@@ -1,0 +1,8 @@
+name: nomic-embed-text
+backend: llama-cpp
+embeddings: true
+parameters:
+  model: nomic-embed-text-v1.5.Q8_0.gguf
+  context_size: 8192
+  threads: 4
+  f16: true

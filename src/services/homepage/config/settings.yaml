@@ -1,0 +1,22 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/settings/
+
+title: banana-AI
+showStats: true
+color: zinc
+
+useEqualHeights: true
+layout:
+  AI & Automation:
+    icon: mdi-brain
+    style: row
+    columns: 3
+  Tools:
+    icon: mdi-tools
+    style: row
+    columns: 3
+  Infrastructure:
+    icon: mdi-server-network
+    style: row
+    columns: 3

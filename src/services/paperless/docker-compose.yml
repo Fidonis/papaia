@@ -1,0 +1,80 @@
+services:
+  pl-broker:
+    image: docker.io/library/redis:8
+    container_name: pl-broker
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    networks:
+      - default
+  
+  pl-db:
+    image: docker.io/library/postgres:18
+    container_name: pl-db
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    volumes:
+      - pgdata:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: ${PAPERLESS_DB}
+      POSTGRES_USER: ${PAPERLESS_DBUSER}
+      POSTGRES_PASSWORD: ${PAPERLESS_DBPASS} 
+    networks:
+      - default
+  
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.10
+    container_name: paperless
+    restart: unless-stopped
+    depends_on:
+      - pl-db
+      - pl-broker
+      - pl-gotenberg
+      - pl-tika
+    ports:
+      - "${PAPERLESS_EXT_PORT}:8000"
+    volumes:
+      - data:/usr/src/paperless/data
+      - ${MEDIA_DIRECTORY}:/usr/src/paperless/media
+      - ${EXPORT_DIRECTORY}:/usr/src/paperless/export
+      - ${CONSUME_DIRECTORY}:/usr/src/paperless/consume
+    env_file: ./.env
+    environment:
+      PAPERLESS_REDIS: redis://pl-broker:6379
+      PAPERLESS_DBHOST: pl-db
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://pl-gotenberg:3000
+      PAPERLESS_TIKA_ENDPOINT: http://pl-tika:9998
+    networks:
+      - default
+  
+  pl-gotenberg:
+    image: docker.io/gotenberg/gotenberg:8.25
+    container_name: pl-gotenberg
+    restart: unless-stopped
+    # The gotenberg chromium route is used to convert .eml files. We do not
+    # want to allow external content like tracking pixels or even javascript.
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+    networks:
+      - default
+
+  pl-tika:
+    image: docker.io/apache/tika:3.2.3.0
+    container_name: pl-tika
+    restart: unless-stopped
+    networks:
+      - default
+
+volumes:
+  data:
+  pgdata:
+  redisdata:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true

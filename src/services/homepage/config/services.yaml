@@ -1,0 +1,62 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/services/
+# Icons from https://dashboardicons.com/
+
+- AI & Automation:
+    - LibreChat:
+        href: http://server:8000
+        description: ChatGPT compatible, self-hosted AI chatbot
+        icon: librechat.svg
+        container: librechat
+        showStats: true
+    - N8N:
+        href: http://server:8400
+        description: Self-hosted workflow automation tool with a visual editor and a large library of integrations
+        icon: n8n.svg
+        container: n8n
+        showStats: true
+    - LiteLLM:
+        href: http://server:8200/ui
+        description: Fast, self-hosted LLM inference server
+        icon: tsd-proxy.svg
+        container: litellm
+        showStats: true
+
+- Tools:
+    - Paperless-ngx:
+        href: http://server:8010
+        description: Self-hosted document management system with OCR and a nice UI 
+        icon: paperless-ngx.svg
+        container: paperless
+        widget:
+            type: paperlessngx
+            url: http://paperless:8000
+            key: your-keyless-key
+    - Home Assistant:
+        href: http://server:8123
+        description: Open-source home automation platform with a powerful dashboard and integrations
+        icon: home-assistant.svg
+        container: homeassistant
+    - SearXNG:
+        href: http://server:8500
+        description: Self-hosted metasearch engine that aggregates results from multiple search engines while respecting your privacy
+        icon: searxng.svg
+        container: searxng
+
+- Infrastructure:
+    - Keycloak:
+        href: http://server:8110/
+        description: Indentity and access management solution for modern applications and services, with support for single sign-on, social login, and more
+        icon: keycloak.svg
+        container: keycloak
+    - NGINX Proxy:
+        href: http://server:8100/
+        description: Self-hosted reverse proxy with a nice UI for managing your services
+        icon: nginx-proxy-manager.svg
+        container: nginx-proxy-manager
+    - Technitium:
+        href: http://server:8120/
+        description: Self-hosted DNS server with a web console for managing DNS zones and records
+        icon: technitium.png
+        container: technitium

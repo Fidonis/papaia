@@ -1,0 +1,35 @@
+services:
+  #########################
+  #  NGINX Proxy Manager  #
+  #########################
+  npm:
+    image: jc21/nginx-proxy-manager:2.14.0
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "${NPM_ADMIN_EXT_PORT:-8100}:81"     # Admin UI
+    volumes:
+      - npm-data:/data
+      - npm-letsencrypt:/etc/letsencrypt
+    healthcheck:  # Defines the health check configuration for the container
+      test: ["CMD-SHELL", "curl -f http://localhost:81/api/ || exit 1"]
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+    networks:
+      - default
+
+
+# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
+# Volumes mounted on Linux: /var/lib/docker/volumes
+volumes:
+  npm-data:
+  npm-letsencrypt:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true

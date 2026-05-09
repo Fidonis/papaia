@@ -1,0 +1,10 @@
+.env
+*.log
+
+# AI model files
+*.gguf
+*.bin
+*.safetensors
+
+# Excluded from upstream import — never check in
+setup-papaia.sh

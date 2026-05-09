@@ -1,0 +1,23 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/info-widgets/
+
+- resources:
+    cpu: true
+    memory: true
+    disk: /
+
+- search:
+    provider: custom
+    url: http://server:8500/search?q=
+    target: _blank
+
+- openmeteo:
+    label: Witzmannsberg # optional
+    latitude: 48.7167
+    longitude: 13.4167
+    timezone: Europe/Berlin # optional
+    units: metric # or imperial
+    cache: 5 # Time in minutes to cache API responses, to stay within limits
+    format: # optional, Intl.NumberFormat options
+      maximumFractionDigits: 1

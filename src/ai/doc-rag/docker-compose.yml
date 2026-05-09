@@ -1,0 +1,144 @@
+services:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  DOCUMENT SOURCE — WebDAV integration (multi-source)
+  #
+  #  Syncs remote WebDAV sources into the shared docs volume.
+  #  Each WEBDAV_N_* group in .env produces one background sync loop.
+  #  Files land in /data/docs/{WEBDAV_N_NAME}/, which the ingester
+  #  maps to a Qdrant collection of the same name.
+  #
+  #  To replace this with a different source (SMB, S3, local mount),
+  #  swap the volume mount to a different integration script.
+  # ═══════════════════════════════════════════════════════════════════════════
+  docrag-sync:
+    image: rclone/rclone:1.69
+    container_name: docrag-sync
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/sync.sh"]
+    env_file: .env
+    environment:
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-60}
+    volumes:
+      - ./integrations/webdav/sync.sh:/scripts/sync.sh:ro
+      - docs:/data/docs
+    networks:
+      - default
+    labels:
+      de.fidonis.module: papaia-doc-rag
+      de.fidonis.role: document-source
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  VECTOR DATABASE — Qdrant
+  #
+  #  Stores document embeddings. One collection per document source.
+  #  Dashboard available at http://host:${QDRANT_EXT_PORT}/dashboard
+  # ═══════════════════════════════════════════════════════════════════════════
+  docrag-vectordb:
+    image: qdrant/qdrant:v1.13.6
+    container_name: docrag-vectordb
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_EXT_PORT:-6333}:6333"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    healthcheck:
+      # Qdrant uses a distroless image (no wget/curl/nc).
+      # We call the /healthz HTTP endpoint via /proc/net to stay shell-free,
+      # or fall back to a TCP connection attempt using bash's /dev/tcp.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - default
+    labels:
+      de.fidonis.module: papaia-doc-rag
+      de.fidonis.role: vector-database
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  INGESTER — document processing pipeline
+  #
+  #  Scans /data/docs/ every SCAN_INTERVAL seconds. Converts documents to
+  #  text (Docling), chunks, embeds via LiteLLM, and upserts into Qdrant.
+  #  Each top-level subdirectory maps to its own Qdrant collection.
+  # ═══════════════════════════════════════════════════════════════════════════
+  docrag-ingester:
+    build:
+      context: .
+      dockerfile: ingester/Dockerfile
+    image: docrag-ingester:2.85.0
+    container_name: docrag-ingester
+    restart: unless-stopped
+    depends_on:
+      docrag-vectordb:
+        condition: service_healthy
+      docrag-sync:
+        condition: service_started
+    environment:
+      DOCS_PATH:          /data/docs
+      LITELLM_URL:        ${LITELLM_URL:-http://litellm:4000/v1}
+      LITELLM_API_KEY:    ${LITELLM_API_KEY}
+      EMBED_MODEL:        ${EMBED_MODEL:-nomic-embed-text}
+      QDRANT_URL:         http://docrag-vectordb:6333
+      SCAN_INTERVAL:      ${SCAN_INTERVAL:-60}
+      CHUNK_WORDS:        ${CHUNK_WORDS:-400}
+      CHUNK_OVERLAP:      ${CHUNK_OVERLAP:-50}
+      EMBED_BATCH_SIZE:   ${EMBED_BATCH_SIZE:-32}
+      EMBED_RETRIES:      ${EMBED_RETRIES:-3}
+      EMBED_RETRY_DELAY:  ${EMBED_RETRY_DELAY:-5.0}
+      STATE_PATH:         /data/state
+    volumes:
+      - docs:/data/docs:ro
+      - docrag-state:/data/state
+    networks:
+      - default
+    labels:
+      de.fidonis.module: papaia-doc-rag
+      de.fidonis.role: ingester
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  API — MCP server and query interface
+  #
+  #  Exposes an MCP tool (search_documents) over streamable-HTTP at /mcp.
+  #  Searches across all Qdrant collections, merges and re-ranks results.
+  #  Consumed by LibreChat via MCP; also callable from n8n or any HTTP client.
+  # ═══════════════════════════════════════════════════════════════════════════
+  docrag-api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: docrag-api:1.27.0
+    container_name: docrag-api
+    restart: unless-stopped
+    depends_on:
+      docrag-vectordb:
+        condition: service_healthy
+    ports:
+      - "${DOC_RAG_EXT_PORT:-8700}:8000"
+    environment:
+      LITELLM_URL:        ${LITELLM_URL:-http://litellm:4000/v1}
+      LITELLM_API_KEY:    ${LITELLM_API_KEY}
+      EMBED_MODEL:        ${EMBED_MODEL:-nomic-embed-text}
+      QDRANT_URL:         http://docrag-vectordb:6333
+      DEFAULT_TOP_K:      ${DEFAULT_TOP_K:-5}
+      DEFAULT_MIN_SCORE:  ${DEFAULT_MIN_SCORE:-0.5}
+      STATE_PATH:         /data/state
+    volumes:
+      - docrag-state:/data/state
+    networks:
+      - default
+    labels:
+      de.fidonis.module: papaia-doc-rag
+      de.fidonis.role: api
+
+volumes:
+  docs:
+  qdrant-storage:
+  docrag-state:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true

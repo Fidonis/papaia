@@ -1,0 +1,80 @@
+services:
+  #############
+  #  LiteLLM  #
+  #############
+  litellm:
+    build:
+      context: .
+      args:
+        target: runtime
+    image: ghcr.io/berriai/litellm:v1.82.0-stable.patch5
+    restart: unless-stopped
+    container_name: litellm
+    volumes:
+      - ./config.yaml:/app/config.yaml
+    command:
+      - "--config=/app/config.yaml"
+    ports:
+      - "${LITELLM_EXT_PORT}:4000" # Map the container port to the host, change the host port if necessary
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:${LITELLM_PG_PASSWORD}@litellm-db:5432/litellm"
+      STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+    env_file:
+      - ./.env # Load local .env file
+    depends_on:
+      - litellm-db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
+    healthcheck:  # Defines the health check configuration for the container
+      test: ["CMD-SHELL", "apk add --no-cache curl >/dev/null 2>&1 && curl -fs http://localhost:4000/health/liveliness || exit 1"]
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+    networks:
+      - default
+
+  litellm-db:
+    image: postgres:16
+    restart: unless-stopped
+    container_name: litellm-postgresql
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: ${LITELLM_PG_PASSWORD}
+    ports:
+      - "${LITELLM_EXT_PG_PORT}:5432"
+    volumes:
+      - litellm-postgresql:/var/lib/postgresql/data # Persists Postgres data across container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+    networks:
+      - default 
+
+  litellm-prometheus:
+    image: prom/prometheus
+    container_name: litellm-prometheus
+    volumes:
+      - litellm-prometheus:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "${LITELLM_EXT_PROMETHEUS_PORT}:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    restart: unless-stopped
+    networks:
+      - default
+
+# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
+# Volumes mounted on Linux: /var/lib/docker/volumes
+volumes:
+  litellm-postgresql:
+  litellm-prometheus:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true

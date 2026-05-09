@@ -1,0 +1,63 @@
+
+services:
+  n8n-postgres:
+    container_name: n8n-postgres
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+      - POSTGRES_NON_ROOT_USER
+      - POSTGRES_NON_ROOT_PASSWORD
+    volumes:
+      - n8n_db:/var/lib/postgresql/data
+      - ./init-data.sh:/docker-entrypoint-initdb.d/init-data.sh
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - default
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.13.0
+    container_name: n8n
+    restart: unless-stopped
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=n8n-postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_NON_ROOT_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_NON_ROOT_PASSWORD}
+      - N8N_RUNNERS_MODE=internal
+      - N8N_SECURE_COOKIE=false
+    ports:
+      - ${N8N_EXT_PORT}:5678
+    links:
+      - n8n-postgres
+    volumes:
+      - n8n_storage:/home/node/.n8n
+    depends_on:
+      n8n-postgres:
+        condition: service_healthy
+    healthcheck:  # Defines the health check configuration for the container
+      #test: ["CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:5678/healthz || exit 1"]
+      test: ["CMD-SHELL", "/usr/bin/wget --server-response --proxy off --no-verbose --tries=1 --timeout=3 127.0.0.1:5678/healthz -O /dev/null 2>&1 | grep -q 'HTTP/1.1 200 OK'"]
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+    networks:
+      - default
+
+volumes:
+  n8n_db:
+  n8n_storage:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true

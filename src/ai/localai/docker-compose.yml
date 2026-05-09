@@ -1,0 +1,61 @@
+services:
+  ##########################
+  #  LocalAI Model Init    #
+  ##########################
+  localai-model-init:
+    container_name: localai-model-init
+    image: curlimages/curl:latest
+    restart: "no"
+    volumes:
+      - ./models:/models
+    entrypoint: sh
+    command:
+      - -c
+      - >-
+        (test -f /models/qwen2.5-1.5b-instruct-q4_k_m.gguf ||
+        curl -fL -o /models/qwen2.5-1.5b-instruct-q4_k_m.gguf
+        https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf)
+        &&
+        (test -f /models/nomic-embed-text-v1.5.Q8_0.gguf ||
+        curl -fL -o /models/nomic-embed-text-v1.5.Q8_0.gguf
+        https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf)
+    networks:
+      - default
+
+  #############
+  #  LocalAI  #
+  #############
+  localai:
+    container_name: localai
+    image: ${LOCALAI_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      localai-model-init:
+        condition: service_completed_successfully
+    ports:
+      - "${LOCALAI_EXT_PORT}:8080"
+    environment:
+      LOCALAI_LOG_LEVEL: ${LOCALAI_LOG_LEVEL:-info}
+      MODELS_PATH: /models
+      DEBUG: ${LOCALAI_DEBUG:-false}
+      LOCALAI_EXTERNAL_BACKENDS: "llama-cpp"
+    volumes:
+      - ./models:/models
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/models >/dev/null 2>&1 || exit 1"]
+      interval: ${LOCALAI_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${LOCALAI_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${LOCALAI_HEALTHCHECK_RETRIES:-5}
+      start_period: ${LOCALAI_HEALTHCHECK_START_PERIOD:-60s}
+
+volumes:
+  localai-models:  
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true
+
+

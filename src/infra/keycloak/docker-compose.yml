@@ -1,0 +1,59 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.5.6
+    container_name: keycloak
+    restart: unless-stopped
+    ports:
+      - "${KEYCLOAK_EXT_PORT}:8080"
+      - "9000:9000" # Management port for health checks
+    volumes:
+      - ./keycloak.conf:/opt/keycloak/conf/keycloak.conf
+    depends_on:
+      - kc-postgres
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_SCHEMA: public
+      KC_DB_URL: jdbc:postgresql://kc-postgres/keycloak
+
+      KC_DB_USERNAME: ${KC_DB_USER}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+    command: start
+    networks:
+      - default 
+    healthcheck:
+      test: ["CMD-SHELL", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000"]
+      interval: 30s          # Run every 30 seconds
+      timeout: 10s           # Give curl 10 seconds to respond
+      retries: 5             # Fail after 5 unsuccessful attempts
+      start_period: 40s      # Wait before the first check after container start
+  
+  kc-postgres:
+    image: postgres:18.3
+    container_name: kc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: ${KC_DB_USER}
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD}
+    volumes:
+      - kc-postgresql:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d keycloak -U ${KC_DB_USER}"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+    networks:
+      - default 
+
+# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
+# Volumes mounted on Linux: /var/lib/docker/volumes
+volumes:
+  kc-postgresql:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true  

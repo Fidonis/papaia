@@ -1,0 +1,28 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/bookmarks
+
+- Developer:
+    - GitHub:
+        - abbr: GH
+          href: https://github.com/
+          icon: github.svg
+    - Hugging Face:
+        - abbr: HF
+          href: https://huggingface.co/
+          icon: hugging-face.svg
+
+- Social:
+    - LindedIn:
+        - abbr: LI
+          href: https://www.linkedin.com/
+          icon: linkedin.svg
+    - XING:
+        - abbr: XI
+          href: https://www.xing.com/
+
+- Entertainment:
+    - YouTube:
+        - abbr: YT
+          href: https://youtube.com/
+          icon: youtube.svg

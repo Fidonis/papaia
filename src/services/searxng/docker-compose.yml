@@ -1,0 +1,33 @@
+services:
+  #############
+  #  SearXNG  #
+  #############
+  searxng:
+    image: searxng/searxng:2026.3.13-3c1f68c59
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "${SEARXNG_EXT_PORT:-8500}:8080"
+    volumes:
+      - searxng_config:/etc/searxng
+      - searxng_data:/var/cache/searxng
+    healthcheck:  # Defines the health check configuration for the container
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:8080/healthz || exit 1"]
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+    networks:
+      - default
+
+
+# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
+# Volumes mounted on Linux: /var/lib/docker/volumes
+volumes:
+  searxng_config:
+  searxng_data:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true

@@ -1,0 +1,22 @@
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:2026.3.1
+    volumes:
+      - ha-config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    environment:
+      TZ: Europe/Berlin
+    healthcheck:  # Defines the health check configuration for the container
+      test: ["CMD-SHELL", "curl -f http://localhost:8123 || exit 1"]
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+
+volumes:
+  ha-config:

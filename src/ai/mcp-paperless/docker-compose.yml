@@ -1,0 +1,18 @@
+services:
+  mcp-paperless:
+    image: ghcr.io/baruchiro/paperless-mcp:sha-5ad68b6
+    container_name: mcp-paperless
+    restart: unless-stopped
+    environment:
+      PAPERLESS_URL: ${PAPERLESS_URL}
+      PAPERLESS_API_KEY: ${PAPERLESS_API_KEY}
+      PAPERLESS_PUBLIC_URL: ${PAPERLESS_PUBLIC_URL}
+    ports:
+      - "${MCP_PAPERLESS_EXT_PORT}:3000"
+    networks:
+      - default
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    external: true
