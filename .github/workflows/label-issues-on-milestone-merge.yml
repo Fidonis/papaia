@@ -1,4 +1,4 @@
-name: Label Issues on Milestone Branch Merge
+name: Label Issues on Milestone Merge
 
 on:
   pull_request:
@@ -45,7 +45,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                body: `✅ In Milestone-Branch \`${branch}\` gemergt via PR #${prNumber} (_${prTitle}_).\n\nWird geschlossen wenn \`${branch}\` in \`main\` geht.`
+                body: `✅ Merged into milestone branch \`${branch}\` via PR #${prNumber} (_${prTitle}_).\n\nWill be closed when \`${branch}\` is merged into \`main\`.`
               });
 
               console.log(`Labeled and commented on issue #${issueNumber}`);
