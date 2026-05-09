@@ -1,0 +1,5 @@
+transformers<5.0
+docling==2.85.0
+openai==2.30.0
+pypdf==5.5.0
+qdrant-client==1.17.1

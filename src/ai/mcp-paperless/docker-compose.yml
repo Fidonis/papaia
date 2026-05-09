@@ -1,0 +1,32 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — MCP Paperless · Per-user Paperless-ngx Document Proxy
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  Sits between LibreChat and Paperless-ngx. Reads the
+#  x-librechat-user-email header forwarded by LibreChat and restricts all
+#  document queries to documents owned by that user.
+#
+#  Requires:
+#    - PAPERLESS_ADMIN_USER / PAPERLESS_ADMIN_PASSWORD in root .env
+#      (propagated by setup-papaia.sh from services/paperless/.env)
+#    - PAPERLESS_PUBLIC_URL in root .env (set by setup-papaia.sh)
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  mcp-paperless:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      PAPERLESS_URL:          http://paperless:8000
+      PAPERLESS_PUBLIC_URL:   ${PAPERLESS_PUBLIC_URL}
+      PAPERLESS_ADMIN_USER:   ${PAPERLESS_ADMIN_USER:-paperless-admin}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${MCP_PAPERLESS_EXT_PORT:-9520}:3000"
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-mcp-paperless
+      de.fidonis.role:   mcp-server
+    profiles: [mcp-paperless]

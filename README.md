@@ -1,0 +1,554 @@
+# papAIa
+
+> Self-hosted, OIDC-first AI & document platform — built with Docker Compose.
+> by **Fidonis GmbH** · <https://fidonis.de>
+
+papAIa is a unified Docker Compose stack that bundles a chat UI, an LLM proxy,
+local model hosting, document management, RAG over personal files, workflow
+automation and metasearch — all behind a single Keycloak SSO.
+
+This is the **0.6.0** release: every service that supports authentication is
+wired up to Keycloak via OIDC (native or via oauth2-proxy), and the entire
+stack is bootstrapped by a single `setup-papaia.sh` script.
+
+---
+
+## Highlights of 0.6.0
+
+- **OIDC-first SSO** for the whole stack — Keycloak realm, clients, roles and
+  test users are pre-provisioned via realm import.
+- **Unified setup** — one script (`src/setup-papaia.sh`) creates `.env` files,
+  generates secrets, propagates client secrets to consuming services and
+  enables only the modules the user opts into.
+- **New services**: n8n, MCP Paperless, doc-rag (RAG over WebDAV sources),
+  SearXNG, Homepage dashboard, oauth2-proxy.
+- **Single Compose file** at `src/docker-compose.yml` aggregates per-service
+  compose files via `include:` — no more juggling many compose invocations.
+- **Split-URL OIDC** — browser-facing endpoints use the host's reachable URL
+  (`PAPAIA_HOST`, e.g. `host.docker.internal` on Docker Desktop or a LAN IP on
+  Linux), while server-to-server token/JWKS lookups stay on internal Docker
+  DNS. This keeps the `iss` claim stable across both worlds.
+- **Per-user document isolation** in MCP Paperless — Keycloak access tokens
+  are forwarded into Paperless on a per-request basis so each user only sees
+  their own documents.
+
+---
+
+## Architecture overview
+
+```
+                ┌───────────────────────────────────────────────┐
+                │                   Browser                     │
+                └───────────┬─────────────────┬─────────────────┘
+                            │                 │
+                            │  native OIDC    │  forward auth (oauth2-proxy)
+                            ▼                 ▼
+              ┌─────────────────────┐   ┌────────────────┐
+              │ LibreChat (8000)    │   │ n8n (8400)     │
+              │ Paperless (8010)    │   │ Homepage (8300)│
+              │ LiteLLM   (8200)    │   └───────┬────────┘
+              └──────┬──────────────┘           │
+                     │                          ▼
+                     ▼                ┌─────────────────────┐
+              ┌──────────────┐        │ oauth2-proxy (4180) │
+              │  Keycloak    │◀───────┤                     │
+              │   (8110)     │        └─────────────────────┘
+              └──────┬───────┘
+                     │
+                     │ realm: papaia
+                     │ clients: librechat, paperless, litellm, oauth2-proxy
+                     │ roles:   admin, user, viewer
+                     │
+                     ▼
+        ┌───────────────────────────────────────────────────┐
+        │                AI / Backend services              │
+        │ LocalAI · doc-rag (Qdrant+rclone+ingester+API)    │
+        │ MCP Paperless · SearXNG · Mongo · Postgres · ...  │
+        └───────────────────────────────────────────────────┘
+```
+
+**Authentication coverage**
+
+| Service        | Approach                | Notes                                |
+|----------------|-------------------------|--------------------------------------|
+| LibreChat      | Native OIDC             | `openid-client`, PKCE enforced       |
+| Paperless-ngx  | Native OIDC             | `django-allauth`                     |
+| LiteLLM (UI)   | Generic OIDC            | API key for programmatic access      |
+| n8n            | oauth2-proxy forward    | NPM rule guards the upstream         |
+| Homepage       | oauth2-proxy forward    | optional, configurable per host      |
+| MCP Paperless  | OAuth2 token forwarding | per-user view of Paperless documents |
+| Nginx PM admin | Network-level only      | bind to internal interfaces          |
+
+---
+
+## Service catalogue & default port map
+
+External ports are configurable in `src/.env`. Defaults below.
+
+### Infrastructure
+
+| Service              | Port | Purpose                                        |
+|----------------------|------|------------------------------------------------|
+| Keycloak             | 8110 | Identity & access management (OIDC issuer)     |
+| Nginx Proxy Manager  | 8100 | Reverse proxy / TLS termination admin UI       |
+| oauth2-proxy         | 4180 | Forward-auth gateway for non-OIDC services     |
+| Technitium DNS       | 8120 | Optional DNS server (commented out by default) |
+
+### Application services
+
+| Service        | Port | Purpose                                              |
+|----------------|------|------------------------------------------------------|
+| LibreChat      | 8000 | Multi-provider chat UI                               |
+| Paperless-ngx  | 8010 | Document management system                           |
+| LiteLLM        | 8200 | Unified LLM proxy + Postgres (8210) + Prom. (8230)   |
+| Homepage       | 8300 | Service dashboard                                    |
+| n8n            | 8400 | Workflow automation                                  |
+| SearXNG        | 8500 | Privacy-respecting metasearch                        |
+| doc-rag API    | 8700 | RAG MCP server (`POST /mcp`, `GET /health`)          |
+| Qdrant         | 6333 | Vector store dashboard for doc-rag                   |
+| LocalAI        | 8080 | OpenAI-compatible local model inference              |
+| Firecrawl      | 3002 | Web crawler (commented out by default)               |
+| Home Assistant | 8123 | Home automation (host-network mode, optional)        |
+
+### Internal-only / co-deployed
+
+- MCP Paperless (per-user Paperless proxy for LibreChat) — `:9520`
+- Jina AI Reranker (optional, `:8600`)
+- LibreChat sidecars (Mongo, Meilisearch, pgvector, RAG API)
+- Paperless sidecars (Postgres, Redis, Tika, Gotenberg)
+
+> **Tip:** all `*_EXT_PORT` variables are listed in `src/.env.example` and
+> grouped per service. Change a single number to relocate a port.
+
+---
+
+## Quick start
+
+### Prerequisites
+- Docker and Docker Compose installed
+- `openssl` and `python3` (used by the setup script)
+- At least 8GB RAM recommended
+- Linux, macOS or WSL2 environment
+
+### Single-host setup (default)
+
+```bash
+git clone https://github.com/marko-boehm/papaia.git
+cd papaia
+bin/setup-papaia.sh                                  # interactive
+docker compose -f src/docker-compose.yml --env-file src/.env up -d
+```
+
+`bin/setup-papaia.sh` is idempotent. It generates `src/.env` and per-service
+`.env` files from their `.env.example` templates, fills in random secrets
+for any value still set to `GENERATE_…`, and propagates Keycloak client
+secrets into every service that consumes them. Re-running is safe; pass
+`--force` only if you want to discard generated values and start over.
+
+### Stopping
+
+```bash
+docker compose -f src/docker-compose.yml --env-file src/.env stop      # keep volumes
+docker compose -f src/docker-compose.yml --env-file src/.env down      # also remove network
+docker compose -f src/docker-compose.yml --env-file src/.env down -v   # also wipe volumes
+```
+
+## Multi-environment deployments (dev / stage / demo on one host)
+
+Multiple papAIa stacks can run side-by-side on a single host without
+forking the repo. Each environment gets its own:
+
+- `COMPOSE_PROJECT_NAME` (e.g. `papaia-dev`) — namespaces containers and
+  volumes so Docker doesn't reuse them across stacks.
+- `DOCKER_NETWORK` (e.g. `papaia-dev-net`) — every stack gets its own
+  bridge network.
+- `HOST_IP` — bind address for published ports. Combine with IP aliases
+  on the host's primary interface so two stacks with identical port
+  numbers can coexist (`papaia-dev` → `.102`, `papaia-stage` → `.103`,
+  `papaia-demo` → `.101`).
+- `PAPAIA_HOST` — public URL used in OIDC redirects and service public
+  URLs. The hostname depends on whether you are behind a reverse proxy
+  (Caddy / Traefik / NPM / …) and what scheme it terminates on; both
+  questions are asked interactively at setup time. There is no enforced
+  hostname convention — pick what fits the platform.
+- HTTPS / `OAUTH2_PROXY_COOKIE_SECURE` — derived from the scheme of
+  `PAPAIA_HOST`. HTTPS implies `--cookie-secure=true` for every
+  oauth2-proxy sidecar; HTTP implies `false`. Browsers ignore Secure
+  cookies over plain HTTP, so doing this the other way around silently
+  breaks login.
+
+The setup script accepts those values as flags so a fresh clone reaches
+`docker compose up -d` non-interactively:
+
+```bash
+bin/setup-papaia.sh \
+    --env=dev \
+    --host-ip=192.168.10.102 \
+    --papaia-host=https://papaia-dev.example.com
+
+docker compose -f src/docker-compose.yml --env-file src/.env up -d
+```
+
+`--env=NAME` implies `--non-interactive`: every "Enable X?" prompt is
+auto-answered Y, every model / GPU / credential prompt is skipped, and
+all required `.env` files are generated. The doc-rag module is the one
+exception — it requires WebDAV credentials that the script cannot
+infer, so it is left disabled.
+
+When run interactively (no `--env`), the script prompts for the public
+hostname and whether HTTPS / a TLS-terminating reverse proxy sits in
+front. Those two answers determine `PAPAIA_HOST` and the matching
+`OAUTH2_PROXY_COOKIE_SECURE` value. The hostname can be anything
+reachable from the user's browser — a LAN IP, a `host.docker.internal`
+default for Docker Desktop, or a public FQDN. With the bind addresses
+pinned through `HOST_IP`, ports on the public interface are unaffected
+and can be filtered at the firewall.
+
+### Reverse Proxy Setup
+
+Two services need a TLS-terminating reverse proxy in front of them for
+OIDC login to work reliably:
+
+- **Keycloak** (`AUTH_HOST`) — tokens are issued under this URL and the
+  browser POSTs the OIDC callback cross-origin. Behind a TLS-terminating
+  edge proxy Keycloak only sees plain HTTP and must trust
+  `X-Forwarded-*` headers; the bundled `KC_PROXY_HEADERS=xforwarded`
+  default takes care of that.
+- **LibreChat** (`--librechat-host`) — its container speaks plain HTTP
+  on port 3080 (mapped to `HOST_IP:LIBRECHAT_EXT_PORT`). Without HTTPS
+  in front, Keycloak's cross-origin POST + LibreChat's cookie / SameSite
+  defaults break the OIDC callback in subtle ways. `setup-papaia.sh`
+  refuses to run non-interactively without `--librechat-host` for that
+  reason.
+
+Each public URL must point at the corresponding `HOST_IP:port` mapping:
+
+```
+${AUTH_HOST}            →  HOST_IP : KEYCLOAK_EXT_PORT      (default 8110)
+${LIBRECHAT_HOST}       →  HOST_IP : LIBRECHAT_EXT_PORT     (default 8000)
+```
+
+Add similar routes for any other service exposed through the proxy
+(Paperless, n8n, Homepage, …).
+
+#### Caddyfile example
+
+```caddy
+auth.papaia-dev.example.com {
+    reverse_proxy 192.168.10.102:8110
+}
+
+chat.papaia-dev.example.com {
+    reverse_proxy 192.168.10.102:8000
+}
+```
+
+For Traefik / nginx the equivalent rules are a host header match plus
+`reverse_proxy` / `proxy_pass` to `HOST_IP:port`. The `setup-papaia.sh`
+output prints the required routes after a successful run as a
+reminder.
+
+If the host is already running an edge proxy on ports 80/443, pass
+`--external-reverse-proxy` to keep the bundled nginx-proxy-manager
+out of `COMPOSE_PROFILES` (otherwise it port-conflicts on 80).
+
+### Environment Setup (manual)
+
+If you'd rather not use the script:
+1. Copy each `.env.example` to `.env` in the corresponding service directory
+2. Replace every `GENERATE_…` placeholder with a real secret
+3. Make sure all `KC_<service>_CLIENT_SECRET` values match between
+   `src/infra/keycloak/.env` and the consuming service's `.env`
+
+- Keycloak admin: `http://host.docker.internal:8110` — login as `admin`
+  with the password in `src/infra/keycloak/.env` (`KC_ADMIN_PASSWORD`).
+- Realm login (e.g. via LibreChat): `admin` / `admin` in realm `papaia`
+  (test user — change for anything beyond local development).
+- LibreChat: `http://host.docker.internal:8000`
+- Paperless: `http://host.docker.internal:8010`
+- Homepage: `http://host.docker.internal:8300`
+- n8n: `http://host.docker.internal:8400`
+
+### 3. Stop / remove
+
+```bash
+docker compose stop      # stop containers, keep volumes
+docker compose down      # remove containers + network
+docker compose down -v   # also wipe volumes (destructive!)
+```
+
+---
+
+## OIDC & SSO — how the pieces fit together
+
+papAIa standardises on **OpenID Connect** for all human-facing
+authentication. There are two integration patterns:
+
+### 1. Native OIDC clients (LibreChat, Paperless, LiteLLM)
+
+These services speak OIDC themselves. The setup script:
+
+- Registers a Keycloak client per service (`librechat`, `paperless`,
+  `litellm`) by importing `papaia-realm.json` on first start.
+- Generates a strong client secret (`KC_<service>_CLIENT_SECRET`) and writes
+  it both into `infra/keycloak/.env` and the consuming service's `.env`.
+- Sets `OPENID_ISSUER` / `GENERIC_AUTHORIZATION_ENDPOINT` to the **public**
+  Keycloak URL derived from `PAPAIA_HOST`, so the `iss` claim that the
+  service receives matches what the browser hits at login.
+- Enables PKCE (`OPENID_USE_PKCE=true`) where required by the realm
+  configuration (mandatory for the LibreChat client).
+
+### 2. oauth2-proxy forward auth (n8n, optional Homepage and any custom service)
+
+Services without native OIDC sit behind oauth2-proxy. NPM checks
+`/oauth2/auth` before letting requests through; on a 401, the user is
+bounced to Keycloak via oauth2-proxy.
+
+oauth2-proxy runs in **`--skip-oidc-discovery` mode** with the three OIDC
+endpoints split into:
+
+| Variable                  | Purpose                            | Reachable from |
+|---------------------------|------------------------------------|----------------|
+| `OIDC_ISSUER_KC_AUTH`     | Browser redirect to login          | Browser        |
+| `OIDC_ISSUER_KC_TOKEN`    | Server-side code → token exchange  | Containers     |
+| `OIDC_ISSUER_KC_CERTS`    | JWKS for signature verification    | Containers     |
+
+The auth URL uses `PAPAIA_HOST` (e.g. `http://host.docker.internal:8110`)
+so it works in the user's browser. The token & JWKS URLs use the internal
+service name (`http://keycloak:8080`) so cross-container calls don't
+depend on host DNS. Both routes resolve to the **same realm**, which keeps
+the `iss` claim consistent.
+
+### Realm contents (out of the box)
+
+| Item                | Value                                       |
+|---------------------|---------------------------------------------|
+| Realm               | `papaia`                                    |
+| Discovery URL       | `${PAPAIA_HOST}:8110/realms/papaia/.well-known/openid-configuration` |
+| Clients             | `librechat`, `paperless`, `litellm`, `oauth2-proxy` |
+| Realm roles         | `admin`, `user`, `viewer`                   |
+| Default test users  | `admin/admin`, `testuser/testuser`          |
+
+> ⚠️ The default test users exist purely for local development. Disable or
+> delete them before exposing the stack to anything beyond `localhost`.
+
+### Switching to an external IdP (Entra ID, Authentik, Okta …)
+
+In `src/.env`:
+
+```env
+AUTH_PROVIDER=external_oidc
+OIDC_ISSUER=https://idp.example.com/realms/your-realm
+OIDC_CLIENT_ID=librechat
+OIDC_ISSUER_KC_AUTH=https://idp.example.com/realms/your-realm/protocol/openid-connect/auth
+OIDC_ISSUER_KC_TOKEN=https://idp.example.com/realms/your-realm/protocol/openid-connect/token
+OIDC_ISSUER_KC_CERTS=https://idp.example.com/realms/your-realm/protocol/openid-connect/certs
+```
+
+See [`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) for
+provider-specific notes.
+
+---
+
+## Service highlights
+
+### LibreChat
+- Multi-provider chat UI — OpenAI, Anthropic, local models via LiteLLM.
+- Native Keycloak OIDC login with PKCE.
+- Built-in RAG with Meilisearch + pgvector for uploaded files.
+
+### LiteLLM
+- Unified API gateway across providers.
+- Generic OIDC SSO for the admin UI; master key for programmatic clients.
+- Prometheus metrics on `:8230`.
+
+### LocalAI
+- OpenAI-compatible local inference (CPU or NVIDIA GPU image).
+- The setup script offers a model picker (Qwen 2.5, Mistral 7B, Llama 3.1,
+  nomic-embed-text) and writes the chosen download URLs into
+  `ai/localai/models.txt`.
+
+### doc-rag
+- Pulls documents from one or more WebDAV sources (Nextcloud, SharePoint,
+  …) via `rclone` and indexes them with Docling + LiteLLM embeddings into
+  per-source Qdrant collections.
+- Exposes `search_documents` and `list_collections` as MCP tools (consumed
+  by LibreChat and n8n) plus `GET /health` and `POST /reindex` HTTP
+  endpoints.
+- See [`src/ai/doc-rag/README.md`](src/ai/doc-rag/README.md) for the full
+  pipeline, environment variables and operational notes.
+
+### MCP Paperless
+- Bridges LibreChat to Paperless-ngx as an MCP tool.
+- Forwards the user's Keycloak access token to Paperless on each request,
+  so each LibreChat user only ever sees **their own** documents.
+
+### n8n
+- Self-hosted workflow automation behind oauth2-proxy.
+- Postgres-backed state; public URL set from `PAPAIA_HOST` so the
+  oauth2-proxy redirect callback stays correct.
+
+### Paperless-ngx
+- Document management with native Keycloak OIDC.
+- Pre-wired with Tika + Gotenberg for OCR.
+- Admin user/password generated by setup and propagated to MCP Paperless.
+
+### SearXNG
+- Privacy-respecting metasearch.
+- Bound to LibreChat's web-search integration via
+  `SEARXNG_INSTANCE_URL=http://searxng:8080` (set by setup).
+
+### Homepage
+- Curated dashboard for all enabled services.
+- `HP_ALLOWED_HOSTS` is derived from `PAPAIA_HOST` so the dashboard is
+  reachable on whichever URL the rest of the stack uses.
+
+---
+
+## Operations
+
+### Backup
+
+```bash
+src/backup-papaia.sh         # gzipped archives of all named volumes
+src/restore-papaia.sh <vol>  # restore one volume from a backup archive
+```
+
+The backup script keeps the last 14 days locally. Off-site sync (e.g. to
+OneDrive or S3) is left to your environment.
+
+### Selective module enable / disable
+
+`src/docker-compose.yml` aggregates services via `include:`. Lines for
+optional modules are commented out by default; setup uncomments the ones
+you opted into. To toggle a module manually, edit the `include:` list and
+restart with `docker compose up -d`.
+
+### Updating images
+
+Image tags are pinned in `src/.env.example`. To upgrade a service, bump the
+corresponding `*_IMAGE` variable in `src/.env` and `docker compose up -d
+<service>`.
+
+### Resetting Keycloak
+
+The realm import only runs on the **first** Keycloak start. To re-import
+(after editing the realm template, for example):
+
+```bash
+docker compose down keycloak keycloak-postgresql
+docker volume rm papaia_keycloak-postgresql
+docker compose up -d
+```
+
+This also wipes any users created through the admin UI — back them up first
+if you need them.
+
+---
+
+## Troubleshooting
+
+### "redirect_uri does not match" from Keycloak after login
+
+Cause: `PAPAIA_HOST` and the Keycloak client's registered redirect URIs
+disagree.
+
+- Check `src/.env` — `PAPAIA_HOST` must be the URL you actually type into
+  the browser (host **and** port, scheme included).
+- Re-run `./setup-papaia.sh` after changing `PAPAIA_HOST`. The script
+  rewrites `OIDC_ISSUER`, `OIDC_ISSUER_KC_AUTH`, LibreChat / LiteLLM /
+  Paperless / n8n public URLs and Homepage's `HP_ALLOWED_HOSTS` to match.
+- For first-time changes you may also need to update redirect URIs in the
+  Keycloak admin UI (Clients → `librechat` / etc. → Valid redirect URIs).
+
+### LibreChat OIDC login: "invalid_token" or signature errors
+
+Cause: the `iss` claim in the access token doesn't match what LibreChat
+expects.
+
+- The token's `iss` always equals `KC_HOSTNAME` (= `PAPAIA_HOST:8110`).
+- Make sure `OPENID_ISSUER` in `ai/librechat/.env` is the same URL.
+- On Linux, ensure `host.docker.internal` resolves to `127.0.0.1` in
+  `/etc/hosts` (the setup script adds this automatically).
+
+### Cookies don't stick / login loops behind oauth2-proxy
+
+oauth2-proxy issues a session cookie tied to the host that served the
+login. If you reach n8n via `http://host.docker.internal:8400` but
+oauth2-proxy was configured with a different `--redirect-url`, the cookie
+won't be sent on subsequent requests.
+
+- Verify that `OAUTH2_PROXY_COOKIE_SECRET` is exactly **32 base64 bytes**.
+  The setup script generates this for you; don't shorten it.
+- Use the same scheme + host + port in NPM, oauth2-proxy `--redirect-url`,
+  and the Keycloak client's "Valid redirect URIs". A mismatch on **any** of
+  these breaks the loop.
+- When testing, clear cookies for the affected host between attempts —
+  stale `_oauth2_proxy*` cookies survive container restarts.
+
+### LibreChat Keycloak login fails over HTTP (issue #40)
+
+Browsers refuse to send `Secure` cookies over plain HTTP. Either:
+
+- Run the stack behind HTTPS (recommended for any non-local deployment), or
+- Stay on `http://host.docker.internal` for local development — the realm
+  is preconfigured to allow it.
+
+### "host.docker.internal: cannot resolve" on Linux
+
+The setup script writes `127.0.0.1 host.docker.internal` into `/etc/hosts`
+(requires sudo). If you skipped that step:
+
+```bash
+echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+```
+
+Or set `PAPAIA_HOST` to the LAN IP of the host before re-running setup.
+
+### Out-of-memory when running LocalAI
+
+LocalAI is the heaviest module. If RAM is tight, run a smaller model
+(`Qwen2.5 1.5B Q4`), disable LocalAI entirely (comment its line in
+`src/docker-compose.yml`) and route LibreChat to a hosted provider via
+LiteLLM.
+
+### General debugging
+
+```bash
+docker compose ps                 # what's running
+docker compose logs -f <service>  # follow one service
+docker compose config             # render the merged compose file
+```
+
+---
+
+## Repository layout
+
+```
+.
+├── README.md                  # this file
+└── src/
+    ├── README.md              # Compose-level operational guide
+    ├── docker-compose.yml     # root compose, includes per-service files
+    ├── .env.example           # all stack-wide env vars, grouped per service
+    ├── setup-papaia.sh        # idempotent setup / secret generation
+    ├── backup-papaia.sh       # volume backup
+    ├── restore-papaia.sh      # volume restore
+    ├── infra/                 # keycloak, nginx, oauth2-proxy, technitium
+    ├── services/              # firecrawl, home-assistant, homepage,
+    │                          # paperless, searxng
+    └── ai/                    # doc-rag, jinaai, librechat, litellm,
+                               # localai, mcp-paperless, n8n
+```
+
+---
+
+## Further reading
+
+- [`src/README.md`](src/README.md) — Compose-level orchestration, service
+  toggles, common commands.
+- [`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) —
+  Realm contents, client list, external-IdP migration, secret rotation.
+- [`src/ai/README.md`](src/ai/README.md) — Per-AI-service summary.
+- [`src/ai/doc-rag/README.md`](src/ai/doc-rag/README.md) — RAG pipeline
+  reference: data flow, env vars, operations.

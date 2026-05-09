@@ -1,0 +1,170 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Firecrawl · Web Crawler
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  firecrawl:
+    image: ${FIRECRAWL_IMAGE}
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
+      REDIS_RATE_LIMIT_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
+      PLAYWRIGHT_MICROSERVICE_URL: ${PLAYWRIGHT_MICROSERVICE_URL:-http://firecrawl-playwright-service:3000/scrape}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_HOST: ${POSTGRES_HOST:-firecrawl-nuq-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      USE_DB_AUTHENTICATION: ${USE_DB_AUTHENTICATION:-false}
+      NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-8}
+      CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
+      BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      MODEL_NAME: ${MODEL_NAME}
+      MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME} 
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL} 
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+      BULL_AUTH_KEY: ${BULL_AUTH_KEY}
+      TEST_API_KEY: ${TEST_API_KEY}
+      SUPABASE_ANON_TOKEN: ${SUPABASE_ANON_TOKEN}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_TOKEN: ${SUPABASE_SERVICE_TOKEN}
+      SELF_HOSTED_WEBHOOK_URL: ${SELF_HOSTED_WEBHOOK_URL}
+      LOGGING_LEVEL: ${LOGGING_LEVEL}
+      PROXY_SERVER: ${PROXY_SERVER}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT}
+      SEARXNG_ENGINES: ${SEARXNG_ENGINES}
+      SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES}
+      HOST: "0.0.0.0"
+      PORT: ${INTERNAL_PORT:-3002}
+      EXTRACT_WORKER_PORT: ${EXTRACT_WORKER_PORT:-3004}
+      WORKER_PORT: ${WORKER_PORT:-3005}
+      NUQ_RABBITMQ_URL: amqp://fc-rabbitmq:5672
+      ENV: local  
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: node dist/src/harness.js --start-docker
+    # Resource limits for Docker Compose (not Swarm)
+    # Increase if you have more CPU cores/RAM available
+    cpus: 4.0
+    mem_limit: 8G
+    memswap_limit: 8G
+    depends_on:
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-playwright-service:
+        condition: service_started
+      firecrawl-rabbitmq:
+        condition: service_started  
+    ports:
+      - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   web-crawler
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    profiles: [firecrawl]
+
+  firecrawl-playwright-service:
+    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE}
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      PROXY_SERVER: ${PROXY_SERVER}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      BLOCK_MEDIA: ${BLOCK_MEDIA}
+      # Configure maximum concurrent pages for Playwright browser instances
+      MAX_CONCURRENT_PAGES: ${CRAWL_CONCURRENT_REQUESTS:-10}
+    # Resource limits for Docker Compose (not Swarm)
+    cpus: 2.0
+    mem_limit: 4G
+    memswap_limit: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   browser
+    profiles: [firecrawl]
+
+  firecrawl-redis:
+    image: ${FIRECRAWL_REDIS_IMAGE}
+    restart: unless-stopped
+    command: redis-server --bind 0.0.0.0
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   cache
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+        compress: "true"
+    profiles: [firecrawl]
+
+  firecrawl-rabbitmq:
+    image: ${FIRECRAWL_RABBITMQ_IMAGE}
+    restart: unless-stopped
+    command: rabbitmq-server
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   message-queue
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+        compress: "true"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    profiles: [firecrawl]
+  
+  firecrawl-nuq-postgres:
+    image: ${FIRECRAWL_NUCPOSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   database
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    profiles: [firecrawl]

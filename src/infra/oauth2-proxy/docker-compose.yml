@@ -1,0 +1,52 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — oauth2-proxy · Forward Authentication
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  oauth2-proxy:
+    image: ${OAUTH2_PROXY_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${OAUTH2_PROXY_EXT_PORT}:4180"
+    command:
+      # OIDC provider — discovery is skipped to allow split URLs:
+      #   browser-facing calls use KC_HOSTNAME (host.docker.internal / external)
+      #   server-side calls use the internal Docker service name (keycloak:8080)
+      - --provider=oidc
+      # Used only for iss-claim validation — must match KC_HOSTNAME in keycloak/.env
+      - --oidc-issuer-url=${OIDC_ISSUER}
+      - --skip-oidc-discovery=true
+      # Browser redirect to Keycloak login (external URL, reachable by the browser)
+      - --login-url=${OIDC_ISSUER_KC_AUTH}
+      # Server-side token exchange (internal Docker DNS — no host.docker.internal needed)
+      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
+      # JWKS for token verification (internal)
+      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --client-id=${OAUTH2_PROXY_CLIENT_ID}
+      - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
+      # Cookie. cookie-secure=true is required when the user reaches the stack
+      # over HTTPS — browsers refuse Secure cookies over plain HTTP, so the
+      # value tracks the scheme of PAPAIA_HOST. Set by the setup script.
+      - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
+      - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
+      - --cookie-name=_oauth2_proxy
+      # Forward-auth mode: returns 202 for authenticated, 401 for not authenticated
+      - --upstream=static://202
+      - --http-address=0.0.0.0:4180
+      - --redirect-url=${PAPAIA_HOST}:${OAUTH2_PROXY_EXT_PORT}/oauth2/callback
+      # Access control
+      - --email-domain=*
+      - --scope=${OIDC_SCOPES}
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+      - --provider-display-name=Keycloak (papAIa)
+      - --set-xauthrequest=true
+      - --pass-user-headers=true
+    # No healthcheck: the distroless image has no curl/wget.
+    # /ping endpoint returns 200 OK — verified externally.
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-auth
+      de.fidonis.role:   forward-auth
+    profiles: [oauth2-proxy]

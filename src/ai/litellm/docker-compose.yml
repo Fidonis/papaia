@@ -1,0 +1,73 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — LiteLLM · AI Proxy
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  litellm:
+    image: ${LITELLM_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:${LITELLM_PG_PASSWORD}@litellm-db:5432/litellm"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+    command:
+      - "--config=/app/config.yaml"
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${LITELLM_EXT_PORT}:4000"
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-litellm
+      de.fidonis.role:   llm-proxy
+    profiles: [litellm]
+
+  litellm-db:
+    image: ${LITELLM_DB_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: ${LITELLM_PG_PASSWORD}
+    volumes:
+      - litellm-postgresql:/var/lib/postgresql/data
+    # Port not exposed — use: docker exec -it <container> psql -U llmproxy litellm
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-litellm
+      de.fidonis.role:   database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+    profiles: [litellm]
+
+  litellm-prometheus:
+    image: ${LITELLM_PROMETHEUS_IMAGE}
+    restart: unless-stopped
+    volumes:
+      - litellm-prometheus:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    # Port not exposed — access via NPM reverse proxy with auth if needed
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-litellm
+      de.fidonis.role:   metrics
+    profiles: [litellm]
+
+# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
+# Volumes mounted on Linux: /var/lib/docker/volumes
+volumes:
+  litellm-postgresql:
+  litellm-prometheus:

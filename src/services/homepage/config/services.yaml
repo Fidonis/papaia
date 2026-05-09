@@ -1,0 +1,63 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/services/
+# Icons from https://dashboardicons.com/
+# {{HOMEPAGE_VAR_HOST}} is substituted with PAPAIA_HOST at runtime.
+
+- AI & Automation:
+    - LibreChat:
+        href: "{{HOMEPAGE_VAR_HOST}}:8000"
+        description: ChatGPT compatible, self-hosted AI chatbot
+        icon: librechat.svg
+        container: papaia-librechat-1
+        showStats: true
+    - N8N:
+        href: "{{HOMEPAGE_VAR_HOST}}:8400"
+        description: Self-hosted workflow automation tool
+        icon: n8n.svg
+        container: papaia-n8n-1
+        showStats: true
+    - LiteLLM:
+        href: "{{HOMEPAGE_VAR_HOST}}:8200/ui"
+        description: LLM proxy and load balancer
+        icon: tsd-proxy.svg
+        container: papaia-litellm-1
+        showStats: true
+
+- Tools:
+    - Paperless-ngx:
+        href: "{{HOMEPAGE_VAR_HOST}}:8010"
+        description: Self-hosted document management with OCR
+        icon: paperless-ngx.svg
+        container: papaia-paperless-1
+        widget:
+            type: paperlessngx
+            url: http://paperless:8000
+            key: your-keyless-key
+    - SearXNG:
+        href: "{{HOMEPAGE_VAR_HOST}}:8500"
+        description: Privacy-respecting metasearch engine
+        icon: searxng.svg
+        container: papaia-searxng-1
+    - Home Assistant:
+        href: "{{HOMEPAGE_VAR_HOST}}:8123"
+        description: Open-source home automation platform
+        icon: home-assistant.svg
+        container: homeassistant
+
+- Infrastructure:
+    - Keycloak:
+        href: "{{HOMEPAGE_VAR_HOST}}:8110/"
+        description: Identity and access management
+        icon: keycloak.svg
+        container: papaia-keycloak-1
+    - NGINX Proxy:
+        href: "{{HOMEPAGE_VAR_HOST}}:8100/"
+        description: Reverse proxy with admin UI
+        icon: nginx-proxy-manager.svg
+        container: papaia-nginx-proxy-manager-1
+    - Technitium:
+        href: "{{HOMEPAGE_VAR_HOST}}:8120/"
+        description: Self-hosted DNS server
+        icon: technitium.png
+        container: papaia-technitium-1

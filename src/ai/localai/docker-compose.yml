@@ -1,0 +1,109 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — LocalAI · Local LLM Hosting
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LocalAI Model Init
+  # ═══════════════════════════════════════════════════════════════════════════
+  localai-model-init:
+    image: ${LOCALAI_MODEL_INIT_IMAGE}
+    user: "0"
+    restart: "no"
+    volumes:
+      - localai-models:/models
+      - ./models.txt:/models-config/models.txt:ro
+    entrypoint: sh
+    command:
+      - -c
+      - |
+        grep -v '^\s*#' /models-config/models.txt | grep -v '^\s*$$' | while IFS= read -r url; do
+          filename=$$(basename "$$url")
+          if test -f "/models/$$filename"; then
+            echo "[model-init] $$filename already exists — skipped"
+          else
+            echo "[model-init] Downloading $$filename ..."
+            curl -fL -o "/models/$$filename" "$$url" && echo "[model-init] $$filename done" || echo "[model-init] $$filename FAILED" >&2
+          fi
+        done
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-localai
+      de.fidonis.role:   model-init
+    profiles: [localai]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LocalAI
+  # ═══════════════════════════════════════════════════════════════════════════
+  localai:
+    image: ${LOCALAI_IMAGE}
+    restart: unless-stopped
+    # Port not exposed directly — access only via localai-auth below
+    environment:
+      LOCALAI_LOG_LEVEL: ${LOCALAI_LOG_LEVEL:-info}
+      MODELS_PATH: /models
+      DEBUG: ${LOCALAI_DEBUG:-false}
+      LOCALAI_EXTERNAL_BACKENDS: "llama-cpp"
+    depends_on:
+      localai-model-init:
+        condition: service_completed_successfully
+    volumes:
+      - localai-models:/models
+    networks:
+      - papaia-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/models >/dev/null 2>&1 || exit 1"]
+      interval: ${LOCALAI_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${LOCALAI_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${LOCALAI_HEALTHCHECK_RETRIES:-5}
+      start_period: ${LOCALAI_HEALTHCHECK_START_PERIOD:-60s}
+    labels:
+      de.fidonis.module: papaia-localai
+      de.fidonis.role:   inference-engine
+    profiles: [localai]
+
+  # oauth2-proxy sidecar — protects LocalAI API with Keycloak authentication.
+  # Exposed on LOCALAI_EXT_PORT; LocalAI itself is only reachable inside Docker.
+  localai-auth:
+    image: ${OAUTH2_PROXY_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${LOCALAI_EXT_PORT}:4180"
+    command:
+      - --provider=oidc
+      - --oidc-issuer-url=${OIDC_ISSUER}
+      - --skip-oidc-discovery=true
+      - --login-url=${OIDC_ISSUER_KC_AUTH}
+      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
+      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --client-id=${OAUTH2_PROXY_CLIENT_ID}
+      - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
+      - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
+      - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
+      - --cookie-expire=10h
+      - --cookie-refresh=30m
+      - --redirect-url=${PAPAIA_HOST}:${LOCALAI_EXT_PORT}/oauth2/callback
+      - --upstream=http://localai:8080
+      - --http-address=0.0.0.0:4180
+      - --email-domain=*
+      - --scope=${OIDC_SCOPES}
+      - --oidc-groups-claim=roles
+      - --allowed-group=admin
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+      - --pass-user-headers=true
+      - --provider-display-name=Keycloak (papAIa)
+    depends_on:
+      localai:
+        condition: service_healthy
+    # No healthcheck: the distroless image has no curl/wget.
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-localai
+      de.fidonis.role:   sso-proxy
+    profiles: [localai]
+
+volumes:
+  localai-models:

@@ -1,0 +1,72 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Nginx Proxy Manager · Reverse Proxy
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  nginx-proxy-manager:
+    image: ${NPM_IMAGE}
+    restart: unless-stopped
+    volumes:
+      - nginx-proxy-manager-data:/data
+      - nginx-proxy-manager-letsencrypt:/etc/letsencrypt
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:81/api/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    ports:
+      - "80:80"
+      - "443:443"
+      # Admin port 81 is NOT exposed directly — access only via nginx-proxy-manager-auth below
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-nginx
+      de.fidonis.role:   reverse-proxy
+    profiles: [nginx]
+
+  # oauth2-proxy sidecar — protects the NPM admin UI with Keycloak authentication.
+  # Exposed on NPM_ADMIN_EXT_PORT; NPM admin (port 81) is only reachable inside Docker.
+  nginx-proxy-manager-auth:
+    image: ${OAUTH2_PROXY_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${NPM_ADMIN_EXT_PORT:-8100}:4180"
+    command:
+      - --provider=oidc
+      - --oidc-issuer-url=${OIDC_ISSUER}
+      - --skip-oidc-discovery=true
+      - --login-url=${OIDC_ISSUER_KC_AUTH}
+      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
+      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --client-id=${OAUTH2_PROXY_CLIENT_ID}
+      - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
+      - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
+      - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
+      - --redirect-url=${PAPAIA_HOST}:${NPM_ADMIN_EXT_PORT:-8100}/oauth2/callback
+      - --upstream=http://nginx-proxy-manager:81
+      - --http-address=0.0.0.0:4180
+      - --email-domain=*
+      - --scope=${OIDC_SCOPES}
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+      - --pass-user-headers=true
+      - --provider-display-name=Keycloak (papAIa)
+    depends_on:
+      nginx-proxy-manager:
+        condition: service_healthy
+    # No healthcheck: the distroless image has no curl/wget.
+    # /ping endpoint returns 200 OK — verified externally.
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-nginx
+      de.fidonis.role:   sso-proxy
+    profiles: [nginx]
+    
+# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
+# Volumes mounted on Linux: /var/lib/docker/volumes
+volumes:
+  nginx-proxy-manager-data:
+  nginx-proxy-manager-letsencrypt:
