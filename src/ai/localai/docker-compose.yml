@@ -12,7 +12,10 @@ services:
     restart: "no"
     volumes:
       - localai-models:/models
-      - ./models.txt:/models-config/models.txt:ro
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/localai/models.txt
+        target: /models-config/models.txt
+        read_only: true
     entrypoint: sh
     command:
       - -c
