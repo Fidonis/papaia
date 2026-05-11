@@ -136,6 +136,7 @@ External ports are configurable in `src/.env`. Defaults below.
 git clone https://github.com/marko-boehm/papaia.git
 cd papaia
 bin/setup-papaia.sh                                  # interactive
+src/sync-config.sh                                   # seed PAPAIA_CONFIG_DIR
 docker compose -f src/docker-compose.yml --env-file src/.env up -d
 ```
 
@@ -144,6 +145,12 @@ docker compose -f src/docker-compose.yml --env-file src/.env up -d
 for any value still set to `GENERATE_…`, and propagates Keycloak client
 secrets into every service that consumes them. Re-running is safe; pass
 `--force` only if you want to discard generated values and start over.
+
+`src/sync-config.sh` copies the shipped service-configuration defaults from
+`src/` into the externalised config directory at `${PAPAIA_CONFIG_DIR}`
+(see [Externalised service configuration](#externalised-service-configuration)
+below). It is non-destructive: existing files in the target are kept, so
+running it again after a `git pull` only fills in newly added defaults.
 
 ### Stopping
 
@@ -251,6 +258,84 @@ reminder.
 If the host is already running an edge proxy on ports 80/443, pass
 `--external-reverse-proxy` to keep the bundled nginx-proxy-manager
 out of `COMPOSE_PROFILES` (otherwise it port-conflicts on 80).
+
+### Externalised service configuration
+
+papAIa keeps customer-editable service configuration **outside** the repo so
+that local edits do not collide with `git pull` / fast-forward upgrades.
+The variable that drives this is `PAPAIA_CONFIG_DIR` in `src/.env`.
+
+```env
+# src/.env
+PAPAIA_CONFIG_DIR=/srv/papaia/config
+```
+
+`PAPAIA_CONFIG_DIR` must be an **absolute path** — Docker Compose resolves
+relative paths in `include:`d files against each file's own directory, so a
+relative value would resolve differently per service.
+
+The directory layout inside `${PAPAIA_CONFIG_DIR}` mirrors `src/` exactly,
+so the diff between the shipped default and the customer copy stays
+obvious:
+
+```
+${PAPAIA_CONFIG_DIR}/
+├── ai/
+│   ├── doc-rag/integrations/webdav/sync.sh
+│   ├── librechat/librechat.yaml
+│   ├── librechat/patches/{entrypoint.sh, mcp-user-headers.js, openidStrategy.js}
+│   ├── litellm/{config.yaml, prometheus.yml}
+│   ├── localai/models.txt
+│   ├── localai/models/{nomic-embed-text.yaml, qwen2.5-1.5b-instruct.yaml}
+│   └── n8n/nginx.conf
+├── infra/
+│   └── keycloak/
+│       ├── keycloak.conf
+│       └── realm-import/papaia-realm.json[.template]
+└── services/
+    ├── homepage/config/{bookmarks,custom.css,custom.js,docker,kubernetes,
+    │                    proxmox,services,settings,widgets}.{yaml,css,js}
+    └── searxng/settings.yml
+```
+
+Every bind-mount in `src/**/docker-compose.yml` references
+`${PAPAIA_CONFIG_DIR}/<mirrored-path>`. Editing a file inside the config
+directory and restarting the affected container therefore applies the
+change inside that container.
+
+#### Initial population
+
+```bash
+src/sync-config.sh                # uses PAPAIA_CONFIG_DIR from src/.env
+src/sync-config.sh /custom/path   # or pass an explicit target
+src/sync-config.sh --force        # overwrite (DESTRUCTIVE — discards edits)
+```
+
+The script copies every file listed above from `src/` into
+`${PAPAIA_CONFIG_DIR}`. By default existing target files are preserved, so
+the script is safe to re-run after upgrades.
+
+#### Upgrade flow
+
+```bash
+git pull                                                       # new repo version
+src/sync-config.sh                                             # add new defaults
+                                                               # (non-destructive)
+docker compose -f src/docker-compose.yml --env-file src/.env up -d
+```
+
+Customer overrides under `${PAPAIA_CONFIG_DIR}` survive the upgrade
+untouched. Any **new** files shipped by the upgrade land in the config
+directory next to the existing ones. To re-baseline a specific file to
+the new shipped default, delete it from `${PAPAIA_CONFIG_DIR}` first and
+re-run `src/sync-config.sh`.
+
+#### Backup
+
+`src/backup-papaia.sh` now also archives `${PAPAIA_CONFIG_DIR}` (as
+`papaia-config.tar.gz`) on every run if the directory exists. Restoring
+the config archive is a plain `tar xzf` into the target path — no Docker
+volume operations are required.
 
 ### Environment Setup (manual)
 
@@ -532,7 +617,8 @@ docker compose config             # render the merged compose file
     ├── docker-compose.yml     # root compose, includes per-service files
     ├── .env.example           # all stack-wide env vars, grouped per service
     ├── setup-papaia.sh        # idempotent setup / secret generation
-    ├── backup-papaia.sh       # volume backup
+    ├── sync-config.sh         # seed/refresh PAPAIA_CONFIG_DIR from src/
+    ├── backup-papaia.sh       # volume + PAPAIA_CONFIG_DIR backup
     ├── restore-papaia.sh      # volume restore
     ├── infra/                 # keycloak, nginx, oauth2-proxy, technitium
     ├── services/              # firecrawl, home-assistant, homepage,

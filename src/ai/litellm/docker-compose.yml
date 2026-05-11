@@ -11,7 +11,9 @@ services:
     environment:
       DATABASE_URL: "postgresql://llmproxy:${LITELLM_PG_PASSWORD}@litellm-db:5432/litellm"
     volumes:
-      - ./config.yaml:/app/config.yaml
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/litellm/config.yaml
+        target: /app/config.yaml
     command:
       - "--config=/app/config.yaml"
     depends_on:
@@ -53,7 +55,9 @@ services:
     restart: unless-stopped
     volumes:
       - litellm-prometheus:/prometheus
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/litellm/prometheus.yml
+        target: /etc/prometheus/prometheus.yml
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"

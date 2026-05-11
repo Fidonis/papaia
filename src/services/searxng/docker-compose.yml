@@ -14,7 +14,7 @@ services:
       - searxng_config:/etc/searxng
       - searxng_data:/var/cache/searxng
       - type: bind
-        source: ./settings.yml
+        source: ${PAPAIA_CONFIG_DIR}/services/searxng/settings.yml
         target: /etc/searxng/_data/settings.yml
     # Port not exposed directly — access only via searxng-auth below
     networks:

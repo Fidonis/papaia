@@ -29,7 +29,7 @@ services:
         source: ./.env
         target: /app/.env
       - type: bind
-        source: ./librechat.yaml
+        source: ${PAPAIA_CONFIG_DIR}/ai/librechat/librechat.yaml
         target: /app/librechat.yaml
       - librechat-images:/app/client/public/images
       - librechat-uploads:/app/uploads

@@ -16,7 +16,9 @@ services:
       HOMEPAGE_VAR_HOST:     ${PAPAIA_HOST:-http://host.docker.internal}
     # Port not exposed directly — access only via homepage-auth below
     volumes:
-      - ./config:/app/config
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/services/homepage/config
+        target: /app/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - papaia-net
