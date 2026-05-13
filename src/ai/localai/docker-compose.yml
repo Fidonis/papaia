@@ -16,10 +16,21 @@ services:
         source: ${PAPAIA_CONFIG_DIR}/ai/localai/models.txt
         target: /models-config/models.txt
         read_only: true
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/localai/models
+        target: /models-config/configs
+        read_only: true
     entrypoint: sh
     command:
       - -c
       - |
+        # Install model yaml configs into the volume so LocalAI can
+        # discover them on startup. Idempotent: cp overwrites with the
+        # current canonical config from ${PAPAIA_CONFIG_DIR}.
+        cp /models-config/configs/*.yaml /models/ 2>/dev/null \
+          && echo "[model-init] copied model yamls into /models/" \
+          || echo "[model-init] no model yamls found in /models-config/configs"
+
         grep -v '^\s*#' /models-config/models.txt | grep -v '^\s*$$' | while IFS= read -r url; do
           filename=$$(basename "$$url")
           if test -f "/models/$$filename"; then
