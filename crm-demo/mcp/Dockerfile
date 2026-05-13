@@ -8,7 +8,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 FROM node:20-alpine
 
-ARG ESPOMCP_REF=main
+ARG ESPOMCP_REF=master
 
 RUN apk add --no-cache git
 
