@@ -48,7 +48,7 @@ services:
       - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
       - --cookie-expire=10h
       - --cookie-refresh=30m
-      - --redirect-url=${PAPAIA_HOST}:${SEARXNG_EXT_PORT:-8500}/oauth2/callback
+      - --redirect-url=${SEARXNG_PUBLIC_URL}/oauth2/callback
       - --upstream=http://searxng:8080
       - --http-address=0.0.0.0:4180
       - --email-domain=*

@@ -45,7 +45,7 @@ services:
       - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
       - --cookie-expire=10h
       - --cookie-refresh=30m
-      - --redirect-url=${PAPAIA_HOST}:${HOMEPAGE_EXT_PORT:-8300}/oauth2/callback
+      - --redirect-url=${HOMEPAGE_PUBLIC_URL}/oauth2/callback
       - --upstream=http://homepage:3000
       - --http-address=0.0.0.0:4180
       - --email-domain=*
