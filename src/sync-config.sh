@@ -102,6 +102,7 @@ FILES=(
 DIRS=(
     "infra/keycloak/realm-import"
     "services/homepage/config"
+    "ai/localai/models"
 )
 
 copied=0
