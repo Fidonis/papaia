@@ -1,0 +1,150 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# crm-demo — EspoCRM + EspoMCP (HTTP)
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+# Standalone demo stack. Not integrated with the rest of papAIa (no Keycloak,
+# no oauth2-proxy, no shared papaia-net) — runs on its own bridge network.
+#
+# Quick start:
+#   cp .env.example .env
+#   # edit .env: set DB/admin passwords and (after first login) ESPOCRM_API_KEY
+#   docker compose up -d espocrm-db espocrm espocrm-daemon espocrm-websocket
+#   # → open http://localhost:8080, log in as admin, create an API user with an
+#   #   API key, paste the key into .env, then:
+#   docker compose up -d espocrm-mcp
+# ═══════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # DATABASE — MariaDB
+  # ═════════════════════════════════════════════════════════════════════════
+  espocrm-db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${ESPOCRM_DB_ROOT_PASSWORD}
+      MARIADB_DATABASE:      ${ESPOCRM_DB_NAME:-espocrm}
+      MARIADB_USER:          ${ESPOCRM_DB_USER:-espocrm}
+      MARIADB_PASSWORD:      ${ESPOCRM_DB_PASSWORD}
+    volumes:
+      - espocrm-db-data:/var/lib/mysql
+    networks:
+      - crm-demo-net
+    labels:
+      de.fidonis.module: crm-demo
+      de.fidonis.role:   database
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # WEBSERVER — EspoCRM (Apache flavour)
+  #
+  # First boot performs the unattended installation using the
+  # ESPOCRM_ADMIN_* credentials below.
+  # ═════════════════════════════════════════════════════════════════════════
+  espocrm:
+    image: espocrm/espocrm:latest
+    restart: unless-stopped
+    depends_on:
+      - espocrm-db
+    environment:
+      ESPOCRM_DATABASE_PLATFORM:        Mysql
+      ESPOCRM_DATABASE_HOST:            espocrm-db
+      ESPOCRM_DATABASE_NAME:            ${ESPOCRM_DB_NAME:-espocrm}
+      ESPOCRM_DATABASE_USER:            ${ESPOCRM_DB_USER:-espocrm}
+      ESPOCRM_DATABASE_PASSWORD:        ${ESPOCRM_DB_PASSWORD}
+      ESPOCRM_ADMIN_USERNAME:           ${ESPOCRM_ADMIN_USERNAME:-admin}
+      ESPOCRM_ADMIN_PASSWORD:           ${ESPOCRM_ADMIN_PASSWORD}
+      ESPOCRM_SITE_URL:                 ${ESPOCRM_SITE_URL:-http://localhost:8080}
+      ESPOCRM_CONFIG_USE_WEB_SOCKET:    "true"
+    volumes:
+      - espocrm-data:/var/www/html
+    ports:
+      - "${ESPOCRM_EXT_PORT:-8080}:80"
+    networks:
+      - crm-demo-net
+    labels:
+      de.fidonis.module: crm-demo
+      de.fidonis.role:   webserver
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # DAEMON — cron / background job runner
+  # ═════════════════════════════════════════════════════════════════════════
+  espocrm-daemon:
+    image: espocrm/espocrm:latest
+    restart: unless-stopped
+    depends_on:
+      - espocrm
+    environment:
+      ESPOCRM_CONFIG_USE_WEB_SOCKET: "true"
+    volumes:
+      - espocrm-data:/var/www/html
+    entrypoint: docker-daemon.sh
+    networks:
+      - crm-demo-net
+    labels:
+      de.fidonis.module: crm-demo
+      de.fidonis.role:   daemon
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # WEBSOCKET — real-time notifications
+  # ═════════════════════════════════════════════════════════════════════════
+  espocrm-websocket:
+    image: espocrm/espocrm:latest
+    restart: unless-stopped
+    depends_on:
+      - espocrm
+    environment:
+      ESPOCRM_CONFIG_USE_WEB_SOCKET: "true"
+    volumes:
+      - espocrm-data:/var/www/html
+    entrypoint: docker-websocket.sh
+    ports:
+      - "${ESPOCRM_WS_EXT_PORT:-8081}:8080"
+    networks:
+      - crm-demo-net
+    labels:
+      de.fidonis.module: crm-demo
+      de.fidonis.role:   websocket
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # MCP SERVER — EspoMCP (stdio) wrapped by supergateway for HTTP transport
+  #
+  # Upstream (zaphod-black/EspoMCP) ships stdio-only. We build it from source
+  # and expose it over Streamable HTTP via supergateway on port 8000.
+  #   Endpoint:  http://localhost:${MCP_EXT_PORT}/mcp   (streamable-http)
+  #              http://localhost:${MCP_EXT_PORT}/sse   (legacy SSE)
+  #
+  # Configure the MCP client to point at the streamable-http URL.
+  # ═════════════════════════════════════════════════════════════════════════
+  espocrm-mcp:
+    build:
+      context: ./mcp
+    restart: unless-stopped
+    depends_on:
+      - espocrm
+    environment:
+      # Internal URL — MCP container talks to EspoCRM over the compose network.
+      ESPOCRM_URL:           http://espocrm
+      ESPOCRM_API_KEY:       ${ESPOCRM_API_KEY}
+      ESPOCRM_AUTH_METHOD:   ${ESPOCRM_AUTH_METHOD:-apikey}
+      ESPOCRM_SECRET_KEY:    ${ESPOCRM_SECRET_KEY:-}
+      RATE_LIMIT:            ${MCP_RATE_LIMIT:-100}
+      REQUEST_TIMEOUT:       ${MCP_REQUEST_TIMEOUT:-30000}
+      LOG_LEVEL:             ${MCP_LOG_LEVEL:-info}
+      # supergateway listener
+      MCP_PORT:              "8000"
+    ports:
+      - "${MCP_EXT_PORT:-8090}:8000"
+    networks:
+      - crm-demo-net
+    labels:
+      de.fidonis.module: crm-demo
+      de.fidonis.role:   mcp-server
+
+networks:
+  crm-demo-net:
+    driver: bridge
+
+volumes:
+  espocrm-db-data:
+  espocrm-data:
