@@ -145,7 +145,7 @@ services:
 networks:
   papaia-net:
     external: true
-    name: papaia-dev-net
+    name: ${PAPAIA_DOCKER_NETWORK:-papaia-dev-net}
 
   crm-demo-net:
     driver: bridge

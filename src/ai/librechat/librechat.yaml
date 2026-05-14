@@ -123,11 +123,17 @@ mcpServers:
     description: 'Semantische Suche in persoenlichen Dokumenten (Nextcloud-Sync).'
     type: streamable-http
     url: http://docrag-api:8000/mcp
+  EspoCRM:
+     title: 'EspoCRM'
+     description: 'MCP server for EspoCRM customer relationship management system.'
+     type: streamable-http
+     url: http://espocrm-mcp:9010/mcp
 
 mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:3000"
     - "http://docrag-api:8000"
+    - "http://espocrm-mcp:9010"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain
