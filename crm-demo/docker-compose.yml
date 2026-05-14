@@ -59,7 +59,7 @@ services:
     volumes:
       - espocrm-data:/var/www/html
     ports:
-      - "${ESPOCRM_EXT_PORT:-8080}:80"
+      - "${ESPOCRM_EXT_PORT:-9000}:80"
     networks:
       - crm-demo-net
     labels:
@@ -99,7 +99,7 @@ services:
       - espocrm-data:/var/www/html
     entrypoint: docker-websocket.sh
     ports:
-      - "${ESPOCRM_WS_EXT_PORT:-8081}:8080"
+      - "${ESPOCRM_WS_EXT_PORT:-9001}:8080"
     networks:
       - crm-demo-net
     labels:
@@ -132,16 +132,21 @@ services:
       REQUEST_TIMEOUT:       ${MCP_REQUEST_TIMEOUT:-30000}
       LOG_LEVEL:             ${MCP_LOG_LEVEL:-info}
       # supergateway listener
-      MCP_PORT:              "8000"
+      MCP_PORT:              "9010"
     ports:
-      - "${MCP_EXT_PORT:-8090}:8000"
+      - "${MCP_EXT_PORT:-9010}:9010"
     networks:
       - crm-demo-net
+      - papaia-net
     labels:
       de.fidonis.module: crm-demo
       de.fidonis.role:   mcp-server
 
 networks:
+  papaia-net:
+    external: true
+    name: papaia-dev-net
+
   crm-demo-net:
     driver: bridge
 
