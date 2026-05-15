@@ -73,7 +73,7 @@ services:
       - lc-meilisearch:/meili_data
     networks:
       - default
-    
+
   lc-vectordb:
     container_name: lc-vectordb
     env_file:

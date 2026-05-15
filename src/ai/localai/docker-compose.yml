@@ -51,11 +51,9 @@ services:
       start_period: ${LOCALAI_HEALTHCHECK_START_PERIOD:-60s}
 
 volumes:
-  localai-models:  
+  localai-models:
 
 networks:
   default:
     name: ${DOCKER_NETWORK}
     external: true
-
-

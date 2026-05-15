@@ -7,7 +7,7 @@ services:
       - redisdata:/data
     networks:
       - default
-  
+
   pl-db:
     image: docker.io/library/postgres:18
     container_name: pl-db
@@ -19,10 +19,10 @@ services:
     environment:
       POSTGRES_DB: ${PAPERLESS_DB}
       POSTGRES_USER: ${PAPERLESS_DBUSER}
-      POSTGRES_PASSWORD: ${PAPERLESS_DBPASS} 
+      POSTGRES_PASSWORD: ${PAPERLESS_DBPASS}
     networks:
       - default
-  
+
   paperless:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.20.10
     container_name: paperless
@@ -48,7 +48,7 @@ services:
       PAPERLESS_TIKA_ENDPOINT: http://pl-tika:9998
     networks:
       - default
-  
+
   pl-gotenberg:
     image: docker.io/gotenberg/gotenberg:8.25
     container_name: pl-gotenberg

@@ -77,18 +77,18 @@ services:
       docrag-sync:
         condition: service_started
     environment:
-      DOCS_PATH:          /data/docs
-      LITELLM_URL:        ${LITELLM_URL:-http://litellm:4000/v1}
-      LITELLM_API_KEY:    ${LITELLM_API_KEY}
-      EMBED_MODEL:        ${EMBED_MODEL:-nomic-embed-text}
-      QDRANT_URL:         http://docrag-vectordb:6333
-      SCAN_INTERVAL:      ${SCAN_INTERVAL:-60}
-      CHUNK_WORDS:        ${CHUNK_WORDS:-400}
-      CHUNK_OVERLAP:      ${CHUNK_OVERLAP:-50}
-      EMBED_BATCH_SIZE:   ${EMBED_BATCH_SIZE:-32}
-      EMBED_RETRIES:      ${EMBED_RETRIES:-3}
-      EMBED_RETRY_DELAY:  ${EMBED_RETRY_DELAY:-5.0}
-      STATE_PATH:         /data/state
+      DOCS_PATH: /data/docs
+      LITELLM_URL: ${LITELLM_URL:-http://litellm:4000/v1}
+      LITELLM_API_KEY: ${LITELLM_API_KEY}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      QDRANT_URL: http://docrag-vectordb:6333
+      SCAN_INTERVAL: ${SCAN_INTERVAL:-60}
+      CHUNK_WORDS: ${CHUNK_WORDS:-400}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-50}
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-32}
+      EMBED_RETRIES: ${EMBED_RETRIES:-3}
+      EMBED_RETRY_DELAY: ${EMBED_RETRY_DELAY:-5.0}
+      STATE_PATH: /data/state
     volumes:
       - docs:/data/docs:ro
       - docrag-state:/data/state
@@ -118,13 +118,13 @@ services:
     ports:
       - "${DOC_RAG_EXT_PORT:-8700}:8000"
     environment:
-      LITELLM_URL:        ${LITELLM_URL:-http://litellm:4000/v1}
-      LITELLM_API_KEY:    ${LITELLM_API_KEY}
-      EMBED_MODEL:        ${EMBED_MODEL:-nomic-embed-text}
-      QDRANT_URL:         http://docrag-vectordb:6333
-      DEFAULT_TOP_K:      ${DEFAULT_TOP_K:-5}
-      DEFAULT_MIN_SCORE:  ${DEFAULT_MIN_SCORE:-0.5}
-      STATE_PATH:         /data/state
+      LITELLM_URL: ${LITELLM_URL:-http://litellm:4000/v1}
+      LITELLM_API_KEY: ${LITELLM_API_KEY}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      QDRANT_URL: http://docrag-vectordb:6333
+      DEFAULT_TOP_K: ${DEFAULT_TOP_K:-5}
+      DEFAULT_MIN_SCORE: ${DEFAULT_MIN_SCORE:-0.5}
+      STATE_PATH: /data/state
     volumes:
       - docrag-state:/data/state
     networks:
