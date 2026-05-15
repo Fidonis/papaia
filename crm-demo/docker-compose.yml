@@ -42,7 +42,7 @@ services:
   # ESPOCRM_ADMIN_* credentials below.
   # ═════════════════════════════════════════════════════════════════════════
   espocrm:
-    image: espocrm/espocrm:latest
+    image: espocrm/espocrm:9.3.6
     restart: unless-stopped
     depends_on:
       - espocrm-db
@@ -70,7 +70,7 @@ services:
   # DAEMON — cron / background job runner
   # ═════════════════════════════════════════════════════════════════════════
   espocrm-daemon:
-    image: espocrm/espocrm:latest
+    image: espocrm/espocrm:9.3.6
     restart: unless-stopped
     depends_on:
       - espocrm
@@ -89,7 +89,7 @@ services:
   # WEBSOCKET — real-time notifications
   # ═════════════════════════════════════════════════════════════════════════
   espocrm-websocket:
-    image: espocrm/espocrm:latest
+    image: espocrm/espocrm:9.3.6
     restart: unless-stopped
     depends_on:
       - espocrm
