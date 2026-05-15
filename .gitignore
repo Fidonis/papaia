@@ -9,3 +9,6 @@ src/infra/keycloak/realm-import/papaia-realm.json
 *.bin
 *.safetensors
 
+# Deployment lock file (written into PAPAIA_CONFIG_DIR)
+deployed.lock
+
