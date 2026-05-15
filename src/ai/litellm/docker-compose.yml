@@ -15,12 +15,12 @@ services:
     command:
       - "--config=/app/config.yaml"
     ports:
-      - "${LITELLM_EXT_PORT}:4000" # Map the container port to the host, change the host port if necessary
+      - "${LITELLM_EXT_PORT}:4000"  # Map the container port to the host, change the host port if necessary
     environment:
       DATABASE_URL: "postgresql://llmproxy:${LITELLM_PG_PASSWORD}@litellm-db:5432/litellm"
-      STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+      STORE_MODEL_IN_DB: "True"  # allows adding models to proxy via UI
     env_file:
-      - ./.env # Load local .env file
+      - ./.env  # Load local .env file
     depends_on:
       - litellm-db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
     healthcheck:  # Defines the health check configuration for the container
@@ -43,14 +43,14 @@ services:
     ports:
       - "${LITELLM_EXT_PG_PORT}:5432"
     volumes:
-      - litellm-postgresql:/var/lib/postgresql/data # Persists Postgres data across container restarts
+      - litellm-postgresql:/var/lib/postgresql/data  # Persists Postgres data across container restarts
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
       interval: 1s
       timeout: 5s
       retries: 10
     networks:
-      - default 
+      - default
 
   litellm-prometheus:
     image: prom/prometheus

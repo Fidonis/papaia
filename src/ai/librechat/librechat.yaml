@@ -1,29 +1,29 @@
 version: 1.3.5
- 
+
 cache: true
- 
+
 interface:
   # MCP Servers UI configuration
   mcpServers:
     placeholder: 'MCP Servers'
-    
+
   # Privacy policy settings
   privacyPolicy:
     externalUrl: 'https://librechat.ai/privacy-policy'
     openNewTab: true
- 
+
   # Terms of service
   termsOfService:
     externalUrl: 'https://librechat.ai/tos'
     openNewTab: true
- 
+
 registration:
   socialLogins: ["discord", "facebook", "github", "google", "openid"]
- 
+
 endpoints:
   custom:
     - name: "Private-LLM"
-      apiKey: "${LITELLM_API_KEY}" #"user_provided" or replace with your private API key
+      apiKey: "${LITELLM_API_KEY}"  # "user_provided" or replace with your private API key
       baseURL: "http://litellm:4000/v1"
       # if using LiteLLM example in docker-compose.override.yml.example, use "http://litellm:8000/v1"
       models:
@@ -37,34 +37,34 @@ endpoints:
 webSearch:
   # Search Provider Configuration
   searxngInstanceUrl: "${SEARXNG_INSTANCE_URL}"
-  #searxngApiKey: "${SEARXNG_API_KEY}"
-  searchProvider: "searxng" # Options: "serper", "searxng"
-  
+  # searxngApiKey: "${SEARXNG_API_KEY}"
+  searchProvider: "searxng"  # Options: "serper", "searxng"
+
   # Scraper Configuration
   firecrawlApiKey: "${FIRECRAWL_API_KEY}"
   firecrawlApiUrl: "${FIRECRAWL_API_URL}"
-  #firecrawlVersion: "${FIRECRAWL_VERSION}"
+  # firecrawlVersion: "${FIRECRAWL_VERSION}"
   firecrawlOptions:
     parsePDF: true
     blockAds: true
     onlyMainContent: true
     formats: ["markdown", "rawHtml"]
-  scraperProvider: "firecrawl" # Options: "firecrawl", "serper"
- 
+  scraperProvider: "firecrawl"  # Options: "firecrawl", "serper"
+
   # Reranker Configuration
   jinaApiKey: "${JINA_API_KEY}"
   jinaApiUrl: "${JINA_API_URL}"
-  rerankerType: "jina" # Options: "jina", "cohere"
- 
+  rerankerType: "jina"  # Options: "jina", "cohere"
+
   # General Settings
-  scraperTimeout: 7500 # Timeout in milliseconds for scraper requests (default: 7500)
-  safeSearch: 1 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
+  scraperTimeout: 7500  # Timeout in milliseconds for scraper requests (default: 7500)
+  safeSearch: 1  # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
 
 memory:
   disabled: false  # Set to true to completely disable memory
-  validKeys: 
+  validKeys:
     - "user_preferences"
-    - "conversation_context" 
+    - "conversation_context"
     - "learned_facts"
     - "personal_information"
   personalize: true  # Gives users the ability to toggle memory on/off, true by default
@@ -74,11 +74,11 @@ memory:
     provider: "Private-LLM"
     model: "qwen2.5-1.5b-instruct"
     instructions: |
-      Store memory using only the specified validKeys. For user_preferences: save 
-      explicitly stated preferences about communication style, topics of interest, 
-      or workflow preferences. For conversation_context: save important facts or 
-      ongoing projects mentioned. For learned_facts: save objective information 
-      about the user. For personal_information: save only what the user explicitly 
+      Store memory using only the specified validKeys. For user_preferences: save
+      explicitly stated preferences about communication style, topics of interest,
+      or workflow preferences. For conversation_context: save important facts or
+      ongoing projects mentioned. For learned_facts: save objective information
+      about the user. For personal_information: save only what the user explicitly
       shares about themselves. Delete outdated or incorrect information promptly.
     model_parameters:
       temperature: 0.2
@@ -89,7 +89,7 @@ memory:
 fileConfig:
   # Maximum tokens from text files before truncation
   fileTokenLimit: 100000
-  
+
   # Files matching these patterns use OCR (if configured)
   ocr:
     supportedMimeTypes:
@@ -98,17 +98,17 @@ fileConfig:
       - "^application/vnd\\.openxmlformats-officedocument\\.(wordprocessingml\\.document|presentationml\\.presentation|spreadsheetml\\.sheet)$"
       - "^application/vnd\\.ms-(word|powerpoint|excel)$"
       - "^application/epub\\+zip$"
-  
+
   # Files matching these patterns use text parsing
   text:
     supportedMimeTypes:
       - "^text/(plain|markdown|csv|json|xml|html|css|javascript|typescript|x-python|x-java|x-csharp|x-php|x-ruby|x-go|x-rust|x-kotlin|x-swift|x-scala|x-perl|x-lua|x-shell|x-sql|x-yaml|x-toml)$"
-  
+
   # Files matching these patterns use STT (if configured)
   stt:
     supportedMimeTypes:
       - "^audio/(mp3|mpeg|mpeg3|wav|wave|x-wav|ogg|vorbis|mp4|x-m4a|flac|x-flac|webm)$"
-      
+
 ocr:
   strategy: "document_parser"
 
@@ -128,7 +128,7 @@ mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:3000"
     - "http://docrag-api:8000"
-    #- "example.com"                       # Specific domain
+    # - "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain
     # - "172.24.1.165"                     # Internal network IP

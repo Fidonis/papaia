@@ -26,13 +26,13 @@
 - Tools:
     - Paperless-ngx:
         href: http://server:8010
-        description: Self-hosted document management system with OCR and a nice UI 
+        description: Self-hosted document management system with OCR and a nice UI
         icon: paperless-ngx.svg
         container: paperless
         widget:
-            type: paperlessngx
-            url: http://paperless:8000
-            key: your-keyless-key
+          type: paperlessngx
+          url: http://paperless:8000
+          key: your-keyless-key
     - Home Assistant:
         href: http://server:8123
         description: Open-source home automation platform with a powerful dashboard and integrations
