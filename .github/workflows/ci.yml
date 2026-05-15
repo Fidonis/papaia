@@ -27,7 +27,7 @@ jobs:
       - name: Install yamllint
         run: pip install --user yamllint
       - name: Run yamllint
-        run: yamllint -d "{extends: default, rules: {line-length: disable, comments-indentation: disable, document-start: disable, truthy: {check-keys: false}}}" .
+        run: yamllint .
 
   lint-docker:
     name: Hadolint
