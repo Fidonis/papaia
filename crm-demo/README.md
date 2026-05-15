@@ -177,9 +177,9 @@ EspoMCP authenticates as a dedicated **API User** (not the admin account):
 2. Set **Authentication Method**:
    - **API Key Only** → matches `ESPOCRM_AUTH_METHOD=apikey`.
    - **HMAC** → matches `ESPOCRM_AUTH_METHOD=hmac`. Note the secret too.
-3. Assign a role that grants access to the entities the agent should reach
-   (Accounts, Contacts, Opportunities, …). A read-only role is a sensible
-   starting point.
+3. Assign a role that grants access to the entities the MCP client should
+   reach (Accounts, Contacts, Opportunities, …). A read-only role is a
+   sensible starting point.
 4. Save the user. EspoCRM shows the generated **API Key** (and, for HMAC, the
    **Secret Key**).
 5. Paste the values into `.env`:
