@@ -31,9 +31,9 @@
         icon: paperless-ngx.svg
         container: papaia-paperless-1
         widget:
-            type: paperlessngx
-            url: http://paperless:8000
-            key: your-keyless-key
+          type: paperlessngx
+          url: http://paperless:8000
+          key: your-keyless-key
     - SearXNG:
         href: "{{HOMEPAGE_VAR_HOST}}:8500"
         description: Privacy-respecting metasearch engine

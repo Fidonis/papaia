@@ -47,12 +47,12 @@ services:
       de.fidonis.role:   identity-provider
     healthcheck:
       test: ["CMD-SHELL", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000"]
-      interval: 30s          
-      timeout: 10s           
-      retries: 5             
-      start_period: 40s      
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
     profiles: [keycloak]
-  
+
   keycloak-postgres:
     image: ${KEYCLOAK_POSTGRES_IMAGE}
     restart: unless-stopped

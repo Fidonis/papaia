@@ -31,7 +31,7 @@ fi
 # Restore durchführen
 docker run --rm \
   -v ${VOLUME_NAME}:/volume \
-  -v $(dirname "$BACKUP_FILE"):/backup \
+  -v "$(dirname "$BACKUP_FILE"):/backup" \
   alpine \
   sh -c "rm -rf /volume/* && tar xzf /backup/$(basename "$BACKUP_FILE") -C /volume"
 

@@ -110,7 +110,7 @@ services:
       de.fidonis.module: papaia-n8n
       de.fidonis.role:   sso-proxy
     profiles: [n8n]
-    
+
   # ═══════════════════════════════════════════════════════════════════════════
   #  N8N-DB — PostgreSQL
   # ═══════════════════════════════════════════════════════════════════════════
@@ -134,7 +134,7 @@ services:
       de.fidonis.module: papaia-n8n
       de.fidonis.role:   database
     profiles: [n8n]
-    
+
 volumes:
   n8n-data:
   n8n-pgdata:

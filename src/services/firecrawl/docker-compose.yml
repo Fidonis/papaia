@@ -23,8 +23,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
       MODEL_NAME: ${MODEL_NAME}
-      MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME} 
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL} 
+      MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
       BULL_AUTH_KEY: ${BULL_AUTH_KEY}
       TEST_API_KEY: ${TEST_API_KEY}
@@ -44,7 +44,7 @@ services:
       EXTRACT_WORKER_PORT: ${EXTRACT_WORKER_PORT:-3004}
       WORKER_PORT: ${WORKER_PORT:-3005}
       NUQ_RABBITMQ_URL: amqp://fc-rabbitmq:5672
-      ENV: local  
+      ENV: local
     ulimits:
       nofile:
         soft: 65535
@@ -63,7 +63,7 @@ services:
       firecrawl-playwright-service:
         condition: service_started
       firecrawl-rabbitmq:
-        condition: service_started  
+        condition: service_started
     ports:
       - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
     networks:
@@ -148,7 +148,7 @@ services:
       retries: 3
       start_period: 5s
     profiles: [firecrawl]
-  
+
   firecrawl-nuq-postgres:
     image: ${FIRECRAWL_NUCPOSTGRES_IMAGE}
     restart: unless-stopped

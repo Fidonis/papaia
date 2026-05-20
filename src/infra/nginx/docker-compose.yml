@@ -64,7 +64,7 @@ services:
       de.fidonis.module: papaia-nginx
       de.fidonis.role:   sso-proxy
     profiles: [nginx]
-    
+
 # Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
 # Volumes mounted on Linux: /var/lib/docker/volumes
 volumes:

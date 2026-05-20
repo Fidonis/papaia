@@ -101,6 +101,6 @@ services:
       de.fidonis.module: papaia-technitium
       de.fidonis.role:   sso-proxy
     profiles: [technitium]
-    
+
 volumes:
   technitium-config:

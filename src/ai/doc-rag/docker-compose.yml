@@ -111,7 +111,7 @@ services:
       de.fidonis.module: papaia-doc-rag
       de.fidonis.role: ingester
     profiles: [doc-rag]
-    
+
   # ═══════════════════════════════════════════════════════════════════════════
   #  API — MCP server and query interface
   #
@@ -146,7 +146,7 @@ services:
       de.fidonis.module: papaia-doc-rag
       de.fidonis.role: api
     profiles: [doc-rag]
-    
+
 volumes:
   docrag-docs:
   docrag-qdrant:
