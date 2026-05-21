@@ -1,8 +1,8 @@
 # papAIa — Compose Orchestration
 
 This directory holds the runtime side of the papAIa stack: the root
-`docker-compose.yml`, the global `.env` template, the setup / backup /
-restore scripts, and one subdirectory per service category.
+`docker-compose.yml`, the global `.env` template, the config-sync /
+backup / restore scripts, and one subdirectory per service category.
 
 For an architecture overview and feature highlights of the **0.6.0**
 release, see the [top-level README](../README.md).
@@ -15,7 +15,6 @@ release, see the [top-level README](../README.md).
 src/
 ├── docker-compose.yml      # root compose — includes per-service compose files
 ├── .env.example            # all stack-wide variables, grouped per service
-├── setup-papaia.sh         # idempotent setup / secret generation
 ├── sync-config.sh          # seed PAPAIA_CONFIG_DIR with shipped defaults
 ├── backup-papaia.sh        # gzipped backups of all named Docker volumes
 │                           # plus the PAPAIA_CONFIG_DIR tree
@@ -36,7 +35,7 @@ src/
     ├── jinaai/             # Jina reranker (commented out by default)
     ├── librechat/          # multi-provider chat UI (OIDC)
     ├── litellm/            # LLM proxy + Postgres + Prometheus (OIDC)
-    ├── localai/            # local OpenAI-compatible inference
+    ├── localai/            # local chat-completions inference
     ├── mcp-paperless/      # per-user Paperless proxy for LibreChat
     └── n8n/                # workflow automation (oauth2-proxy)
 ```
@@ -49,36 +48,48 @@ configuration lives in the corresponding subdirectory.
 
 ## First-time setup
 
+papAIa is configured by hand from the shipped `.env.example` templates.
+The full step-by-step lives in the
+[top-level README](../README.md#single-host-setup-default); in short:
+
 ```bash
 cd src/
-./setup-papaia.sh
-./sync-config.sh             # populate $PAPAIA_CONFIG_DIR with shipped defaults
+
+# 1. Copy .env.example → .env here and in every service directory,
+#    then replace each GENERATE_… placeholder with a real secret.
+cp .env.example .env
+
+# 2. Create the realm file Keycloak imports on first start.
+cp infra/keycloak/realm-import/papaia-realm.json.template \
+   infra/keycloak/realm-import/papaia-realm.json
+
+# 3. Populate $PAPAIA_CONFIG_DIR with the shipped defaults.
+./sync-config.sh
+
+# 4. Bring the stack up.
+docker compose up -d
 ```
 
-The script is idempotent and safe to re-run:
+Key points when filling in the `.env` files:
 
-- Existing `.env` files are preserved unless `--force` is used.
-- Secrets are only generated where the value is still `GENERATE_…`.
-- `UID` / `GID` in `src/.env` are always overwritten with the current
-  host user's IDs (so bind-mounted files end up with the right owner on
-  Linux; ignored on Docker Desktop).
-- Keycloak client secrets are written into `infra/keycloak/.env` and then
-  propagated into each consuming service's `.env`. The
-  `realm-import/papaia-realm.json` file is regenerated from the template
-  with all `${env.VAR}` placeholders substituted.
-- `PAPAIA_HOST` is auto-detected on Linux (primary IP) and falls back to
-  `http://host.docker.internal` elsewhere. All OIDC redirect URLs and
-  service public URLs are derived from it.
+- Replace every `GENERATE_…` value with a fresh secret
+  (`openssl rand -hex 24`, or `openssl rand -base64 32` for the 32-byte
+  `*_COOKIE_SECRET` values).
+- Each Keycloak client secret must hold the **same value** in
+  `infra/keycloak/.env` and in the consuming service's `.env`.
+- Set `UID` / `GID` in `src/.env` to the host user's IDs so bind-mounted
+  files end up with the right owner on Linux (ignored on Docker Desktop).
+- `realm-import/papaia-realm.json` keeps `${env.VAR}` placeholders for the
+  client secrets — Keycloak substitutes them at import time from the
+  container environment, so a plain copy of the template is enough.
+- `PAPAIA_HOST` drives all OIDC redirect URLs and service public URLs. On
+  Linux use the host's primary IP; elsewhere `http://host.docker.internal`
+  works out of the box.
 
-After the first run, only the optional modules need an interactive answer
-(LocalAI, doc-rag, n8n, SearXNG, Homepage, Paperless-ngx). Modules you
-opt into are uncommented in `docker-compose.yml`; modules you skip stay
-commented out and are not started.
-
-> **Re-running:** simply call `./setup-papaia.sh` again. To wipe everything
-> and start over with fresh secrets, use `./setup-papaia.sh --force` —
-> note that this **replaces** all generated `.env` values and any manual
-> edits made to them.
+Enable optional modules (LocalAI, doc-rag, n8n, SearXNG, Homepage,
+Paperless-ngx) by adding their profile to `COMPOSE_PROFILES` in `src/.env`
+and uncommenting their `include:` line in `docker-compose.yml` — see
+[Toggling modules](#toggling-modules) below.
 
 ---
 
@@ -141,12 +152,11 @@ include:
 To enable or disable a module:
 
 1. Comment / uncomment its `- path:` line.
-2. Make sure its `.env` file exists (run `./setup-papaia.sh` if needed).
-3. `docker compose up -d` to start, or `docker compose down <service>`
+2. Make sure its `.env` file exists — copy the matching `.env.example`
+   and fill in any `GENERATE_…` placeholders if it does not.
+3. Add or remove its profile in `COMPOSE_PROFILES` in `src/.env`.
+4. `docker compose up -d` to start, or `docker compose down <service>`
    to stop a no-longer-included one.
-
-The setup script automates this for the modules it asks about
-(LocalAI, doc-rag, n8n, SearXNG, Homepage, Paperless-ngx + MCP Paperless).
 
 ---
 
@@ -204,9 +214,8 @@ docker compose -f docker-compose.yml --env-file .env up -d     # restart stack
 ```
 
 Note: per-service `.env` files (e.g. `ai/librechat/.env`) are **not** part
-of `PAPAIA_CONFIG_DIR`. They are generated by `setup-papaia.sh` and
-contain secrets; they live next to each `docker-compose.yml` and are
-already gitignored.
+of `PAPAIA_CONFIG_DIR`. They contain secrets, live next to each
+`docker-compose.yml` and are already gitignored.
 
 ---
 
@@ -218,15 +227,17 @@ The stack uses a **single shared `.env`** at `src/.env` that defines:
 - External port numbers (`*_EXT_PORT`) — change one number to relocate.
 - The OIDC topology (`PAPAIA_HOST`, `OIDC_ISSUER*`, `AUTH_PROVIDER`).
 - Cross-service secrets that must stay in sync (e.g. the oauth2-proxy
-  client secret, propagated by setup).
+  client secret, which appears in both `src/.env` and the Keycloak
+  client config).
 
 In addition, each service has its **own** `.env` file (e.g.
-`ai/librechat/.env`) for service-specific settings. The setup script
-ensures the shared values stay in sync between `src/.env` and the
-per-service files.
+`ai/librechat/.env`) for service-specific settings. Shared values
+(client secrets, `PAPAIA_HOST`-derived URLs) must be kept consistent by
+hand between `src/.env` and the per-service files.
 
-Never edit `realm-import/papaia-realm.json` by hand — it is regenerated
-from `papaia-realm.json.template` whenever the setup script runs.
+`realm-import/papaia-realm.json` is created by copying
+`papaia-realm.json.template`; its `${env.VAR}` client-secret placeholders
+are substituted by Keycloak at import time.
 
 ### Selected variables
 
@@ -240,7 +251,7 @@ from `papaia-realm.json.template` whenever the setup script runs.
 | `OAUTH2_PROXY_COOKIE_SECRET`   | 32-byte random — DO NOT shorten                          |
 | `COMPOSE_PROFILES`             | All known profiles, kept enabled by default              |
 | `DOCKER_NETWORK`               | Name of the shared bridge network                        |
-| `UID` / `GID`                  | Host user IDs propagated by setup (Linux only)           |
+| `UID` / `GID`                  | Host user IDs for bind-mount ownership (Linux)           |
 
 A full list with comments lives in [`.env.example`](.env.example).
 
@@ -263,9 +274,9 @@ script with locking, integrity checks and structured logging is tracked in
 ## Common pitfalls
 
 - **`PAPAIA_HOST` mismatch.** Whatever URL the browser uses must equal
-  `PAPAIA_HOST`, otherwise OIDC redirects break. Re-run the setup script
-  after editing `PAPAIA_HOST` so dependent variables (issuer URLs, public
-  URLs, `HP_ALLOWED_HOSTS`) are rewritten.
+  `PAPAIA_HOST`, otherwise OIDC redirects break. After editing
+  `PAPAIA_HOST`, update every dependent variable (issuer URLs, service
+  public URLs, `HP_ALLOWED_HOSTS`) to match.
 - **HTTP and `Secure` cookies.** Browsers refuse `Secure` cookies over
   plain HTTP. Local development on `http://host.docker.internal` is
   fine; remote deployments need TLS termination at NPM.
@@ -288,8 +299,7 @@ signature errors) see the
 ## Security notes
 
 - `.env` files are gitignored — secrets never enter version control.
-- Every service generated by the setup script uses a unique random secret;
-  no shared defaults.
+- Every service uses its own unique random secret; no shared defaults.
 - Default Keycloak test users (`admin/admin`, `testuser/testuser`) exist
   for local development only. Disable or delete them before exposing the
   stack to anything beyond `localhost`.

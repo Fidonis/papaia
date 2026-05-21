@@ -29,8 +29,8 @@ Paperless-ngx   Qdrant
   MCP tools from doc-rag and MCP Paperless.
 - **LiteLLM** unifies access to local and hosted LLMs and is also the
   embedding gateway for doc-rag.
-- **LocalAI** runs OpenAI-compatible inference locally (CPU or NVIDIA
-  GPU). The setup script offers a model picker on first run.
+- **LocalAI** runs chat-completions inference locally (CPU or NVIDIA
+  GPU). Models to download are listed in `localai/models.txt`.
 - **doc-rag** ingests documents from one or more WebDAV sources, chunks
   them with Docling, embeds via LiteLLM, stores vectors in Qdrant and
   exposes `search_documents` / `list_collections` as MCP tools.
@@ -44,21 +44,18 @@ Paperless-ngx   Qdrant
 
 ## Configuration
 
-Per-service configuration lives in each subdirectory. The setup script
-(`src/setup-papaia.sh`) takes care of:
+Per-service configuration lives in each subdirectory. For each AI module
+you enable:
 
-1. Copying `.env.example` → `.env` per service.
-2. Generating service-specific secrets (JWT, Meili master key, vector DB
-   passwords, …) where the value is still `GENERATE_…`.
-3. Propagating shared values from `src/.env`:
+1. Copy `.env.example` → `.env` in the service directory.
+2. Replace every service-specific `GENERATE_…` secret (JWT, Meili master
+   key, vector DB passwords, …) with a real value.
+3. Keep the shared values consistent with `src/.env`:
    - Keycloak client secrets → `OPENID_CLIENT_SECRET` / `GENERIC_CLIENT_SECRET`.
    - LiteLLM master key → LibreChat `LITELLM_API_KEY` and doc-rag
      `LITELLM_API_KEY`.
    - `PAPAIA_HOST` → service public URLs (LibreChat `DOMAIN_*`, LiteLLM
      `GENERIC_REDIRECT_URI`, n8n `N8N_PUBLIC_URL`, …).
-
-Re-running the script is safe and idempotent. Use `--force` only if you
-want to discard all generated secrets and start over.
 
 ---
 
@@ -77,11 +74,11 @@ want to discard all generated secrets and start over.
 - Auth: generic OIDC for the admin UI, master key for programmatic clients
 - Configuration: `config.yaml` (provider routes), `prometheus.yml`, `.env`
 
-### LocalAI — local OpenAI-compatible inference
+### LocalAI — local chat-completions inference
 - Image: `localai/localai` (CPU) or its NVIDIA CUDA variant
 - External port: `8080`
-- The setup script picks one variant based on whether `nvidia-smi` is
-  available, and prompts for which models to download into `models/`.
+- Use the CPU or NVIDIA CUDA image variant as appropriate for the host;
+  list the models to download in `localai/models.txt`.
 
 ### doc-rag — RAG over WebDAV sources
 - Components: `docrag-sync` (rclone), `docrag-vectordb` (Qdrant),
@@ -99,7 +96,7 @@ want to discard all generated secrets and start over.
 - Forwards the user's Keycloak access token to Paperless on each request,
   so per-user document isolation is preserved.
 - Internal port: `9520`.
-- Auto-enabled when Paperless-ngx is enabled in the setup script.
+- Enable it together with Paperless-ngx via `COMPOSE_PROFILES`.
 
 ### n8n — workflow automation
 - Image: `docker.n8n.io/n8nio/n8n`

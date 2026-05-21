@@ -9,8 +9,8 @@
 #
 #  Requires:
 #    - PAPERLESS_ADMIN_USER / PAPERLESS_ADMIN_PASSWORD in root .env
-#      (propagated by setup-papaia.sh from services/paperless/.env)
-#    - PAPERLESS_PUBLIC_URL in root .env (set by setup-papaia.sh)
+#      (must match the values in services/paperless/.env)
+#    - PAPERLESS_PUBLIC_URL in root .env
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-paperless:

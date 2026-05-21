@@ -6,7 +6,7 @@
 # The filename is derived from the URL (last path segment).
 # Models are only downloaded if not already present in the volume.
 #
-# This file is written by setup-papaia.sh — edit manually to add/remove models.
+# Edit this file manually to add or remove models (one URL per line).
 # GPU vs CPU: select the matching image in src/.env
 #   CPU:  LOCALAI_IMAGE=localai/localai:sha-6c635e8
 #   GPU:  LOCALAI_IMAGE=localai/localai:sha-6c635e8-gpu-nvidia-cuda-13

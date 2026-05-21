@@ -67,9 +67,9 @@ model_list:
       api_key: "os.environ/MAMMOUTH_API_KEY"
 
   # OpenRouter — requires OPENROUTER_API_KEY in litellm/.env
-  # - model_name: openrouter/claude-3.5-sonnet
+  # - model_name: openrouter/mistral-large
   #   litellm_params:
-  #     model: "openrouter/anthropic/claude-3.5-sonnet"
+  #     model: "openrouter/mistralai/mistral-large"
   #     api_key: "os.environ/OPENROUTER_API_KEY"
 
   # - model_name: openrouter/llama-3.1-70b
