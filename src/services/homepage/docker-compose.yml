@@ -1,21 +1,70 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Homepage · Dashboard
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
 services:
   homepage:
-    image: ghcr.io/gethomepage/homepage:v1.11.0
-    container_name: homepage
+    image: ${HOMEPAGE_IMAGE}
     restart: unless-stopped
+    env_file:
+      - ./.env
     environment:
-      HOMEPAGE_ALLOWED_HOSTS: ${HP_ALLOWED_HOSTS:-localhost:8300}  # required, may need port. See gethomepage.dev/installation/#homepage_allowed_hosts
-      PUID: ${UID:-1000}  # optional, your user id
-      PGID: ${GID:-1000}  # optional, your group id
-    ports:
-      - ${HOMEPAGE_EXT_PORT:-8300}:3000
+      PUID:                  ${UID:-1000}
+      PGID:                  ${GID:-1000}
+      HOMEPAGE_ALLOWED_HOSTS: ${HP_ALLOWED_HOSTS:-localhost:8300}
+      # HOMEPAGE_VAR_* vars are available as {{HOMEPAGE_VAR_HOST}} in config files
+      HOMEPAGE_VAR_HOST:     ${PAPAIA_HOST:-http://host.docker.internal}
+    # Port not exposed directly — access only via homepage-auth below
     volumes:
-      - ./config:/app/config  # Make sure your local config directory exists
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # optional, for docker integrations
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/services/homepage/config
+        target: /app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-homepage
+      de.fidonis.role:   dashboard
+    profiles: [homepage]
 
-networks:
-  default:
-    name: ${DOCKER_NETWORK}
-    external: true
+  # oauth2-proxy sidecar — protects Homepage with Keycloak authentication.
+  # Exposed on HOMEPAGE_EXT_PORT; Homepage itself is only reachable inside Docker.
+  homepage-auth:
+    image: ${OAUTH2_PROXY_IMAGE}
+    restart: unless-stopped
+    command:
+      - --provider=oidc
+      - --oidc-issuer-url=${OIDC_ISSUER}
+      - --skip-oidc-discovery=true
+      - --login-url=${OIDC_ISSUER_KC_AUTH}
+      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
+      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --client-id=${OAUTH2_PROXY_CLIENT_ID}
+      - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
+      - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
+      - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
+      - --cookie-expire=10h
+      - --cookie-refresh=30m
+      - --redirect-url=${HOMEPAGE_PUBLIC_URL}/oauth2/callback
+      - --upstream=http://homepage:3000
+      - --http-address=0.0.0.0:4180
+      - --email-domain=*
+      - --scope=${OIDC_SCOPES}
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+      - --pass-user-headers=true
+      - --provider-display-name=Keycloak (papAIa)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${HOMEPAGE_EXT_PORT:-8300}:4180"
+    depends_on:
+      homepage:
+        condition: service_started
+    # No healthcheck: the distroless image has no curl/wget.
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-homepage
+      de.fidonis.role:   sso-proxy
+    profiles: [homepage]

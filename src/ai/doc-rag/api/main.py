@@ -23,6 +23,7 @@ import os
 import re
 import time
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -320,12 +321,25 @@ if __name__ == "__main__":
     wait_for_qdrant()
     probe_embedding_service()
 
-    # Compose: custom HTTP routes in front, MCP app behind
+    # streamable_http_app() returns a Starlette app whose lifespan initialises
+    # the StreamableHTTPSessionManager task group. Mounting it inside a plain
+    # Starlette app suppresses that lifespan → "Task group is not initialized".
+    # Fix: delegate our lifespan to the MCP app's lifespan_context so the
+    # session manager is always started before the first request arrives.
     mcp_app = mcp.streamable_http_app()
-    app = Starlette(routes=[
-        Route("/health",  health_endpoint),
-        Route("/reindex", reindex_endpoint, methods=["POST"]),
-        Mount("/", app=mcp_app),
-    ])
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with mcp_app.router.lifespan_context(app):
+            yield
+
+    app = Starlette(
+        lifespan=lifespan,
+        routes=[
+            Route("/health",  health_endpoint),
+            Route("/reindex", reindex_endpoint, methods=["POST"]),
+            Mount("/", app=mcp_app),
+        ],
+    )
 
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_config=None)

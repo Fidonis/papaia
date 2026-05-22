@@ -1,18 +1,32 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — MCP Paperless · Per-user Paperless-ngx Document Proxy
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  Sits between LibreChat and Paperless-ngx. Reads the
+#  x-librechat-user-email header forwarded by LibreChat and restricts all
+#  document queries to documents owned by that user.
+#
+#  Requires:
+#    - PAPERLESS_ADMIN_USER / PAPERLESS_ADMIN_PASSWORD in root .env
+#      (must match the values in services/paperless/.env)
+#    - PAPERLESS_PUBLIC_URL in root .env
+# ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-paperless:
-    image: ghcr.io/baruchiro/paperless-mcp:sha-5ad68b6
-    container_name: mcp-paperless
+    build:
+      context: .
     restart: unless-stopped
     environment:
-      PAPERLESS_URL: ${PAPERLESS_URL}
-      PAPERLESS_API_KEY: ${PAPERLESS_API_KEY}
-      PAPERLESS_PUBLIC_URL: ${PAPERLESS_PUBLIC_URL}
+      PAPERLESS_URL:          http://paperless:8000
+      PAPERLESS_PUBLIC_URL:   ${PAPERLESS_PUBLIC_URL}
+      PAPERLESS_ADMIN_USER:   ${PAPERLESS_ADMIN_USER:-paperless-admin}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
     ports:
-      - "${MCP_PAPERLESS_EXT_PORT}:3000"
+      - "${HOST_IP:-0.0.0.0}:${MCP_PAPERLESS_EXT_PORT:-9520}:3000"
     networks:
-      - default
-
-networks:
-  default:
-    name: ${DOCKER_NETWORK}
-    external: true
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-mcp-paperless
+      de.fidonis.role:   mcp-server
+    profiles: [mcp-paperless]

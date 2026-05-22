@@ -1,59 +1,123 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — LocalAI · Local LLM Hosting
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
 services:
-  ##########################
-  #  LocalAI Model Init    #
-  ##########################
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LocalAI Model Init
+  # ═══════════════════════════════════════════════════════════════════════════
   localai-model-init:
-    container_name: localai-model-init
-    image: curlimages/curl:latest
+    image: ${LOCALAI_MODEL_INIT_IMAGE}
+    user: "0"
     restart: "no"
     volumes:
-      - ./models:/models
+      - localai-models:/models
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/localai/models.txt
+        target: /models-config/models.txt
+        read_only: true
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/localai/models
+        target: /models-config/configs
+        read_only: true
     entrypoint: sh
     command:
       - -c
-      - >-
-        (test -f /models/qwen2.5-1.5b-instruct-q4_k_m.gguf ||
-        curl -fL -o /models/qwen2.5-1.5b-instruct-q4_k_m.gguf
-        https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf)
-        &&
-        (test -f /models/nomic-embed-text-v1.5.Q8_0.gguf ||
-        curl -fL -o /models/nomic-embed-text-v1.5.Q8_0.gguf
-        https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf)
-    networks:
-      - default
+      - |
+        # Install model yaml configs into the volume so LocalAI can
+        # discover them on startup. Idempotent: cp overwrites with the
+        # current canonical config from ${PAPAIA_CONFIG_DIR}.
+        cp /models-config/configs/*.yaml /models/ 2>/dev/null \
+          && echo "[model-init] copied model yamls into /models/" \
+          || echo "[model-init] no model yamls found in /models-config/configs"
 
-  #############
-  #  LocalAI  #
-  #############
+        grep -v '^\s*#' /models-config/models.txt | grep -v '^\s*$$' | while IFS= read -r url; do
+          filename=$$(basename "$$url")
+          if test -f "/models/$$filename"; then
+            echo "[model-init] $$filename already exists — skipped"
+          else
+            echo "[model-init] Downloading $$filename ..."
+            curl -fL -o "/models/$$filename" "$$url" && echo "[model-init] $$filename done" || echo "[model-init] $$filename FAILED" >&2
+          fi
+        done
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-localai
+      de.fidonis.role:   model-init
+    profiles: [localai]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LocalAI
+  # ═══════════════════════════════════════════════════════════════════════════
   localai:
-    container_name: localai
     image: ${LOCALAI_IMAGE}
     restart: unless-stopped
-    depends_on:
-      localai-model-init:
-        condition: service_completed_successfully
-    ports:
-      - "${LOCALAI_EXT_PORT}:8080"
+    # Port not exposed directly — access only via localai-auth below
     environment:
       LOCALAI_LOG_LEVEL: ${LOCALAI_LOG_LEVEL:-info}
       MODELS_PATH: /models
       DEBUG: ${LOCALAI_DEBUG:-false}
       LOCALAI_EXTERNAL_BACKENDS: "llama-cpp"
+    depends_on:
+      localai-model-init:
+        condition: service_completed_successfully
     volumes:
-      - ./models:/models
+      - localai-models:/models
     networks:
-      - default
+      - papaia-net
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/models >/dev/null 2>&1 || exit 1"]
       interval: ${LOCALAI_HEALTHCHECK_INTERVAL:-30s}
       timeout: ${LOCALAI_HEALTHCHECK_TIMEOUT:-10s}
       retries: ${LOCALAI_HEALTHCHECK_RETRIES:-5}
       start_period: ${LOCALAI_HEALTHCHECK_START_PERIOD:-60s}
+    labels:
+      de.fidonis.module: papaia-localai
+      de.fidonis.role:   inference-engine
+    profiles: [localai]
+
+  # oauth2-proxy sidecar — protects LocalAI API with Keycloak authentication.
+  # Exposed on LOCALAI_EXT_PORT; LocalAI itself is only reachable inside Docker.
+  localai-auth:
+    image: ${OAUTH2_PROXY_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${LOCALAI_EXT_PORT}:4180"
+    command:
+      - --provider=oidc
+      - --oidc-issuer-url=${OIDC_ISSUER}
+      - --skip-oidc-discovery=true
+      - --login-url=${OIDC_ISSUER_KC_AUTH}
+      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
+      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --client-id=${OAUTH2_PROXY_CLIENT_ID}
+      - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
+      - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
+      - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
+      - --cookie-expire=10h
+      - --cookie-refresh=30m
+      - --redirect-url=${LOCALAI_PUBLIC_URL}/oauth2/callback
+      - --upstream=http://localai:8080
+      - --http-address=0.0.0.0:4180
+      - --email-domain=*
+      - --scope=${OIDC_SCOPES}
+      - --oidc-groups-claim=roles
+      - --allowed-group=admin
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+      - --pass-user-headers=true
+      - --provider-display-name=Keycloak (papAIa)
+    depends_on:
+      localai:
+        condition: service_healthy
+    # No healthcheck: the distroless image has no curl/wget.
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-localai
+      de.fidonis.role:   sso-proxy
+    profiles: [localai]
 
 volumes:
   localai-models:
-
-networks:
-  default:
-    name: ${DOCKER_NETWORK}
-    external: true

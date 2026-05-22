@@ -5,8 +5,13 @@ Role: Document processing pipeline.
 
 Watches /data/docs/ on a configurable interval. Each top-level subdirectory
 maps to a dedicated Qdrant collection (named after the directory). When a file
-is new or has changed (mtime), it is converted to text using Docling, split
-into overlapping chunks, embedded via LiteLLM, and upserted into Qdrant.
+is new or has changed (mtime), it is converted to text, split into overlapping
+chunks, embedded via LiteLLM, and upserted into Qdrant.
+
+Text extraction strategy (fastest path first):
+  .md / .txt  — direct file read, no AI
+  .pdf        — pypdf for digital PDFs (milliseconds); Docling fallback for scans
+  .docx / .doc — Docling
 
 Supported formats: PDF, DOCX, DOC, Markdown, plain text.
 
@@ -34,7 +39,10 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from docling.document_converter import DocumentConverter
+import pypdf
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -70,17 +78,31 @@ EMBED_BATCH_SIZE   = int(os.getenv("EMBED_BATCH_SIZE", "32"))
 EMBED_RETRIES      = int(os.getenv("EMBED_RETRIES", "3"))
 EMBED_RETRY_DELAY  = float(os.getenv("EMBED_RETRY_DELAY", "5.0"))
 STATE_PATH         = Path(os.getenv("STATE_PATH", "/data/state"))
+# Docling PDF options — disable OCR and table detection by default for speed.
+# Enable DOCLING_OCR=true only if you need to index scanned/image-only PDFs.
+DOCLING_OCR        = os.getenv("DOCLING_OCR",    "false").lower() == "true"
+DOCLING_TABLES     = os.getenv("DOCLING_TABLES", "false").lower() == "true"
 
 STATE_DB_PATH = STATE_PATH / "ingester.db"
 REINDEX_DIR   = STATE_PATH / "reindex"
 SUPPORTED     = {".pdf", ".docx", ".doc", ".md", ".txt"}
+
+# pypdf fast-path: if a PDF page averages fewer than this many characters,
+# assume it is a scanned/image PDF and fall back to Docling.
+PDF_MIN_CHARS_PER_PAGE = 100
 
 
 # ── Clients ───────────────────────────────────────────────────────────────────
 
 embed_client = OpenAI(base_url=LITELLM_URL, api_key=LITELLM_API_KEY)
 qdrant       = QdrantClient(url=QDRANT_URL)
-converter    = DocumentConverter()
+
+_pdf_opts = PdfPipelineOptions()
+_pdf_opts.do_ocr             = DOCLING_OCR
+_pdf_opts.do_table_structure = DOCLING_TABLES
+converter = DocumentConverter(
+    format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=_pdf_opts)}
+)
 
 # Collections confirmed to exist in Qdrant with the correct dimension
 _verified_collections: set[str] = set()
@@ -373,6 +395,51 @@ def probe_embedding_dim() -> int:
     )
 
 
+# ── Text extraction ───────────────────────────────────────────────────────────
+
+def _try_pypdf(path: Path) -> str | None:
+    """
+    Extract text directly from a digital PDF using pypdf.
+    Returns None if the PDF appears to be scanned (average chars/page below
+    PDF_MIN_CHARS_PER_PAGE) or if pypdf cannot read the file at all.
+    """
+    try:
+        reader = pypdf.PdfReader(str(path))
+        if not reader.pages:
+            return None
+        parts = [page.extract_text() or "" for page in reader.pages]
+        text  = "\n\n".join(parts).strip()
+        if len(text) / len(reader.pages) < PDF_MIN_CHARS_PER_PAGE:
+            return None
+        return text
+    except Exception as exc:
+        log.debug("pypdf could not read '%s': %s", path.name, exc)
+        return None
+
+
+def extract_text(path: Path) -> str:
+    """
+    Extract plain text from a supported document file.
+
+      .md / .txt  — direct read, no AI
+      .pdf        — pypdf fast path; Docling fallback for scanned PDFs
+      .docx / .doc — Docling
+    """
+    suffix = path.suffix.lower()
+
+    if suffix in {".md", ".txt"}:
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    if suffix == ".pdf":
+        text = _try_pypdf(path)
+        if text is not None:
+            log.debug("'%s': extracted via pypdf.", path.name)
+            return text
+        log.info("'%s': sparse text — falling back to Docling (scanned PDF?).", path.name)
+
+    return converter.convert(str(path)).document.export_to_markdown()
+
+
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 
 def ingest(path: Path, collection: str, vector_dim: int, indexed: dict) -> None:
@@ -381,7 +448,7 @@ def ingest(path: Path, collection: str, vector_dim: int, indexed: dict) -> None:
     log.info("[%s] ingesting %s", collection, rel)
 
     try:
-        text = converter.convert(str(path)).document.export_to_markdown()
+        text = extract_text(path)
     except Exception as exc:
         log.error("[%s] text extraction failed for '%s': %s", collection, rel, exc)
         return

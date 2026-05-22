@@ -1,12 +1,83 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — LiteLLM · Proxy Configuration
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+# LITELLM_MASTER_KEY, LITELLM_SALT_KEY, DATABASE_URL are set via .env.
+# Additional models and teams can be managed in the Admin UI.
+
+general_settings:
+  ui_access_mode: "sso_only"
+  store_model_in_db: true        # allow adding models via Admin UI
+  allow_user_auth: true          # users can log in via SSO and get personal keys
+
+litellm_settings:
+  drop_params: true              # ignore unknown/unsupported params silently
+  num_retries: 2
+  request_timeout: 600
+  callbacks: ["prometheus"]     # expose /metrics for Prometheus scraping
+
+router_settings:
+  routing_strategy: least-busy  # prefer least-loaded model replica
+
+# ── Teams ──────────────────────────────────────────────────────────────────
+# Teams are created and managed in the Admin UI (Settings → Teams).
+# Recommended starting setup:
+#   • "admins"  — no budget limit, all models, manage API keys
+#   • "users"   — monthly budget limit, chat models only
+#
+# Per-user budgets and rate limits can be set under Settings → Users.
+
+# ── Models ─────────────────────────────────────────────────────────────────
+# LocalAI models are pre-configured here.
+# All other models (cloud APIs) should be added via the Admin UI so that
+# API keys are stored in the database and not in this file.
+
 model_list:
+  # ── LocalAI — available when LocalAI service is running ──────────────────
+  # Models are only usable if the corresponding .gguf file was downloaded
+  # (configured via src/ai/localai/models.txt).
+
   - model_name: qwen2.5-1.5b-instruct
     litellm_params:
-      model: openai/qwen2.5-1.5b-instruct
-      api_base: http://localai:8080/v1
+      model: "openai/qwen2.5-1.5b-instruct"
+      api_base: "http://localai:8080/v1"
       api_key: "sk-notused"
 
   - model_name: nomic-embed-text
     litellm_params:
-      model: openai/nomic-embed-text
-      api_base: http://localai:8080/v1
+      model: "openai/nomic-embed-text"
+      api_base: "http://localai:8080/v1"
       api_key: "sk-notused"
+
+  # ── Cloud models ──────────────────────────────────────────────────────────
+  # Add via Admin UI → Models, or uncomment and set API keys in litellm/.env.
+
+  # Mammouth.ai — requires MAMMOUTH_API_KEY in litellm/.env
+  # Check available model IDs in your Mammouth dashboard.
+  - model_name: mammouth-chat
+    litellm_params:
+      model: "openai/gpt-4.1-mini"
+      api_base: "os.environ/MAMMOUTH_API_BASE"
+      api_key: "os.environ/MAMMOUTH_API_KEY"
+
+  - model_name: mammouth-embed
+    litellm_params:
+      model: "openai/text-embedding-3-small"
+      api_base: "os.environ/MAMMOUTH_API_BASE"
+      api_key: "os.environ/MAMMOUTH_API_KEY"
+
+  # OpenRouter — requires OPENROUTER_API_KEY in litellm/.env
+  # - model_name: openrouter/mistral-large
+  #   litellm_params:
+  #     model: "openrouter/mistralai/mistral-large"
+  #     api_key: "os.environ/OPENROUTER_API_KEY"
+
+  # - model_name: openrouter/llama-3.1-70b
+  #   litellm_params:
+  #     model: "openrouter/meta-llama/llama-3.1-70b-instruct"
+  #     api_key: "os.environ/OPENROUTER_API_KEY"
+
+  # - model_name: openrouter/gemini-2.0-flash
+  #   litellm_params:
+  #     model: "openrouter/google/gemini-2.0-flash-001"
+  #     api_key: "os.environ/OPENROUTER_API_KEY"

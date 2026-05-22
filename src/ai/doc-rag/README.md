@@ -235,7 +235,7 @@ unknown collection is specified.
 |---|---|---|
 | `DOC_RAG_EXT_PORT` | `8700` | Host port for the MCP API |
 | `QDRANT_EXT_PORT` | `6333` | Host port for the Qdrant dashboard |
-| `DOCKER_NETWORK` | `hs-net` | External Docker bridge network |
+| `DOCKER_NETWORK` | `papaia-net` | External Docker bridge network |
 
 ---
 

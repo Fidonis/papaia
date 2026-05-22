@@ -1,4 +1,4 @@
-version: 1.3.5
+version: 1.3.9
 
 cache: true
 
@@ -18,16 +18,16 @@ interface:
     openNewTab: true
 
 registration:
-  socialLogins: ["discord", "facebook", "github", "google", "openid"]
+  socialLogins: ["openid"]
 
 endpoints:
   custom:
     - name: "Private-LLM"
-      apiKey: "${LITELLM_API_KEY}"  # "user_provided" or replace with your private API key
+      apiKey: "${LITELLM_API_KEY}" #"user_provided" or replace with your private API key
       baseURL: "http://litellm:4000/v1"
       # if using LiteLLM example in docker-compose.override.yml.example, use "http://litellm:8000/v1"
       models:
-        default: ["qwen2.5-1.5b-instruct"]
+        default: ["mammouth-chat", "qwen2.5-1.5b-instruct"]
         fetch: true
       titleConvo: true
       summarize: false
@@ -37,28 +37,28 @@ endpoints:
 webSearch:
   # Search Provider Configuration
   searxngInstanceUrl: "${SEARXNG_INSTANCE_URL}"
-  # searxngApiKey: "${SEARXNG_API_KEY}"
-  searchProvider: "searxng"  # Options: "serper", "searxng"
+  #searxngApiKey: "${SEARXNG_API_KEY}"
+  searchProvider: "searxng" # Options: "serper", "searxng"
 
   # Scraper Configuration
   firecrawlApiKey: "${FIRECRAWL_API_KEY}"
   firecrawlApiUrl: "${FIRECRAWL_API_URL}"
-  # firecrawlVersion: "${FIRECRAWL_VERSION}"
+  #firecrawlVersion: "${FIRECRAWL_VERSION}"
   firecrawlOptions:
     parsePDF: true
     blockAds: true
     onlyMainContent: true
     formats: ["markdown", "rawHtml"]
-  scraperProvider: "firecrawl"  # Options: "firecrawl", "serper"
+  scraperProvider: "firecrawl" # Options: "firecrawl", "serper"
 
   # Reranker Configuration
   jinaApiKey: "${JINA_API_KEY}"
   jinaApiUrl: "${JINA_API_URL}"
-  rerankerType: "jina"  # Options: "jina", "cohere"
+  rerankerType: "jina" # Options: "jina", "cohere"
 
   # General Settings
-  scraperTimeout: 7500  # Timeout in milliseconds for scraper requests (default: 7500)
-  safeSearch: 1  # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
+  scraperTimeout: 7500 # Timeout in milliseconds for scraper requests (default: 7500)
+  safeSearch: 1 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
 
 memory:
   disabled: false  # Set to true to completely disable memory
@@ -128,7 +128,7 @@ mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:3000"
     - "http://docrag-api:8000"
-    # - "example.com"                       # Specific domain
+    #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain
     # - "172.24.1.165"                     # Internal network IP

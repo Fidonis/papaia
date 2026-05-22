@@ -1,8 +1,14 @@
 .env
 *.log
 
+# Generated realm JSON (contains secrets)
+src/infra/keycloak/realm-import/papaia-realm.json
+
 # AI model files
 *.gguf
 *.bin
 *.safetensors
+
+# Deployment lock file (written into PAPAIA_CONFIG_DIR)
+deployed.lock
 

@@ -1,0 +1,16 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Jina AI · Reranker
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  jina-reranker-api:
+    image: ${JINAAI_RERANKER_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${JINAAI_EXT_PORT:-8600}:8000"
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-jinaai
+      de.fidonis.role:   reranker
+    profiles: [jinaai]

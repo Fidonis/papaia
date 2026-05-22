@@ -1,3 +1,7 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — doc-rag · Document RAG
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
 services:
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -12,8 +16,7 @@ services:
   #  swap the volume mount to a different integration script.
   # ═══════════════════════════════════════════════════════════════════════════
   docrag-sync:
-    image: rclone/rclone:1.69
-    container_name: docrag-sync
+    image: ${DOCRAG_SYNC_IMAGE}
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/scripts/sync.sh"]
     env_file: .env
@@ -21,12 +24,13 @@ services:
       SYNC_INTERVAL: ${SYNC_INTERVAL:-60}
     volumes:
       - ./integrations/webdav/sync.sh:/scripts/sync.sh:ro
-      - docs:/data/docs
+      - docrag-docs:/data/docs
     networks:
-      - default
+      - papaia-net
     labels:
       de.fidonis.module: papaia-doc-rag
       de.fidonis.role: document-source
+    profiles: [doc-rag]
 
   # ═══════════════════════════════════════════════════════════════════════════
   #  VECTOR DATABASE — Qdrant
@@ -35,13 +39,14 @@ services:
   #  Dashboard available at http://host:${QDRANT_EXT_PORT}/dashboard
   # ═══════════════════════════════════════════════════════════════════════════
   docrag-vectordb:
-    image: qdrant/qdrant:v1.13.6
-    container_name: docrag-vectordb
+    image: ${DOCRAG_VECTORDB_IMAGE}
     restart: unless-stopped
-    ports:
-      - "${QDRANT_EXT_PORT:-6333}:6333"
     volumes:
-      - qdrant-storage:/qdrant/storage
+      - docrag-qdrant:/qdrant/storage
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${DOCRAG_QDRANT_EXT_PORT:-6333}:6333"
+    networks:
+      - papaia-net
     healthcheck:
       # Qdrant uses a distroless image (no wget/curl/nc).
       # We call the /healthz HTTP endpoint via /proc/net to stay shell-free,
@@ -51,11 +56,10 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
-    networks:
-      - default
     labels:
       de.fidonis.module: papaia-doc-rag
       de.fidonis.role: vector-database
+    profiles: [doc-rag]
 
   # ═══════════════════════════════════════════════════════════════════════════
   #  INGESTER — document processing pipeline
@@ -68,35 +72,45 @@ services:
     build:
       context: .
       dockerfile: ingester/Dockerfile
-    image: docrag-ingester:2.85.0
-    container_name: docrag-ingester
+    image: ${DOCRAG_INGESTER_IMAGE}
     restart: unless-stopped
+    environment:
+      DOCS_PATH:          /data/docs
+      LITELLM_URL:        ${LITELLM_URL:-http://litellm:4000/v1}
+      LITELLM_API_KEY:    ${LITELLM_API_KEY}
+      EMBED_MODEL:        ${EMBED_MODEL:-nomic-embed-text}
+      QDRANT_URL:         http://docrag-vectordb:6333
+      SCAN_INTERVAL:      ${SCAN_INTERVAL:-60}
+      CHUNK_WORDS:        ${CHUNK_WORDS:-400}
+      CHUNK_OVERLAP:      ${CHUNK_OVERLAP:-50}
+      EMBED_BATCH_SIZE:   ${EMBED_BATCH_SIZE:-32}
+      EMBED_RETRIES:      ${EMBED_RETRIES:-3}
+      EMBED_RETRY_DELAY:  ${EMBED_RETRY_DELAY:-5.0}
+      STATE_PATH:         /data/state
+      DOCLING_OCR:        ${DOCLING_OCR:-false}
+      DOCLING_TABLES:     ${DOCLING_TABLES:-false}
     depends_on:
       docrag-vectordb:
         condition: service_healthy
       docrag-sync:
         condition: service_started
-    environment:
-      DOCS_PATH: /data/docs
-      LITELLM_URL: ${LITELLM_URL:-http://litellm:4000/v1}
-      LITELLM_API_KEY: ${LITELLM_API_KEY}
-      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
-      QDRANT_URL: http://docrag-vectordb:6333
-      SCAN_INTERVAL: ${SCAN_INTERVAL:-60}
-      CHUNK_WORDS: ${CHUNK_WORDS:-400}
-      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-50}
-      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-32}
-      EMBED_RETRIES: ${EMBED_RETRIES:-3}
-      EMBED_RETRY_DELAY: ${EMBED_RETRY_DELAY:-5.0}
-      STATE_PATH: /data/state
     volumes:
-      - docs:/data/docs:ro
+      - docrag-docs:/data/docs:ro
       - docrag-state:/data/state
+      - docrag-hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
-      - default
+      - papaia-net
     labels:
       de.fidonis.module: papaia-doc-rag
       de.fidonis.role: ingester
+    profiles: [doc-rag]
 
   # ═══════════════════════════════════════════════════════════════════════════
   #  API — MCP server and query interface
@@ -109,36 +123,32 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    image: docrag-api:1.27.0
-    container_name: docrag-api
+    image: ${DOCRAG_API_IMAGE}
     restart: unless-stopped
     depends_on:
       docrag-vectordb:
         condition: service_healthy
     ports:
-      - "${DOC_RAG_EXT_PORT:-8700}:8000"
+      - "${HOST_IP:-0.0.0.0}:${DOCRAG_API_EXT_PORT:-8700}:8000"
     environment:
-      LITELLM_URL: ${LITELLM_URL:-http://litellm:4000/v1}
-      LITELLM_API_KEY: ${LITELLM_API_KEY}
-      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
-      QDRANT_URL: http://docrag-vectordb:6333
-      DEFAULT_TOP_K: ${DEFAULT_TOP_K:-5}
-      DEFAULT_MIN_SCORE: ${DEFAULT_MIN_SCORE:-0.5}
-      STATE_PATH: /data/state
+      LITELLM_URL:        ${LITELLM_URL:-http://litellm:4000/v1}
+      LITELLM_API_KEY:    ${LITELLM_API_KEY}
+      EMBED_MODEL:        ${EMBED_MODEL:-nomic-embed-text}
+      QDRANT_URL:         http://docrag-vectordb:6333
+      DEFAULT_TOP_K:      ${DEFAULT_TOP_K:-5}
+      DEFAULT_MIN_SCORE:  ${DEFAULT_MIN_SCORE:-0.5}
+      STATE_PATH:         /data/state
     volumes:
       - docrag-state:/data/state
     networks:
-      - default
+      - papaia-net
     labels:
       de.fidonis.module: papaia-doc-rag
       de.fidonis.role: api
+    profiles: [doc-rag]
 
 volumes:
-  docs:
-  qdrant-storage:
+  docrag-docs:
+  docrag-qdrant:
   docrag-state:
-
-networks:
-  default:
-    name: ${DOCKER_NETWORK}
-    external: true
+  docrag-hf-cache:

@@ -2,61 +2,62 @@
 # For configuration options and examples, please see:
 # https://gethomepage.dev/configs/services/
 # Icons from https://dashboardicons.com/
+# {{HOMEPAGE_VAR_HOST}} is substituted with PAPAIA_HOST at runtime.
 
 - AI & Automation:
     - LibreChat:
-        href: http://server:8000
+        href: "{{HOMEPAGE_VAR_HOST}}:8000"
         description: ChatGPT compatible, self-hosted AI chatbot
         icon: librechat.svg
-        container: librechat
+        container: papaia-librechat-1
         showStats: true
     - N8N:
-        href: http://server:8400
-        description: Self-hosted workflow automation tool with a visual editor and a large library of integrations
+        href: "{{HOMEPAGE_VAR_HOST}}:8400"
+        description: Self-hosted workflow automation tool
         icon: n8n.svg
-        container: n8n
+        container: papaia-n8n-1
         showStats: true
     - LiteLLM:
-        href: http://server:8200/ui
-        description: Fast, self-hosted LLM inference server
+        href: "{{HOMEPAGE_VAR_HOST}}:8200/ui"
+        description: LLM proxy and load balancer
         icon: tsd-proxy.svg
-        container: litellm
+        container: papaia-litellm-1
         showStats: true
 
 - Tools:
     - Paperless-ngx:
-        href: http://server:8010
-        description: Self-hosted document management system with OCR and a nice UI
+        href: "{{HOMEPAGE_VAR_HOST}}:8010"
+        description: Self-hosted document management with OCR
         icon: paperless-ngx.svg
-        container: paperless
+        container: papaia-paperless-1
         widget:
           type: paperlessngx
           url: http://paperless:8000
           key: your-keyless-key
+    - SearXNG:
+        href: "{{HOMEPAGE_VAR_HOST}}:8500"
+        description: Privacy-respecting metasearch engine
+        icon: searxng.svg
+        container: papaia-searxng-1
     - Home Assistant:
-        href: http://server:8123
-        description: Open-source home automation platform with a powerful dashboard and integrations
+        href: "{{HOMEPAGE_VAR_HOST}}:8123"
+        description: Open-source home automation platform
         icon: home-assistant.svg
         container: homeassistant
-    - SearXNG:
-        href: http://server:8500
-        description: Self-hosted metasearch engine that aggregates results from multiple search engines while respecting your privacy
-        icon: searxng.svg
-        container: searxng
 
 - Infrastructure:
     - Keycloak:
-        href: http://server:8110/
-        description: Indentity and access management solution for modern applications and services, with support for single sign-on, social login, and more
+        href: "{{HOMEPAGE_VAR_HOST}}:8110/"
+        description: Identity and access management
         icon: keycloak.svg
-        container: keycloak
+        container: papaia-keycloak-1
     - NGINX Proxy:
-        href: http://server:8100/
-        description: Self-hosted reverse proxy with a nice UI for managing your services
+        href: "{{HOMEPAGE_VAR_HOST}}:8100/"
+        description: Reverse proxy with admin UI
         icon: nginx-proxy-manager.svg
-        container: nginx-proxy-manager
+        container: papaia-nginx-proxy-manager-1
     - Technitium:
-        href: http://server:8120/
-        description: Self-hosted DNS server with a web console for managing DNS zones and records
+        href: "{{HOMEPAGE_VAR_HOST}}:8120/"
+        description: Self-hosted DNS server
         icon: technitium.png
-        container: technitium
+        container: papaia-technitium-1

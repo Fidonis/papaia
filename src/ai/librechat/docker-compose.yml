@@ -1,123 +1,150 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — LibreChat · AI Chat Interface
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
 services:
-  ###############
-  #  LibreChat  #
-  ###############
   librechat:
-    container_name: librechat
+    image: ${LIBRECHAT_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      librechat-mongodb:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+      keycloak:
+        condition: service_healthy
     env_file:
       - ./.env
-      - ../../.env
-    ports:
-      - "${LIBRECHAT_EXT_PORT}:${PORT}"
-    depends_on:
-      - lc-mongodb
-      - lc-ragapi
-    image: ghcr.io/danny-avila/librechat:v0.8.3
-    restart: unless-stopped
-    user: "${UID}:${GID}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       HOST: 0.0.0.0
-      MONGO_URI: mongodb://lc-mongodb:27017/LibreChat
-      MEILI_HOST: http://lc-meilisearch:7700
+      MONGO_URI: mongodb://librechat-mongodb:27017/LibreChat
+      MEILI_HOST: http://librechat-meilisearch:7700
       RAG_PORT: ${RAG_PORT:-8020}
-      RAG_API_URL: http://lc-ragapi:${RAG_PORT:-8020}
+      RAG_API_URL: http://librechat-ragapi:${RAG_PORT:-8020}
+    entrypoint: ["/bin/sh", "/app/patches/entrypoint.sh"]
     volumes:
       - type: bind
         source: ./.env
         target: /app/.env
       - type: bind
-        source: ./librechat.yaml
+        source: ${PAPAIA_CONFIG_DIR}/ai/librechat/librechat.yaml
         target: /app/librechat.yaml
-      - lc-images:/app/client/public/images
-      - lc-uploads:/app/uploads
-      - lc-logs:/app/logs
+      - librechat-images:/app/client/public/images
+      - librechat-uploads:/app/uploads
+      - librechat-logs:/app/logs
+      # Patch: allows HTTP OIDC issuers (e.g. local Keycloak without TLS).
+      # Remove once HTTPS is configured for the identity provider.
+      - type: bind
+        source: ./patches/openidStrategy.js
+        target: /app/api/strategies/openidStrategy.js
+      # Patch: injects x-librechat-user-email / x-librechat-user-id into MCP requests.
+      - type: bind
+        source: ./patches/mcp-user-headers.js
+        target: /app/patches/mcp-user-headers.js
+      - type: bind
+        source: ./patches/entrypoint.sh
+        target: /app/patches/entrypoint.sh
       # - ./librechat/logo.svg:/app/client/dist/assets/logo.svg
       # - ./librechat/favicon-32x32.png:/app/client/dist/assets/favicon-32x32.png
       # - ./librechat/favicon-16x16.png:/app/client/dist/assets/favicon-16x16.png
-    healthcheck:  # Defines the health check configuration for the container
-      test: ["CMD-SHELL", "apk add --no-cache curl >/dev/null 2>&1 && curl -fs http://localhost:${PORT}/health || exit 1"]
-      interval: 30s  # Perform health check every 30 seconds
-      timeout: 10s   # Health check command times out after 10 seconds
-      retries: 3     # Retry up to 3 times if health check fails
-      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${LIBRECHAT_EXT_PORT}:3080"
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-librechat
+      de.fidonis.role:   chat-interface
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    profiles: [librechat]
 
-  lc-mongodb:
-    container_name: lc-mongodb
-    env_file:
-      - ./.env
-    image: mongo:8.0.17
+  librechat-mongodb:
     restart: unless-stopped
-    user: "${UID}:${GID}"
+    image: ${LIBRECHAT_MONGODB_IMAGE}
     volumes:
-      - lc-mongodb:/data/db
+      - librechat-mongodb:/data/db
     command: mongod --noauth
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-librechat
+      de.fidonis.role:   database
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    profiles: [librechat]
 
-  lc-meilisearch:
-    container_name: lc-meilisearch
-    env_file:
-      - ./.env
-    image: getmeili/meilisearch:v1.35.1
+  librechat-meilisearch:
+    image: ${LIBRECHAT_MEILISEARCH_IMAGE}
     restart: unless-stopped
-    user: "${UID}:${GID}"
     environment:
-      MEILI_HOST: http://lc-meilisearch:7700
       MEILI_NO_ANALYTICS: true
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
     volumes:
-      - lc-meilisearch:/meili_data
+      - librechat-meilisearch:/meili_data
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-librechat
+      de.fidonis.role:   search
+    profiles: [librechat]
 
-  lc-vectordb:
-    container_name: lc-vectordb
-    env_file:
-      - ./.env
-    image: pgvector/pgvector:0.8.0-pg15-trixie
+  librechat-vectordb:
+    image: ${LIBRECHAT_VECTORDB_IMAGE}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${VECTORDB_NAME}
       POSTGRES_USER: ${VECTORDB_USER}
       POSTGRES_PASSWORD: ${VECTORDB_PASSWORD}
     volumes:
-      - lc-vectordb:/var/lib/postgresql/data
+      - librechat-vectordb:/var/lib/postgresql/data
+    # Port not exposed — internal use only by ragapi
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-librechat
+      de.fidonis.role:   vector-database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d ${VECTORDB_NAME} -U ${VECTORDB_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles: [librechat]
 
-  lc-ragapi:
-    container_name: lc-ragapi
-    env_file:
-      - ./.env
-    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest
+  librechat-ragapi:
+    image: ${LIBRECHAT_RAGAPI_IMAGE}
     restart: unless-stopped
     environment:
-      DB_HOST: lc-vectordb
+      DB_HOST: librechat-vectordb
       RAG_PORT: ${RAG_PORT:-8020}
       POSTGRES_DB: ${VECTORDB_NAME}
       POSTGRES_USER: ${VECTORDB_USER}
       POSTGRES_PASSWORD: ${VECTORDB_PASSWORD}
     depends_on:
-      - lc-vectordb
+      librechat-vectordb:
+        condition: service_healthy
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-librechat
+      de.fidonis.role:   rag-api
+    profiles: [librechat]
 
 # Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
 # Volumes mounted on Linux: /var/lib/docker/volumes
 volumes:
-  lc-images:
-  lc-uploads:
-  lc-logs:
-  lc-mongodb:
-  lc-meilisearch:
-  lc-vectordb:
-  lc-ragapi:
-
-networks:
-  default:
-    name: ${DOCKER_NETWORK}
-    external: true
+  librechat-images:
+  librechat-uploads:
+  librechat-logs:
+  librechat-mongodb:
+  librechat-meilisearch:
+  librechat-vectordb:

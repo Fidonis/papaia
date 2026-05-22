@@ -1,32 +1,19 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Firecrawl · Web Crawler
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
 services:
-  ###############
-  #  Firecrawl  #
-  ###############
-  # Firecrawl has no reasonable versioning
   firecrawl:
-    image: ghcr.io/firecrawl/firecrawl@sha256:d06c296fd746355de9c569f17d3dc330b74b20d5aea5f5dcf98fd4a9218081e0
-    container_name: firecrawl
+    image: ${FIRECRAWL_IMAGE}
     restart: unless-stopped
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-        compress: "true"
     environment:
-      REDIS_URL: ${REDIS_URL:-redis://fc-redis:6379}
-      REDIS_RATE_LIMIT_URL: ${REDIS_URL:-redis://fc-redis:6379}
-      PLAYWRIGHT_MICROSERVICE_URL: ${PLAYWRIGHT_MICROSERVICE_URL:-http://fc-playwright-service:3000/scrape}
+      REDIS_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
+      REDIS_RATE_LIMIT_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
+      PLAYWRIGHT_MICROSERVICE_URL: ${PLAYWRIGHT_MICROSERVICE_URL:-http://firecrawl-playwright-service:3000/scrape}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
-      POSTGRES_HOST: ${POSTGRES_HOST:-fc-nuq-postgres}
+      POSTGRES_HOST: ${POSTGRES_HOST:-firecrawl-nuq-postgres}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       USE_DB_AUTHENTICATION: ${USE_DB_AUTHENTICATION:-false}
       NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-8}
@@ -58,29 +45,42 @@ services:
       WORKER_PORT: ${WORKER_PORT:-3005}
       NUQ_RABBITMQ_URL: amqp://fc-rabbitmq:5672
       ENV: local
-    depends_on:
-      fc-redis:
-        condition: service_started
-      fc-playwright-service:
-        condition: service_started
-      fc-rabbitmq:
-        condition: service_healthy
-    ports:
-      - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: node dist/src/harness.js --start-docker
     # Resource limits for Docker Compose (not Swarm)
     # Increase if you have more CPU cores/RAM available
     cpus: 4.0
     mem_limit: 8G
     memswap_limit: 8G
-    env_file:
-      - ./.env
+    depends_on:
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-playwright-service:
+        condition: service_started
+      firecrawl-rabbitmq:
+        condition: service_started
+    ports:
+      - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   web-crawler
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    profiles: [firecrawl]
 
-  fc-playwright-service:
-    image: ghcr.io/firecrawl/playwright-service@sha256:e8829fb3e87703d0834f0aa0a0965c7574210d7d23a1c58d0bfaf290a0417e6b
-    container_name: fc-playwright-service
+  firecrawl-playwright-service:
+    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE}
     restart: unless-stopped
     environment:
       PORT: 3000
@@ -102,69 +102,69 @@ services:
         compress: "true"
     tmpfs:
       - /tmp/.cache:noexec,nosuid,size=1g
-    env_file:
-      - ./.env
     networks:
-      - default
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   browser
+    profiles: [firecrawl]
 
-  fc-redis:
-    # NOTE: If you want to use Valkey (open source) instead of Redis (source available),
-    # uncomment the Valkey statement and comment out the Redis statement.
-    # Using Valkey with Firecrawl is untested and not guaranteed to work. Use with caution.
-    image: redis:8.6.1-alpine
-    # image: valkey/valkey:alpine
-    container_name: fc-redis
+  firecrawl-redis:
+    image: ${FIRECRAWL_REDIS_IMAGE}
     restart: unless-stopped
     command: redis-server --bind 0.0.0.0
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   cache
     logging:
       driver: "json-file"
       options:
         max-size: "5m"
         max-file: "2"
         compress: "true"
-    networks:
-      - default
+    profiles: [firecrawl]
 
-  fc-rabbitmq:
-    image: rabbitmq:3-management
-    container_name: fc-rabbitmq
+  firecrawl-rabbitmq:
+    image: ${FIRECRAWL_RABBITMQ_IMAGE}
     restart: unless-stopped
     command: rabbitmq-server
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   message-queue
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+        compress: "true"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
       timeout: 5s
       retries: 3
       start_period: 5s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"
-        compress: "true"
-    networks:
-      - default
+    profiles: [firecrawl]
 
-  fc-nuq-postgres:
-    image: ghcr.io/firecrawl/nuq-postgres@sha256:8565e5f46000085c16d247a4354c41e2439dbcf1640f7dd6e6406c0b18c31732
-    container_name: fc-nuq-postgres
+  firecrawl-nuq-postgres:
+    image: ${FIRECRAWL_NUCPOSTGRES_IMAGE}
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-firecrawl
+      de.fidonis.role:   database
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
         compress: "true"
-    env_file:
-      - ./.env
-    networks:
-      - default
-
-networks:
-  default:
-    name: ${DOCKER_NETWORK}
-    external: true
+    profiles: [firecrawl]
