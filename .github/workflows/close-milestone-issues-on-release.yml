@@ -1,0 +1,101 @@
+name: Close Milestone Issues on Release
+
+# Counterpart to .github/workflows/label-issues-on-milestone-merge.yml:
+#
+#   When a PR closes #N and merges into releases/x.y.z, the labelling
+#   workflow tags issue #N with `merged-to-milestone`. The issue stays
+#   open because GitHub only auto-closes against the default branch.
+#
+#   This workflow runs at release-publish time, finds the milestone
+#   whose title starts with the released tag (e.g. tag `v0.6.0` ->
+#   milestone "v0.6.0 – RAG & Core Infrastructure"), and closes every
+#   open `merged-to-milestone`-labelled issue in it with a comment
+#   that links to the release. Label is removed on the way out.
+#
+#   The milestone itself is NOT auto-closed -- a release can ship even
+#   with open issues left in scope (rolled to a later milestone by
+#   the maintainer).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  close-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close merged-to-milestone issues for the released milestone
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const releaseTag  = context.payload.release.tag_name;
+            const releaseName = context.payload.release.name || releaseTag;
+            const releaseUrl  = context.payload.release.html_url;
+            core.info(`Release: ${releaseName} (tag ${releaseTag})`);
+
+            // Match the open milestone whose title starts with the released tag.
+            // Convention: milestone titles look like "v0.6.0 – RAG & Core Infrastructure".
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const milestone = milestones.find(m => m.title === releaseTag || m.title.startsWith(`${releaseTag} `));
+            if (!milestone) {
+              core.notice(`No open milestone matches tag '${releaseTag}'. Nothing to close.`);
+              return;
+            }
+            core.info(`Matched milestone #${milestone.number}: ${milestone.title}`);
+
+            // Open issues in that milestone with the merged-to-milestone label.
+            const candidates = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              milestone: milestone.number,
+              state: 'open',
+              labels: 'merged-to-milestone',
+              per_page: 100,
+            });
+
+            if (candidates.length === 0) {
+              core.notice(`No 'merged-to-milestone' issues to close in milestone #${milestone.number}.`);
+              return;
+            }
+            core.info(`Closing ${candidates.length} issue(s)...`);
+
+            for (const issue of candidates) {
+              if (issue.pull_request) continue; // listForRepo can include PRs
+
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `Released in **${releaseName}** ([${releaseTag}](${releaseUrl})).`,
+                });
+
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: 'merged-to-milestone',
+                }).catch(err => core.warning(`could not remove label on #${issue.number}: ${err.message}`));
+
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+
+                core.info(`Closed #${issue.number} (${issue.title})`);
+              } catch (err) {
+                core.warning(`failed on #${issue.number}: ${err.message}`);
+              }
+            }
