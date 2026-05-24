@@ -123,11 +123,19 @@ mcpServers:
     description: 'Semantische Suche in persoenlichen Dokumenten (Nextcloud-Sync).'
     type: streamable-http
     url: http://docrag-api:8000/mcp
+  QdrantRAG:
+    title: 'Qdrant Search'
+    description: 'Role-scoped semantic vector search against Qdrant collections.'
+    type: streamable-http
+    url: http://qdrant-rag:8000/mcp
+    headers:
+      Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
 
 mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:3000"
     - "http://docrag-api:8000"
+    - "http://qdrant-rag:8000"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain
