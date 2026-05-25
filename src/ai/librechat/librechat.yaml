@@ -124,7 +124,7 @@ mcpServers:
     type: streamable-http
     url: http://docrag-api:8000/mcp
   QdrantRAG:
-    title: 'Qdrant Search'
+    title: 'Document Search'
     description: 'Role-scoped semantic vector search against Qdrant collections.'
     type: streamable-http
     url: http://qdrant-rag:8000/mcp
