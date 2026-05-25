@@ -37,7 +37,8 @@ src/
     ├── litellm/            # LLM proxy + Postgres + Prometheus (OIDC)
     ├── localai/            # local chat-completions inference
     ├── mcp-paperless/      # per-user Paperless proxy for LibreChat
-    └── n8n/                # workflow automation (oauth2-proxy)
+    ├── n8n/                # workflow automation (oauth2-proxy)
+    └── qdrant-rag/         # OIDC + RBAC MCP server over Qdrant for LibreChat
 ```
 
 The root `docker-compose.yml` is intentionally tiny — it only declares the
