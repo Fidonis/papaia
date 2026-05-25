@@ -55,6 +55,7 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.18.1
+    restart: unless-stopped
     environment:
       # The api-key doubles as the JWT signing secret; it must equal QDRANT_JWT_SECRET.
       QDRANT__SERVICE__API_KEY: ${QDRANT_JWT_SECRET:-change-me-to-a-strong-secret}
@@ -63,10 +64,12 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - qdrant_storage:/qdrant/storage
-    restart: unless-stopped
+      - qdrant_storage:/qdrant/storage   
     networks:
       - papaia-net
+    labels:
+      de.fidonis.module: papaia-qdrant-rag
+      de.fidonis.role:   qdrant-vector-db
     profiles: [qdrant-rag]
 
 volumes:
