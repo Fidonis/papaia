@@ -25,7 +25,7 @@ services:
       OIDC_AUDIENCE:            ${QDRANT_RAG_OIDC_AUDIENCE:-qdrant-rag}
       OIDC_JWKS_CACHE_TTL:      ${QDRANT_RAG_OIDC_JWKS_CACHE_TTL:-3600}
       # Qdrant
-      QDRANT_URL:               ${QDRANT_RAG_QDRANT_URL:-http://docrag-vectordb:6333}
+      QDRANT_URL:               ${QDRANT_RAG_QDRANT_URL:-http://qdrant:6333}
       QDRANT_JWT_SECRET:        ${QDRANT_RAG_QDRANT_JWT_SECRET}
       QDRANT_JWT_TTL:           ${QDRANT_RAG_QDRANT_JWT_TTL:-3600}
       # MCP server — defaults match the container port mapping below.
@@ -52,3 +52,22 @@ services:
       de.fidonis.module: papaia-qdrant-rag
       de.fidonis.role:   mcp-server
     profiles: [qdrant-rag]
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.1
+    environment:
+      # The api-key doubles as the JWT signing secret; it must equal QDRANT_JWT_SECRET.
+      QDRANT__SERVICE__API_KEY: ${QDRANT_JWT_SECRET:-change-me-to-a-strong-secret}
+      QDRANT__SERVICE__JWT_RBAC: "true"
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - papaia-net
+    profiles: [qdrant-rag]
+
+volumes:
+  qdrant_storage:
