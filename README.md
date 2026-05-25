@@ -76,6 +76,7 @@ wired up to Keycloak via OIDC (native or via oauth2-proxy).
 | n8n            | oauth2-proxy forward    | NPM rule guards the upstream         |
 | Homepage       | oauth2-proxy forward    | optional, configurable per host      |
 | MCP Paperless  | OAuth2 token forwarding | per-user view of Paperless documents |
+| qdrant-rag     | OIDC token forwarding   | per-user role-scoped vector search   |
 | Nginx PM admin | Network-level only      | bind to internal interfaces          |
 
 ---
@@ -103,9 +104,11 @@ External ports are configurable in `src/.env`. Defaults below.
 | Homepage       | 8300 | Service dashboard                                    |
 | n8n            | 8400 | Workflow automation                                  |
 | SearXNG        | 8500 | Privacy-respecting metasearch                        |
-| doc-rag API    | 8700 | RAG MCP server (`POST /mcp`, `GET /health`)          |
-| Qdrant         | 6333 | Vector store dashboard for doc-rag                   |
-| LocalAI        | 8080 | Local model inference, chat-completions API          |
+| doc-rag API         | 8700       | RAG MCP server (`POST /mcp`, `GET /health`)          |
+| Qdrant (doc-rag)    | 6333       | Vector store for doc-rag                             |
+| qdrant-rag          | 8800       | OIDC + RBAC MCP server for role-scoped vector search |
+| Qdrant (qdrant-rag) | 6333 / 6334| Vector store for qdrant-rag (REST + gRPC)            |
+| LocalAI             | 8080       | Local model inference, chat-completions API          |
 | Firecrawl      | 3002 | Web crawler (commented out by default)               |
 | Home Assistant | 8123 | Home automation (host-network mode, optional)        |
 
@@ -503,6 +506,18 @@ provider-specific notes.
 - Forwards the user's Keycloak access token to Paperless on each request,
   so each LibreChat user only ever sees **their own** documents.
 
+### qdrant-rag
+- OIDC + RBAC MCP server that exposes Qdrant vector search to LibreChat.
+- Validates the logged-in user's Keycloak Bearer token and maps Keycloak roles
+  to per-collection Qdrant access, so each user can only search collections
+  they are authorized for.
+- LibreChat forwards the user's token automatically via the `QdrantRAG` MCP
+  server entry in `librechat.yaml` — no custom patch required.
+- Ships its own Qdrant instance; configured via `QDRANT_RAG_*` variables.
+  `OIDC_ISSUER` is reused from the global OIDC block — no duplicate needed.
+- Optional profile `qdrant-rag`; see `src/ai/qdrant-rag/.env.example` for
+  the full variable reference.
+
 ### n8n
 - Self-hosted workflow automation behind oauth2-proxy.
 - Postgres-backed state; public URL set from `PAPAIA_HOST` so the
@@ -661,7 +676,7 @@ docker compose config             # render the merged compose file
     ├── services/              # firecrawl, home-assistant, homepage,
     │                          # paperless, searxng
     └── ai/                    # doc-rag, jinaai, librechat, litellm,
-                               # localai, mcp-paperless, n8n
+                               # localai, mcp-paperless, n8n, qdrant-rag
 ```
 
 ---

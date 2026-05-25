@@ -37,6 +37,10 @@ Paperless-ngx   Qdrant
 - **MCP Paperless** is a per-user proxy that forwards a LibreChat user's
   Keycloak access token into Paperless-ngx, so each user only sees their
   own documents.
+- **qdrant-rag** exposes per-user, role-scoped vector search over a Qdrant
+  collection as an MCP tool. LibreChat forwards the logged-in user's Keycloak
+  Bearer token via the native `{{LIBRECHAT_OPENID_ACCESS_TOKEN}}` placeholder;
+  qdrant-rag validates the token and enforces RBAC derived from Keycloak roles.
 - **n8n** is workflow automation behind oauth2-proxy. It can call doc-rag
   via the MCP API or HTTP for retrieval-augmented automations.
 
@@ -104,6 +108,21 @@ you enable:
 - Auth: oauth2-proxy forward auth (NPM rule guards the upstream).
 - Postgres-backed state. The public URL is derived from `PAPAIA_HOST`
   during setup so the oauth2-proxy redirect callback stays correct.
+
+### qdrant-rag — OIDC + RBAC vector search MCP server
+
+- Profile: `qdrant-rag`
+- Components: `qdrant-rag` (FastMCP server), `qdrant` (vector store)
+- External ports: `8800` (MCP endpoint: `POST /mcp`), `6333` (Qdrant REST),
+  `6334` (Qdrant gRPC)
+- Auth: validates the caller's Keycloak Bearer token; maps Keycloak roles to
+  per-collection Qdrant access via an ACL collection in the vector store.
+- LibreChat forwards the logged-in user's token automatically via the
+  `QdrantRAG` entry in `librechat.yaml` — no custom patch required.
+- Configuration: `QDRANT_RAG_*` variables in `src/.env`; `OIDC_ISSUER` is
+  reused from the global OIDC block — no duplicate needed.
+- See [`qdrant-rag/.env.example`](qdrant-rag/.env.example) for the full
+  variable reference.
 
 ### Jina AI Reranker (optional)
 - Image: `ghcr.io/marko-boehm/jina-ai-litellm-reranker`
