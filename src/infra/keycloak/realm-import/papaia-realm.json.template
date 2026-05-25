@@ -26,6 +26,14 @@
       {
         "name": "viewer",
         "description": "Read-only viewer"
+      },
+      {
+        "name": "qdrant-admin",
+        "description": "Qdrant RBAC administrator"
+      },
+      {
+        "name": "finance",
+        "description": "Finance demo user role"
       }
     ]
   },
@@ -209,6 +217,40 @@
       "publicClient": false,
       "protocol": "openid-connect",
       "fullScopeAllowed": true
+    },
+    {
+      "clientId": "qdrant-rag",
+      "name": "Qdrant Vector DB",
+      "description": "",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${env.KC_QDRANT_RAG_CLIENT_SECRET}",
+      "redirectUris": [
+        "/*"
+      ],
+      "webOrigins": [
+        "/*"
+      ],
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "qdrant-rag-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "qdrant-rag",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "users": [
@@ -228,7 +270,8 @@
       ],
       "realmRoles": [
         "admin",
-        "user"
+        "user",
+        "qdrant-admin"
       ]
     },
     {
@@ -246,7 +289,8 @@
         }
       ],
       "realmRoles": [
-        "user"
+        "user",
+        "finance"
       ]
     }
   ]
