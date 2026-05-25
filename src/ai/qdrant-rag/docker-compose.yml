@@ -19,6 +19,8 @@ services:
   qdrant-rag:
     image: ${QDRANT_RAG_IMAGE}
     restart: unless-stopped
+    env_file:
+      - ./.env
     environment:
       # OIDC / Keycloak
       OIDC_ISSUER_URL:          ${OIDC_ISSUER}
@@ -62,6 +64,8 @@ services:
   qdrant:
     image: ${QDRANT_IMAGE}
     restart: unless-stopped
+    env_file:
+      - ./.env
     environment:
       # The api-key doubles as the JWT signing secret; it must equal QDRANT_JWT_SECRET.
       QDRANT__SERVICE__API_KEY: ${QDRANT_JWT_SECRET:-change-me-to-a-strong-secret}
