@@ -29,6 +29,7 @@ include:
   - path: ./ai/mcp-paperless/docker-compose.yml
   - path: ./ai/n8n/docker-compose.yml
   - path: ./ai/qdrant-rag/docker-compose.yml
+  - path: ./ai/qdrant-nextcloud-ingest/docker-compose.yml
   # - path: ./ai/jinaai/docker-compose.yml
 
 networks:
