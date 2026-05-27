@@ -1,7 +1,8 @@
 """
-qdrant-nextcloud-ingest / ingester
-==================================
-Role: Document processing pipeline driven by Nextcloud (WebDAV) sync.
+qdrant-webdav-ingest / ingester
+===============================
+Role: Document processing pipeline driven by WebDAV sync (Nextcloud,
+ownCloud, SharePoint, infinitescale, or any RFC-4918 server).
 
 Watches /data/docs/ on a configurable interval. Each second-level directory
 (i.e. each top-level folder inside a WebDAV source) maps to a dedicated
@@ -102,8 +103,11 @@ SUPPORTED     = {".pdf", ".docx", ".md", ".txt"}
 _META_NAMESPACE = uuid.UUID("9e3a5c2f-8b7d-4f1e-a6b3-2d8c9e4f1a02")
 _META_VECTOR    = [0.0]
 
-# Scoped namespace for chunk point ids — keeps qdrant-nextcloud-ingest data
-# disjoint from any other producer that might write into the same collection.
+# Scoped namespace for chunk point ids — keeps this service's data disjoint
+# from any other producer that might write into the same collection.
+# Seed string MUST stay "qdrant-nextcloud-ingest" (historic): changing it
+# would re-derive every chunk's UUID and orphan all previously upserted
+# vectors in Qdrant. The service rename does not propagate here on purpose.
 _INGEST_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "qdrant-nextcloud-ingest")
 
 PDF_MIN_CHARS_PER_PAGE = 100
@@ -563,7 +567,7 @@ def scan_loop(vector_dim: int) -> None:
 
 # ── FastMCP server ────────────────────────────────────────────────────────────
 
-mcp = FastMCP("qdrant-nextcloud-ingest")
+mcp = FastMCP("qdrant-webdav-ingest")
 
 
 @mcp.tool()
@@ -610,7 +614,7 @@ def list_sources() -> dict:
 
 def main() -> None:
     log.info(
-        "Starting qdrant-nextcloud-ingest | docs=%s | model=%s | qdrant=%s | interval=%ds",
+        "Starting qdrant-webdav-ingest | docs=%s | model=%s | qdrant=%s | interval=%ds",
         DOCS_PATH, EMBED_MODEL, QDRANT_URL, SCAN_INTERVAL,
     )
     wait_for_qdrant()

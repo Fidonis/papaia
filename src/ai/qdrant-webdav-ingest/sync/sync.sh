@@ -1,6 +1,6 @@
 #!/bin/sh
 # -----------------------------------------------------------------------------
-# qdrant-nextcloud-ingest / sync.sh
+# qdrant-webdav-ingest / sync.sh
 #
 # Role:    Document source integration — WebDAV (multi-source).
 # Purpose: One-way sync from one or more WebDAV servers into the shared
