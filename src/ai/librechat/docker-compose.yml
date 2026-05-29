@@ -46,6 +46,14 @@ services:
       - type: bind
         source: ./patches/entrypoint.sh
         target: /app/patches/entrypoint.sh
+      # Optional: provision pre-defined agents from an external directory.
+      # Set LIBRECHAT_AGENTS_DIR in .env to a host path containing one
+      # *.yaml per agent. Default points to an empty stub so dev/stage
+      # behave exactly as before.
+      - type: bind
+        source: ${LIBRECHAT_AGENTS_DIR:-./agents-stub}
+        target: /app/api/data/agents
+        read_only: true
       # - ./librechat/logo.svg:/app/client/dist/assets/logo.svg
       # - ./librechat/favicon-32x32.png:/app/client/dist/assets/favicon-32x32.png
       # - ./librechat/favicon-16x16.png:/app/client/dist/assets/favicon-16x16.png
