@@ -1,0 +1,96 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — qdrant-webdav-ingest · WebDAV → Qdrant ingestion
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  Standalone ingestion pipeline:
+#    1. rclone pulls documents from one or more WebDAV sources (Nextcloud,
+#       ownCloud, SharePoint, infinitescale, or any RFC-4918 WebDAV server)
+#    2. Python daemon scans the shared docs volume, chunks, embeds via
+#       LiteLLM, and upserts to an externally configured Qdrant.
+#    3. The same Python process exposes a small FastMCP HTTP server that
+#       offers trigger/status tools for operators or automation.
+#
+#  This service has NO bundled Qdrant — it writes into the qdrant-rag
+#  Qdrant (or any reachable Qdrant) via QDRANT_URL + QDRANT_API_KEY.
+#  qdrant-rbac and qdrant-rag remain untouched.
+#
+#  Collection mapping:
+#    /data/docs/{WEBDAV_N_NAME}/{folder}/...  →  Qdrant collection "{folder}"
+#    Files directly in the source root are skipped.
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  #  SYNC — WebDAV pull (multi-source)
+  #
+  #  Each WEBDAV_N_* group in .env spawns one background rclone loop.
+  #  Files land in /data/docs/{WEBDAV_N_NAME}/, mirroring the remote tree.
+  # ─────────────────────────────────────────────────────────────────────────
+  qdrant-webdav-sync:
+    image: ${QWI_SYNC_IMAGE:-rclone/rclone:latest}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/sync.sh"]
+    env_file: .env
+    environment:
+      SYNC_INTERVAL: ${QWI_SYNC_INTERVAL:-60}
+    volumes:
+      - ./sync/sync.sh:/scripts/sync.sh:ro
+      - qwi-docs:/data/docs
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-qdrant-webdav-ingest
+      de.fidonis.role:   document-source
+    profiles: [qdrant-webdav-ingest]
+
+  # ─────────────────────────────────────────────────────────────────────────
+  #  INGEST — scan loop + FastMCP trigger server
+  #
+  #  Background thread: SQLite-mtime-tracked scan of /data/docs/, chunking,
+  #  embedding via LiteLLM, upsert into the configured Qdrant collection
+  #  derived from the second-level directory (WebDAV source subfolder).
+  #
+  #  Main thread: FastMCP HTTP server on INGEST_MCP_PORT for trigger_reindex,
+  #  get_status, and list_sources.
+  # ─────────────────────────────────────────────────────────────────────────
+  qdrant-webdav-ingest:
+    build:
+      context: .
+      dockerfile: ingester/Dockerfile
+    image: ${QWI_INGEST_IMAGE:-papaia-qdrant-webdav-ingest:latest}
+    restart: unless-stopped
+    environment:
+      DOCS_PATH:        /data/docs
+      STATE_PATH:       /data/state
+      QDRANT_URL:       ${QWI_QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY:   ${QWI_QDRANT_API_KEY}
+      LITELLM_URL:      ${LITELLM_URL:-http://litellm:4000/v1}
+      LITELLM_API_KEY:  ${LITELLM_API_KEY}
+      EMBED_MODEL:      ${QWI_EMBED_MODEL:-nomic-embed-text}
+      EMBED_META_COLLECTION: ${QWI_EMBED_META_COLLECTION:-_collection_meta}
+      SCAN_INTERVAL:    ${QWI_SCAN_INTERVAL:-60}
+      CHUNK_WORDS:      ${QWI_CHUNK_WORDS:-400}
+      CHUNK_OVERLAP:    ${QWI_CHUNK_OVERLAP:-50}
+      EMBED_BATCH_SIZE: ${QWI_EMBED_BATCH_SIZE:-32}
+      INGEST_MCP_HOST:  ${QWI_INGEST_MCP_HOST:-0.0.0.0}
+      INGEST_MCP_PORT:  ${QWI_INGEST_MCP_PORT:-8100}
+      INGEST_MCP_PATH:  ${QWI_INGEST_MCP_PATH:-/mcp}
+      LOG_LEVEL:        ${QWI_LOG_LEVEL:-INFO}
+      WEBDAV_SOURCES:   ${QWI_WEBDAV_SOURCES:-}
+    depends_on:
+      qdrant-webdav-sync:
+        condition: service_started
+    volumes:
+      - qwi-docs:/data/docs:ro
+      - qwi-state:/data/state
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-qdrant-webdav-ingest
+      de.fidonis.role:   ingester
+    profiles: [qdrant-webdav-ingest]
+
+volumes:
+  qwi-docs:
+  qwi-state:
