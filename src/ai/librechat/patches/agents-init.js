@@ -24,6 +24,22 @@ const MONGO_URI = process.env.MONGO_URI;
 const log = (msg) => console.log(`[agents-init] ${msg}`);
 const warn = (msg) => console.warn(`[agents-init] ${msg}`);
 
+// Resolves the MongoDB user ObjectId an agent should be filed under.
+// Tries the explicit author_email from the YAML first, falls back to the
+// first user with role ADMIN, then to any user. Returns null if the
+// instance has no users yet — in which case the agent is skipped.
+async function resolveAuthorId(users, doc) {
+  if (doc.author_email) {
+    const match = await users.findOne({ email: doc.author_email });
+    if (match) return match._id;
+    warn(`${doc.id}: author_email '${doc.author_email}' has no matching user — falling back`);
+  }
+  const admin = await users.findOne({ role: 'ADMIN' });
+  if (admin) return admin._id;
+  const anyUser = await users.findOne();
+  return anyUser ? anyUser._id : null;
+}
+
 async function main() {
   if (!MONGO_URI) {
     warn('MONGO_URI not set — skipping');
@@ -53,6 +69,7 @@ async function main() {
     await client.connect();
     const db = client.db();
     const agents = db.collection('agents');
+    const users = db.collection('users');
 
     let upserted = 0;
     let failed = 0;
@@ -72,6 +89,13 @@ async function main() {
           continue;
         }
 
+        const authorId = await resolveAuthorId(users, doc);
+        if (!authorId) {
+          warn(`${file}: no LibreChat user available to own the agent — skip`);
+          failed += 1;
+          continue;
+        }
+
         const update = {
           id: doc.id,
           name: doc.name,
@@ -82,6 +106,11 @@ async function main() {
           mcpServers: Array.isArray(doc.mcpServers) ? doc.mcpServers : [],
           model_parameters: doc.model_parameters ?? {},
           tools: Array.isArray(doc.tools) ? doc.tools : [],
+          // Shared with everyone in the instance by default; YAML can opt out.
+          is_collaborative: doc.is_collaborative !== false,
+          // Re-stamp the author on every run so a re-imported agent stays
+          // owned by the right user even if the user document was rebuilt.
+          author: authorId,
           updatedAt: new Date(),
         };
 
@@ -91,13 +120,13 @@ async function main() {
             $set: update,
             $setOnInsert: {
               createdAt: new Date(),
-              author: 'system',
+              versions: [],
             },
           },
           { upsert: true },
         );
         upserted += 1;
-        log(`upserted ${doc.id} (${file})`);
+        log(`upserted ${doc.id} (${file}) author=${authorId}`);
       } catch (err) {
         warn(`${file}: ${err.message}`);
         failed += 1;
