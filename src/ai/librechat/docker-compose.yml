@@ -43,6 +43,10 @@ services:
       - type: bind
         source: ./patches/mcp-user-headers.js
         target: /app/patches/mcp-user-headers.js
+      # Patch: upserts agents from /app/api/data/agents/ into MongoDB on startup.
+      - type: bind
+        source: ./patches/agents-init.js
+        target: /app/patches/agents-init.js
       - type: bind
         source: ./patches/entrypoint.sh
         target: /app/patches/entrypoint.sh
