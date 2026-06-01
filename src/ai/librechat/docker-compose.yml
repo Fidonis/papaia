@@ -47,6 +47,10 @@ services:
       - type: bind
         source: ./patches/agents-init.js
         target: /app/patches/agents-init.js
+      # Patch: upserts prompts from /app/api/data/prompts/ into MongoDB on startup.
+      - type: bind
+        source: ./patches/prompts-init.js
+        target: /app/patches/prompts-init.js
       - type: bind
         source: ./patches/entrypoint.sh
         target: /app/patches/entrypoint.sh
@@ -57,6 +61,14 @@ services:
       - type: bind
         source: ${LIBRECHAT_AGENTS_DIR:-./agents-stub}
         target: /app/api/data/agents
+        read_only: true
+      # Optional: provision pre-defined prompts from an external directory.
+      # Set LIBRECHAT_PROMPTS_DIR in .env to a host path containing one
+      # *.md per prompt (YAML front matter + markdown body). Default
+      # points to an empty stub so dev/stage behave exactly as before.
+      - type: bind
+        source: ${LIBRECHAT_PROMPTS_DIR:-./prompts-stub}
+        target: /app/api/data/prompts
         read_only: true
       # - ./librechat/logo.svg:/app/client/dist/assets/logo.svg
       # - ./librechat/favicon-32x32.png:/app/client/dist/assets/favicon-32x32.png

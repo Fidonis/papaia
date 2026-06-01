@@ -7,5 +7,6 @@ cd /app
 
 node /app/patches/mcp-user-headers.js
 node /app/patches/agents-init.js
+node /app/patches/prompts-init.js
 
 exec npm run backend
