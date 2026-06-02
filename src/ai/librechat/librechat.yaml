@@ -123,11 +123,28 @@ mcpServers:
     description: 'Semantische Suche in persoenlichen Dokumenten (Nextcloud-Sync).'
     type: streamable-http
     url: http://docrag-api:8000/mcp
+  QdrantRAG:
+    title: 'Document Search'
+    description: 'Role-scoped semantic vector search against Qdrant collections.'
+    type: streamable-http
+    url: http://qdrant-rag:8000/mcp
+    headers:
+      Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
+    # Lazy init: qdrant-rag requires a real user Bearer token (OIDC).
+    # Without `startup: false`, LibreChat tries to connect at process
+    # start with the unsubstituted `{{...}}` placeholder, sees a 401,
+    # then falls back to MCP dynamic OAuth discovery which qdrant-rag
+    # doesn't speak — and burns 120 s in `OAuth handling timeout` per
+    # retry. With `startup: false` the connection is deferred to the
+    # first per-user tool call, where the placeholder gets substituted
+    # with the logged-in user's Keycloak access token.
+    startup: false
 
 mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:3000"
     - "http://docrag-api:8000"
+    - "http://qdrant-rag:8000"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain
