@@ -36,9 +36,9 @@ services:
       - librechat-logs:/app/logs
       # Patch: allows HTTP OIDC issuers (e.g. local Keycloak without TLS).
       # Remove once HTTPS is configured for the identity provider.
-      - type: bind
-        source: ./patches/openidStrategy.js
-        target: /app/api/strategies/openidStrategy.js
+      # - type: bind
+      #   source: ./patches/openidStrategy.js
+      #   target: /app/api/strategies/openidStrategy.js
       # Patch: injects x-librechat-user-email / x-librechat-user-id into MCP requests.
       - type: bind
         source: ./patches/mcp-user-headers.js

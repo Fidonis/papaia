@@ -18,13 +18,25 @@ services:
     image: ${MCP_PAPERLESS_IMAGE}
     restart: unless-stopped
     environment:
-      OIDC_ISSUER_URL:   ${OIDC_ISSUER}
-      OIDC_AUDIENCE:     ${MCP_PAPERLESS_OIDC_AUDIENCE:-mcp-paperless}
-      PAPERLESS_URL:     http://paperless:8000
-      MCP_HOST:          0.0.0.0
-      MCP_PORT:          8000
-      MCP_PATH:          /mcp
-      LOG_LEVEL:         ${MCP_PAPERLESS_LOG_LEVEL:-INFO}
+      # OIDC / Keycloak — OIDC_ISSUER is reused from the global OIDC block.
+      OIDC_ISSUER_URL:              ${OIDC_ISSUER}
+      OIDC_AUDIENCE:                ${MCP_PAPERLESS_OIDC_AUDIENCE:-mcp-paperless}
+      OIDC_JWKS_CACHE_TTL:          ${MCP_PAPERLESS_OIDC_JWKS_CACHE_TTL:-3600}
+      # Paperless-ngx
+      PAPERLESS_URL:                ${MCP_PAPERLESS_PAPERLESS_URL:-http://paperless:8000}
+      # Header forwarded to Paperless as the remote-user identifier. Must match
+      # PAPERLESS_HTTP_REMOTE_USER_HEADER_NAME in services/paperless (WSGI form):
+      # X-Papaia-Remote-User <-> HTTP_X_PAPAIA_REMOTE_USER
+      PAPERLESS_REMOTE_USER_HEADER: ${MCP_PAPERLESS_REMOTE_USER_HEADER:-X-Papaia-Remote-User}
+      PAPERLESS_USERNAME_CLAIM:     ${MCP_PAPERLESS_USERNAME_CLAIM:-preferred_username}
+      PAPERLESS_HTTP_TIMEOUT:       ${MCP_PAPERLESS_HTTP_TIMEOUT:-30}
+      PAPERLESS_MAX_DOWNLOAD_BYTES: ${MCP_PAPERLESS_MAX_DOWNLOAD_BYTES:-10485760}
+      # MCP server — defaults match the container port mapping below.
+      MCP_HOST:                     ${MCP_PAPERLESS_MCP_HOST:-0.0.0.0}
+      MCP_PORT:                     ${MCP_PAPERLESS_MCP_PORT:-8000}
+      MCP_PATH:                     ${MCP_PAPERLESS_MCP_PATH:-/mcp}
+      # Logging
+      LOG_LEVEL:                    ${MCP_PAPERLESS_LOG_LEVEL:-INFO}
     ports:
       - "${HOST_IP:-0.0.0.0}:${MCP_PAPERLESS_EXT_PORT:-9520}:8000"
     networks:
