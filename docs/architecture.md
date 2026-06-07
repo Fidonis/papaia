@@ -4,7 +4,7 @@
 
 ## Overview
 
-papAIa is a self-hosted, OIDC-secured Docker Compose stack that combines AI tooling (LiteLLM, LibreChat, doc-rag, LocalAI) with infrastructure and productivity services (Keycloak, oauth2-proxy, Nginx, Paperless-ngx, n8n, SearXNG, Homepage).
+papAIa is a self-hosted, OIDC-secured Docker Compose stack that combines AI tooling (LiteLLM, LibreChat, qdrant-rag, LocalAI) with infrastructure and productivity services (Keycloak, oauth2-proxy, Nginx, Paperless-ngx, n8n, SearXNG, Homepage).
 
 ## Service catalog
 
@@ -16,7 +16,7 @@ papAIa is a self-hosted, OIDC-secured Docker Compose stack that combines AI tool
 
 ## Data flows
 
-<!-- TODO: e.g. doc-rag ingester → Qdrant → LiteLLM → LibreChat -->
+<!-- TODO: e.g. qdrant-webdav-ingest → Qdrant → qdrant-rag → LibreChat -->
 
 ## Networking
 

@@ -118,11 +118,6 @@ mcpServers:
     description: 'MCP server for Paperless-ngx document management system.'
     type: streamable-http
     url: http://mcp-paperless:3000/mcp
-  DocumentRAG:
-    title: 'Personal Documents'
-    description: 'Semantische Suche in persoenlichen Dokumenten (Nextcloud-Sync).'
-    type: streamable-http
-    url: http://docrag-api:8000/mcp
   QdrantRAG:
     title: 'Document Search'
     description: 'Role-scoped semantic vector search against Qdrant collections.'
@@ -143,7 +138,6 @@ mcpServers:
 mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:3000"
-    - "http://docrag-api:8000"
     - "http://qdrant-rag:8000"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
