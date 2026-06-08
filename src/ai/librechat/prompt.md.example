@@ -1,0 +1,12 @@
+# Example: provision a LibreChat prompt.
+# Copy this file to <LIBRECHAT_PROMPTS_DIR>/my-prompt.md and adjust as needed.
+---
+name: Document Summary                           # displayed name in the prompt library
+category: Productivity                           # prompt category
+command: summarize                               # /slash-command trigger (no leading slash)
+oneliner: Summarize a document in one paragraph  # short description shown in the UI
+author_email: admin@example.com                  # optional; falls back to the ADMIN user
+---
+Summarize the following document in one concise paragraph, highlighting the key points and main conclusions:
+
+{{document}}
