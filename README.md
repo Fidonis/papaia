@@ -74,7 +74,7 @@ wired up to Keycloak via OIDC (native or via oauth2-proxy).
 | LiteLLM (UI)   | Generic OIDC            | API key for programmatic access      |
 | n8n            | oauth2-proxy forward    | NPM rule guards the upstream         |
 | Homepage       | oauth2-proxy forward    | optional, configurable per host      |
-| MCP Paperless  | OAuth2 token forwarding | per-user view of Paperless documents |
+| MCP Paperless  | OIDC token forwarding   | per-user RBAC view of Paperless documents |
 | qdrant-rag     | OIDC token forwarding   | per-user role-scoped vector search   |
 | Nginx PM admin | Network-level only      | bind to internal interfaces          |
 
@@ -488,9 +488,14 @@ provider-specific notes.
   line); edit that file to add or remove models.
 
 ### MCP Paperless
-- Bridges LibreChat to Paperless-ngx as an MCP tool.
-- Forwards the user's Keycloak access token to Paperless on each request,
-  so each LibreChat user only ever sees **their own** documents.
+- OIDC-secured MCP server that bridges LibreChat to Paperless-ngx.
+- Validates the logged-in user's Keycloak Bearer token (forwarded automatically
+  via the `Paperless` entry in `librechat.yaml`), then calls Paperless on the
+  user's behalf via a remote-user header — **no admin credentials stored**.
+- Paperless enforces its own per-user permissions, so each user only ever sees
+  **their own** documents.
+- `OIDC_ISSUER` is reused from the global OIDC block; service-internal settings
+  live in `ai/mcp-paperless/.env`. See `src/ai/mcp-paperless/.env.example`.
 
 ### qdrant-rag
 - OIDC + RBAC MCP server that exposes Qdrant vector search to LibreChat.
@@ -512,8 +517,9 @@ provider-specific notes.
 ### Paperless-ngx
 - Document management with native Keycloak OIDC.
 - Pre-wired with Tika + Gotenberg for OCR.
-- Admin credentials live in `services/paperless/.env`; the same values
-  go into `ai/mcp-paperless/.env`.
+- Accepts a remote-user header from MCP Paperless
+  (`PAPERLESS_ENABLE_HTTP_REMOTE_USER`) so per-user document access works
+  without sharing admin credentials.
 
 ### SearXNG
 - Privacy-respecting metasearch.

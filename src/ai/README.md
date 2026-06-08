@@ -78,11 +78,17 @@ you enable:
 - Use the CPU or NVIDIA CUDA image variant as appropriate for the host;
   list the models to download in `localai/models.txt`.
 
-### MCP Paperless — per-user Paperless proxy
+### MCP Paperless — OIDC + RBAC Paperless proxy
+- Profile: `mcp-paperless`
 - Bridges LibreChat to Paperless-ngx as an MCP tool.
-- Forwards the user's Keycloak access token to Paperless on each request,
-  so per-user document isolation is preserved.
-- Internal port: `9520`.
+- Validates the caller's Keycloak Bearer token (forwarded automatically via the
+  `Paperless` entry in `librechat.yaml`) and calls Paperless on the user's
+  behalf via a remote-user header — no admin credentials stored. Paperless
+  enforces its own per-user permissions.
+- External port: `9520` (MCP endpoint `POST /mcp`, `GET /health`).
+- Configuration: `MCP_PAPERLESS_*` in `src/.env` (image, port); service-internal
+  settings in `ai/mcp-paperless/.env`. `OIDC_ISSUER` is reused from the global
+  OIDC block. Requires `PAPERLESS_ENABLE_HTTP_REMOTE_USER` on Paperless-ngx.
 - Enable it together with Paperless-ngx via `COMPOSE_PROFILES`.
 
 ### n8n — workflow automation

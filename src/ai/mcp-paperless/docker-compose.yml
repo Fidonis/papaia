@@ -1,31 +1,56 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# papAIa — MCP Paperless · Per-user Paperless-ngx Document Proxy
+# papAIa — MCP Paperless · OIDC-secured Paperless-ngx proxy
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
 #
-#  Sits between LibreChat and Paperless-ngx. Reads the
-#  x-librechat-user-email header forwarded by LibreChat and restricts all
-#  document queries to documents owned by that user.
+#  Validates the caller's Keycloak Bearer token and forwards Paperless-ngx
+#  API requests via the X-Papaia-Remote-User header so Paperless enforces
+#  its own per-user permission model — no admin credentials stored here.
 #
 #  Requires:
-#    - PAPERLESS_ADMIN_USER / PAPERLESS_ADMIN_PASSWORD in root .env
-#      (must match the values in services/paperless/.env)
-#    - PAPERLESS_PUBLIC_URL in root .env
+#    - MCP_PAPERLESS_IMAGE in root .env (build locally or pull from registry)
+#    - OIDC_ISSUER in root .env (Keycloak realm URL)
+#    - Audience mapper "mcp-paperless" on the LibreChat Keycloak client
+#    - PAPERLESS_ENABLE_HTTP_REMOTE_USER=true in services/paperless
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-paperless:
-    build:
-      context: .
+    image: ${MCP_PAPERLESS_IMAGE}
     restart: unless-stopped
     environment:
-      PAPERLESS_URL:          http://paperless:8000
-      PAPERLESS_PUBLIC_URL:   ${PAPERLESS_PUBLIC_URL}
-      PAPERLESS_ADMIN_USER:   ${PAPERLESS_ADMIN_USER:-paperless-admin}
-      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
+      # OIDC / Keycloak — OIDC_ISSUER is reused from the global OIDC block.
+      OIDC_ISSUER_URL:              ${OIDC_ISSUER}
+      OIDC_AUDIENCE:                ${MCP_PAPERLESS_OIDC_AUDIENCE:-mcp-paperless}
+      OIDC_JWKS_CACHE_TTL:          ${MCP_PAPERLESS_OIDC_JWKS_CACHE_TTL:-3600}
+      # Paperless-ngx
+      PAPERLESS_URL:                ${MCP_PAPERLESS_PAPERLESS_URL:-http://paperless:8000}
+      # Header forwarded to Paperless as the remote-user identifier. Must match
+      # PAPERLESS_HTTP_REMOTE_USER_HEADER_NAME in services/paperless (WSGI form):
+      # X-Papaia-Remote-User <-> HTTP_X_PAPAIA_REMOTE_USER
+      PAPERLESS_REMOTE_USER_HEADER: ${MCP_PAPERLESS_REMOTE_USER_HEADER:-X-Papaia-Remote-User}
+      PAPERLESS_USERNAME_CLAIM:     ${MCP_PAPERLESS_USERNAME_CLAIM:-preferred_username}
+      PAPERLESS_HTTP_TIMEOUT:       ${MCP_PAPERLESS_HTTP_TIMEOUT:-30}
+      PAPERLESS_MAX_DOWNLOAD_BYTES: ${MCP_PAPERLESS_MAX_DOWNLOAD_BYTES:-10485760}
+      # MCP server — defaults match the container port mapping below.
+      MCP_HOST:                     ${MCP_PAPERLESS_MCP_HOST:-0.0.0.0}
+      MCP_PORT:                     ${MCP_PAPERLESS_MCP_PORT:-8000}
+      MCP_PATH:                     ${MCP_PAPERLESS_MCP_PATH:-/mcp}
+      # Logging
+      LOG_LEVEL:                    ${MCP_PAPERLESS_LOG_LEVEL:-INFO}
     ports:
-      - "${HOST_IP:-0.0.0.0}:${MCP_PAPERLESS_EXT_PORT:-9520}:3000"
+      - "${HOST_IP:-0.0.0.0}:${MCP_PAPERLESS_EXT_PORT:-9520}:8000"
     networks:
       - papaia-net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     labels:
       de.fidonis.module: papaia-mcp-paperless
       de.fidonis.role:   mcp-server
