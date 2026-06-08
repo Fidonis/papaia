@@ -1,0 +1,62 @@
+name: License check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/.env.example"
+      - "THIRD_PARTY_LICENSES.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/.env.example"
+      - "THIRD_PARTY_LICENSES.md"
+
+jobs:
+  image-inventory-check:
+    name: Verify image inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify all images in .env.example are documented
+        run: |
+          set -euo pipefail
+
+          env_file="src/.env.example"
+          doc_file="THIRD_PARTY_LICENSES.md"
+
+          if [ ! -f "$env_file" ]; then
+            echo "ERROR: $env_file not found"
+            exit 1
+          fi
+          if [ ! -f "$doc_file" ]; then
+            echo "ERROR: $doc_file not found"
+            exit 1
+          fi
+
+          mapfile -t image_vars < <(grep -oP '^[A-Z0-9_]+_IMAGE(?=\s*=)' "$env_file" | sort -u)
+
+          if [ ${#image_vars[@]} -eq 0 ]; then
+            echo "No *_IMAGE variables found in $env_file — nothing to check."
+            exit 0
+          fi
+
+          missing=()
+          for var in "${image_vars[@]}"; do
+            if ! grep -qF "$var" "$doc_file"; then
+              missing+=("$var")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "The following image variables are not documented in $doc_file:"
+            for var in "${missing[@]}"; do
+              echo "  - $var"
+            done
+            echo ""
+            echo "Add an entry for each variable to $doc_file before merging."
+            exit 1
+          fi
+
+          echo "OK — all ${#image_vars[@]} image variable(s) are documented in $doc_file."
