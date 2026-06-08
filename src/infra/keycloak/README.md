@@ -101,6 +101,27 @@ Keycloak imports the `papaia` realm automatically on the first start
 | `paperless` | Paperless-ngx | `KC_PAPERLESS_CLIENT_SECRET` |
 | `litellm` | LiteLLM | `KC_LITELLM_CLIENT_SECRET` |
 | `oauth2-proxy` | N8N + others (forward auth) | `KC_OAUTH2_PROXY_CLIENT_SECRET` |
+| `qdrant-rag` | qdrant-rag MCP (OIDC + RBAC) | `KC_QDRANT_RAG_CLIENT_SECRET` |
+| `mcp-paperless` | MCP Paperless (resource server, no login flows) | — |
+
+**Audience Mappers for MCP servers**
+
+MCP Paperless and qdrant-rag receive access tokens forwarded by LibreChat
+(`Authorization: Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}`). Each server validates
+the incoming token against Keycloak's JWKS and checks the `aud` (audience) claim.
+
+| MCP server | Required audience | Mapper location |
+|---|---|---|
+| mcp-paperless | `mcp-paperless` | `mcp-paperless-audience` mapper on the **`librechat`** client |
+| qdrant-rag | `qdrant-rag` | `qdrant-rag-audience` mapper on the **`qdrant-rag`** client |
+
+The `mcp-paperless` client is registered in the realm as a resource server (no flows,
+no secret) so that the `included.client.audience` reference in the mapper resolves
+correctly. It never issues tokens itself.
+
+> **External OIDC provider:** if you use Entra ID, Authentik, or another provider
+> instead of the built-in Keycloak, configure equivalent audience claims in that
+> provider's token issuance policy before enabling mcp-paperless or qdrant-rag.
 
 **Realm Roles**
 
@@ -218,6 +239,7 @@ Replace the `OPENID_*` / client vars in each service's `.env` as needed.
 | `KC_PAPERLESS_CLIENT_SECRET` | Paperless OIDC secret |
 | `KC_LITELLM_CLIENT_SECRET` | LiteLLM OIDC secret |
 | `KC_OAUTH2_PROXY_CLIENT_SECRET` | oauth2-proxy OIDC secret |
+| `KC_QDRANT_RAG_CLIENT_SECRET` | qdrant-rag OIDC secret |
 
 ### `src/infra/oauth2-proxy/.env`
 
