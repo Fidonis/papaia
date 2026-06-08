@@ -22,7 +22,6 @@ include:
   - path: ./services/searxng/docker-compose.yml
 
   # AI Services
-  # - path: ./ai/doc-rag/docker-compose.yml
   - path: ./ai/librechat/docker-compose.yml
   - path: ./ai/litellm/docker-compose.yml
   - path: ./ai/localai/docker-compose.yml

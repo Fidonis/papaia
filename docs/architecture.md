@@ -4,7 +4,7 @@
 
 ## Overview
 
-papAIa is a self-hosted, OIDC-secured Docker Compose stack that combines AI services (LiteLLM, LibreChat, doc-rag, LocalAI) with productivity and infrastructure services (Keycloak, oauth2-proxy, Nginx Proxy Manager, Paperless-ngx, n8n, SearXNG, Homepage).
+papAIa is a self-hosted, OIDC-secured Docker Compose stack that combines AI services (LiteLLM, LibreChat, qdrant-rag, LocalAI) with productivity and infrastructure services (Keycloak, oauth2-proxy, Nginx Proxy Manager, Paperless-ngx, n8n, SearXNG, Homepage).
 
 All services are guarded by a single identity provider (Keycloak by default, or any external OIDC provider). Services with native OIDC support authenticate directly; services without it are protected by an oauth2-proxy forward-auth sidecar. Every user, human or programmatic, obtains a Keycloak token before reaching any service.
 
@@ -36,11 +36,9 @@ flowchart TD
     end
 
     subgraph RAG["RAG & MCP layer"]
-        DOCRAG["doc-rag\nWebDAV → Qdrant pipeline"]
         QR["qdrant-rag\nRBAC vector search"]
         MCP["MCP Paperless\nper-user doc proxy"]
-        QD1[("Qdrant\ndoc-rag vectors")]
-        QD2[("Qdrant\nqdrant-rag vectors")]
+        QD[("Qdrant\nqdrant-rag vectors")]
     end
 
     subgraph Productivity["Productivity services"]
@@ -76,18 +74,16 @@ flowchart TD
     LL --> LAI
     LL --> EXT
 
-    LC -->|"MCP tools"| DOCRAG
     LC -->|"MCP tools"| QR
     LC -->|"MCP tools"| MCP
 
-    DOCRAG --> QD1
-    QR --> QD2
+    QR --> QD
     MCP --> PL
 
-    WEBDAV --> RCLONE --> DOCLING --> EMBED --> QD1
+    WEBDAV --> RCLONE --> DOCLING --> EMBED --> QD
     EMBED -.->|"embedding API"| LL
 
-    N8N -->|"HTTP"| DOCRAG
+    N8N -->|"HTTP"| QD
     N8N --> PL
 ```
 
@@ -181,7 +177,6 @@ sequenceDiagram
     participant LC as LibreChat
     participant LL as LiteLLM
     participant Model as Model (LocalAI / external)
-    participant DOCRAG as doc-rag MCP
     participant QR as qdrant-rag
     participant MCP as MCP Paperless
     participant PL as Paperless-ngx
@@ -192,10 +187,6 @@ sequenceDiagram
     Model-->>LL: token stream
     LL-->>LC: streamed response
     LC-->>User: display response
-
-    Note over LC,DOCRAG: RAG tool calls (parallel, if configured)
-    LC->>DOCRAG: search_documents(query)
-    DOCRAG-->>LC: ranked chunks from Qdrant
 
     LC->>QR: search (Bearer token)
     QR->>QR: validate token + apply RBAC
@@ -281,8 +272,6 @@ All stateful data is stored in **named Docker volumes**. Bind-mounts are used on
 | `litellm-postgresql` | LiteLLM | API keys, spend logs, model configs |
 | `litellm-prometheus` | Prometheus | Metrics (15-day retention) |
 | `localai-models` | LocalAI | Downloaded model weights |
-| `docrag-vectordb` | doc-rag Qdrant | Document chunk vectors |
-| `docrag-state` | doc-rag ingester | SQLite mtime index |
 | `qdrant_storage` | qdrant-rag | Role-scoped vector collections |
 | `paperless-data` | Paperless-ngx | Documents, thumbnails, index |
 | `paperless-db` | Paperless PostgreSQL | Document metadata |

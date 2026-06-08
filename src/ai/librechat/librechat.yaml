@@ -129,11 +129,6 @@ mcpServers:
     # first per-user tool call, where the placeholder gets substituted
     # with the logged-in user's Keycloak access token.
     startup: false
-  DocumentRAG:
-    title: 'Personal Documents'
-    description: 'Semantische Suche in persoenlichen Dokumenten (Nextcloud-Sync).'
-    type: streamable-http
-    url: http://docrag-api:8000/mcp
   QdrantRAG:
     title: 'Document Search'
     description: 'Role-scoped semantic vector search against Qdrant collections.'
@@ -154,7 +149,6 @@ mcpServers:
 mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:8000"
-    - "http://docrag-api:8000"
     - "http://qdrant-rag:8000"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
