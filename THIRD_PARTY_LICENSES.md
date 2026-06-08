@@ -23,17 +23,17 @@ file. Adding a new service without updating this file will fail the check.
 | `KEYCLOAK_POSTGRES_IMAGE` | `postgres` | 18.3 | PostgreSQL License | |
 | `OAUTH2_PROXY_IMAGE` | `quay.io/oauth2-proxy/oauth2-proxy` | v7.9.0 | MIT | |
 | `NPM_IMAGE` | `jc21/nginx-proxy-manager` | 2.14.0 | MIT | |
-| `HOMEPAGE_IMAGE` | `ghcr.io/gethomepage/homepage` | v1.12.3 | MIT | |
+| `HOMEPAGE_IMAGE` | `ghcr.io/gethomepage/homepage` | v1.12.3 | GPL-3.0 | used as network service |
 | `PAPERLESS_IMAGE` | `ghcr.io/paperless-ngx/paperless-ngx` | 2.20.10 | GPL-3.0 | used as network service |
-| `PAPERLESS_REDIS_IMAGE` | `docker.io/library/redis` | 8 | Redis RSAL 2.0 | used as network service; source-available since Redis 7.4 |
+| `PAPERLESS_REDIS_IMAGE` | `docker.io/library/redis` | 8 | RSALv2 / SSPLv1 / AGPLv3 | used as network service; Redis 8 is tri-licensed (AGPLv3 is OSI-approved) |
 | `PAPERLESS_DB_IMAGE` | `docker.io/library/postgres` | 18 | PostgreSQL License | |
 | `PAPERLESS_GOTENBERG_IMAGE` | `docker.io/gotenberg/gotenberg` | 8.27 | MIT | |
 | `PAPERLESS_TIKA_IMAGE` | `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | |
 | `SEARXNG_IMAGE` | `searxng/searxng` | 2026.4.24-a7ac696b4 | AGPL-3.0 | used as network service |
 | `LIBRECHAT_IMAGE` | `ghcr.io/danny-avila/librechat` | v0.8.5 | MIT | |
 | `LIBRECHAT_MONGODB_IMAGE` | `mongo` | 8.0.20 | SSPL | used as network service |
-| `LIBRECHAT_MEILISEARCH_IMAGE` | `getmeili/meilisearch` | v1.35.1 | SSPL | used as network service |
-| `LIBRECHAT_VECTORDB_IMAGE` | `pgvector/pgvector` | 0.8.0-pg15-trixie | MIT | |
+| `LIBRECHAT_MEILISEARCH_IMAGE` | `getmeili/meilisearch` | v1.35.1 | MIT | MIT core; BUSL-1.1 covers Enterprise Edition components |
+| `LIBRECHAT_VECTORDB_IMAGE` | `pgvector/pgvector` | 0.8.0-pg15-trixie | PostgreSQL License | |
 | `LIBRECHAT_RAGAPI_IMAGE` | `ghcr.io/danny-avila/librechat-rag-api-dev-lite` | latest | MIT | |
 | `LITELLM_IMAGE` | `ghcr.io/berriai/litellm` | v1.83.14.rc.1 | MIT | |
 | `LITELLM_DB_IMAGE` | `postgres` | 16 | PostgreSQL License | |
@@ -50,7 +50,7 @@ file. Adding a new service without updating this file will fail the check.
 | `HOMEASSISTANT_IMAGE` | `ghcr.io/home-assistant/home-assistant` | 2026.4.4 | Apache-2.0 | |
 | `FIRECRAWL_IMAGE` | `ghcr.io/firecrawl/firecrawl` | (digest-pinned) | AGPL-3.0 | used as network service |
 | `FIRECRAWL_PLAYWRIGHT_IMAGE` | `ghcr.io/firecrawl/playwright-service` | (digest-pinned) | Apache-2.0 | |
-| `FIRECRAWL_REDIS_IMAGE` | `redis` | 8.6.1-alpine | Redis RSAL 2.0 | used as network service; source-available since Redis 7.4 |
+| `FIRECRAWL_REDIS_IMAGE` | `redis` | 8.6.1-alpine | RSALv2 / SSPLv1 / AGPLv3 | used as network service; Redis 8 is tri-licensed (AGPLv3 is OSI-approved) |
 | `FIRECRAWL_RABBITMQ_IMAGE` | `rabbitmq` | 3-management | MPL-2.0 | |
 | `FIRECRAWL_NUCPOSTGRES_IMAGE` | `ghcr.io/firecrawl/nuq-postgres` | (digest-pinned) | PostgreSQL License | |
 | `TECHNITIUM_IMAGE` | `technitium/dns-server` | 14.3.0 | GPL-3.0 | used as network service |
@@ -76,7 +76,8 @@ They must be updated manually here when the compose file changes.
 | GPL-3.0 | GNU General Public License v3.0 |
 | AGPL-3.0 | GNU Affero General Public License v3.0 |
 | SSPL | Server Side Public License v1 (MongoDB / Elastic) |
-| RSAL 2.0 | Redis Source Available License 2.0 |
+| RSALv2 | Redis Source Available License v2 |
+| BUSL-1.1 | Business Source License 1.1 |
 | MPL-2.0 | Mozilla Public License 2.0 |
 | PostgreSQL License | PostgreSQL License (permissive, BSD-style) |
 | Sustainable Use License | n8n Sustainable Use License (source-available, not OSI) |
