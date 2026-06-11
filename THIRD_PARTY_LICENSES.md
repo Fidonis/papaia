@@ -54,6 +54,11 @@ file. Adding a new service without updating this file will fail the check.
 | `FIRECRAWL_RABBITMQ_IMAGE` | `rabbitmq` | 3-management | MPL-2.0 | |
 | `FIRECRAWL_NUCPOSTGRES_IMAGE` | `ghcr.io/firecrawl/nuq-postgres` | (digest-pinned) | PostgreSQL License | |
 | `TECHNITIUM_IMAGE` | `technitium/dns-server` | 14.3.0 | GPL-3.0 | used as network service |
+| `QDRANT_IMAGE` | `qdrant/qdrant` | v1.18.1 | Apache-2.0 | |
+| `QDRANT_RAG_IMAGE` | `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.1.1 | MIT | Fidonis-maintained OIDC+RBAC MCP layer for Qdrant |
+| `QWI_SYNC_IMAGE` | `rclone/rclone` | sha-b22fe98 | MIT | |
+| `QWI_INGEST_IMAGE` | `papaia-qdrant-webdav-ingest` | 0.1.0 | Fidonis proprietary | internal Fidonis image; built in-repo |
+| `MCP_PAPERLESS_IMAGE` | `ghcr.io/fidonis/paperless-mcp-rbac` | 0.1.0 | MIT | Fidonis-maintained OIDC-secured Paperless MCP server |
 
 ### Hardcoded image references
 
