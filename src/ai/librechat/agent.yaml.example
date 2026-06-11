@@ -1,0 +1,17 @@
+# Example: provision a Paperless assistant agent.
+# Copy this file to <LIBRECHAT_AGENTS_DIR>/paperless.yaml and adjust as needed.
+id: paperless-assistant          # unique, stable — used as the upsert key
+name: Paperless-Assistent
+description: Search and manage documents in Paperless-ngx.
+provider: Private-LLM            # must match a configured LLM endpoint
+model: qwen2.5-1.5b-instruct
+author_email: admin@example.com  # optional; falls back to the ADMIN user
+is_collaborative: true           # optional; default: true (visible to all users)
+instructions: |
+  You have access to Paperless-ngx via the MCP tool.
+  Help with searching, categorising, and tagging documents.
+mcpServers:
+  - Paperless                    # must match a configured MCP server
+tools: []
+model_parameters:
+  temperature: 0.3

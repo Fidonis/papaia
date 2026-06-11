@@ -15,30 +15,29 @@ services are aggregated, toggled, started) see the
 
 ```
 LibreChat  ──▶  LiteLLM  ──▶  LocalAI / hosted providers
-   │              ▲
-   │ MCP tools    │ embeddings
-   ▼              │
-MCP Paperless    doc-rag  ─── rclone ───▶  WebDAV (Nextcloud, …)
-   │              │
-   ▼              ▼
-Paperless-ngx   Qdrant
+   │
+   │ MCP tools
+   ▼
+MCP Paperless    qdrant-rag ──▶ Qdrant
+   │
+   ▼
+Paperless-ngx
 ```
 
 - **LibreChat** is the user-facing chat UI. It authenticates with Keycloak
   (native OIDC, PKCE), routes model calls through LiteLLM, and consumes
-  MCP tools from doc-rag and MCP Paperless.
-- **LiteLLM** unifies access to local and hosted LLMs and is also the
-  embedding gateway for doc-rag.
+  MCP tools from MCP Paperless and qdrant-rag.
+- **LiteLLM** unifies access to local and hosted LLMs.
 - **LocalAI** runs chat-completions inference locally (CPU or NVIDIA
   GPU). Models to download are listed in `localai/models.txt`.
-- **doc-rag** ingests documents from one or more WebDAV sources, chunks
-  them with Docling, embeds via LiteLLM, stores vectors in Qdrant and
-  exposes `search_documents` / `list_collections` as MCP tools.
 - **MCP Paperless** is a per-user proxy that forwards a LibreChat user's
   Keycloak access token into Paperless-ngx, so each user only sees their
   own documents.
-- **n8n** is workflow automation behind oauth2-proxy. It can call doc-rag
-  via the MCP API or HTTP for retrieval-augmented automations.
+- **qdrant-rag** exposes per-user, role-scoped vector search over a Qdrant
+  collection as an MCP tool. LibreChat forwards the logged-in user's Keycloak
+  Bearer token via the native `{{LIBRECHAT_OPENID_ACCESS_TOKEN}}` placeholder;
+  qdrant-rag validates the token and enforces RBAC derived from Keycloak roles.
+- **n8n** is workflow automation behind oauth2-proxy.
 
 ---
 
@@ -52,8 +51,7 @@ you enable:
    key, vector DB passwords, …) with a real value.
 3. Keep the shared values consistent with `src/.env`:
    - Keycloak client secrets → `OPENID_CLIENT_SECRET` / `GENERIC_CLIENT_SECRET`.
-   - LiteLLM master key → LibreChat `LITELLM_API_KEY` and doc-rag
-     `LITELLM_API_KEY`.
+   - LiteLLM master key → LibreChat `LITELLM_API_KEY`.
    - `PAPAIA_HOST` → service public URLs (LibreChat `DOMAIN_*`, LiteLLM
      `GENERIC_REDIRECT_URI`, n8n `N8N_PUBLIC_URL`, …).
 
@@ -80,22 +78,17 @@ you enable:
 - Use the CPU or NVIDIA CUDA image variant as appropriate for the host;
   list the models to download in `localai/models.txt`.
 
-### doc-rag — RAG over WebDAV sources
-- Components: `docrag-sync` (rclone), `docrag-vectordb` (Qdrant),
-  `docrag-ingester` (Docling + LiteLLM embeddings),
-  `docrag-api` (FastMCP).
-- External ports: `8700` (MCP API: `POST /mcp`, `GET /health`,
-  `POST /reindex`), `6333` (Qdrant dashboard).
-- Configuration: WebDAV credentials, embedding model, chunk parameters
-  in `.env`.
-- See [`doc-rag/README.md`](doc-rag/README.md) for the full pipeline,
-  variable reference, MCP tool schema and operational notes.
-
-### MCP Paperless — per-user Paperless proxy
+### MCP Paperless — OIDC + RBAC Paperless proxy
+- Profile: `mcp-paperless`
 - Bridges LibreChat to Paperless-ngx as an MCP tool.
-- Forwards the user's Keycloak access token to Paperless on each request,
-  so per-user document isolation is preserved.
-- Internal port: `9520`.
+- Validates the caller's Keycloak Bearer token (forwarded automatically via the
+  `Paperless` entry in `librechat.yaml`) and calls Paperless on the user's
+  behalf via a remote-user header — no admin credentials stored. Paperless
+  enforces its own per-user permissions.
+- External port: `9520` (MCP endpoint `POST /mcp`, `GET /health`).
+- Configuration: `MCP_PAPERLESS_*` in `src/.env` (image, port); service-internal
+  settings in `ai/mcp-paperless/.env`. `OIDC_ISSUER` is reused from the global
+  OIDC block. Requires `PAPERLESS_ENABLE_HTTP_REMOTE_USER` on Paperless-ngx.
 - Enable it together with Paperless-ngx via `COMPOSE_PROFILES`.
 
 ### n8n — workflow automation
@@ -104,6 +97,21 @@ you enable:
 - Auth: oauth2-proxy forward auth (NPM rule guards the upstream).
 - Postgres-backed state. The public URL is derived from `PAPAIA_HOST`
   during setup so the oauth2-proxy redirect callback stays correct.
+
+### qdrant-rag — OIDC + RBAC vector search MCP server
+
+- Profile: `qdrant-rag`
+- Components: `qdrant-rag` (FastMCP server), `qdrant` (vector store)
+- External ports: `8800` (MCP endpoint: `POST /mcp`), `6333` (Qdrant REST),
+  `6334` (Qdrant gRPC)
+- Auth: validates the caller's Keycloak Bearer token; maps Keycloak roles to
+  per-collection Qdrant access via an ACL collection in the vector store.
+- LibreChat forwards the logged-in user's token automatically via the
+  `QdrantRAG` entry in `librechat.yaml` — no custom patch required.
+- Configuration: `QDRANT_RAG_*` variables in `src/.env`; `OIDC_ISSUER` is
+  reused from the global OIDC block — no duplicate needed.
+- See [`qdrant-rag/.env.example`](qdrant-rag/.env.example) for the full
+  variable reference.
 
 ### Jina AI Reranker (optional)
 - Image: `ghcr.io/marko-boehm/jina-ai-litellm-reranker`

@@ -19,8 +19,7 @@ wired up to Keycloak via OIDC (native or via oauth2-proxy).
 - **Template-driven setup** — every service ships a `.env.example` with
   `GENERATE_…` placeholders; copy it to `.env`, fill in the secrets and
   enable only the modules you need via `COMPOSE_PROFILES`.
-- **New services**: n8n, MCP Paperless, doc-rag (RAG over WebDAV sources),
-  SearXNG, Homepage dashboard, oauth2-proxy.
+- **New services**: n8n, MCP Paperless, SearXNG, Homepage dashboard, oauth2-proxy.
 - **Single Compose file** at `src/docker-compose.yml` aggregates per-service
   compose files via `include:` — no more juggling many compose invocations.
 - **Split-URL OIDC** — browser-facing endpoints use the host's reachable URL
@@ -61,8 +60,8 @@ wired up to Keycloak via OIDC (native or via oauth2-proxy).
                      ▼
         ┌───────────────────────────────────────────────────┐
         │                AI / Backend services              │
-        │ LocalAI · doc-rag (Qdrant+rclone+ingester+API)    │
-        │ MCP Paperless · SearXNG · Mongo · Postgres · ...  │
+        │ LocalAI · MCP Paperless · SearXNG · Mongo · ...   │
+        │ Postgres · qdrant-rag · n8n · ...                  │
         └───────────────────────────────────────────────────┘
 ```
 
@@ -75,7 +74,8 @@ wired up to Keycloak via OIDC (native or via oauth2-proxy).
 | LiteLLM (UI)   | Generic OIDC            | API key for programmatic access      |
 | n8n            | oauth2-proxy forward    | NPM rule guards the upstream         |
 | Homepage       | oauth2-proxy forward    | optional, configurable per host      |
-| MCP Paperless  | OAuth2 token forwarding | per-user view of Paperless documents |
+| MCP Paperless  | OIDC token forwarding   | per-user RBAC view of Paperless documents |
+| qdrant-rag     | OIDC token forwarding   | per-user role-scoped vector search   |
 | Nginx PM admin | Network-level only      | bind to internal interfaces          |
 
 ---
@@ -103,9 +103,9 @@ External ports are configurable in `src/.env`. Defaults below.
 | Homepage       | 8300 | Service dashboard                                    |
 | n8n            | 8400 | Workflow automation                                  |
 | SearXNG        | 8500 | Privacy-respecting metasearch                        |
-| doc-rag API    | 8700 | RAG MCP server (`POST /mcp`, `GET /health`)          |
-| Qdrant         | 6333 | Vector store dashboard for doc-rag                   |
-| LocalAI        | 8080 | Local model inference, chat-completions API          |
+| qdrant-rag          | 8800       | OIDC + RBAC MCP server for role-scoped vector search |
+| Qdrant (qdrant-rag) | 6333 / 6334| Vector store for qdrant-rag (REST + gRPC)            |
+| LocalAI             | 8080       | Local model inference, chat-completions API          |
 | Firecrawl      | 3002 | Web crawler (commented out by default)               |
 | Home Assistant | 8123 | Home automation (host-network mode, optional)        |
 
@@ -308,7 +308,6 @@ obvious:
 ```
 ${PAPAIA_CONFIG_DIR}/
 ├── ai/
-│   ├── doc-rag/integrations/webdav/sync.sh
 │   ├── librechat/librechat.yaml
 │   ├── librechat/patches/{entrypoint.sh, mcp-user-headers.js, openidStrategy.js}
 │   ├── litellm/{config.yaml, prometheus.yml}
@@ -488,20 +487,27 @@ provider-specific notes.
 - Models to download are listed in `ai/localai/models.txt` (one URL per
   line); edit that file to add or remove models.
 
-### doc-rag
-- Pulls documents from one or more WebDAV sources (Nextcloud, SharePoint,
-  …) via `rclone` and indexes them with Docling + LiteLLM embeddings into
-  per-source Qdrant collections.
-- Exposes `search_documents` and `list_collections` as MCP tools (consumed
-  by LibreChat and n8n) plus `GET /health` and `POST /reindex` HTTP
-  endpoints.
-- See [`src/ai/doc-rag/README.md`](src/ai/doc-rag/README.md) for the full
-  pipeline, environment variables and operational notes.
-
 ### MCP Paperless
-- Bridges LibreChat to Paperless-ngx as an MCP tool.
-- Forwards the user's Keycloak access token to Paperless on each request,
-  so each LibreChat user only ever sees **their own** documents.
+- OIDC-secured MCP server that bridges LibreChat to Paperless-ngx.
+- Validates the logged-in user's Keycloak Bearer token (forwarded automatically
+  via the `Paperless` entry in `librechat.yaml`), then calls Paperless on the
+  user's behalf via a remote-user header — **no admin credentials stored**.
+- Paperless enforces its own per-user permissions, so each user only ever sees
+  **their own** documents.
+- `OIDC_ISSUER` is reused from the global OIDC block; service-internal settings
+  live in `ai/mcp-paperless/.env`. See `src/ai/mcp-paperless/.env.example`.
+
+### qdrant-rag
+- OIDC + RBAC MCP server that exposes Qdrant vector search to LibreChat.
+- Validates the logged-in user's Keycloak Bearer token and maps Keycloak roles
+  to per-collection Qdrant access, so each user can only search collections
+  they are authorized for.
+- LibreChat forwards the user's token automatically via the `QdrantRAG` MCP
+  server entry in `librechat.yaml` — no custom patch required.
+- Ships its own Qdrant instance; configured via `QDRANT_RAG_*` variables.
+  `OIDC_ISSUER` is reused from the global OIDC block — no duplicate needed.
+- Optional profile `qdrant-rag`; see `src/ai/qdrant-rag/.env.example` for
+  the full variable reference.
 
 ### n8n
 - Self-hosted workflow automation behind oauth2-proxy.
@@ -511,8 +517,9 @@ provider-specific notes.
 ### Paperless-ngx
 - Document management with native Keycloak OIDC.
 - Pre-wired with Tika + Gotenberg for OCR.
-- Admin credentials live in `services/paperless/.env`; the same values
-  go into `ai/mcp-paperless/.env`.
+- Accepts a remote-user header from MCP Paperless
+  (`PAPERLESS_ENABLE_HTTP_REMOTE_USER`) so per-user document access works
+  without sharing admin credentials.
 
 ### SearXNG
 - Privacy-respecting metasearch.
@@ -660,8 +667,8 @@ docker compose config             # render the merged compose file
     ├── infra/                 # keycloak, nginx, oauth2-proxy, technitium
     ├── services/              # firecrawl, home-assistant, homepage,
     │                          # paperless, searxng
-    └── ai/                    # doc-rag, jinaai, librechat, litellm,
-                               # localai, mcp-paperless, n8n
+    └── ai/                    # jinaai, librechat, litellm,
+                               # localai, mcp-paperless, n8n, qdrant-rag
 ```
 
 ---
@@ -673,5 +680,3 @@ docker compose config             # render the merged compose file
 - [`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) —
   Realm contents, client list, external-IdP migration, secret rotation.
 - [`src/ai/README.md`](src/ai/README.md) — Per-AI-service summary.
-- [`src/ai/doc-rag/README.md`](src/ai/doc-rag/README.md) — RAG pipeline
-  reference: data flow, env vars, operations.

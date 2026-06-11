@@ -1,14 +1,15 @@
 #!/bin/sh
 # -----------------------------------------------------------------------------
-# doc-rag / integrations/webdav/sync.sh
+# qdrant-webdav-ingest / sync.sh
 #
 # Role:    Document source integration — WebDAV (multi-source).
 # Purpose: One-way sync from one or more WebDAV servers into the shared
 #          /data/docs/ volume. Each source lands in its own subdirectory,
-#          which the ingester maps to a dedicated Qdrant collection.
+#          which the ingester traverses to derive per-folder Qdrant
+#          collections.
 #
 # Source configuration (N = 1, 2, 3, ...):
-#   WEBDAV_N_NAME    Target subdirectory and collection name, e.g. "nextcloud"
+#   WEBDAV_N_NAME    Target subdirectory under /data/docs/, e.g. "nextcloud"
 #   WEBDAV_N_URL     Full WebDAV base URL
 #   WEBDAV_N_USER    Username
 #   WEBDAV_N_PASS    Plaintext password or Nextcloud app password

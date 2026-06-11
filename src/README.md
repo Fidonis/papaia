@@ -31,13 +31,13 @@ src/
 │   ├── paperless/          # document management (OIDC)
 │   └── searxng/            # privacy-respecting metasearch
 └── ai/                     # AI / ML services
-    ├── doc-rag/            # WebDAV → Qdrant RAG pipeline + MCP API
     ├── jinaai/             # Jina reranker (commented out by default)
     ├── librechat/          # multi-provider chat UI (OIDC)
     ├── litellm/            # LLM proxy + Postgres + Prometheus (OIDC)
     ├── localai/            # local chat-completions inference
     ├── mcp-paperless/      # per-user Paperless proxy for LibreChat
-    └── n8n/                # workflow automation (oauth2-proxy)
+    ├── n8n/                # workflow automation (oauth2-proxy)
+    └── qdrant-rag/         # OIDC + RBAC MCP server over Qdrant for LibreChat
 ```
 
 The root `docker-compose.yml` is intentionally tiny — it only declares the
@@ -86,9 +86,9 @@ Key points when filling in the `.env` files:
   Linux use the host's primary IP; elsewhere `http://host.docker.internal`
   works out of the box.
 
-Enable optional modules (LocalAI, doc-rag, n8n, SearXNG, Homepage,
-Paperless-ngx) by adding their profile to `COMPOSE_PROFILES` in `src/.env`
-and uncommenting their `include:` line in `docker-compose.yml` — see
+Enable optional modules (LocalAI, n8n, SearXNG, Homepage, Paperless-ngx)
+by adding their profile to `COMPOSE_PROFILES` in `src/.env` and
+uncommenting their `include:` line in `docker-compose.yml` — see
 [Toggling modules](#toggling-modules) below.
 
 ---
@@ -106,7 +106,7 @@ docker compose stop
 docker compose down
 
 # Same, plus delete all volumes (DESTRUCTIVE — wipes Keycloak users,
-# Paperless documents, doc-rag vectors, Mongo, etc.)
+# Paperless documents, Qdrant vectors, Mongo, etc.)
 docker compose down -v
 ```
 
@@ -144,7 +144,6 @@ include:
   - path: ./services/homepage/docker-compose.yml
   ...
   # AI Services
-  # - path: ./ai/doc-rag/docker-compose.yml
   - path: ./ai/librechat/docker-compose.yml
   ...
 ```
@@ -187,7 +186,6 @@ The directory layout inside `${PAPAIA_CONFIG_DIR}` mirrors `src/` exactly:
 | `${PAPAIA_CONFIG_DIR}/ai/localai/models.txt`                            | `/models-config/models.txt`                   | localai-model-init |
 | `${PAPAIA_CONFIG_DIR}/ai/localai/models/*.yaml`                         | `/models/*.yaml`                              | localai     |
 | `${PAPAIA_CONFIG_DIR}/ai/n8n/nginx.conf`                                | `/etc/nginx/conf.d/default.conf`              | n8n-proxy   |
-| `${PAPAIA_CONFIG_DIR}/ai/doc-rag/integrations/webdav/sync.sh`           | `/scripts/sync.sh`                            | docrag-sync |
 | `${PAPAIA_CONFIG_DIR}/infra/keycloak/keycloak.conf`                     | `/opt/keycloak/conf/keycloak.conf`            | keycloak    |
 | `${PAPAIA_CONFIG_DIR}/infra/keycloak/realm-import/`                     | `/opt/keycloak/data/import`                   | keycloak    |
 | `${PAPAIA_CONFIG_DIR}/services/homepage/config/`                        | `/app/config`                                 | homepage    |
