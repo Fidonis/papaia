@@ -7,28 +7,28 @@ papAIa is a unified Docker Compose stack that bundles a chat UI, an LLM proxy,
 local model hosting, document management, RAG over personal files, workflow
 automation and metasearch — all behind a single Keycloak SSO.
 
-This is the **0.6.0** release: every service that supports authentication is
-wired up to Keycloak via OIDC (native or via oauth2-proxy).
+This is the **0.7.0** release: the RAG and MCP layer is fully OIDC-secured,
+and the AI service roster has been significantly expanded.
 
 ---
 
-## Highlights of 0.6.0
+## Highlights of 0.7.0
 
-- **OIDC-first SSO** for the whole stack — Keycloak realm, clients, roles and
-  test users are pre-provisioned via realm import.
-- **Template-driven setup** — every service ships a `.env.example` with
-  `GENERATE_…` placeholders; copy it to `.env`, fill in the secrets and
-  enable only the modules you need via `COMPOSE_PROFILES`.
-- **New services**: n8n, MCP Paperless, SearXNG, Homepage dashboard, oauth2-proxy.
-- **Single Compose file** at `src/docker-compose.yml` aggregates per-service
-  compose files via `include:` — no more juggling many compose invocations.
-- **Split-URL OIDC** — browser-facing endpoints use the host's reachable URL
-  (`PAPAIA_HOST`, e.g. `host.docker.internal` on Docker Desktop or a LAN IP on
-  Linux), while server-to-server token/JWKS lookups stay on internal Docker
-  DNS. This keeps the `iss` claim stable across both worlds.
-- **Per-user document isolation** in MCP Paperless — Keycloak access tokens
-  are forwarded into Paperless on a per-request basis so each user only sees
-  their own documents.
+- **Qdrant RBAC MCP** — new `qdrant-rbac` service exposes the vector store
+  behind a Keycloak-gated MCP interface; LibreChat forwards per-user OIDC
+  tokens so every query is scoped to the caller's identity.
+- **WebDAV → Qdrant ingestion** — `qdrant-webdav-ingest` pulls documents from
+  any WebDAV source (e.g. Nextcloud) and indexes them into Qdrant for RAG,
+  replacing the former `doc-rag` module.
+- **paperless-mcp-rbac** — replaces the previous `mcp-paperless`; uses
+  Keycloak token forwarding for per-user document isolation with no additional
+  service account needed.
+- **LibreChat operator provisioning** — agents and prompts can now be loaded
+  from operator-managed bind-mount directories; changes are picked up on
+  container restart without rebuilding the image.
+- **Configurable Paperless paths** — `PAPERLESS_MEDIA_ROOT`,
+  `PAPERLESS_EXPORT_DIR`, `PAPERLESS_CONSUMPTION_DIR`, and SSO / login
+  behaviour are now fully env-var-driven.
 
 ---
 

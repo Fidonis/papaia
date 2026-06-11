@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status:** Complete · **Stack version:** 0.6.0
+> **Status:** Complete · **Stack version:** 0.7.0
 
 ## Overview
 
