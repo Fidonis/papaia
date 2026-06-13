@@ -39,12 +39,6 @@
         description: Privacy-respecting metasearch engine
         icon: searxng.svg
         container: papaia-searxng-1
-    - Firecrawl:
-        href: "{{HOMEPAGE_VAR_HOST}}:3002"
-        description: Self-hosted web crawler and scraper
-        icon: firecrawl.svg
-        container: papaia-firecrawl-1
-        showStats: true
     - Home Assistant:
         href: "{{HOMEPAGE_VAR_HOST}}:8123"
         description: Open-source home automation platform
