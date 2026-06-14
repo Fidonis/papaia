@@ -21,6 +21,9 @@ services:
     environment:
       FIRECRAWL_API_URL: ${FIRECRAWL_API_URL:-http://firecrawl:3002}
       FIRECRAWL_API_KEY: "sk-not-used"
+      # Enable HTTP streamable transport so Node.js binds port 3000 for nginx.
+      # Without this the process starts in stdio mode and nginx returns 502.
+      HTTP_STREAMABLE_SERVER: "true"
     networks:
       - papaia-net
     healthcheck:
@@ -32,4 +35,4 @@ services:
     labels:
       de.fidonis.module: papaia-mcp-firecrawl
       de.fidonis.role:   mcp-server
-    profiles: [mcp-firecrawl]
+    profiles: [firecrawl]
