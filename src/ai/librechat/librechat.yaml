@@ -146,12 +146,13 @@ mcpServers:
     # with the logged-in user's Keycloak access token.
     startup: false
   FirecrawlMCP:
-    title: 'Firecrawl'
+    title: 'Web Crawler'
     description: 'Web crawling, scraping, search, site mapping, and structured data extraction via local Firecrawl.'
     type: streamable-http
     url: http://mcp-firecrawl:8080/mcp
     # No Authorization header — network isolation (internal papaia-net,
     # no external port binding) is the security boundary for this service.
+    startup: true 
 
 mcpSettings:
   allowedDomains:
