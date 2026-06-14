@@ -145,11 +145,19 @@ mcpServers:
     # first per-user tool call, where the placeholder gets substituted
     # with the logged-in user's Keycloak access token.
     startup: false
+  FirecrawlMCP:
+    title: 'Firecrawl'
+    description: 'Web crawling, scraping, search, site mapping, and structured data extraction via local Firecrawl.'
+    type: streamable-http
+    url: http://mcp-firecrawl:8080/mcp
+    # No Authorization header — network isolation (internal papaia-net,
+    # no external port binding) is the security boundary for this service.
 
 mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:8000"
     - "http://qdrant-rag:8000"
+    - "http://mcp-firecrawl:8080"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain
