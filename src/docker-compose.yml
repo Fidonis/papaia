@@ -25,6 +25,7 @@ include:
   - path: ./ai/librechat/docker-compose.yml
   - path: ./ai/litellm/docker-compose.yml
   - path: ./ai/localai/docker-compose.yml
+  - path: ./ai/mcp-firecrawl/docker-compose.yml
   - path: ./ai/mcp-paperless/docker-compose.yml
   - path: ./ai/n8n/docker-compose.yml
   - path: ./ai/qdrant-rag/docker-compose.yml
