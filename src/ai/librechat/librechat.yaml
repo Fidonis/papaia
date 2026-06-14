@@ -152,7 +152,7 @@ mcpServers:
     url: http://mcp-firecrawl:8080/mcp
     # No Authorization header — network isolation (internal papaia-net,
     # no external port binding) is the security boundary for this service.
-    startup: true 
+    startup: true
 
 mcpSettings:
   allowedDomains:
