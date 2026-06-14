@@ -15,7 +15,7 @@ include:
   # - path: ./infra/technitium/docker-compose.yml
 
   # Application Services
-  # - path: ./services/firecrawl/docker-compose.yml
+  - path: ./services/firecrawl/docker-compose.yml
   # - path: ./services/home-assistant/docker-compose.yml
   - path: ./services/homepage/docker-compose.yml
   - path: ./services/paperless/docker-compose.yml
