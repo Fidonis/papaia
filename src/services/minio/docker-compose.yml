@@ -1,0 +1,74 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — MinIO · Self-Hosted Object Storage
+# by Fidonis GmbH · https://fidonis.de
+#
+#  Provides S3-compatible object storage for generated office documents.
+#  Pre-signed download URLs are constructed from MINIO_SERVER_URL so they
+#  resolve in the user's browser, not from the internal Docker hostname.
+#
+#  Requires:
+#    - MINIO_IMAGE, MINIO_EXT_PORT, MINIO_CONSOLE_EXT_PORT in root .env
+#    - PAPAIA_HOST in root .env (drives MINIO_SERVER_URL)
+#    - MINIO_ROOT_USER, MINIO_ROOT_PASSWORD in services/minio/.env
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  minio:
+    image: ${MINIO_IMAGE}
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    env_file:
+      - ./.env
+    environment:
+      # Override the URL MinIO embeds in pre-signed objects so the links
+      # resolve from the user's browser, not from the internal Docker hostname.
+      MINIO_SERVER_URL: "${PAPAIA_HOST}:${MINIO_EXT_PORT:-9000}"
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${MINIO_EXT_PORT:-9000}:9000"
+      - "${HOST_IP:-0.0.0.0}:${MINIO_CONSOLE_EXT_PORT:-9001}:9001"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://localhost:9000/minio/health/live
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-minio
+      de.fidonis.role:   object-storage
+    profiles: [mcp-office-docs]
+
+  minio-cleanup:
+    build: ./cleanup
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      CLEANUP_BUCKET: ${CLEANUP_BUCKET}
+      CLEANUP_PREFIX: ${CLEANUP_PREFIX:-}
+      CLEANUP_RETENTION_HOURS: ${CLEANUP_RETENTION_HOURS:-24}
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-3600}
+      CLEANUP_DRY_RUN: ${CLEANUP_DRY_RUN:-false}
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-minio
+      de.fidonis.role:   object-storage
+    profiles: [mcp-office-docs]
+
+volumes:
+  minio-data:

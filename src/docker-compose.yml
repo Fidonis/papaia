@@ -18,6 +18,7 @@ include:
   # - path: ./services/firecrawl/docker-compose.yml
   # - path: ./services/home-assistant/docker-compose.yml
   - path: ./services/homepage/docker-compose.yml
+  - path: ./services/minio/docker-compose.yml
   - path: ./services/paperless/docker-compose.yml
   - path: ./services/searxng/docker-compose.yml
 
@@ -26,6 +27,7 @@ include:
   - path: ./ai/litellm/docker-compose.yml
   - path: ./ai/localai/docker-compose.yml
   - path: ./ai/mcp-paperless/docker-compose.yml
+  - path: ./ai/mcp-office-docs/docker-compose.yml
   - path: ./ai/n8n/docker-compose.yml
   - path: ./ai/qdrant-rag/docker-compose.yml
   - path: ./ai/qdrant-webdav-ingest/docker-compose.yml

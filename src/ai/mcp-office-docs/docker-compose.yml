@@ -1,0 +1,41 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — mcp-office-docs · Office Document Generator MCP Server
+# by Fidonis GmbH · https://fidonis.de
+#
+#  Exposes MCP tools that generate Word (.docx), Excel (.xlsx),
+#  PowerPoint (.pptx), email draft (.eml), and XML files. Generated files
+#  are uploaded to MinIO; the tool response contains a pre-signed download
+#  URL that LibreChat surfaces as a clickable link.
+#
+#  Requires:
+#    - MCP_OFFICE_DOCS_IMAGE, MCP_OFFICE_DOCS_EXT_PORT in root .env
+#    - All other variables in ai/mcp-office-docs/.env
+#    - services/minio running (profile mcp-office-docs)
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  mcp-office-docs:
+    image: ${MCP_OFFICE_DOCS_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${MCP_OFFICE_DOCS_EXT_PORT:-9530}:8958"
+    networks:
+      - papaia-net
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex(('localhost',8958))==0 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      de.fidonis.module: papaia-mcp-office-docs
+      de.fidonis.role:   mcp-server
+    profiles: [mcp-office-docs]
