@@ -22,23 +22,19 @@ services:
       # Override the URL MinIO embeds in pre-signed objects so the links
       # resolve from the user's browser, not from the internal Docker hostname.
       MINIO_SERVER_URL: "${PAPAIA_HOST}:${MINIO_EXT_PORT:-9000}"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - minio-data:/data
     ports:
       - "${HOST_IP:-0.0.0.0}:${MINIO_EXT_PORT:-9000}:9000"
       - "${HOST_IP:-0.0.0.0}:${MINIO_CONSOLE_EXT_PORT:-9001}:9001"
     healthcheck:
-      test:
-        - CMD
-        - wget
-        - --no-verbose
-        - --tries=1
-        - --spider
-        - http://localhost:9000/minio/health/live
+      test: ["CMD", "mc", "ready", "local"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 10s
     networks:
       - papaia-net
     labels:
@@ -55,6 +51,11 @@ services:
       minio:
         condition: service_healthy
     environment:
+      # Static internal endpoint — not stored in .env because it never changes.
+      # All other variables (MINIO_ACCESS_KEY, MINIO_SECRET_KEY, CLEANUP_*)
+      # are loaded from env_file above. Compose-time substitution (${VAR})
+      # only resolves from the root .env, not from service-local .env files,
+      # so they cannot be referenced here.
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}

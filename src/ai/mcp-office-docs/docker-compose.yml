@@ -18,6 +18,16 @@ services:
     restart: unless-stopped
     env_file:
       - ./.env
+    environment:
+      UPLOAD_STRATEGY: MINIO
+      MINIO_ENDPOINT: ${MINIO_API_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MCP_OFFICE_DOCS_MINIO_BUCKET:-librechat-office-documents}
+      MINIO_SECURE: "false"
+      SIGNED_URL_EXPIRES_IN: ${MCP_OFFICE_DOCS_SIGNED_URL_EXPIRES_IN:-3600}
+      # Optional: API-Key-Schutz
+      API_KEY: ${MCP_OFFICE_DOCS_API_KEY:-}  
     ports:
       - "${HOST_IP:-0.0.0.0}:${MCP_OFFICE_DOCS_EXT_PORT:-9530}:8958"
     networks:
