@@ -42,6 +42,28 @@ services:
       de.fidonis.role:   object-storage
     profiles: [mcp-office-docs]
 
+  minio-init:
+    image: ${MC_IMAGE:-minio/mc:latest}
+    restart: "no"
+    env_file:
+      - ./.env
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        mc alias set minio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+        mc mb --ignore-existing minio/$$CLEANUP_BUCKET &&
+        echo "Bucket '$$CLEANUP_BUCKET' ready."
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-minio
+      de.fidonis.role:   object-storage
+    profiles: [mcp-office-docs]
+
   minio-cleanup:
     build: ./cleanup
     restart: unless-stopped

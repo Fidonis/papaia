@@ -34,8 +34,8 @@ services:
     networks:
       - papaia-net
     depends_on:
-      minio:
-        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
