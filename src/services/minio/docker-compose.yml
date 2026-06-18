@@ -28,7 +28,8 @@ services:
       - minio-data:/data
     ports:
       - "${HOST_IP:-0.0.0.0}:${MINIO_EXT_PORT:-9000}:9000"
-      - "${HOST_IP:-0.0.0.0}:${MINIO_CONSOLE_EXT_PORT:-9001}:9001"
+      # Console port is optional — only needed if you want to access the MinIO web UI directly. Not required for LibreChat integration.
+      #- "${HOST_IP:-0.0.0.0}:${MINIO_CONSOLE_EXT_PORT:-9001}:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 30s

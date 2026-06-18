@@ -150,9 +150,8 @@ mcpServers:
     description: 'Creates Word, Excel, PowerPoint, email draft, and XML files. Returns a pre-signed download URL for each generated file.'
     type: streamable-http
     url: http://mcp-office-docs:8958/mcp
-    # No OIDC token needed — mcp-office-docs is not OIDC-aware.
-    # startup: false defers the connection to the first tool call so a
-    # temporarily unavailable service does not block LibreChat startup.
+    headers:
+      x-api-key: "${MCP_OFFICE_DOCS_API_KEY}"
     startup: false
 
 mcpSettings:
