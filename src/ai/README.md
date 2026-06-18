@@ -113,6 +113,22 @@ you enable:
 - See [`qdrant-rag/.env.example`](qdrant-rag/.env.example) for the full
   variable reference.
 
+### Office Documents — downloadable office-file generator
+
+- Profile: `mcp-office-docs`
+- Components: `mcp-office-docs` (MCP server), backed by the `minio` object store
+  (see [`../services/minio/`](../services/minio/))
+- Generates Word, Excel, PowerPoint, email-draft and XML files from a chat
+  prompt, uploads each to MinIO, and returns a time-limited pre-signed download
+  URL that LibreChat renders as a clickable link.
+- External port: `9530` (MCP endpoint `POST /mcp`).
+- Auth: optional `x-api-key` header (`MCP_OFFICE_DOCS_API_KEY`); otherwise relies
+  on Docker network isolation. LibreChat reaches it via the `OfficeDocuments`
+  entry in `librechat.yaml`.
+- Configuration: `MCP_OFFICE_DOCS_*` and `MINIO_*` in `src/.env`;
+  service-internal settings in `ai/mcp-office-docs/.env`. See
+  [`mcp-office-docs/.env.example`](mcp-office-docs/.env.example).
+
 ### Jina AI Reranker (optional)
 - Image: `ghcr.io/marko-boehm/jina-ai-litellm-reranker`
 - External port: `8600`

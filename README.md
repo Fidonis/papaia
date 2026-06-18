@@ -112,6 +112,8 @@ External ports are configurable in `src/.env`. Defaults below.
 ### Internal-only / co-deployed
 
 - MCP Paperless (per-user Paperless proxy for LibreChat) — `:9520`
+- Office Documents MCP (generates downloadable office files for LibreChat) — `:9530`
+- MinIO object storage (backs Office Documents downloads) — `:9000` / `:9001`
 - Jina AI Reranker (optional, `:8600`)
 - LibreChat sidecars (Mongo, Meilisearch, pgvector, RAG API)
 - Paperless sidecars (Postgres, Redis, Tika, Gotenberg)
@@ -509,6 +511,25 @@ provider-specific notes.
 - Optional profile `qdrant-rag`; see `src/ai/qdrant-rag/.env.example` for
   the full variable reference.
 
+### MCP Office Documents
+- MCP server that generates Word, Excel, PowerPoint, email-draft and XML files
+  from a LibreChat prompt and returns a clickable, time-limited download link.
+- Generated files are uploaded to the bundled MinIO object store; the tool
+  response carries a pre-signed URL that resolves from the user's browser.
+- LibreChat reaches it via the `OfficeDocuments` MCP server entry in
+  `librechat.yaml`; an optional `MCP_OFFICE_DOCS_API_KEY` guards the endpoint.
+- Optional profile `mcp-office-docs`; see `src/ai/mcp-office-docs/.env.example`
+  for the full variable reference.
+
+### MinIO
+- Self-hosted, S3-compatible object storage backing the Office Documents MCP
+  server. `MINIO_SERVER_URL` is derived from `PAPAIA_HOST` so pre-signed
+  download URLs resolve from the user's browser, not the internal Docker host.
+- A cleanup sidecar prunes objects past their retention window
+  (`CLEANUP_RETENTION_HOURS`); state persists in the `minio-data` volume.
+- Enabled together with the MCP server via the `mcp-office-docs` profile; see
+  `src/services/minio/.env.example`.
+
 ### n8n
 - Self-hosted workflow automation behind oauth2-proxy.
 - Postgres-backed state; public URL set from `PAPAIA_HOST` so the
@@ -666,9 +687,9 @@ docker compose config             # render the merged compose file
     ├── restore-papaia.sh      # volume restore
     ├── infra/                 # keycloak, nginx, oauth2-proxy, technitium
     ├── services/              # firecrawl, home-assistant, homepage,
-    │                          # paperless, searxng
-    └── ai/                    # jinaai, librechat, litellm,
-                               # localai, mcp-paperless, n8n, qdrant-rag
+    │                          # minio, paperless, searxng
+    └── ai/                    # jinaai, librechat, litellm, localai,
+                               # mcp-office-docs, mcp-paperless, n8n, qdrant-rag
 ```
 
 ---
