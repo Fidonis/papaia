@@ -29,6 +29,13 @@ services:
       # Optional: API-Key-Schutz
       API_KEY: ${MCP_OFFICE_DOCS_API_KEY:-}  
       MINIO_REGION: ${MINIO_REGION:-eu-central-1}
+    volumes:
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/mcp-office-docs/custom_templates
+        target: /app/custom_templates
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/mcp-office-docs/config
+        target: /app/config
     ports:
       - "${HOST_IP:-0.0.0.0}:${MCP_OFFICE_DOCS_EXT_PORT:-9530}:8958"
     networks:
