@@ -1,0 +1,59 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — mcp-office-docs · Office Document Generator MCP Server
+# by Fidonis GmbH · https://fidonis.de
+#
+#  Exposes MCP tools that generate Word (.docx), Excel (.xlsx),
+#  PowerPoint (.pptx), email draft (.eml), and XML files. Generated files
+#  are uploaded to MinIO; the tool response contains a pre-signed download
+#  URL that LibreChat surfaces as a clickable link.
+#
+#  Requires:
+#    - MCP_OFFICE_DOCS_IMAGE, MCP_OFFICE_DOCS_EXT_PORT in root .env
+#    - All other variables in ai/mcp-office-docs/.env
+#    - services/minio running (profile mcp-office-docs)
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  mcp-office-docs:
+    image: ${MCP_OFFICE_DOCS_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      UPLOAD_STRATEGY: MINIO
+      MINIO_ENDPOINT: ${MINIO_API_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MCP_OFFICE_DOCS_MINIO_BUCKET:-librechat-office-documents}
+      MINIO_SECURE: "false"
+      SIGNED_URL_EXPIRES_IN: ${MCP_OFFICE_DOCS_SIGNED_URL_EXPIRES_IN:-3600}
+      # Optional: API-Key-Schutz
+      API_KEY: ${MCP_OFFICE_DOCS_API_KEY:-}
+      MINIO_REGION: ${MINIO_REGION:-eu-central-1}
+    volumes:
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/mcp-office-docs/custom_templates
+        target: /app/custom_templates
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/mcp-office-docs/config
+        target: /app/config
+    ports:
+      - "${HOST_IP:-0.0.0.0}:${MCP_OFFICE_DOCS_EXT_PORT:-9530}:8958"
+    networks:
+      - papaia-net
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex(('localhost',8958))==0 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      de.fidonis.module: papaia-mcp-office-docs
+      de.fidonis.role:   mcp-server
+    profiles: [mcp-office-docs]
