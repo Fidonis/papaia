@@ -6,6 +6,13 @@ services:
   jina-reranker-api:
     image: ${JINAAI_RERANKER_IMAGE}
     restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      API_KEY:           ${JINAAI_RERANKER_API_KEY}
+      RERANKER_BASE_URL: ${LITELLM_BASE_URL}
+      RERANKER_API_KEY:  ${LITELLM_API_KEY}
+      RERANKER_MODEL:    ${RERANKER_MODEL}
     ports:
       - "${HOST_IP:-0.0.0.0}:${JINAAI_EXT_PORT:-8600}:8000"
     networks:
@@ -13,4 +20,10 @@ services:
     labels:
       de.fidonis.module: papaia-jinaai
       de.fidonis.role:   reranker
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     profiles: [jinaai]
