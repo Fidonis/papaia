@@ -23,6 +23,12 @@
         icon: tsd-proxy.svg
         container: papaia-litellm-1
         showStats: true
+    - Jina Reranker:
+        href: "{{HOMEPAGE_VAR_HOST}}:8600"
+        description: Self-hosted reranker for LibreChat web search
+        icon: jina.svg
+        container: papaia-jina-reranker-api-1
+        showStats: true
 
 - Tools:
     - Paperless-ngx:
