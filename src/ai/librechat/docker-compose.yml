@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   librechat:
-    image: ${LIBRECHAT_IMAGE}
+    image: ghcr.io/danny-avila/librechat:v0.8.5
     restart: unless-stopped
     depends_on:
       librechat-mongodb:
@@ -90,7 +90,7 @@ services:
 
   librechat-mongodb:
     restart: unless-stopped
-    image: ${LIBRECHAT_MONGODB_IMAGE}
+    image: mongo:8.0.20
     volumes:
       - librechat-mongodb:/data/db
     command: mongod --noauth
@@ -108,7 +108,7 @@ services:
     profiles: [librechat]
 
   librechat-meilisearch:
-    image: ${LIBRECHAT_MEILISEARCH_IMAGE}
+    image: getmeili/meilisearch:v1.35.1
     restart: unless-stopped
     environment:
       MEILI_NO_ANALYTICS: true
@@ -123,7 +123,7 @@ services:
     profiles: [librechat]
 
   librechat-vectordb:
-    image: ${LIBRECHAT_VECTORDB_IMAGE}
+    image: pgvector/pgvector:0.8.0-pg15-trixie
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${VECTORDB_NAME}
@@ -145,7 +145,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ${LIBRECHAT_RAGAPI_IMAGE}
+    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb

@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   jina-reranker-api:
-    image: ${JINAAI_RERANKER_IMAGE}
+    image: ghcr.io/fidonis/jina-reranker-api:0.1.2
     restart: unless-stopped
     env_file:
       - ./.env

@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   searxng:
-    image: ${SEARXNG_IMAGE}
+    image: searxng/searxng:2026.4.24-a7ac696b4
     restart: unless-stopped
     env_file:
       - ./.env
@@ -33,7 +33,7 @@ services:
   # oauth2-proxy sidecar — protects SearXNG with Keycloak authentication.
   # Exposed on SEARXNG_EXT_PORT; SearXNG itself is only reachable inside Docker.
   searxng-auth:
-    image: ${OAUTH2_PROXY_IMAGE}
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.9.0
     restart: unless-stopped
     command:
       - --provider=oidc

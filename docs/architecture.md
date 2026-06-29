@@ -96,7 +96,6 @@ flowchart TD
 | **Nginx Proxy Manager** | Node.js + Nginx | 8100 | oauth2-proxy (admin UI) | `nginx-proxy-manager-data`, `nginx-proxy-manager-letsencrypt` |
 | **Keycloak** | Java + PostgreSQL 16 | 8110 | — (IdP itself) | `keycloak-postgresql` |
 | **oauth2-proxy** | Go | 4180 (internal) | OIDC → Keycloak | — |
-| **Technitium DNS** | .NET | 8120 | — | — |
 | **LibreChat** | Node.js | 8000 | Native OIDC (PKCE) | `librechat-mongodb`, `librechat-images`, `librechat-uploads`, `librechat-logs` |
 | **LibreChat MongoDB** | MongoDB 8.0 | internal | — | `librechat-mongodb` |
 | **LibreChat Meilisearch** | Meilisearch v1.35 | internal | — | `librechat-meilisearch` |
@@ -106,21 +105,32 @@ flowchart TD
 | **LiteLLM PostgreSQL** | PostgreSQL 16 | 8210 (internal) | — | `litellm-postgresql` |
 | **LiteLLM Prometheus** | Prometheus v3.11 | 8230 | — | `litellm-prometheus` |
 | **LocalAI** | Go | 8080 | oauth2-proxy forward-auth | `localai-models` |
-| **doc-rag (sync)** | rclone 1.69 | — | WebDAV credentials | — |
-| **doc-rag (vectordb)** | Qdrant v1.13 | 6333 | — | `docrag-vectordb` |
-| **doc-rag (ingester)** | Python · Docling | — | — | `docrag-state` |
-| **doc-rag (MCP API)** | FastMCP | 8700 | — | — |
-| **qdrant-rag** | FastMCP + Qdrant v1.13 | 8800 | OIDC + RBAC (Keycloak tokens) | `qdrant_storage` |
-| **MCP Paperless** | Node.js | 9520 (internal) | Token forwarding | — |
-| **Paperless-ngx** | Python · Django | 8010 | Native OIDC (django-allauth) | `paperless-data`, `paperless-db` |
-| **Paperless PostgreSQL** | PostgreSQL 15 | internal | — | `paperless-db` |
-| **Paperless Redis** | Redis 7 | internal | — | — |
-| **Paperless Tika** | Apache Tika | internal | — | — |
-| **Paperless Gotenberg** | Gotenberg | internal | — | — |
-| **n8n** | Node.js | 8400 | oauth2-proxy forward-auth | `n8n-data` |
-| **n8n PostgreSQL** | PostgreSQL 16 | internal | — | `n8n-db` |
+| **Jina Reranker** | Python | 8600 | — (internal network) | — |
+| **Firecrawl** | Node.js | internal | — (internal network) | — |
+| **MCP Firecrawl** | Node.js | internal | — (internal network) | — |
 | **Homepage** | Node.js | 8300 | oauth2-proxy forward-auth | — |
 | **SearXNG** | Python · Flask | 8500 | oauth2-proxy forward-auth | `searxng_config`, `searxng_data` |
+
+---
+
+## Core service status
+
+Optional status is reflected by the per-service Compose `profiles:`. Mandatory
+services start without any profile flag; optional services are activated by
+including their profile name in `COMPOSE_PROFILES`.
+
+| Service | Status |
+|---|---|
+| Keycloak | Mandatory, Replaceable |
+| oauth2-proxy | Optional |
+| Nginx Proxy Manager | Optional, Replaceable |
+| LibreChat | Mandatory |
+| LiteLLM | Mandatory |
+| LocalAI | Optional |
+| SearXNG | Optional |
+| Firecrawl (+ MCP) | Optional |
+| Jina reranker | Optional |
+| Homepage | Optional |
 
 ---
 

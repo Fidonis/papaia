@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   firecrawl:
-    image: ${FIRECRAWL_IMAGE}
+    image: ghcr.io/firecrawl/firecrawl@sha256:a7a8c9b2f81276c83a90d6d8877b2ecc953805c8feabe2cd5783be28e750cc88
     restart: unless-stopped
     environment:
       REDIS_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
@@ -78,7 +78,7 @@ services:
     profiles: [firecrawl]
 
   firecrawl-playwright-service:
-    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE}
+    image: ghcr.io/firecrawl/playwright-service@sha256:1f6eba6403207d501a63d9b1d4685b6316b4fc7968fe64a5839ab1bfec9d1c14
     restart: unless-stopped
     environment:
       PORT: 3000
@@ -108,7 +108,7 @@ services:
     profiles: [firecrawl]
 
   firecrawl-redis:
-    image: ${FIRECRAWL_REDIS_IMAGE}
+    image: redis:8.8.0-alpine
     restart: unless-stopped
     command: redis-server --bind 0.0.0.0
     networks:
@@ -125,7 +125,7 @@ services:
     profiles: [firecrawl]
 
   firecrawl-rabbitmq:
-    image: ${FIRECRAWL_RABBITMQ_IMAGE}
+    image: rabbitmq:3-management
     restart: unless-stopped
     command: rabbitmq-server
     networks:
@@ -148,7 +148,7 @@ services:
     profiles: [firecrawl]
 
   firecrawl-nuq-postgres:
-    image: ${FIRECRAWL_NUCPOSTGRES_IMAGE}
+    image: ghcr.io/firecrawl/nuq-postgres@sha256:f9388bd25ae2e1f1d034518236f993ce236173c1d8800ce24092ea6643a95a33
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}

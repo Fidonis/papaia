@@ -7,7 +7,7 @@ services:
   # LocalAI Model Init
   # ═══════════════════════════════════════════════════════════════════════════
   localai-model-init:
-    image: ${LOCALAI_MODEL_INIT_IMAGE}
+    image: curlimages/curl:latest
     user: "0"
     restart: "no"
     volumes:
@@ -51,7 +51,7 @@ services:
   # LocalAI
   # ═══════════════════════════════════════════════════════════════════════════
   localai:
-    image: ${LOCALAI_IMAGE}
+    image: localai/localai:sha-6c635e8
     restart: unless-stopped
     # Port not exposed directly — access only via localai-auth below
     environment:
@@ -80,7 +80,7 @@ services:
   # oauth2-proxy sidecar — protects LocalAI API with Keycloak authentication.
   # Exposed on LOCALAI_EXT_PORT; LocalAI itself is only reachable inside Docker.
   localai-auth:
-    image: ${OAUTH2_PROXY_IMAGE}
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.9.0
     restart: unless-stopped
     ports:
       - "${HOST_IP:-0.0.0.0}:${LOCALAI_EXT_PORT}:4180"

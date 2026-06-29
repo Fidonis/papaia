@@ -113,38 +113,6 @@ ocr:
   strategy: "document_parser"
 
 mcpServers:
-  Paperless:
-    title: 'Paperless'
-    description: 'OIDC-secured document management via Paperless-ngx.'
-    type: streamable-http
-    url: http://mcp-paperless:8000/mcp
-    headers:
-      Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
-    # Lazy init: mcp-paperless requires a real user Bearer token (OIDC).
-    # Without `startup: false`, LibreChat tries to connect at process
-    # start with the unsubstituted `{{...}}` placeholder, sees a 401,
-    # then falls back to MCP dynamic OAuth discovery which mcp-paperless
-    # doesn't speak — and burns 120 s in `OAuth handling timeout` per
-    # retry. With `startup: false` the connection is deferred to the
-    # first per-user tool call, where the placeholder gets substituted
-    # with the logged-in user's Keycloak access token.
-    startup: false
-  QdrantRAG:
-    title: 'Document Search'
-    description: 'Role-scoped semantic vector search against Qdrant collections.'
-    type: streamable-http
-    url: http://qdrant-rag:8000/mcp
-    headers:
-      Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
-    # Lazy init: qdrant-rag requires a real user Bearer token (OIDC).
-    # Without `startup: false`, LibreChat tries to connect at process
-    # start with the unsubstituted `{{...}}` placeholder, sees a 401,
-    # then falls back to MCP dynamic OAuth discovery which qdrant-rag
-    # doesn't speak — and burns 120 s in `OAuth handling timeout` per
-    # retry. With `startup: false` the connection is deferred to the
-    # first per-user tool call, where the placeholder gets substituted
-    # with the logged-in user's Keycloak access token.
-    startup: false
   FirecrawlMCP:
     title: 'Web Crawler'
     description: 'Web crawling, scraping, search, site mapping, and structured data extraction via local Firecrawl.'
@@ -153,21 +121,10 @@ mcpServers:
     # No Authorization header — network isolation (internal papaia-net,
     # no external port binding) is the security boundary for this service.
     startup: true
-  OfficeDocuments:
-    title: 'Office Documents'
-    description: 'Creates Word, Excel, PowerPoint, email draft, and XML files. Returns a pre-signed download URL for each generated file.'
-    type: streamable-http
-    url: http://mcp-office-docs:8958/mcp
-    headers:
-      x-api-key: "${MCP_OFFICE_DOCS_API_KEY}"
-    startup: false
 
 mcpSettings:
   allowedDomains:
-    - "http://mcp-paperless:8000"
-    - "http://qdrant-rag:8000"
     - "http://mcp-firecrawl:8080"
-    - "http://mcp-office-docs:8958"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain
