@@ -145,11 +145,29 @@ mcpServers:
     # first per-user tool call, where the placeholder gets substituted
     # with the logged-in user's Keycloak access token.
     startup: false
+  FirecrawlMCP:
+    title: 'Web Crawler'
+    description: 'Web crawling, scraping, search, site mapping, and structured data extraction via local Firecrawl.'
+    type: streamable-http
+    url: http://mcp-firecrawl:8080/mcp
+    # No Authorization header — network isolation (internal papaia-net,
+    # no external port binding) is the security boundary for this service.
+    startup: true
+  OfficeDocuments:
+    title: 'Office Documents'
+    description: 'Creates Word, Excel, PowerPoint, email draft, and XML files. Returns a pre-signed download URL for each generated file.'
+    type: streamable-http
+    url: http://mcp-office-docs:8958/mcp
+    headers:
+      x-api-key: "${MCP_OFFICE_DOCS_API_KEY}"
+    startup: false
 
 mcpSettings:
   allowedDomains:
     - "http://mcp-paperless:8000"
     - "http://qdrant-rag:8000"
+    - "http://mcp-firecrawl:8080"
+    - "http://mcp-office-docs:8958"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain

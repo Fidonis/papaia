@@ -1,0 +1,41 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — MCP Firecrawl · MCP interface to local Firecrawl
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  Exposes Firecrawl's crawl, scrape, search, map, and extract capabilities
+#  as MCP tools so users can invoke them directly in LibreChat.
+#
+#  Security boundary: internal Docker network only (no external port binding).
+#  No OIDC authentication required — only containers on papaia-net can reach
+#  this service.
+#
+#  Requires:
+#    - MCP_FIRECRAWL_IMAGE in root .env
+#    - firecrawl service running (profile: firecrawl) on papaia-net
+# ═══════════════════════════════════════════════════════════════════════════
+services:
+  mcp-firecrawl:
+    image: ${MCP_FIRECRAWL_IMAGE}
+    restart: unless-stopped
+    environment:
+      FIRECRAWL_API_URL: ${FIRECRAWL_API_URL:-http://firecrawl:3002}
+      FIRECRAWL_API_KEY: "sk-not-used"
+      # Enable HTTP streamable transport so Node.js binds port 3000 for nginx.
+      # Without this the process starts in stdio mode and nginx returns 502.
+      HTTP_STREAMABLE_SERVER: "true"
+      # Force IPv4 binding — Node.js resolves "localhost" to ::1 (IPv6) by
+      # default; nginx upstream is 127.0.0.1 (IPv4), causing a 502.
+      HOST: "127.0.0.1"
+    networks:
+      - papaia-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/mcp || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    labels:
+      de.fidonis.module: papaia-mcp-firecrawl
+      de.fidonis.role:   mcp-server
+    profiles: [firecrawl]

@@ -28,6 +28,7 @@ src/
 │   ├── firecrawl/          # web crawler (commented out by default)
 │   ├── home-assistant/     # home automation (host network, commented out)
 │   ├── homepage/           # service dashboard
+│   ├── minio/              # object storage backing Office Documents downloads
 │   ├── paperless/          # document management (OIDC)
 │   └── searxng/            # privacy-respecting metasearch
 └── ai/                     # AI / ML services
@@ -35,6 +36,7 @@ src/
     ├── librechat/          # multi-provider chat UI (OIDC)
     ├── litellm/            # LLM proxy + Postgres + Prometheus (OIDC)
     ├── localai/            # local chat-completions inference
+    ├── mcp-office-docs/    # office-document generator MCP server for LibreChat
     ├── mcp-paperless/      # per-user Paperless proxy for LibreChat
     ├── n8n/                # workflow automation (oauth2-proxy)
     └── qdrant-rag/         # OIDC + RBAC MCP server over Qdrant for LibreChat
