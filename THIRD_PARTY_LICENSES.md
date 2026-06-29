@@ -59,6 +59,10 @@ file. Adding a new service without updating this file will fail the check.
 | `QWI_SYNC_IMAGE` | `rclone/rclone` | sha-b22fe98 | MIT | |
 | `QWI_INGEST_IMAGE` | `papaia-qdrant-webdav-ingest` | 0.1.0 | Fidonis proprietary | internal Fidonis image; built in-repo |
 | `MCP_PAPERLESS_IMAGE` | `ghcr.io/fidonis/paperless-mcp-rbac` | 0.1.0 | MIT | Fidonis-maintained OIDC-secured Paperless MCP server |
+| `MINIO_IMAGE` | `minio/minio` | RELEASE.2025-09-07T16-13-09Z | AGPL-3.0 | used as network service |
+| `MC_IMAGE` | `minio/mc` | RELEASE.2025-08-13T08-35-41Z | AGPL-3.0 | MinIO Client CLI |
+| `MCP_OFFICE_DOCS_IMAGE` | `georgx22/mcp-office-docs` | v3.8 | MIT | |
+| `MCP_FIRECRAWL_IMAGE` | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | used as network service |
 
 ### Hardcoded image references
 
