@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — papaia-ctl · core orchestrator
+# by Fidonis GmbH · https://fidonis.de
+#
+# Bootstraps a fresh papAIa checkout into a runnable core stack with one
+# idempotent command. Bash owns arg-parsing, interactive prompts, and
+# `docker compose` invocations; all YAML/JSON/.env manipulation is
+# delegated to tools/lib/*.py (invoked via `python3 -m lib.cli`).
+#
+# Usage:
+#   papaia-ctl init   [--config-dir=PATH] [--env=NAME] [--force] [-y]
+#   papaia-ctl setup  [--config-dir=PATH] [--env=NAME] [--host-ip=IP]
+#                     [--app-host=URL] [--auth-host=URL]
+#                     [--external-reverse-proxy|--no-external-reverse-proxy]
+#                     [--allow-direct-port-access] [--force] [-y]
+#   papaia-ctl up     [PROFILE...] [--config-dir=PATH]
+#   papaia-ctl down   [PROFILE...] [--volumes] [--config-dir=PATH]
+#   papaia-ctl apps render [--config-dir=PATH]
+#   papaia-ctl help
+# ═══════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
+
+# --- logging helpers --------------------------------------------------------
+if [ -t 1 ]; then
+    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
+else
+    RED=""; GREEN=""; YELLOW=""; CYAN=""; NC=""
+fi
+info()    { printf '%s[papaia-ctl]%s %s\n' "$CYAN" "$NC" "$*"; }
+success() { printf '%s[ok]%s %s\n' "$GREEN" "$NC" "$*"; }
+warn()    { printf '%s[!]%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
+error()   { printf '%s[error]%s %s\n' "$RED" "$NC" "$*" >&2; }
+
+usage() {
+    sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+# --- preflight ---------------------------------------------------------------
+if [ ! -f "$COMPOSE_FILE" ]; then
+    error "Marker file not found: $COMPOSE_FILE"
+    error "papaia-ctl must be run from within a papAIa checkout."
+    exit 2
+fi
+
+PYTHON_BIN=""
+for candidate in python3 python; do
+    # command -v alone isn't enough: on Windows, `python3`/`python` may
+    # resolve to the Microsoft Store's inert app-execution-alias stub even
+    # when no real interpreter is installed under that name. Only accept a
+    # candidate that actually runs.
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+if [ -z "$PYTHON_BIN" ]; then
+    error "python3 not found on PATH. papaia-ctl requires Python 3.10+."
+    exit 2
+fi
+
+DEFAULT_CONFIG_DIR="$(dirname "$REPO_ROOT")/papaia-config"
+
+py_cli() {
+    PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON_BIN" -m lib.cli --repo-root "$REPO_ROOT" --config-dir "$CONFIG_DIR" "$@"
+}
+
+# Reads `defaults` output (KEY=VALUE lines) into the current shell's
+# variables (APP_HOST_STICKY, AUTH_HOST_STICKY, AUTH_HOST_DERIVED, ...).
+load_defaults() {
+    local line key value
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        key="${line%%=*}"
+        value="${line#*=}"
+        printf -v "$key" '%s' "$value"
+    done < <(py_cli defaults)
+}
+
+prompt_with_default() {
+    local message="$1" default="$2" answer
+    read -rp "$message [${default:-none}]: " answer
+    printf '%s' "${answer:-$default}"
+}
+
+confirm() {
+    local message="$1" default="${2:-N}" answer hint
+    hint="y/N"; [ "$default" = "Y" ] && hint="Y/n"
+    read -rp "$message [$hint]: " answer
+    answer="${answer:-$default}"
+    case "$answer" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
+
+is_tty() { [ -t 0 ] && [ -t 1 ]; }
+
+# ─────────────────────────────────────────────────────────────────────────
+# init
+# ─────────────────────────────────────────────────────────────────────────
+cmd_init() {
+    local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia" force=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --env=*) env_name="${1#*=}" ;;
+            --force) force=1 ;;
+            -y|--non-interactive) : ;;  # init never prompts; accepted for symmetry
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for init: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+
+    info "Seeding $CONFIG_DIR"
+    if [ "$force" -eq 1 ]; then
+        py_cli init --env="$env_name" --force
+    else
+        py_cli init --env="$env_name"
+    fi
+    success "init complete."
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# setup
+# ─────────────────────────────────────────────────────────────────────────
+cmd_setup() {
+    local orig_argc=$#
+    local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
+    local host_ip="" app_host="" auth_host=""
+    local external_reverse_proxy="" allow_direct_port_access=0
+    local force=0 non_interactive=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --env=*) env_name="${1#*=}" ;;
+            --host-ip=*) host_ip="${1#*=}" ;;
+            --app-host=*) app_host="${1#*=}" ;;
+            --auth-host=*) auth_host="${1#*=}" ;;
+            --external-reverse-proxy) external_reverse_proxy="true" ;;
+            --no-external-reverse-proxy) external_reverse_proxy="false" ;;
+            --allow-direct-port-access) allow_direct_port_access=1 ;;
+            --force) force=1 ;;
+            -y|--non-interactive) non_interactive=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for setup: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+
+    load_defaults
+
+    # Bare re-run: zero args, interactive TTY, already seeded -> offer to
+    # reuse everything as-is (just refresh the render) instead of
+    # re-prompting for values that were already resolved on a prior run.
+    if [ "$orig_argc" -eq 0 ] && [ "$CONFIG_SEEDED" = "true" ] && is_tty && [ "$non_interactive" -eq 0 ]; then
+        info "Existing setup detected in $CONFIG_DIR"
+        info "  PAPAIA_HOST = $APP_HOST_STICKY"
+        info "  AUTH_HOST   = $AUTH_HOST_STICKY"
+        if ! confirm "Reconfigure?" "N"; then
+            info "Reusing existing configuration; re-rendering only."
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0
+            success "setup complete (re-render only)."
+            return 0
+        fi
+    fi
+
+    if [ "$non_interactive" -eq 0 ] && is_tty; then
+        if [ -z "$app_host" ]; then
+            app_host="$(prompt_with_default "Public URL of this server (PAPAIA_HOST)" "${APP_HOST_STICKY:-http://host.docker.internal}")"
+        fi
+        if [ -z "$auth_host" ]; then
+            local auth_default="${AUTH_HOST_STICKY:-}"
+            [ -z "$auth_default" ] && auth_default="$(PAPAIA_HOST_OVERRIDE="$app_host" _derive_auth_default "$app_host")"
+            auth_host="$(prompt_with_default "Public Keycloak URL (AUTH_HOST)" "$auth_default")"
+        fi
+    else
+        if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
+            error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
+            exit 3
+        fi
+    fi
+
+    # --allow-direct-port-access is the explicit opt-in for "no proxy at
+    # all" (nginx excluded, no external proxy declared). Bash owns
+    # interactive confirmation, so ask here -- before invoking Python --
+    # rather than after a failure, since the Python side never blocks on
+    # its own once this flag is set (the flag IS the authorization).
+    if [ "$allow_direct_port_access" -eq 1 ] && [ "$external_reverse_proxy" != "true" ]; then
+        case "$app_host" in
+            https://*) : ;;  # TLS already in place, nothing unsafe about it
+            *)
+                if [ "$non_interactive" -eq 0 ] && is_tty; then
+                    warn "No reverse proxy and no TLS detected for this configuration."
+                    if ! confirm "Continue with services reachable on plain HTTP ports directly?" "N"; then
+                        error "Aborted."
+                        exit 3
+                    fi
+                fi
+                ;;
+        esac
+    fi
+
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force"; then
+        error "setup failed."
+        exit 3
+    fi
+    success "setup complete. Run 'papaia-ctl up' to start the stack."
+}
+
+_derive_auth_default() {
+    # Best-effort bash-side fallback if defaults() had no sticky value yet;
+    # the authoritative derivation lives in bootstrap.derive_auth_host_default
+    # and is what setup actually applies -- this is only used to pre-fill
+    # the interactive prompt.
+    case "$1" in
+        http://host.docker.internal*|http://localhost*|http://127.0.0.1*)
+            printf 'http://host.docker.internal:%s' "${KEYCLOAK_EXT_PORT:-8110}" ;;
+        *)
+            printf '%s' "$1" | sed -E 's#^(https?://)([^:/]+).*#\1auth.\2#' ;;
+    esac
+}
+
+_run_setup_py() {
+    local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
+    local -a extra=()
+    [ -n "$app_host" ] && extra+=(--app-host="$app_host")
+    [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
+    [ -n "$external_rp" ] && extra+=(--external-reverse-proxy="$external_rp")
+    [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")
+    [ "$allow_direct" = "1" ] && extra+=(--allow-direct-port-access)
+    [ "$force" = "1" ] && extra+=(--force)
+    py_cli setup --env="$env_name" "${extra[@]}"
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# up / down / apps render
+# ─────────────────────────────────────────────────────────────────────────
+cmd_up() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    local -a profiles=()
+    for arg in "$@"; do
+        case "$arg" in
+            --config-dir=*) config_dir="${arg#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            *) profiles+=("$arg") ;;
+        esac
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+
+    info "Rendering current configuration..."
+    py_cli render
+
+    local env_file="$REPO_ROOT/src/.env"
+    if [ ${#profiles[@]} -gt 0 ]; then
+        local joined
+        joined="$(IFS=,; echo "${profiles[*]}")"
+        info "Starting profiles: $joined"
+        COMPOSE_PROFILES="$joined" docker compose -f "$COMPOSE_FILE" --env-file "$env_file" up -d
+    else
+        docker compose -f "$COMPOSE_FILE" --env-file "$env_file" up -d
+    fi
+    success "up complete."
+}
+
+cmd_down() {
+    local config_dir="$DEFAULT_CONFIG_DIR" volumes=0
+    local -a profiles=()
+    for arg in "$@"; do
+        case "$arg" in
+            --config-dir=*) config_dir="${arg#*=}" ;;
+            --volumes) volumes=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) profiles+=("$arg") ;;
+        esac
+    done
+    CONFIG_DIR="$config_dir"
+    local env_file="$REPO_ROOT/src/.env"
+
+    local -a down_args=(-f "$COMPOSE_FILE" --env-file "$env_file" down)
+    [ "$volumes" -eq 1 ] && down_args+=(-v)
+    if [ ${#profiles[@]} -gt 0 ]; then
+        local joined
+        joined="$(IFS=,; echo "${profiles[*]}")"
+        COMPOSE_PROFILES="$joined" docker compose "${down_args[@]}"
+    else
+        docker compose "${down_args[@]}"
+    fi
+    success "down complete."
+}
+
+cmd_apps_render() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for apps render: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli render
+    success "Render complete."
+}
+
+_require_setup_done() {
+    if [ ! -f "$CONFIG_DIR/.env" ] || [ ! -f "$CONFIG_DIR/deployment.yaml" ]; then
+        error "No setup found at $CONFIG_DIR. Run 'papaia-ctl setup' first."
+        exit 2
+    fi
+    if [ ! -f "$REPO_ROOT/src/.env" ]; then
+        error "$REPO_ROOT/src/.env not found. Run 'papaia-ctl setup' first."
+        exit 2
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# dispatch
+# ─────────────────────────────────────────────────────────────────────────
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
+fi
+
+cmd="$1"; shift || true
+case "$cmd" in
+    init) cmd_init "$@" ;;
+    setup) cmd_setup "$@" ;;
+    up) cmd_up "$@" ;;
+    down) cmd_down "$@" ;;
+    apps)
+        sub="${1:-}"; shift || true
+        case "$sub" in
+            render) cmd_apps_render "$@" ;;
+            *) error "Unknown 'apps' subcommand: ${sub:-<none>}. Only 'apps render' is implemented."; exit 2 ;;
+        esac
+        ;;
+    help|-h|--help) usage ;;
+    *) error "Unknown command: $cmd"; usage; exit 2 ;;
+esac

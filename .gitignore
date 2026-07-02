@@ -12,3 +12,9 @@ src/infra/keycloak/realm-import/papaia-realm.json
 # Deployment lock file (written into PAPAIA_CONFIG_DIR)
 deployed.lock
 
+# Python tooling artifacts (tools/lib + tools/tests)
+tools/**/__pycache__/
+tools/.pytest_cache/
+tools/.ruff_cache/
+tools/*.egg-info/
+

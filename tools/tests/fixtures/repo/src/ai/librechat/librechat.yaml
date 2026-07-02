@@ -1,0 +1,7 @@
+version: 1.0.0
+mcpServers:
+  FirecrawlMCP:
+    type: streamable-http
+    url: http://mcp-firecrawl:3000/mcp
+webSearch:
+  serpProvider: searxng

@@ -1,0 +1,150 @@
+"""Shared helpers for the papaia-ctl Python library.
+
+Env-file parsing/writing, secret-key detection, and secret generation. Pure
+functions wherever feasible so the rest of tools/lib stays unit-testable
+without mocking the filesystem.
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+import re
+import secrets
+from pathlib import Path
+
+# A key is treated as secret-shaped if it matches this pattern, per the
+# convention already used throughout every shipped .env.example file.
+_SECRET_KEY_PATTERN = re.compile(r"(SECRET|PASSWORD|KEY|TOKEN)", re.IGNORECASE)
+
+# Exact-key overrides for secrets whose consuming service requires a precise
+# byte length, where the generic 24-byte hex default would be wrong:
+#   - oauth2-proxy cookie secrets must be exactly 32 raw bytes (AES-256).
+#   - LibreChat's CREDS_KEY/CREDS_IV are AES-256-CBC key/IV pairs and must be
+#     exactly 32 and 16 raw bytes respectively, or LibreChat refuses to start.
+_EXACT_GENERATORS: dict[str, callable[[], str]] = {}
+
+
+def _register_exact(key: str):
+    def deco(fn):
+        _EXACT_GENERATORS[key] = fn
+        return fn
+
+    return deco
+
+
+@_register_exact("CREDS_KEY")
+def _gen_creds_key() -> str:
+    return secrets.token_hex(32)  # 64 hex chars = 32 bytes
+
+
+@_register_exact("CREDS_IV")
+def _gen_creds_iv() -> str:
+    return secrets.token_hex(16)  # 32 hex chars = 16 bytes
+
+
+def is_secret_key(key: str) -> bool:
+    """Whether a .env key should be treated as a generated secret."""
+    return bool(_SECRET_KEY_PATTERN.search(key))
+
+
+def is_placeholder(value: str) -> bool:
+    """Whether a .env value is an unfilled placeholder, per the shipped
+    GENERATE_* convention (or simply empty)."""
+    return value == "" or value.startswith("GENERATE_")
+
+
+def generate_secret(key: str) -> str:
+    """Generate a value for the given secret-shaped key.
+
+    Dispatch order:
+      1. Exact-key overrides (CREDS_KEY, CREDS_IV) for keys with a strict
+         required byte length.
+      2. Suffix match on *_COOKIE_SECRET — must be exactly 32 raw bytes,
+         base64-encoded (oauth2-proxy's documented requirement).
+      3. Default — 24 raw bytes, hex-encoded (matches the README's existing
+         manual instruction `openssl rand -hex 24` byte-for-byte).
+    """
+    if key in _EXACT_GENERATORS:
+        return _EXACT_GENERATORS[key]()
+    if key.endswith("_COOKIE_SECRET"):
+        return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+    return secrets.token_hex(24)
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env-style file into a flat dict. Blank lines, comments, and
+    malformed lines are silently skipped."""
+    result: dict[str, str] = {}
+    if not path.is_file():
+        return result
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        if key:
+            result[key] = value
+    return result
+
+
+def write_env_file(
+    path: Path, values: dict[str, str], *, template_path: Path | None = None
+) -> None:
+    """Write a .env file, preserving comments/blank lines/ordering from
+    `template_path` (or the existing file at `path` if no template is given)
+    and only rewriting the value portion of lines whose key changed. Keys
+    present in `values` but absent from the template are appended at the
+    end under a generated-by-papaia-ctl banner.
+
+    This preserves byte-identical output for unchanged keys across repeated
+    runs, which is what makes render/setup idempotent at the file level.
+    """
+    source = template_path if template_path is not None and template_path.is_file() else path
+    existing_lines: list[str] = []
+    if source.is_file():
+        existing_lines = source.read_text(encoding="utf-8").splitlines()
+
+    seen_keys: set[str] = set()
+    out_lines: list[str] = []
+    for raw_line in existing_lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out_lines.append(raw_line)
+            continue
+        key, _, _old_value = stripped.partition("=")
+        key = key.strip()
+        if key in values:
+            out_lines.append(f"{key}={values[key]}")
+            seen_keys.add(key)
+        else:
+            # Key from the template that we don't have a value for (e.g. an
+            # optional, commented-out var) — keep the line as shipped.
+            out_lines.append(raw_line)
+
+    missing = [k for k in values if k not in seen_keys]
+    if missing:
+        if out_lines and out_lines[-1].strip() != "":
+            out_lines.append("")
+        out_lines.append("# --- Generated by papaia-ctl (not present in the shipped template) ---")
+        for key in missing:
+            out_lines.append(f"{key}={values[key]}")
+
+    atomic_write(path, "\n".join(out_lines) + "\n")
+
+
+def atomic_write(path: Path, content: str) -> None:
+    """Write `content` to `path` atomically (write to a sibling temp file,
+    then os.replace) so a crash mid-write never leaves a half-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(content, encoding="utf-8", newline="\n")
+    os.replace(tmp_path, path)

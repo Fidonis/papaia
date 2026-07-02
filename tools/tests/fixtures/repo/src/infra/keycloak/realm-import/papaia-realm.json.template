@@ -1,0 +1,8 @@
+{
+  "realm": "papaia",
+  "clients": [
+    {"clientId": "librechat", "secret": "${env.KC_LIBRECHAT_CLIENT_SECRET}"},
+    {"clientId": "litellm", "secret": "${env.KC_LITELLM_CLIENT_SECRET}"},
+    {"clientId": "oauth2-proxy", "secret": "${env.KC_OAUTH2_PROXY_CLIENT_SECRET}"}
+  ]
+}
