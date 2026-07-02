@@ -87,8 +87,8 @@ def init(
 ) -> None:
     """Create and seed $PAPAIA_CONFIG_DIR. Does not generate secrets or
     touch src/**/.env -- purely seeds the config dir from shipped defaults."""
-    (config_dir / "overlay").mkdir(parents=True, exist_ok=True)
-    (config_dir / "overrides").mkdir(parents=True, exist_ok=True)
+    common.ensure_dir(config_dir / "overlay")
+    common.ensure_dir(config_dir / "overrides")
 
     seed = load_seed_tree(repo_root)
     for rel_dir, values in seed.items():

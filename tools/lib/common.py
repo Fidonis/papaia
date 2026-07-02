@@ -11,6 +11,7 @@ import base64
 import os
 import re
 import secrets
+import time
 from pathlib import Path
 
 # A key is treated as secret-shaped if it matches this pattern, per the
@@ -141,10 +142,32 @@ def write_env_file(
     atomic_write(path, "\n".join(out_lines) + "\n")
 
 
+def ensure_dir(path: Path) -> None:
+    """Path.mkdir(parents=True, exist_ok=True), hardened against a transient
+    race observed on WSL2's /mnt/c (DrvFs) mounts: the metadata cache can
+    momentarily report a just-created directory as both "already exists"
+    (FileExistsError from the mkdir syscall) and "not a directory" (the
+    is_dir() check pathlib's own exist_ok handling uses), which makes
+    Path.mkdir(parents=True, exist_ok=True) spuriously raise. A brief
+    settle-and-retry clears it; a real conflict (e.g. a file occupying the
+    path) still raises."""
+    last_exc: OSError | None = None
+    for attempt in range(5):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return
+        except FileExistsError as exc:
+            last_exc = exc
+            if path.is_dir():
+                return
+            time.sleep(0.05 * (attempt + 1))
+    raise last_exc
+
+
 def atomic_write(path: Path, content: str) -> None:
     """Write `content` to `path` atomically (write to a sibling temp file,
     then os.replace) so a crash mid-write never leaves a half-written file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_dir(path.parent)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(content, encoding="utf-8", newline="\n")
     os.replace(tmp_path, path)

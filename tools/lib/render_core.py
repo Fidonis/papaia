@@ -154,5 +154,5 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     json.loads(resolved)  # validate the substitution didn't break the JSON
 
     out_dir = config_dir / "infra/keycloak/realm-import"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    common.ensure_dir(out_dir)
     common.atomic_write(out_dir / "papaia-realm.json", resolved)
