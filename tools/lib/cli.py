@@ -98,6 +98,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return 3
 
     tree = bootstrap.stamp_platform_version(tree, repo_root)
+    tree = bootstrap.stamp_config_dir(tree, config_dir)
     bootstrap.persist_tree(tree, config_dir, repo_root)
     _sync_deployment_manifest(config_dir, tree, repo_root)
 

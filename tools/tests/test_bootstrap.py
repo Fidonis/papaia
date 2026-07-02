@@ -20,6 +20,13 @@ def test_stamp_platform_version_populates_papaia_version(repo_root):
     assert tree[""]["PAPAIA_VERSION"] == "0.7.0"
 
 
+def test_stamp_config_dir_populates_papaia_config_dir(repo_root, config_dir):
+    tree = bootstrap.load_seed_tree(repo_root)
+    assert tree[""]["PAPAIA_CONFIG_DIR"] != str(config_dir)
+    bootstrap.stamp_config_dir(tree, config_dir)
+    assert tree[""]["PAPAIA_CONFIG_DIR"] == str(config_dir)
+
+
 def test_init_seeds_config_dir_without_touching_repo_tree(repo_root, config_dir):
     src_files_before = sorted(
         p.relative_to(repo_root) for p in (repo_root / "src").rglob("*") if p.is_file()

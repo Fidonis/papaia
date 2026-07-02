@@ -140,6 +140,15 @@ def stamp_platform_version(tree: EnvTree, repo_root: Path) -> EnvTree:
     return tree
 
 
+def stamp_config_dir(tree: EnvTree, config_dir: Path) -> EnvTree:
+    """Populate the root .env's PAPAIA_CONFIG_DIR with the actually-resolved
+    config directory, so docker compose's ${PAPAIA_CONFIG_DIR} bind mounts
+    resolve to the same place render_core just wrote to, instead of the
+    placeholder shipped in src/.env.example."""
+    tree.setdefault("", {})["PAPAIA_CONFIG_DIR"] = str(config_dir)
+    return tree
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Secret generation
 # ─────────────────────────────────────────────────────────────────────────
