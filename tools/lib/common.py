@@ -11,6 +11,7 @@ import base64
 import os
 import re
 import secrets
+import shutil
 import time
 from pathlib import Path
 
@@ -166,8 +167,19 @@ def ensure_dir(path: Path) -> None:
 
 def atomic_write(path: Path, content: str) -> None:
     """Write `content` to `path` atomically (write to a sibling temp file,
-    then os.replace) so a crash mid-write never leaves a half-written file."""
+    then os.replace) so a crash mid-write never leaves a half-written file.
+
+    Self-heals a directory sitting at `path`: Docker auto-vivifies a bind
+    mount's host source as an empty directory when a container with
+    `restart: unless-stopped` (re)starts while the source file doesn't yet
+    exist (e.g. a fresh checkout's `.env` files, before the first `setup`
+    run). `os.replace` refuses tmp-file-over-directory with IsADirectoryError,
+    which would otherwise crash every subsequent `setup` run as long as that
+    container keeps retrying. A `.env`/rendered-config path is never
+    legitimately a directory, so removing it here is always correct."""
     ensure_dir(path.parent)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(content, encoding="utf-8", newline="\n")
+    if path.is_dir():
+        shutil.rmtree(path)
     os.replace(tmp_path, path)

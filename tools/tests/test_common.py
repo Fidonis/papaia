@@ -39,8 +39,11 @@ def test_generate_secret_default_is_24_byte_hex():
 
 
 def test_generate_secret_cookie_secret_is_32_byte_base64():
+    # oauth2-proxy decodes --cookie-secret as URL-safe base64 (RFC 4648 §5):
+    # a standard-alphabet value containing '+' or '/' fails to decode there
+    # and gets treated as raw bytes of the wrong length instead.
     value = common.generate_secret("OAUTH2_PROXY_COOKIE_SECRET")
-    decoded = base64.b64decode(value)
+    decoded = base64.urlsafe_b64decode(value)
     assert len(decoded) == 32
 
 
@@ -76,6 +79,20 @@ def test_write_env_file_appends_keys_missing_from_template(tmp_path):
     common.write_env_file(out, {"FOO": "bar", "NEW_KEY": "value"}, template_path=template)
     content = out.read_text(encoding="utf-8")
     assert "NEW_KEY=value" in content
+
+
+def test_atomic_write_replaces_stray_directory(tmp_path):
+    # Reproduces Docker's bind-mount auto-vivification: a container with
+    # `restart: unless-stopped` recreates its host bind-mount source as an
+    # empty directory if the source file is missing at (re)start time.
+    target = tmp_path / ".env"
+    target.mkdir()
+    (target / "leftover").write_text("stray", encoding="utf-8")
+
+    common.atomic_write(target, "FOO=bar\n")
+
+    assert target.is_file()
+    assert target.read_text(encoding="utf-8") == "FOO=bar\n"
 
 
 def test_ensure_dir_creates_nested_path(tmp_path):
