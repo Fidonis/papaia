@@ -69,7 +69,7 @@ def generate_secret(key: str) -> str:
     if key in _EXACT_GENERATORS:
         return _EXACT_GENERATORS[key]()
     if key.endswith("_COOKIE_SECRET"):
-        return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+        return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
     return secrets.token_hex(24)
 
 

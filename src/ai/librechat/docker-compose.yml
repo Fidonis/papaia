@@ -153,6 +153,9 @@ services:
       POSTGRES_DB: ${VECTORDB_NAME}
       POSTGRES_USER: ${VECTORDB_USER}
       POSTGRES_PASSWORD: ${VECTORDB_PASSWORD}
+      OPENAI_API_KEY: ${LITELLM_API_KEY}
+      OPENAI_API_BASE: http://litellm:4000
+      EMBEDDINGS_MODEL: nomic-embed-text
     depends_on:
       librechat-vectordb:
         condition: service_healthy
