@@ -13,6 +13,7 @@ services:
         condition: service_started
       keycloak:
         condition: service_healthy
+        required: false
     env_file:
       - ./.env
     extra_hosts:
