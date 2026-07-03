@@ -127,14 +127,16 @@ External ports are configurable in `src/.env`. Defaults below.
 
 ### Prerequisites
 - Docker and Docker Compose installed
-- `openssl` to generate secrets; `python3` for the Keycloak bootstrap helper
+- `python3` (3.10+) — `papaia-ctl` generates secrets and renders configs
+  itself; `openssl` is no longer required
 - At least 8GB RAM recommended
 - Linux, macOS or WSL2 environment
 
 ### Single-host setup (default)
 
-papAIa is deployed manually: copy the shipped `.env.example` templates,
-fill in your own secrets, and bring the stack up with Docker Compose.
+`papaia-ctl`, the orchestrator shipped under `tools/`, turns a fresh
+checkout into a runnable core stack with one idempotent command — no more
+copying `.env.example` files or generating secrets by hand.
 
 **1. Clone the repository**
 
@@ -143,67 +145,94 @@ git clone https://github.com/marko-boehm/papaia.git
 cd papaia
 ```
 
-**2. Create the environment files**
-
-Copy `src/.env.example` to `src/.env`, and one `.env` per service
-directory, then replace every `GENERATE_…` placeholder with a fresh
-secret:
+**2. Run setup**
 
 ```bash
-cp src/.env.example src/.env
-# repeat for each module you enable, e.g.:
-cp src/infra/keycloak/.env.example  src/infra/keycloak/.env
-cp src/ai/librechat/.env.example    src/ai/librechat/.env
-cp src/ai/litellm/.env.example      src/ai/litellm/.env
-# … and so on
-
-openssl rand -hex 24      # generic secret / password
-openssl rand -base64 32   # for any *_COOKIE_SECRET (must be 32 bytes)
+tools/papaia-ctl setup
 ```
 
-Review `src/.env` for the host-specific basics — `PAPAIA_HOST`, `HOST_IP`,
-`COMPOSE_PROFILES`, `PAPAIA_CONFIG_DIR` — and follow the
-[environment setup details](#environment-setup-details) for the one
-cross-file rule you must respect (matching Keycloak client secrets).
+Run with no flags, `setup` prompts for the two values it can't derive on
+its own — the public URL of this server (`PAPAIA_HOST`) and the public
+Keycloak URL (`AUTH_HOST`) — pre-filled with sensible defaults. Everything
+else is generated or derived automatically:
 
-**3. Prepare the Keycloak realm file**
+- secrets for every `*_SECRET`/`*_PASSWORD`/`*_KEY`/`*_TOKEN` variable
+  (sticky — re-running `setup` never rotates an already-set value; pass
+  `--force` to regenerate all of them)
+- the OIDC issuer, split endpoints, and per-service redirect URLs, derived
+  from `AUTH_HOST`/`PAPAIA_HOST`
+- whether the bundled Nginx Proxy Manager is started, based on whether an
+  HTTPS hostname suggests an external reverse proxy already terminates TLS
+  (override with `--external-reverse-proxy` / `--no-external-reverse-proxy`,
+  or opt into raw ports with no proxy at all via `--allow-direct-port-access`)
+- the Keycloak realm import, with client secrets baked in directly (no
+  reliance on Keycloak's own `${env.…}` substitution at import time)
 
-The realm import keeps client secrets as `${env.…}` placeholders that
-Keycloak substitutes at import time, so a plain copy is enough:
+For unattended/CI use, pass everything as flags and skip the prompts:
 
 ```bash
-cp src/infra/keycloak/realm-import/papaia-realm.json.template \
-   src/infra/keycloak/realm-import/papaia-realm.json
+tools/papaia-ctl setup --non-interactive \
+  --app-host=https://papaia.example.com \
+  --auth-host=https://auth.papaia.example.com
 ```
 
-**4. Seed the externalised config directory**
+All generated state lives under an external config directory (default:
+a `papaia-config` directory next to the checkout, override with
+`--config-dir=PATH`) — the repo tree itself is never modified beyond the
+gitignored `.env` files `docker compose` already reads from each service
+directory. Run `tools/papaia-ctl setup --help` for the full flag reference.
+
+**3. Start the stack**
 
 ```bash
-src/sync-config.sh
+tools/papaia-ctl up
 ```
 
-`src/sync-config.sh` copies the shipped service-configuration defaults
-from `src/` into the externalised config directory at `${PAPAIA_CONFIG_DIR}`
-(see [Externalised service configuration](#externalised-service-configuration)
-below). It is non-destructive: existing files in the target are kept, so
-running it again after a `git pull` only fills in newly added defaults.
-
-**5. Start the stack**
-
-```bash
-docker compose -f src/docker-compose.yml --env-file src/.env up -d
-```
+This re-renders the current configuration (picking up any `git pull`
+changes) and runs `docker compose up -d`. Pass profile names to start a
+subset, e.g. `tools/papaia-ctl up keycloak librechat litellm`.
 
 Keycloak imports the `papaia` realm automatically on first start
 (`--import-realm`). To re-sync realm clients later without recreating the
 Keycloak volume, run `src/infra/keycloak/bootstrap.sh`.
 
+<details>
+<summary>What <code>setup</code> does manually, step by step (advanced / troubleshooting)</summary>
+
+This is the sequence `papaia-ctl setup` automates. Useful if you need to
+debug a generated value or prefer full manual control:
+
+1. Copy `src/.env.example` to `src/.env`, and one `.env` per service
+   directory (`src/infra/keycloak/.env.example`,
+   `src/ai/librechat/.env.example`, …), replacing every `GENERATE_…`
+   placeholder with a fresh secret (`openssl rand -hex 24` for most,
+   `openssl rand -base64 32` for any `*_COOKIE_SECRET`, which must be
+   exactly 32 bytes). Keep `KC_<service>_CLIENT_SECRET` in
+   `infra/keycloak/.env` identical to the matching client secret in the
+   consuming service's `.env`.
+2. Set `PAPAIA_HOST`, `AUTH_HOST`, `HOST_IP`, `COMPOSE_PROFILES`,
+   `PAPAIA_CONFIG_DIR` in `src/.env` (see
+   [environment setup details](#environment-setup-details)), and derive
+   every `OIDC_ISSUER*` / `*_PUBLIC_URL` / `DOMAIN_SERVER` /
+   `DOMAIN_CLIENT` variable from `PAPAIA_HOST`/`AUTH_HOST` by hand.
+3. Bake the Keycloak realm secrets into
+   `src/infra/keycloak/realm-import/papaia-realm.json` (substitute every
+   `${env.KC_…}` placeholder in the `.template` file with the matching
+   secret from `infra/keycloak/.env`) rather than relying on Keycloak's
+   own `${env.…}` substitution at import time, which is unreliable.
+4. Run `src/sync-config.sh` to copy the shipped service-configuration
+   defaults from `src/` into `${PAPAIA_CONFIG_DIR}` (see
+   [Externalised service configuration](#externalised-service-configuration)).
+   Non-destructive: existing files in the target are kept.
+5. `docker compose -f src/docker-compose.yml --env-file src/.env up -d`
+
+</details>
+
 ### Stopping
 
 ```bash
-docker compose -f src/docker-compose.yml --env-file src/.env stop      # keep volumes
-docker compose -f src/docker-compose.yml --env-file src/.env down      # also remove network
-docker compose -f src/docker-compose.yml --env-file src/.env down -v   # also wipe volumes
+tools/papaia-ctl down              # remove containers and network, keep volumes
+tools/papaia-ctl down --volumes    # also wipe volumes
 ```
 
 ## Multi-environment deployments (dev / stage / demo on one host)
@@ -231,15 +260,19 @@ forking the repo. Each environment gets its own:
   requires `false`. Browsers ignore Secure cookies over plain HTTP, so a
   mismatch silently breaks login.
 
-Give each environment its own env file (e.g. `src/.env.dev`,
-`src/.env.stage`, …) and pass the active one with `--env-file`:
+`tools/papaia-ctl setup --env=<name> --host-ip=<ip>` sets
+`COMPOSE_PROJECT_NAME`/`DOCKER_NETWORK` to `papaia-<name>`/`papaia-<name>-net`
+and `HOST_IP` to the given bind address in one step — the manual equivalent
+of setting all three by hand in a per-environment `src/.env`:
 
 ```bash
-docker compose -f src/docker-compose.yml --env-file src/.env.dev up -d
+tools/papaia-ctl setup --env=dev   --host-ip=192.168.1.102 --app-host=http://192.168.1.102
+tools/papaia-ctl setup --env=stage --host-ip=192.168.1.103 --app-host=http://192.168.1.103
 ```
 
-Set `COMPOSE_PROJECT_NAME`, `DOCKER_NETWORK`, `HOST_IP` and `PAPAIA_HOST`
-to distinct values per environment. With the bind addresses pinned through
+Each `--env` value gets its own `--config-dir` too (pass one explicitly,
+e.g. `--config-dir=/srv/papaia-dev/config`, so concurrent environments
+don't share generated state). With the bind addresses pinned through
 `HOST_IP`, ports on the public interface stay isolated and can be filtered
 at the firewall.
 
@@ -333,6 +366,12 @@ change inside that container.
 
 #### Initial population
 
+`tools/papaia-ctl setup` (or `tools/papaia-ctl apps render` on its own)
+populates this directory as part of its 3-layer config render — this is
+now the primary path. The underlying per-file mirroring logic is also
+available standalone via `src/sync-config.sh` (deprecated, kept as a
+manual fallback):
+
 ```bash
 src/sync-config.sh                # uses PAPAIA_CONFIG_DIR from src/.env
 src/sync-config.sh /custom/path   # or pass an explicit target
@@ -347,10 +386,11 @@ the script is safe to re-run after upgrades.
 
 ```bash
 git pull                                                       # new repo version
-src/sync-config.sh                                             # add new defaults
-                                                               # (non-destructive)
-docker compose -f src/docker-compose.yml --env-file src/.env up -d
+tools/papaia-ctl up                                            # re-render + restart
 ```
+
+(equivalently, `src/sync-config.sh` followed by a manual
+`docker compose ... up -d` for the non-destructive-merge-only case)
 
 Customer overrides under `${PAPAIA_CONFIG_DIR}` survive the upgrade
 untouched. Any **new** files shipped by the upgrade land in the config
@@ -366,6 +406,11 @@ the config archive is a plain `tar xzf` into the target path — no Docker
 volume operations are required.
 
 ### Environment setup details
+
+`tools/papaia-ctl setup` handles both points below automatically (sticky
+secret generation, plus a built-in alias table that keeps matching
+Keycloak client secrets in sync across files). They only need manual
+attention when following the [manual fallback](#single-host-setup-default).
 
 The [Single-host setup](#single-host-setup-default) above creates the
 `.env` files. Two things need extra care:
@@ -678,18 +723,20 @@ docker compose config             # render the merged compose file
 ```
 .
 ├── README.md                  # this file
+├── tools/                     # papaia-ctl orchestrator (init/setup/up/down)
+│   ├── papaia-ctl              # bash dispatcher
+│   ├── deployment.template.yaml
+│   └── lib/                    # render_core.py, bootstrap.py, gen_override.py
 └── src/
     ├── README.md              # Compose-level operational guide
     ├── docker-compose.yml     # root compose, includes per-service files
     ├── .env.example           # all stack-wide env vars, grouped per service
-    ├── sync-config.sh         # seed/refresh PAPAIA_CONFIG_DIR from src/
+    ├── sync-config.sh         # seed/refresh PAPAIA_CONFIG_DIR from src/ (deprecated, see tools/papaia-ctl)
     ├── backup-papaia.sh       # volume + PAPAIA_CONFIG_DIR backup
     ├── restore-papaia.sh      # volume restore
-    ├── infra/                 # keycloak, nginx, oauth2-proxy, technitium
-    ├── services/              # firecrawl, home-assistant, homepage,
-    │                          # minio, paperless, searxng
-    └── ai/                    # jinaai, librechat, litellm, localai,
-                               # mcp-office-docs, mcp-paperless, n8n, qdrant-rag
+    ├── infra/                 # keycloak, nginx, oauth2-proxy
+    ├── services/               # firecrawl, homepage, searxng
+    └── ai/                     # jinaai, librechat, litellm, localai, mcp-firecrawl
 ```
 
 ---

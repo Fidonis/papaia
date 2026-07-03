@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   librechat:
-    image: ${LIBRECHAT_IMAGE}
+    image: ghcr.io/danny-avila/librechat:v0.8.5
     restart: unless-stopped
     depends_on:
       librechat-mongodb:
@@ -81,7 +81,11 @@ services:
       de.fidonis.module: papaia-librechat
       de.fidonis.role:   chat-interface
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3080/health || exit 1"]
+      # 127.0.0.1, not localhost: the container resolves "localhost" to the
+      # IPv6 loopback first, but the app only binds 0.0.0.0 (IPv4) -- with
+      # "localhost" every probe fails with connection refused even though
+      # the server is up.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3080/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -90,7 +94,7 @@ services:
 
   librechat-mongodb:
     restart: unless-stopped
-    image: ${LIBRECHAT_MONGODB_IMAGE}
+    image: mongo:8.0.20
     volumes:
       - librechat-mongodb:/data/db
     command: mongod --noauth
@@ -108,7 +112,7 @@ services:
     profiles: [librechat]
 
   librechat-meilisearch:
-    image: ${LIBRECHAT_MEILISEARCH_IMAGE}
+    image: getmeili/meilisearch:v1.35.1
     restart: unless-stopped
     environment:
       MEILI_NO_ANALYTICS: true
@@ -123,7 +127,7 @@ services:
     profiles: [librechat]
 
   librechat-vectordb:
-    image: ${LIBRECHAT_VECTORDB_IMAGE}
+    image: pgvector/pgvector:0.8.0-pg15-trixie
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${VECTORDB_NAME}
@@ -145,7 +149,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ${LIBRECHAT_RAGAPI_IMAGE}
+    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb
@@ -153,6 +157,9 @@ services:
       POSTGRES_DB: ${VECTORDB_NAME}
       POSTGRES_USER: ${VECTORDB_USER}
       POSTGRES_PASSWORD: ${VECTORDB_PASSWORD}
+      OPENAI_API_KEY: ${LITELLM_API_KEY}
+      OPENAI_API_BASE: http://litellm:4000
+      EMBEDDINGS_MODEL: nomic-embed-text
     depends_on:
       librechat-vectordb:
         condition: service_healthy

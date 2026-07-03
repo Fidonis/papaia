@@ -16,7 +16,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-firecrawl:
-    image: ${MCP_FIRECRAWL_IMAGE}
+    image: ghcr.io/firecrawl/firecrawl-mcp-server@sha256:6e4bfa2019b6b430d5ef2f11875d85d106cc302c285c0dfc0bde2286bdb05abd
     restart: unless-stopped
     environment:
       FIRECRAWL_API_URL: ${FIRECRAWL_API_URL:-http://firecrawl:3002}

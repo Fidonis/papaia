@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   litellm:
-    image: ${LITELLM_IMAGE}
+    image: ghcr.io/berriai/litellm:v1.83.14.rc.1
     restart: unless-stopped
     env_file:
       - ./.env
@@ -29,7 +29,7 @@ services:
     profiles: [litellm]
 
   litellm-db:
-    image: ${LITELLM_DB_IMAGE}
+    image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_DB: litellm
@@ -51,7 +51,7 @@ services:
     profiles: [litellm]
 
   litellm-prometheus:
-    image: ${LITELLM_PROMETHEUS_IMAGE}
+    image: prom/prometheus:v3.11.1
     restart: unless-stopped
     volumes:
       - litellm-prometheus:/prometheus

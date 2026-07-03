@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   keycloak:
-    image: ${KEYCLOAK_IMAGE}
+    image: quay.io/keycloak/keycloak:26.5.6
     restart: unless-stopped
     ports:
       - "${HOST_IP:-0.0.0.0}:${KEYCLOAK_EXT_PORT}:8080"
@@ -54,7 +54,7 @@ services:
     profiles: [keycloak]
 
   keycloak-postgres:
-    image: ${KEYCLOAK_POSTGRES_IMAGE}
+    image: postgres:18.3
     restart: unless-stopped
     environment:
       POSTGRES_DB: keycloak

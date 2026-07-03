@@ -1,0 +1,12 @@
+name: paperless
+version: 1.0.0
+extension_repo: papaia-ext-paperless
+papaia_compat: ">=0.8.0"
+description: "Paperless-ngx document management"
+
+networks:
+  app_network: papaia-paperless-net
+  attach: [nginx, librechat]
+
+integration:
+  librechat: integration/ai/librechat/librechat.yaml

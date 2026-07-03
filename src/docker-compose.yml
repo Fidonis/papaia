@@ -12,14 +12,10 @@ include:
   - path: ./infra/keycloak/docker-compose.yml
   - path: ./infra/oauth2-proxy/docker-compose.yml
   - path: ./infra/nginx/docker-compose.yml
-  # - path: ./infra/technitium/docker-compose.yml
 
   # Application Services
   - path: ./services/firecrawl/docker-compose.yml
-  # - path: ./services/home-assistant/docker-compose.yml
   - path: ./services/homepage/docker-compose.yml
-  - path: ./services/minio/docker-compose.yml
-  - path: ./services/paperless/docker-compose.yml
   - path: ./services/searxng/docker-compose.yml
 
   # AI Services
@@ -27,11 +23,6 @@ include:
   - path: ./ai/litellm/docker-compose.yml
   - path: ./ai/localai/docker-compose.yml
   - path: ./ai/mcp-firecrawl/docker-compose.yml
-  - path: ./ai/mcp-paperless/docker-compose.yml
-  - path: ./ai/mcp-office-docs/docker-compose.yml
-  - path: ./ai/n8n/docker-compose.yml
-  - path: ./ai/qdrant-rag/docker-compose.yml
-  - path: ./ai/qdrant-webdav-ingest/docker-compose.yml
   - path: ./ai/jinaai/docker-compose.yml
 
 networks:

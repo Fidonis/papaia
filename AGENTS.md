@@ -31,6 +31,12 @@ Non-negotiable. Any change that violates them must be rejected and undone.
 ## Repository Structure
 
 ```
+tools/
+  papaia-ctl                  # bash orchestrator: init · setup · up/down · apps render
+  deployment.template.yaml    # template copied into PAPAIA_CONFIG_DIR on init
+  pyproject.toml              # ruff + pytest config for tools/lib (local-only, not yet wired into CI)
+  lib/                        # Python: render_core.py, gen_override.py, bootstrap.py, common.py, cli.py
+  tests/                      # pytest suite for tools/lib
 src/
   docker-compose.yml          # Root compose — shared network + include: list only
   .env.example                # All stack-wide variables (source of truth for env docs)
@@ -84,9 +90,14 @@ docs/
   `src/.env.example`)
 - Per-service `.env` files in subdirectories — service-specific secrets
   (all gitignored)
-- `$PAPAIA_CONFIG_DIR` — operator-editable config files populated once by
-  `sync-config.sh`; survives `git pull` because `sync-config.sh` is
-  non-destructive
+- `$PAPAIA_CONFIG_DIR` — operator-editable config files, populated and kept
+  in sync by `tools/papaia-ctl setup`/`up` (3-layer merge: repo base +
+  active extensions + customer overlay under `$PAPAIA_CONFIG_DIR/overlay/`).
+  `src/sync-config.sh` is the deprecated, lower-level predecessor it
+  supersedes (still present as a manual fallback).
+- `tools/lib/*.py` only ever reads from `src/` (read-only templates) and
+  writes to `$PAPAIA_CONFIG_DIR` plus the gitignored `src/**/.env` files —
+  never to any other tracked path in the repo tree.
 
 ## Branch Strategy
 
@@ -138,6 +149,7 @@ Run `make lint` locally before pushing. CI enforces the same checks.
 | Shell (`*.sh`) | shellcheck | `--severity=warning` must pass |
 | YAML (`*.yml`, `*.yaml`) | yamllint | Project `.yamllint` config must pass |
 | Dockerfiles | hadolint | Project ignore list in CI must pass |
+| Python (`tools/lib/*.py`) | ruff (`tools/pyproject.toml`) | Run locally — not yet wired into CI |
 
 Shell conventions:
 - `set -euo pipefail` at the top of every script
