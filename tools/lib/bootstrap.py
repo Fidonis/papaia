@@ -154,12 +154,28 @@ def stamp_config_dir(tree: EnvTree, config_dir: Path) -> EnvTree:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def generate_missing_secrets(tree: EnvTree, *, force: bool = False) -> EnvTree:
+def generate_missing_secrets(
+    tree: EnvTree, *, force: bool = False, auth_provider: str | None = None
+) -> EnvTree:
     """Sticky secret-fill pass: generate a value for every secret-shaped
     key that's still a placeholder (or, with force=True, for every
     secret-shaped key unconditionally), then fan canonical values out to
-    their declared aliases."""
-    for values in tree.values():
+    their declared aliases.
+
+    `auth_provider` mirrors the effective AUTH_PROVIDER this run resolves
+    to (falling back to the tree's current on-disk value when omitted) --
+    when it's "external_oidc", the infra/keycloak directory is skipped
+    entirely, since nothing consumes those secrets once the bundled
+    Keycloak isn't started.
+    """
+    effective_auth_provider = auth_provider or tree.get("", {}).get(
+        "AUTH_PROVIDER", "internal_keycloak"
+    )
+    skip_dirs = {"infra/keycloak"} if effective_auth_provider == "external_oidc" else set()
+
+    for rel_dir, values in tree.items():
+        if rel_dir in skip_dirs:
+            continue
         for key, value in list(values.items()):
             if not common.is_secret_key(key):
                 continue
@@ -167,6 +183,8 @@ def generate_missing_secrets(tree: EnvTree, *, force: bool = False) -> EnvTree:
                 values[key] = common.generate_secret(key)
 
     for (canon_dir, canon_key), aliases in SECRET_ALIASES.items():
+        if canon_dir in skip_dirs:
+            continue
         canon_values = tree.get(canon_dir)
         if canon_values is None or canon_key not in canon_values:
             continue
@@ -191,6 +209,8 @@ class SetupArgs:
     host_ip: str | None = None
     app_host: str | None = None
     auth_host: str | None = None
+    auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
+    oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect
     allow_direct_port_access: bool = False
     non_interactive: bool = False
@@ -229,17 +249,45 @@ def derive_auth_host_default(app_host: str, keycloak_ext_port: str) -> str:
     return f"{scheme}://{hostname}:{keycloak_ext_port}"
 
 
+def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
+    """Resolve the real external issuer URL on a first-time transition into
+    external_oidc. Never falls back to the bundled-Keycloak-shaped seed
+    default -- that value is real-looking, not a GENERATE_* placeholder, so
+    silently keeping it would misconfigure the stack against a customer's
+    real IdP without any signal that something is wrong."""
+    issuer = args.oidc_issuer
+    if issuer:
+        return issuer
+    if not args.non_interactive and args.prompt is not None:
+        issuer = args.prompt("External OIDC issuer URL (OIDC_ISSUER)", "")
+        if issuer:
+            return issuer
+    raise SetupError(
+        "--oidc-issuer is required when selecting external_oidc for the first "
+        "time: no real issuer URL was provided and there is no interactive "
+        "terminal to prompt in."
+    )
+
+
 def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     root = tree.setdefault("", {})
     keycloak = tree.setdefault("infra/keycloak", {})
     librechat = tree.setdefault("ai/librechat", {})
     litellm = tree.setdefault("ai/litellm", {})
 
-    if root.get("AUTH_PROVIDER", "internal_keycloak") == "external_oidc":
-        # Advanced user manages their own IdP -- never clobber their config.
+    prior_auth_provider = root.get("AUTH_PROVIDER", "internal_keycloak")
+    auth_provider = args.auth_provider or prior_auth_provider
+
+    if auth_provider == "external_oidc" and prior_auth_provider == "external_oidc":
+        # Already sticky from a prior run -- advanced user manages their own
+        # IdP config by hand. Never clobber it, regardless of what
+        # args.auth_provider says this run (re-passing the same value is a
+        # no-op; nothing to prompt for).
         return tree
 
-    # --- PAPAIA_HOST ---
+    root["AUTH_PROVIDER"] = auth_provider
+
+    # --- PAPAIA_HOST (provider-independent) ---
     sticky_app_host = "" if args.fresh_init else root.get("PAPAIA_HOST", "")
     if sticky_app_host and common.is_placeholder(sticky_app_host):
         sticky_app_host = ""
@@ -257,50 +305,61 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             )
     root["PAPAIA_HOST"] = app_host
 
-    # --- AUTH_HOST + KC_HOSTNAME ---
-    keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")
-    derived_auth_host = derive_auth_host_default(app_host, keycloak_port)
-    auth_host = args.auth_host or derived_auth_host
-    if not args.auth_host and not args.non_interactive and args.prompt is not None:
-        auth_host = args.prompt("Public Keycloak URL (AUTH_HOST)", derived_auth_host)
-    root["AUTH_HOST"] = auth_host
-    keycloak["KC_HOSTNAME"] = auth_host
+    if auth_provider == "external_oidc":
+        # First-time transition (fresh init, or switching this run). The
+        # seed/prior OIDC_ISSUER is bundled-Keycloak-shaped -- never kept
+        # silently. AUTH_HOST / KC_HOSTNAME / split KC_* endpoints / litellm
+        # GENERIC_* are Keycloak-specific and meaningless without the
+        # bundled Keycloak, so they are left untouched.
+        root["OIDC_ISSUER"] = _resolve_external_oidc_issuer(args)
+        librechat["OPENID_ISSUER"] = root["OIDC_ISSUER"]
+    else:
+        # --- AUTH_HOST + KC_HOSTNAME ---
+        keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")
+        derived_auth_host = derive_auth_host_default(app_host, keycloak_port)
+        auth_host = args.auth_host or derived_auth_host
+        if not args.auth_host and not args.non_interactive and args.prompt is not None:
+            auth_host = args.prompt("Public Keycloak URL (AUTH_HOST)", derived_auth_host)
+        root["AUTH_HOST"] = auth_host
+        keycloak["KC_HOSTNAME"] = auth_host
 
-    # --- OIDC issuer + split endpoints ---
-    root["OIDC_ISSUER"] = f"{auth_host}/realms/papaia"
-    root["OIDC_ISSUER_KC_AUTH"] = f"{auth_host}/realms/papaia/protocol/openid-connect/auth"
-    root["OIDC_ISSUER_KC_TOKEN"] = (
-        "http://keycloak:8080/realms/papaia/protocol/openid-connect/token"
-    )
-    root["OIDC_ISSUER_KC_CERTS"] = (
-        "http://keycloak:8080/realms/papaia/protocol/openid-connect/certs"
-    )
+        # --- OIDC issuer + split endpoints ---
+        root["OIDC_ISSUER"] = f"{auth_host}/realms/papaia"
+        root["OIDC_ISSUER_KC_AUTH"] = f"{auth_host}/realms/papaia/protocol/openid-connect/auth"
+        root["OIDC_ISSUER_KC_TOKEN"] = (
+            "http://keycloak:8080/realms/papaia/protocol/openid-connect/token"
+        )
+        root["OIDC_ISSUER_KC_CERTS"] = (
+            "http://keycloak:8080/realms/papaia/protocol/openid-connect/certs"
+        )
 
-    # --- LibreChat ---
-    librechat_port = root.get("LIBRECHAT_EXT_PORT", "8000")
-    librechat["OPENID_ISSUER"] = root["OIDC_ISSUER"]
-    librechat["DOMAIN_SERVER"] = f"{app_host}:{librechat_port}"
-    librechat["DOMAIN_CLIENT"] = f"{app_host}:{librechat_port}"
-    # TRUST_PROXY is intentionally left untouched: it's a static value (1)
-    # correct for every topology this repo supports.
+        # --- LibreChat ---
+        librechat_port = root.get("LIBRECHAT_EXT_PORT", "8000")
+        librechat["OPENID_ISSUER"] = root["OIDC_ISSUER"]
+        librechat["DOMAIN_SERVER"] = f"{app_host}:{librechat_port}"
+        librechat["DOMAIN_CLIENT"] = f"{app_host}:{librechat_port}"
+        # TRUST_PROXY is intentionally left untouched: it's a static value (1)
+        # correct for every topology this repo supports.
 
-    # --- LiteLLM ---
-    litellm_port = root.get("LITELLM_EXT_PORT", "8200")
-    litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = root["OIDC_ISSUER_KC_AUTH"]
-    litellm["GENERIC_TOKEN_ENDPOINT"] = root["OIDC_ISSUER_KC_TOKEN"]
-    litellm["GENERIC_USERINFO_ENDPOINT"] = (
-        "http://keycloak:8080/realms/papaia/protocol/openid-connect/userinfo"
-    )
-    litellm["GENERIC_REDIRECT_URI"] = f"{app_host}:{litellm_port}/sso/callback"
-    litellm["PROXY_LOGOUT_URL"] = (
-        f"{auth_host}/realms/papaia/protocol/openid-connect/logout"
-        f"?client_id=litellm&post_logout_redirect_uri={app_host}:{litellm_port}/sso/key/generate"
-    )
+        # --- LiteLLM ---
+        litellm_port = root.get("LITELLM_EXT_PORT", "8200")
+        litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = root["OIDC_ISSUER_KC_AUTH"]
+        litellm["GENERIC_TOKEN_ENDPOINT"] = root["OIDC_ISSUER_KC_TOKEN"]
+        litellm["GENERIC_USERINFO_ENDPOINT"] = (
+            "http://keycloak:8080/realms/papaia/protocol/openid-connect/userinfo"
+        )
+        litellm["GENERIC_REDIRECT_URI"] = f"{app_host}:{litellm_port}/sso/callback"
+        litellm["PROXY_LOGOUT_URL"] = (
+            f"{auth_host}/realms/papaia/protocol/openid-connect/logout"
+            f"?client_id=litellm&post_logout_redirect_uri={app_host}:{litellm_port}/sso/key/generate"
+        )
 
     # --- Homepage / LocalAI / SearXNG: oauth2-proxy sidecar redirect URLs ---
     # These vars are consumed directly by docker compose's ${VAR} expansion
     # in each service's docker-compose.yml `command:` block, so (like
     # OIDC_ISSUER*) they belong in the root .env, not a per-service one.
+    # Independent of AUTH_PROVIDER -- these are server-reachability URLs, not
+    # Keycloak-specific.
     homepage_port = root.get("HOMEPAGE_EXT_PORT", "8300")
     localai_port = root.get("LOCALAI_EXT_PORT", "8080")
     searxng_port = root.get("SEARXNG_EXT_PORT", "8500")
@@ -359,6 +418,13 @@ def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
     if not profiles:
         profiles = ["keycloak", "oauth2-proxy", "librechat", "litellm"]
+    if root.get("AUTH_PROVIDER", "internal_keycloak") == "external_oidc":
+        # Nothing to start -- the bundled Keycloak (+ its Postgres, which
+        # shares the same `keycloak` compose profile) is not part of this
+        # topology when an external IdP is in use. Switching back to
+        # internal_keycloak later does not re-add it here (out of scope --
+        # only the forward transition is required).
+        profiles = [p for p in profiles if p != "keycloak"]
     profiles = [p for p in profiles if p != "nginx"]
 
     bundle_nginx = not external and not args.allow_direct_port_access
@@ -396,6 +462,7 @@ def write_run_summary(config_dir: Path, tree: EnvTree, *, fresh_init: bool, forc
         "env": root.get("COMPOSE_PROJECT_NAME", "papaia"),
         "app_host": root.get("PAPAIA_HOST", ""),
         "auth_host": root.get("AUTH_HOST", ""),
+        "auth_provider": root.get("AUTH_PROVIDER", "internal_keycloak"),
         "external_reverse_proxy": "nginx" not in root.get("COMPOSE_PROFILES", "").split(","),
         "fresh_init": fresh_init,
         "force": force,

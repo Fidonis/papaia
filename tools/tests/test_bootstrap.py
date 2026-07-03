@@ -120,6 +120,50 @@ def test_generate_missing_secrets_fans_out_aliases(repo_root):
     assert tree["ai/jinaai"]["JINAAI_RERANKER_API_KEY"] == tree["ai/librechat"]["JINA_API_KEY"]
 
 
+def test_generate_missing_secrets_skips_keycloak_dir_for_external_oidc(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+
+    bootstrap.generate_missing_secrets(tree, auth_provider="external_oidc")
+
+    # infra/keycloak's own GENERATE_* placeholders are left untouched --
+    # nothing consumes them once the bundled Keycloak isn't started.
+    assert (
+        tree["infra/keycloak"]["KC_LIBRECHAT_CLIENT_SECRET"]
+        == "GENERATE_KC_LIBRECHAT_CLIENT_SECRET"
+    )
+    assert tree["infra/keycloak"]["KC_LITELLM_CLIENT_SECRET"] == "GENERATE_KC_LITELLM_CLIENT_SECRET"
+    assert (
+        tree["infra/keycloak"]["KC_OAUTH2_PROXY_CLIENT_SECRET"]
+        == "GENERATE_KC_OAUTH2_PROXY_CLIENT_SECRET"
+    )
+    # Other services' own secrets are still generated as normal.
+    assert not common.is_placeholder(tree["ai/librechat"]["JWT_SECRET"])
+
+
+def test_generate_missing_secrets_reads_auth_provider_from_tree_when_arg_omitted(repo_root):
+    # Direct callers that don't pass auth_provider= explicitly still get
+    # correct skip behavior purely from the tree's own on-disk AUTH_PROVIDER
+    # value.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+
+    bootstrap.generate_missing_secrets(tree)
+
+    assert (
+        tree["infra/keycloak"]["KC_LIBRECHAT_CLIENT_SECRET"]
+        == "GENERATE_KC_LIBRECHAT_CLIENT_SECRET"
+    )
+
+
+def test_generate_missing_secrets_generates_keycloak_secrets_by_default(repo_root):
+    # internal_keycloak (default / absent AUTH_PROVIDER) must remain
+    # byte-for-byte unchanged from today.
+    tree = bootstrap.load_seed_tree(repo_root)
+    bootstrap.generate_missing_secrets(tree)
+    assert not common.is_placeholder(tree["infra/keycloak"]["KC_LIBRECHAT_CLIENT_SECRET"])
+
+
 @pytest.mark.parametrize(
     "app_host,expected",
     [
@@ -212,6 +256,97 @@ def test_resolve_hostnames_skips_external_oidc(repo_root):
     assert tree[""]["OIDC_ISSUER"] == "https://idp.customer.com/realms/foo"
 
 
+def test_resolve_hostnames_external_oidc_first_time_prompts_for_issuer(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    prompts = []
+
+    def fake_prompt(message, default):
+        prompts.append(message)
+        return "https://idp.customer.com/realms/foo"
+
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_provider="external_oidc",
+        prompt=fake_prompt,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+
+    assert tree[""]["AUTH_PROVIDER"] == "external_oidc"
+    assert tree[""]["OIDC_ISSUER"] == "https://idp.customer.com/realms/foo"
+    assert tree["ai/librechat"]["OPENID_ISSUER"] == "https://idp.customer.com/realms/foo"
+    assert any("issuer" in m.lower() for m in prompts)
+    # AUTH_HOST is Keycloak-specific and meaningless without the bundled
+    # Keycloak -- left untouched (still the seed default).
+    assert tree[""]["AUTH_HOST"] == "http://host.docker.internal:8110"
+
+
+def test_resolve_hostnames_external_oidc_first_time_non_interactive_requires_issuer(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_provider="external_oidc",
+        non_interactive=True,
+    )
+    with pytest.raises(bootstrap.SetupError):
+        bootstrap.resolve_hostnames(tree, args)
+
+
+def test_resolve_hostnames_external_oidc_first_time_non_interactive_with_flag_succeeds(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_provider="external_oidc",
+        oidc_issuer="https://idp.customer.com/realms/foo",
+        non_interactive=True,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+    assert tree[""]["OIDC_ISSUER"] == "https://idp.customer.com/realms/foo"
+    assert tree[""]["AUTH_PROVIDER"] == "external_oidc"
+
+
+def test_resolve_hostnames_sticky_external_oidc_with_flag_still_preserved(repo_root):
+    # Re-passing --auth-provider=external_oidc on a sticky re-run (not just
+    # omitting the flag) must still never clobber the existing issuer --
+    # confirms the guard checks the tree's prior state, not just whether
+    # args.auth_provider happens to be unset.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+    tree[""]["OIDC_ISSUER"] = "https://idp.customer.com/realms/foo"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_provider="external_oidc",
+        non_interactive=True,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+    assert tree[""]["OIDC_ISSUER"] == "https://idp.customer.com/realms/foo"
+
+
+def test_resolve_hostnames_internal_keycloak_explicit_matches_default(repo_root):
+    # Explicitly requesting internal_keycloak (e.g. via --auth-provider=
+    # internal_keycloak) must be byte-for-byte identical to omitting the
+    # flag entirely.
+    tree_explicit = bootstrap.load_seed_tree(repo_root)
+    tree_omitted = bootstrap.load_seed_tree(repo_root)
+    args_explicit = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_provider="internal_keycloak",
+        non_interactive=True,
+    )
+    args_omitted = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        non_interactive=True,
+    )
+    tree_explicit = bootstrap.resolve_hostnames(tree_explicit, args_explicit)
+    tree_omitted = bootstrap.resolve_hostnames(tree_omitted, args_omitted)
+    assert tree_explicit == tree_omitted
+
+
 def test_resolve_multi_env_default_identity_unchanged(repo_root):
     tree = bootstrap.load_seed_tree(repo_root)
     args = bootstrap.SetupArgs(config_dir=repo_root, env_name="papaia")
@@ -293,6 +428,29 @@ def test_resolve_reverse_proxy_allow_direct_port_access_interactive_confirm(repo
     )
     with pytest.raises(bootstrap.SetupError):
         bootstrap.resolve_reverse_proxy(tree, args)
+
+
+def test_resolve_reverse_proxy_excludes_keycloak_when_external_oidc(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["AUTH_HOST"] = "http://host.docker.internal:8110"
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    profiles = tree[""]["COMPOSE_PROFILES"].split(",")
+    assert "keycloak" not in profiles
+    # oauth2-proxy / librechat / litellm still bundled as usual.
+    assert "oauth2-proxy" in profiles
+
+
+def test_resolve_reverse_proxy_includes_keycloak_by_default(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["AUTH_HOST"] = "http://host.docker.internal:8110"
+    # AUTH_PROVIDER absent -> defaults to internal_keycloak.
+    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert "keycloak" in tree[""]["COMPOSE_PROFILES"].split(",")
 
 
 def test_resolve_reverse_proxy_external_skips_direct_access_confirmation(repo_root):

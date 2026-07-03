@@ -12,6 +12,8 @@
 #   papaia-ctl init   [--config-dir=PATH] [--env=NAME] [--force] [-y]
 #   papaia-ctl setup  [--config-dir=PATH] [--env=NAME] [--host-ip=IP]
 #                     [--app-host=URL] [--auth-host=URL]
+#                     [--auth-provider=internal_keycloak|external_oidc]
+#                     [--oidc-issuer=URL]
 #                     [--external-reverse-proxy|--no-external-reverse-proxy]
 #                     [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl up     [PROFILE...] [--config-dir=PATH]
@@ -131,6 +133,7 @@ cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
     local host_ip="" app_host="" auth_host=""
+    local auth_provider="" oidc_issuer=""
     local external_reverse_proxy="" allow_direct_port_access=0
     local force=0 non_interactive=0
 
@@ -141,6 +144,17 @@ cmd_setup() {
             --host-ip=*) host_ip="${1#*=}" ;;
             --app-host=*) app_host="${1#*=}" ;;
             --auth-host=*) auth_host="${1#*=}" ;;
+            --auth-provider=*)
+                auth_provider="${1#*=}"
+                case "$auth_provider" in
+                    internal_keycloak|external_oidc) : ;;
+                    *)
+                        error "Invalid --auth-provider value: '$auth_provider' (must be 'internal_keycloak' or 'external_oidc')"
+                        exit 2
+                        ;;
+                esac
+                ;;
+            --oidc-issuer=*) oidc_issuer="${1#*=}" ;;
             --external-reverse-proxy) external_reverse_proxy="true" ;;
             --no-external-reverse-proxy) external_reverse_proxy="false" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
@@ -161,10 +175,14 @@ cmd_setup() {
     if [ "$orig_argc" -eq 0 ] && [ "$CONFIG_SEEDED" = "true" ] && is_tty && [ "$non_interactive" -eq 0 ]; then
         info "Existing setup detected in $CONFIG_DIR"
         info "  PAPAIA_HOST = $APP_HOST_STICKY"
-        info "  AUTH_HOST   = $AUTH_HOST_STICKY"
+        if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "external_oidc" ]; then
+            info "  AUTH_PROVIDER = external_oidc"
+        else
+            info "  AUTH_HOST   = $AUTH_HOST_STICKY"
+        fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" ""
             success "setup complete (re-render only)."
             return 0
         fi
@@ -174,7 +192,27 @@ cmd_setup() {
         if [ -z "$app_host" ]; then
             app_host="$(prompt_with_default "Public URL of this server (PAPAIA_HOST)" "${APP_HOST_STICKY:-http://host.docker.internal}")"
         fi
-        if [ -z "$auth_host" ]; then
+        if [ -z "$auth_provider" ]; then
+            local provider_default="${AUTH_PROVIDER_STICKY:-internal_keycloak}"
+            local provider_choice
+            provider_choice="$(prompt_with_default \
+                "Use the bundled Keycloak, or point papAIa at an existing OIDC provider? [internal_keycloak/external_oidc]" \
+                "$provider_default")"
+            case "$provider_choice" in
+                internal_keycloak|external_oidc) auth_provider="$provider_choice" ;;
+                *)
+                    warn "Unrecognized choice '$provider_choice'; defaulting to internal_keycloak."
+                    auth_provider="internal_keycloak"
+                    ;;
+            esac
+        fi
+        if [ "$auth_provider" = "external_oidc" ] && [ "${AUTH_PROVIDER_STICKY:-}" != "external_oidc" ]; then
+            info "External OIDC selected. See src/infra/keycloak/README.md 'Switching to an External OIDC Provider' for provider-specific setup notes."
+            if [ -z "$oidc_issuer" ]; then
+                oidc_issuer="$(prompt_with_default "External OIDC issuer URL (OIDC_ISSUER)" "")"
+            fi
+        fi
+        if [ -z "$auth_host" ] && [ "$auth_provider" != "external_oidc" ]; then
             local auth_default="${AUTH_HOST_STICKY:-}"
             [ -z "$auth_default" ] && auth_default="$(PAPAIA_HOST_OVERRIDE="$app_host" _derive_auth_default "$app_host")"
             auth_host="$(prompt_with_default "Public Keycloak URL (AUTH_HOST)" "$auth_default")"
@@ -182,6 +220,13 @@ cmd_setup() {
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
+            exit 3
+        fi
+        if [ -z "$auth_provider" ]; then
+            auth_provider="${AUTH_PROVIDER_STICKY:-internal_keycloak}"
+        fi
+        if [ "$auth_provider" = "external_oidc" ] && [ "${AUTH_PROVIDER_STICKY:-}" != "external_oidc" ] && [ -z "$oidc_issuer" ]; then
+            error "--oidc-issuer is required: selecting --auth-provider=external_oidc for the first time with no interactive terminal to prompt in."
             exit 3
         fi
     fi
@@ -206,7 +251,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer"; then
         error "setup failed."
         exit 3
     fi
@@ -228,9 +273,12 @@ _derive_auth_default() {
 
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
+    local auth_provider="$8" oidc_issuer="$9"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
+    [ -n "$auth_provider" ] && extra+=(--auth-provider="$auth_provider")
+    [ -n "$oidc_issuer" ] && extra+=(--oidc-issuer="$oidc_issuer")
     [ -n "$external_rp" ] && extra+=(--external-reverse-proxy="$external_rp")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")
     [ "$allow_direct" = "1" ] && extra+=(--allow-direct-port-access)

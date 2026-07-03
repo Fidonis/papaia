@@ -55,6 +55,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
         "AUTH_HOST_DERIVED": bootstrap.derive_auth_host_default(
             app_host or "http://host.docker.internal", keycloak_port
         ),
+        "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
         "EXTERNAL_REVERSE_PROXY_STICKY": (
             "false" if "nginx" in profiles else ("true" if profiles else "")
         ),
@@ -81,6 +82,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         host_ip=args.host_ip,
         app_host=args.app_host,
         auth_host=args.auth_host,
+        auth_provider=args.auth_provider,
+        oidc_issuer=args.oidc_issuer,
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
@@ -88,8 +91,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
         fresh_init=fresh_init,
     )
 
+    effective_auth_provider = args.auth_provider or tree.get("", {}).get(
+        "AUTH_PROVIDER", "internal_keycloak"
+    )
+
     try:
-        tree = bootstrap.generate_missing_secrets(tree, force=args.force)
+        tree = bootstrap.generate_missing_secrets(
+            tree, force=args.force, auth_provider=effective_auth_provider
+        )
         tree = bootstrap.resolve_multi_env(tree, setup_args)
         tree = bootstrap.resolve_hostnames(tree, setup_args)
         tree = bootstrap.resolve_reverse_proxy(tree, setup_args)
@@ -107,6 +116,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(f"Setup complete. PAPAIA_CONFIG_DIR={config_dir}")
+    if effective_auth_provider == "external_oidc":
+        print(
+            "External OIDC provider selected -- see "
+            "src/infra/keycloak/README.md 'Switching to an External OIDC "
+            "Provider' for the client/realm configuration you still need to "
+            "set up on your provider's side."
+        )
     return 0
 
 
@@ -150,6 +166,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--host-ip")
     p_setup.add_argument("--app-host")
     p_setup.add_argument("--auth-host")
+    p_setup.add_argument(
+        "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
+    )
+    p_setup.add_argument("--oidc-issuer")
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
     p_setup.add_argument("--force", action="store_true")
