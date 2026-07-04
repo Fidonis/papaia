@@ -15,6 +15,7 @@
 #                     [--auth-provider=internal_keycloak|external_oidc]
 #                     [--oidc-issuer=URL]
 #                     [--external-reverse-proxy|--no-external-reverse-proxy]
+#                     [--web-search|--no-web-search]
 #                     [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl up     [PROFILE...] [--config-dir=PATH]
 #   papaia-ctl down   [PROFILE...] [--volumes] [--config-dir=PATH]
@@ -149,6 +150,7 @@ cmd_setup() {
     local host_ip="" app_host="" auth_host="" librechat_host=""
     local auth_provider="" oidc_issuer=""
     local external_reverse_proxy="" allow_direct_port_access=0
+    local web_search=""
     local force=0 non_interactive=0
 
     while [ $# -gt 0 ]; do
@@ -172,6 +174,8 @@ cmd_setup() {
             --oidc-issuer=*) oidc_issuer="${1#*=}" ;;
             --external-reverse-proxy) external_reverse_proxy="true" ;;
             --no-external-reverse-proxy) external_reverse_proxy="false" ;;
+            --web-search) web_search="true" ;;
+            --no-web-search) web_search="false" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
@@ -196,9 +200,14 @@ cmd_setup() {
             info "  Keycloak URL      = $AUTH_HOST_STICKY"
         fi
         [ -n "${LIBRECHAT_HOST_STICKY:-}" ] && info "  LibreChat URL     = $LIBRECHAT_HOST_STICKY"
+        if [ -n "${WEB_SEARCH_STICKY:-}" ]; then
+            local _ws_label="disabled"
+            [ "$WEB_SEARCH_STICKY" = "true" ] && _ws_label="enabled"
+            info "  Web Search        = $_ws_label"
+        fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" ""
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" ""
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
                 _is_local_auth_host "${AUTH_HOST_STICKY:-}" && _ensure_keycloak_certs
             fi
@@ -253,6 +262,23 @@ cmd_setup() {
                 "Where browsers reach the chat UI." \
                 "DOMAIN_SERVER" "$librechat_default")"
         fi
+        if [ -z "$web_search" ]; then
+            local web_search_default="1"
+            [ "${WEB_SEARCH_STICKY:-}" = "false" ] && web_search_default="2"
+            printf '\n%sEnable Web Search%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — activate SearXNG (meta-search) + Firecrawl (web crawler)\n' >&2
+            printf '  2) No   — skip web search components\n' >&2
+            local web_search_choice
+            web_search_choice="$(prompt_with_default "  Choose" "$web_search_default")"
+            case "$web_search_choice" in
+                1|yes) web_search="true" ;;
+                2|no)  web_search="false" ;;
+                *)
+                    warn "Unrecognized choice '$web_search_choice'; defaulting to enabled."
+                    web_search="true"
+                    ;;
+            esac
+        fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
@@ -287,7 +313,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search"; then
         error "setup failed."
         exit 3
     fi
@@ -397,7 +423,7 @@ _ensure_keycloak_certs() {
 
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
-    local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}"
+    local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -405,6 +431,7 @@ _run_setup_py() {
     [ -n "$auth_provider" ] && extra+=(--auth-provider="$auth_provider")
     [ -n "$oidc_issuer" ] && extra+=(--oidc-issuer="$oidc_issuer")
     [ -n "$external_rp" ] && extra+=(--external-reverse-proxy="$external_rp")
+    [ -n "$web_search" ] && extra+=(--enable-web-search="$web_search")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")
     [ "$allow_direct" = "1" ] && extra+=(--allow-direct-port-access)
     [ "$force" = "1" ] && extra+=(--force)

@@ -626,6 +626,35 @@ def test_resolve_reverse_proxy_external_skips_direct_access_confirmation(repo_ro
     assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
 
 
+def test_resolve_web_search_adds_profiles_when_enabled(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx"
+    args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=True)
+    tree = bootstrap.resolve_web_search(tree, args)
+    profiles = tree[""]["COMPOSE_PROFILES"].split(",")
+    assert "searxng" in profiles
+    assert "firecrawl" in profiles
+
+
+def test_resolve_web_search_removes_profiles_when_disabled(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx,searxng,firecrawl"
+    args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=False)
+    tree = bootstrap.resolve_web_search(tree, args)
+    profiles = tree[""]["COMPOSE_PROFILES"].split(",")
+    assert "searxng" not in profiles
+    assert "firecrawl" not in profiles
+
+
+def test_resolve_web_search_preserves_profiles_when_sticky(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    original = "keycloak,oauth2-proxy,librechat,litellm,nginx,searxng,firecrawl"
+    tree[""]["COMPOSE_PROFILES"] = original
+    args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=None)
+    tree = bootstrap.resolve_web_search(tree, args)
+    assert tree[""]["COMPOSE_PROFILES"] == original
+
+
 def test_persist_tree_writes_both_locations(repo_root, config_dir):
     tree = bootstrap.load_seed_tree(repo_root)
     tree[""]["PAPAIA_HOST"] = "https://papaia.example.com"
