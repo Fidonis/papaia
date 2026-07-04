@@ -1,23 +1,24 @@
 """Shared helpers for the papaia-ctl Python library.
 
-Env-file parsing/writing, secret-key detection, and secret generation. Pure
+Env-file parsing/writing, secret-marker detection, and secret generation. Pure
 functions wherever feasible so the rest of tools/lib stays unit-testable
 without mocking the filesystem.
+
+Which keys get a generated value is declared by the shipped .env.example, not
+guessed from the key name: any value carrying the GENERATE_ marker (e.g.
+CREDS_IV=GENERATE_CREDS_IV) is filled in. This keeps the intent visible in the
+template and avoids both missing an unconventionally-named secret and
+clobbering a literal value that merely happens to sit under a *_KEY name.
 """
 
 from __future__ import annotations
 
 import base64
 import os
-import re
 import secrets
 import shutil
 import time
 from pathlib import Path
-
-# A key is treated as secret-shaped if it matches this pattern, per the
-# convention already used throughout every shipped .env.example file.
-_SECRET_KEY_PATTERN = re.compile(r"(SECRET|PASSWORD|KEY|TOKEN)", re.IGNORECASE)
 
 # Exact-key overrides for secrets whose consuming service requires a precise
 # byte length, where the generic 24-byte hex default would be wrong:
@@ -45,9 +46,11 @@ def _gen_creds_iv() -> str:
     return secrets.token_hex(16)  # 32 hex chars = 16 bytes
 
 
-def is_secret_key(key: str) -> bool:
-    """Whether a .env key should be treated as a generated secret."""
-    return bool(_SECRET_KEY_PATTERN.search(key))
+def marks_generated_secret(value: str) -> bool:
+    """Whether a .env.example value is marked for secret generation, per the
+    shipped GENERATE_ convention (e.g. CREDS_IV=GENERATE_CREDS_IV). This is the
+    single source of truth for *which* keys get a generated value."""
+    return value.startswith("GENERATE_")
 
 
 def is_placeholder(value: str) -> bool:

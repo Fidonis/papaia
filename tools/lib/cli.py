@@ -45,23 +45,34 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     root = tree.get("", {})
+    librechat = tree.get("ai/librechat", {})
     app_host = root.get("PAPAIA_HOST", "")
     keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")
     auth_host_sticky = root.get("AUTH_HOST", "")
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    # Only surface a sticky LibreChat URL once the config dir is actually seeded:
+    # on a fresh checkout the tree falls back to the shipped .env.example, whose
+    # DOMAIN_SERVER (host.docker.internal:8000) differs from the localhost-based
+    # default bash should prefill -- gating avoids a wrong sticky prefill.
+    config_seeded = (config_dir / ".env").is_file()
+    librechat_sticky = librechat.get("DOMAIN_SERVER", "") if config_seeded else ""
+    if common.is_placeholder(librechat_sticky):
+        librechat_sticky = ""
     out = {
         "APP_HOST_STICKY": app_host,
         "AUTH_HOST_STICKY": auth_host_sticky,
         "AUTH_HOST_DERIVED": bootstrap.derive_auth_host_default(
             app_host or "http://host.docker.internal", keycloak_port
         ),
+        "LIBRECHAT_HOST_STICKY": librechat_sticky,
+        "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),
         "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
         "EXTERNAL_REVERSE_PROXY_STICKY": (
             "false" if "nginx" in profiles else ("true" if profiles else "")
         ),
         "COMPOSE_PROFILES_STICKY": ",".join(profiles),
         "PLATFORM_VERSION": bootstrap.resolve_platform_version(repo_root),
-        "CONFIG_SEEDED": "true" if (config_dir / ".env").is_file() else "false",
+        "CONFIG_SEEDED": "true" if config_seeded else "false",
     }
     for key, value in out.items():
         print(f"{key}={value}")
@@ -82,6 +93,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         host_ip=args.host_ip,
         app_host=args.app_host,
         auth_host=args.auth_host,
+        librechat_host=args.librechat_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
@@ -95,9 +107,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "AUTH_PROVIDER", "internal_keycloak"
     )
 
+    seed = bootstrap.load_seed_tree(repo_root)
     try:
         tree = bootstrap.generate_missing_secrets(
-            tree, force=args.force, auth_provider=effective_auth_provider
+            tree, seed, force=args.force, auth_provider=effective_auth_provider
         )
         tree = bootstrap.resolve_multi_env(tree, setup_args)
         tree = bootstrap.resolve_hostnames(tree, setup_args)
@@ -166,6 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--host-ip")
     p_setup.add_argument("--app-host")
     p_setup.add_argument("--auth-host")
+    p_setup.add_argument("--librechat-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
     )

@@ -14,7 +14,8 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 def _setup_minimal(repo_root, config_dir):
     bootstrap.init(config_dir, repo_root, env_name="papaia")
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
-    tree = bootstrap.generate_missing_secrets(tree)
+    seed = bootstrap.load_seed_tree(repo_root)
+    tree = bootstrap.generate_missing_secrets(tree, seed)
     args = bootstrap.SetupArgs(
         config_dir=config_dir, app_host="http://host.docker.internal", non_interactive=True
     )

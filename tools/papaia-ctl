@@ -11,7 +11,7 @@
 # Usage:
 #   papaia-ctl init   [--config-dir=PATH] [--env=NAME] [--force] [-y]
 #   papaia-ctl setup  [--config-dir=PATH] [--env=NAME] [--host-ip=IP]
-#                     [--app-host=URL] [--auth-host=URL]
+#                     [--app-host=URL] [--auth-host=URL] [--librechat-host=URL]
 #                     [--auth-provider=internal_keycloak|external_oidc]
 #                     [--oidc-issuer=URL]
 #                     [--external-reverse-proxy|--no-external-reverse-proxy]
@@ -76,6 +76,10 @@ py_cli() {
 load_defaults() {
     local line key value
     while IFS= read -r line; do
+        # Strip a trailing CR: on Windows the Python interpreter emits CRLF
+        # line endings, which would otherwise leave every value ending in \r
+        # (e.g. AUTH_PROVIDER=internal_keycloak\r fails validation downstream).
+        line="${line%$'\r'}"
         [ -z "$line" ] && continue
         key="${line%%=*}"
         value="${line#*=}"
@@ -87,6 +91,16 @@ prompt_with_default() {
     local message="$1" default="$2" answer
     read -rp "$message [${default:-none}]: " answer
     printf '%s' "${answer:-$default}"
+}
+
+# Show a titled section (bold-ish title + optional indented help line) and then
+# read a value. Title/help go to stderr so this stays usable inside $( ) --
+# only the resolved value (from prompt_with_default) reaches stdout.
+prompt_field() {
+    local title="$1" help="$2" label="$3" default="$4"
+    printf '\n%s%s%s\n' "$CYAN" "$title" "$NC" >&2
+    [ -n "$help" ] && printf '  %s\n' "$help" >&2
+    prompt_with_default "  $label" "$default"
 }
 
 confirm() {
@@ -132,7 +146,7 @@ cmd_init() {
 cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
-    local host_ip="" app_host="" auth_host=""
+    local host_ip="" app_host="" auth_host="" librechat_host=""
     local auth_provider="" oidc_issuer=""
     local external_reverse_proxy="" allow_direct_port_access=0
     local force=0 non_interactive=0
@@ -144,6 +158,7 @@ cmd_setup() {
             --host-ip=*) host_ip="${1#*=}" ;;
             --app-host=*) app_host="${1#*=}" ;;
             --auth-host=*) auth_host="${1#*=}" ;;
+            --librechat-host=*) librechat_host="${1#*=}" ;;
             --auth-provider=*)
                 auth_provider="${1#*=}"
                 case "$auth_provider" in
@@ -174,48 +189,66 @@ cmd_setup() {
     # re-prompting for values that were already resolved on a prior run.
     if [ "$orig_argc" -eq 0 ] && [ "$CONFIG_SEEDED" = "true" ] && is_tty && [ "$non_interactive" -eq 0 ]; then
         info "Existing setup detected in $CONFIG_DIR"
-        info "  PAPAIA_HOST = $APP_HOST_STICKY"
+        info "  Server URL        = $APP_HOST_STICKY"
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "external_oidc" ]; then
-            info "  AUTH_PROVIDER = external_oidc"
+            info "  Identity provider = external OIDC"
         else
-            info "  AUTH_HOST   = $AUTH_HOST_STICKY"
+            info "  Keycloak URL      = $AUTH_HOST_STICKY"
         fi
+        [ -n "${LIBRECHAT_HOST_STICKY:-}" ] && info "  LibreChat URL     = $LIBRECHAT_HOST_STICKY"
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" ""
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" ""
             success "setup complete (re-render only)."
             return 0
         fi
     fi
 
     if [ "$non_interactive" -eq 0 ] && is_tty; then
+        info "papAIa setup — press Enter to keep each [default]."
         if [ -z "$app_host" ]; then
-            app_host="$(prompt_with_default "Public URL of this server (PAPAIA_HOST)" "${APP_HOST_STICKY:-http://host.docker.internal}")"
+            app_host="$(prompt_field "Public URL of this server" \
+                "Where browsers reach papAIa (scheme + host, no path)." \
+                "PAPAIA_HOST" "${APP_HOST_STICKY:-http://host.docker.internal}")"
         fi
         if [ -z "$auth_provider" ]; then
-            local provider_default="${AUTH_PROVIDER_STICKY:-internal_keycloak}"
+            local provider_default="1"
+            [ "${AUTH_PROVIDER_STICKY:-}" = "external_oidc" ] && provider_default="2"
+            printf '\n%sIdentity provider%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Bundled Keycloak  — papAIa runs its own login (default)\n' >&2
+            printf '  2) External OIDC     — use your existing provider\n' >&2
             local provider_choice
-            provider_choice="$(prompt_with_default \
-                "Use the bundled Keycloak, or point papAIa at an existing OIDC provider? [internal_keycloak/external_oidc]" \
-                "$provider_default")"
+            provider_choice="$(prompt_with_default "  Choose" "$provider_default")"
             case "$provider_choice" in
-                internal_keycloak|external_oidc) auth_provider="$provider_choice" ;;
+                1|internal|internal_keycloak) auth_provider="internal_keycloak" ;;
+                2|external|external_oidc) auth_provider="external_oidc" ;;
                 *)
-                    warn "Unrecognized choice '$provider_choice'; defaulting to internal_keycloak."
+                    warn "Unrecognized choice '$provider_choice'; defaulting to bundled Keycloak."
                     auth_provider="internal_keycloak"
                     ;;
             esac
         fi
         if [ "$auth_provider" = "external_oidc" ] && [ "${AUTH_PROVIDER_STICKY:-}" != "external_oidc" ]; then
-            info "External OIDC selected. See src/infra/keycloak/README.md 'Switching to an External OIDC Provider' for provider-specific setup notes."
             if [ -z "$oidc_issuer" ]; then
-                oidc_issuer="$(prompt_with_default "External OIDC issuer URL (OIDC_ISSUER)" "")"
+                oidc_issuer="$(prompt_field "External OIDC provider" \
+                    "Issuer URL of your provider. See src/infra/keycloak/README.md 'Switching to an External OIDC Provider'." \
+                    "OIDC_ISSUER" "")"
             fi
         fi
         if [ -z "$auth_host" ] && [ "$auth_provider" != "external_oidc" ]; then
             local auth_default="${AUTH_HOST_STICKY:-}"
-            [ -z "$auth_default" ] && auth_default="$(PAPAIA_HOST_OVERRIDE="$app_host" _derive_auth_default "$app_host")"
-            auth_host="$(prompt_with_default "Public Keycloak URL (AUTH_HOST)" "$auth_default")"
+            [ -z "$auth_default" ] && auth_default="$(_derive_auth_default "$app_host")"
+            auth_host="$(prompt_field "Public Keycloak URL" \
+                "Where browsers reach the bundled Keycloak." \
+                "AUTH_HOST" "$auth_default")"
+        fi
+        # LibreChat is served for either auth provider, so ask in both cases.
+        if [ -z "$librechat_host" ]; then
+            local librechat_default="${LIBRECHAT_HOST_STICKY:-}"
+            [ -z "$librechat_default" ] && librechat_default="$(_derive_librechat_default "$app_host")"
+            librechat_host="$(prompt_field "Public URL of LibreChat" \
+                "Where browsers reach the chat UI." \
+                "DOMAIN_SERVER" "$librechat_default")"
         fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
@@ -251,7 +284,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host"; then
         error "setup failed."
         exit 3
     fi
@@ -271,12 +304,27 @@ _derive_auth_default() {
     esac
 }
 
+_derive_librechat_default() {
+    # Best-effort bash-side prefill for the LibreChat URL prompt; the
+    # authoritative derivation lives in bootstrap.derive_librechat_url_default.
+    # host.docker.internal over plain HTTP -> localhost (Secure-cookie reason);
+    # otherwise keep the app host, appending the LibreChat port.
+    local host="$1" port="${LIBRECHAT_EXT_PORT:-8000}" base
+    case "$host" in
+        http://host.docker.internal*) printf 'http://localhost:%s' "$port" ;;
+        *)
+            base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
+            printf '%s:%s' "$base" "$port" ;;
+    esac
+}
+
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
-    local auth_provider="$8" oidc_issuer="$9"
+    local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
+    [ -n "$librechat_host" ] && extra+=(--librechat-host="$librechat_host")
     [ -n "$auth_provider" ] && extra+=(--auth-provider="$auth_provider")
     [ -n "$oidc_issuer" ] && extra+=(--oidc-issuer="$oidc_issuer")
     [ -n "$external_rp" ] && extra+=(--external-reverse-proxy="$external_rp")

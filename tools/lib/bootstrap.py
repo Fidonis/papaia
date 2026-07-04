@@ -155,12 +155,17 @@ def stamp_config_dir(tree: EnvTree, config_dir: Path) -> EnvTree:
 
 
 def generate_missing_secrets(
-    tree: EnvTree, *, force: bool = False, auth_provider: str | None = None
+    tree: EnvTree, seed: EnvTree, *, force: bool = False, auth_provider: str | None = None
 ) -> EnvTree:
-    """Sticky secret-fill pass: generate a value for every secret-shaped
-    key that's still a placeholder (or, with force=True, for every
-    secret-shaped key unconditionally), then fan canonical values out to
-    their declared aliases.
+    """Sticky secret-fill pass: generate a value for every key the shipped
+    `seed` marks with the GENERATE_ convention that's still a placeholder (or,
+    with force=True, for every GENERATE_-marked key unconditionally), then fan
+    canonical values out to their declared aliases.
+
+    Using the seed's GENERATE_ marker -- not a key-name heuristic -- as the
+    source of truth means literals shipped without the marker (e.g.
+    KC_DB_PASSWORD=keycloak, empty third-party API keys) are never touched, and
+    an unconventionally-named secret (e.g. CREDS_IV) is never missed.
 
     `auth_provider` mirrors the effective AUTH_PROVIDER this run resolves
     to (falling back to the tree's current on-disk value when omitted) --
@@ -176,8 +181,9 @@ def generate_missing_secrets(
     for rel_dir, values in tree.items():
         if rel_dir in skip_dirs:
             continue
+        seed_values = seed.get(rel_dir, {})
         for key, value in list(values.items()):
-            if not common.is_secret_key(key):
+            if not common.marks_generated_secret(seed_values.get(key, "")):
                 continue
             if force or common.is_placeholder(value):
                 values[key] = common.generate_secret(key)
@@ -209,6 +215,7 @@ class SetupArgs:
     host_ip: str | None = None
     app_host: str | None = None
     auth_host: str | None = None
+    librechat_host: str | None = None  # public LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect
@@ -247,6 +254,23 @@ def derive_auth_host_default(app_host: str, keycloak_ext_port: str) -> str:
     if is_fqdn:
         return f"{scheme}://auth.{hostname}"
     return f"{scheme}://{hostname}:{keycloak_ext_port}"
+
+
+def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
+    """Default browser-facing LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT):
+    the public host plus the external LibreChat port.
+
+    host.docker.internal over plain HTTP is rewritten to localhost, because
+    LibreChat marks its OIDC session cookie Secure for any host other than
+    localhost/127.0.0.1/::1 -- served over plain HTTP the browser then drops
+    that cookie and OIDC login fails. Everything else keeps app_host as-is (the
+    OIDC issuer still uses app_host so the container reaches the bundled
+    Keycloak for discovery)."""
+    parts = urlsplit(app_host)
+    host = app_host
+    if parts.scheme == "http" and parts.hostname == "host.docker.internal":
+        host = app_host.replace("host.docker.internal", "localhost", 1)
+    return f"{host}:{librechat_port}"
 
 
 def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
@@ -334,10 +358,10 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         )
 
         # --- LibreChat ---
-        librechat_port = root.get("LIBRECHAT_EXT_PORT", "8000")
+        # OPENID_ISSUER is provider-specific (bundled-Keycloak issuer here); the
+        # browser-facing DOMAIN_SERVER/DOMAIN_CLIENT are resolved below, outside
+        # this branch, since LibreChat is served for either auth provider.
         librechat["OPENID_ISSUER"] = root["OIDC_ISSUER"]
-        librechat["DOMAIN_SERVER"] = f"{app_host}:{librechat_port}"
-        librechat["DOMAIN_CLIENT"] = f"{app_host}:{librechat_port}"
         # TRUST_PROXY is intentionally left untouched: it's a static value (1)
         # correct for every topology this repo supports.
 
@@ -353,6 +377,28 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             f"{auth_host}/realms/papaia/protocol/openid-connect/logout"
             f"?client_id=litellm&post_logout_redirect_uri={app_host}:{litellm_port}/sso/key/generate"
         )
+
+    # --- LibreChat browser URL (DOMAIN_SERVER/DOMAIN_CLIENT) ---
+    # Provider-independent: LibreChat is served regardless of the IdP, so its
+    # public URL is resolved for both internal_keycloak and external_oidc.
+    # --librechat-host wins, else a prior run's sticky value, else the derived
+    # default -- same arg/sticky/prompt shape as PAPAIA_HOST, including the
+    # fresh_init guard (the seed default http://host.docker.internal:8000 is a
+    # real-looking illustrative value, not a GENERATE_* placeholder, so it must
+    # not be reused as sticky).
+    librechat_port = root.get("LIBRECHAT_EXT_PORT", "8000")
+    derived_librechat = derive_librechat_url_default(app_host, librechat_port)
+    sticky_librechat = "" if args.fresh_init else librechat.get("DOMAIN_SERVER", "")
+    if sticky_librechat and common.is_placeholder(sticky_librechat):
+        sticky_librechat = ""
+    librechat_url = args.librechat_host or sticky_librechat or derived_librechat
+    if not args.librechat_host and not args.non_interactive and args.prompt is not None:
+        librechat_url = args.prompt(
+            "Public URL of LibreChat (DOMAIN_SERVER)",
+            sticky_librechat or derived_librechat,
+        )
+    librechat["DOMAIN_SERVER"] = librechat_url
+    librechat["DOMAIN_CLIENT"] = librechat_url
 
     # --- Homepage / LocalAI / SearXNG: oauth2-proxy sidecar redirect URLs ---
     # These vars are consumed directly by docker compose's ${VAR} expansion
