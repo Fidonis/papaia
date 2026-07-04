@@ -366,7 +366,9 @@ _ensure_keycloak_certs() {
     # Local CA key + self-signed certificate
     openssl genrsa -out "$ca_key" 4096 2>/dev/null
     openssl req -new -x509 -key "$ca_key" -out "$ca_crt" -days 3650 \
-        -subj "/CN=papaia-local-ca/O=papAIa" 2>/dev/null
+        -subj "/CN=papaia-local-ca/O=papAIa" \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
 
     # Keycloak server key + CSR
     openssl genrsa -out "$kc_key" 4096 2>/dev/null
