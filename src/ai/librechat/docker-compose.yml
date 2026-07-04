@@ -24,6 +24,10 @@ services:
       MEILI_HOST: http://librechat-meilisearch:7700
       RAG_PORT: ${RAG_PORT:-8020}
       RAG_API_URL: http://librechat-ragapi:${RAG_PORT:-8020}
+      # Trust the locally-generated Keycloak CA so openid-client v6 can connect
+      # to https://keycloak:8443 and https://host.docker.internal:8110 without
+      # the allowInsecureRequests workaround.
+      NODE_EXTRA_CA_CERTS: /certs/local-ca.crt
     entrypoint: ["/bin/sh", "/app/patches/entrypoint.sh"]
     volumes:
       - type: bind
@@ -35,11 +39,10 @@ services:
       - librechat-images:/app/client/public/images
       - librechat-uploads:/app/uploads
       - librechat-logs:/app/logs
-      # Patch: allows HTTP OIDC issuers (e.g. local Keycloak without TLS).
-      # Remove once HTTPS is configured for the identity provider.
       - type: bind
-        source: ./patches/openidStrategy.js
-        target: /app/api/strategies/openidStrategy.js
+        source: ${PAPAIA_CONFIG_DIR}/certs
+        target: /certs
+        read_only: true
       # Patch: injects x-librechat-user-email / x-librechat-user-id into MCP requests.
       - type: bind
         source: ./patches/mcp-user-headers.js
