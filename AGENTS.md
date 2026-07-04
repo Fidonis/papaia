@@ -4,13 +4,23 @@
 
 ## Project Overview
 
-**papAIa** is a self-hosted, OIDC-secured Docker Compose stack that combines
-LLM services (LiteLLM, LibreChat, LocalAI), document management (Paperless-ngx,
-qdrant-rag), workflow automation (n8n), and supporting infrastructure (Keycloak,
-oauth2-proxy, Nginx Proxy Manager, SearXNG, Homepage).
+**papAIa** is a self-hosted, OIDC-secured Docker Compose platform structured in three
+tiers:
 
-The repository is **configuration-as-code only** — no upstream service source
-code lives here. Changes are almost always YAML, shell scripts, or documentation.
+- **Lean Core** (always on): Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat,
+  LiteLLM, LocalAI, Homepage. Self-sufficient — runs without any extension.
+- **First-party extensions** (Fidonis-maintained, each in its own repo, version-pinned):
+  RAG / vector search (qdrant-rag), documents (Paperless-ngx + MCP bridge), workflow
+  automation (n8n), metasearch (SearXNG), web crawling (Firecrawl).
+- **Custom extensions** (per-customer, same Extension Contract).
+
+Extensions integrate through five standardised seams — network attachment, OIDC client
+registration, LibreChat-MCP fragments, dashboard cards, and Nginx ingress rules — without
+requiring changes to any tracked file in the Core repo. The extension manifest
+(`papaia-app.yaml`) in each extension repo declares all seams in machine-readable form.
+
+The repository is **configuration-as-code only** — no upstream service source code lives
+here. Changes are almost always YAML, shell scripts, or documentation.
 
 ## Hard Constraints
 
@@ -18,8 +28,8 @@ Non-negotiable. Any change that violates them must be rejected and undone.
 
 1. **Never commit `.env` files.** Secrets live only in untracked `.env` files.
 2. **Never commit generated Keycloak realm JSON**
-   (`src/infra/keycloak/realm-import/papaia-realm.json`) — it contains live
-   secrets after a setup run.
+   (`src/infra/keycloak/realm-import/papaia-realm.json`) — it contains live secrets
+   after a setup run.
 3. **Never commit private keys, API tokens, or credentials** of any kind.
 4. **Never push directly to `main`.** All changes go through a PR.
 5. **PR titles must follow Conventional Commits** — CI enforces this strictly.
@@ -30,18 +40,40 @@ Non-negotiable. Any change that violates them must be rejected and undone.
 
 ## Repository Structure
 
+### Workspace topology
+
+papAIa is designed to run in a workspace where extension repos sit alongside the Core
+checkout:
+
+```
+[workspace root]/
+├── papaia/                    ← this repo (read-only at deploy time)
+├── extensions/
+│   └── papaia-ext-<name>/     ← extension repos cloned alongside (opt-in)
+└── papaia-config/             ← PAPAIA_CONFIG_DIR (generated state, never committed)
+    ├── deployment.yaml         # installation manifest (active extensions, profiles)
+    ├── overlay/                # customer config overrides (highest merge layer)
+    └── overrides/              # auto-generated extension network Compose overrides
+```
+
+`tools/lib/*.py` only reads from `src/` and writes to `$PAPAIA_CONFIG_DIR` plus the
+gitignored `src/**/.env` files — never to any other tracked path in the repo.
+
+### Repo tree
+
 ```
 tools/
-  papaia-ctl                  # bash orchestrator: init · setup · up/down · apps render
-  deployment.template.yaml    # template copied into PAPAIA_CONFIG_DIR on init
-  pyproject.toml              # ruff + pytest config for tools/lib (local-only, not yet wired into CI)
-  lib/                        # Python: render_core.py, gen_override.py, bootstrap.py, common.py, cli.py
-  tests/                      # pytest suite for tools/lib
+  papaia-ctl                  # Bash dispatcher: init · setup · up · down · apps render
+  deployment.template.yaml    # template → $PAPAIA_CONFIG_DIR/deployment.yaml on init
+                              # describes active extensions, core profiles, hosting type
+  pyproject.toml              # ruff + pytest config for tools/lib
+  lib/                        # Python: render_core.py · gen_override.py · bootstrap.py
+                              #          common.py · cli.py
+  tests/                      # pytest suite (96 tests across bootstrap, common, render_core)
 src/
-  docker-compose.yml          # Root compose — shared network + include: list only
+  docker-compose.yml          # Root compose — shared network + include list only
   .env.example                # All stack-wide variables (source of truth for env docs)
-  sync-config.sh              # Populate $PAPAIA_CONFIG_DIR with defaults (non-destructive)
-  backup-papaia.sh            # Archive all Docker volumes + config dir
+  backup-papaia.sh            # Archive all Docker volumes + PAPAIA_CONFIG_DIR
   restore-papaia.sh           # Restore a single named volume from archive
   infra/
     keycloak/                 # OIDC IdP (Java/PostgreSQL)
@@ -55,6 +87,7 @@ src/
     qdrant-rag/               # OIDC + RBAC vector search (MCP, FastMCP/Python)
     qdrant-webdav-ingest/     # WebDAV → Qdrant ingestion worker
     mcp-paperless/            # Per-user Paperless proxy (MCP, Node.js)
+    mcp-office-docs/          # Office document generation MCP server
     mcp-firecrawl/            # Firecrawl MCP server
     n8n/                      # Workflow automation
     jinaai/                   # Optional Jina reranker
@@ -63,12 +96,15 @@ src/
     homepage/                 # Service dashboard
     searxng/                  # Privacy-respecting metasearch
     firecrawl/                # Web crawler
+    minio/                    # S3-compatible object store
     home-assistant/           # Optional home automation
 docs/
-  architecture.md             # Service catalog and full architecture diagram
-  adr/                        # Architecture Decision Records
-  deployment.md               # Deployment guide
-  configuration.md            # Configuration reference
+  papaia-architecture-1.0.0.md  # Full architecture specification (3-tier model,
+                                 # Extension Contract, integration seams, manifest schema)
+  configuration.md              # Environment variable reference
+  deployment.md                 # Deployment guide
+  troubleshooting.md            # Common issues and fixes
+  adr/                          # Architecture Decision Records
 .github/
   workflows/ci.yml            # Lint (shellcheck, yamllint, hadolint) + PR-title check
   ISSUE_TEMPLATE/             # Bug / Feature / Docs issue forms
@@ -77,8 +113,8 @@ docs/
 
 ### Compose architecture pattern
 
-- The **root `docker-compose.yml`** declares only the shared Docker network and
-  an `include:` list — no service definitions.
+- The **root `docker-compose.yml`** declares only the shared Docker network and an
+  `include:` list — no service definitions live there.
 - Each subdirectory ships its own `docker-compose.yml` with `profiles:` declarations.
 - Optional modules are toggled via `COMPOSE_PROFILES` in `src/.env`.
 - Every `${VAR}` substitution in a compose file **must** be documented in the
@@ -88,16 +124,22 @@ docs/
 
 - `src/.env` — stack-wide secrets and settings (gitignored, generated from
   `src/.env.example`)
-- Per-service `.env` files in subdirectories — service-specific secrets
-  (all gitignored)
-- `$PAPAIA_CONFIG_DIR` — operator-editable config files, populated and kept
-  in sync by `tools/papaia-ctl setup`/`up` (3-layer merge: repo base +
-  active extensions + customer overlay under `$PAPAIA_CONFIG_DIR/overlay/`).
-  `src/sync-config.sh` is the deprecated, lower-level predecessor it
-  supersedes (still present as a manual fallback).
-- `tools/lib/*.py` only ever reads from `src/` (read-only templates) and
-  writes to `$PAPAIA_CONFIG_DIR` plus the gitignored `src/**/.env` files —
-  never to any other tracked path in the repo tree.
+- Per-service `.env` files in subdirectories — service-specific secrets (all gitignored)
+- `$PAPAIA_CONFIG_DIR` — operator-editable config files, populated and kept in sync by
+  `tools/papaia-ctl setup` / `apps render` via a 3-layer merge:
+  ```
+  repo base (src/<target>)
+    + active extension fragments (extensions/<name>/integration/<target>/)
+    + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>/)
+      → $PAPAIA_CONFIG_DIR/<target>
+  ```
+  `src/sync-config.sh` is the deprecated lower-level predecessor — still present as a
+  manual fallback but superseded by `papaia-ctl apps render`.
+- `$PAPAIA_CONFIG_DIR/deployment.yaml` — the installation manifest: active extensions,
+  active Core profiles, platform version, hosting type. Read by `gen_override.py` to
+  generate the extension network attachment overrides.
+- `$PAPAIA_CONFIG_DIR/overrides/docker-compose.<name>.override.yml` — auto-generated
+  by `gen_override.py` for each active extension (Seam-1: network). Never edit manually.
 
 ## Branch Strategy
 
@@ -187,6 +229,8 @@ Issue titles must use the template prefix (`[Bug]:`, `[Feature]:`, `[Docs]:`).
 ## Further Reading
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contribution workflow and PR checklist
-- [docs/architecture.md](docs/architecture.md) — service catalog and architecture
+- [docs/papaia-architecture-1.0.0.md](docs/papaia-architecture-1.0.0.md) — full
+  architecture specification: 3-tier model, Extension Contract, integration seams,
+  extension manifest schema, deployment manifest
 - [SECURITY.md](SECURITY.md) — security reporting policy and scope
 - [CHANGELOG.md](CHANGELOG.md) — release history
