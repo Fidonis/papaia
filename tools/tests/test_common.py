@@ -7,23 +7,15 @@ import pytest
 from lib import common
 
 
-def test_is_secret_key_matches_known_secrets():
-    for key in [
-        "OAUTH2_PROXY_CLIENT_SECRET",
-        "OAUTH2_PROXY_COOKIE_SECRET",
-        "KC_LIBRECHAT_CLIENT_SECRET",
-        "CREDS_KEY",
-        "JWT_SECRET",
-        "MEILI_MASTER_KEY",
-        "LITELLM_API_KEY",
-        "KC_DB_PASSWORD",
-    ]:
-        assert common.is_secret_key(key), key
-
-
-def test_is_secret_key_no_false_positives():
-    for key in ["OPENID_CLIENT_ID", "GENERIC_CLIENT_ID", "PAPAIA_HOST", "COMPOSE_PROFILES"]:
-        assert not common.is_secret_key(key), key
+def test_marks_generated_secret():
+    # The GENERATE_ marker in .env.example is what selects a key for generation,
+    # not its name -- so CREDS_IV (no SECRET/KEY/... substring) qualifies, while
+    # literals shipped without the marker do not.
+    assert common.marks_generated_secret("GENERATE_CREDS_IV")
+    assert common.marks_generated_secret("GENERATE_NEW_SECRET")
+    assert not common.marks_generated_secret("")
+    assert not common.marks_generated_secret("keycloak")
+    assert not common.marks_generated_secret("sk-not-used")
 
 
 def test_is_placeholder():
