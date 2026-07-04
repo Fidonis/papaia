@@ -10,10 +10,15 @@ services:
       - ./.env
     environment:
       DATABASE_URL: "postgresql://llmproxy:${LITELLM_PG_PASSWORD}@litellm-db:5432/litellm"
+      SSL_CERT_FILE: /certs/local-ca.crt
     volumes:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/ai/litellm/config.yaml
         target: /app/config.yaml
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/certs
+        target: /certs
+        read_only: true
     command:
       - "--config=/app/config.yaml"
     depends_on:

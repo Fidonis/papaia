@@ -245,15 +245,18 @@ def _strip_scheme(url: str) -> str:
 
 def derive_auth_host_default(app_host: str, keycloak_ext_port: str) -> str:
     """FQDN -> <scheme>://auth.<domain> (no port); IP/localhost/
-    host.docker.internal -> same host + KEYCLOAK_EXT_PORT (today's shipped
-    default shape)."""
+    host.docker.internal -> https://<host>:<KEYCLOAK_EXT_PORT>.
+
+    Local hostnames always get https:// because Keycloak now terminates TLS
+    natively and the locally-generated CA cert covers these SANs. For FQDNs the
+    scheme is preserved from app_host -- the operator already has a real cert."""
     parts = urlsplit(app_host)
     hostname = parts.hostname or ""
     scheme = parts.scheme or "http"
     is_fqdn = hostname not in _HOSTLIKE_NO_FQDN and not _IPV4_RE.match(hostname) and "." in hostname
     if is_fqdn:
         return f"{scheme}://auth.{hostname}"
-    return f"{scheme}://{hostname}:{keycloak_ext_port}"
+    return f"https://{hostname}:{keycloak_ext_port}"
 
 
 def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
@@ -351,10 +354,10 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         root["OIDC_ISSUER"] = f"{auth_host}/realms/papaia"
         root["OIDC_ISSUER_KC_AUTH"] = f"{auth_host}/realms/papaia/protocol/openid-connect/auth"
         root["OIDC_ISSUER_KC_TOKEN"] = (
-            "http://keycloak:8080/realms/papaia/protocol/openid-connect/token"
+            "https://keycloak:8443/realms/papaia/protocol/openid-connect/token"
         )
         root["OIDC_ISSUER_KC_CERTS"] = (
-            "http://keycloak:8080/realms/papaia/protocol/openid-connect/certs"
+            "https://keycloak:8443/realms/papaia/protocol/openid-connect/certs"
         )
 
         # --- LibreChat ---
@@ -370,7 +373,7 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = root["OIDC_ISSUER_KC_AUTH"]
         litellm["GENERIC_TOKEN_ENDPOINT"] = root["OIDC_ISSUER_KC_TOKEN"]
         litellm["GENERIC_USERINFO_ENDPOINT"] = (
-            "http://keycloak:8080/realms/papaia/protocol/openid-connect/userinfo"
+            "https://keycloak:8443/realms/papaia/protocol/openid-connect/userinfo"
         )
         litellm["GENERIC_REDIRECT_URI"] = f"{app_host}:{litellm_port}/sso/callback"
         litellm["PROXY_LOGOUT_URL"] = (

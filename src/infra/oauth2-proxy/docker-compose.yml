@@ -42,6 +42,13 @@ services:
       - --provider-display-name=Keycloak (papAIa)
       - --set-xauthrequest=true
       - --pass-user-headers=true
+    environment:
+      SSL_CERT_FILE: /certs/local-ca.crt
+    volumes:
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/certs
+        target: /certs
+        read_only: true
     # No healthcheck: the distroless image has no curl/wget.
     # /ping endpoint returns 200 OK — verified externally.
     networks:
