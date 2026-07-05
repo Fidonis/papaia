@@ -32,7 +32,7 @@
         "description": "Finance demo user role"
       },
       {
-        "name": "localai",
+        "name": "localai-access",
         "description": "Access to LocalAI local inference engine"
       }
     ]
@@ -254,7 +254,7 @@
       "realmRoles": [
         "admin",
         "user",
-        "localai"
+        "localai-access"
       ]
     },
     {
@@ -333,7 +333,7 @@
         },
         {
           "authenticatorFlow": true,
-          "requirement": "REQUIRED",
+          "requirement": "CONDITIONAL",
           "priority": 30,
           "flowAlias": "localai access gate",
           "userSetupAllowed": false
@@ -394,7 +394,7 @@
     {
       "alias": "localai-role-condition",
       "config": {
-        "condUserRole": "localai",
+        "condUserRole": "localai-access",
         "negate": "true"
       }
     }

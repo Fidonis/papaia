@@ -291,11 +291,11 @@ cmd_setup() {
             esac
         fi
         if [ -z "$local_ai" ]; then
-            local local_ai_default="2"
-            [ "${LOCAL_AI_STICKY:-}" = "true" ] && local_ai_default="1"
+            local local_ai_default="1"
+            [ "${LOCAL_AI_STICKY:-}" = "false" ] && local_ai_default="2"
             printf '\n%sEnable Local AI%s\n' "$CYAN" "$NC" >&2
-            printf '  1) Yes  — run local LLM inference via LocalAI\n' >&2
-            printf '  2) No   — skip LocalAI (default)\n' >&2
+            printf '  1) Yes  — run local LLM inference via LocalAI (default)\n' >&2
+            printf '  2) No   — skip LocalAI\n' >&2
             local local_ai_choice
             local_ai_choice="$(prompt_with_default "  Choose" "$local_ai_default")"
             case "$local_ai_choice" in
