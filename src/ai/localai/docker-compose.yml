@@ -63,6 +63,11 @@ services:
     environment:
       MODELS_PATH: /models
       LOCALAI_EXTERNAL_BACKENDS: "llama-cpp"
+      # Enable the auth subsystem — without this flag LocalAI does not register
+      # any auth routes (including /api/auth/oidc/login) regardless of other OIDC vars.
+      LOCALAI_AUTH: "true"
+      # Persist user accounts across container restarts (SQLite via localai-data volume)
+      LOCALAI_AUTH_DATABASE_URL: /data/localai.db
       # Root-env vars: resolved from src/.env via docker compose ${VAR} expansion
       LOCALAI_OIDC_ISSUER: ${OIDC_ISSUER}
       LOCALAI_OIDC_CLIENT_ID: localai
@@ -77,6 +82,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - localai-models:/models
+      - localai-data:/data
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/certs
         target: /certs
@@ -96,3 +102,4 @@ services:
 
 volumes:
   localai-models:
+  localai-data:
