@@ -18,6 +18,8 @@ Browser / Client
       │
       ├──▶  LibreChat (8000)     ─── native OIDC ──▶  Keycloak (8110)
       │
+      ├──▶  LocalAI (8080)       ─── native OIDC ──▶  Keycloak (8110)
+      │
       ├──▶  Paperless-ngx (8010) ─── native OIDC ──▶  Keycloak (8110)
       │
       ├──▶  Nginx Proxy Manager  ─── forward auth ──▶  oauth2-proxy (4180)
@@ -32,9 +34,10 @@ Browser / Client
 | Service | Auth approach | Notes |
 |---------|--------------|-------|
 | LibreChat | native OIDC | openid-client strategy |
+| LocalAI | native OIDC | role-restricted via custom browser flow (`localai-access` required) |
 | Paperless-ngx | native OIDC | django-allauth |
 | N8N | oauth2-proxy forward auth | NPM custom config required |
-| LiteLLM UI | — | SSO requires enterprise license; use API key |
+| LiteLLM UI | generic OIDC | admin UI only; API key for programmatic access |
 | Nginx Proxy Manager | — | protected by network / IP restriction |
 
 ---
@@ -101,6 +104,7 @@ Keycloak imports the `papaia` realm automatically on the first start
 | `paperless` | Paperless-ngx | `KC_PAPERLESS_CLIENT_SECRET` |
 | `litellm` | LiteLLM | `KC_LITELLM_CLIENT_SECRET` |
 | `oauth2-proxy` | N8N + others (forward auth) | `KC_OAUTH2_PROXY_CLIENT_SECRET` |
+| `localai` | LocalAI (native OIDC, role-restricted) | `KC_LOCALAI_CLIENT_SECRET` |
 | `qdrant-rag` | qdrant-rag MCP (OIDC + RBAC) | `KC_QDRANT_RAG_CLIENT_SECRET` |
 | `mcp-paperless` | MCP Paperless (resource server, no login flows) | — |
 
@@ -130,13 +134,15 @@ correctly. It never issues tokens itself.
 | `admin` | Full administrator access |
 | `user` | Regular user (default for all new accounts) |
 | `viewer` | Read-only viewer |
+| `localai-access` | Required for SSO login to LocalAI |
+| `finance` | Finance department (demo role) |
 
 **Default Test Users** (local development only — do not use in production)
 
-| Username | Password | Role |
-|----------|----------|------|
-| `admin` | `admin` | admin, user |
-| `testuser` | `testuser` | user |
+| Username | Password | Roles |
+|----------|----------|-------|
+| `admin` | `admin` | admin, user, localai-access |
+| `testuser` | `testuser` | user, finance (no `localai-access` — cannot log in to LocalAI via SSO) |
 
 ### Linux Host Note
 
@@ -198,23 +204,97 @@ location = /oauth2-proxy/auth {
 
 ## Switching to an External OIDC Provider
 
-### 1. Set `AUTH_PROVIDER=external_oidc` in `src/.env`
+### 1. Run setup with external OIDC
+
+```bash
+tools/papaia-ctl setup \
+  --auth-provider=external_oidc \
+  --oidc-issuer=https://your-provider.example.com/realms/your-realm
+```
+
+Or set manually in `src/.env`:
 
 ```dotenv
 AUTH_PROVIDER=external_oidc
-```
-
-### 2. Update OIDC variables in `src/.env`
-
-```dotenv
 OIDC_ISSUER=https://your-provider.example.com/realms/your-realm
-OIDC_CLIENT_ID=librechat
-OIDC_CLIENT_SECRET=your-secret
 ```
 
-Replace the `OPENID_*` / client vars in each service's `.env` as needed.
+`setup` derives all OIDC endpoints from the issuer URL. Client secrets are not derivable —
+copy each one from the external provider into the matching papaia env file (see below).
 
-### 3. Provider-specific notes
+### 2. Create OIDC clients in the external provider
+
+Register a confidential client for each service. When using an external Keycloak the client
+settings mirror the bundled realm (`src/infra/keycloak/realm-import/papaia-realm.json.template`):
+
+| Client ID | PKCE | Redirect URI(s) | papaia secret variable |
+|---|---|---|---|
+| `librechat` | required | `{LIBRECHAT_HOST}/oauth/openid/callback` | `OPENID_CLIENT_SECRET` in `src/ai/librechat/.env` |
+| `litellm` | — | `*` | `GENERIC_CLIENT_SECRET` in `src/ai/litellm/.env` |
+| `oauth2-proxy` | — | `*` | `OAUTH2_PROXY_CLIENT_SECRET` in `src/infra/oauth2-proxy/.env` |
+| `localai` | — | `{LOCALAI_PUBLIC_URL}/api/auth/oidc/callback` | `LOCALAI_OIDC_CLIENT_SECRET` in `src/ai/localai/.env` |
+
+All clients need a **realm-roles protocol mapper** (type: User Realm Role, claim name `roles`,
+multivalued, included in ID token, Access token, and userinfo).
+
+After creating each client, paste its secret from **Clients → `<id>` → Credentials** into the
+matching papaia env file. Then restart the affected services:
+
+```bash
+docker compose restart librechat localai litellm oauth2-proxy
+```
+
+### 3. LibreChat configuration for an external Keycloak
+
+LibreChat's OIDC variables in `src/ai/librechat/.env` (set automatically by `setup`):
+
+```env
+OPENID_ISSUER=https://keycloak.example.com/realms/papaia
+OPENID_CLIENT_ID=librechat
+OPENID_CLIENT_SECRET=<Clients → librechat → Credentials → Client secret>
+OPENID_CALLBACK_URL=https://librechat.example.com/oauth/openid/callback
+OPENID_USE_PKCE=true
+```
+
+In the external Keycloak, the `librechat` client requires:
+
+- **PKCE** enforced: set `pkce.code.challenge.method` to `S256` under the client's
+  Advanced settings.
+- **Realm-roles mapper**: protocol mapper of type "User Realm Role", claim name `roles`,
+  multivalued, included in ID token, Access token, and userinfo.
+- **Username mapper**: protocol mapper of type "User Property", property `username`,
+  claim name `preferred_username`.
+
+### 4. LocalAI configuration and role restriction for an external Keycloak
+
+LocalAI's OIDC variables in `src/ai/localai/.env` (set automatically by `setup`):
+
+```env
+LOCALAI_OIDC_ISSUER=https://keycloak.example.com/realms/papaia
+LOCALAI_OIDC_CLIENT_ID=localai
+LOCALAI_OIDC_CLIENT_SECRET=<Clients → localai → Credentials → Client secret>
+```
+
+To restrict SSO access to users with a specific realm role, configure a **custom browser
+flow** for the `localai` client:
+
+1. In Keycloak Admin Console → **Authentication → Flows**, duplicate the built-in
+   `browser` flow and rename it (e.g. `localai browser`).
+2. Inside the `browser forms` sub-flow, add a new **CONDITIONAL** sub-flow
+   (e.g. `localai access gate`).
+3. Inside `localai access gate` add two steps:
+   - **Condition - User Role** (set to `CONDITIONAL`): configure role `localai-access`,
+     enable **Negate** so the condition is true when the user *lacks* the role.
+   - **Deny Access** (set to `REQUIRED`).
+4. Under **Clients → `localai` → Advanced → Authentication flow overrides**, set
+   **Browser Flow** to `localai browser`.
+5. Create the realm role `localai-access` and assign it to users who should be allowed in.
+
+The bundled `papaia-realm.json.template` ships this flow pre-configured and imports it
+automatically on first Keycloak start — the manual steps above are only needed for an
+external Keycloak.
+
+### 5. Provider-specific notes
 
 | Provider | Issuer URL pattern | Notes |
 |----------|--------------------|-------|
@@ -239,6 +319,7 @@ Replace the `OPENID_*` / client vars in each service's `.env` as needed.
 | `KC_PAPERLESS_CLIENT_SECRET` | Paperless OIDC secret |
 | `KC_LITELLM_CLIENT_SECRET` | LiteLLM OIDC secret |
 | `KC_OAUTH2_PROXY_CLIENT_SECRET` | oauth2-proxy OIDC secret |
+| `KC_LOCALAI_CLIENT_SECRET` | LocalAI OIDC secret |
 | `KC_QDRANT_RAG_CLIENT_SECRET` | qdrant-rag OIDC secret |
 
 ### `src/infra/oauth2-proxy/.env`

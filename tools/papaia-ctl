@@ -16,6 +16,7 @@
 #                     [--oidc-issuer=URL]
 #                     [--external-reverse-proxy|--no-external-reverse-proxy]
 #                     [--web-search|--no-web-search]
+#                     [--local-ai|--no-local-ai] [--localai-host=URL]
 #                     [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl up     [PROFILE...] [--config-dir=PATH]
 #   papaia-ctl down   [PROFILE...] [--volumes] [--config-dir=PATH]
@@ -147,10 +148,10 @@ cmd_init() {
 cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
-    local host_ip="" app_host="" auth_host="" librechat_host=""
+    local host_ip="" app_host="" auth_host="" librechat_host="" localai_host=""
     local auth_provider="" oidc_issuer=""
     local external_reverse_proxy="" allow_direct_port_access=0
-    local web_search=""
+    local web_search="" local_ai=""
     local force=0 non_interactive=0
 
     while [ $# -gt 0 ]; do
@@ -176,6 +177,9 @@ cmd_setup() {
             --no-external-reverse-proxy) external_reverse_proxy="false" ;;
             --web-search) web_search="true" ;;
             --no-web-search) web_search="false" ;;
+            --local-ai) local_ai="true" ;;
+            --no-local-ai) local_ai="false" ;;
+            --localai-host=*) localai_host="${1#*=}" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
@@ -205,9 +209,16 @@ cmd_setup() {
             [ "$WEB_SEARCH_STICKY" = "true" ] && _ws_label="enabled"
             info "  Web Search        = $_ws_label"
         fi
+        if [ -n "${LOCAL_AI_STICKY:-}" ]; then
+            local _lai_label="disabled"
+            [ "$LOCAL_AI_STICKY" = "true" ] && _lai_label="enabled"
+            info "  Local AI          = $_lai_label"
+            [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_HOST_STICKY:-}" ] && \
+                info "  LocalAI URL       = $LOCALAI_HOST_STICKY"
+        fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" ""
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" ""
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
                 _is_local_auth_host "${AUTH_HOST_STICKY:-}" && _ensure_keycloak_certs
             fi
@@ -279,6 +290,30 @@ cmd_setup() {
                     ;;
             esac
         fi
+        if [ -z "$local_ai" ]; then
+            local local_ai_default="1"
+            [ "${LOCAL_AI_STICKY:-}" = "false" ] && local_ai_default="2"
+            printf '\n%sEnable Local AI%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — run local LLM inference via LocalAI (default)\n' >&2
+            printf '  2) No   — skip LocalAI\n' >&2
+            local local_ai_choice
+            local_ai_choice="$(prompt_with_default "  Choose" "$local_ai_default")"
+            case "$local_ai_choice" in
+                1|yes) local_ai="true" ;;
+                2|no)  local_ai="false" ;;
+                *)
+                    warn "Unrecognized choice '$local_ai_choice'; defaulting to disabled."
+                    local_ai="false"
+                    ;;
+            esac
+        fi
+        if [ "$local_ai" = "true" ] && [ -z "$localai_host" ]; then
+            local localai_default="${LOCALAI_HOST_STICKY:-}"
+            [ -z "$localai_default" ] && localai_default="$(_derive_localai_default "$app_host")"
+            localai_host="$(prompt_field "Public URL of LocalAI" \
+                "Where browsers and LiteLLM reach LocalAI." \
+                "LOCALAI_PUBLIC_URL" "$localai_default")"
+        fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
@@ -313,7 +348,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai"; then
         error "setup failed."
         exit 3
     fi
@@ -334,6 +369,12 @@ _derive_auth_default() {
         *)
             printf '%s' "$1" | sed -E 's#^(https?://)([^:/]+).*#\1auth.\2#' ;;
     esac
+}
+
+_derive_localai_default() {
+    local host="$1" port="${LOCALAI_EXT_PORT:-8080}" base
+    base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
+    printf '%s:%s' "$base" "$port"
 }
 
 _derive_librechat_default() {
@@ -424,14 +465,17 @@ _ensure_keycloak_certs() {
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
+    local localai_host="${12}" local_ai="${13}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
     [ -n "$librechat_host" ] && extra+=(--librechat-host="$librechat_host")
+    [ -n "$localai_host" ] && extra+=(--localai-host="$localai_host")
     [ -n "$auth_provider" ] && extra+=(--auth-provider="$auth_provider")
     [ -n "$oidc_issuer" ] && extra+=(--oidc-issuer="$oidc_issuer")
     [ -n "$external_rp" ] && extra+=(--external-reverse-proxy="$external_rp")
     [ -n "$web_search" ] && extra+=(--enable-web-search="$web_search")
+    [ -n "$local_ai" ] && extra+=(--enable-local-ai="$local_ai")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")
     [ "$allow_direct" = "1" ] && extra+=(--allow-direct-port-access)
     [ "$force" = "1" ] && extra+=(--force)
