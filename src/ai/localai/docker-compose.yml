@@ -80,6 +80,11 @@ services:
     depends_on:
       localai-model-init:
         condition: service_completed_successfully
+      # OIDC discovery runs at startup via oidc.NewProvider — if Keycloak is not
+      # healthy yet the discovery fails and /api/auth/oidc/login is never registered.
+      keycloak:
+        condition: service_healthy
+        required: false
     volumes:
       - localai-models:/models
       - localai-data:/data
