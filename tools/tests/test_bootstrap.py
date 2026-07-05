@@ -313,7 +313,6 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     )
     assert tree[""]["HOMEPAGE_PUBLIC_URL"] == "https://papaia.example.com:8300"
     assert tree[""]["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
-    assert tree[""]["SEARXNG_PUBLIC_URL"] == "https://papaia.example.com:8500"
     assert tree[""]["OAUTH2_PROXY_COOKIE_SECURE"] == "true"
     # internal Docker DNS endpoints must never be derived from the public host
     assert (

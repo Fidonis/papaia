@@ -24,13 +24,6 @@
         container: papaia-jina-reranker-api-1
         showStats: true
 
-- Tools:
-    - SearXNG:
-        href: "{{HOMEPAGE_VAR_HOST}}:8500"
-        description: Privacy-respecting metasearch engine
-        icon: searxng.svg
-        container: papaia-searxng-1
-
 - Infrastructure:
     - Keycloak:
         href: "{{HOMEPAGE_VAR_HOST}}:8110/"

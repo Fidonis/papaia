@@ -404,7 +404,7 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     librechat["DOMAIN_SERVER"] = librechat_url
     librechat["DOMAIN_CLIENT"] = librechat_url
 
-    # --- Homepage / LocalAI / SearXNG: oauth2-proxy sidecar redirect URLs ---
+    # --- Homepage / LocalAI: oauth2-proxy sidecar redirect URLs ---
     # These vars are consumed directly by docker compose's ${VAR} expansion
     # in each service's docker-compose.yml `command:` block, so (like
     # OIDC_ISSUER*) they belong in the root .env, not a per-service one.
@@ -412,10 +412,8 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     # Keycloak-specific.
     homepage_port = root.get("HOMEPAGE_EXT_PORT", "8300")
     localai_port = root.get("LOCALAI_EXT_PORT", "8080")
-    searxng_port = root.get("SEARXNG_EXT_PORT", "8500")
     root["HOMEPAGE_PUBLIC_URL"] = f"{app_host}:{homepage_port}"
     root["LOCALAI_PUBLIC_URL"] = f"{app_host}:{localai_port}"
-    root["SEARXNG_PUBLIC_URL"] = f"{app_host}:{searxng_port}"
 
     homepage = tree.setdefault("services/homepage", {})
     if "HP_ALLOWED_HOSTS" in homepage:

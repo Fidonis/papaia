@@ -71,7 +71,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
             "false" if "nginx" in profiles else ("true" if profiles else "")
         ),
         "WEB_SEARCH_STICKY": (
-            "true" if "searxng" in profiles else ("false" if profiles else "")
+            ("true" if "searxng" in profiles else "false") if config_seeded else ""
         ),
         "COMPOSE_PROFILES_STICKY": ",".join(profiles),
         "PLATFORM_VERSION": bootstrap.resolve_platform_version(repo_root),
