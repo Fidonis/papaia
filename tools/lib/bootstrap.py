@@ -219,6 +219,7 @@ class SetupArgs:
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect
+    enable_web_search: bool | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
     force: bool = False
@@ -403,7 +404,7 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     librechat["DOMAIN_SERVER"] = librechat_url
     librechat["DOMAIN_CLIENT"] = librechat_url
 
-    # --- Homepage / LocalAI / SearXNG: oauth2-proxy sidecar redirect URLs ---
+    # --- Homepage / LocalAI: oauth2-proxy sidecar redirect URLs ---
     # These vars are consumed directly by docker compose's ${VAR} expansion
     # in each service's docker-compose.yml `command:` block, so (like
     # OIDC_ISSUER*) they belong in the root .env, not a per-service one.
@@ -411,10 +412,8 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     # Keycloak-specific.
     homepage_port = root.get("HOMEPAGE_EXT_PORT", "8300")
     localai_port = root.get("LOCALAI_EXT_PORT", "8080")
-    searxng_port = root.get("SEARXNG_EXT_PORT", "8500")
     root["HOMEPAGE_PUBLIC_URL"] = f"{app_host}:{homepage_port}"
     root["LOCALAI_PUBLIC_URL"] = f"{app_host}:{localai_port}"
-    root["SEARXNG_PUBLIC_URL"] = f"{app_host}:{searxng_port}"
 
     homepage = tree.setdefault("services/homepage", {})
     if "HP_ALLOWED_HOSTS" in homepage:
@@ -491,6 +490,23 @@ def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
             if not ok:
                 raise SetupError("Aborted: direct port access was not confirmed.")
 
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_web_search(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `searxng` and `firecrawl` Compose profiles based on
+    the operator's web-search choice.
+
+    When `enable_web_search` is None the call is a no-op -- whatever was
+    already written to COMPOSE_PROFILES on a prior run is preserved (sticky)."""
+    if args.enable_web_search is None:
+        return tree
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    profiles = [p for p in profiles if p not in ("searxng", "firecrawl")]
+    if args.enable_web_search:
+        profiles.extend(["searxng", "firecrawl"])
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 

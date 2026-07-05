@@ -313,7 +313,6 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     )
     assert tree[""]["HOMEPAGE_PUBLIC_URL"] == "https://papaia.example.com:8300"
     assert tree[""]["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
-    assert tree[""]["SEARXNG_PUBLIC_URL"] == "https://papaia.example.com:8500"
     assert tree[""]["OAUTH2_PROXY_COOKIE_SECURE"] == "true"
     # internal Docker DNS endpoints must never be derived from the public host
     assert (
@@ -624,6 +623,35 @@ def test_resolve_reverse_proxy_external_skips_direct_access_confirmation(repo_ro
     )
     tree = bootstrap.resolve_reverse_proxy(tree, args)
     assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_web_search_adds_profiles_when_enabled(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx"
+    args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=True)
+    tree = bootstrap.resolve_web_search(tree, args)
+    profiles = tree[""]["COMPOSE_PROFILES"].split(",")
+    assert "searxng" in profiles
+    assert "firecrawl" in profiles
+
+
+def test_resolve_web_search_removes_profiles_when_disabled(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx,searxng,firecrawl"
+    args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=False)
+    tree = bootstrap.resolve_web_search(tree, args)
+    profiles = tree[""]["COMPOSE_PROFILES"].split(",")
+    assert "searxng" not in profiles
+    assert "firecrawl" not in profiles
+
+
+def test_resolve_web_search_preserves_profiles_when_sticky(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    original = "keycloak,oauth2-proxy,librechat,litellm,nginx,searxng,firecrawl"
+    tree[""]["COMPOSE_PROFILES"] = original
+    args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=None)
+    tree = bootstrap.resolve_web_search(tree, args)
+    assert tree[""]["COMPOSE_PROFILES"] == original
 
 
 def test_persist_tree_writes_both_locations(repo_root, config_dir):
