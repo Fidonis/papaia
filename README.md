@@ -64,6 +64,7 @@ and generate the network attachment overrides.
 |---|---|---|
 | LibreChat | Native OIDC | `openid-client`, PKCE enforced |
 | LiteLLM (UI) | Generic OIDC | API key for programmatic access |
+| LocalAI | Native OIDC | Role-restricted: only users with the `localai-access` realm role can authenticate via SSO |
 | Nginx PM admin | Network-level only | bind to internal interfaces |
 | oauth2-proxy | Forward-auth gateway | guards services without native OIDC |
 | Homepage | oauth2-proxy forward | optional, configurable per host |
@@ -81,7 +82,6 @@ and generate the network attachment overrides.
 | oauth2-proxy | 4180 | Forward-auth gateway for non-OIDC services |
 | LibreChat | 8000 | Multi-provider chat UI |
 | LiteLLM | 8200 | Unified LLM proxy (Postgres 8210 · Prometheus 8230) |
-| LocalAI | 8080 | Local model inference, chat-completions API |
 | Homepage | 8300 | Service dashboard |
 
 Core sidecars (internal, not directly exposed): Mongo · Meilisearch · pgvector
@@ -94,6 +94,7 @@ Contract and will graduate to independent extension repos in upcoming releases.
 
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
+| LocalAI | `localai` | 8080 | Local model inference, chat-completions API (enabled by default) |
 | qdrant-rag | `qdrant-rag` | 8800 | OIDC + RBAC MCP server for role-scoped vector search |
 | Qdrant | (with qdrant-rag) | 6333 / 6334 | Vector store for qdrant-rag (REST + gRPC) |
 | qdrant-webdav-ingest | `qdrant-rag` | — | WebDAV → Qdrant ingestion worker |
@@ -154,6 +155,9 @@ tools/papaia-ctl setup [OPTIONS]
 | `--app-host=URL` | _(prompted)_ | Public papAIa URL (scheme + host + optional port, no trailing path) |
 | `--auth-host=URL` | _(derived from app-host)_ | Public Keycloak URL; only relevant with `internal_keycloak` |
 | `--librechat-host=URL` | _(derived from app-host)_ | Public LibreChat URL if it differs from `--app-host` |
+| `--localai-host=URL` | _(derived from app-host)_ | Public LocalAI URL if it differs from `--app-host` |
+| `--enable-local-ai` | _(enabled by default)_ | Include LocalAI in the active Compose profile set |
+| `--no-local-ai` | — | Exclude LocalAI from the Compose profile set |
 | `--auth-provider=VALUE` | `internal_keycloak` | `internal_keycloak` or `external_oidc` |
 | `--oidc-issuer=URL` | _(required for external_oidc)_ | External OIDC issuer URL |
 | `--external-reverse-proxy` | _(auto from URL scheme)_ | Suppress bundled Nginx PM (TLS terminated upstream) |
@@ -550,12 +554,63 @@ oauth2-proxy runs in **`--skip-oidc-discovery` mode** with endpoints split:
 | Item | Value |
 |---|---|
 | Realm | `papaia` |
-| Clients | `librechat`, `paperless`, `litellm`, `oauth2-proxy` |
-| Realm roles | `admin`, `user`, `viewer` |
-| Default test users | `admin/admin`, `testuser/testuser` |
+| Clients | `librechat`, `litellm`, `oauth2-proxy`, `localai` |
+| Realm roles | `admin`, `user`, `viewer`, `localai-access`, `finance` |
+| Default test users | `admin/admin` (admin, user, localai-access) · `testuser/testuser` (user, finance) |
 
 > The default test users exist purely for local development. Disable or delete them
 > before exposing the stack to anything beyond `localhost`.
+
+### Configuring an External Keycloak
+
+When your organisation already runs a Keycloak instance, papaia can use it instead of the
+bundled one. The bundled Keycloak is then excluded from the stack; its postgres and init
+containers do not start.
+
+**Step 1 — Run setup with external OIDC**
+
+```bash
+tools/papaia-ctl setup \
+  --auth-provider=external_oidc \
+  --oidc-issuer=https://keycloak.example.com/realms/your-realm
+```
+
+`setup` derives all OIDC endpoints from the issuer URL and writes `GENERATE_*` placeholders
+for every client secret you must supply manually.
+
+**Step 2 — Create OIDC clients in the external Keycloak**
+
+Create a confidential OIDC client for each service in the realm your `--oidc-issuer` points at:
+
+| Client ID | PKCE | Redirect URI | Secret env (papaia) |
+|---|---|---|---|
+| `librechat` | required | `{LIBRECHAT_HOST}/oauth/openid/callback` | `OPENID_CLIENT_SECRET` in `src/ai/librechat/.env` |
+| `litellm` | — | `*` | `GENERIC_CLIENT_SECRET` in `src/ai/litellm/.env` |
+| `oauth2-proxy` | — | `*` | `OAUTH2_PROXY_CLIENT_SECRET` in `src/infra/oauth2-proxy/.env` |
+| `localai` | — | `{LOCALAI_PUBLIC_URL}/api/auth/oidc/callback` | `LOCALAI_OIDC_CLIENT_SECRET` in `src/ai/localai/.env` |
+
+Each client needs a **realm-roles protocol mapper** that places the user's realm roles in
+the token under claim name `roles` (multivalued, String, included in ID token, Access token,
+and userinfo).
+
+**Step 3 — Set secrets in papaia**
+
+After creating each client, copy its secret from Keycloak (**Clients → `<id>` → Credentials**)
+into the matching papaia env file (see the table above). Then restart the affected services:
+
+```bash
+docker compose restart librechat localai litellm oauth2-proxy
+```
+
+**Step 4 — LocalAI role restriction (optional)**
+
+To limit LocalAI SSO access to specific users, create the realm role `localai-access` and
+configure a custom browser flow for the `localai` client (CONDITIONAL sub-flow with a
+Condition - User Role authenticator set to negate `localai-access`, followed by Deny Access).
+Assign the role to users who should be allowed in. See
+[`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) for the step-by-step flow
+configuration. The bundled realm template ships this flow pre-configured and auto-imports it
+on first start.
 
 ### Switching to an external IdP (Entra ID, Authentik, Okta …)
 
@@ -595,9 +650,15 @@ notes.
 - Prometheus metrics on `:8230`.
 
 #### LocalAI
-- Local model inference with a chat-completions API (CPU or NVIDIA GPU image).
-- Models to download are listed in `ai/localai/models.txt` (one URL per line); edit
-  the file (or its `overlay/` copy) to add or remove models.
+- Local model inference with a chat-completions API (CPU or NVIDIA GPU image); enabled by
+  default via the `localai` Compose profile.
+- Native OIDC SSO via the `localai` Keycloak client — no oauth2-proxy sidecar required.
+  `papaia-ctl setup` generates and syncs `LOCALAI_OIDC_CLIENT_SECRET` automatically.
+- Role-based access gate: only users holding the `localai-access` realm role can sign in via
+  SSO. The default `admin` user has this role; `testuser` does not. Grant access in Keycloak
+  Admin Console → Realm roles → `localai-access` → Users.
+- Models to download are listed in `ai/localai/models.txt` (one URL per line); edit the
+  file (or its `overlay/` copy) to add or remove models.
 
 ### Optional modules
 
