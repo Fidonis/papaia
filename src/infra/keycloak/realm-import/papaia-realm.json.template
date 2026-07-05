@@ -294,13 +294,6 @@
           "userSetupAllowed": false
         },
         {
-          "authenticator": "auth-spnego",
-          "authenticatorFlow": false,
-          "requirement": "DISABLED",
-          "priority": 20,
-          "userSetupAllowed": false
-        },
-        {
           "authenticator": "identity-provider-redirector",
           "authenticatorFlow": false,
           "requirement": "ALTERNATIVE",
@@ -388,7 +381,7 @@
           "userSetupAllowed": false
         },
         {
-          "authenticator": "deny-access",
+          "authenticator": "deny-access-authenticator",
           "authenticatorFlow": false,
           "requirement": "REQUIRED",
           "priority": 20,
