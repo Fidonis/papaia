@@ -58,6 +58,9 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     librechat_sticky = librechat.get("DOMAIN_SERVER", "") if config_seeded else ""
     if common.is_placeholder(librechat_sticky):
         librechat_sticky = ""
+    localai_sticky = root.get("LOCALAI_PUBLIC_URL", "") if config_seeded else ""
+    if common.is_placeholder(localai_sticky):
+        localai_sticky = ""
     out = {
         "APP_HOST_STICKY": app_host,
         "AUTH_HOST_STICKY": auth_host_sticky,
@@ -66,6 +69,11 @@ def cmd_defaults(args: argparse.Namespace) -> int:
         ),
         "LIBRECHAT_HOST_STICKY": librechat_sticky,
         "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),
+        "LOCALAI_HOST_STICKY": localai_sticky,
+        "LOCALAI_EXT_PORT": root.get("LOCALAI_EXT_PORT", "8080"),
+        "LOCAL_AI_STICKY": (
+            ("true" if "localai" in profiles else "false") if config_seeded else ""
+        ),
         "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
         "EXTERNAL_REVERSE_PROXY_STICKY": (
             "false" if "nginx" in profiles else ("true" if profiles else "")
@@ -97,10 +105,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
         app_host=args.app_host,
         auth_host=args.auth_host,
         librechat_host=args.librechat_host,
+        localai_host=args.localai_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
         enable_web_search=_tristate(args.enable_web_search),
+        enable_local_ai=_tristate(args.enable_local_ai),
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
         force=args.force,
@@ -120,6 +130,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = bootstrap.resolve_hostnames(tree, setup_args)
         tree = bootstrap.resolve_reverse_proxy(tree, setup_args)
         tree = bootstrap.resolve_web_search(tree, setup_args)
+        tree = bootstrap.resolve_local_ai(tree, setup_args)
     except bootstrap.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
@@ -185,12 +196,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--app-host")
     p_setup.add_argument("--auth-host")
     p_setup.add_argument("--librechat-host")
+    p_setup.add_argument("--localai-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
     )
     p_setup.add_argument("--oidc-issuer")
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
     p_setup.add_argument("--force", action="store_true")
     p_setup.set_defaults(func=cmd_setup)

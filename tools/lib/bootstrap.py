@@ -32,6 +32,7 @@ SECRET_ALIASES: dict[tuple[str, str], list[tuple[str, str]]] = {
     ("infra/keycloak", "KC_LIBRECHAT_CLIENT_SECRET"): [("ai/librechat", "OPENID_CLIENT_SECRET")],
     ("infra/keycloak", "KC_LITELLM_CLIENT_SECRET"): [("ai/litellm", "GENERIC_CLIENT_SECRET")],
     ("infra/keycloak", "KC_OAUTH2_PROXY_CLIENT_SECRET"): [("", "OAUTH2_PROXY_CLIENT_SECRET")],
+    ("infra/keycloak", "KC_LOCALAI_CLIENT_SECRET"): [("ai/localai", "LOCALAI_OIDC_CLIENT_SECRET")],
     ("ai/litellm", "LITELLM_MASTER_KEY"): [
         ("ai/librechat", "LITELLM_API_KEY"),
         ("ai/jinaai", "LITELLM_API_KEY"),
@@ -89,6 +90,7 @@ def init(
     touch src/**/.env -- purely seeds the config dir from shipped defaults."""
     common.ensure_dir(config_dir / "overlay")
     common.ensure_dir(config_dir / "overrides")
+    common.ensure_dir(config_dir / "certs")
 
     seed = load_seed_tree(repo_root)
     for rel_dir, values in seed.items():
@@ -216,10 +218,12 @@ class SetupArgs:
     app_host: str | None = None
     auth_host: str | None = None
     librechat_host: str | None = None  # public LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT)
+    localai_host: str | None = None  # public LocalAI URL (LOCALAI_PUBLIC_URL)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect
     enable_web_search: bool | None = None  # None = sticky / no change
+    enable_local_ai: bool | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
     force: bool = False
@@ -277,6 +281,11 @@ def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
     return f"{host}:{librechat_port}"
 
 
+def derive_localai_url_default(app_host: str, localai_port: str) -> str:
+    """Default browser-facing LocalAI URL: the public host plus the external LocalAI port."""
+    return f"{app_host}:{localai_port}"
+
+
 def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
     """Resolve the real external issuer URL on a first-time transition into
     external_oidc. Never falls back to the bundled-Keycloak-shaped seed
@@ -302,6 +311,7 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     keycloak = tree.setdefault("infra/keycloak", {})
     librechat = tree.setdefault("ai/librechat", {})
     litellm = tree.setdefault("ai/litellm", {})
+    localai = tree.setdefault("ai/localai", {})
 
     prior_auth_provider = root.get("AUTH_PROVIDER", "internal_keycloak")
     auth_provider = args.auth_provider or prior_auth_provider
@@ -404,16 +414,31 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     librechat["DOMAIN_SERVER"] = librechat_url
     librechat["DOMAIN_CLIENT"] = librechat_url
 
-    # --- Homepage / LocalAI: oauth2-proxy sidecar redirect URLs ---
-    # These vars are consumed directly by docker compose's ${VAR} expansion
-    # in each service's docker-compose.yml `command:` block, so (like
-    # OIDC_ISSUER*) they belong in the root .env, not a per-service one.
-    # Independent of AUTH_PROVIDER -- these are server-reachability URLs, not
-    # Keycloak-specific.
+    # --- Homepage: oauth2-proxy sidecar redirect URL ---
+    # Belongs in the root .env (consumed by docker compose ${VAR} expansion).
+    # Independent of AUTH_PROVIDER -- this is a server-reachability URL.
     homepage_port = root.get("HOMEPAGE_EXT_PORT", "8300")
-    localai_port = root.get("LOCALAI_EXT_PORT", "8080")
     root["HOMEPAGE_PUBLIC_URL"] = f"{app_host}:{homepage_port}"
-    root["LOCALAI_PUBLIC_URL"] = f"{app_host}:{localai_port}"
+
+    # --- LocalAI public URL + native OIDC config ---
+    # LOCALAI_PUBLIC_URL is exposed in the root .env (docker compose ${VAR}
+    # expansion in localai/docker-compose.yml). Per-service OIDC vars go into
+    # the ai/localai env node, which is written to $PAPAIA_CONFIG_DIR/ai/localai/.env.
+    localai_port = root.get("LOCALAI_EXT_PORT", "8080")
+    derived_localai = derive_localai_url_default(app_host, localai_port)
+    sticky_localai = "" if args.fresh_init else root.get("LOCALAI_PUBLIC_URL", "")
+    if sticky_localai and common.is_placeholder(sticky_localai):
+        sticky_localai = ""
+    localai_url = args.localai_host or sticky_localai or derived_localai
+    if not args.localai_host and not args.non_interactive and args.prompt is not None:
+        localai_url = args.prompt(
+            "Public URL of LocalAI (LOCALAI_PUBLIC_URL)",
+            sticky_localai or derived_localai,
+        )
+    root["LOCALAI_PUBLIC_URL"] = localai_url
+    localai["LOCALAI_OIDC_ISSUER"] = root["OIDC_ISSUER"]
+    localai["LOCALAI_OIDC_CLIENT_ID"] = "localai"
+    localai["LOCALAI_BASE_URL"] = localai_url
 
     homepage = tree.setdefault("services/homepage", {})
     if "HP_ALLOWED_HOSTS" in homepage:
@@ -507,6 +532,22 @@ def resolve_web_search(tree: EnvTree, args: SetupArgs) -> EnvTree:
     profiles = [p for p in profiles if p not in ("searxng", "firecrawl")]
     if args.enable_web_search:
         profiles.extend(["searxng", "firecrawl"])
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_local_ai(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `localai` Compose profile based on the operator's choice.
+
+    When `enable_local_ai` is None the call is a no-op — whatever was
+    already written to COMPOSE_PROFILES on a prior run is preserved (sticky)."""
+    if args.enable_local_ai is None:
+        return tree
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    profiles = [p for p in profiles if p != "localai"]
+    if args.enable_local_ai:
+        profiles.append("localai")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 
