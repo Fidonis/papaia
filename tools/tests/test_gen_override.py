@@ -39,3 +39,28 @@ def test_generate_override_synthetic_fixture():
 def test_generate_override_returns_none_without_networks():
     out_path = gen_override.generate_override({"name": "foo"}, Path("/tmp/unused"))
     assert out_path is None
+
+
+def test_generate_ssl_cert_override_creates_file_for_external_oidc(config_dir, repo_root):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_ssl_cert_override(config_dir, "external_oidc")
+
+    out_path = config_dir / "overrides" / "docker-compose.ssl-cert.override.yml"
+    assert out_path.is_file()
+    override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
+    services = override["services"]
+    assert services["litellm"]["environment"]["SSL_CERT_FILE"] == ""
+    assert services["oauth2-proxy"]["environment"]["SSL_CERT_FILE"] == ""
+    assert services["localai"]["environment"]["SSL_CERT_FILE"] == ""
+
+
+def test_generate_ssl_cert_override_removes_file_for_internal_keycloak(config_dir, repo_root):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    # First create the file as if a prior external-OIDC run wrote it
+    gen_override.generate_ssl_cert_override(config_dir, "external_oidc")
+    out_path = config_dir / "overrides" / "docker-compose.ssl-cert.override.yml"
+    assert out_path.is_file()
+
+    # Switching back to internal_keycloak must remove it
+    gen_override.generate_ssl_cert_override(config_dir, "internal_keycloak")
+    assert not out_path.exists()

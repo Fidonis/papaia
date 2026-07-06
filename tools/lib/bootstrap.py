@@ -40,6 +40,12 @@ SECRET_ALIASES: dict[tuple[str, str], list[tuple[str, str]]] = {
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
 }
 
+# Written to consumer secrets whose canonical lives in a skipped directory
+# (e.g. KC_*_CLIENT_SECRET when external_oidc skips infra/keycloak). A
+# recognisable string is better than a random hex value because a random value
+# silently breaks OIDC while a placeholder makes the gap obvious.
+_EXTERNAL_SECRET_PLACEHOLDER = "REPLACE_WITH_VALID_SECRET"
+
 _HOSTLIKE_NO_FQDN = {"localhost", "127.0.0.1", "host.docker.internal"}
 _IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
@@ -180,6 +186,16 @@ def generate_missing_secrets(
     )
     skip_dirs = {"infra/keycloak"} if effective_auth_provider == "external_oidc" else set()
 
+    # Consumer variables whose canonical lives in a skipped dir (e.g.
+    # KC_*_CLIENT_SECRET when external_oidc skips infra/keycloak) must not be
+    # auto-generated -- the operator must supply the real value from the external
+    # provider. Track them here so the loop below can write a recognisable
+    # placeholder instead of a random hex string that silently breaks OIDC.
+    skip_generated: set[tuple[str, str]] = set()
+    for (canon_dir, _), aliases in SECRET_ALIASES.items():
+        if canon_dir in skip_dirs:
+            skip_generated.update(aliases)
+
     for rel_dir, values in tree.items():
         if rel_dir in skip_dirs:
             continue
@@ -187,7 +203,10 @@ def generate_missing_secrets(
         for key, value in list(values.items()):
             if not common.marks_generated_secret(seed_values.get(key, "")):
                 continue
-            if force or common.is_placeholder(value):
+            if (rel_dir, key) in skip_generated:
+                if force or common.is_placeholder(value):
+                    values[key] = _EXTERNAL_SECRET_PLACEHOLDER
+            elif force or common.is_placeholder(value):
                 values[key] = common.generate_secret(key)
 
     for (canon_dir, canon_key), aliases in SECRET_ALIASES.items():
@@ -347,11 +366,33 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if auth_provider == "external_oidc":
         # First-time transition (fresh init, or switching this run). The
         # seed/prior OIDC_ISSUER is bundled-Keycloak-shaped -- never kept
-        # silently. AUTH_HOST / KC_HOSTNAME / split KC_* endpoints / litellm
-        # GENERIC_* are Keycloak-specific and meaningless without the
-        # bundled Keycloak, so they are left untouched.
+        # silently. AUTH_HOST / KC_HOSTNAME / KC_* split endpoints are
+        # Keycloak-specific; they are left untouched since the bundled
+        # Keycloak isn't started for this provider.
         root["OIDC_ISSUER"] = _resolve_external_oidc_issuer(args)
         librechat["OPENID_ISSUER"] = root["OIDC_ISSUER"]
+
+        # Derive LiteLLM OIDC endpoints from the external issuer. The path
+        # suffix (/protocol/openid-connect/*) follows RFC 8414 and matches
+        # Keycloak and most other providers; operators using a non-standard path
+        # layout can adjust these values manually after setup.
+        issuer = root["OIDC_ISSUER"]
+        litellm_port = root.get("LITELLM_EXT_PORT", "8200")
+        litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = (
+            f"{issuer}/protocol/openid-connect/auth"
+        )
+        litellm["GENERIC_TOKEN_ENDPOINT"] = (
+            f"{issuer}/protocol/openid-connect/token"
+        )
+        litellm["GENERIC_USERINFO_ENDPOINT"] = (
+            f"{issuer}/protocol/openid-connect/userinfo"
+        )
+        litellm["GENERIC_REDIRECT_URI"] = f"{app_host}:{litellm_port}/sso/callback"
+        litellm["PROXY_LOGOUT_URL"] = (
+            f"{issuer}/protocol/openid-connect/logout"
+            f"?client_id=litellm&post_logout_redirect_uri="
+            f"{app_host}:{litellm_port}/sso/key/generate"
+        )
     else:
         # --- AUTH_HOST + KC_HOSTNAME ---
         keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")

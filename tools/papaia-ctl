@@ -152,7 +152,7 @@ cmd_setup() {
     local auth_provider="" oidc_issuer=""
     local external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" reranker_model=""
-    local force=0 non_interactive=0
+    local force=0 non_interactive=0 env_only=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -184,6 +184,7 @@ cmd_setup() {
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
+            --env-only) env_only=1 ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for setup: $1"; exit 2 ;;
         esac
@@ -192,6 +193,16 @@ cmd_setup() {
     CONFIG_DIR="$config_dir"
 
     load_defaults
+
+    if [ "$env_only" -eq 1 ]; then
+        info "Reusing existing configuration; re-rendering env files only."
+        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" ""
+        if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
+            _is_local_auth_host "${AUTH_HOST_STICKY:-}" && _ensure_keycloak_certs
+        fi
+        success "setup complete (re-render only)."
+        return 0
+    fi
 
     # Bare re-run: zero args, interactive TTY, already seeded -> offer to
     # reuse everything as-is (just refresh the render) instead of
@@ -511,13 +522,21 @@ cmd_up() {
     py_cli render
 
     local env_file="$REPO_ROOT/src/.env"
+
+    local -a compose_overrides=()
+    if [ -d "$CONFIG_DIR/overrides" ]; then
+        for f in "$CONFIG_DIR"/overrides/docker-compose.*.override.yml; do
+            [ -f "$f" ] && compose_overrides+=(-f "$f")
+        done
+    fi
+
     if [ ${#profiles[@]} -gt 0 ]; then
         local joined
         joined="$(IFS=,; echo "${profiles[*]}")"
         info "Starting profiles: $joined"
-        COMPOSE_PROFILES="$joined" docker compose -f "$COMPOSE_FILE" --env-file "$env_file" up -d
+        COMPOSE_PROFILES="$joined" docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
     else
-        docker compose -f "$COMPOSE_FILE" --env-file "$env_file" up -d
+        docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
     fi
     success "up complete."
 }

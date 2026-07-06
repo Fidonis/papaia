@@ -102,6 +102,61 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_external_oidc_checklist(config_dir: Path, tree: bootstrap.EnvTree) -> None:
+    """Print a step-by-step operator checklist for completing an external OIDC
+    setup. Called after persist_tree so all resolved values are available."""
+    root = tree.get("", {})
+    librechat = tree.get("ai/librechat", {})
+    litellm = tree.get("ai/litellm", {})
+
+    issuer = root.get("OIDC_ISSUER", "<OIDC_ISSUER>")
+    app_host = root.get("PAPAIA_HOST", "<PAPAIA_HOST>")
+    librechat_url = librechat.get("DOMAIN_SERVER") or app_host
+    litellm_redirect = litellm.get("GENERIC_REDIRECT_URI", "")
+
+    # Collect env files that still contain REPLACE_WITH_VALID_SECRET
+    placeholder = bootstrap._EXTERNAL_SECRET_PLACEHOLDER
+    needs_edit: list[tuple[str, str]] = []
+    for rel_dir, values in sorted(tree.items()):
+        for key, value in sorted(values.items()):
+            if value == placeholder:
+                env_file = f"{rel_dir}.env" if rel_dir else ".env"
+                needs_edit.append((env_file, key))
+
+    clients = [
+        ("librechat", f"{librechat_url}/oauth/openid/callback"),
+        ("litellm", litellm_redirect or f"{app_host}/sso/callback"),
+        ("oauth2-proxy", f"{app_host}/oauth2/callback"),
+    ]
+
+    sep = "─" * 65
+    print()
+    print("External OIDC — manual steps required before 'papaia-ctl up'")
+    print(sep)
+    print()
+    print(f"1. Register these OIDC clients on {issuer}:")
+    print()
+    id_w = max(len(c[0]) for c in clients) + 2
+    for client_id, redirect_uri in clients:
+        print(f"   {client_id:<{id_w}} {redirect_uri}")
+    print()
+    if needs_edit:
+        print("2. Replace REPLACE_WITH_VALID_SECRET in:")
+        print()
+        path_w = max(len(e[0]) for e in needs_edit) + 2
+        for env_file, key in needs_edit:
+            print(f"   {env_file:<{path_w}} {key}")
+        print()
+    print("3. Apply and start the stack:")
+    print()
+    print("   papaia-ctl setup -y && papaia-ctl up")
+    print()
+    print(
+        "See src/infra/keycloak/README.md"
+        " 'Switching to an External OIDC Provider' for details."
+    )
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     config_dir = Path(args.config_dir)
@@ -157,16 +212,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir)
+    gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(f"Setup complete. PAPAIA_CONFIG_DIR={config_dir}")
     if effective_auth_provider == "external_oidc":
-        print(
-            "External OIDC provider selected -- see "
-            "src/infra/keycloak/README.md 'Switching to an External OIDC "
-            "Provider' for the client/realm configuration you still need to "
-            "set up on your provider's side."
-        )
+        _print_external_oidc_checklist(config_dir, tree)
     return 0
 
 
@@ -185,8 +236,13 @@ def _sync_deployment_manifest(config_dir: Path, tree, repo_root: Path) -> None:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    render_core.render(Path(args.config_dir), Path(args.repo_root))
-    gen_override.generate_overrides(Path(args.config_dir))
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir)
+    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     print("Rendered.")
     return 0
 
