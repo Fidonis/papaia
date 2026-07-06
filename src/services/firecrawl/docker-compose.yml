@@ -75,7 +75,7 @@ services:
         max-size: "10m"
         max-file: "3"
         compress: "true"
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-playwright-service:
     image: ghcr.io/firecrawl/playwright-service@sha256:1f6eba6403207d501a63d9b1d4685b6316b4fc7968fe64a5839ab1bfec9d1c14
@@ -105,7 +105,7 @@ services:
     labels:
       de.fidonis.module: papaia-firecrawl
       de.fidonis.role:   browser
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-redis:
     image: redis:8.8.0-alpine
@@ -122,7 +122,7 @@ services:
         max-size: "5m"
         max-file: "2"
         compress: "true"
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-rabbitmq:
     image: rabbitmq:3-management
@@ -145,7 +145,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-nuq-postgres:
     image: ghcr.io/firecrawl/nuq-postgres@sha256:f9388bd25ae2e1f1d034518236f993ce236173c1d8800ce24092ea6643a95a33
@@ -165,4 +165,4 @@ services:
         max-size: "10m"
         max-file: "3"
         compress: "true"
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]

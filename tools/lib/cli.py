@@ -83,7 +83,14 @@ def cmd_defaults(args: argparse.Namespace) -> int:
             "false" if "nginx" in profiles else ("true" if profiles else "")
         ),
         "WEB_SEARCH_STICKY": (
-            ("true" if "searxng" in profiles else "false") if config_seeded else ""
+            (
+                "true"
+                if "librechat-websearch" in profiles
+                or any(p in bootstrap._WEB_SEARCH_LEGACY_PROFILES for p in profiles)
+                else "false"
+            )
+            if config_seeded
+            else ""
         ),
         "RERANKER_MODEL_STICKY": reranker_model_sticky,
         "COMPOSE_PROFILES_STICKY": ",".join(profiles),
@@ -135,6 +142,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = bootstrap.resolve_multi_env(tree, setup_args)
         tree = bootstrap.resolve_hostnames(tree, setup_args)
         tree = bootstrap.resolve_reverse_proxy(tree, setup_args)
+        tree = bootstrap.migrate_web_search_profiles(tree)
         tree = bootstrap.resolve_web_search(tree, setup_args)
         tree = bootstrap.resolve_local_ai(tree, setup_args)
         tree = bootstrap.resolve_reranker_model(tree, setup_args)

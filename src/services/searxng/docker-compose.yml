@@ -28,7 +28,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    profiles: [searxng]
+    profiles: [librechat-websearch]
 
 # Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
 # Volumes mounted on Linux: /var/lib/docker/volumes

@@ -520,19 +520,42 @@ def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
     return tree
 
 
-def resolve_web_search(tree: EnvTree, args: SetupArgs) -> EnvTree:
-    """Add or remove the `searxng` and `firecrawl` Compose profiles based on
-    the operator's web-search choice.
+_WEB_SEARCH_PROFILE = "librechat-websearch"
+_WEB_SEARCH_LEGACY_PROFILES = {"searxng", "firecrawl", "jinaai"}
 
-    When `enable_web_search` is None the call is a no-op -- whatever was
+
+def migrate_web_search_profiles(tree: EnvTree) -> EnvTree:
+    """Replace legacy per-component web search profiles with the unified
+    `librechat-websearch` profile.  Runs unconditionally so that existing
+    config dirs are migrated transparently on the next `papaia-ctl setup`."""
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    legacy_present = any(p in _WEB_SEARCH_LEGACY_PROFILES for p in profiles)
+    if not legacy_present:
+        return tree
+    profiles = [p for p in profiles if p not in _WEB_SEARCH_LEGACY_PROFILES]
+    if _WEB_SEARCH_PROFILE not in profiles:
+        profiles.append(_WEB_SEARCH_PROFILE)
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_web_search(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `librechat-websearch` Compose profile based on the
+    operator's web-search choice.
+
+    When `enable_web_search` is None the call is a no-op — whatever was
     already written to COMPOSE_PROFILES on a prior run is preserved (sticky)."""
     if args.enable_web_search is None:
         return tree
     root = tree.setdefault("", {})
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
-    profiles = [p for p in profiles if p not in ("searxng", "firecrawl", "jinaai")]
+    profiles = [
+        p for p in profiles
+        if p != _WEB_SEARCH_PROFILE and p not in _WEB_SEARCH_LEGACY_PROFILES
+    ]
     if args.enable_web_search:
-        profiles.extend(["searxng", "firecrawl", "jinaai"])
+        profiles.append(_WEB_SEARCH_PROFILE)
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 
