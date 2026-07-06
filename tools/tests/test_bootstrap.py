@@ -146,6 +146,50 @@ def test_generate_missing_secrets_skips_keycloak_dir_for_external_oidc(repo_root
     assert not common.is_placeholder(tree["ai/librechat"]["JWT_SECRET"])
 
 
+def test_generate_missing_secrets_external_oidc_placeholder_for_kc_aliases(repo_root):
+    # When the bundled Keycloak is skipped, every consumer variable whose
+    # canonical is a KC_* secret must get the explicit placeholder rather than
+    # a random generated value that silently breaks OIDC.
+    tree = bootstrap.load_seed_tree(repo_root)
+    seed = bootstrap.load_seed_tree(repo_root)
+
+    bootstrap.generate_missing_secrets(tree, seed, auth_provider="external_oidc")
+
+    placeholder = bootstrap._EXTERNAL_SECRET_PLACEHOLDER
+    assert tree["ai/librechat"]["OPENID_CLIENT_SECRET"] == placeholder
+    assert tree["ai/litellm"]["GENERIC_CLIENT_SECRET"] == placeholder
+    assert tree[""]["OAUTH2_PROXY_CLIENT_SECRET"] == placeholder
+    # Non-KC-aliased secrets (JWT_SECRET, LITELLM_MASTER_KEY, …) are still
+    # generated normally.
+    assert not common.is_placeholder(tree["ai/librechat"]["JWT_SECRET"])
+    assert not common.is_placeholder(tree["ai/litellm"]["LITELLM_MASTER_KEY"])
+
+
+def test_generate_missing_secrets_external_oidc_preserves_operator_set_value(repo_root):
+    # An operator who has already replaced the placeholder with a real secret
+    # must not have that value overwritten on a subsequent sticky re-run.
+    tree = bootstrap.load_seed_tree(repo_root)
+    seed = bootstrap.load_seed_tree(repo_root)
+    tree["ai/librechat"]["OPENID_CLIENT_SECRET"] = "real-operator-supplied-secret"
+
+    bootstrap.generate_missing_secrets(tree, seed, auth_provider="external_oidc")
+
+    assert tree["ai/librechat"]["OPENID_CLIENT_SECRET"] == "real-operator-supplied-secret"
+
+
+def test_generate_missing_secrets_external_oidc_force_resets_to_placeholder(repo_root):
+    # --force on an external OIDC setup must reset KC-aliased consumer secrets
+    # back to the placeholder (not to a random generated value, since the
+    # operator must supply the real secret from their IdP).
+    tree = bootstrap.load_seed_tree(repo_root)
+    seed = bootstrap.load_seed_tree(repo_root)
+    tree["ai/librechat"]["OPENID_CLIENT_SECRET"] = "real-operator-supplied-secret"
+
+    bootstrap.generate_missing_secrets(tree, seed, auth_provider="external_oidc", force=True)
+
+    assert tree["ai/librechat"]["OPENID_CLIENT_SECRET"] == bootstrap._EXTERNAL_SECRET_PLACEHOLDER
+
+
 def test_generate_missing_secrets_reads_auth_provider_from_tree_when_arg_omitted(repo_root):
     # Direct callers that don't pass auth_provider= explicitly still get
     # correct skip behavior purely from the tree's own on-disk AUTH_PROVIDER
@@ -476,6 +520,38 @@ def test_resolve_hostnames_sticky_external_oidc_with_flag_still_preserved(repo_r
     )
     tree = bootstrap.resolve_hostnames(tree, args)
     assert tree[""]["OIDC_ISSUER"] == "https://idp.customer.com/realms/foo"
+
+
+def test_resolve_hostnames_external_oidc_derives_litellm_endpoints(repo_root):
+    # LiteLLM OIDC endpoints must be derived from the external issuer URL, not
+    # left at the bundled-Keycloak seed values (keycloak:8443 / host.docker…).
+    issuer = "https://idp.customer.com/realms/foo"
+    tree = bootstrap.load_seed_tree(repo_root)
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_provider="external_oidc",
+        oidc_issuer=issuer,
+        non_interactive=True,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+
+    assert tree["ai/litellm"]["GENERIC_AUTHORIZATION_ENDPOINT"] == (
+        f"{issuer}/protocol/openid-connect/auth"
+    )
+    assert tree["ai/litellm"]["GENERIC_TOKEN_ENDPOINT"] == (
+        f"{issuer}/protocol/openid-connect/token"
+    )
+    assert tree["ai/litellm"]["GENERIC_USERINFO_ENDPOINT"] == (
+        f"{issuer}/protocol/openid-connect/userinfo"
+    )
+    assert tree["ai/litellm"]["GENERIC_REDIRECT_URI"] == (
+        "https://papaia.example.com:8200/sso/callback"
+    )
+    assert "idp.customer.com" in tree["ai/litellm"]["PROXY_LOGOUT_URL"]
+    # Bundled-Keycloak internals must not appear in any of these values
+    assert "keycloak:8443" not in tree["ai/litellm"]["GENERIC_TOKEN_ENDPOINT"]
+    assert "keycloak:8443" not in tree["ai/litellm"]["GENERIC_USERINFO_ENDPOINT"]
 
 
 def test_resolve_hostnames_internal_keycloak_explicit_matches_default(repo_root):

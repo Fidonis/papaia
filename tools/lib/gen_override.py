@@ -1,4 +1,4 @@
-"""Seam-1 (network) Docker Compose override generation.
+"""Seam-1 (network) and auth-provider Docker Compose override generation.
 
 For each active extension, attaches the core containers it declares to its
 own bridge network via a generated override file at
@@ -69,3 +69,34 @@ def generate_overrides(config_dir: Path) -> list[Path]:
         if result is not None:
             written.append(result)
     return written
+
+
+# Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For
+# external OIDC the cert file is absent, so SSL_CERT_FILE must be cleared to
+# let Python's ssl module fall back to the system CA bundle.
+_SSL_CERT_SERVICES = ("litellm", "oauth2-proxy", "localai")
+
+
+def generate_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:
+    """Write or remove the SSL_CERT_FILE override for external OIDC.
+
+    With external OIDC, $PAPAIA_CONFIG_DIR/certs/ is empty (the local CA cert
+    is only generated for bundled Keycloak).  Setting SSL_CERT_FILE to an empty
+    string is falsy in Python's ssl.create_default_context, so it skips
+    load_verify_locations and uses system CAs instead of crashing on the
+    missing file path.
+    """
+    out_path = config_dir / "overrides" / "docker-compose.ssl-cert.override.yml"
+    if auth_provider != "external_oidc":
+        out_path.unlink(missing_ok=True)
+        return
+
+    override = {
+        "services": {
+            svc: {"environment": {"SSL_CERT_FILE": ""}}
+            for svc in _SSL_CERT_SERVICES
+        }
+    }
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
