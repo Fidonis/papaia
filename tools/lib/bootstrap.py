@@ -224,6 +224,7 @@ class SetupArgs:
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect
     enable_web_search: bool | None = None  # None = sticky / no change
     enable_local_ai: bool | None = None  # None = sticky / no change
+    reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
     force: bool = False
@@ -529,9 +530,9 @@ def resolve_web_search(tree: EnvTree, args: SetupArgs) -> EnvTree:
         return tree
     root = tree.setdefault("", {})
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
-    profiles = [p for p in profiles if p not in ("searxng", "firecrawl")]
+    profiles = [p for p in profiles if p not in ("searxng", "firecrawl", "jinaai")]
     if args.enable_web_search:
-        profiles.extend(["searxng", "firecrawl"])
+        profiles.extend(["searxng", "firecrawl", "jinaai"])
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 
@@ -549,6 +550,17 @@ def resolve_local_ai(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_local_ai:
         profiles.append("localai")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_reranker_model(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write RERANKER_MODEL into ai/jinaai when the operator supplied a value.
+
+    When reranker_model is None the call is a no-op — whatever was already
+    written on a prior run is preserved (sticky)."""
+    if args.reranker_model is None:
+        return tree
+    tree.setdefault("ai/jinaai", {})["RERANKER_MODEL"] = args.reranker_model
     return tree
 
 

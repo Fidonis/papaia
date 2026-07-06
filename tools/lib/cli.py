@@ -61,6 +61,10 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     localai_sticky = root.get("LOCALAI_PUBLIC_URL", "") if config_seeded else ""
     if common.is_placeholder(localai_sticky):
         localai_sticky = ""
+    jinaai = tree.get("ai/jinaai", {})
+    reranker_model_sticky = jinaai.get("RERANKER_MODEL", "") if config_seeded else ""
+    if common.is_placeholder(reranker_model_sticky):
+        reranker_model_sticky = ""
     out = {
         "APP_HOST_STICKY": app_host,
         "AUTH_HOST_STICKY": auth_host_sticky,
@@ -81,6 +85,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
         "WEB_SEARCH_STICKY": (
             ("true" if "searxng" in profiles else "false") if config_seeded else ""
         ),
+        "RERANKER_MODEL_STICKY": reranker_model_sticky,
         "COMPOSE_PROFILES_STICKY": ",".join(profiles),
         "PLATFORM_VERSION": bootstrap.resolve_platform_version(repo_root),
         "CONFIG_SEEDED": "true" if config_seeded else "false",
@@ -111,6 +116,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
         enable_web_search=_tristate(args.enable_web_search),
         enable_local_ai=_tristate(args.enable_local_ai),
+        reranker_model=args.reranker_model or None,
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
         force=args.force,
@@ -131,6 +137,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = bootstrap.resolve_reverse_proxy(tree, setup_args)
         tree = bootstrap.resolve_web_search(tree, setup_args)
         tree = bootstrap.resolve_local_ai(tree, setup_args)
+        tree = bootstrap.resolve_reranker_model(tree, setup_args)
     except bootstrap.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
@@ -204,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
+    p_setup.add_argument("--reranker-model", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
     p_setup.add_argument("--force", action="store_true")
     p_setup.set_defaults(func=cmd_setup)

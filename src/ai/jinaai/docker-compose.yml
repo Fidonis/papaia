@@ -13,8 +13,6 @@ services:
       RERANKER_BASE_URL: ${LITELLM_BASE_URL}
       RERANKER_API_KEY:  ${LITELLM_API_KEY}
       RERANKER_MODEL:    ${RERANKER_MODEL}
-    ports:
-      - "${HOST_IP:-0.0.0.0}:${JINAAI_EXT_PORT:-8600}:8000"
     networks:
       - papaia-net
     labels:
