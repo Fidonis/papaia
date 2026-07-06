@@ -224,6 +224,7 @@ class SetupArgs:
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect
     enable_web_search: bool | None = None  # None = sticky / no change
     enable_local_ai: bool | None = None  # None = sticky / no change
+    reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
     force: bool = False
@@ -519,19 +520,42 @@ def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
     return tree
 
 
-def resolve_web_search(tree: EnvTree, args: SetupArgs) -> EnvTree:
-    """Add or remove the `searxng` and `firecrawl` Compose profiles based on
-    the operator's web-search choice.
+_WEB_SEARCH_PROFILE = "librechat-websearch"
+_WEB_SEARCH_LEGACY_PROFILES = {"searxng", "firecrawl", "jinaai"}
 
-    When `enable_web_search` is None the call is a no-op -- whatever was
+
+def migrate_web_search_profiles(tree: EnvTree) -> EnvTree:
+    """Replace legacy per-component web search profiles with the unified
+    `librechat-websearch` profile.  Runs unconditionally so that existing
+    config dirs are migrated transparently on the next `papaia-ctl setup`."""
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    legacy_present = any(p in _WEB_SEARCH_LEGACY_PROFILES for p in profiles)
+    if not legacy_present:
+        return tree
+    profiles = [p for p in profiles if p not in _WEB_SEARCH_LEGACY_PROFILES]
+    if _WEB_SEARCH_PROFILE not in profiles:
+        profiles.append(_WEB_SEARCH_PROFILE)
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_web_search(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `librechat-websearch` Compose profile based on the
+    operator's web-search choice.
+
+    When `enable_web_search` is None the call is a no-op — whatever was
     already written to COMPOSE_PROFILES on a prior run is preserved (sticky)."""
     if args.enable_web_search is None:
         return tree
     root = tree.setdefault("", {})
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
-    profiles = [p for p in profiles if p not in ("searxng", "firecrawl")]
+    profiles = [
+        p for p in profiles
+        if p != _WEB_SEARCH_PROFILE and p not in _WEB_SEARCH_LEGACY_PROFILES
+    ]
     if args.enable_web_search:
-        profiles.extend(["searxng", "firecrawl"])
+        profiles.append(_WEB_SEARCH_PROFILE)
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 
@@ -549,6 +573,17 @@ def resolve_local_ai(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_local_ai:
         profiles.append("localai")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_reranker_model(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write RERANKER_MODEL into ai/jinaai when the operator supplied a value.
+
+    When reranker_model is None the call is a no-op — whatever was already
+    written on a prior run is preserved (sticky)."""
+    if args.reranker_model is None:
+        return tree
+    tree.setdefault("ai/jinaai", {})["RERANKER_MODEL"] = args.reranker_model
     return tree
 
 

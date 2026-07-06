@@ -13,8 +13,6 @@ services:
       RERANKER_BASE_URL: ${LITELLM_BASE_URL}
       RERANKER_API_KEY:  ${LITELLM_API_KEY}
       RERANKER_MODEL:    ${RERANKER_MODEL}
-    ports:
-      - "${HOST_IP:-0.0.0.0}:${JINAAI_EXT_PORT:-8600}:8000"
     networks:
       - papaia-net
     labels:
@@ -26,4 +24,4 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    profiles: [jinaai]
+    profiles: [librechat-websearch]

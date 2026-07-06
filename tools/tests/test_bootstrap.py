@@ -625,33 +625,71 @@ def test_resolve_reverse_proxy_external_skips_direct_access_confirmation(repo_ro
     assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
 
 
-def test_resolve_web_search_adds_profiles_when_enabled(repo_root):
+def test_resolve_web_search_adds_unified_profile_when_enabled(repo_root):
     tree = bootstrap.load_seed_tree(repo_root)
     tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx"
     args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=True)
     tree = bootstrap.resolve_web_search(tree, args)
     profiles = tree[""]["COMPOSE_PROFILES"].split(",")
-    assert "searxng" in profiles
-    assert "firecrawl" in profiles
+    assert "librechat-websearch" in profiles
+    assert "searxng" not in profiles
+    assert "firecrawl" not in profiles
+    assert "jinaai" not in profiles
 
 
-def test_resolve_web_search_removes_profiles_when_disabled(repo_root):
+def test_resolve_web_search_removes_unified_profile_when_disabled(repo_root):
     tree = bootstrap.load_seed_tree(repo_root)
-    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx,searxng,firecrawl"
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx,librechat-websearch"
     args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=False)
     tree = bootstrap.resolve_web_search(tree, args)
     profiles = tree[""]["COMPOSE_PROFILES"].split(",")
-    assert "searxng" not in profiles
-    assert "firecrawl" not in profiles
+    assert "librechat-websearch" not in profiles
 
 
 def test_resolve_web_search_preserves_profiles_when_sticky(repo_root):
     tree = bootstrap.load_seed_tree(repo_root)
-    original = "keycloak,oauth2-proxy,librechat,litellm,nginx,searxng,firecrawl"
+    original = "keycloak,oauth2-proxy,librechat,litellm,nginx,librechat-websearch"
     tree[""]["COMPOSE_PROFILES"] = original
     args = bootstrap.SetupArgs(config_dir=repo_root, enable_web_search=None)
     tree = bootstrap.resolve_web_search(tree, args)
     assert tree[""]["COMPOSE_PROFILES"] == original
+
+
+def test_migrate_web_search_profiles_replaces_legacy_names(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,nginx,searxng,firecrawl,jinaai,librechat"
+    tree = bootstrap.migrate_web_search_profiles(tree)
+    profiles = tree[""]["COMPOSE_PROFILES"].split(",")
+    assert "librechat-websearch" in profiles
+    assert "searxng" not in profiles
+    assert "firecrawl" not in profiles
+    assert "jinaai" not in profiles
+
+
+def test_migrate_web_search_profiles_noop_when_already_migrated(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    original = "keycloak,nginx,librechat-websearch,librechat"
+    tree[""]["COMPOSE_PROFILES"] = original
+    tree = bootstrap.migrate_web_search_profiles(tree)
+    assert tree[""]["COMPOSE_PROFILES"] == original
+
+
+def test_resolve_reranker_model_writes_value(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        reranker_model="rerank/jina-reranker-v2-base-multilingual",
+    )
+    tree = bootstrap.resolve_reranker_model(tree, args)
+    assert tree["ai/jinaai"]["RERANKER_MODEL"] == "rerank/jina-reranker-v2-base-multilingual"
+
+
+def test_resolve_reranker_model_sticky_when_none(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree.setdefault("ai/jinaai", {})["RERANKER_MODEL"] = "existing-model"
+    args = bootstrap.SetupArgs(config_dir=repo_root, reranker_model=None)
+    tree = bootstrap.resolve_reranker_model(tree, args)
+    assert tree["ai/jinaai"]["RERANKER_MODEL"] == "existing-model"
 
 
 def test_persist_tree_writes_both_locations(repo_root, config_dir):

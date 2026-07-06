@@ -12,7 +12,7 @@
 #
 #  Requires:
 #    - MCP_FIRECRAWL_IMAGE in root .env
-#    - firecrawl service running (profile: firecrawl) on papaia-net
+#    - firecrawl service running (profile: librechat-websearch) on papaia-net
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-firecrawl:
@@ -38,4 +38,4 @@ services:
     labels:
       de.fidonis.module: papaia-mcp-firecrawl
       de.fidonis.role:   mcp-server
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
