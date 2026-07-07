@@ -839,6 +839,60 @@ def test_resolve_reverse_proxy_autodetects_internal_on_http_first_run(repo_root)
     assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
 
 
+def test_derive_npm_admin_host_default_appends_port(repo_root):
+    result = bootstrap.derive_npm_admin_host_default("http://host.docker.internal", "8100")
+    assert result == "http://host.docker.internal:8100"
+
+
+def test_resolve_hostnames_npm_admin_host_derived_from_app_host(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="http://host.docker.internal",
+        non_interactive=True,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+    assert tree[""]["NPM_ADMIN_HOST"] == "http://host.docker.internal:8100"
+
+
+def test_resolve_hostnames_npm_admin_host_arg_wins(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="http://host.docker.internal",
+        npm_admin_host="https://proxy-admin.example.com",
+        non_interactive=True,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+    assert tree[""]["NPM_ADMIN_HOST"] == "https://proxy-admin.example.com"
+
+
+def test_resolve_hostnames_npm_admin_host_sticky_reused_when_not_fresh(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["NPM_ADMIN_HOST"] = "https://prior-npm.example.com"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="http://host.docker.internal",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+    assert tree[""]["NPM_ADMIN_HOST"] == "https://prior-npm.example.com"
+
+
+def test_resolve_hostnames_npm_admin_host_fresh_init_uses_derived(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["NPM_ADMIN_HOST"] = "https://prior-npm.example.com"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        app_host="http://host.docker.internal",
+        non_interactive=True,
+        fresh_init=True,
+    )
+    tree = bootstrap.resolve_hostnames(tree, args)
+    assert tree[""]["NPM_ADMIN_HOST"] == "http://host.docker.internal:8100"
+
+
 def test_resolve_web_search_adds_unified_profile_when_enabled(repo_root):
     tree = bootstrap.load_seed_tree(repo_root)
     tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx"

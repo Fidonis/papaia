@@ -149,7 +149,7 @@ cmd_init() {
 cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
-    local host_ip="" app_host="" auth_host="" librechat_host="" localai_host=""
+    local host_ip="" app_host="" auth_host="" librechat_host="" localai_host="" npm_admin_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" reranker_model=""
@@ -162,6 +162,7 @@ cmd_setup() {
             --host-ip=*) host_ip="${1#*=}" ;;
             --app-host=*) app_host="${1#*=}" ;;
             --auth-host=*) auth_host="${1#*=}" ;;
+            --npm-admin-host=*) npm_admin_host="${1#*=}" ;;
             --librechat-host=*) librechat_host="${1#*=}" ;;
             --auth-provider=*)
                 auth_provider="${1#*=}"
@@ -230,6 +231,8 @@ cmd_setup() {
             local _rp_label="Nginx Proxy Manager (bundled)"
             [ "$REVERSE_PROXY_PROVIDER_STICKY" = "external_proxy" ] && _rp_label="external proxy"
             info "  Reverse proxy     = $_rp_label"
+            [ "$REVERSE_PROXY_PROVIDER_STICKY" = "internal_nginx" ] && [ -n "${NPM_ADMIN_HOST_STICKY:-}" ] && \
+                info "  NPM admin URL     = $NPM_ADMIN_HOST_STICKY"
         fi
         [ -n "${LIBRECHAT_HOST_STICKY:-}" ] && info "  LibreChat URL     = $LIBRECHAT_HOST_STICKY"
         if [ -n "${WEB_SEARCH_STICKY:-}" ]; then
@@ -288,6 +291,13 @@ cmd_setup() {
                     "OIDC_ISSUER" "")"
             fi
         fi
+        if [ -z "$auth_host" ] && [ "$auth_provider" != "external_oidc" ]; then
+            local auth_default="${AUTH_HOST_STICKY:-}"
+            [ -z "$auth_default" ] && auth_default="$(_derive_auth_default "$app_host")"
+            auth_host="$(prompt_field "Public Keycloak URL" \
+                "Where browsers reach the bundled Keycloak." \
+                "AUTH_HOST" "$auth_default")"
+        fi
         if [ -z "$reverse_proxy_provider" ]; then
             local rp_default="1"
             [ "${REVERSE_PROXY_PROVIDER_STICKY:-}" = "external_proxy" ] && rp_default="2"
@@ -305,12 +315,12 @@ cmd_setup() {
                     ;;
             esac
         fi
-        if [ -z "$auth_host" ] && [ "$auth_provider" != "external_oidc" ]; then
-            local auth_default="${AUTH_HOST_STICKY:-}"
-            [ -z "$auth_default" ] && auth_default="$(_derive_auth_default "$app_host")"
-            auth_host="$(prompt_field "Public Keycloak URL" \
-                "Where browsers reach the bundled Keycloak." \
-                "AUTH_HOST" "$auth_default")"
+        if [ "$reverse_proxy_provider" = "internal_nginx" ] && [ -z "$npm_admin_host" ]; then
+            local npm_admin_default="${NPM_ADMIN_HOST_STICKY:-}"
+            [ -z "$npm_admin_default" ] && npm_admin_default="${NPM_ADMIN_HOST_DERIVED:-}"
+            npm_admin_host="$(prompt_field "Public URL of NPM admin UI" \
+                "Where browsers reach the Nginx Proxy Manager admin interface." \
+                "NPM_ADMIN_HOST" "$npm_admin_default")"
         fi
         # LibreChat is served for either auth provider, so ask in both cases.
         if [ -z "$librechat_host" ]; then
@@ -382,6 +392,9 @@ cmd_setup() {
         if [ -z "$reverse_proxy_provider" ] && [ -n "${REVERSE_PROXY_PROVIDER_STICKY:-}" ]; then
             reverse_proxy_provider="$REVERSE_PROXY_PROVIDER_STICKY"
         fi
+        if [ -z "$npm_admin_host" ] && [ -n "${NPM_ADMIN_HOST_STICKY:-}" ]; then
+            npm_admin_host="$NPM_ADMIN_HOST_STICKY"
+        fi
     fi
 
     # --allow-direct-port-access is the explicit opt-in for "no proxy at
@@ -404,7 +417,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host"; then
         error "setup failed."
         exit 3
     fi
@@ -521,12 +534,13 @@ _ensure_keycloak_certs() {
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
-    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}"
+    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
     [ -n "$librechat_host" ] && extra+=(--librechat-host="$librechat_host")
     [ -n "$localai_host" ] && extra+=(--localai-host="$localai_host")
+    [ -n "$npm_admin_host" ] && extra+=(--npm-admin-host="$npm_admin_host")
     [ -n "$auth_provider" ] && extra+=(--auth-provider="$auth_provider")
     [ -n "$oidc_issuer" ] && extra+=(--oidc-issuer="$oidc_issuer")
     [ -n "$reverse_proxy_provider" ] && extra+=(--reverse-proxy-provider="$reverse_proxy_provider")

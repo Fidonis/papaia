@@ -44,7 +44,7 @@ services:
       - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
       - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
       - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
-      - --redirect-url=${PAPAIA_HOST}:${NPM_ADMIN_EXT_PORT:-8100}/oauth2/callback
+      - --redirect-url=${NPM_ADMIN_HOST}/oauth2/callback
       - --upstream=http://nginx-proxy-manager:81
       - --http-address=0.0.0.0:4180
       - --email-domain=*

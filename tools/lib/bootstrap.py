@@ -238,6 +238,7 @@ class SetupArgs:
     auth_host: str | None = None
     librechat_host: str | None = None  # public LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT)
     localai_host: str | None = None  # public LocalAI URL (LOCALAI_PUBLIC_URL)
+    npm_admin_host: str | None = None  # public NPM admin URL (NPM_ADMIN_HOST)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect (legacy alias)
@@ -305,6 +306,11 @@ def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
 def derive_localai_url_default(app_host: str, localai_port: str) -> str:
     """Default browser-facing LocalAI URL: the public host plus the external LocalAI port."""
     return f"{app_host}:{localai_port}"
+
+
+def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str:
+    """Default NPM admin URL: the public host plus the NPM admin port."""
+    return f"{app_host}:{npm_admin_ext_port}"
 
 
 def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
@@ -486,6 +492,24 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     homepage = tree.setdefault("services/homepage", {})
     if "HP_ALLOWED_HOSTS" in homepage:
         homepage["HP_ALLOWED_HOSTS"] = f"{_strip_scheme(app_host)}:{homepage_port}"
+
+    # --- NPM admin public URL ---
+    # Always derived regardless of REVERSE_PROXY_PROVIDER: resolve_reverse_proxy
+    # runs after resolve_hostnames and the value is only read by docker compose
+    # when the nginx profile is active. Storing it unconditionally lets the
+    # sticky value survive a temporary switch to external_proxy and back.
+    npm_admin_port = root.get("NPM_ADMIN_EXT_PORT", "8100")
+    derived_npm_admin = derive_npm_admin_host_default(app_host, npm_admin_port)
+    sticky_npm_admin = "" if args.fresh_init else root.get("NPM_ADMIN_HOST", "")
+    if sticky_npm_admin and common.is_placeholder(sticky_npm_admin):
+        sticky_npm_admin = ""
+    npm_admin_url = args.npm_admin_host or sticky_npm_admin or derived_npm_admin
+    if not args.npm_admin_host and not args.non_interactive and args.prompt is not None:
+        npm_admin_url = args.prompt(
+            "Public URL of NPM admin UI (NPM_ADMIN_HOST)",
+            sticky_npm_admin or derived_npm_admin,
+        )
+    root["NPM_ADMIN_HOST"] = npm_admin_url
 
     # --- Cookie-secure: always re-derived, never sticky ---
     root["OAUTH2_PROXY_COOKIE_SECURE"] = "true" if _is_https(app_host) else "false"

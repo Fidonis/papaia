@@ -80,6 +80,11 @@ def cmd_defaults(args: argparse.Namespace) -> int:
         ),
         "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
         "REVERSE_PROXY_PROVIDER_STICKY": root.get("REVERSE_PROXY_PROVIDER", ""),
+        "NPM_ADMIN_HOST_STICKY": root.get("NPM_ADMIN_HOST", "") if config_seeded else "",
+        "NPM_ADMIN_HOST_DERIVED": bootstrap.derive_npm_admin_host_default(
+            app_host or "http://host.docker.internal",
+            root.get("NPM_ADMIN_EXT_PORT", "8100"),
+        ),
         "EXTERNAL_REVERSE_PROXY_STICKY": (
             "false" if "nginx" in profiles else ("true" if profiles else "")
         ),
@@ -174,6 +179,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         auth_host=args.auth_host,
         librechat_host=args.librechat_host,
         localai_host=args.localai_host,
+        npm_admin_host=args.npm_admin_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
         reverse_proxy_provider=args.reverse_proxy_provider or None,
@@ -270,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--auth-host")
     p_setup.add_argument("--librechat-host")
     p_setup.add_argument("--localai-host")
+    p_setup.add_argument("--npm-admin-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
     )
