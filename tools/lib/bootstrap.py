@@ -309,8 +309,18 @@ def derive_localai_url_default(app_host: str, localai_port: str) -> str:
 
 
 def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str:
-    """Default NPM admin URL: the public host plus the NPM admin port."""
-    return f"{app_host}:{npm_admin_ext_port}"
+    """Default browser-facing NPM admin URL.
+
+    Mirrors derive_librechat_url_default: plain-HTTP host.docker.internal is
+    rewritten to localhost so the oauth2-proxy CSRF cookie is scoped to the
+    same origin the browser uses. Without this, the callback from Keycloak
+    (which uses the redirect_url hostname) doesn't match the origin that set
+    the CSRF cookie, and browsers refuse to send it."""
+    parts = urlsplit(app_host)
+    host = app_host
+    if parts.scheme == "http" and parts.hostname == "host.docker.internal":
+        host = app_host.replace("host.docker.internal", "localhost", 1)
+    return f"{host}:{npm_admin_ext_port}"
 
 
 def _resolve_external_oidc_issuer(args: SetupArgs) -> str:

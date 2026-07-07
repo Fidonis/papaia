@@ -839,12 +839,26 @@ def test_resolve_reverse_proxy_autodetects_internal_on_http_first_run(repo_root)
     assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
 
 
-def test_derive_npm_admin_host_default_appends_port(repo_root):
+def test_derive_npm_admin_host_default_rewrites_docker_internal_to_localhost(repo_root):
+    # Plain-HTTP host.docker.internal → localhost so the oauth2-proxy CSRF
+    # cookie is scoped to the same origin the browser uses.
     result = bootstrap.derive_npm_admin_host_default("http://host.docker.internal", "8100")
-    assert result == "http://host.docker.internal:8100"
+    assert result == "http://localhost:8100"
+
+
+def test_derive_npm_admin_host_default_keeps_https_docker_internal(repo_root):
+    result = bootstrap.derive_npm_admin_host_default("https://host.docker.internal", "8100")
+    assert result == "https://host.docker.internal:8100"
+
+
+def test_derive_npm_admin_host_default_keeps_fqdn(repo_root):
+    result = bootstrap.derive_npm_admin_host_default("https://proxy.example.com", "8100")
+    assert result == "https://proxy.example.com:8100"
 
 
 def test_resolve_hostnames_npm_admin_host_derived_from_app_host(repo_root):
+    # host.docker.internal over plain HTTP is rewritten to localhost
+    # (same pattern as derive_librechat_url_default).
     tree = bootstrap.load_seed_tree(repo_root)
     args = bootstrap.SetupArgs(
         config_dir=repo_root,
@@ -852,7 +866,7 @@ def test_resolve_hostnames_npm_admin_host_derived_from_app_host(repo_root):
         non_interactive=True,
     )
     tree = bootstrap.resolve_hostnames(tree, args)
-    assert tree[""]["NPM_ADMIN_HOST"] == "http://host.docker.internal:8100"
+    assert tree[""]["NPM_ADMIN_HOST"] == "http://localhost:8100"
 
 
 def test_resolve_hostnames_npm_admin_host_arg_wins(repo_root):
@@ -890,7 +904,8 @@ def test_resolve_hostnames_npm_admin_host_fresh_init_uses_derived(repo_root):
         fresh_init=True,
     )
     tree = bootstrap.resolve_hostnames(tree, args)
-    assert tree[""]["NPM_ADMIN_HOST"] == "http://host.docker.internal:8100"
+    # host.docker.internal over plain HTTP is rewritten to localhost
+    assert tree[""]["NPM_ADMIN_HOST"] == "http://localhost:8100"
 
 
 def test_resolve_web_search_adds_unified_profile_when_enabled(repo_root):
