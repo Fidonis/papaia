@@ -238,9 +238,11 @@ class SetupArgs:
     auth_host: str | None = None
     librechat_host: str | None = None  # public LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT)
     localai_host: str | None = None  # public LocalAI URL (LOCALAI_PUBLIC_URL)
+    npm_admin_host: str | None = None  # public NPM admin URL (NPM_ADMIN_HOST)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
-    external_reverse_proxy: bool | None = None  # None = unset / auto-detect
+    external_reverse_proxy: bool | None = None  # None = unset / auto-detect (legacy alias)
+    reverse_proxy_provider: str | None = None  # None = sticky; "internal_nginx" | "external_proxy" | "no_proxy"
     enable_web_search: bool | None = None  # None = sticky / no change
     enable_local_ai: bool | None = None  # None = sticky / no change
     reranker_model: str | None = None  # None = sticky / no change
@@ -304,6 +306,21 @@ def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
 def derive_localai_url_default(app_host: str, localai_port: str) -> str:
     """Default browser-facing LocalAI URL: the public host plus the external LocalAI port."""
     return f"{app_host}:{localai_port}"
+
+
+def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str:
+    """Default browser-facing NPM admin URL.
+
+    Mirrors derive_librechat_url_default: plain-HTTP host.docker.internal is
+    rewritten to localhost so the oauth2-proxy CSRF cookie is scoped to the
+    same origin the browser uses. Without this, the callback from Keycloak
+    (which uses the redirect_url hostname) doesn't match the origin that set
+    the CSRF cookie, and browsers refuse to send it."""
+    parts = urlsplit(app_host)
+    host = app_host
+    if parts.scheme == "http" and parts.hostname == "host.docker.internal":
+        host = app_host.replace("host.docker.internal", "localhost", 1)
+    return f"{host}:{npm_admin_ext_port}"
 
 
 def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
@@ -486,6 +503,24 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if "HP_ALLOWED_HOSTS" in homepage:
         homepage["HP_ALLOWED_HOSTS"] = f"{_strip_scheme(app_host)}:{homepage_port}"
 
+    # --- NPM admin public URL ---
+    # Always derived regardless of REVERSE_PROXY_PROVIDER: resolve_reverse_proxy
+    # runs after resolve_hostnames and the value is only read by docker compose
+    # when the nginx profile is active. Storing it unconditionally lets the
+    # sticky value survive a temporary switch to external_proxy and back.
+    npm_admin_port = root.get("NPM_ADMIN_EXT_PORT", "8100")
+    derived_npm_admin = derive_npm_admin_host_default(app_host, npm_admin_port)
+    sticky_npm_admin = "" if args.fresh_init else root.get("NPM_ADMIN_HOST", "")
+    if sticky_npm_admin and common.is_placeholder(sticky_npm_admin):
+        sticky_npm_admin = ""
+    npm_admin_url = args.npm_admin_host or sticky_npm_admin or derived_npm_admin
+    if not args.npm_admin_host and not args.non_interactive and args.prompt is not None:
+        npm_admin_url = args.prompt(
+            "Public URL of NPM admin UI (NPM_ADMIN_HOST)",
+            sticky_npm_admin or derived_npm_admin,
+        )
+    root["NPM_ADMIN_HOST"] = npm_admin_url
+
     # --- Cookie-secure: always re-derived, never sticky ---
     root["OAUTH2_PROXY_COOKIE_SECURE"] = "true" if _is_https(app_host) else "false"
 
@@ -510,35 +545,56 @@ def resolve_multi_env(tree: EnvTree, args: SetupArgs) -> EnvTree:
 
 def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Decide whether the bundled Nginx Proxy Manager (`nginx` Compose
-    profile) is included.
+    profile) is included, and persist the choice as REVERSE_PROXY_PROVIDER.
 
-    `nginx` is excluded only via an explicit opt-in: either
-    `--external-reverse-proxy` (the operator has their own edge proxy) or
-    `--allow-direct-port-access` (the operator wants raw ports, no proxy at
-    all). Every other combination defaults to bundling `nginx`, so there is
-    no flag combination that *accidentally* leaves the stack with no proxy
-    in front of it. The interactive confirmation below is therefore reached
-    only via the explicit `--allow-direct-port-access` escape hatch -- a
-    last safety net against a copy-pasted flag, not a way to discover the
-    unsafe state by surprise.
+    Provider resolution order (highest wins):
+      1. args.reverse_proxy_provider  — explicit new-style flag
+      2. args.external_reverse_proxy  — legacy bool flag (translated to string)
+      3. stored REVERSE_PROXY_PROVIDER in the current tree (sticky re-run)
+      4. migration: derive from current COMPOSE_PROFILES when variable absent
+      5. first-run auto-detect: HTTPS app/auth host → external_proxy, else → internal_nginx
+
+    `nginx` is excluded for `external_proxy` (operator has their own proxy) and
+    `no_proxy` (explicit direct-port-access choice), but never accidentally: the
+    default is always `internal_nginx` when neither flag is given and no sticky
+    value exists.
     """
     root = tree.setdefault("", {})
     app_host = root.get("PAPAIA_HOST", "")
-    auth_host = root.get("AUTH_HOST", "")
-    auto_external = _is_https(app_host) or _is_https(auth_host)
-    external = (
-        args.external_reverse_proxy if args.external_reverse_proxy is not None else auto_external
-    )
 
+    # --- Resolve effective provider ---
+    prior_provider = root.get("REVERSE_PROXY_PROVIDER", "")
+
+    # Migration: derive from COMPOSE_PROFILES for installs without the variable
+    if not prior_provider:
+        existing_profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+        if "nginx" in existing_profiles:
+            prior_provider = "internal_nginx"
+
+    if args.reverse_proxy_provider:
+        provider = args.reverse_proxy_provider
+    elif args.external_reverse_proxy is not None:
+        provider = "external_proxy" if args.external_reverse_proxy else "internal_nginx"
+    elif prior_provider:
+        provider = prior_provider
+    else:
+        # First run, no stored value: auto-detect from URL scheme
+        auth_host = root.get("AUTH_HOST", "")
+        auto_external = _is_https(app_host) or _is_https(auth_host)
+        provider = "external_proxy" if auto_external else "internal_nginx"
+
+    root["REVERSE_PROXY_PROVIDER"] = provider
+    # Both external_proxy and no_proxy exclude the bundled nginx profile.
+    # no_proxy is an explicit operator choice, so unlike allow_direct_port_access
+    # it never triggers the "no proxy and no TLS" confirmation prompt.
+    external = provider in ("external_proxy", "no_proxy")
+
+    # --- Profile manipulation ---
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
     if not profiles:
         profiles = ["keycloak", "oauth2-proxy", "librechat", "litellm"]
     if root.get("AUTH_PROVIDER", "internal_keycloak") == "external_oidc":
-        # Nothing to start -- the bundled Keycloak (+ its Postgres, which
-        # shares the same `keycloak` compose profile) is not part of this
-        # topology when an external IdP is in use. Switching back to
-        # internal_keycloak later does not re-add it here (out of scope --
-        # only the forward transition is required).
+        # Bundled Keycloak (+ its Postgres) is not started with an external IdP.
         profiles = [p for p in profiles if p != "keycloak"]
     profiles = [p for p in profiles if p != "nginx"]
 
@@ -645,6 +701,7 @@ def write_run_summary(config_dir: Path, tree: EnvTree, *, fresh_init: bool, forc
         "app_host": root.get("PAPAIA_HOST", ""),
         "auth_host": root.get("AUTH_HOST", ""),
         "auth_provider": root.get("AUTH_PROVIDER", "internal_keycloak"),
+        "reverse_proxy_provider": root.get("REVERSE_PROXY_PROVIDER", "internal_nginx"),
         "external_reverse_proxy": "nginx" not in root.get("COMPOSE_PROFILES", "").split(","),
         "fresh_init": fresh_init,
         "force": force,
