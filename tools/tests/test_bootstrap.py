@@ -908,6 +908,48 @@ def test_resolve_hostnames_npm_admin_host_fresh_init_uses_derived(repo_root):
     assert tree[""]["NPM_ADMIN_HOST"] == "http://localhost:8100"
 
 
+def test_resolve_reverse_proxy_no_proxy_excludes_nginx(repo_root):
+    # Explicit no_proxy choice removes the nginx profile, same as external_proxy.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        reverse_proxy_provider="no_proxy",
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "no_proxy"
+    assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_no_proxy_skips_confirmation(repo_root):
+    # no_proxy is an explicit operator choice — the "no proxy and no TLS"
+    # confirmation prompt must never fire (unlike allow_direct_port_access).
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=False,
+        reverse_proxy_provider="no_proxy",
+        confirm=lambda _msg, _default: (_ for _ in ()).throw(
+            AssertionError("confirmation prompt must not be called for no_proxy")
+        ),
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_no_proxy_sticky_reused(repo_root):
+    # A stored no_proxy value is reused on a re-run without an explicit arg.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["REVERSE_PROXY_PROVIDER"] = "no_proxy"
+    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "no_proxy"
+    assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
 def test_resolve_web_search_adds_unified_profile_when_enabled(repo_root):
     tree = bootstrap.load_seed_tree(repo_root)
     tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx"

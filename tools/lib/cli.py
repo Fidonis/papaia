@@ -282,7 +282,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_setup.add_argument("--oidc-issuer")
     p_setup.add_argument(
-        "--reverse-proxy-provider", choices=["internal_nginx", "external_proxy"], default=None
+        "--reverse-proxy-provider",
+        choices=["internal_nginx", "external_proxy", "no_proxy"],
+        default=None,
     )
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)

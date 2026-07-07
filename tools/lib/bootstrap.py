@@ -242,7 +242,7 @@ class SetupArgs:
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect (legacy alias)
-    reverse_proxy_provider: str | None = None  # None = sticky; "internal_nginx" | "external_proxy"
+    reverse_proxy_provider: str | None = None  # None = sticky; "internal_nginx" | "external_proxy" | "no_proxy"
     enable_web_search: bool | None = None  # None = sticky / no change
     enable_local_ai: bool | None = None  # None = sticky / no change
     reranker_model: str | None = None  # None = sticky / no change
@@ -554,11 +554,10 @@ def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
       4. migration: derive from current COMPOSE_PROFILES when variable absent
       5. first-run auto-detect: HTTPS app/auth host → external_proxy, else → internal_nginx
 
-    `nginx` is excluded only via an explicit provider choice of `external_proxy`
-    or via the `--allow-direct-port-access` escape hatch (raw ports, no proxy at
-    all). Every other combination defaults to bundling `nginx`, so there is no
-    flag combination that *accidentally* leaves the stack with no proxy in front
-    of it.
+    `nginx` is excluded for `external_proxy` (operator has their own proxy) and
+    `no_proxy` (explicit direct-port-access choice), but never accidentally: the
+    default is always `internal_nginx` when neither flag is given and no sticky
+    value exists.
     """
     root = tree.setdefault("", {})
     app_host = root.get("PAPAIA_HOST", "")
@@ -585,7 +584,10 @@ def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
         provider = "external_proxy" if auto_external else "internal_nginx"
 
     root["REVERSE_PROXY_PROVIDER"] = provider
-    external = provider == "external_proxy"
+    # Both external_proxy and no_proxy exclude the bundled nginx profile.
+    # no_proxy is an explicit operator choice, so unlike allow_direct_port_access
+    # it never triggers the "no proxy and no TLS" confirmation prompt.
+    external = provider in ("external_proxy", "no_proxy")
 
     # --- Profile manipulation ---
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]

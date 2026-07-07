@@ -14,7 +14,7 @@
 #                     [--app-host=URL] [--auth-host=URL] [--librechat-host=URL]
 #                     [--auth-provider=internal_keycloak|external_oidc]
 #                     [--oidc-issuer=URL]
-#                     [--reverse-proxy-provider=internal_nginx|external_proxy]
+#                     [--reverse-proxy-provider=internal_nginx|external_proxy|no_proxy]
 #                     [--external-reverse-proxy|--no-external-reverse-proxy]
 #                     [--web-search|--no-web-search]
 #                     [--local-ai|--no-local-ai] [--localai-host=URL]
@@ -178,9 +178,9 @@ cmd_setup() {
             --reverse-proxy-provider=*)
                 reverse_proxy_provider="${1#*=}"
                 case "$reverse_proxy_provider" in
-                    internal_nginx|external_proxy) : ;;
+                    internal_nginx|external_proxy|no_proxy) : ;;
                     *)
-                        error "Invalid --reverse-proxy-provider value: '$reverse_proxy_provider' (must be 'internal_nginx' or 'external_proxy')"
+                        error "Invalid --reverse-proxy-provider value: '$reverse_proxy_provider' (must be 'internal_nginx', 'external_proxy', or 'no_proxy')"
                         exit 2
                         ;;
                 esac
@@ -230,6 +230,7 @@ cmd_setup() {
         if [ -n "${REVERSE_PROXY_PROVIDER_STICKY:-}" ]; then
             local _rp_label="Nginx Proxy Manager (bundled)"
             [ "$REVERSE_PROXY_PROVIDER_STICKY" = "external_proxy" ] && _rp_label="external proxy"
+            [ "$REVERSE_PROXY_PROVIDER_STICKY" = "no_proxy" ] && _rp_label="no proxy (direct port access)"
             info "  Reverse proxy     = $_rp_label"
             [ "$REVERSE_PROXY_PROVIDER_STICKY" = "internal_nginx" ] && [ -n "${NPM_ADMIN_HOST_STICKY:-}" ] && \
                 info "  NPM admin URL     = $NPM_ADMIN_HOST_STICKY"
@@ -301,14 +302,17 @@ cmd_setup() {
         if [ -z "$reverse_proxy_provider" ]; then
             local rp_default="1"
             [ "${REVERSE_PROXY_PROVIDER_STICKY:-}" = "external_proxy" ] && rp_default="2"
+            [ "${REVERSE_PROXY_PROVIDER_STICKY:-}" = "no_proxy" ] && rp_default="3"
             printf '\n%sReverse Proxy%s\n' "$CYAN" "$NC" >&2
             printf '  1) Bundled Nginx Proxy Manager  — papAIa ships its own reverse proxy (default)\n' >&2
             printf '  2) External proxy               — use your existing Traefik, Caddy, load balancer, ...\n' >&2
+            printf '  3) No proxy                     — direct port access (development / air-gapped setups)\n' >&2
             local rp_choice
             rp_choice="$(prompt_with_default "  Choose" "$rp_default")"
             case "$rp_choice" in
                 1|internal|internal_nginx) reverse_proxy_provider="internal_nginx" ;;
                 2|external|external_proxy) reverse_proxy_provider="external_proxy" ;;
+                3|none|no_proxy) reverse_proxy_provider="no_proxy" ;;
                 *)
                     warn "Unrecognized choice '$rp_choice'; defaulting to bundled Nginx Proxy Manager."
                     reverse_proxy_provider="internal_nginx"
