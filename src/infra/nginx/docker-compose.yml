@@ -48,6 +48,10 @@ services:
       # Distinct cookie name avoids collision with the main oauth2-proxy cookie
       # (browsers don't scope cookies by port, so both proxies share the same cookie jar)
       - --cookie-name=_oauth2_proxy_npm
+      # Embed CSRF nonce in the encrypted state parameter instead of a separate cookie.
+      # Prevents "invalid CSRF token" on first login in Chromium-based browsers when
+      # Keycloak (HTTPS) redirects back to the HTTP admin URL (schemeful-same-site).
+      - --cookie-csrf-per-request=true
       - --redirect-url=${NPM_ADMIN_HOST}/oauth2/callback
       - --upstream=http://nginx-proxy-manager:81
       - --http-address=0.0.0.0:4180
