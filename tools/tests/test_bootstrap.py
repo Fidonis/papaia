@@ -594,9 +594,14 @@ def test_resolve_multi_env_named_env(repo_root):
 
 
 def test_resolve_reverse_proxy_excludes_nginx_when_external(repo_root):
+    # Explicit provider choice wins regardless of PAPAIA_HOST scheme.
     tree = bootstrap.load_seed_tree(repo_root)
     tree[""]["PAPAIA_HOST"] = "https://papaia.example.com"
-    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        reverse_proxy_provider="external_proxy",
+    )
     tree = bootstrap.resolve_reverse_proxy(tree, args)
     profiles = tree[""]["COMPOSE_PROFILES"].split(",")
     assert "nginx" not in profiles
@@ -699,6 +704,139 @@ def test_resolve_reverse_proxy_external_skips_direct_access_confirmation(repo_ro
     )
     tree = bootstrap.resolve_reverse_proxy(tree, args)
     assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_stores_provider_in_tree(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        reverse_proxy_provider="internal_nginx",
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "internal_nginx"
+    assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_external_proxy_provider_excludes_nginx(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        reverse_proxy_provider="external_proxy",
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "external_proxy"
+    assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_provider_sticky_reused_when_arg_absent(repo_root):
+    # A value stored from a prior run is reused when no explicit arg is given.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["REVERSE_PROXY_PROVIDER"] = "external_proxy"
+    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "external_proxy"
+    assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_provider_arg_wins_over_sticky(repo_root):
+    # An explicit --reverse-proxy-provider flag overrides the stored sticky value.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["REVERSE_PROXY_PROVIDER"] = "external_proxy"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        reverse_proxy_provider="internal_nginx",
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "internal_nginx"
+    assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_legacy_bool_flag_translates_to_provider(repo_root):
+    # The old --external-reverse-proxy flag is preserved as an alias.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        external_reverse_proxy=True,
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "external_proxy"
+    assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_legacy_bool_false_translates_to_internal(repo_root):
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["REVERSE_PROXY_PROVIDER"] = "external_proxy"  # prior sticky
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        external_reverse_proxy=False,
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "internal_nginx"
+    assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_provider_arg_wins_over_legacy_bool(repo_root):
+    # New-style --reverse-proxy-provider takes precedence over legacy bool flag.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    args = bootstrap.SetupArgs(
+        config_dir=repo_root,
+        non_interactive=True,
+        reverse_proxy_provider="internal_nginx",
+        external_reverse_proxy=True,  # conflicting legacy flag — new style wins
+    )
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "internal_nginx"
+    assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_migrates_from_profile_only_state(repo_root):
+    # Existing installs that have nginx in COMPOSE_PROFILES but no
+    # REVERSE_PROXY_PROVIDER are migrated to internal_nginx automatically.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx"
+    del tree[""]["REVERSE_PROXY_PROVIDER"]
+    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "internal_nginx"
+    assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_autodetects_external_on_https_first_run(repo_root):
+    # First run with no stored value and no nginx in profiles: HTTPS host auto-detects external_proxy.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "https://papaia.example.com"
+    del tree[""]["REVERSE_PROXY_PROVIDER"]
+    # Clear nginx from profiles too so the migration path doesn't set internal_nginx
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm"
+    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "external_proxy"
+    assert "nginx" not in tree[""]["COMPOSE_PROFILES"].split(",")
+
+
+def test_resolve_reverse_proxy_autodetects_internal_on_http_first_run(repo_root):
+    # First run with no stored value and no nginx in profiles: HTTP host auto-detects internal_nginx.
+    tree = bootstrap.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    del tree[""]["REVERSE_PROXY_PROVIDER"]
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm"
+    args = bootstrap.SetupArgs(config_dir=repo_root, non_interactive=True)
+    tree = bootstrap.resolve_reverse_proxy(tree, args)
+    assert tree[""]["REVERSE_PROXY_PROVIDER"] == "internal_nginx"
+    assert "nginx" in tree[""]["COMPOSE_PROFILES"].split(",")
 
 
 def test_resolve_web_search_adds_unified_profile_when_enabled(repo_root):

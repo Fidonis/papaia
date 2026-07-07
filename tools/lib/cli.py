@@ -79,6 +79,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
             ("true" if "localai" in profiles else "false") if config_seeded else ""
         ),
         "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
+        "REVERSE_PROXY_PROVIDER_STICKY": root.get("REVERSE_PROXY_PROVIDER", ""),
         "EXTERNAL_REVERSE_PROXY_STICKY": (
             "false" if "nginx" in profiles else ("true" if profiles else "")
         ),
@@ -175,6 +176,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_host=args.localai_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
+        reverse_proxy_provider=args.reverse_proxy_provider or None,
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
         enable_web_search=_tristate(args.enable_web_search),
         enable_local_ai=_tristate(args.enable_local_ai),
@@ -272,6 +274,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
     )
     p_setup.add_argument("--oidc-issuer")
+    p_setup.add_argument(
+        "--reverse-proxy-provider", choices=["internal_nginx", "external_proxy"], default=None
+    )
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
