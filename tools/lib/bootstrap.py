@@ -745,11 +745,15 @@ def persist_tree(tree: EnvTree, config_dir: Path, repo_root: Path) -> None:
 
 
 def seed_extension_env(ext_path: Path, config_dir: Path) -> None:
-    """Non-destructively append an extension's .env.example keys to the
-    core config's .env.
+    """Non-destructively seed an extension's .env.example into ext_path/.env.
+
+    The extension's .env sits next to its docker-compose.yml so Docker Compose
+    picks it up automatically for both env_file: directives and variable
+    substitution.  config_dir is accepted for API symmetry but not used as
+    the write target.
 
     Rules:
-    - Keys already present in config_dir/.env are never touched (sticky).
+    - Keys already present in ext_path/.env are never touched (sticky).
     - Values marked GENERATE_* get a fresh random secret.
     - All other values (CHANGE_ME markers, literals) are copied verbatim.
     """
@@ -758,7 +762,7 @@ def seed_extension_env(ext_path: Path, config_dir: Path) -> None:
         return
 
     example_values = common.parse_env_file(example_path)
-    env_path = config_dir / ".env"
+    env_path = ext_path / ".env"
     existing_keys = set(common.parse_env_file(env_path).keys())
 
     new_pairs: list[tuple[str, str]] = []

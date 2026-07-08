@@ -6,7 +6,7 @@ description: "Paperless-ngx document management"
 
 networks:
   app_network: papaia-paperless-net
-  attach: [nginx, librechat]
+  attach: [nginx-proxy-manager, librechat]
 
 integration:
   librechat: integration/ai/librechat/librechat.yaml

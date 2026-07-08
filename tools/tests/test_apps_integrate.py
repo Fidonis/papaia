@@ -56,10 +56,13 @@ def test_integrate_seeds_env_generates_secrets(repo_root, config_dir):
     _setup(repo_root, config_dir)
     cmd_integrate(_integrate_args(config_dir, repo_root))
 
-    env_content = (config_dir / ".env").read_text(encoding="utf-8")
+    # Extension env is written to ext_path/.env, not config_dir/.env
+    ext_env_path = EXT_PAPERLESS / ".env"
+    assert ext_env_path.is_file(), "ext_path/.env must be created by integrate"
+    env_content = ext_env_path.read_text(encoding="utf-8")
     from lib import common
 
-    parsed = common.parse_env_file(config_dir / ".env")
+    parsed = common.parse_env_file(ext_env_path)
     # GENERATE_* keys must receive a real secret (non-placeholder, non-empty)
     assert "PAPERLESS_DBPASS" in parsed
     assert not common.marks_generated_secret(parsed["PAPERLESS_DBPASS"])
@@ -69,7 +72,7 @@ def test_integrate_seeds_env_generates_secrets(repo_root, config_dir):
     # Literal defaults are copied verbatim
     assert parsed["PAPERLESS_EXT_PORT"] == "8010"
     assert parsed["PAPERLESS_DBUSER"] == "paperless"
-    # CHANGE_ME keys that are NOT already in core .env stay as-is
+    # CHANGE_ME keys stay as-is
     assert parsed["PAPERLESS_PUBLIC_URL"] == "CHANGE_ME"
     # Section banner is present
     assert "Extension: paperless" in env_content
@@ -81,10 +84,11 @@ def test_integrate_is_idempotent(repo_root, config_dir):
 
     from lib import common
 
-    secret_after_first = common.parse_env_file(config_dir / ".env")["PAPERLESS_DBPASS"]
+    ext_env = EXT_PAPERLESS / ".env"
+    secret_after_first = common.parse_env_file(ext_env)["PAPERLESS_DBPASS"]
 
     cmd_integrate(_integrate_args(config_dir, repo_root))
-    secret_after_second = common.parse_env_file(config_dir / ".env")["PAPERLESS_DBPASS"]
+    secret_after_second = common.parse_env_file(ext_env)["PAPERLESS_DBPASS"]
 
     assert secret_after_first == secret_after_second
 
@@ -167,7 +171,7 @@ def test_generate_overrides_uses_repo_root(repo_root, config_dir):
     written = gen_override.generate_overrides(config_dir, repo_root)
     assert len(written) == 1
     override = yaml.safe_load(written[0].read_text(encoding="utf-8"))
-    assert override["services"]["nginx"]["networks"] == ["papaia-paperless-net"]
+    assert override["services"]["nginx-proxy-manager"]["networks"] == ["papaia-paperless-net"]
     assert override["networks"]["papaia-paperless-net"]["external"] is True
 
 
