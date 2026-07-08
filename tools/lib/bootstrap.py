@@ -737,3 +737,56 @@ def persist_tree(tree: EnvTree, config_dir: Path, repo_root: Path) -> None:
         common.write_env_file(
             repo_target, values, template_path=template_path if template_path.is_file() else None
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Extension env seeding
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def seed_extension_env(ext_path: Path, config_dir: Path) -> None:
+    """Non-destructively append an extension's .env.example keys to the
+    core config's .env.
+
+    Rules:
+    - Keys already present in config_dir/.env are never touched (sticky).
+    - Values marked GENERATE_* get a fresh random secret.
+    - All other values (CHANGE_ME markers, literals) are copied verbatim.
+    """
+    example_path = ext_path / ".env.example"
+    if not example_path.is_file():
+        return
+
+    example_values = common.parse_env_file(example_path)
+    env_path = config_dir / ".env"
+    existing_keys = set(common.parse_env_file(env_path).keys())
+
+    new_pairs: list[tuple[str, str]] = []
+    for key, template_value in example_values.items():
+        if key in existing_keys:
+            continue
+        if common.marks_generated_secret(template_value):
+            new_pairs.append((key, common.generate_secret(key)))
+        else:
+            new_pairs.append((key, template_value))
+
+    if not new_pairs:
+        return
+
+    import yaml as _yaml
+
+    try:
+        manifest = _yaml.safe_load((ext_path / "papaia-app.yaml").read_text(encoding="utf-8")) or {}
+        ext_name = manifest.get("name", ext_path.name)
+    except Exception:
+        ext_name = ext_path.name
+
+    existing_content = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    lines: list[str] = []
+    if existing_content and not existing_content.endswith("\n"):
+        lines.append("")
+    lines.append(f"# --- Extension: {ext_name} (seeded by papaia-ctl) ---")
+    for k, v in new_pairs:
+        lines.append(f"{k}={v}")
+
+    common.atomic_write(env_path, existing_content + "\n".join(lines) + "\n")

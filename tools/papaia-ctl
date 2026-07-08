@@ -21,7 +21,12 @@
 #                     [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl up     [PROFILE...] [--config-dir=PATH]
 #   papaia-ctl down   [PROFILE...] [--volumes] [--config-dir=PATH]
-#   papaia-ctl apps render [--config-dir=PATH]
+#   papaia-ctl apps render      [--config-dir=PATH]
+#   papaia-ctl apps integrate   <name> --path=PATH [--version=VER] [--config-dir=PATH]
+#   papaia-ctl apps deintegrate <name> [--config-dir=PATH]
+#   papaia-ctl apps install     <name> [--config-dir=PATH]
+#   papaia-ctl apps update      <name> [--config-dir=PATH]
+#   papaia-ctl apps remove      <name> [--volumes] [--config-dir=PATH]
 #   papaia-ctl help
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
@@ -639,6 +644,139 @@ cmd_apps_render() {
     success "Render complete."
 }
 
+cmd_apps_integrate() {
+    local config_dir="$DEFAULT_CONFIG_DIR" ext_name="" ext_path="" ext_version=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --path=*) ext_path="${1#*=}" ;;
+            --version=*) ext_version="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) ext_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$ext_name" ]; then
+        error "Usage: papaia-ctl apps integrate <name> --path=PATH [--version=VER]"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local -a extra=()
+    [ -n "$ext_path" ]    && extra+=(--path="$ext_path")
+    [ -n "$ext_version" ] && extra+=(--version="$ext_version")
+    py_cli apps-integrate --name="$ext_name" "${extra[@]}"
+    success "apps integrate complete: $ext_name"
+}
+
+cmd_apps_deintegrate() {
+    local config_dir="$DEFAULT_CONFIG_DIR" ext_name=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) ext_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$ext_name" ]; then
+        error "Usage: papaia-ctl apps deintegrate <name>"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli apps-deintegrate --name="$ext_name"
+    success "apps deintegrate complete: $ext_name"
+}
+
+_apps_ext_path() {
+    local ext_name="$1"
+    py_cli apps-ext-path --name="$ext_name"
+}
+
+cmd_apps_install() {
+    local config_dir="$DEFAULT_CONFIG_DIR" ext_name=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) ext_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$ext_name" ]; then
+        error "Usage: papaia-ctl apps install <name>"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local ext_path
+    ext_path="$(_apps_ext_path "$ext_name")"
+    info "Starting extension $ext_name from $ext_path"
+    docker compose -f "$ext_path/docker-compose.yml" up -d
+    success "apps install complete: $ext_name"
+}
+
+cmd_apps_update() {
+    local config_dir="$DEFAULT_CONFIG_DIR" ext_name=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) ext_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$ext_name" ]; then
+        error "Usage: papaia-ctl apps update <name>"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local ext_path
+    ext_path="$(_apps_ext_path "$ext_name")"
+    info "Pulling latest images for $ext_name..."
+    docker compose -f "$ext_path/docker-compose.yml" pull
+    docker compose -f "$ext_path/docker-compose.yml" up -d
+    info "Re-rendering configuration..."
+    py_cli render
+    success "apps update complete: $ext_name"
+}
+
+cmd_apps_remove() {
+    local config_dir="$DEFAULT_CONFIG_DIR" ext_name="" volumes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --volumes) volumes=1 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) ext_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$ext_name" ]; then
+        error "Usage: papaia-ctl apps remove <name> [--volumes]"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local ext_path
+    ext_path="$(_apps_ext_path "$ext_name")"
+    info "Stopping extension $ext_name..."
+    if [ "$volumes" -eq 1 ]; then
+        docker compose -f "$ext_path/docker-compose.yml" down -v
+    else
+        docker compose -f "$ext_path/docker-compose.yml" down
+    fi
+    py_cli apps-deintegrate --name="$ext_name"
+    success "apps remove complete: $ext_name"
+}
+
 _require_setup_done() {
     if [ ! -f "$CONFIG_DIR/.env" ] || [ ! -f "$CONFIG_DIR/deployment.yaml" ]; then
         error "No setup found at $CONFIG_DIR. Run 'papaia-ctl setup' first."
@@ -667,8 +805,13 @@ case "$cmd" in
     apps)
         sub="${1:-}"; shift || true
         case "$sub" in
-            render) cmd_apps_render "$@" ;;
-            *) error "Unknown 'apps' subcommand: ${sub:-<none>}. Only 'apps render' is implemented."; exit 2 ;;
+            render)      cmd_apps_render "$@" ;;
+            integrate)   cmd_apps_integrate "$@" ;;
+            deintegrate) cmd_apps_deintegrate "$@" ;;
+            install)     cmd_apps_install "$@" ;;
+            update)      cmd_apps_update "$@" ;;
+            remove)      cmd_apps_remove "$@" ;;
+            *) error "Unknown 'apps' subcommand: '${sub:-<none>}'. Valid: render, integrate, deintegrate, install, update, remove."; exit 2 ;;
         esac
         ;;
     help|-h|--help) usage ;;

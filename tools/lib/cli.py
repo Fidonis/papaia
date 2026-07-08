@@ -219,7 +219,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     _sync_deployment_manifest(config_dir, tree, repo_root)
 
     render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir)
+    gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
@@ -247,11 +247,160 @@ def cmd_render(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir)
+    gen_override.generate_overrides(config_dir, repo_root)
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     print("Rendered.")
+    return 0
+
+
+def _load_deployment(config_dir: Path) -> dict:
+    deployment_path = config_dir / "deployment.yaml"
+    if not deployment_path.is_file():
+        return {}
+    return yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
+
+
+def _save_deployment(config_dir: Path, deployment: dict) -> None:
+    common.atomic_write(
+        config_dir / "deployment.yaml",
+        yaml.safe_dump(deployment, sort_keys=False, default_flow_style=False),
+    )
+
+
+def _resolve_ext_path(ext: dict, repo_root: Path) -> Path:
+    p = Path(ext["path"])
+    if not p.is_absolute():
+        p = repo_root / p
+    return p.resolve()
+
+
+def _print_keycloak_checklist(name: str, manifest: dict, ext_path: Path) -> None:
+    integration = manifest.get("integration") or {}
+    keycloak_cfg = integration.get("keycloak") or {}
+    clients = keycloak_cfg.get("clients") or []
+    mappers = keycloak_cfg.get("client_mappers") or {}
+
+    if not clients and not mappers:
+        return
+
+    sep = "─" * 65
+    print()
+    print(f"Extension '{name}' — Keycloak steps required before 'papaia-ctl apps install'")
+    print(sep)
+    print()
+    if clients:
+        print("1. Import these OIDC clients in the 'papaia' realm:")
+        print()
+        for rel in clients:
+            print(f"   {ext_path / rel}")
+        print()
+        print("   Keycloak Admin UI → Clients → Import client.")
+        print()
+    if mappers:
+        step = 2 if clients else 1
+        print(f"{step}. Add protocol mappers to these existing clients:")
+        print()
+        for client_name, mapper_paths in mappers.items():
+            for rel in mapper_paths:
+                print(f"   {client_name}: {ext_path / rel}")
+        print()
+        print("   Clients → <client> → Client scopes → Dedicated → Add mapper → By configuration.")
+        print()
+
+
+def cmd_integrate(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    if not deployment:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+
+    extensions: list[dict] = deployment.setdefault("extensions", [])
+    existing = next((e for e in extensions if e.get("name") == name), None)
+
+    if existing:
+        if args.path:
+            existing["path"] = str(Path(args.path).resolve())
+        if args.version:
+            existing["version"] = args.version
+        existing["active"] = True
+        ext_path = _resolve_ext_path(existing, repo_root)
+    else:
+        if not args.path:
+            print(
+                f"ERROR: --path is required when integrating a new extension '{name}'.",
+                file=sys.stderr,
+            )
+            return 2
+        ext_path = Path(args.path).resolve()
+        entry: dict = {"name": name, "path": str(ext_path), "active": True}
+        if args.version:
+            entry["version"] = args.version
+        extensions.append(entry)
+
+    manifest_path = ext_path / "papaia-app.yaml"
+    if not manifest_path.is_file():
+        print(f"ERROR: {manifest_path} not found.", file=sys.stderr)
+        return 2
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+
+    bootstrap.seed_extension_env(ext_path, config_dir)
+    _save_deployment(config_dir, deployment)
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
+
+    _print_keycloak_checklist(name, manifest, ext_path)
+    print(f"Integration registered: {name}")
+    return 0
+
+
+def cmd_deintegrate(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    if not deployment:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+
+    extensions: list[dict] = deployment.get("extensions") or []
+    entry = next((e for e in extensions if e.get("name") == name), None)
+    if entry is None:
+        print(f"ERROR: extension '{name}' is not registered.", file=sys.stderr)
+        return 2
+
+    entry["active"] = False
+    _save_deployment(config_dir, deployment)
+
+    override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
+    override_file.unlink(missing_ok=True)
+
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
+
+    print(f"Extension deintegrated: {name}")
+    return 0
+
+
+def cmd_ext_path(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    extensions: list[dict] = deployment.get("extensions") or []
+    entry = next((e for e in extensions if e.get("name") == name), None)
+    if entry is None:
+        print(f"ERROR: extension '{name}' is not registered.", file=sys.stderr)
+        return 2
+
+    print(_resolve_ext_path(entry, repo_root))
     return 0
 
 
@@ -296,6 +445,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_render = sub.add_parser("render")
     p_render.set_defaults(func=cmd_render)
+
+    p_integrate = sub.add_parser("apps-integrate")
+    p_integrate.add_argument("--name", required=True)
+    p_integrate.add_argument("--path", default=None)
+    p_integrate.add_argument("--version", default=None)
+    p_integrate.set_defaults(func=cmd_integrate)
+
+    p_deintegrate = sub.add_parser("apps-deintegrate")
+    p_deintegrate.add_argument("--name", required=True)
+    p_deintegrate.set_defaults(func=cmd_deintegrate)
+
+    p_ext_path = sub.add_parser("apps-ext-path")
+    p_ext_path.add_argument("--name", required=True)
+    p_ext_path.set_defaults(func=cmd_ext_path)
 
     return parser
 

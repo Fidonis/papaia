@@ -50,18 +50,25 @@ def generate_override(extension_manifest: dict, config_dir: Path) -> Path | None
     return out_path
 
 
-def generate_overrides(config_dir: Path) -> list[Path]:
+def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[Path]:
     """Read deployment.yaml's active extensions and (re-)generate every
-    Seam-1 override. Always empty on the lean core today."""
+    Seam-1 override. Always empty on the lean core today.
+
+    `repo_root` is used as the base when resolving relative extension paths
+    from deployment.yaml (matching render_core.render's behaviour). When
+    omitted, Path.cwd() is used — kept for backwards compatibility but
+    callers should always supply repo_root.
+    """
     deployment_path = config_dir / "deployment.yaml"
     if not deployment_path.is_file():
         return []
     deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
     active_extensions = [e for e in (deployment.get("extensions") or []) if e.get("active")]
 
+    base = repo_root if repo_root is not None else Path.cwd()
     written: list[Path] = []
     for ext in active_extensions:
-        manifest_path = Path(ext["path"]) / "papaia-app.yaml"
+        manifest_path = (base / ext["path"]) / "papaia-app.yaml"
         if not manifest_path.is_file():
             continue
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
