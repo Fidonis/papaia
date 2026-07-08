@@ -447,6 +447,27 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_addon_networks(args: argparse.Namespace) -> int:
+    """Print the Docker network name for each active addon (one per line).
+
+    Used by papaia-ctl up to pre-create external networks before the core
+    compose starts, so the stack comes up cleanly even when no addon container
+    is running yet.
+    """
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployment = _load_deployment(config_dir)
+    active_addons = [a for a in (deployment.get("addons") or []) if a.get("active")]
+    for addon in active_addons:
+        manifest_path = _resolve_addon_path(addon, repo_root) / "papaia-app.yaml"
+        if manifest_path.is_file():
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            net = (manifest.get("networks") or {}).get("app_network")
+            if net:
+                print(net)
+    return 0
+
+
 def cmd_addon_path(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -522,6 +543,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_uninstall = sub.add_parser("addon-uninstall")
     p_addon_uninstall.add_argument("--name", required=True)
     p_addon_uninstall.set_defaults(func=cmd_addon_uninstall)
+
+    p_addon_networks = sub.add_parser("addon-networks")
+    p_addon_networks.set_defaults(func=cmd_addon_networks)
 
     p_addon_path = sub.add_parser("addon-path")
     p_addon_path.add_argument("--name", required=True)

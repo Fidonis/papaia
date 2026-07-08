@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from lib import bootstrap, common, gen_override
-from lib.cli import cmd_addon_install, cmd_addon_remove, cmd_addon_uninstall, cmd_addon_start, cmd_addon_path
+from lib.cli import cmd_addon_install, cmd_addon_networks, cmd_addon_remove, cmd_addon_uninstall, cmd_addon_start, cmd_addon_path
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ADDON_PAPERLESS = FIXTURES_DIR / "addon-paperless"
@@ -230,6 +230,39 @@ def test_uninstall_unknown_addon_returns_2(repo_root, config_dir):
     )
     result = cmd_addon_uninstall(args)
     assert result == 2
+
+
+# ── addon-networks ────────────────────────────────────────────────────────────
+
+
+def test_addon_networks_returns_network_for_active_addon(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    addon_dst = repo_root / "addons" / "papaia-addon-paperless"
+    shutil.copytree(ADDON_PAPERLESS, addon_dst)
+
+    cmd_addon_install(
+        argparse.Namespace(
+            config_dir=str(config_dir),
+            repo_root=str(repo_root),
+            name="paperless",
+            path=str(addon_dst),
+            version=None,
+        )
+    )
+
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    result = cmd_addon_networks(args)
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "papaia-paperless-net" in out
+
+
+def test_addon_networks_empty_when_no_active_addons(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    result = cmd_addon_networks(args)
+    assert result == 0
+    assert capsys.readouterr().out.strip() == ""
 
 
 # ── addon-path ────────────────────────────────────────────────────────────────

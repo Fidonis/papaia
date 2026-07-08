@@ -86,7 +86,12 @@ def _deep_merge(base, overlay):
         for key, value in overlay.items():
             merged[key] = _deep_merge(merged[key], value) if key in merged else value
         return merged
-    # Scalars and lists: the higher layer replaces the lower one wholesale.
+    if isinstance(base, list) and isinstance(overlay, list):
+        # Append-and-dedup: overlay items not already present are appended.
+        # repr() gives a stable content-identity key for dicts/lists/scalars.
+        seen = {repr(x) for x in base}
+        return list(base) + [x for x in overlay if repr(x) not in seen]
+    # Scalars: the higher layer replaces the lower one wholesale.
     return overlay
 
 

@@ -93,6 +93,62 @@ def test_render_merges_active_addon_fragment(repo_root, config_dir):
     assert "PaperlessMCP" in rendered["mcpServers"]
 
 
+def test_render_merges_addon_allowed_domains(repo_root, config_dir):
+    """allowedDomains from an addon fragment is appended to the base list, not replaced."""
+    addon_dst = repo_root / "addons" / "papaia-addon-paperless"
+    shutil.copytree(FIXTURES_DIR / "addon-paperless", addon_dst)
+
+    _setup_minimal(repo_root, config_dir)
+    deployment_path = config_dir / "deployment.yaml"
+    manifest = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    manifest["addons"] = [
+        {
+            "name": "paperless",
+            "path": "addons/papaia-addon-paperless",
+            "version": "1.0.0",
+            "active": True,
+        }
+    ]
+    deployment_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    render_core.render(config_dir, repo_root)
+
+    rendered = yaml.safe_load(
+        (config_dir / "ai/librechat/librechat.yaml").read_text(encoding="utf-8")
+    )
+    domains = rendered["mcpSettings"]["allowedDomains"]
+    assert "http://mcp-firecrawl:8080" in domains, "base domain must be preserved"
+    assert "http://paperless-mcp:8000" in domains, "addon domain must be appended"
+
+
+def test_render_idempotent_list_merge(repo_root, config_dir):
+    """Running render twice with an active addon must not duplicate list entries."""
+    addon_dst = repo_root / "addons" / "papaia-addon-paperless"
+    shutil.copytree(FIXTURES_DIR / "addon-paperless", addon_dst)
+
+    _setup_minimal(repo_root, config_dir)
+    deployment_path = config_dir / "deployment.yaml"
+    manifest = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    manifest["addons"] = [
+        {
+            "name": "paperless",
+            "path": "addons/papaia-addon-paperless",
+            "version": "1.0.0",
+            "active": True,
+        }
+    ]
+    deployment_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    render_core.render(config_dir, repo_root)
+    render_core.render(config_dir, repo_root)
+
+    rendered = yaml.safe_load(
+        (config_dir / "ai/librechat/librechat.yaml").read_text(encoding="utf-8")
+    )
+    domains = rendered["mcpSettings"]["allowedDomains"]
+    assert domains.count("http://paperless-mcp:8000") == 1, "domain must not be duplicated"
+
+
 def test_render_lean_core_addons_list_is_empty_noop(repo_root, config_dir):
     _setup_minimal(repo_root, config_dir)
     deployment = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))

@@ -583,6 +583,16 @@ cmd_up() {
 
     local env_file="$REPO_ROOT/src/.env"
 
+    # Ensure Docker networks for active addons exist before core compose up.
+    # The Seam-1 overrides declare addon networks as external:true; if an addon
+    # hasn't been started yet the network doesn't exist and compose would fail.
+    while IFS= read -r net_name; do
+        if ! docker network inspect "$net_name" >/dev/null 2>&1; then
+            info "Creating addon network: $net_name"
+            docker network create "$net_name"
+        fi
+    done < <(py_cli addon-networks 2>/dev/null || true)
+
     local -a compose_overrides=()
     if [ -d "$CONFIG_DIR/overrides" ]; then
         for f in "$CONFIG_DIR"/overrides/docker-compose.*.override.yml; do
