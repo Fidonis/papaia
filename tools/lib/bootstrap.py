@@ -740,29 +740,39 @@ def persist_tree(tree: EnvTree, config_dir: Path, repo_root: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Extension env seeding
+# Addon env seeding
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def seed_extension_env(ext_path: Path, config_dir: Path) -> None:
-    """Non-destructively seed an extension's .env.example into ext_path/.env.
+def seed_addon_env(addon_path: Path, config_dir: Path) -> None:
+    """Non-destructively seed an addon's .env.example into <config>/addons/<name>/.env.
 
-    The extension's .env sits next to its docker-compose.yml so Docker Compose
-    picks it up automatically for both env_file: directives and variable
-    substitution.  config_dir is accepted for API symmetry but not used as
-    the write target.
+    The canonical .env lives in the config bundle so the addon repo checkout
+    stays git-pristine (read-only at deploy time). Before starting containers,
+    materialize_addon_env copies the bundle .env into the checkout.
 
     Rules:
-    - Keys already present in ext_path/.env are never touched (sticky).
+    - Keys already present in the bundle .env are never touched (sticky).
     - Values marked GENERATE_* get a fresh random secret.
     - All other values (CHANGE_ME markers, literals) are copied verbatim.
     """
-    example_path = ext_path / ".env.example"
+    example_path = addon_path / ".env.example"
     if not example_path.is_file():
         return
 
+    import yaml as _yaml
+
+    try:
+        manifest = _yaml.safe_load((addon_path / "papaia-app.yaml").read_text(encoding="utf-8")) or {}
+        addon_name = manifest.get("name", addon_path.name)
+    except Exception:
+        addon_name = addon_path.name
+
+    bundle_dir = config_dir / "addons" / addon_name
+    common.ensure_dir(bundle_dir)
+    env_path = bundle_dir / ".env"
+
     example_values = common.parse_env_file(example_path)
-    env_path = ext_path / ".env"
     existing_keys = set(common.parse_env_file(env_path).keys())
 
     new_pairs: list[tuple[str, str]] = []
@@ -777,20 +787,26 @@ def seed_extension_env(ext_path: Path, config_dir: Path) -> None:
     if not new_pairs:
         return
 
-    import yaml as _yaml
-
-    try:
-        manifest = _yaml.safe_load((ext_path / "papaia-app.yaml").read_text(encoding="utf-8")) or {}
-        ext_name = manifest.get("name", ext_path.name)
-    except Exception:
-        ext_name = ext_path.name
-
     existing_content = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
     lines: list[str] = []
     if existing_content and not existing_content.endswith("\n"):
         lines.append("")
-    lines.append(f"# --- Extension: {ext_name} (seeded by papaia-ctl) ---")
+    lines.append(f"# --- Addon: {addon_name} (seeded by papaia-ctl) ---")
     for k, v in new_pairs:
         lines.append(f"{k}={v}")
 
     common.atomic_write(env_path, existing_content + "\n".join(lines) + "\n")
+
+
+def materialize_addon_env(config_dir: Path, addon_path: Path, addon_name: str) -> None:
+    """Copy the canonical bundle .env into the addon checkout before compose up.
+
+    The addon's docker-compose.yml uses `env_file: ./.env`. This function
+    ensures the checkout .env is always in sync with the config bundle.
+    """
+    import shutil
+
+    bundle_env = config_dir / "addons" / addon_name / ".env"
+    target_env = addon_path / ".env"
+    if bundle_env.is_file():
+        shutil.copy2(bundle_env, target_env)

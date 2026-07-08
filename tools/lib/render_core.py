@@ -3,12 +3,12 @@
 Renders the effective core configuration into $PAPAIA_CONFIG_DIR:
 
     repo base (src/<target>)
-      + active-extension fragments (extensions/<name>/integration/<target>)
+      + active-addon fragments (addons/<name>/integration/<target>)
       + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>)
       --render--> $PAPAIA_CONFIG_DIR/<target>
 
-On the lean core, `deployment.yaml`'s `extensions` list is always empty, so
-the extension layer is a real loop that iterates zero times -- not a stub.
+On the lean core, `deployment.yaml`'s `addons` list is always empty, so
+the addon layer is a real loop that iterates zero times -- not a stub.
 
 Realm-secret baking supersedes Keycloak's native `${env.VAR}` import-time
 substitution (found unreliable in practice): secrets are substituted into
@@ -52,14 +52,14 @@ def render(config_dir: Path, repo_root: Path) -> None:
     deployment = {}
     if deployment_path.is_file():
         deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
-    active_extensions = [e for e in (deployment.get("extensions") or []) if e.get("active")]
+    active_addons = [a for a in (deployment.get("addons") or []) if a.get("active")]
 
     for target in BASE_RENDER_TARGETS:
         base_path = repo_root / "src" / target
         if base_path.is_dir():
-            _render_dir(target, repo_root, config_dir, active_extensions)
+            _render_dir(target, repo_root, config_dir, active_addons)
         else:
-            _render_file(target, repo_root, config_dir, active_extensions)
+            _render_file(target, repo_root, config_dir, active_addons)
 
     bake_realm_secrets(repo_root, config_dir)
 
@@ -91,7 +91,7 @@ def _deep_merge(base, overlay):
 
 
 def _render_file(
-    rel_path: str, repo_root: Path, config_dir: Path, active_extensions: list[dict]
+    rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> None:
     base_path = repo_root / "src" / rel_path
     if not base_path.is_file():
@@ -99,8 +99,8 @@ def _render_file(
 
     if base_path.suffix in _STRUCTURED_SUFFIXES:
         merged = _load_structured(base_path)
-        for ext in active_extensions:
-            frag_path = repo_root / ext["path"] / "integration" / rel_path
+        for addon in active_addons:
+            frag_path = repo_root / addon["path"] / "integration" / rel_path
             if frag_path.is_file():
                 merged = _deep_merge(merged, _load_structured(frag_path))
         overlay_path = config_dir / "overlay" / rel_path
@@ -111,8 +111,8 @@ def _render_file(
         # Non-structured file: the highest layer present replaces the base
         # wholesale (no line-level diffing).
         content_path = base_path
-        for ext in active_extensions:
-            frag_path = repo_root / ext["path"] / "integration" / rel_path
+        for addon in active_addons:
+            frag_path = repo_root / addon["path"] / "integration" / rel_path
             if frag_path.is_file():
                 content_path = frag_path
         overlay_path = config_dir / "overlay" / rel_path
@@ -124,7 +124,7 @@ def _render_file(
 
 
 def _render_dir(
-    rel_path: str, repo_root: Path, config_dir: Path, active_extensions: list[dict]
+    rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> None:
     base_dir = repo_root / "src" / rel_path
     if not base_dir.is_dir():
@@ -133,7 +133,7 @@ def _render_dir(
     for file_path in sorted(base_dir.rglob("*")):
         if file_path.is_file():
             sub_rel = file_path.relative_to(src_root).as_posix()
-            _render_file(sub_rel, repo_root, config_dir, active_extensions)
+            _render_file(sub_rel, repo_root, config_dir, active_addons)
 
 
 def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
