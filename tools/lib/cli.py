@@ -219,7 +219,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     _sync_deployment_manifest(config_dir, tree, repo_root)
 
     render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir)
+    gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
@@ -247,11 +247,240 @@ def cmd_render(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir)
+    gen_override.generate_overrides(config_dir, repo_root)
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     print("Rendered.")
+    return 0
+
+
+def _load_deployment(config_dir: Path) -> dict:
+    deployment_path = config_dir / "deployment.yaml"
+    if not deployment_path.is_file():
+        return {}
+    return yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
+
+
+def _save_deployment(config_dir: Path, deployment: dict) -> None:
+    common.atomic_write(
+        config_dir / "deployment.yaml",
+        yaml.safe_dump(deployment, sort_keys=False, default_flow_style=False),
+    )
+
+
+def _resolve_addon_path(addon: dict, repo_root: Path) -> Path:
+    p = Path(addon["path"])
+    if not p.is_absolute():
+        p = repo_root / p
+    return p.resolve()
+
+
+def _print_keycloak_checklist(name: str, manifest: dict, addon_path: Path) -> None:
+    integration = manifest.get("integration") or {}
+    keycloak_cfg = integration.get("keycloak") or {}
+    clients = keycloak_cfg.get("clients") or []
+    mappers = keycloak_cfg.get("client_mappers") or {}
+
+    if not clients and not mappers:
+        return
+
+    sep = "─" * 65
+    print()
+    print(f"Addon '{name}' — Keycloak steps required before 'papaia-ctl addon start'")
+    print(sep)
+    print()
+    if clients:
+        print("1. Import these OIDC clients in the 'papaia' realm:")
+        print()
+        for rel in clients:
+            print(f"   {addon_path / rel}")
+        print()
+        print("   Keycloak Admin UI → Clients → Import client.")
+        print()
+    if mappers:
+        step = 2 if clients else 1
+        print(f"{step}. Add protocol mappers to these existing clients:")
+        print()
+        for client_name, mapper_paths in mappers.items():
+            for rel in mapper_paths:
+                print(f"   {client_name}: {addon_path / rel}")
+        print()
+        print("   Clients → <client> → Client scopes → Dedicated → Add mapper → By configuration.")
+        print()
+
+
+def cmd_addon_install(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    if not deployment:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+
+    addons: list[dict] = deployment.setdefault("addons", [])
+    existing = next((a for a in addons if a.get("name") == name), None)
+
+    if existing:
+        if args.path:
+            existing["path"] = str(Path(args.path).resolve())
+        if args.version:
+            existing["version"] = args.version
+        existing["active"] = True
+        addon_path = _resolve_addon_path(existing, repo_root)
+    else:
+        if not args.path:
+            print(
+                f"ERROR: --path is required when installing a new addon '{name}'.",
+                file=sys.stderr,
+            )
+            return 2
+        addon_path = Path(args.path).resolve()
+        entry: dict = {"name": name, "path": str(addon_path), "active": True}
+        if args.version:
+            entry["version"] = args.version
+        addons.append(entry)
+
+    manifest_path = addon_path / "papaia-app.yaml"
+    if not manifest_path.is_file():
+        print(f"ERROR: {manifest_path} not found.", file=sys.stderr)
+        return 2
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+
+    bootstrap.seed_addon_env(addon_path, config_dir)
+    _save_deployment(config_dir, deployment)
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
+
+    _print_keycloak_checklist(name, manifest, addon_path)
+    print(f"Addon installed: {name}")
+    return 0
+
+
+def cmd_addon_start(args: argparse.Namespace) -> int:
+    """Materialize .env into checkout and re-render. Docker compose up is done by bash."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    addons: list[dict] = deployment.get("addons") or []
+    entry = next((a for a in addons if a.get("name") == name), None)
+    if entry is None:
+        print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
+        return 2
+    if not entry.get("active"):
+        print(f"ERROR: addon '{name}' is not active. Run 'papaia-ctl addon install {name}' first.", file=sys.stderr)
+        return 2
+
+    addon_path = _resolve_addon_path(entry, repo_root)
+    bootstrap.materialize_addon_env(config_dir, addon_path, name)
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
+    return 0
+
+
+def cmd_addon_remove(args: argparse.Namespace) -> int:
+    """Remove integration only: override gone, active=false, re-render. Bundle kept."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    if not deployment:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+
+    addons: list[dict] = deployment.get("addons") or []
+    entry = next((a for a in addons if a.get("name") == name), None)
+    if entry is None:
+        print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
+        return 2
+
+    entry["active"] = False
+    _save_deployment(config_dir, deployment)
+
+    override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
+    override_file.unlink(missing_ok=True)
+
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
+
+    print(f"Addon removed: {name}")
+    return 0
+
+
+def cmd_addon_uninstall(args: argparse.Namespace) -> int:
+    """Remove integration + delete config bundle + deployment entry. Docker down done by bash."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    if not deployment:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+
+    addons: list[dict] = deployment.get("addons") or []
+    entry = next((a for a in addons if a.get("name") == name), None)
+    if entry is None:
+        print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
+        return 2
+
+    override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
+    override_file.unlink(missing_ok=True)
+
+    bundle_dir = config_dir / "addons" / name
+    if bundle_dir.is_dir():
+        import shutil
+        shutil.rmtree(bundle_dir)
+
+    deployment["addons"] = [a for a in addons if a.get("name") != name]
+    _save_deployment(config_dir, deployment)
+
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
+
+    print(f"Addon uninstalled: {name}")
+    return 0
+
+
+def cmd_addon_networks(args: argparse.Namespace) -> int:
+    """Print the Docker network name for each active addon (one per line).
+
+    Used by papaia-ctl up to pre-create external networks before the core
+    compose starts, so the stack comes up cleanly even when no addon container
+    is running yet.
+    """
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployment = _load_deployment(config_dir)
+    active_addons = [a for a in (deployment.get("addons") or []) if a.get("active")]
+    for addon in active_addons:
+        manifest_path = _resolve_addon_path(addon, repo_root) / "papaia-app.yaml"
+        if manifest_path.is_file():
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            net = (manifest.get("networks") or {}).get("app_network")
+            if net:
+                print(net)
+    return 0
+
+
+def cmd_addon_path(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    deployment = _load_deployment(config_dir)
+    addons: list[dict] = deployment.get("addons") or []
+    entry = next((a for a in addons if a.get("name") == name), None)
+    if entry is None:
+        print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
+        return 2
+
+    print(_resolve_addon_path(entry, repo_root))
     return 0
 
 
@@ -296,6 +525,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_render = sub.add_parser("render")
     p_render.set_defaults(func=cmd_render)
+
+    p_addon_install = sub.add_parser("addon-install")
+    p_addon_install.add_argument("--name", required=True)
+    p_addon_install.add_argument("--path", default=None)
+    p_addon_install.add_argument("--version", default=None)
+    p_addon_install.set_defaults(func=cmd_addon_install)
+
+    p_addon_start = sub.add_parser("addon-start")
+    p_addon_start.add_argument("--name", required=True)
+    p_addon_start.set_defaults(func=cmd_addon_start)
+
+    p_addon_remove = sub.add_parser("addon-remove")
+    p_addon_remove.add_argument("--name", required=True)
+    p_addon_remove.set_defaults(func=cmd_addon_remove)
+
+    p_addon_uninstall = sub.add_parser("addon-uninstall")
+    p_addon_uninstall.add_argument("--name", required=True)
+    p_addon_uninstall.set_defaults(func=cmd_addon_uninstall)
+
+    p_addon_networks = sub.add_parser("addon-networks")
+    p_addon_networks.set_defaults(func=cmd_addon_networks)
+
+    p_addon_path = sub.add_parser("addon-path")
+    p_addon_path.add_argument("--name", required=True)
+    p_addon_path.set_defaults(func=cmd_addon_path)
 
     return parser
 

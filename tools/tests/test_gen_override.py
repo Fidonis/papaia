@@ -18,7 +18,7 @@ def test_generate_overrides_empty_on_lean_core(repo_root, config_dir):
 
 def test_generate_override_synthetic_fixture():
     manifest = yaml.safe_load(
-        (FIXTURES_DIR / "ext-paperless" / "papaia-app.yaml").read_text(encoding="utf-8")
+        (FIXTURES_DIR / "addon-paperless" / "papaia-app.yaml").read_text(encoding="utf-8")
     )
 
     import tempfile
@@ -31,7 +31,7 @@ def test_generate_override_synthetic_fixture():
         assert out_path is not None
         assert out_path.name == "docker-compose.paperless.override.yml"
         override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
-        assert override["services"]["nginx"]["networks"] == ["papaia-paperless-net"]
+        assert override["services"]["nginx-proxy-manager"]["networks"] == ["papaia-paperless-net"]
         assert override["services"]["librechat"]["networks"] == ["papaia-paperless-net"]
         assert override["networks"]["papaia-paperless-net"]["external"] is True
 

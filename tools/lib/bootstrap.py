@@ -737,3 +737,76 @@ def persist_tree(tree: EnvTree, config_dir: Path, repo_root: Path) -> None:
         common.write_env_file(
             repo_target, values, template_path=template_path if template_path.is_file() else None
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Addon env seeding
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def seed_addon_env(addon_path: Path, config_dir: Path) -> None:
+    """Non-destructively seed an addon's .env.example into <config>/addons/<name>/.env.
+
+    The canonical .env lives in the config bundle so the addon repo checkout
+    stays git-pristine (read-only at deploy time). Before starting containers,
+    materialize_addon_env copies the bundle .env into the checkout.
+
+    Rules:
+    - Keys already present in the bundle .env are never touched (sticky).
+    - Values marked GENERATE_* get a fresh random secret.
+    - All other values (CHANGE_ME markers, literals) are copied verbatim.
+    """
+    example_path = addon_path / ".env.example"
+    if not example_path.is_file():
+        return
+
+    import yaml as _yaml
+
+    try:
+        manifest = _yaml.safe_load((addon_path / "papaia-app.yaml").read_text(encoding="utf-8")) or {}
+        addon_name = manifest.get("name", addon_path.name)
+    except Exception:
+        addon_name = addon_path.name
+
+    bundle_dir = config_dir / "addons" / addon_name
+    common.ensure_dir(bundle_dir)
+    env_path = bundle_dir / ".env"
+
+    example_values = common.parse_env_file(example_path)
+    existing_keys = set(common.parse_env_file(env_path).keys())
+
+    new_pairs: list[tuple[str, str]] = []
+    for key, template_value in example_values.items():
+        if key in existing_keys:
+            continue
+        if common.marks_generated_secret(template_value):
+            new_pairs.append((key, common.generate_secret(key)))
+        else:
+            new_pairs.append((key, template_value))
+
+    if not new_pairs:
+        return
+
+    existing_content = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    lines: list[str] = []
+    if existing_content and not existing_content.endswith("\n"):
+        lines.append("")
+    lines.append(f"# --- Addon: {addon_name} (seeded by papaia-ctl) ---")
+    for k, v in new_pairs:
+        lines.append(f"{k}={v}")
+
+    common.atomic_write(env_path, existing_content + "\n".join(lines) + "\n")
+
+
+def materialize_addon_env(config_dir: Path, addon_path: Path, addon_name: str) -> None:
+    """Copy the canonical bundle .env into the addon checkout before compose up.
+
+    The addon's docker-compose.yml uses `env_file: ./.env`. This function
+    ensures the checkout .env is always in sync with the config bundle.
+    """
+    import shutil
+
+    bundle_env = config_dir / "addons" / addon_name / ".env"
+    target_env = addon_path / ".env"
+    if bundle_env.is_file():
+        shutil.copy2(bundle_env, target_env)

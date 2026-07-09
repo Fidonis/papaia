@@ -21,7 +21,11 @@
 #                     [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl up     [PROFILE...] [--config-dir=PATH]
 #   papaia-ctl down   [PROFILE...] [--volumes] [--config-dir=PATH]
-#   papaia-ctl apps render [--config-dir=PATH]
+#   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--config-dir=PATH]
+#   papaia-ctl addon start     <name> [--config-dir=PATH]
+#   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
+#   papaia-ctl addon remove    <name> [--config-dir=PATH]
+#   papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
 #   papaia-ctl help
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
@@ -579,10 +583,31 @@ cmd_up() {
 
     local env_file="$REPO_ROOT/src/.env"
 
+    # Build the override list, but skip any override whose external networks
+    # don't exist yet.  The Seam-1 overrides declare addon networks as
+    # external:true — if the addon hasn't been started yet the network doesn't
+    # exist and docker compose up would fail.  Once the user runs
+    # `addon start <name>` the network is Compose-owned; subsequent `up` calls
+    # will include the override automatically.
     local -a compose_overrides=()
     if [ -d "$CONFIG_DIR/overrides" ]; then
         for f in "$CONFIG_DIR"/overrides/docker-compose.*.override.yml; do
-            [ -f "$f" ] && compose_overrides+=(-f "$f")
+            [ -f "$f" ] || continue
+            local nets_missing=0
+            while IFS= read -r net_name; do
+                [ -z "$net_name" ] && continue
+                docker network inspect "$net_name" >/dev/null 2>&1 || { nets_missing=1; break; }
+            done < <(python3 -c "
+import yaml, sys
+doc = yaml.safe_load(open(sys.argv[1])) or {}
+for n, c in (doc.get('networks') or {}).items():
+    if (c or {}).get('external'): print(n)
+" "$f" 2>/dev/null)
+            if [ "$nets_missing" -eq 0 ]; then
+                compose_overrides+=(-f "$f")
+            else
+                warn "Addon not running — skipping override: $(basename "$f")"
+            fi
         done
     fi
 
@@ -623,20 +648,142 @@ cmd_down() {
     success "down complete."
 }
 
-cmd_apps_render() {
-    local config_dir="$DEFAULT_CONFIG_DIR"
+_addon_path() {
+    local addon_name="$1"
+    py_cli addon-path --name="$addon_name"
+}
+
+cmd_addon_install() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" addon_path="" addon_version=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --path=*) addon_path="${1#*=}" ;;
+            --version=*) addon_version="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon install <name> --path=PATH [--version=VER]"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local -a extra=()
+    [ -n "$addon_path" ]    && extra+=(--path="$addon_path")
+    [ -n "$addon_version" ] && extra+=(--version="$addon_version")
+    py_cli addon-install --name="$addon_name" "${extra[@]}"
+    success "addon install complete: $addon_name"
+}
+
+cmd_addon_start() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
-            *) error "Unknown option for apps render: $1"; exit 2 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
         esac
         shift
     done
+    if [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon start <name>"
+        exit 2
+    fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
-    py_cli render
-    success "Render complete."
+    # materialize .env from config bundle into checkout, then render
+    py_cli addon-start --name="$addon_name"
+    local addon_path
+    addon_path="$(_addon_path "$addon_name")"
+    info "Starting addon $addon_name from $addon_path"
+    docker compose -f "$addon_path/docker-compose.yml" up -d
+    success "addon start complete: $addon_name"
+}
+
+cmd_addon_stop() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --clean-up) clean_up=1 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon stop <name> [--clean-up]"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local addon_path
+    addon_path="$(_addon_path "$addon_name")"
+    if [ "$clean_up" -eq 1 ]; then
+        info "Stopping and removing containers for addon $addon_name..."
+        docker compose -f "$addon_path/docker-compose.yml" down
+    else
+        info "Stopping addon $addon_name..."
+        docker compose -f "$addon_path/docker-compose.yml" stop
+    fi
+    success "addon stop complete: $addon_name"
+}
+
+cmd_addon_remove() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon remove <name>"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli addon-remove --name="$addon_name"
+    success "addon remove complete: $addon_name"
+}
+
+cmd_addon_uninstall() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --clean-up) clean_up=1 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon uninstall <name> [--clean-up]"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local addon_path
+    addon_path="$(_addon_path "$addon_name")"
+    info "Removing containers for addon $addon_name..."
+    if [ "$clean_up" -eq 1 ]; then
+        docker compose -f "$addon_path/docker-compose.yml" down -v
+    else
+        docker compose -f "$addon_path/docker-compose.yml" down
+    fi
+    py_cli addon-uninstall --name="$addon_name"
+    success "addon uninstall complete: $addon_name"
 }
 
 _require_setup_done() {
@@ -664,11 +811,15 @@ case "$cmd" in
     setup) cmd_setup "$@" ;;
     up) cmd_up "$@" ;;
     down) cmd_down "$@" ;;
-    apps)
+    addon)
         sub="${1:-}"; shift || true
         case "$sub" in
-            render) cmd_apps_render "$@" ;;
-            *) error "Unknown 'apps' subcommand: ${sub:-<none>}. Only 'apps render' is implemented."; exit 2 ;;
+            install)   cmd_addon_install "$@" ;;
+            start)     cmd_addon_start "$@" ;;
+            stop)      cmd_addon_stop "$@" ;;
+            remove)    cmd_addon_remove "$@" ;;
+            uninstall) cmd_addon_uninstall "$@" ;;
+            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, stop, remove, uninstall."; exit 2 ;;
         esac
         ;;
     help|-h|--help) usage ;;

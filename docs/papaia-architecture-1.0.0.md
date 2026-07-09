@@ -5,7 +5,7 @@
 | **Version**  | 1.0.0                                        |
 | **Datum**    | 2026-06-25                                   |
 | **Status**   | Draft — aktiv                                |
-| **Scope**    | Plattform-Architektur, Extension-Kontrakt,   |
+| **Scope**    | Plattform-Architektur, Addon-Kontrakt,       |
 |              | Workspace-Topologie, Deployment-Modell       |
 | **Author(en)**   | Marko Böhm     |
 
@@ -35,8 +35,8 @@ wartbar.
 
 Ein **Lean Core** (nur generische Plattform-Dienste) mit **leeren,
 app-agnostischen Aufnahmepunkten** wird über einen einheitlichen
-**Extension-Kontrakt** um anwendungsspezifische Module erweiterbar — jede
-Extension in einem eigenen Repo, jederzeit hinzufüg- oder entfernbar, ohne den
+**Addon-Kontrakt** um anwendungsspezifische Module erweiterbar — jedes
+Addon in einem eigenen Repo, jederzeit hinzufüg- oder entfernbar, ohne den
 Core zu verändern.
 
 ---
@@ -56,10 +56,10 @@ Core zu verändern.
                    │                           ▲     ▲     ▲                                │
                    │               (5 Nähte: Netz · OIDC · MCP · Homepage · Ingress)       │
                    └───────────────────────────┼─────┼─────┼────────────────────────────┘
-                                               │     │     │   einheitlicher Extension-Kontrakt
+                                               │     │     │   einheitlicher Addon-Kontrakt
                ┌───────────────────────────────┘     │     └───────────────────────────────┐
                │                                      │                                      │
-  Tier 2: KURATIERTER FIDONIS-EXTENSION-KATALOG       │   Tier 3: KUNDEN-APPLIKATIONEN      │
+  Tier 2: KURATIERTER FIDONIS-ADDON-KATALOG           │   Tier 3: KUNDEN-APPLIKATIONEN      │
   (Fidonis-gepflegt, zubuchbar, je eigenes Repo)      │   (bespoke pro Kunde, je eigenes    │
                                                        │    Repo, gleicher Kontrakt)         │
   • RAG-Bundle (qdrant-rbac + Qdrant + Jina)          │   • Muster A: bestehende App        │
@@ -68,7 +68,7 @@ Core zu verändern.
   • Suche (SearXNG)                                    │     RAG ingestieren (role-scoped)   │
   • Web-Crawling (Firecrawl)                           │   • Muster C: Hybrid                │
                │                                       │                                      │
-               └──────── jede Extension: eigenes Netz, nur MCP-Seam zur AI-Runtime ─────────┘
+               └──────── jedes Addon: eigenes Netz, nur MCP-Seam zur AI-Runtime ────────────┘
 
   Querliegend:
   ① DATENHOHEIT        — local-first Inferenz, per-User-RBAC am Datenrand, Netz-Isolation
@@ -92,24 +92,24 @@ Im Core bleibt **nur**, was jede Instanz als generische Plattform braucht:
 
 Die Integrations-Punkte des Core werden zu **leeren, app-agnostischen
 Aufnahmepunkten** entkernt — kein hart verdrahteter App-Bezug mehr. Der Core
-ist **self-sufficient**: er startet und läuft vollständig ohne jede Extension.
+ist **self-sufficient**: er startet und läuft vollständig ohne jedes Addon.
 
 ### Core-Aufnahmepunkte
 
 ```
-librechat.yaml     →  mcpServers: []        (leer, von Extensionen befüllt)
-                       allowedDomains: []    (leer, von Extensionen befüllt)
-services.yaml      →  nur Core-Dienste      (Extensionen fügen Service-Karten hinzu)
-Keycloak-Realm     →  Basis-Clients         (Extension-Clients additiv registriert)
-NPM                →  Core-Hosts            (Extension-Hosts additiv angelegt)
+librechat.yaml     →  mcpServers: []        (leer, von Addons befüllt)
+                       allowedDomains: []    (leer, von Addons befüllt)
+services.yaml      →  nur Core-Dienste      (Addons fügen Service-Karten hinzu)
+Keycloak-Realm     →  Basis-Clients         (Addon-Clients additiv registriert)
+NPM                →  Core-Hosts            (Addon-Hosts additiv angelegt)
 ```
 
 ---
 
-## 4. Tier 2 — Kuratierter Fidonis-Extension-Katalog
+## 4. Tier 2 — Kuratierter Fidonis-Addon-Katalog
 
 Fidonis-eigene Optional-Module — je **eigenes Repo**, als **versionierte Images**
-konsumiert. Sie nutzen **denselben** Extension-Kontrakt wie Kunden-Apps (eine
+konsumiert. Sie nutzen **denselben** Addon-Kontrakt wie Kunden-Apps (eine
 Mechanik), sind aber Fidonis-gepflegt, qualitätsgesichert und als Katalog
 „zubuchbar".
 
@@ -132,15 +132,15 @@ Bespoke pro Kunde, je eigenes Repo, gleicher Kontrakt. Drei wiederkehrende Muste
 
 ---
 
-## 6. Der Extension-Kontrakt
+## 6. Der Addon-Kontrakt
 
-### 6.1 Dateistruktur einer Extension
+### 6.1 Dateistruktur eines Addons
 
 ```
-extensions/papaia-ext-<name>/
+addons/papaia-addon-<name>/
 ├── papaia-app.yaml          # Manifest: deklarativer Kontrakt (alle Metadaten)
 ├── docker-compose.yml       # App + zugehöriger MCP-Server, auf EIGENEM Netz
-├── .env.example             # App-Secrets-Template (wird in $PAPAIA_CONFIG_DIR/.env geseedet)
+├── .env.example             # App-Secrets-Template (wird in $PAPAIA_CONFIG_DIR/addons/<name>/.env geseedet)
 ├── integration/             # Die 5 Nähte als Fragmente (alle optional)
 │   ├── keycloak/            # OIDC-Clients + Audience-Mapper JSONs
 │   ├── librechat/           # mcpServers + allowedDomains Fragment (YAML)
@@ -149,22 +149,22 @@ extensions/papaia-ext-<name>/
 └── README.md                # Self-contained manueller Integrationspfad (public-clean)
 ```
 
-> **Kein `papaia-app.sh` pro Extension.** Alle Lifecycle-Verben (`install`,
-> `update`, `remove`) werden zentral von `papaia-ctl` ausgeführt — kein
-> Delegations-Skript pro Extension nötig.
+> **Kein `papaia-app.sh` pro Addon.** Alle Lifecycle-Verben (`install`,
+> `start`, `stop`, `remove`, `uninstall`) werden zentral von `papaia-ctl`
+> ausgeführt — kein Delegations-Skript pro Addon nötig.
 
 ### 6.2 `papaia-app.yaml` — Manifest-Schema
 
 ```yaml
-name: <kurzname>                    # Eindeutiger Bezeichner (a-z, 0-9, -)
-version: <semver>                   # Extension-Version
-extension_repo: papaia-ext-<name>   # GitHub-Repo-Name
-papaia_compat: ">=<semver>"         # Minimale Core-Version
+name: <kurzname>                   # Eindeutiger Bezeichner (a-z, 0-9, -)
+version: <semver>                  # Addon-Version
+addon_repo: papaia-addon-<name>    # GitHub-Repo-Name
+papaia_compat: ">=<semver>"        # Minimale Core-Version
 description: "<Beschreibung>"
 
 networks:
-  app_network: papaia-<name>-net    # Eigenes Bridge-Netz der Extension
-  attach: [nginx, librechat]        # Core-Container, die ans App-Netz angehängt werden
+  app_network: papaia-<name>-net   # Eigenes Bridge-Netz des Addons
+  attach: [nginx, librechat]       # Core-Container, die ans App-Netz angehängt werden
 
 integration:
   keycloak:
@@ -176,12 +176,12 @@ integration:
   nginx:     integration/nginx/<name>.conf        # optional
 ```
 
-### 6.3 Beispiel A: `papaia-ext-paperless`
+### 6.3 Beispiel A: `papaia-addon-paperless`
 
 ```yaml
 name: paperless
 version: 1.0.0
-extension_repo: papaia-ext-paperless
+addon_repo: papaia-addon-paperless
 papaia_compat: ">=0.8.0"
 description: "Paperless-ngx document management + OIDC/RBAC MCP server"
 networks:
@@ -201,12 +201,12 @@ integration:
 Requests als `X-Papaia-Remote-User` weiter — Paperless erzwingt seine eigene
 per-User-RBAC. Kein Admin-Credential im MCP-Layer.
 
-### 6.4 Beispiel B: `papaia-ext-qdrant-rbac`
+### 6.4 Beispiel B: `papaia-addon-qdrant-rbac`
 
 ```yaml
 name: qdrant-rbac
 version: 0.1.0
-extension_repo: papaia-ext-qdrant-rbac
+addon_repo: papaia-addon-qdrant-rbac
 papaia_compat: ">=0.8.0"
 description: "Qdrant vector DB + OIDC/RBAC MCP server for RAG workloads"
 networks:
@@ -227,14 +227,14 @@ Collection-ACL).
 
 ---
 
-## 7. Die 5 Nähte (Extension-Integration-Punkte)
+## 7. Die 5 Nähte (Addon-Integration-Punkte)
 
-Alle 5 Nähte sind **standardisiert**, nicht handverdrahtet. Welche Nähte eine
-Extension nutzt, ist im Manifest optional deklariert.
+Alle 5 Nähte sind **standardisiert**, nicht handverdrahtet. Welche Nähte ein
+Addon nutzt, ist im Manifest optional deklariert.
 
 ### Naht 1 — Netz: „Core attacht an App"
 
-Die Extension definiert ihr eigenes Bridge-Netz. Der Orchestrator generiert
+Das Addon definiert sein eigenes Bridge-Netz. Der Orchestrator generiert
 automatisch eine **Override-Compose** (`$PAPAIA_CONFIG_DIR/overrides/docker-compose.<name>.override.yml`),
 die das App-Netz als `external: true` referenziert und die im Manifest unter
 `attach:` gelisteten Core-Container (z. B. `nginx`, `librechat`) an das App-Netz
@@ -265,7 +265,7 @@ Keycloak-Client-Sync in `papaia/src/infra/keycloak/bootstrap.sh`.
 
 Das `mcpServers`- und `allowedDomains`-Fragment aus `integration/librechat/`
 wird **beim Render** in die effektive `librechat.yaml` im Config-Ordner gemerged.
-Der Render-Prozess: Base-Template + Σ aktive Extension-Fragmente + Kunden-Overlay.
+Der Render-Prozess: Base-Template + Σ aktive Addon-Fragmente + Kunden-Overlay.
 
 ### Naht 4 — Homepage
 
@@ -275,7 +275,7 @@ die gerenderte Datei aus `$PAPAIA_CONFIG_DIR/services/homepage/config/`.
 
 ### Naht 5 — Ingress (optional)
 
-Optionaler NPM-Proxy-Host-Eintrag für die Extension-UI. Wird über den
+Optionaler NPM-Proxy-Host-Eintrag für die Addon-UI. Wird über den
 Nginx-Fragment-Mechanismus (oder NPM API) additiv angelegt.
 
 ---
@@ -284,10 +284,10 @@ Nginx-Fragment-Mechanismus (oder NPM API) additiv angelegt.
 
 Der Orchestrator lebt in `papaia/tools/papaia-ctl` und ist damit Teil des
 öffentlichen Core-Repos (Community-nutzbar). Er liest das **Deployment-Manifest**
-(`$PAPAIA_CONFIG_DIR/deployment.yaml`) und ruft pro Extension den entsprechenden
+(`$PAPAIA_CONFIG_DIR/deployment.yaml`) und ruft pro Addon den entsprechenden
 `docker compose`-Befehl in der richtigen Reihenfolge auf.
 
-**Neue Extension = Repo klonen + Eintrag in `deployment.yaml` + `papaia-ctl apps integrate <name>`.**
+**Neues Addon = Repo klonen + `papaia-ctl addon install <name> --path=addons/<name>`.**
 Kein Core-Eingriff.
 
 ### Verfügbare Verben
@@ -295,22 +295,27 @@ Kein Core-Eingriff.
 | Kommando | Was passiert |
 |---|---|
 | `papaia-ctl init` | Config-Ordner anlegen, `.env` + `deployment.yaml` seeden |
-| `papaia-ctl apps integrate <name>` | .env seeden → aktiv setzen → Configs rendern → Override generieren |
-| `papaia-ctl apps deintegrate <name>` | Override entfernen → Configs neu rendern → inaktiv setzen |
-| `papaia-ctl apps install <name>` | `docker compose -f extensions/…/docker-compose.yml up -d` |
-| `papaia-ctl apps update <name>` | `docker compose … pull && up -d` + `render` |
-| `papaia-ctl apps remove <name>` | `deintegrate` + `docker compose … down` |
-| `papaia-ctl apps render` | 3-Schicht-Merge für alle aktiven Extensions → Config-Ordner |
-| `papaia-ctl up [profile...]` | Render + alle aktiven Apps starten + Core-Compose up |
-| `papaia-ctl down [profile...] [--volumes]` | Core down + alle aktiven Apps stoppen |
+| `papaia-ctl addon install <name> --path=` | Config-Bundle seeden → in `deployment.yaml` registrieren → Override generieren → Core rendern → Keycloak-Checkliste ausgeben. **Startet nichts.** |
+| `papaia-ctl addon start <name>` | `.env` aus Config-Bundle in Checkout kopieren → Core rendern → `docker compose up -d` |
+| `papaia-ctl addon stop <name>` | `docker compose stop` (Container stoppen, nicht löschen) |
+| `papaia-ctl addon stop <name> --clean-up` | `docker compose down` (Container löschen, Volumes bleiben) |
+| `papaia-ctl addon remove <name>` | Override entfernen → Core neu rendern → `active: false` im Manifest. **Container unberührt, Config-Bundle bleibt.** |
+| `papaia-ctl addon uninstall <name>` | Override + deployment-Eintrag entfernen → Config-Bundle löschen → `docker compose down` |
+| `papaia-ctl addon uninstall <name> --clean-up` | wie `uninstall` + `docker compose down -v` (auch Volumes löschen) |
+| `papaia-ctl up [profile...]` | Render + alle aktiven Addons starten + Core-Compose up |
+| `papaia-ctl down [profile...] [--volumes]` | Core down + alle aktiven Addons stoppen |
 
-### `.env`-Seeding bei `integrate`
+### Config-Bundle-Seeding bei `addon install`
 
-`integrate` liest `.env.example` der Extension und fügt **fehlende Keys
-non-destruktiv** in `$PAPAIA_CONFIG_DIR/.env` ein (sticky reuse — bestehende
-Werte bleiben). Secret-Keys (Muster `SECRET|PASSWORD|KEY|TOKEN`) mit Platzhalter
-erhalten automatisch einen zufälligen Wert (`secrets.token_urlsafe`), sodass
-Realm-Client-Secret und App denselben Wert teilen (eine Quelle).
+`addon install` liest `.env.example` des Addons und fügt **fehlende Keys
+non-destruktiv** in `$PAPAIA_CONFIG_DIR/addons/<name>/.env` ein (sticky reuse —
+bestehende Werte bleiben). Secret-Keys (Muster `SECRET|PASSWORD|KEY|TOKEN`) mit
+Platzhalter erhalten automatisch einen zufälligen Wert (`secrets.token_urlsafe`),
+sodass Realm-Client-Secret und App denselben Wert teilen (eine Quelle).
+
+`addon start` kopiert das Config-Bundle (`.env`) in den Addon-Checkout, damit
+`docker compose` die Variablen über `env_file: ./.env` einlesen kann. Der
+Checkout bleibt git-pristine; die Quelle der Wahrheit liegt im Config-Ordner.
 
 ---
 
@@ -321,8 +326,8 @@ Realm-Client-Secret und App denselben Wert teilen (eine Quelle).
 ```
 [workspace-root]/
 │
-├── extensions/                          # Tier-2- und Tier-3-Extensions (je eigenes GitHub-Repo)
-│   ├── papaia-ext-paperless/
+├── addons/                              # Tier-2- und Tier-3-Addons (je eigenes GitHub-Repo)
+│   ├── papaia-addon-paperless/
 │   │   ├── papaia-app.yaml
 │   │   ├── docker-compose.yml
 │   │   ├── .env.example
@@ -332,7 +337,7 @@ Realm-Client-Secret und App denselben Wert teilen (eine Quelle).
 │   │       ├── homepage/
 │   │       └── nginx/
 │   │
-│   └── papaia-ext-qdrant-rbac/
+│   └── papaia-addon-qdrant-rbac/
 │       ├── papaia-app.yaml
 │       ├── docker-compose.yml
 │       ├── .env.example
@@ -342,29 +347,32 @@ Realm-Client-Secret und App denselben Wert teilen (eine Quelle).
 │           └── homepage/
 │
 ├── papaia/                              # Tier 1 — Core-Repo (Fidonis/papaia, public-bound)
-│   ├── docs/                            # Architekturdokumentation, ADRs, Extension-Spec
+│   ├── docs/                            # Architekturdokumentation, ADRs, Addon-Spec
 │   ├── src/                             # Core-Implementierung
 │   │   ├── docker-compose.yml           # Lean Core (mountet ausschließlich aus $PAPAIA_CONFIG_DIR)
 │   │   ├── .env.example                 # Core-Env-Template
 │   │   ├── ai/                          # Base-Templates (librechat.yaml.base, litellm.yaml.base)
 │   │   ├── infra/                       # Keycloak-Realm-Base, Bootstrap-Skripte
 │   │   ├── services/                    # Homepage-Base-Config
-│   │   └── catalog.yaml                 # Bekannte Extensions (Name, Repo-URL, Tags, Tier)
+│   │   └── catalog.yaml                 # Bekannte Addons (Name, Repo-URL, Tags, Tier)
 │   └── tools/                           # Orchestrator
-│       ├── papaia-ctl                   # init · up/down · apps list|render|integrate|…
+│       ├── papaia-ctl                   # init · up/down · addon install|start|stop|remove|uninstall
 │       ├── deployment.template.yaml     # Template für deployment.yaml im Config-Ordner
 │       └── lib/
 │           ├── render_core.py           # 3-Schicht-Merge → Config-Ordner
 │           └── gen_override.py          # Seam-1-Override generieren → Config-Ordner
 │
 └── papaia-config/                       # Config-Ordner (pro Kunde/Env, KEIN Repo, gitignored)
-    ├── deployment.yaml                  # SSOT: aktive Extensions + Versionen + Core-Profile
+    ├── deployment.yaml                  # SSOT: aktive Addons + Versionen + Core-Profile
     ├── .env                             # Secrets + Env-Vars (gitignored, geseedet bei init)
-    ├── ai/librechat/librechat.yaml      # GENERIERT (Base + Extensions + Overlay)
+    ├── addons/                          # Addon-Config-Bundles (kanonische Quelle, wird gesichert)
+    │   └── <name>/
+    │       └── .env                    # Addon-Secrets (geseedet bei install, sticky)
+    ├── ai/librechat/librechat.yaml      # GENERIERT (Base + Addons + Overlay)
     ├── ai/litellm/config.yaml           # GENERIERT
     ├── infra/keycloak/realm-import/     # GENERIERT (Secrets eingebacken, immer render-owned)
     ├── services/homepage/config/        # GENERIERT
-    ├── overrides/                       # GENERIERTE docker-compose.<ext>.override.yml
+    ├── overrides/                       # GENERIERTE docker-compose.<addon>.override.yml
     └── overlay/                         # Kunden-Overlay (hand-authored, überlebt Re-Render)
         ├── ai/librechat/librechat.yaml
         └── services/homepage/config/services.yaml
@@ -376,22 +384,22 @@ Realm-Client-Secret und App denselben Wert teilen (eine Quelle).
 |---|---|---|
 | `papaia/` | `Fidonis/papaia` | public-bound |
 | `papaia/tools/` | Teil von `Fidonis/papaia` | public-bound |
-| `extensions/papaia-ext-paperless/` | `Fidonis/papaia-ext-paperless` | public-bound |
-| `extensions/papaia-ext-qdrant-rbac/` | `Fidonis/qdrant-rbac` | public-bound |
+| `addons/papaia-addon-paperless/` | `Fidonis/papaia-addon-paperless` | public-bound |
+| `addons/papaia-addon-qdrant-rbac/` | `Fidonis/qdrant-rbac` | public-bound |
 | `papaia-config/` | — (kein Repo) | gitignored, pro Kunde/Env |
 
 ---
 
 ## 10. Namenskonventionen
 
-### Extension-Repos: `papaia-ext-<name>`
+### Addon-Repos: `papaia-addon-<name>`
 
 | Kontext | Namensschema | Beispiel |
 |---|---|---|
-| GitHub-Repo | `papaia-ext-<name>` | `papaia-ext-paperless` |
-| Workspace-Verzeichnis | `extensions/papaia-ext-<name>/` | `extensions/papaia-ext-paperless/` |
+| GitHub-Repo | `papaia-addon-<name>` | `papaia-addon-paperless` |
+| Workspace-Verzeichnis | `addons/papaia-addon-<name>/` | `addons/papaia-addon-paperless/` |
 | Manifest-Feld `name:` | `<name>` (Kurzname) | `paperless` |
-| `deployment.yaml` → `path:` | `extensions/papaia-ext-<name>` | `extensions/papaia-ext-paperless` |
+| `deployment.yaml` → `path:` | `addons/papaia-addon-<name>` | `addons/papaia-addon-paperless` |
 | Docker-Netz | `papaia-<name>-net` | `papaia-paperless-net` |
 
 ### Config-Ordner
@@ -409,8 +417,8 @@ export PAPAIA_CONFIG_DIR=/srv/fidonis/papaia-prod/config   # absoluter Pfad in P
 |---|---|---|
 | Core-Implementierung | `papaia/src/` | Compose, Base-Templates, Bootstrap-Skripte |
 | Orchestrator | `papaia/tools/` | `papaia-ctl`, Render-Bibliotheken |
-| Extension | `extensions/papaia-ext-<name>/` | Manifest, Compose, Fragments |
-| Config-Ordner | `papaia-config/` | Generierte Configs, Secrets, Overlay |
+| Addon | `addons/papaia-addon-<name>/` | Manifest, Compose, Fragments |
+| Config-Ordner | `papaia-config/` | Generierte Configs, Secrets, Overlay, Addon-Bundles |
 
 ---
 
@@ -428,7 +436,7 @@ export PAPAIA_CONFIG_DIR=/srv/fidonis/papaia-prod/config   # absoluter Pfad in P
   Keycloak-Bearer + Audience und scopen **jeden** Request:
   - `mcp-qdrant-rbac` → Qdrant-JWT per Collection-ACL (role-scoped Retrieval)
   - `mcp-paperless` → `X-Papaia-Remote-User` → native Paperless-RBAC
-- **Netz-Isolation**: jede Extension auf eigenem Bridge-Netz; nur der MCP-Seam
+- **Netz-Isolation**: jedes Addon auf eigenem Bridge-Netz; nur der MCP-Seam
   ist zur AI-Runtime exponiert; Reverse-Proxy strippt Trust-Header aus externem
   Verkehr (Defense-in-Depth).
 
@@ -445,37 +453,37 @@ Unterschied liegt im Tooling-Pfad, nicht im Stack.
 ### ③ Flotten-Skalierung & Wartbarkeit
 
 - **SemVer-Kompatibilitäts-Kontrakt**: Core veröffentlicht eine SemVer-Plattform-
-  Version; jede Extension deklariert `papaia_compat: ">=x.y.z"`; der Orchestrator
+  Version; jedes Addon deklariert `papaia_compat: ">=x.y.z"`; der Orchestrator
   verweigert inkompatible Kombinationen. Das macht Flotten-Updates sicher.
 
   > **SemVer-Kurzreferenz:** `MAJOR.MINOR.PATCH` — MAJOR bricht die Abwärts-
-  > kompatibilität (Extensions müssen explizit angepasst werden), MINOR fügt
+  > kompatibilität (Addons müssen explizit angepasst werden), MINOR fügt
   > Funktionen abwärtskompatibel hinzu, PATCH behebt Fehler ohne API-Änderung.
-  > `papaia_compat: ">=0.8.0"` bedeutet: diese Extension läuft auf jeder
+  > `papaia_compat: ">=0.8.0"` bedeutet: dieses Addon läuft auf jeder
   > Core-Version ab 0.8.0 aufwärts, solange MAJOR 0 bleibt.
 
-- **Image-basierte Distribution**: Extensions als gepinnte Images aus
+- **Image-basierte Distribution**: Addons als gepinnte Images aus
   `ghcr.io/fidonis/...`, nicht als Source. Update = Ref bumpen + idempotentes
-  `integrate` re-applizieren; Rollback = vorheriger Image-Pin.
+  `install` re-applizieren; Rollback = vorheriger Image-Pin.
 - **Per-Kunde-Deployment-Manifest**: `deployment.yaml` im Config-Ordner ist
-  die **Single Source of Truth** je Install (Core-Profile + aktive Extensions
+  die **Single Source of Truth** je Install (Core-Profile + aktive Addons
   + Versionen + Hosting-Typ). Treibt Orchestrator und Update-Runs.
-- **Idempotenz durchgängig**: `integrate`, `render`, `up` sind re-runnable
+- **Idempotenz durchgängig**: `install`, `render`, `up` sind re-runnable
   ohne Seiteneffekte → unbeaufsichtigte Flotten-Updates möglich.
 - **Lean Core = weniger Wartung**: entkoppelte Lebenszyklen — Core upgradet
-  unabhängig von Extensions, Extensions unabhängig vom Core (innerhalb der
+  unabhängig von Addons, Addons unabhängig vom Core (innerhalb der
   Compat-Range).
 
 ### ④ Keine Repo-Änderungen am Kunden (Config-Ordner-Externalisierung)
 
 Dies ist das **load-bearing Muster** für den Upgrade-Pfad beim Kunden:
 
-- **Repos = read-only zur Deploy-Zeit**: Core-Repo, Extension-Repos, Tooling —
-  keinerlei Mutation durch Integrate / Deploy / Update-Runs. `git pull` bleibt
+- **Repos = read-only zur Deploy-Zeit**: Core-Repo, Addon-Repos, Tooling —
+  keinerlei Mutation durch Install / Deploy / Update-Runs. `git pull` bleibt
   immer konfliktfrei.
 - **`$PAPAIA_CONFIG_DIR` = alles Materialisierte**: gerenderte effektive Configs,
   generierte Overrides, generiertes `papaia-realm.json` (Secrets eingebacken),
-  Deployment-Manifest, `.env`, Kunden-Overlay.
+  Deployment-Manifest, `.env`, Kunden-Overlay, Addon-Config-Bundles.
 - **Core-Compose mountet ausschließlich aus `$PAPAIA_CONFIG_DIR/...`**.
 - **Kein generiertes Artefakt liegt im Repo-Baum** (`.gitignore`-Disziplin).
 
@@ -503,22 +511,22 @@ core:
     - homepage
   inference: local-first | external # LLM-Inferenz-Modus
 
-extensions:
+addons:
   - name: paperless                 # Kurzname (= Manifest-Feld name:)
-    path: extensions/papaia-ext-paperless  # Workspace-relativer Pfad zum Extension-Repo
+    path: addons/papaia-addon-paperless  # Workspace-relativer Pfad zum Addon-Repo
     version: 1.0.0                  # Gepinnte Version
     active: true                    # false = installiert aber nicht integriert
   - name: qdrant-rbac
-    path: extensions/papaia-ext-qdrant-rbac
+    path: addons/papaia-addon-qdrant-rbac
     version: 0.1.0
     active: false                   # auskommentiert / inaktiv
 ```
 
 ### Aktiv-Set
 
-Der Orchestrator leitet das Aktiv-Set (welche Extensions am Render und am
+Der Orchestrator leitet das Aktiv-Set (welche Addons am Render und am
 `docker compose up` teilnehmen) aus `active: true`-Einträgen ab. Das Manifest
-selbst wird nie von `integrate`/`deintegrate` gelöscht — nur `active`-Flag
+selbst wird nie von `install`/`remove` gelöscht — nur `active`-Flag
 und `version` werden gesetzt.
 
 ---
@@ -533,7 +541,7 @@ kundenspezifische Anpassungen. Overlay-Dateien werden **nie von `papaia-ctl`
 
 ```
 Repo-Base  (papaia/src/*.base.*)
-  + Σ aktive Extension-Fragmente  (extensions/papaia-ext-*/integration/*)
+  + Σ aktive Addon-Fragmente  (addons/papaia-addon-*/integration/*)
   + Kunden-Overlay  ($PAPAIA_CONFIG_DIR/overlay/*)
   ───render──▶  effektive Config in $PAPAIA_CONFIG_DIR/...
 ```
@@ -562,18 +570,18 @@ endpoints:
 
 ---
 
-## 14. papaia-manager — Web-basiertes Extension-Management
+## 14. papaia-manager — Web-basiertes Addon-Management
 
 ### Motivation
 
 `papaia-ctl` ist ein CLI-Orchestrator — ideal für Administratoren, aber kein
-zugänglicher Weg für Nicht-Techniker, Extensions anzusehen, auszuprobieren oder
+zugänglicher Weg für Nicht-Techniker, Addons anzusehen, auszuprobieren oder
 zu installieren. Der **papaia-manager** bietet eine Web-UI auf Basis derselben
 Orchestrator-Logik.
 
-### Rolle: optionaler Core-Service (kein Extension)
+### Rolle: optionaler Core-Service (kein Addon)
 
-Der Manager verwaltet Extensions — er darf nicht selbst eine Extension sein
+Der Manager verwaltet Addons — er darf nicht selbst ein Addon sein
 (zirkuläre Abhängigkeit). Er ist ein **optionaler Core-Service** in
 `papaia/src/docker-compose.yml` hinter einem Compose-Profile (`manager`).
 
@@ -586,39 +594,39 @@ Der Manager verwaltet Extensions — er darf nicht selbst eine Extension sein
 | Docker API | `docker` Python SDK + subprocess | Typsicher + Fallback für `docker compose` |
 | Katalog | `catalog.yaml` in `papaia/src/` | Versioniert, offline-fähig |
 | Auth | oauth2-proxy (Naht 2, Rolle `admin`) | Vorhanden — kein eigenes OIDC nötig |
-| Ingress | Nginx-Fragment (Naht 5) | Analog zu Extension-Ingress-Regeln |
+| Ingress | Nginx-Fragment (Naht 5) | Analog zu Addon-Ingress-Regeln |
 
 ### Dateistruktur
 
 ```
 papaia/src/
-├── catalog.yaml              # Bekannte Extensions: Name, Repo-URL, Beschreibung, Tags, Tier
+├── catalog.yaml              # Bekannte Addons: Name, Repo-URL, Beschreibung, Tags, Tier
 └── manager/
     ├── Dockerfile
     ├── main.py               # FastAPI App
     ├── routers/
-    │   └── extensions.py     # GET/POST /extensions/{name}/install|update|remove|activate
+    │   └── addons.py         # GET/POST /addons/{name}/install|start|remove|uninstall
     ├── services/
-    │   ├── catalog.py        # Liest catalog.yaml — "verfügbare" Extensions
-    │   ├── deployment.py     # Liest/schreibt deployment.yaml — "installierte" Extensions
+    │   ├── catalog.py        # Liest catalog.yaml — "verfügbare" Addons
+    │   ├── deployment.py     # Liest/schreibt deployment.yaml — "installierte" Addons
     │   └── orchestrator.py   # Ruft papaia-ctl via subprocess auf
     └── templates/
-        ├── index.html        # Extension-Galerie (Katalog + Status)
-        └── extension.html    # Detailansicht mit Action-Buttons
+        ├── index.html        # Addon-Galerie (Katalog + Status)
+        └── addon.html        # Detailansicht mit Action-Buttons
 ```
 
 ### Katalog-Format (`catalog.yaml`)
 
 ```yaml
-extensions:
+addons:
   - name: paperless
-    repo: https://github.com/Fidonis/papaia-ext-paperless
+    repo: https://github.com/Fidonis/papaia-addon-paperless
     description: Dokumentenmanagement mit OCR und OIDC/RBAC MCP-Server
     category: productivity
     tier: 2
     tags: [documents, ocr]
   - name: qdrant-rbac
-    repo: https://github.com/Fidonis/papaia-ext-qdrant-rbac
+    repo: https://github.com/Fidonis/papaia-addon-qdrant-rbac
     description: Qdrant Vector-DB mit OIDC/RBAC für RAG-Workloads
     category: ai
     tier: 2
@@ -638,9 +646,10 @@ def run_ctl(*args):
         capture_output=True, text=True
     )
 
-install = lambda name: run_ctl("apps", "install", name)
-update  = lambda name: run_ctl("apps", "update",  name)
-remove  = lambda name: run_ctl("apps", "remove",  name)
+install   = lambda name, path: run_ctl("addon", "install",   name, f"--path={path}")
+start     = lambda name:       run_ctl("addon", "start",     name)
+remove    = lambda name:       run_ctl("addon", "remove",    name)
+uninstall = lambda name:       run_ctl("addon", "uninstall", name)
 ```
 
 > **Sicherheitshinweis:** Der `name`-Parameter aus der URL muss gegen
@@ -654,7 +663,7 @@ papaia-manager:
   profiles: [manager]
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock   # Docker API
-    - ${WORKSPACE_ROOT}:/workspace                 # papaia-ctl + Extensions
+    - ${WORKSPACE_ROOT}:/workspace                 # papaia-ctl + Addons
     - ${PAPAIA_CONFIG_DIR}:/config                 # deployment.yaml lesen/schreiben
   networks:
     - papaia-net
@@ -669,20 +678,20 @@ papaia-manager:
 | Naht 5 (Ingress) | `manager.${PAPAIA_HOST}` → Nginx-Forward an Container-Port |
 | Naht 1, 3 | Keine direkte Nutzung |
 
-### UI-Konzept: Extension-Karten
+### UI-Konzept: Addon-Karten
 
 Jede Karte zeigt:
 - Name + Beschreibung (aus `catalog.yaml` / `papaia-app.yaml`)
 - Status-Badge: `available` · `installed` · `active`
 - Version + Update-verfügbar-Hinweis
-- Action-Button kontextuell: **Download & Install → Activate ↔ Deactivate → Remove**
-- Seam-Indikatoren: welche Integrationspunkte die Extension nutzt
+- Action-Button kontextuell: **Download & Install → Start ↔ Stop → Remove → Uninstall**
+- Seam-Indikatoren: welche Integrationspunkte das Addon nutzt
 
 ### Offene Designfrage
 
 | Option | Beschreibung | Bewertung |
 |---|---|---|
-| **A — MVP** | Manager verwaltet nur lokal vorhandene Extensions in `extensions/` | Schneller zu implementieren |
+| **A — MVP** | Manager verwaltet nur lokal vorhandene Addons in `addons/` | Schneller zu implementieren |
 | **B — Store** | Manager klont bei „Install" automatisch aus `catalog.yaml` (`git clone`) | Echter Marketplace-Feel; empfohlen für Folge-Iteration |
 
 ---
@@ -691,9 +700,9 @@ Jede Karte zeigt:
 
 | Phase | Inhalt | Status |
 |---|---|---|
-| **Phase 0** — Spec & Blueprint | Architektur-Spec, Extension-Kontrakt-Schema, ADR definieren; Manifest-Schema validieren gegen existierende Beispiele | Abgeschlossen |
-| **Phase 1** — Core entschlacken + Pilot Paperless | App-spezifische Includes + hartverdrahtete Configs aus Core lösen; `papaia-ext-paperless` als erstes Companion-Repo; `papaia-ctl`-Verben; End-to-End verifizieren | Prototype vorhanden (verifiziert) |
-| **Phase 2** — Tooling härten | App-Registry + `papaia-ctl apps` vollständig; sourcebare Merge-Helfer (YAML-Merge, Keycloak-Register, Override-Netz-Generierung); Per-Kunde-Deployment-Manifest treibt Komposition | Offen |
+| **Phase 0** — Spec & Blueprint | Architektur-Spec, Addon-Kontrakt-Schema, ADR definieren; Manifest-Schema validieren gegen existierende Beispiele | Abgeschlossen |
+| **Phase 1** — Core entschlacken + Pilot Paperless | App-spezifische Includes + hartverdrahtete Configs aus Core lösen; `papaia-addon-paperless` als erstes Companion-Repo; `papaia-ctl`-Verben; End-to-End verifizieren | Prototype vorhanden (verifiziert) |
+| **Phase 2** — Tooling härten | Addon-Registry + `papaia-ctl addon` vollständig; sourcebare Merge-Helfer (YAML-Merge, Keycloak-Register, Override-Netz-Generierung); Per-Kunde-Deployment-Manifest treibt Komposition | Offen |
 | **Phase 3** — Katalog + Kunden-Apps + Flotte | Restliche First-Party-Module einzeln in Katalog migrieren (RAG-Bundle, n8n, Suche, Firecrawl); Companion-App-Template-Repo für Kunden (Muster A + B); Flotten-Update-Verteilung (Versions-Pinning, Compat-Gating, Rollback) | Offen |
 
 ---
@@ -702,11 +711,11 @@ Jede Karte zeigt:
 
 | Punkt | Beschreibung | Empfehlung |
 |---|---|---|
-| Extension-Sichtbarkeit | Generische Tier-2-Extensions public-bound oder privat? | Public-bound (No-Trace-Pflicht beachten) |
-| MCP-Erreichbarkeit | East-west (librechat ans App-Netz) vs. über Ingress | East-west als Default; im Manifest pro Extension wählbar |
+| Addon-Sichtbarkeit | Generische Tier-2-Addons public-bound oder privat? | Public-bound (No-Trace-Pflicht beachten) |
+| MCP-Erreichbarkeit | East-west (librechat ans App-Netz) vs. über Ingress | East-west als Default; im Manifest pro Addon wählbar |
 | `PAPAIA_CONFIG_DIR`-Default | Sibling `<repo>-config` wie heute vs. `/srv/fidonis/<env>/config` | Sibling für Dev, absoluter Pfad für Prod |
 | Compat-Policy-Strenge | Warn vs. Hard-Fail bei `papaia_compat`-Verletzung | Hard-Fail in Produktion; Warn in Dev-Modus |
-| Pre-Release-Kanäle | `>=x.y.z-rc` oder separater Kanal für Beta-Extensions | Offen |
+| Pre-Release-Kanäle | `>=x.y.z-rc` oder separater Kanal für Beta-Addons | Offen |
 | `papaia/tools/` öffentlich | Orchestrator ist public-bound; Fidonis kann private Optimierungen schichten | Community-Orchestrator in `papaia/tools/`; privater Fast-Path bleibt getrennt |
 | papaia-manager: Katalog-Download | Git-Clone bei „Install" (Option B) in Prototyp implementieren? | Empfehlung: Folge-Iteration nach Phase-2-Tooling |
 
@@ -726,13 +735,14 @@ Jede Karte zeigt:
 | Check | Erwartetes Ergebnis |
 |---|---|
 | `papaia-ctl init` | `papaia-config/` anlegen, `.env` + `deployment.yaml` seeden |
-| `papaia-ctl apps integrate paperless` | `papaia-config/` aktualisiert; Repos unverändert |
-| Hash `papaia/` + `extensions/` vor/nach integrate | **Identisch** (Repo-Pristine-Beweis) |
-| `papaia-ctl apps render` (2×) | Identische Outputs (Idempotenz) |
+| `papaia-ctl addon install paperless --path=addons/papaia-addon-paperless` | `papaia-config/addons/paperless/.env` angelegt; Repos unverändert |
+| Hash `papaia/` + `addons/` vor/nach install | **Identisch** (Repo-Pristine-Beweis) |
+| `papaia-ctl addon start paperless` | `.env` im Checkout vorhanden; 6 Container laufen |
+| Render (2×) | Identische Outputs (Idempotenz) |
 | Overlay greift | `papaia-config/overlay/ai/librechat/librechat.yaml` erscheint im rendered Output |
 | `docker compose -f papaia/src/docker-compose.yml config` | Valide; nur Core-Services; kein Paperless |
 | Seam-1-Override aktiv | `librechat` + `nginx` an `papaia-net` **und** `papaia-paperless-net` |
-| `.env`-Seeding | `KC_PAPERLESS_CLIENT_SECRET` (zufällig) + App-Keys vorhanden; zweites `integrate` ändert nichts |
+| Config-Bundle-Seeding | `KC_PAPERLESS_CLIENT_SECRET` (zufällig) + App-Keys vorhanden; zweites `install` ändert nichts |
 | `up keycloak` | Nur Keycloak + DB starten |
 | `up` (voll) | Core-Profile + Paperless-App + Override aktiv |
 | `down --volumes` | Alle Container + Volumes entfernt |

@@ -11,4 +11,4 @@ core:
     - litellm
   inference: local-first
 
-extensions: []
+addons: []
