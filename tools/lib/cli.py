@@ -32,11 +32,6 @@ def _tristate(value: str | None) -> bool | None:
     return value == "true"
 
 
-def cmd_init(args: argparse.Namespace) -> int:
-    bootstrap.init(Path(args.config_dir), Path(args.repo_root), env_name=args.env, force=args.force)
-    print(f"Seeded {args.config_dir}")
-    return 0
-
 
 def cmd_defaults(args: argparse.Namespace) -> int:
     """Print sticky/derived values as shell-safe KEY=VALUE lines, one per
@@ -137,7 +132,7 @@ def _print_external_oidc_checklist(config_dir: Path, tree: bootstrap.EnvTree) ->
 
     sep = "─" * 65
     print()
-    print("External OIDC — manual steps required before 'papaia-ctl up'")
+    print("External OIDC — manual steps required before 'papaia-ctl start'")
     print(sep)
     print()
     print(f"1. Register these OIDC clients on {issuer}:")
@@ -155,7 +150,7 @@ def _print_external_oidc_checklist(config_dir: Path, tree: bootstrap.EnvTree) ->
         print()
     print("3. Apply and start the stack:")
     print()
-    print("   papaia-ctl setup -y && papaia-ctl up")
+    print("   papaia-ctl setup -y && papaia-ctl start")
     print()
     print(
         "See src/infra/keycloak/README.md"
@@ -223,7 +218,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
-    print(f"Setup complete. PAPAIA_CONFIG_DIR={config_dir}")
+    print(f"Setup complete. Run 'papaia-ctl start' to bring up the stack. PAPAIA_CONFIG_DIR={config_dir}")
     if effective_auth_provider == "external_oidc":
         _print_external_oidc_checklist(config_dir, tree)
     return 0
@@ -241,6 +236,11 @@ def _sync_deployment_manifest(config_dir: Path, tree, repo_root: Path) -> None:
     common.atomic_write(
         deployment_path, yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False)
     )
+
+
+def cmd_materialize(args: argparse.Namespace) -> int:
+    bootstrap.materialize_core_env(Path(args.config_dir), Path(args.repo_root))
+    return 0
 
 
 def cmd_render(args: argparse.Namespace) -> int:
@@ -450,7 +450,7 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
 def cmd_addon_networks(args: argparse.Namespace) -> int:
     """Print the Docker network name for each active addon (one per line).
 
-    Used by papaia-ctl up to pre-create external networks before the core
+    Used by papaia-ctl start to pre-create external networks before the core
     compose starts, so the stack comes up cleanly even when no addon container
     is running yet.
     """
@@ -490,10 +490,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-dir", required=True)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init")
-    p_init.add_argument("--env", default="papaia")
-    p_init.add_argument("--force", action="store_true")
-    p_init.set_defaults(func=cmd_init)
+    p_materialize = sub.add_parser("materialize-core")
+    p_materialize.set_defaults(func=cmd_materialize)
 
     p_defaults = sub.add_parser("defaults")
     p_defaults.set_defaults(func=cmd_defaults)

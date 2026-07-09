@@ -294,7 +294,10 @@ Kein Core-Eingriff.
 
 | Kommando | Was passiert |
 |---|---|
-| `papaia-ctl init` | Config-Ordner anlegen, `.env` + `deployment.yaml` seeden |
+| `papaia-ctl setup` | Config-Ordner anlegen, `.env` seeden, Secrets generieren, Konfiguration rendern, `deployment.yaml` schreiben |
+| `papaia-ctl start [--addons] [--profiles=LIST]` | Core-`.env` aus Config-Bundle in Checkout kopieren → Config rendern → Core starten. Mit `--addons`: aktive Addons ebenfalls starten. |
+| `papaia-ctl stop [--clean-up] [--addons]` | `docker compose stop` (Container stoppen, nicht löschen). Mit `--clean-up`: `docker compose down` (Container löschen, Volumes bleiben). Mit `--addons`: dasselbe für aktive Addons. |
+| `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → `$PAPAIA_CONFIG_DIR` komplett löschen. Mit `--clean-up`: auch Volumes löschen. Mit `--addons`: aktive Addon-Container ebenfalls herunterfahren. Warnung + Bestätigung erforderlich. |
 | `papaia-ctl addon install <name> --path=` | Config-Bundle seeden → in `deployment.yaml` registrieren → Override generieren → Core rendern → Keycloak-Checkliste ausgeben. **Startet nichts.** |
 | `papaia-ctl addon start <name>` | `.env` aus Config-Bundle in Checkout kopieren → Core rendern → `docker compose up -d` |
 | `papaia-ctl addon stop <name>` | `docker compose stop` (Container stoppen, nicht löschen) |
@@ -302,8 +305,6 @@ Kein Core-Eingriff.
 | `papaia-ctl addon remove <name>` | Override entfernen → Core neu rendern → `active: false` im Manifest. **Container unberührt, Config-Bundle bleibt.** |
 | `papaia-ctl addon uninstall <name>` | Override + deployment-Eintrag entfernen → Config-Bundle löschen → `docker compose down` |
 | `papaia-ctl addon uninstall <name> --clean-up` | wie `uninstall` + `docker compose down -v` (auch Volumes löschen) |
-| `papaia-ctl up [profile...]` | Render + alle aktiven Addons starten + Core-Compose up |
-| `papaia-ctl down [profile...] [--volumes]` | Core down + alle aktiven Addons stoppen |
 
 ### Config-Bundle-Seeding bei `addon install`
 
@@ -734,7 +735,7 @@ Jede Karte zeigt:
 
 | Check | Erwartetes Ergebnis |
 |---|---|
-| `papaia-ctl init` | `papaia-config/` anlegen, `.env` + `deployment.yaml` seeden |
+| `papaia-ctl setup` | `papaia-config/` anlegen, `.env` + `deployment.yaml` seeden, Secrets generieren |
 | `papaia-ctl addon install paperless --path=addons/papaia-addon-paperless` | `papaia-config/addons/paperless/.env` angelegt; Repos unverändert |
 | Hash `papaia/` + `addons/` vor/nach install | **Identisch** (Repo-Pristine-Beweis) |
 | `papaia-ctl addon start paperless` | `.env` im Checkout vorhanden; 6 Container laufen |
@@ -743,7 +744,7 @@ Jede Karte zeigt:
 | `docker compose -f papaia/src/docker-compose.yml config` | Valide; nur Core-Services; kein Paperless |
 | Seam-1-Override aktiv | `librechat` + `nginx` an `papaia-net` **und** `papaia-paperless-net` |
 | Config-Bundle-Seeding | `KC_PAPERLESS_CLIENT_SECRET` (zufällig) + App-Keys vorhanden; zweites `install` ändert nichts |
-| `up keycloak` | Nur Keycloak + DB starten |
+| `papaia-ctl start --profiles=keycloak` | Nur Keycloak + DB starten |
 | `up` (voll) | Core-Profile + Paperless-App + Override aktiv |
 | `down --volumes` | Alle Container + Volumes entfernt |
 

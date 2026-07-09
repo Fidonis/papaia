@@ -8,7 +8,7 @@
 git clone https://github.com/marko-boehm/papaia.git
 cd papaia
 tools/papaia-ctl setup   # interactive: prompts for PAPAIA_HOST / AUTH_HOST
-tools/papaia-ctl up      # renders config, starts the stack
+tools/papaia-ctl start   # materialises .env files, renders config, starts the stack
 ```
 
 `setup` is a one-shot, idempotent bootstrap: it seeds an external config
@@ -31,10 +31,10 @@ config — safe to run again after a `git pull`.
 | `--force` | Regenerate every secret unconditionally |
 | `-y`, `--non-interactive` | No prompts; every value must come from a flag or a prior sticky run |
 
-`tools/papaia-ctl down [--volumes]` stops the stack; `tools/papaia-ctl apps
-render` re-renders the config without touching `.env` or restarting
-anything. See the root [README's Quick start](../README.md#quick-start) for
-the full walkthrough, including the manual fallback steps `setup` automates.
+`tools/papaia-ctl stop` pauses all core containers (containers kept, volumes untouched);
+`tools/papaia-ctl stop --clean-up` removes them (volumes untouched).
+See the root [README's Quick start](../README.md#quick-start) for the full
+walkthrough, including the manual fallback steps `setup` automates.
 
 ## Server deployment
 

@@ -7,7 +7,7 @@ backup / restore scripts, and one subdirectory per service category.
 For an architecture overview and feature highlights of the **0.6.0**
 release, see the [top-level README](../README.md).
 
-> **Setup:** `tools/papaia-ctl setup && tools/papaia-ctl up` (one level up)
+> **Setup:** `tools/papaia-ctl setup && tools/papaia-ctl start` (one level up)
 > now automates everything below this point — secret generation, hostname
 > resolution, and `sync-config.sh`'s config-dir seeding in one idempotent
 > command. The manual steps in this file still describe what it does under

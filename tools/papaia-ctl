@@ -9,18 +9,18 @@
 # delegated to tools/lib/*.py (invoked via `python3 -m lib.cli`).
 #
 # Usage:
-#   papaia-ctl init   [--config-dir=PATH] [--env=NAME] [--force] [-y]
-#   papaia-ctl setup  [--config-dir=PATH] [--env=NAME] [--host-ip=IP]
-#                     [--app-host=URL] [--auth-host=URL] [--librechat-host=URL]
-#                     [--auth-provider=internal_keycloak|external_oidc]
-#                     [--oidc-issuer=URL]
-#                     [--reverse-proxy-provider=internal_nginx|external_proxy|no_proxy]
-#                     [--external-reverse-proxy|--no-external-reverse-proxy]
-#                     [--web-search|--no-web-search]
-#                     [--local-ai|--no-local-ai] [--localai-host=URL]
-#                     [--allow-direct-port-access] [--force] [-y]
-#   papaia-ctl up     [PROFILE...] [--config-dir=PATH]
-#   papaia-ctl down   [PROFILE...] [--volumes] [--config-dir=PATH]
+#   papaia-ctl setup    [--config-dir=PATH] [--env=NAME] [--host-ip=IP]
+#                       [--app-host=URL] [--auth-host=URL] [--librechat-host=URL]
+#                       [--auth-provider=internal_keycloak|external_oidc]
+#                       [--oidc-issuer=URL]
+#                       [--reverse-proxy-provider=internal_nginx|external_proxy|no_proxy]
+#                       [--external-reverse-proxy|--no-external-reverse-proxy]
+#                       [--web-search|--no-web-search]
+#                       [--local-ai|--no-local-ai] [--localai-host=URL]
+#                       [--allow-direct-port-access] [--force] [-y]
+#   papaia-ctl start    [--addons] [--profiles=LIST] [--config-dir=PATH]
+#   papaia-ctl stop     [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+#   papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--config-dir=PATH]
 #   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
@@ -45,7 +45,7 @@ warn()    { printf '%s[!]%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
 error()   { printf '%s[error]%s %s\n' "$RED" "$NC" "$*" >&2; }
 
 usage() {
-    sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- preflight ---------------------------------------------------------------
@@ -122,31 +122,6 @@ is_tty() { [ -t 0 ] && [ -t 1 ]; }
 
 # ─────────────────────────────────────────────────────────────────────────
 # init
-# ─────────────────────────────────────────────────────────────────────────
-cmd_init() {
-    local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia" force=0
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --config-dir=*) config_dir="${1#*=}" ;;
-            --env=*) env_name="${1#*=}" ;;
-            --force) force=1 ;;
-            -y|--non-interactive) : ;;  # init never prompts; accepted for symmetry
-            -h|--help) usage; exit 0 ;;
-            *) error "Unknown option for init: $1"; exit 2 ;;
-        esac
-        shift
-    done
-    CONFIG_DIR="$config_dir"
-
-    info "Seeding $CONFIG_DIR"
-    if [ "$force" -eq 1 ]; then
-        py_cli init --env="$env_name" --force
-    else
-        py_cli init --env="$env_name"
-    fi
-    success "init complete."
-}
-
 # ─────────────────────────────────────────────────────────────────────────
 # setup
 # ─────────────────────────────────────────────────────────────────────────
@@ -432,7 +407,7 @@ cmd_setup() {
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
         _is_local_auth_host "${auth_host:-${AUTH_HOST_STICKY:-}}" && _ensure_keycloak_certs
     fi
-    success "setup complete. Run 'papaia-ctl up' to start the stack."
+    success "setup complete. Run 'papaia-ctl start' to bring up the stack."
 }
 
 _derive_auth_default() {
@@ -563,32 +538,85 @@ _run_setup_py() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────
-# up / down / apps render
+# start / stop / uninstall
 # ─────────────────────────────────────────────────────────────────────────
-cmd_up() {
-    local config_dir="$DEFAULT_CONFIG_DIR"
-    local -a profiles=()
-    for arg in "$@"; do
-        case "$arg" in
-            --config-dir=*) config_dir="${arg#*=}" ;;
+
+# Print the Docker network name for each active addon that is currently
+# running (network exists).  Used by cmd_start to decide which overrides
+# are safe to include.
+_active_addon_names() {
+    py_cli addon-networks 2>/dev/null || true
+}
+
+# Run docker compose start/stop/up/down on every active addon.
+# $1 = compose verb ("stop" or "down"), rest = extra docker compose flags
+_addon_compose_all() {
+    local verb="$1"; shift
+    local -a extra=("$@")
+    local addon_name addon_path
+    while IFS= read -r addon_name; do
+        [ -z "$addon_name" ] && continue
+        addon_path="$(_addon_path "$addon_name")"
+        info "  addon $addon_name: docker compose $verb"
+        docker compose -f "$addon_path/docker-compose.yml" "$verb" "${extra[@]}"
+    done < <(
+        "$PYTHON_BIN" -c "
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+for a in (d.get('addons') or []):
+    if a.get('active'): print(a['name'])
+" "$CONFIG_DIR/deployment.yaml" 2>/dev/null
+    )
+}
+
+cmd_start() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --addons) addons=1 ;;
+            --profiles=*) profiles="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
-            *) profiles+=("$arg") ;;
+            *) error "Unknown option for start: $1"; exit 2 ;;
         esac
+        shift
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+
+    info "Materialising configuration into checkout..."
+    py_cli materialize-core
 
     info "Rendering current configuration..."
     py_cli render
 
     local env_file="$REPO_ROOT/src/.env"
 
+    if [ "$addons" -eq 1 ]; then
+        info "Starting active addons..."
+        local addon_name addon_path
+        while IFS= read -r addon_name; do
+            [ -z "$addon_name" ] && continue
+            addon_path="$(_addon_path "$addon_name")"
+            info "  addon $addon_name: materialising env + starting"
+            py_cli addon-start --name="$addon_name"
+            docker compose -f "$addon_path/docker-compose.yml" up -d
+        done < <(
+            "$PYTHON_BIN" -c "
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+for a in (d.get('addons') or []):
+    if a.get('active'): print(a['name'])
+" "$CONFIG_DIR/deployment.yaml" 2>/dev/null
+        )
+    fi
+
     # Build the override list, but skip any override whose external networks
-    # don't exist yet.  The Seam-1 overrides declare addon networks as
-    # external:true — if the addon hasn't been started yet the network doesn't
-    # exist and docker compose up would fail.  Once the user runs
-    # `addon start <name>` the network is Compose-owned; subsequent `up` calls
-    # will include the override automatically.
+    # don't exist yet.  Overrides declare addon networks as external:true —
+    # if the addon hasn't been started yet the network doesn't exist and
+    # docker compose up would fail.  Once `addon start <name>` (or
+    # `start --addons`) runs, the network is Compose-owned and the override
+    # is included automatically on the next start.
     local -a compose_overrides=()
     if [ -d "$CONFIG_DIR/overrides" ]; then
         for f in "$CONFIG_DIR"/overrides/docker-compose.*.override.yml; do
@@ -597,7 +625,7 @@ cmd_up() {
             while IFS= read -r net_name; do
                 [ -z "$net_name" ] && continue
                 docker network inspect "$net_name" >/dev/null 2>&1 || { nets_missing=1; break; }
-            done < <(python3 -c "
+            done < <("$PYTHON_BIN" -c "
 import yaml, sys
 doc = yaml.safe_load(open(sys.argv[1])) or {}
 for n, c in (doc.get('networks') or {}).items():
@@ -611,41 +639,111 @@ for n, c in (doc.get('networks') or {}).items():
         done
     fi
 
-    if [ ${#profiles[@]} -gt 0 ]; then
-        local joined
-        joined="$(IFS=,; echo "${profiles[*]}")"
-        info "Starting profiles: $joined"
-        COMPOSE_PROFILES="$joined" docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
+    if [ -n "$profiles" ]; then
+        info "Starting core with profiles: $profiles"
+        COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
     else
         docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
     fi
-    success "up complete."
+    success "start complete."
 }
 
-cmd_down() {
-    local config_dir="$DEFAULT_CONFIG_DIR" volumes=0
-    local -a profiles=()
-    for arg in "$@"; do
-        case "$arg" in
-            --config-dir=*) config_dir="${arg#*=}" ;;
-            --volumes) volumes=1 ;;
+cmd_stop() {
+    local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 profiles=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --clean-up) clean_up=1 ;;
+            --addons) addons=1 ;;
+            --profiles=*) profiles="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
-            *) profiles+=("$arg") ;;
+            *) error "Unknown option for stop: $1"; exit 2 ;;
         esac
+        shift
     done
     CONFIG_DIR="$config_dir"
     local env_file="$REPO_ROOT/src/.env"
 
-    local -a down_args=(-f "$COMPOSE_FILE" --env-file "$env_file" down)
-    [ "$volumes" -eq 1 ] && down_args+=(-v)
-    if [ ${#profiles[@]} -gt 0 ]; then
-        local joined
-        joined="$(IFS=,; echo "${profiles[*]}")"
-        COMPOSE_PROFILES="$joined" docker compose "${down_args[@]}"
-    else
-        docker compose "${down_args[@]}"
+    if [ "$addons" -eq 1 ]; then
+        info "Stopping active addons..."
+        if [ "$clean_up" -eq 1 ]; then
+            _addon_compose_all down
+        else
+            _addon_compose_all stop
+        fi
     fi
-    success "down complete."
+
+    if [ "$clean_up" -eq 1 ]; then
+        if [ -n "$profiles" ]; then
+            COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down
+        else
+            docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down
+        fi
+    else
+        if [ -n "$profiles" ]; then
+            COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" --env-file "$env_file" stop
+        else
+            docker compose -f "$COMPOSE_FILE" --env-file "$env_file" stop
+        fi
+    fi
+    success "stop complete."
+}
+
+cmd_uninstall() {
+    local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 non_interactive=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --clean-up) clean_up=1 ;;
+            --addons) addons=1 ;;
+            -y|--yes) non_interactive=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for uninstall: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+
+    warn "This will stop and remove all core containers and permanently delete $CONFIG_DIR."
+    if [ "$clean_up" -eq 1 ]; then
+        warn "  --clean-up: all named volumes will also be removed."
+    fi
+    if [ "$addons" -eq 1 ]; then
+        warn "  --addons: active addon containers will also be stopped and removed."
+    fi
+
+    if [ "$non_interactive" -eq 0 ] && is_tty; then
+        if ! confirm "Proceed with uninstall?" "N"; then
+            error "Aborted."
+            exit 3
+        fi
+    fi
+
+    local env_file="$REPO_ROOT/src/.env"
+
+    if [ "$addons" -eq 1 ] && [ -f "$CONFIG_DIR/deployment.yaml" ]; then
+        info "Stopping and removing active addon containers..."
+        if [ "$clean_up" -eq 1 ]; then
+            _addon_compose_all down -v
+        else
+            _addon_compose_all down
+        fi
+    fi
+
+    if [ -f "$COMPOSE_FILE" ] && [ -f "$env_file" ]; then
+        info "Stopping and removing core containers..."
+        if [ "$clean_up" -eq 1 ]; then
+            docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down -v
+        else
+            docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down
+        fi
+    fi
+
+    if [ -d "$CONFIG_DIR" ]; then
+        info "Deleting $CONFIG_DIR..."
+        rm -rf "$CONFIG_DIR"
+    fi
+    success "uninstall complete."
 }
 
 _addon_path() {
@@ -791,10 +889,6 @@ _require_setup_done() {
         error "No setup found at $CONFIG_DIR. Run 'papaia-ctl setup' first."
         exit 2
     fi
-    if [ ! -f "$REPO_ROOT/src/.env" ]; then
-        error "$REPO_ROOT/src/.env not found. Run 'papaia-ctl setup' first."
-        exit 2
-    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -807,10 +901,10 @@ fi
 
 cmd="$1"; shift || true
 case "$cmd" in
-    init) cmd_init "$@" ;;
-    setup) cmd_setup "$@" ;;
-    up) cmd_up "$@" ;;
-    down) cmd_down "$@" ;;
+    setup)     cmd_setup "$@" ;;
+    start)     cmd_start "$@" ;;
+    stop)      cmd_stop "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in
