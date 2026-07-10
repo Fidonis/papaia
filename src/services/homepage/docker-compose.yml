@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   homepage:
-    image: ghcr.io/gethomepage/homepage:v1.12.3
+    image: ghcr.io/gethomepage/homepage:v1.13.2
     restart: unless-stopped
     env_file:
       - ./.env
@@ -30,7 +30,7 @@ services:
   # oauth2-proxy sidecar — protects Homepage with Keycloak authentication.
   # Exposed on HOMEPAGE_EXT_PORT; Homepage itself is only reachable inside Docker.
   homepage-auth:
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.9.0
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     restart: unless-stopped
     command:
       - --provider=oidc

@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   firecrawl:
-    image: ghcr.io/firecrawl/firecrawl@sha256:a7a8c9b2f81276c83a90d6d8877b2ecc953805c8feabe2cd5783be28e750cc88
+    image: ghcr.io/firecrawl/firecrawl:v1.14.0
     restart: unless-stopped
     environment:
       REDIS_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
