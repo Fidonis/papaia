@@ -189,7 +189,7 @@ cmd_setup() {
         info "Reusing existing configuration; re-rendering env files only."
         _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" ""
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
-            _is_local_auth_host "${AUTH_HOST_STICKY:-}" && _ensure_keycloak_certs
+            _ensure_keycloak_certs
         fi
         success "setup complete (re-render only)."
         return 0
@@ -233,7 +233,7 @@ cmd_setup() {
             info "Reusing existing configuration; re-rendering only."
             _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" ""
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
-                _is_local_auth_host "${AUTH_HOST_STICKY:-}" && _ensure_keycloak_certs
+                _ensure_keycloak_certs
             fi
             success "setup complete (re-render only)."
             return 0
@@ -405,7 +405,7 @@ cmd_setup() {
         exit 3
     fi
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
-        _is_local_auth_host "${auth_host:-${AUTH_HOST_STICKY:-}}" && _ensure_keycloak_certs
+        _ensure_keycloak_certs
     fi
     success "setup complete. Run 'papaia-ctl start' to bring up the stack."
 }
