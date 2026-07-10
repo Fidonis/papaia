@@ -123,20 +123,6 @@ JSON manipulation is delegated to `tools/lib/*.py`.
 All operations are **idempotent by default** — re-running any command leaves already-set
 values unchanged.
 
-### `init`
-
-Seeds `$PAPAIA_CONFIG_DIR` from shipped defaults. Non-destructive: existing files are kept
-unless `--force` is given. Never generates secrets.
-
-```bash
-tools/papaia-ctl init [--config-dir=PATH] [--env=NAME] [--force] [-y]
-```
-
-Creates in `$PAPAIA_CONFIG_DIR`:
-- `.env` files seeded from every `src/**/.env.example`
-- `deployment.yaml` from `tools/deployment.template.yaml`
-- `overlay/` and `overrides/` subdirectories
-
 ### `setup`
 
 Full bootstrap: prompts for public URLs, generates secrets, derives OIDC endpoints, renders
@@ -206,41 +192,56 @@ tools/papaia-ctl setup \
   --auth-host=https://auth.example.com
 ```
 
-### `up`
+### `start`
 
-Re-renders the current configuration and starts the stack.
-
-```bash
-tools/papaia-ctl up [PROFILE...] [--config-dir=PATH]
-```
-
-Config rendering happens on every `up` call — picks up `git pull` changes, new extension
-fragments, and `overlay/` edits automatically. Pass profile names to start a subset:
+Materialises `.env` files from the config bundle into the checkout, re-renders the
+configuration, and starts the stack.
 
 ```bash
-tools/papaia-ctl up keycloak librechat litellm
+tools/papaia-ctl start [--addons] [--profiles=LIST] [--config-dir=PATH]
 ```
 
-### `down`
+Config rendering happens on every `start` call — picks up `git pull` changes, new addon
+fragments, and `overlay/` edits automatically.
+
+`--addons` also starts all active addons before bringing up the core stack (ensures addon
+networks exist so core override files apply cleanly).
+
+`--profiles` accepts a comma-separated list of Compose profile names to activate for this
+run:
+
+```bash
+tools/papaia-ctl start --profiles=keycloak,librechat,litellm
+```
+
+### `stop`
 
 Stops the stack.
 
 ```bash
-tools/papaia-ctl down [PROFILE...] [--volumes] [--config-dir=PATH]
+tools/papaia-ctl stop [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
 ```
 
-`--volumes` also removes Docker volumes (destructive).
+Without `--clean-up`: `docker compose stop` — containers are paused but not removed;
+volumes and networks are kept.
 
-### `apps render`
+`--clean-up`: `docker compose down` — containers are removed; volumes are kept.
 
-Re-renders the configuration without starting or restarting containers. Useful after:
-- `git pull` to pick up new config templates before the next `up`
-- Editing `$PAPAIA_CONFIG_DIR/overlay/` to apply a custom override
-- Adding or removing an extension in `deployment.yaml`
+`--addons`: apply the same stop operation to all active addons.
+
+### `uninstall`
+
+Stops and removes all core containers, then permanently deletes `$PAPAIA_CONFIG_DIR`.
 
 ```bash
-tools/papaia-ctl apps render [--config-dir=PATH]
+tools/papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 ```
+
+Prompts for confirmation before proceeding; `-y` / `--yes` skips the prompt.
+
+`--clean-up`: also removes Docker volumes.
+
+`--addons`: also stops and removes active addon containers before deleting the config.
 
 ### Configuration engine
 
@@ -314,21 +315,22 @@ tools/papaia-ctl setup --non-interactive \
 **3. Start the stack**
 
 ```bash
-tools/papaia-ctl up
+tools/papaia-ctl start
 ```
 
-Re-renders the configuration and runs `docker compose up -d`. Keycloak imports the `papaia`
-realm automatically on first start. Pass profile names to start a subset:
+Materialises `.env` files from the config bundle, re-renders the configuration, and runs
+`docker compose up -d`. Keycloak imports the `papaia` realm automatically on first start.
+Pass profile names to start a subset:
 
 ```bash
-tools/papaia-ctl up keycloak librechat litellm
+tools/papaia-ctl start --profiles=keycloak,librechat,litellm
 ```
 
 ### Stopping
 
 ```bash
-tools/papaia-ctl down              # remove containers and network, keep volumes
-tools/papaia-ctl down --volumes    # also wipe volumes (destructive)
+tools/papaia-ctl stop              # pause containers, keep them (volumes untouched)
+tools/papaia-ctl stop --clean-up   # remove containers, keep volumes
 ```
 
 ---
@@ -438,10 +440,9 @@ ${PAPAIA_CONFIG_DIR}/
 └── overrides/        ← auto-generated extension network override files
 ```
 
-`tools/papaia-ctl setup` (and `apps render` on its own) populates and updates this directory
-through the 3-layer merge engine. Editing a file inside `overlay/` and running
-`papaia-ctl apps render` (or `papaia-ctl up`) applies the change on the next container
-start.
+`tools/papaia-ctl setup` populates and updates this directory through the 3-layer merge
+engine. Editing a file inside `overlay/` and running `papaia-ctl start` applies the change
+on the next container start.
 
 > `src/sync-config.sh` is a deprecated predecessor of `papaia-ctl apps render`. It remains
 > in the repo as a low-level fallback for scripting scenarios but should not be used for
@@ -449,9 +450,9 @@ start.
 
 ### `deployment.yaml`
 
-`papaia-ctl init` writes `deployment.yaml` into `$PAPAIA_CONFIG_DIR` from
-`tools/deployment.template.yaml`. `setup` refreshes it on every run. This file is the
-manifest for the current installation:
+`papaia-ctl setup` writes `deployment.yaml` into `$PAPAIA_CONFIG_DIR` from
+`tools/deployment.template.yaml` on first run and refreshes it on every subsequent run.
+This file is the manifest for the current installation:
 
 ```yaml
 customer: papaia
@@ -478,7 +479,7 @@ override. With the default empty list, zero override files are produced.
 
 ```bash
 git pull                     # pull new repo version
-tools/papaia-ctl up          # re-render (picks up template changes) + restart
+tools/papaia-ctl start       # re-render (picks up template changes) + restart
 ```
 
 Customer overrides under `${PAPAIA_CONFIG_DIR}/overlay/` survive the upgrade untouched.
@@ -717,7 +718,7 @@ notes.
 `src/docker-compose.yml` aggregates services via `include:`, and each service declares
 a Compose `profile`. Enable a module by adding its profile to `COMPOSE_PROFILES` in
 `src/.env`; fully optional modules also need their `include:` line uncommented. Restart
-with `tools/papaia-ctl up` afterwards.
+with `tools/papaia-ctl start` afterwards.
 
 ### Updating images
 

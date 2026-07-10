@@ -1031,3 +1031,48 @@ def test_persist_tree_writes_both_locations(repo_root, config_dir):
     assert "PAPAIA_HOST=https://papaia.example.com" in (config_dir / ".env").read_text(
         encoding="utf-8"
     )
+
+
+# ── materialize_core_env ──────────────────────────────────────────────────────
+
+
+def test_materialize_core_env_copies_bundle_to_checkout(repo_root, config_dir):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    # Write a distinctive value into the config bundle
+    bundle_env = config_dir / ".env"
+    bundle_env.write_text("PAPAIA_HOST=https://restored.example.com\n", encoding="utf-8")
+
+    # Remove the checkout copy to simulate a git-clean scenario
+    checkout_env = repo_root / "src" / ".env"
+    checkout_env.unlink(missing_ok=True)
+    assert not checkout_env.is_file()
+
+    bootstrap.materialize_core_env(config_dir, repo_root)
+
+    assert checkout_env.is_file()
+    assert "PAPAIA_HOST=https://restored.example.com" in checkout_env.read_text(encoding="utf-8")
+
+
+def test_materialize_core_env_matches_bundle_content(repo_root, config_dir):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    # Overwrite checkout with stale content
+    checkout_env = repo_root / "src" / ".env"
+    checkout_env.write_text("PAPAIA_HOST=stale\n", encoding="utf-8")
+    bundle_env = config_dir / ".env"
+    bundle_env.write_text("PAPAIA_HOST=fresh\n", encoding="utf-8")
+
+    bootstrap.materialize_core_env(config_dir, repo_root)
+
+    assert checkout_env.read_text(encoding="utf-8") == "PAPAIA_HOST=fresh\n"
+
+
+def test_materialize_core_env_skips_missing_bundle_files(repo_root, config_dir):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    # Remove a bundle .env for a sub-directory — materialize must not crash
+    keycloak_bundle = config_dir / "infra" / "keycloak" / ".env"
+    keycloak_bundle.unlink(missing_ok=True)
+
+    bootstrap.materialize_core_env(config_dir, repo_root)
+
+    # Root .env should still be restored from its bundle copy
+    assert (repo_root / "src" / ".env").is_file()

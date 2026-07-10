@@ -1,4 +1,4 @@
-"""Seeding and resolution logic for `papaia-ctl init` / `papaia-ctl setup`.
+"""Seeding and resolution logic for `papaia-ctl setup`.
 
 Operates on an "env tree": a dict mapping a service's directory (relative to
 `src/`, POSIX-style, "" for the repo-root `src/.env`) to that service's flat
@@ -810,3 +810,25 @@ def materialize_addon_env(config_dir: Path, addon_path: Path, addon_name: str) -
     target_env = addon_path / ".env"
     if bundle_env.is_file():
         shutil.copy2(bundle_env, target_env)
+
+
+def materialize_core_env(config_dir: Path, repo_root: Path) -> None:
+    """Copy each core .env from the config bundle into the checkout before compose up.
+
+    Mirrors materialize_addon_env for the core stack: the config bundle in
+    config_dir is the single source of truth; the checkout copies under
+    repo_root/src/ are derived and must be refreshed before every start so
+    that a git-clean checkout or a manually deleted src/.env never causes a
+    silent stale-env start.
+    """
+    import shutil
+
+    seed = load_seed_tree(repo_root)
+    for rel_dir in seed:
+        bundle_env = config_dir / rel_dir / ".env" if rel_dir else config_dir / ".env"
+        checkout_env = (
+            repo_root / "src" / rel_dir / ".env" if rel_dir else repo_root / "src" / ".env"
+        )
+        if bundle_env.is_file():
+            checkout_env.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bundle_env, checkout_env)

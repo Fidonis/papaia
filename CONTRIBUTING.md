@@ -91,7 +91,7 @@ Please run them locally before pushing if you can. Configuration lives in `.gith
 See [`docs/deployment.md`](./docs/deployment.md) (work in progress) for local setup. The short version:
 
     tools/papaia-ctl setup       # interactive by default; --non-interactive + --*-host flags for CI/scripted use
-    tools/papaia-ctl up
+    tools/papaia-ctl start
 
 `setup` generates secrets, derives the OIDC issuer and per-service hostnames, and renders every config file into the external `PAPAIA_CONFIG_DIR` — see the root [README's Quick start](./README.md#quick-start) for the full flag reference.
 
