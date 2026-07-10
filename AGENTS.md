@@ -63,9 +63,9 @@ gitignored `src/**/.env` files — never to any other tracked path in the repo.
 
 ```
 tools/
-  papaia-ctl                  # Bash dispatcher: init · setup · up · down · apps render
-  deployment.template.yaml    # template → $PAPAIA_CONFIG_DIR/deployment.yaml on init
-                              # describes active extensions, core profiles, hosting type
+  papaia-ctl                  # Bash dispatcher: setup · start · stop · uninstall · addon
+  deployment.template.yaml    # template → $PAPAIA_CONFIG_DIR/deployment.yaml on setup
+                              # describes active addons, core profiles, hosting type
   pyproject.toml              # ruff + pytest config for tools/lib
   lib/                        # Python: render_core.py · gen_override.py · bootstrap.py
                               #          common.py · cli.py
@@ -129,15 +129,16 @@ docs/
   `tools/papaia-ctl setup` / `apps render` via a 3-layer merge:
   ```
   repo base (src/<target>)
-    + active extension fragments (extensions/<name>/integration/<target>/)
+    + active addon fragments (<addon-path>/integration/<target>/)
     + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>/)
       → $PAPAIA_CONFIG_DIR/<target>
   ```
+  Rendering runs on `setup`, on every `start`, and on every `addon` operation.
   `src/sync-config.sh` is the deprecated lower-level predecessor — still present as a
-  manual fallback but superseded by `papaia-ctl apps render`.
-- `$PAPAIA_CONFIG_DIR/deployment.yaml` — the installation manifest: active extensions,
+  manual fallback, but not part of the normal operating path.
+- `$PAPAIA_CONFIG_DIR/deployment.yaml` — the installation manifest: active addons,
   active Core profiles, platform version, hosting type. Read by `gen_override.py` to
-  generate the extension network attachment overrides.
+  generate the addon network attachment overrides.
 - `$PAPAIA_CONFIG_DIR/overrides/docker-compose.<name>.override.yml` — auto-generated
   by `gen_override.py` for each active extension (Seam-1: network). Never edit manually.
 
