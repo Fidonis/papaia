@@ -216,7 +216,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
-    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, effective_auth_provider)
+    gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(f"Setup complete. Run 'papaia-ctl start' to bring up the stack. PAPAIA_CONFIG_DIR={config_dir}")
@@ -252,7 +252,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
-    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
+    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
     print("Rendered.")
     return 0
 
@@ -385,7 +385,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
 
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
-    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
+    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
     _print_keycloak_checklist(name, manifest, addon_path, config_dir)
     print(f"Addon installed: {name}")
@@ -442,7 +442,7 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
-    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
+    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
     print(f"Addon removed: {name}")
     return 0
@@ -468,6 +468,14 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
     override_file.unlink(missing_ok=True)
 
+    # The deployment entry is gone after this command, so the generic
+    # regeneration below can no longer see the addon — unlink its ssl-cert
+    # override explicitly, mirroring the network override above.
+    ssl_override_file = (
+        config_dir / "overrides" / "addons" / f"docker-compose.{name}-ssl-cert.override.yml"
+    )
+    ssl_override_file.unlink(missing_ok=True)
+
     bundle_dir = config_dir / "addons" / name
     if bundle_dir.is_dir():
         import shutil
@@ -480,7 +488,7 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
-    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
+    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
     print(f"Addon uninstalled: {name}")
     return 0

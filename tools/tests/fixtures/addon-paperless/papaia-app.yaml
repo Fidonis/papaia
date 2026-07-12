@@ -8,6 +8,10 @@ networks:
   app_network: papaia-paperless-net
   attach: [nginx-proxy-manager, librechat]
 
+local_ca_env:
+  paperless: [REQUESTS_CA_BUNDLE]
+  paperless-mcp: [SSL_CERT_FILE]
+
 env_prompts:
   PAPAIA_CONFIG_DIR:
     label: "papAIa config directory (PAPAIA_CONFIG_DIR from core setup)"
