@@ -84,40 +84,70 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
 _SSL_CERT_SERVICES = ("litellm", "oauth2-proxy", "localai")
 
 
-def generate_paperless_addon_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:
-    """Write or remove the paperless addon SSL cert override for external OIDC.
+def _load_addon_local_ca_env(addon: dict, repo_root: Path) -> dict:
+    """Return the manifest's local_ca_env mapping (service -> list of env
+    vars) for one deployment.yaml addon entry, or {} when the manifest is
+    missing or declares none."""
+    addon_path = Path(addon.get("path", ""))
+    if not addon_path.is_absolute():
+        addon_path = repo_root / addon_path
+    manifest_path = addon_path / "papaia-app.yaml"
+    if not manifest_path.is_file():
+        return {}
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    return manifest.get("local_ca_env") or {}
 
-    With external OIDC, certs/ is empty — REQUESTS_CA_BUNDLE and SSL_CERT_FILE
-    must be cleared so requests/httpx fall back to the system CA bundle instead
-    of failing on the absent local-ca.crt.  The file lives in overrides/addons/
-    so the core compose loop (which globs overrides/docker-compose.*.override.yml)
-    does not pick it up and try to apply it to core services.
+
+def generate_addon_ssl_cert_overrides(
+    config_dir: Path, auth_provider: str, repo_root: Path
+) -> None:
+    """Write or remove the per-addon SSL cert overrides for external OIDC.
+
+    Addons whose services mount the bundled Keycloak CA cert declare the
+    affected env vars in their manifest:
+
+        local_ca_env:
+          <service>: [REQUESTS_CA_BUNDLE, ...]
+
+    With external OIDC, certs/ is empty — those vars must be cleared so
+    requests/httpx fall back to the system CA bundle instead of failing on
+    the absent local-ca.crt.  The files live in overrides/addons/ so the
+    core compose loop (which globs overrides/docker-compose.*.override.yml)
+    does not pick them up; the addon compose loop applies
+    overrides/addons/docker-compose.<name>-*.override.yml instead.
     """
-    out_path = config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
-
     deployment_path = config_dir / "deployment.yaml"
     if deployment_path.is_file():
         deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
     else:
         deployment = {}
-    addons = deployment.get("addons") or []
-    paperless_active = any(
-        a.get("name") == "paperless" and a.get("active") for a in addons
-    )
 
-    if not paperless_active or auth_provider != "external_oidc":
-        out_path.unlink(missing_ok=True)
-        return
+    for addon in deployment.get("addons") or []:
+        name = addon.get("name")
+        if not name:
+            continue
+        out_path = (
+            config_dir / "overrides" / "addons" / f"docker-compose.{name}-ssl-cert.override.yml"
+        )
+        local_ca_env = _load_addon_local_ca_env(addon, repo_root)
+        if not addon.get("active") or auth_provider != "external_oidc" or not local_ca_env:
+            out_path.unlink(missing_ok=True)
+            continue
 
-    override = {
-        "services": {
-            "paperless":     {"environment": {"REQUESTS_CA_BUNDLE": ""}},
-            "paperless-mcp": {"environment": {"SSL_CERT_FILE": ""}},
+        override = {
+            "services": {
+                service: {
+                    "environment": {
+                        var: ""
+                        for var in ([env] if isinstance(env, str) else env)
+                    }
+                }
+                for service, env in local_ca_env.items()
+            }
         }
-    }
-    common.atomic_write(
-        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
-    )
+        common.atomic_write(
+            out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+        )
 
 
 def generate_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:

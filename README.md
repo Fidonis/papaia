@@ -459,6 +459,7 @@ The manifest declares every seam in machine-readable form, so integrating an add
 | LibreChat / MCP | `mcpServers` and `allowedDomains` fragments merged at render time |
 | Dashboard | Homepage service card merged at render time |
 | Ingress | Nginx Proxy Manager fragment merged at render time (optional) |
+| TLS trust | The add-on lists env vars that point at the bundled CA cert (`local_ca_env`); `papaia-ctl` clears them via a generated override when an external OIDC issuer is used |
 
 Add-ons are registered explicitly by path — there is no auto-discovery:
 

@@ -166,6 +166,10 @@ networks:
   app_network: papaia-<name>-net   # Eigenes Bridge-Netz des Addons
   attach: [nginx, librechat]       # Core-Container, die ans App-Netz angehängt werden
 
+local_ca_env:                      # optional: Env-Vars, die auf das lokale
+  <service>: [SSL_CERT_FILE]       # Keycloak-CA-Zertifikat zeigen — werden bei
+                                   # auth_provider=external_oidc per Override geleert
+
 integration:
   keycloak:
     clients: [integration/keycloak/<client>.json]
@@ -187,6 +191,9 @@ description: "Paperless-ngx document management + OIDC/RBAC MCP server"
 networks:
   app_network: papaia-paperless-net
   attach: [nginx, librechat]
+local_ca_env:
+  paperless: [REQUESTS_CA_BUNDLE]
+  paperless-mcp: [SSL_CERT_FILE]
 integration:
   keycloak:
     clients: [integration/keycloak/paperless.json, integration/keycloak/mcp-paperless.json]
