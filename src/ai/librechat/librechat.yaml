@@ -120,6 +120,9 @@ mcpServers:
     url: http://mcp-firecrawl:8080/mcp
     # No Authorization header — network isolation (internal papaia-net,
     # no external port binding) is the security boundary for this service.
+    headers:
+      X-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
+      X-User-Id: "{{LIBRECHAT_USER_ID}}"
     startup: true
 
 mcpSettings:
