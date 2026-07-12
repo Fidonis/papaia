@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   librechat:
-    image: ghcr.io/danny-avila/librechat:v0.8.5
+    image: ghcr.io/danny-avila/librechat:v0.8.7
     restart: unless-stopped
     depends_on:
       librechat-mongodb:
@@ -43,10 +43,6 @@ services:
         source: ${PAPAIA_CONFIG_DIR}/certs
         target: /certs
         read_only: true
-      # Patch: injects x-librechat-user-email / x-librechat-user-id into MCP requests.
-      - type: bind
-        source: ./patches/mcp-user-headers.js
-        target: /app/patches/mcp-user-headers.js
       # Patch: upserts agents from /app/api/data/agents/ into MongoDB on startup.
       - type: bind
         source: ./patches/agents-init.js
@@ -153,7 +149,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest
+    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:v0.8.0
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb
