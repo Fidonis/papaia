@@ -9,6 +9,9 @@ networks:
   attach: [nginx-proxy-manager, librechat]
 
 env_prompts:
+  PAPAIA_CONFIG_DIR:
+    label: "papAIa config directory (PAPAIA_CONFIG_DIR from core setup)"
+    default_from_core: PAPAIA_CONFIG_DIR
   OIDC_ISSUER:
     label: "Keycloak issuer URL"
     default_from_core: OIDC_ISSUER

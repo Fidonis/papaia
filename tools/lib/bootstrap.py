@@ -96,6 +96,7 @@ def init(
     touch src/**/.env -- purely seeds the config dir from shipped defaults."""
     common.ensure_dir(config_dir / "overlay")
     common.ensure_dir(config_dir / "overrides")
+    common.ensure_dir(config_dir / "overrides" / "addons")
     common.ensure_dir(config_dir / "certs")
 
     seed = load_seed_tree(repo_root)

@@ -600,7 +600,7 @@ cmd_start() {
             addon_path="$(_addon_path "$addon_name")"
             info "  addon $addon_name: materialising env + starting"
             py_cli addon-start --name="$addon_name"
-            docker compose -f "$addon_path/docker-compose.yml" up -d
+            _addon_compose_up "$addon_name" "$addon_path"
         done < <(
             "$PYTHON_BIN" -c "
 import sys, yaml
@@ -777,6 +777,22 @@ cmd_addon_install() {
     success "addon install complete: $addon_name"
 }
 
+# Start an addon via docker compose, including any addon-specific overrides
+# from $CONFIG_DIR/overrides/addons/.  Override files in that subdirectory
+# follow the naming pattern docker-compose.<addon_name>-*.override.yml and
+# are not picked up by the core compose loop (which globs overrides/ directly).
+_addon_compose_up() {
+    local addon_name="$1" addon_path="$2"
+    local -a compose_files=(-f "$addon_path/docker-compose.yml")
+    if [ -d "$CONFIG_DIR/overrides/addons" ]; then
+        for f in "$CONFIG_DIR/overrides/addons/docker-compose.${addon_name}-"*.override.yml; do
+            [ -f "$f" ] || continue
+            compose_files+=(-f "$f")
+        done
+    fi
+    docker compose "${compose_files[@]}" up -d
+}
+
 cmd_addon_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
     while [ $# -gt 0 ]; do
@@ -799,7 +815,7 @@ cmd_addon_start() {
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
     info "Starting addon $addon_name from $addon_path"
-    docker compose -f "$addon_path/docker-compose.yml" up -d
+    _addon_compose_up "$addon_name" "$addon_path"
     success "addon start complete: $addon_name"
 }
 

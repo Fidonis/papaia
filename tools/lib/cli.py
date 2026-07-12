@@ -216,6 +216,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, effective_auth_provider)
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(f"Setup complete. Run 'papaia-ctl start' to bring up the stack. PAPAIA_CONFIG_DIR={config_dir}")
@@ -251,6 +252,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
     print("Rendered.")
     return 0
 
@@ -381,6 +383,10 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
 
+    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
+
     _print_keycloak_checklist(name, manifest, addon_path, config_dir)
     print(f"Addon installed: {name}")
     return 0
@@ -434,6 +440,9 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
+    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
 
     print(f"Addon removed: {name}")
     return 0
@@ -469,6 +478,9 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
+    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
 
     print(f"Addon uninstalled: {name}")
     return 0

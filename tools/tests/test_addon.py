@@ -73,7 +73,8 @@ def test_install_seeds_env_into_config_bundle(repo_root, config_dir):
     # Literal defaults are copied verbatim
     assert parsed["PAPERLESS_EXT_PORT"] == "8010"
     assert parsed["PAPERLESS_DBUSER"] == "paperless"
-    # CHANGE_ME keys stay as-is
+    # CHANGE_ME keys stay as-is until prompted
+    assert parsed["PAPAIA_CONFIG_DIR"] == "CHANGE_ME"
     assert parsed["PAPERLESS_PUBLIC_URL"] == "CHANGE_ME"
     # Section banner is present
     env_content = bundle_env.read_text(encoding="utf-8")
@@ -341,11 +342,13 @@ def test_install_warns_about_change_me_in_noninteractive_mode(repo_root, config_
 
     err = capsys.readouterr().err
     assert "CHANGE_ME" in err
+    assert "PAPAIA_CONFIG_DIR" in err
     assert "OIDC_ISSUER" in err
     assert "PAPERLESS_PUBLIC_URL" in err
 
     bundle_env = config_dir / "addons" / "paperless" / ".env"
     parsed = common.parse_env_file(bundle_env)
+    assert parsed["PAPAIA_CONFIG_DIR"] == "CHANGE_ME"
     assert parsed["OIDC_ISSUER"] == "CHANGE_ME"
     assert parsed["PAPERLESS_PUBLIC_URL"] == "CHANGE_ME"
 
@@ -353,7 +356,8 @@ def test_install_warns_about_change_me_in_noninteractive_mode(repo_root, config_
 def test_install_applies_prompted_values(repo_root, config_dir, monkeypatch):
     _setup(repo_root, config_dir)
 
-    answers = iter(["https://kc.example.com/realms/papaia", "http://localhost:8010"])
+    # Three CHANGE_ME keys in fixture order: PAPAIA_CONFIG_DIR, OIDC_ISSUER, PAPERLESS_PUBLIC_URL
+    answers = iter(["/opt/papaia-config", "https://kc.example.com/realms/papaia", "http://localhost:8010"])
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
@@ -361,6 +365,7 @@ def test_install_applies_prompted_values(repo_root, config_dir, monkeypatch):
 
     bundle_env = config_dir / "addons" / "paperless" / ".env"
     parsed = common.parse_env_file(bundle_env)
+    assert parsed["PAPAIA_CONFIG_DIR"] == "/opt/papaia-config"
     assert parsed["OIDC_ISSUER"] == "https://kc.example.com/realms/papaia"
     assert parsed["PAPERLESS_PUBLIC_URL"] == "http://localhost:8010"
 
