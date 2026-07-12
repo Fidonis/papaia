@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from lib import bootstrap, gen_override
+from lib import bootstrap, common, gen_override
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -13,7 +13,8 @@ def test_generate_overrides_empty_on_lean_core(repo_root, config_dir):
     bootstrap.init(config_dir, repo_root, env_name="papaia")
     written = gen_override.generate_overrides(config_dir)
     assert written == []
-    assert list((config_dir / "overrides").glob("*")) == []
+    # overrides/ contains only the addons/ subdirectory — no override files
+    assert list((config_dir / "overrides").glob("*.yml")) == []
 
 
 def test_generate_override_synthetic_fixture():
@@ -63,4 +64,62 @@ def test_generate_ssl_cert_override_removes_file_for_internal_keycloak(config_di
 
     # Switching back to internal_keycloak must remove it
     gen_override.generate_ssl_cert_override(config_dir, "internal_keycloak")
+    assert not out_path.exists()
+
+
+def _write_paperless_deployment(config_dir: Path, active: bool) -> None:
+    import yaml as _yaml
+
+    deployment_path = config_dir / "deployment.yaml"
+    deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
+    deployment["addons"] = [{"name": "paperless", "active": active, "path": "/some/path"}]
+    common.atomic_write(
+        deployment_path,
+        _yaml.safe_dump(deployment, sort_keys=False, default_flow_style=False),
+    )
+
+
+def test_paperless_addon_ssl_cert_override_created_for_external_oidc(config_dir, repo_root):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    _write_paperless_deployment(config_dir, active=True)
+
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, "external_oidc")
+
+    out_path = config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
+    assert out_path.is_file()
+    override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
+    assert override["services"]["paperless"]["environment"]["REQUESTS_CA_BUNDLE"] == ""
+    assert override["services"]["paperless-mcp"]["environment"]["SSL_CERT_FILE"] == ""
+
+
+def test_paperless_addon_ssl_cert_override_removed_for_internal_keycloak(config_dir, repo_root):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    _write_paperless_deployment(config_dir, active=True)
+
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, "external_oidc")
+    out_path = config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
+    assert out_path.is_file()
+
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, "internal_keycloak")
+    assert not out_path.exists()
+
+
+def test_paperless_addon_ssl_cert_override_removed_when_addon_inactive(config_dir, repo_root):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    _write_paperless_deployment(config_dir, active=True)
+
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, "external_oidc")
+    out_path = config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
+    assert out_path.is_file()
+
+    _write_paperless_deployment(config_dir, active=False)
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, "external_oidc")
+    assert not out_path.exists()
+
+
+def test_paperless_addon_ssl_cert_override_not_created_without_deployment(config_dir, repo_root):
+    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    # deployment.yaml has no addons entry → paperless not active
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, "external_oidc")
+    out_path = config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
     assert not out_path.exists()

@@ -250,9 +250,12 @@ def test_generate_missing_secrets_ignores_keys_without_generate_marker(repo_root
 @pytest.mark.parametrize(
     "app_host,expected",
     [
-        ("http://host.docker.internal", "http://host.docker.internal:8110"),
-        ("http://localhost", "http://localhost:8110"),
-        ("http://192.168.1.50", "http://192.168.1.50:8110"),
+        # Local hostnames always resolve to https because Keycloak now terminates
+        # TLS natively and the locally-generated CA cert covers these SANs.
+        ("http://host.docker.internal", "https://host.docker.internal:8110"),
+        ("http://localhost", "https://localhost:8110"),
+        ("http://192.168.1.50", "https://192.168.1.50:8110"),
+        # FQDNs keep the scheme from app_host (operator supplies the cert).
         ("https://papaia.example.com", "https://auth.papaia.example.com"),
     ],
 )
@@ -358,10 +361,11 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     assert tree[""]["HOMEPAGE_PUBLIC_URL"] == "https://papaia.example.com:8300"
     assert tree[""]["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
     assert tree[""]["OAUTH2_PROXY_COOKIE_SECURE"] == "true"
-    # internal Docker DNS endpoints must never be derived from the public host
+    # internal Docker DNS endpoints use https because Keycloak now terminates
+    # TLS natively (port 8443); they must never be derived from the public host
     assert (
         tree[""]["OIDC_ISSUER_KC_TOKEN"]
-        == "http://keycloak:8080/realms/papaia/protocol/openid-connect/token"
+        == "https://keycloak:8443/realms/papaia/protocol/openid-connect/token"
     )
     # TRUST_PROXY is a static value bootstrap.py must never touch
     assert tree["ai/librechat"]["TRUST_PROXY"] == "1"

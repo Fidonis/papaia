@@ -216,6 +216,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, effective_auth_provider)
 
     bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(f"Setup complete. Run 'papaia-ctl start' to bring up the stack. PAPAIA_CONFIG_DIR={config_dir}")
@@ -251,6 +252,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
     print("Rendered.")
     return 0
 
@@ -276,30 +278,38 @@ def _resolve_addon_path(addon: dict, repo_root: Path) -> Path:
     return p.resolve()
 
 
-def _print_keycloak_checklist(name: str, manifest: dict, addon_path: Path) -> None:
+def _print_keycloak_checklist(
+    name: str, manifest: dict, addon_path: Path, config_dir: Path
+) -> None:
     integration = manifest.get("integration") or {}
     keycloak_cfg = integration.get("keycloak") or {}
     clients = keycloak_cfg.get("clients") or []
     mappers = keycloak_cfg.get("client_mappers") or {}
+    replace_secret_cfg = manifest.get("env_replace_secrets") or {}
 
-    if not clients and not mappers:
+    bundle_env = config_dir / "addons" / name / ".env"
+    bundle_vals = common.parse_env_file(bundle_env)
+    replace_keys = [k for k, v in bundle_vals.items() if v.startswith("REPLACE_WITH_")]
+
+    if not clients and not mappers and not replace_keys:
         return
 
     sep = "─" * 65
     print()
-    print(f"Addon '{name}' — Keycloak steps required before 'papaia-ctl addon start'")
+    print(f"Addon '{name}' — manual steps required before 'papaia-ctl addon start'")
     print(sep)
     print()
+    step = 1
     if clients:
-        print("1. Import these OIDC clients in the 'papaia' realm:")
+        print(f"{step}. Import these OIDC clients in the 'papaia' realm:")
         print()
         for rel in clients:
             print(f"   {addon_path / rel}")
         print()
         print("   Keycloak Admin UI → Clients → Import client.")
         print()
+        step += 1
     if mappers:
-        step = 2 if clients else 1
         print(f"{step}. Add protocol mappers to these existing clients:")
         print()
         for client_name, mapper_paths in mappers.items():
@@ -307,6 +317,17 @@ def _print_keycloak_checklist(name: str, manifest: dict, addon_path: Path) -> No
                 print(f"   {client_name}: {addon_path / rel}")
         print()
         print("   Clients → <client> → Client scopes → Dedicated → Add mapper → By configuration.")
+        print()
+        step += 1
+    if replace_keys:
+        print(f"{step}. After importing, enter the client secrets in:")
+        print(f"   {bundle_env}")
+        print()
+        key_w = max(len(k) for k in replace_keys) + 2
+        for key in replace_keys:
+            hint = (replace_secret_cfg.get(key) or {}).get("hint", "")
+            suffix = f"  {hint}" if hint else ""
+            print(f"   {key:<{key_w}}{suffix}")
         print()
 
 
@@ -350,11 +371,23 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
 
     bootstrap.seed_addon_env(addon_path, config_dir)
+
+    bundle_env_path = config_dir / "addons" / name / ".env"
+    updates = bootstrap.prompt_change_me_vars(bundle_env_path, manifest, config_dir)
+    if updates:
+        env_vals = common.parse_env_file(bundle_env_path)
+        env_vals.update(updates)
+        common.write_env_file(bundle_env_path, env_vals)
+
     _save_deployment(config_dir, deployment)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
 
-    _print_keycloak_checklist(name, manifest, addon_path)
+    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
+
+    _print_keycloak_checklist(name, manifest, addon_path, config_dir)
     print(f"Addon installed: {name}")
     return 0
 
@@ -407,6 +440,9 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
+    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
 
     print(f"Addon removed: {name}")
     return 0
@@ -442,6 +478,9 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
+    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_paperless_addon_ssl_cert_override(config_dir, auth_provider)
 
     print(f"Addon uninstalled: {name}")
     return 0

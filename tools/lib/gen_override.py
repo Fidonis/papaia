@@ -84,6 +84,42 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
 _SSL_CERT_SERVICES = ("litellm", "oauth2-proxy", "localai")
 
 
+def generate_paperless_addon_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:
+    """Write or remove the paperless addon SSL cert override for external OIDC.
+
+    With external OIDC, certs/ is empty — REQUESTS_CA_BUNDLE and SSL_CERT_FILE
+    must be cleared so requests/httpx fall back to the system CA bundle instead
+    of failing on the absent local-ca.crt.  The file lives in overrides/addons/
+    so the core compose loop (which globs overrides/docker-compose.*.override.yml)
+    does not pick it up and try to apply it to core services.
+    """
+    out_path = config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
+
+    deployment_path = config_dir / "deployment.yaml"
+    if deployment_path.is_file():
+        deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
+    else:
+        deployment = {}
+    addons = deployment.get("addons") or []
+    paperless_active = any(
+        a.get("name") == "paperless" and a.get("active") for a in addons
+    )
+
+    if not paperless_active or auth_provider != "external_oidc":
+        out_path.unlink(missing_ok=True)
+        return
+
+    override = {
+        "services": {
+            "paperless":     {"environment": {"REQUESTS_CA_BUNDLE": ""}},
+            "paperless-mcp": {"environment": {"SSL_CERT_FILE": ""}},
+        }
+    }
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+
+
 def generate_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:
     """Write or remove the SSL_CERT_FILE override for external OIDC.
 

@@ -96,6 +96,7 @@ def init(
     touch src/**/.env -- purely seeds the config dir from shipped defaults."""
     common.ensure_dir(config_dir / "overlay")
     common.ensure_dir(config_dir / "overrides")
+    common.ensure_dir(config_dir / "overrides" / "addons")
     common.ensure_dir(config_dir / "certs")
 
     seed = load_seed_tree(repo_root)
@@ -796,6 +797,58 @@ def seed_addon_env(addon_path: Path, config_dir: Path) -> None:
         lines.append(f"{k}={v}")
 
     common.atomic_write(env_path, existing_content + "\n".join(lines) + "\n")
+
+
+_CHANGE_ME = "CHANGE_ME"
+
+
+def prompt_change_me_vars(env_path: Path, manifest: dict, config_dir: Path) -> dict[str, str]:
+    """Prompt interactively for CHANGE_ME values in the seeded bundle env.
+
+    Returns a dict of key→value pairs the caller should write back.
+    Non-interactive stdin → warns on stderr and returns {} (values stay CHANGE_ME).
+    """
+    import sys
+
+    env_vals = common.parse_env_file(env_path)
+    change_me_keys = [k for k, v in env_vals.items() if v == _CHANGE_ME]
+    if not change_me_keys:
+        return {}
+
+    prompts_cfg = manifest.get("env_prompts") or {}
+
+    if not sys.stdin.isatty():
+        print(
+            "\nWARNING: Non-interactive mode — the following keys still contain CHANGE_ME in\n"
+            f"  {env_path}\n"
+            "  Set them before running 'papaia-ctl addon start':\n",
+            file=sys.stderr,
+        )
+        for key in change_me_keys:
+            print(f"  {key}", file=sys.stderr)
+        print(file=sys.stderr)
+        return {}
+
+    print("\nFill in environment-specific values (press Enter to accept the default):\n")
+    updates: dict[str, str] = {}
+    core_env: dict[str, str] | None = None
+
+    for key in change_me_keys:
+        cfg = prompts_cfg.get(key) or {}
+        label = cfg.get("label") or key
+        default = cfg.get("default", "")
+
+        if "default_from_core" in cfg:
+            if core_env is None:
+                core_env = common.parse_env_file(config_dir / ".env")
+            default = core_env.get(cfg["default_from_core"], default)
+
+        suffix = f" [{default}]" if default else ""
+        answer = input(f"  {label}{suffix}: ").strip() or default
+        updates[key] = answer
+
+    print()
+    return updates
 
 
 def materialize_addon_env(config_dir: Path, addon_path: Path, addon_name: str) -> None:
