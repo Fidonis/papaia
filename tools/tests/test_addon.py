@@ -68,8 +68,8 @@ def test_install_seeds_env_into_config_bundle(repo_root, config_dir):
     assert "PAPERLESS_DBPASS" in parsed
     assert not common.marks_generated_secret(parsed["PAPERLESS_DBPASS"])
     assert parsed["PAPERLESS_DBPASS"] != ""
-    assert "KC_PAPERLESS_CLIENT_SECRET" in parsed
-    assert not common.marks_generated_secret(parsed["KC_PAPERLESS_CLIENT_SECRET"])
+    # KC secrets use REPLACE_WITH_* (imported from Keycloak, not generated)
+    assert parsed["KC_PAPERLESS_CLIENT_SECRET"] == "REPLACE_WITH_KC_PAPERLESS_CLIENT_SECRET"
     # Literal defaults are copied verbatim
     assert parsed["PAPERLESS_EXT_PORT"] == "8010"
     assert parsed["PAPERLESS_DBUSER"] == "paperless"
@@ -330,3 +330,70 @@ def test_generate_overrides_absolute_path_without_repo_root(repo_root, config_di
 
     written = gen_override.generate_overrides(config_dir)
     assert len(written) == 1
+
+
+# ── CHANGE_ME prompts ────────────────────────────────────────────────────────
+
+
+def test_install_warns_about_change_me_in_noninteractive_mode(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+
+    err = capsys.readouterr().err
+    assert "CHANGE_ME" in err
+    assert "OIDC_ISSUER" in err
+    assert "PAPERLESS_PUBLIC_URL" in err
+
+    bundle_env = config_dir / "addons" / "paperless" / ".env"
+    parsed = common.parse_env_file(bundle_env)
+    assert parsed["OIDC_ISSUER"] == "CHANGE_ME"
+    assert parsed["PAPERLESS_PUBLIC_URL"] == "CHANGE_ME"
+
+
+def test_install_applies_prompted_values(repo_root, config_dir, monkeypatch):
+    _setup(repo_root, config_dir)
+
+    answers = iter(["https://kc.example.com/realms/papaia", "http://localhost:8010"])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    cmd_addon_install(_install_args(config_dir, repo_root))
+
+    bundle_env = config_dir / "addons" / "paperless" / ".env"
+    parsed = common.parse_env_file(bundle_env)
+    assert parsed["OIDC_ISSUER"] == "https://kc.example.com/realms/papaia"
+    assert parsed["PAPERLESS_PUBLIC_URL"] == "http://localhost:8010"
+
+
+def test_install_uses_default_when_input_is_empty(repo_root, config_dir, monkeypatch):
+    _setup(repo_root, config_dir)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    cmd_addon_install(_install_args(config_dir, repo_root))
+
+    bundle_env = config_dir / "addons" / "paperless" / ".env"
+    parsed = common.parse_env_file(bundle_env)
+    assert parsed["PAPERLESS_PUBLIC_URL"] == "http://host.docker.internal:8010"
+
+
+# ── REPLACE_WITH hints ───────────────────────────────────────────────────────
+
+
+def test_install_prints_replace_with_hints(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+
+    out = capsys.readouterr().out
+    assert "KC_PAPERLESS_CLIENT_SECRET" in out
+    assert "Keycloak → Clients → paperless → Credentials → Client Secret" in out
+
+
+def test_install_replace_with_values_preserved_in_bundle(repo_root, config_dir):
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+
+    bundle_env = config_dir / "addons" / "paperless" / ".env"
+    parsed = common.parse_env_file(bundle_env)
+    assert parsed["KC_PAPERLESS_CLIENT_SECRET"] == "REPLACE_WITH_KC_PAPERLESS_CLIENT_SECRET"

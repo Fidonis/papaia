@@ -8,5 +8,17 @@ networks:
   app_network: papaia-paperless-net
   attach: [nginx-proxy-manager, librechat]
 
+env_prompts:
+  OIDC_ISSUER:
+    label: "Keycloak issuer URL"
+    default_from_core: OIDC_ISSUER
+  PAPERLESS_PUBLIC_URL:
+    label: "Browser-facing URL of the Paperless web UI"
+    default: "http://host.docker.internal:8010"
+
+env_replace_secrets:
+  KC_PAPERLESS_CLIENT_SECRET:
+    hint: "Keycloak → Clients → paperless → Credentials → Client Secret"
+
 integration:
   librechat: integration/ai/librechat/librechat.yaml
