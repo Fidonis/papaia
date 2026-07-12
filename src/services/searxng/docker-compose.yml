@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   searxng:
-    image: searxng/searxng:2026.6.30-d115c61a7
+    image: searxng/searxng:2026.7.10-6a4d5148d
     restart: unless-stopped
     env_file:
       - ./.env

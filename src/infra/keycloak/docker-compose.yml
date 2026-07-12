@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.6.4
+    image: quay.io/keycloak/keycloak:26.7.0
     restart: unless-stopped
     ports:
       - "${HOST_IP:-0.0.0.0}:${KEYCLOAK_EXT_PORT}:8443"

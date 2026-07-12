@@ -56,7 +56,7 @@ services:
     profiles: [litellm]
 
   litellm-prometheus:
-    image: prom/prometheus:v3.11.1
+    image: prom/prometheus:v3.13.1
     restart: unless-stopped
     volumes:
       - litellm-prometheus:/prometheus

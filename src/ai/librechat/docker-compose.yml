@@ -153,7 +153,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest
+    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:v0.8.0
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb
