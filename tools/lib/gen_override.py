@@ -75,6 +75,20 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
     return written
 
 
+def external_networks(override_path: Path) -> list[str]:
+    """The names of all `external: true` networks declared in one override
+    file. The bash dispatcher uses this to skip overrides whose addon
+    networks don't exist yet (the addon isn't running)."""
+    if not override_path.is_file():
+        return []
+    doc = yaml.safe_load(override_path.read_text(encoding="utf-8")) or {}
+    return [
+        name
+        for name, cfg in (doc.get("networks") or {}).items()
+        if (cfg or {}).get("external")
+    ]
+
+
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For
 # external OIDC the cert file is absent, so SSL_CERT_FILE must be cleared to
 # let Python's ssl module fall back to the system CA bundle.

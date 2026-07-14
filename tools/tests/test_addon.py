@@ -9,6 +9,7 @@ import yaml
 
 from lib import bootstrap, common, gen_override
 from lib.cli import (
+    cmd_active_addons,
     cmd_addon_check,
     cmd_addon_install,
     cmd_addon_networks,
@@ -16,6 +17,7 @@ from lib.cli import (
     cmd_addon_remove,
     cmd_addon_start,
     cmd_addon_uninstall,
+    cmd_override_external_nets,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -349,6 +351,65 @@ def test_addon_networks_empty_when_no_active_addons(repo_root, config_dir, capsy
     args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
     result = cmd_addon_networks(args)
     assert result == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+# ── active-addons ─────────────────────────────────────────────────────────────
+
+
+def test_active_addons_lists_only_active_entries(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    addon_dst = repo_root / "addons" / "papaia-addon-paperless"
+    shutil.copytree(ADDON_PAPERLESS, addon_dst)
+    cmd_addon_install(_install_args(config_dir, repo_root, path=str(addon_dst)))
+    capsys.readouterr()
+
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    assert cmd_active_addons(args) == 0
+    assert capsys.readouterr().out.split() == ["paperless"]
+
+    # remove deactivates the entry -> no longer listed
+    cmd_addon_remove(_name_args(config_dir, repo_root))
+    capsys.readouterr()
+    assert cmd_active_addons(args) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_active_addons_empty_without_deployment(repo_root, config_dir, capsys):
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    assert cmd_active_addons(args) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+# ── override-external-nets ────────────────────────────────────────────────────
+
+
+def test_override_external_nets_prints_external_networks(tmp_path, capsys):
+    override = tmp_path / "docker-compose.paperless.override.yml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "services": {"nginx": {"networks": ["papaia-paperless-net"]}},
+                "networks": {
+                    "papaia-paperless-net": {"external": True},
+                    "papaia-net": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        config_dir=str(tmp_path), repo_root=str(tmp_path), file=str(override)
+    )
+    assert cmd_override_external_nets(args) == 0
+    assert capsys.readouterr().out.split() == ["papaia-paperless-net"]
+
+
+def test_override_external_nets_missing_file_is_empty(tmp_path, capsys):
+    args = argparse.Namespace(
+        config_dir=str(tmp_path), repo_root=str(tmp_path), file=str(tmp_path / "nope.yml")
+    )
+    assert cmd_override_external_nets(args) == 0
     assert capsys.readouterr().out.strip() == ""
 
 

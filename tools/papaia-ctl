@@ -562,14 +562,7 @@ _addon_compose_all() {
         addon_path="$(_addon_path "$addon_name")"
         info "  addon $addon_name: docker compose $verb"
         docker compose -f "$addon_path/docker-compose.yml" "$verb" "${extra[@]}"
-    done < <(
-        "$PYTHON_BIN" -c "
-import sys, yaml
-d = yaml.safe_load(open(sys.argv[1])) or {}
-for a in (d.get('addons') or []):
-    if a.get('active'): print(a['name'])
-" "$CONFIG_DIR/deployment.yaml" 2>/dev/null
-    )
+    done < <(py_cli active-addons 2>/dev/null)
 }
 
 cmd_start() {
@@ -615,14 +608,7 @@ cmd_start() {
             info "  addon $addon_name: materialising env + starting"
             py_cli addon-start --name="$addon_name" "${check_flags[@]}"
             _addon_compose_up "$addon_name" "$addon_path"
-        done < <(
-            "$PYTHON_BIN" -c "
-import sys, yaml
-d = yaml.safe_load(open(sys.argv[1])) or {}
-for a in (d.get('addons') or []):
-    if a.get('active'): print(a['name'])
-" "$CONFIG_DIR/deployment.yaml" 2>/dev/null
-        )
+        done < <(py_cli active-addons 2>/dev/null)
     fi
 
     # Build the override list, but skip any override whose external networks
@@ -639,12 +625,7 @@ for a in (d.get('addons') or []):
             while IFS= read -r net_name; do
                 [ -z "$net_name" ] && continue
                 docker network inspect "$net_name" >/dev/null 2>&1 || { nets_missing=1; break; }
-            done < <("$PYTHON_BIN" -c "
-import yaml, sys
-doc = yaml.safe_load(open(sys.argv[1])) or {}
-for n, c in (doc.get('networks') or {}).items():
-    if (c or {}).get('external'): print(n)
-" "$f" 2>/dev/null)
+            done < <(py_cli override-external-nets --file="$f" 2>/dev/null)
             if [ "$nets_missing" -eq 0 ]; then
                 compose_overrides+=(-f "$f")
             else

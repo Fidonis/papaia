@@ -624,6 +624,28 @@ def cmd_addon_networks(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_active_addons(args: argparse.Namespace) -> int:
+    """Print the name of each active addon (one per line).
+
+    Exists so the bash dispatcher can enumerate addons without parsing
+    deployment.yaml itself -- the script header's stated contract."""
+    deployed = deployment.load(Path(args.config_dir))
+    for addon in deployment.active_addons(deployed):
+        name = addon.get("name")
+        if name:
+            print(name)
+    return 0
+
+
+def cmd_override_external_nets(args: argparse.Namespace) -> int:
+    """Print the external network names declared in one override file
+    (one per line). Used by the bash dispatcher to skip overrides whose
+    addon networks don't exist yet."""
+    for net in gen_override.external_networks(Path(args.file)):
+        print(net)
+    return 0
+
+
 def cmd_addon_path(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -711,6 +733,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_addon_networks = sub.add_parser("addon-networks")
     p_addon_networks.set_defaults(func=cmd_addon_networks)
+
+    p_active_addons = sub.add_parser("active-addons")
+    p_active_addons.set_defaults(func=cmd_active_addons)
+
+    p_override_nets = sub.add_parser("override-external-nets")
+    p_override_nets.add_argument("--file", required=True)
+    p_override_nets.set_defaults(func=cmd_override_external_nets)
 
     p_addon_path = sub.add_parser("addon-path")
     p_addon_path.add_argument("--name", required=True)
