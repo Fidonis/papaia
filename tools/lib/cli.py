@@ -21,7 +21,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import bootstrap, common, compat, deployment, gen_override, render_core
+from . import addons, common, compat, deployment, envtree, gen_override, render_core, resolve, secrets
 
 
 def _tristate(value: str | None) -> bool | None:
@@ -36,7 +36,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     line, so the bash dispatcher can read them without a JSON parser."""
     repo_root = Path(args.repo_root)
     config_dir = Path(args.config_dir)
-    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
     root = tree.get("", {})
     librechat = tree.get("ai/librechat", {})
     app_host = root.get("PAPAIA_HOST", "")
@@ -61,7 +61,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     out = {
         "APP_HOST_STICKY": app_host,
         "AUTH_HOST_STICKY": auth_host_sticky,
-        "AUTH_HOST_DERIVED": bootstrap.derive_auth_host_default(
+        "AUTH_HOST_DERIVED": resolve.derive_auth_host_default(
             app_host or "http://host.docker.internal", keycloak_port
         ),
         "LIBRECHAT_HOST_STICKY": librechat_sticky,
@@ -74,7 +74,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
         "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
         "REVERSE_PROXY_PROVIDER_STICKY": root.get("REVERSE_PROXY_PROVIDER", ""),
         "NPM_ADMIN_HOST_STICKY": root.get("NPM_ADMIN_HOST", "") if config_seeded else "",
-        "NPM_ADMIN_HOST_DERIVED": bootstrap.derive_npm_admin_host_default(
+        "NPM_ADMIN_HOST_DERIVED": resolve.derive_npm_admin_host_default(
             app_host or "http://host.docker.internal",
             root.get("NPM_ADMIN_EXT_PORT", "8100"),
         ),
@@ -85,7 +85,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
             (
                 "true"
                 if "librechat-websearch" in profiles
-                or any(p in bootstrap._WEB_SEARCH_LEGACY_PROFILES for p in profiles)
+                or any(p in resolve._WEB_SEARCH_LEGACY_PROFILES for p in profiles)
                 else "false"
             )
             if config_seeded
@@ -93,7 +93,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
         ),
         "RERANKER_MODEL_STICKY": reranker_model_sticky,
         "COMPOSE_PROFILES_STICKY": ",".join(profiles),
-        "PLATFORM_VERSION": bootstrap.resolve_platform_version(repo_root),
+        "PLATFORM_VERSION": envtree.resolve_platform_version(repo_root),
         "CONFIG_SEEDED": "true" if config_seeded else "false",
     }
     for key, value in out.items():
@@ -101,7 +101,7 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_external_oidc_checklist(config_dir: Path, tree: bootstrap.EnvTree) -> None:
+def _print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:
     """Print a step-by-step operator checklist for completing an external OIDC
     setup. Called after persist_tree so all resolved values are available."""
     root = tree.get("", {})
@@ -114,7 +114,7 @@ def _print_external_oidc_checklist(config_dir: Path, tree: bootstrap.EnvTree) ->
     litellm_redirect = litellm.get("GENERIC_REDIRECT_URI", "")
 
     # Collect env files that still contain REPLACE_WITH_VALID_SECRET
-    placeholder = bootstrap._EXTERNAL_SECRET_PLACEHOLDER
+    placeholder = secrets._EXTERNAL_SECRET_PLACEHOLDER
     needs_edit: list[tuple[str, str]] = []
     for rel_dir, values in sorted(tree.items()):
         for key, value in sorted(values.items()):
@@ -161,10 +161,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
 
     fresh_init = not (config_dir / ".env").is_file()
-    bootstrap.init(config_dir, repo_root, env_name=args.env, force=False)
+    envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
-    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
-    setup_args = bootstrap.SetupArgs(
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    setup_args = resolve.SetupArgs(
         config_dir=config_dir,
         env_name=args.env,
         host_ip=args.host_ip,
@@ -190,25 +190,25 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "AUTH_PROVIDER", "internal_keycloak"
     )
 
-    seed = bootstrap.load_seed_tree(repo_root)
+    seed = envtree.load_seed_tree(repo_root)
     try:
-        tree = bootstrap.generate_missing_secrets(
+        tree = secrets.generate_missing_secrets(
             tree, seed, force=args.force, auth_provider=effective_auth_provider
         )
-        tree = bootstrap.resolve_multi_env(tree, setup_args)
-        tree = bootstrap.resolve_hostnames(tree, setup_args)
-        tree = bootstrap.resolve_reverse_proxy(tree, setup_args)
-        tree = bootstrap.migrate_web_search_profiles(tree)
-        tree = bootstrap.resolve_web_search(tree, setup_args)
-        tree = bootstrap.resolve_local_ai(tree, setup_args)
-        tree = bootstrap.resolve_reranker_model(tree, setup_args)
-    except bootstrap.SetupError as exc:
+        tree = resolve.resolve_multi_env(tree, setup_args)
+        tree = resolve.resolve_hostnames(tree, setup_args)
+        tree = resolve.resolve_reverse_proxy(tree, setup_args)
+        tree = resolve.migrate_web_search_profiles(tree)
+        tree = resolve.resolve_web_search(tree, setup_args)
+        tree = resolve.resolve_local_ai(tree, setup_args)
+        tree = resolve.resolve_reranker_model(tree, setup_args)
+    except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
 
-    tree = bootstrap.stamp_platform_version(tree, repo_root)
-    tree = bootstrap.stamp_config_dir(tree, config_dir)
-    bootstrap.persist_tree(tree, config_dir, repo_root)
+    tree = envtree.stamp_platform_version(tree, repo_root)
+    tree = envtree.stamp_config_dir(tree, config_dir)
+    envtree.persist_tree(tree, config_dir, repo_root)
     deployment.sync_manifest(config_dir, tree, repo_root)
 
     render_core.render(config_dir, repo_root)
@@ -216,7 +216,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
 
-    bootstrap.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
+    envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(f"Setup complete. Run 'papaia-ctl start' to bring up the stack. PAPAIA_CONFIG_DIR={config_dir}")
     if effective_auth_provider == "external_oidc":
         _print_external_oidc_checklist(config_dir, tree)
@@ -224,7 +224,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 def cmd_materialize(args: argparse.Namespace) -> int:
-    bootstrap.materialize_core_env(Path(args.config_dir), Path(args.repo_root))
+    envtree.materialize_core_env(Path(args.config_dir), Path(args.repo_root))
     return 0
 
 
@@ -233,7 +233,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
-    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
@@ -346,8 +346,8 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return 2
 
-    addons: list[dict] = deployed.setdefault("addons", [])
-    existing = next((a for a in addons if a.get("name") == name), None)
+    addon_entries: list[dict] = deployed.setdefault("addons", [])
+    existing = next((a for a in addon_entries if a.get("name") == name), None)
 
     if existing is None and not args.path:
         print(
@@ -381,12 +381,12 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         entry: dict = {"name": name, "path": str(addon_path), "active": True}
         if args.version:
             entry["version"] = args.version
-        addons.append(entry)
+        addon_entries.append(entry)
 
-    bootstrap.seed_addon_env(addon_path, config_dir)
+    addons.seed_addon_env(addon_path, config_dir)
 
     bundle_env_path = config_dir / "addons" / name / ".env"
-    updates = bootstrap.prompt_change_me_vars(bundle_env_path, manifest, config_dir)
+    updates = addons.prompt_change_me_vars(bundle_env_path, manifest, config_dir)
     if updates:
         env_vals = common.parse_env_file(bundle_env_path)
         env_vals.update(updates)
@@ -396,7 +396,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
 
-    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
@@ -412,8 +412,8 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     name = args.name
 
     deployed = deployment.load(config_dir)
-    addons: list[dict] = deployed.get("addons") or []
-    entry = next((a for a in addons if a.get("name") == name), None)
+    addon_entries: list[dict] = deployed.get("addons") or []
+    entry = next((a for a in addon_entries if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
         return 2
@@ -432,7 +432,7 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
         return 2
 
-    bootstrap.materialize_addon_env(config_dir, addon_path, name)
+    addons.materialize_addon_env(config_dir, addon_path, name)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
     return 0
@@ -534,8 +534,8 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return 2
 
-    addons: list[dict] = deployed.get("addons") or []
-    entry = next((a for a in addons if a.get("name") == name), None)
+    addon_entries: list[dict] = deployed.get("addons") or []
+    entry = next((a for a in addon_entries if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
         return 2
@@ -548,7 +548,7 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
-    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
@@ -567,8 +567,8 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return 2
 
-    addons: list[dict] = deployed.get("addons") or []
-    entry = next((a for a in addons if a.get("name") == name), None)
+    addon_entries: list[dict] = deployed.get("addons") or []
+    entry = next((a for a in addon_entries if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
         return 2
@@ -589,12 +589,12 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
         import shutil
         shutil.rmtree(bundle_dir)
 
-    deployed["addons"] = [a for a in addons if a.get("name") != name]
+    deployed["addons"] = [a for a in addon_entries if a.get("name") != name]
     deployment.save(config_dir, deployed)
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
-    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
@@ -652,8 +652,8 @@ def cmd_addon_path(args: argparse.Namespace) -> int:
     name = args.name
 
     deployed = deployment.load(config_dir)
-    addons: list[dict] = deployed.get("addons") or []
-    entry = next((a for a in addons if a.get("name") == name), None)
+    addon_entries: list[dict] = deployed.get("addons") or []
+    entry = next((a for a in addon_entries if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
         return 2

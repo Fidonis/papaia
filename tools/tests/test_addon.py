@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import bootstrap, common, gen_override
+from lib import common, envtree, gen_override
 from lib.cli import (
     cmd_active_addons,
     cmd_addon_check,
@@ -71,7 +71,7 @@ def _check_args(config_dir: Path, repo_root: Path, **overrides) -> argparse.Name
 
 
 def _setup(repo_root: Path, config_dir: Path) -> None:
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
 
 
 # ── install ───────────────────────────────────────────────────────────────────
@@ -439,7 +439,7 @@ def test_addon_path_unknown_returns_2(repo_root, config_dir):
 
 def test_generate_overrides_uses_repo_root(repo_root, config_dir):
     """generate_overrides() must resolve addon paths via repo_root, not CWD."""
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
 
     deployment_path = config_dir / "deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
@@ -462,7 +462,7 @@ def test_generate_overrides_uses_repo_root(repo_root, config_dir):
 
 def test_generate_overrides_absolute_path_without_repo_root(repo_root, config_dir):
     """Absolute addon paths work even without passing repo_root."""
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
 
     deployment_path = config_dir / "deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}

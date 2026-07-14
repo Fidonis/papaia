@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lib import bootstrap, compat, render_core
+from lib import compat, render_core, secrets
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -124,7 +124,7 @@ def test_base_render_targets_match_snapshot():
 
 
 def test_secret_aliases_match_snapshot():
-    assert bootstrap.SECRET_ALIASES == SECRET_ALIASES, _SURFACE_CHANGED
+    assert secrets.SECRET_ALIASES == SECRET_ALIASES, _SURFACE_CHANGED
 
 
 def test_manifest_keys_are_declared():

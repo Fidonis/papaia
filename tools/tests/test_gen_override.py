@@ -4,13 +4,13 @@ from pathlib import Path
 
 import yaml
 
-from lib import bootstrap, common, gen_override
+from lib import common, envtree, gen_override
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 def test_generate_overrides_empty_on_lean_core(repo_root, config_dir):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     written = gen_override.generate_overrides(config_dir)
     assert written == []
     # overrides/ contains only the addons/ subdirectory — no override files
@@ -43,7 +43,7 @@ def test_generate_override_returns_none_without_networks():
 
 
 def test_generate_ssl_cert_override_creates_file_for_external_oidc(config_dir, repo_root):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     gen_override.generate_ssl_cert_override(config_dir, "external_oidc")
 
     out_path = config_dir / "overrides" / "docker-compose.ssl-cert.override.yml"
@@ -56,7 +56,7 @@ def test_generate_ssl_cert_override_creates_file_for_external_oidc(config_dir, r
 
 
 def test_generate_ssl_cert_override_removes_file_for_internal_keycloak(config_dir, repo_root):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     # First create the file as if a prior external-OIDC run wrote it
     gen_override.generate_ssl_cert_override(config_dir, "external_oidc")
     out_path = config_dir / "overrides" / "docker-compose.ssl-cert.override.yml"
@@ -86,7 +86,7 @@ def _paperless_entry(active: bool) -> dict:
 
 
 def test_addon_ssl_cert_override_created_for_external_oidc(config_dir, repo_root):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     _write_addon_deployment(config_dir, [_paperless_entry(active=True)])
 
     gen_override.generate_addon_ssl_cert_overrides(config_dir, "external_oidc", repo_root)
@@ -99,7 +99,7 @@ def test_addon_ssl_cert_override_created_for_external_oidc(config_dir, repo_root
 
 
 def test_addon_ssl_cert_override_removed_for_internal_keycloak(config_dir, repo_root):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     _write_addon_deployment(config_dir, [_paperless_entry(active=True)])
 
     gen_override.generate_addon_ssl_cert_overrides(config_dir, "external_oidc", repo_root)
@@ -111,7 +111,7 @@ def test_addon_ssl_cert_override_removed_for_internal_keycloak(config_dir, repo_
 
 
 def test_addon_ssl_cert_override_removed_when_addon_inactive(config_dir, repo_root):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     _write_addon_deployment(config_dir, [_paperless_entry(active=True)])
 
     gen_override.generate_addon_ssl_cert_overrides(config_dir, "external_oidc", repo_root)
@@ -124,7 +124,7 @@ def test_addon_ssl_cert_override_removed_when_addon_inactive(config_dir, repo_ro
 
 
 def test_addon_ssl_cert_override_not_created_without_deployment(config_dir, repo_root):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     # deployment.yaml has no addons entry → nothing to generate
     gen_override.generate_addon_ssl_cert_overrides(config_dir, "external_oidc", repo_root)
     out_path = config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
@@ -132,7 +132,7 @@ def test_addon_ssl_cert_override_not_created_without_deployment(config_dir, repo
 
 
 def test_addon_ssl_cert_override_skipped_without_local_ca_env(config_dir, repo_root, tmp_path):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     addon_dir = tmp_path / "addon-plain"
     addon_dir.mkdir()
     (addon_dir / "papaia-app.yaml").write_text(
@@ -150,7 +150,7 @@ def test_addon_ssl_cert_override_skipped_without_local_ca_env(config_dir, repo_r
 
 
 def test_addon_ssl_cert_override_generated_per_addon(config_dir, repo_root, tmp_path):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
     addon_dir = tmp_path / "addon-other"
     addon_dir.mkdir()
     (addon_dir / "papaia-app.yaml").write_text(

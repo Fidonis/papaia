@@ -6,23 +6,23 @@ from pathlib import Path
 
 import yaml
 
-from lib import bootstrap, render_core
+from lib import envtree, render_core, resolve, secrets
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 def _setup_minimal(repo_root, config_dir):
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
-    tree = bootstrap.load_config_dir_tree(config_dir, repo_root)
-    seed = bootstrap.load_seed_tree(repo_root)
-    tree = bootstrap.generate_missing_secrets(tree, seed)
-    args = bootstrap.SetupArgs(
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    tree = secrets.generate_missing_secrets(tree, seed)
+    args = resolve.SetupArgs(
         config_dir=config_dir, app_host="http://host.docker.internal", non_interactive=True
     )
-    tree = bootstrap.resolve_hostnames(tree, args)
-    tree = bootstrap.resolve_multi_env(tree, args)
-    tree = bootstrap.resolve_reverse_proxy(tree, args)
-    bootstrap.persist_tree(tree, config_dir, repo_root)
+    tree = resolve.resolve_hostnames(tree, args)
+    tree = resolve.resolve_multi_env(tree, args)
+    tree = resolve.resolve_reverse_proxy(tree, args)
+    envtree.persist_tree(tree, config_dir, repo_root)
     return tree
 
 

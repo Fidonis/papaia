@@ -62,12 +62,12 @@ def seed(deployment_path: Path, repo_root: Path, env_name: str) -> None:
     """Seed a fresh deployment.yaml from tools/deployment.template.yaml."""
     # Local import: envtree-side code calls seed() during init, so a
     # top-level import here would be circular.
-    from . import bootstrap
+    from . import envtree
 
     template_path = repo_root / "tools" / "deployment.template.yaml"
     manifest = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     manifest["customer"] = env_name
-    manifest["platform_version"] = bootstrap.resolve_platform_version(repo_root)
+    manifest["platform_version"] = envtree.resolve_platform_version(repo_root)
     common.atomic_write(
         deployment_path,
         yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False),
@@ -77,9 +77,9 @@ def seed(deployment_path: Path, repo_root: Path, env_name: str) -> None:
 def sync_manifest(config_dir: Path, tree, repo_root: Path) -> None:
     """Mirror the resolved core state (profiles, platform version, served
     addon-api generation) into deployment.yaml after a setup run. `tree` is
-    the resolved env tree (see bootstrap.EnvTree)."""
+    the resolved env tree (see envtree.EnvTree)."""
     # Local import: see seed().
-    from . import bootstrap
+    from . import envtree
 
     deployment_path = config_dir / "deployment.yaml"
     if not deployment_path.is_file():
@@ -88,7 +88,7 @@ def sync_manifest(config_dir: Path, tree, repo_root: Path) -> None:
     root = tree.get("", {})
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
     manifest.setdefault("core", {})["profiles"] = profiles
-    manifest["platform_version"] = bootstrap.resolve_platform_version(repo_root)
+    manifest["platform_version"] = envtree.resolve_platform_version(repo_root)
     # Display only -- the compatibility gate always reads the live ADDON_API
     # file of the core it evaluates, never this stamped copy.
     window = compat.resolve_addon_api_window(repo_root)

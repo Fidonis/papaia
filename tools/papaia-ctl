@@ -415,7 +415,7 @@ cmd_setup() {
 
 _derive_auth_default() {
     # Best-effort bash-side fallback if defaults() had no sticky value yet;
-    # the authoritative derivation lives in bootstrap.derive_auth_host_default
+    # the authoritative derivation lives in resolve.derive_auth_host_default
     # and is what setup actually applies -- this is only used to pre-fill
     # the interactive prompt.
     case "$1" in
@@ -434,7 +434,7 @@ _derive_localai_default() {
 
 _derive_librechat_default() {
     # Best-effort bash-side prefill for the LibreChat URL prompt; the
-    # authoritative derivation lives in bootstrap.derive_librechat_url_default.
+    # authoritative derivation lives in resolve.derive_librechat_url_default.
     # host.docker.internal over plain HTTP -> localhost (Secure-cookie reason);
     # otherwise keep the app host, appending the LibreChat port.
     local host="$1" port="${LIBRECHAT_EXT_PORT:-8000}" base

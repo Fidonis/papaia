@@ -147,10 +147,10 @@ def resolve_core_services(repo_root: Path) -> dict[str, list[str]] | None:
 def resolve_core_target(repo_root: Path) -> CoreTarget:
     """Snapshot one core checkout's compatibility surface. Works equally
     for the running checkout and for a `--target-core` candidate."""
-    from . import bootstrap
+    from . import envtree
 
     return CoreTarget(
-        platform_version=bootstrap.resolve_platform_version(repo_root),
+        platform_version=envtree.resolve_platform_version(repo_root),
         addon_api=resolve_addon_api_window(repo_root),
         services=resolve_core_services(repo_root),
     )
