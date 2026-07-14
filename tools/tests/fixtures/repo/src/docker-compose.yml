@@ -1,0 +1,6 @@
+# Minimal core compose mirroring the real repo's include structure, so
+# resolve_core_services() and the attach-validation both have a real
+# include-walk to exercise.
+include:
+  - path: ./infra/nginx/docker-compose.yml
+  - path: ./ai/librechat/docker-compose.yml

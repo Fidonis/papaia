@@ -8,28 +8,64 @@ import pytest
 import yaml
 
 from lib import bootstrap, common, gen_override
-from lib.cli import cmd_addon_install, cmd_addon_networks, cmd_addon_remove, cmd_addon_uninstall, cmd_addon_start, cmd_addon_path
+from lib.cli import (
+    cmd_addon_check,
+    cmd_addon_install,
+    cmd_addon_networks,
+    cmd_addon_path,
+    cmd_addon_remove,
+    cmd_addon_start,
+    cmd_addon_uninstall,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ADDON_PAPERLESS = FIXTURES_DIR / "addon-paperless"
+ADDON_INCOMPATIBLE = FIXTURES_DIR / "addon-incompatible"
+REPO_NEXT = FIXTURES_DIR / "repo-next"
 
 
-def _install_args(config_dir: Path, repo_root: Path, *, path: str | None = None) -> argparse.Namespace:
+def _install_args(
+    config_dir: Path,
+    repo_root: Path,
+    *,
+    name: str = "paperless",
+    path: str | None = None,
+    force: bool = False,
+) -> argparse.Namespace:
     return argparse.Namespace(
         config_dir=str(config_dir),
         repo_root=str(repo_root),
-        name="paperless",
+        name=name,
         path=path or str(ADDON_PAPERLESS),
         version=None,
+        force=force,
     )
 
 
-def _name_args(config_dir: Path, repo_root: Path) -> argparse.Namespace:
+def _name_args(
+    config_dir: Path, repo_root: Path, *, name: str = "paperless", force: bool = False
+) -> argparse.Namespace:
     return argparse.Namespace(
         config_dir=str(config_dir),
         repo_root=str(repo_root),
-        name="paperless",
+        name=name,
+        force=force,
     )
+
+
+def _check_args(config_dir: Path, repo_root: Path, **overrides) -> argparse.Namespace:
+    defaults = dict(
+        config_dir=str(config_dir),
+        repo_root=str(repo_root),
+        target_core=None,
+        target_version=None,
+        target_addon_api=None,
+        target_min_addon_api=None,
+        json=False,
+        force=False,
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
 
 
 def _setup(repo_root: Path, config_dir: Path) -> None:
@@ -116,9 +152,72 @@ def test_install_requires_path_for_new_addon(repo_root, config_dir):
         name="paperless",
         path=None,
         version=None,
+        force=False,
     )
     result = cmd_addon_install(args)
     assert result == 2
+
+
+# ── compatibility gate ────────────────────────────────────────────────────────
+
+
+def test_install_rejects_incompatible_addon(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    deployment_before = (config_dir / "deployment.yaml").read_text(encoding="utf-8")
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="broken", path=str(ADDON_INCOMPATIBLE))
+    )
+    assert result == 2
+    assert "incompatible" in capsys.readouterr().err
+
+    # A refused install must leave no trace: deployment.yaml untouched,
+    # nothing seeded into the config bundle.
+    deployment_after = (config_dir / "deployment.yaml").read_text(encoding="utf-8")
+    assert deployment_after == deployment_before
+    assert "broken" not in deployment_after
+    assert not (config_dir / "addons" / "broken").exists()
+
+
+def test_install_force_overrides_incompatible(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+
+    result = cmd_addon_install(
+        _install_args(
+            config_dir, repo_root, name="broken", path=str(ADDON_INCOMPATIBLE), force=True
+        )
+    )
+    assert result == 0
+    assert "WARNING" in capsys.readouterr().err
+
+    deployment = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    assert any(a["name"] == "broken" and a["active"] for a in deployment["addons"])
+
+
+def test_install_warn_mode_degrades_incompatible(repo_root, config_dir, monkeypatch):
+    _setup(repo_root, config_dir)
+    monkeypatch.setenv("PAPAIA_COMPAT_MODE", "warn")
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="broken", path=str(ADDON_INCOMPATIBLE))
+    )
+    assert result == 0
+
+
+def test_addon_start_rechecks_after_core_upgrade(repo_root, config_dir):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+
+    # Simulate the core moving under the installed addon: without the
+    # VERSION file the fixture core resolves to 0.7.0 again, which no
+    # longer satisfies the addon's ">=0.8.0".
+    (repo_root / "VERSION").unlink()
+
+    assert cmd_addon_start(_name_args(config_dir, repo_root)) == 2
+    assert cmd_addon_start(_name_args(config_dir, repo_root, force=True)) == 0
+
+    # cleanup: remove the .env materialized into the shared fixture checkout
+    (ADDON_PAPERLESS / ".env").unlink(missing_ok=True)
 
 
 # ── start ─────────────────────────────────────────────────────────────────────
@@ -144,12 +243,7 @@ def test_start_materializes_env_into_checkout(repo_root, config_dir):
 
 def test_start_returns_2_for_unregistered_addon(repo_root, config_dir):
     _setup(repo_root, config_dir)
-    args = argparse.Namespace(
-        config_dir=str(config_dir),
-        repo_root=str(repo_root),
-        name="unknown",
-    )
-    result = cmd_addon_start(args)
+    result = cmd_addon_start(_name_args(config_dir, repo_root, name="unknown"))
     assert result == 2
 
 
@@ -241,15 +335,7 @@ def test_addon_networks_returns_network_for_active_addon(repo_root, config_dir, 
     addon_dst = repo_root / "addons" / "papaia-addon-paperless"
     shutil.copytree(ADDON_PAPERLESS, addon_dst)
 
-    cmd_addon_install(
-        argparse.Namespace(
-            config_dir=str(config_dir),
-            repo_root=str(repo_root),
-            name="paperless",
-            path=str(addon_dst),
-            version=None,
-        )
-    )
+    cmd_addon_install(_install_args(config_dir, repo_root, path=str(addon_dst)))
 
     args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
     result = cmd_addon_networks(args)
@@ -402,3 +488,97 @@ def test_install_replace_with_values_preserved_in_bundle(repo_root, config_dir):
     bundle_env = config_dir / "addons" / "paperless" / ".env"
     parsed = common.parse_env_file(bundle_env)
     assert parsed["KC_PAPERLESS_CLIENT_SECRET"] == "REPLACE_WITH_KC_PAPERLESS_CLIENT_SECRET"
+
+
+# ── addon-check ───────────────────────────────────────────────────────────────
+
+
+def test_addon_check_reports_ok_for_installed_addon(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+    capsys.readouterr()
+
+    result = cmd_addon_check(_check_args(config_dir, repo_root))
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "paperless" in out
+    assert "OK" in out
+
+
+def test_addon_check_without_setup_returns_2(repo_root, config_dir):
+    result = cmd_addon_check(_check_args(config_dir, repo_root))
+    assert result == 2
+
+
+def test_addon_check_no_active_addons_passes(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    result = cmd_addon_check(_check_args(config_dir, repo_root))
+    assert result == 0
+    assert "No active addons." in capsys.readouterr().out
+
+
+def test_addon_check_target_addon_api_detects_drop(repo_root, config_dir, tmp_path):
+    _setup(repo_root, config_dir)
+    # An addon that declares the contract generation it is built against.
+    addon_dir = tmp_path / "addon-apized"
+    addon_dir.mkdir()
+    (addon_dir / "papaia-app.yaml").write_text(
+        "name: apized\nrequires:\n  addon_api: 1\n", encoding="utf-8"
+    )
+    assert (
+        cmd_addon_install(_install_args(config_dir, repo_root, name="apized", path=str(addon_dir)))
+        == 0
+    )
+
+    # The current core serves [1..1].
+    assert cmd_addon_check(_check_args(config_dir, repo_root)) == 0
+    # A target serving only generation 2 drops the addon; without an
+    # explicit min the window is assumed closed (pessimistic).
+    assert cmd_addon_check(_check_args(config_dir, repo_root, target_addon_api=2)) == 2
+    # The escape hatch degrades the refusal to a warning.
+    assert (
+        cmd_addon_check(_check_args(config_dir, repo_root, target_addon_api=2, force=True)) == 0
+    )
+
+
+def test_addon_check_target_core_detects_service_rename(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+    capsys.readouterr()
+
+    # repo-next renamed nginx-proxy-manager; paperless still attaches to it.
+    result = cmd_addon_check(_check_args(config_dir, repo_root, target_core=str(REPO_NEXT)))
+    assert result == 2
+    out = capsys.readouterr().out
+    assert "core has no service 'nginx-proxy-manager'" in out
+
+
+def test_addon_check_json_shape(repo_root, config_dir, capsys):
+    import json
+
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+    capsys.readouterr()
+
+    assert cmd_addon_check(_check_args(config_dir, repo_root, json=True)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload) == 1
+    assert payload[0]["name"] == "paperless"
+    assert payload[0]["status"] == "OK"
+    assert set(payload[0]) == {"name", "axis", "requirement", "core_value", "status", "reason"}
+
+
+def test_addon_check_json_emitted_even_on_exit_2(repo_root, config_dir, capsys):
+    import json
+
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+    capsys.readouterr()
+
+    result = cmd_addon_check(
+        _check_args(config_dir, repo_root, target_core=str(REPO_NEXT), json=True)
+    )
+    assert result == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[0]["status"] == "INCOMPATIBLE"
+    assert payload[0]["reason"]

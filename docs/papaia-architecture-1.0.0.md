@@ -159,7 +159,11 @@ addons/papaia-addon-<name>/
 name: <kurzname>                   # Eindeutiger Bezeichner (a-z, 0-9, -)
 version: <semver>                  # Addon-Version
 addon_repo: papaia-addon-<name>    # GitHub-Repo-Name
-papaia_compat: ">=<semver>"        # Minimale Core-Version
+requires:
+  addon_api: 1                     # Kontrakt-Generation, gegen die das Addon
+                                   # gebaut ist (Int oder Liste, z. B. [1, 2]);
+                                   # geprüft gegen das ADDON_API-Fenster des Cores
+papaia_compat: ">=<semver>"        # Fallback: SemVer-Range gegen die Core-Version
 description: "<Beschreibung>"
 
 networks:
@@ -179,6 +183,26 @@ integration:
   homepage:  integration/homepage/<name>.yaml    # optional
   nginx:     integration/nginx/<name>.conf        # optional
 ```
+
+> **Kompatibilitäts-Prüfung** (`papaia-ctl addon check` sowie Gates an
+> `addon install`, `addon start`, `start`; siehe
+> [ADR 0002](adr/0002-addon-core-compatibility-gating.md)). Präzedenz pro Addon:
+>
+> 1. `requires.addon_api` vorhanden und der Core exponiert ein
+>    `ADDON_API`-Fenster → Schnittmengen-Check gegen `[min..current]`
+>    (autoritativ).
+> 2. sonst `papaia_compat` vorhanden → SemVer-Range gegen die Plattform-
+>    Version (`VERSION`-Datei). Unterstütztes Range-Subset:
+>    `>= > < <= == !=`, Caret `^`, Tilde `~`, Komma-AND
+>    (`">=0.8.0,<2.0.0"`), Pre-Releases (`-rc.1`).
+> 3. sonst → `UNKNOWN`: Warnung, niemals Hard-Fail — ein Manifest, das älter
+>    ist als der Kontrakt, sperrt nicht aus.
+>
+> Zusätzlich werden alle `networks.attach`-Einträge strukturell gegen die
+> Service-Namen des Core-Compose validiert; ein unbekannter Name ist
+> `INCOMPATIBLE`. Policy: Hard-Fail in Produktion, Warnung im Dev-Modus
+> (`PAPAIA_COMPAT_MODE` > `deployment.yaml → mode:` > Default `enforce`);
+> `--force` degradiert `INCOMPATIBLE`, nie ein malformtes Manifest.
 
 ### 6.3 Beispiel A: `papaia-addon-paperless`
 
@@ -460,9 +484,14 @@ Unterschied liegt im Tooling-Pfad, nicht im Stack.
 
 ### ③ Flotten-Skalierung & Wartbarkeit
 
-- **SemVer-Kompatibilitäts-Kontrakt**: Core veröffentlicht eine SemVer-Plattform-
-  Version; jedes Addon deklariert `papaia_compat: ">=x.y.z"`; der Orchestrator
-  verweigert inkompatible Kombinationen. Das macht Flotten-Updates sicher.
+- **Zwei-Achsen-Kompatibilitäts-Kontrakt**: Der Core veröffentlicht eine
+  Kontrakt-Generation (`ADDON_API`-Fenster) neben der SemVer-Plattform-Version
+  (`VERSION`-Datei); Addons deklarieren `requires.addon_api` (autoritativ) und
+  `papaia_compat: ">=x.y.z"` (Fallback). Der Orchestrator verweigert
+  inkompatible Kombinationen an `install`/`start` und beantwortet mit
+  `papaia-ctl addon check --target-core=PATH` die Update-Frage **vor** dem
+  Wechsel (siehe [ADR 0002](adr/0002-addon-core-compatibility-gating.md)).
+  Das macht Flotten-Updates sicher.
 
   > **SemVer-Kurzreferenz:** `MAJOR.MINOR.PATCH` — MAJOR bricht die Abwärts-
   > kompatibilität (Addons müssen explizit angepasst werden), MINOR fügt
@@ -722,7 +751,7 @@ Jede Karte zeigt:
 | Addon-Sichtbarkeit | Generische Tier-2-Addons public-bound oder privat? | Public-bound (No-Trace-Pflicht beachten) |
 | MCP-Erreichbarkeit | East-west (librechat ans App-Netz) vs. über Ingress | East-west als Default; im Manifest pro Addon wählbar |
 | `PAPAIA_CONFIG_DIR`-Default | Sibling `<repo>-config` wie heute vs. `/srv/fidonis/<env>/config` | Sibling für Dev, absoluter Pfad für Prod |
-| Compat-Policy-Strenge | Warn vs. Hard-Fail bei `papaia_compat`-Verletzung | Hard-Fail in Produktion; Warn in Dev-Modus |
+| Compat-Policy-Strenge | Warn vs. Hard-Fail bei Kompat-Verletzung | **Entschieden** ([ADR 0002](adr/0002-addon-core-compatibility-gating.md)): Hard-Fail in Produktion, Warn im Dev-Modus; `--force` als Escape-Hatch |
 | Pre-Release-Kanäle | `>=x.y.z-rc` oder separater Kanal für Beta-Addons | Offen |
 | `papaia/tools/` öffentlich | Orchestrator ist public-bound; Fidonis kann private Optimierungen schichten | Community-Orchestrator in `papaia/tools/`; privater Fast-Path bleibt getrennt |
 | papaia-manager: Katalog-Download | Git-Clone bei „Install" (Option B) in Prototyp implementieren? | Empfehlung: Folge-Iteration nach Phase-2-Tooling |

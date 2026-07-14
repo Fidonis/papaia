@@ -166,6 +166,7 @@ papaia-ctl start     [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl stop      [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
+papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl help
 ```
 
@@ -247,6 +248,10 @@ and edits under `overlay/` are all picked up automatically.
 networks exist by the time the core's generated override files are applied. An override whose
 network does not exist yet is skipped rather than failing the start.
 
+When `--addons` is active, `start` runs a compatibility check against all active add-ons
+before bringing up the core. If any add-on is INCOMPATIBLE the start is aborted. Pass
+`--force` to demote incompatibility to a warning and proceed.
+
 `--profiles` takes a comma-separated list of Compose profiles and overrides `COMPOSE_PROFILES`
 for this invocation only.
 
@@ -273,20 +278,34 @@ Docker volumes. `--addons` stops and removes active add-on containers first.
 ### `addon`
 
 ```bash
-tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--config-dir=PATH]
-tools/papaia-ctl addon start     <name> [--config-dir=PATH]
+tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 tools/papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 tools/papaia-ctl addon remove    <name> [--config-dir=PATH]
 tools/papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
+tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
+  [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
 ```
 
 | Command | Effect |
 |---|---|
-| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. |
-| `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. |
+| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. |
+| `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. |
 | `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. |
+| `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). |
+
+**`addon check` flags**
+
+| Flag | Purpose |
+|---|---|
+| `--target-core=PATH` | Check against a different core checkout instead of the current one (pre-upgrade dry-run). |
+| `--target-version=VER` | Override the core version used for the check. |
+| `--target-addon-api=N` | Override the `current` bound of the ADDON_API window. |
+| `--target-min-addon-api=N` | Override the `min` bound of the ADDON_API window. |
+| `--json` | Print results as a JSON array (also on exit 2). |
+| `--force` | Treat INCOMPATIBLE as a warning instead of a hard failure (exit 0). |
 
 After `addon install` or `addon remove`, run `tools/papaia-ctl start` to apply the changed
 core configuration.
@@ -370,7 +389,7 @@ hand-editable for anything `papaia-ctl` does not manage.
 
 ```yaml
 customer: papaia            # set from --env
-platform_version: 0.7.0     # resolved from the latest entry in CHANGELOG.md
+platform_version: 0.8.0     # resolved from the VERSION file
 hosting: self-hosted
 
 core:
@@ -381,6 +400,7 @@ core:
     - librechat
     - litellm
   inference: local-first
+  addon_api: 1              # ADDON_API contract window served by this installation
 
 addons:                     # managed by `papaia-ctl addon ...`
   - name: paperless

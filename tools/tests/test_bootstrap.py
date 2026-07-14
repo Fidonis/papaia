@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
-from lib import bootstrap, common
+from lib import bootstrap, common, semver
 
 
-def test_resolve_platform_version_reads_latest_changelog_header(repo_root):
+def test_resolve_platform_version_prefers_version_file(repo_root):
+    # The fixture ships VERSION=0.8.0 next to a CHANGELOG whose first
+    # released header is 0.7.0 -- the VERSION file must win.
+    assert bootstrap.resolve_platform_version(repo_root) == "0.8.0"
+
+
+def test_resolve_platform_version_falls_back_to_changelog(repo_root):
+    (repo_root / "VERSION").unlink()
+    assert bootstrap.resolve_platform_version(repo_root) == "0.7.0"
+
+
+def test_resolve_platform_version_ignores_malformed_version_file(repo_root):
+    (repo_root / "VERSION").write_text("not-a-version\n", encoding="utf-8")
     assert bootstrap.resolve_platform_version(repo_root) == "0.7.0"
 
 
@@ -13,11 +28,26 @@ def test_resolve_platform_version_falls_back_without_changelog(tmp_path):
     assert bootstrap.resolve_platform_version(tmp_path) == "0.0.0-dev"
 
 
+def test_version_file_not_behind_changelog():
+    # Consistency guard for the real checkout: the manually-bumped VERSION
+    # file must never fall behind the newest released CHANGELOG header.
+    repo = Path(__file__).resolve().parents[2]
+    version_text = (repo / "VERSION").read_text(encoding="utf-8").strip()
+    match = re.search(
+        r"^## \[(\d+\.\d+\.\d+)\]",
+        (repo / "CHANGELOG.md").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if match is None:
+        pytest.skip("CHANGELOG.md has no released section yet")
+    assert semver.compare(version_text, match.group(1)) >= 0
+
+
 def test_stamp_platform_version_populates_papaia_version(repo_root):
     tree = bootstrap.load_seed_tree(repo_root)
     assert tree[""]["PAPAIA_VERSION"] == ""
     bootstrap.stamp_platform_version(tree, repo_root)
-    assert tree[""]["PAPAIA_VERSION"] == "0.7.0"
+    assert tree[""]["PAPAIA_VERSION"] == "0.8.0"
 
 
 def test_stamp_config_dir_populates_papaia_config_dir(repo_root, config_dir):

@@ -18,11 +18,14 @@
 #                       [--web-search|--no-web-search]
 #                       [--local-ai|--no-local-ai] [--localai-host=URL]
 #                       [--allow-direct-port-access] [--force] [-y]
-#   papaia-ctl start    [--addons] [--profiles=LIST] [--config-dir=PATH]
+#   papaia-ctl start    [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
 #   papaia-ctl stop     [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
 #   papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
-#   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--config-dir=PATH]
-#   papaia-ctl addon start     <name> [--config-dir=PATH]
+#   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
+#   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
+#   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
+#                              [--target-addon-api=N [--target-min-addon-api=M]]
+#                              [--json] [--force] [--config-dir=PATH]
 #   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 #   papaia-ctl addon remove    <name> [--config-dir=PATH]
 #   papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
@@ -45,7 +48,7 @@ warn()    { printf '%s[!]%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
 error()   { printf '%s[error]%s %s\n' "$RED" "$NC" "$*" >&2; }
 
 usage() {
-    sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- preflight ---------------------------------------------------------------
@@ -570,12 +573,13 @@ for a in (d.get('addons') or []):
 }
 
 cmd_start() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles=""
+    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --addons) addons=1 ;;
             --profiles=*) profiles="${1#*=}" ;;
+            --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for start: $1"; exit 2 ;;
         esac
@@ -583,6 +587,16 @@ cmd_start() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+
+    # Compatibility gate for the upgrade case: the core may have moved since
+    # the addons were installed. Refuse before anything is materialised or
+    # started; --force degrades incompatibilities to warnings.
+    local -a check_flags=()
+    [ "$force" -eq 1 ] && check_flags+=(--force)
+    if ! py_cli addon-check "${check_flags[@]}"; then
+        error "Addon compatibility check failed. See 'papaia-ctl addon check', or re-run with --force to override."
+        exit 2
+    fi
 
     info "Materialising configuration into checkout..."
     py_cli materialize-core
@@ -599,7 +613,7 @@ cmd_start() {
             [ -z "$addon_name" ] && continue
             addon_path="$(_addon_path "$addon_name")"
             info "  addon $addon_name: materialising env + starting"
-            py_cli addon-start --name="$addon_name"
+            py_cli addon-start --name="$addon_name" "${check_flags[@]}"
             _addon_compose_up "$addon_name" "$addon_path"
         done < <(
             "$PYTHON_BIN" -c "
@@ -752,12 +766,13 @@ _addon_path() {
 }
 
 cmd_addon_install() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" addon_path="" addon_version=""
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" addon_path="" addon_version="" force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --path=*) addon_path="${1#*=}" ;;
             --version=*) addon_version="${1#*=}" ;;
+            --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -765,7 +780,7 @@ cmd_addon_install() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon install <name> --path=PATH [--version=VER]"
+        error "Usage: papaia-ctl addon install <name> --path=PATH [--version=VER] [--force]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
@@ -773,6 +788,7 @@ cmd_addon_install() {
     local -a extra=()
     [ -n "$addon_path" ]    && extra+=(--path="$addon_path")
     [ -n "$addon_version" ] && extra+=(--version="$addon_version")
+    [ "$force" -eq 1 ]      && extra+=(--force)
     py_cli addon-install --name="$addon_name" "${extra[@]}"
     success "addon install complete: $addon_name"
 }
@@ -794,10 +810,11 @@ _addon_compose_up() {
 }
 
 cmd_addon_start() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -805,13 +822,17 @@ cmd_addon_start() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon start <name>"
+        error "Usage: papaia-ctl addon start <name> [--force]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
-    # materialize .env from config bundle into checkout, then render
-    py_cli addon-start --name="$addon_name"
+    local -a extra=()
+    [ "$force" -eq 1 ] && extra+=(--force)
+    # Materialize .env from the config bundle into the checkout, then
+    # render. Gates on compatibility -- a non-zero exit (set -e) must
+    # abort here, before _addon_compose_up brings containers up.
+    py_cli addon-start --name="$addon_name" "${extra[@]}"
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
     info "Starting addon $addon_name from $addon_path"
@@ -870,6 +891,28 @@ cmd_addon_remove() {
     success "addon remove complete: $addon_name"
 }
 
+cmd_addon_check() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    local -a extra=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --target-core=*) extra+=(--target-core="${1#*=}") ;;
+            --target-version=*) extra+=(--target-version="${1#*=}") ;;
+            --target-addon-api=*) extra+=(--target-addon-api="${1#*=}") ;;
+            --target-min-addon-api=*) extra+=(--target-min-addon-api="${1#*=}") ;;
+            --json) extra+=(--json) ;;
+            --force) extra+=(--force) ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for addon check: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli addon-check "${extra[@]}"
+}
+
 cmd_addon_uninstall() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0
     while [ $# -gt 0 ]; do
@@ -926,10 +969,11 @@ case "$cmd" in
         case "$sub" in
             install)   cmd_addon_install "$@" ;;
             start)     cmd_addon_start "$@" ;;
+            check)     cmd_addon_check "$@" ;;
             stop)      cmd_addon_stop "$@" ;;
             remove)    cmd_addon_remove "$@" ;;
             uninstall) cmd_addon_uninstall "$@" ;;
-            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, stop, remove, uninstall."; exit 2 ;;
+            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, check, stop, remove, uninstall."; exit 2 ;;
         esac
         ;;
     help|-h|--help) usage ;;
