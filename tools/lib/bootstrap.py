@@ -108,24 +108,15 @@ def init(
 
     deployment_path = config_dir / "deployment.yaml"
     if not deployment_path.is_file() or force:
-        _seed_deployment_yaml(deployment_path, repo_root, env_name)
+        # Local import: deployment.seed() resolves the platform version via
+        # this module, so a top-level import would be circular.
+        from . import deployment
+
+        deployment.seed(deployment_path, repo_root, env_name)
 
 
 def _render_env_lines(values: dict[str, str]) -> str:
     return "\n".join(f"{k}={v}" for k, v in values.items()) + "\n"
-
-
-def _seed_deployment_yaml(deployment_path: Path, repo_root: Path, env_name: str) -> None:
-    import yaml
-
-    template_path = repo_root / "tools" / "deployment.template.yaml"
-    manifest = yaml.safe_load(template_path.read_text(encoding="utf-8"))
-    manifest["customer"] = env_name
-    manifest["platform_version"] = resolve_platform_version(repo_root)
-    common.atomic_write(
-        deployment_path,
-        yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False),
-    )
 
 
 def resolve_platform_version(repo_root: Path) -> str:

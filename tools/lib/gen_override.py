@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common
+from . import common, deployment
 
 
 def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
@@ -59,19 +59,16 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
     omitted, Path.cwd() is used — kept for backwards compatibility but
     callers should always supply repo_root.
     """
-    deployment_path = config_dir / "deployment.yaml"
-    if not deployment_path.is_file():
+    deployed = deployment.load(config_dir)
+    if not deployed:
         return []
-    deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
-    active_addons = [a for a in (deployment.get("addons") or []) if a.get("active")]
 
     base = repo_root if repo_root is not None else Path.cwd()
     written: list[Path] = []
-    for addon in active_addons:
-        manifest_path = (base / addon["path"]) / "papaia-app.yaml"
-        if not manifest_path.is_file():
+    for addon in deployment.active_addons(deployed):
+        manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(addon, base))
+        if manifest is None:
             continue
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         result = generate_override(manifest, config_dir)
         if result is not None:
             written.append(result)
@@ -88,13 +85,11 @@ def _load_addon_local_ca_env(addon: dict, repo_root: Path) -> dict:
     """Return the manifest's local_ca_env mapping (service -> list of env
     vars) for one deployment.yaml addon entry, or {} when the manifest is
     missing or declares none."""
-    addon_path = Path(addon.get("path", ""))
-    if not addon_path.is_absolute():
-        addon_path = repo_root / addon_path
-    manifest_path = addon_path / "papaia-app.yaml"
-    if not manifest_path.is_file():
+    if not addon.get("path"):
         return {}
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(addon, repo_root))
+    if manifest is None:
+        return {}
     return manifest.get("local_ca_env") or {}
 
 
@@ -116,13 +111,9 @@ def generate_addon_ssl_cert_overrides(
     does not pick them up; the addon compose loop applies
     overrides/addons/docker-compose.<name>-*.override.yml instead.
     """
-    deployment_path = config_dir / "deployment.yaml"
-    if deployment_path.is_file():
-        deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
-    else:
-        deployment = {}
+    deployed = deployment.load(config_dir)
 
-    for addon in deployment.get("addons") or []:
+    for addon in deployed.get("addons") or []:
         name = addon.get("name")
         if not name:
             continue

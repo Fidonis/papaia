@@ -21,9 +21,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import yaml
-
-from . import bootstrap, common, compat, gen_override, render_core
+from . import bootstrap, common, compat, deployment, gen_override, render_core
 
 
 def _tristate(value: str | None) -> bool | None:
@@ -211,7 +209,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = bootstrap.stamp_platform_version(tree, repo_root)
     tree = bootstrap.stamp_config_dir(tree, config_dir)
     bootstrap.persist_tree(tree, config_dir, repo_root)
-    _sync_deployment_manifest(config_dir, tree, repo_root)
+    deployment.sync_manifest(config_dir, tree, repo_root)
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
@@ -223,25 +221,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if effective_auth_provider == "external_oidc":
         _print_external_oidc_checklist(config_dir, tree)
     return 0
-
-
-def _sync_deployment_manifest(config_dir: Path, tree, repo_root: Path) -> None:
-    deployment_path = config_dir / "deployment.yaml"
-    if not deployment_path.is_file():
-        return
-    manifest = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
-    root = tree.get("", {})
-    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
-    manifest.setdefault("core", {})["profiles"] = profiles
-    manifest["platform_version"] = bootstrap.resolve_platform_version(repo_root)
-    # Display only -- the compatibility gate always reads the live ADDON_API
-    # file of the core it evaluates, never this stamped copy.
-    window = compat.resolve_addon_api_window(repo_root)
-    if window is not None:
-        manifest["core"]["addon_api"] = window[1]
-    common.atomic_write(
-        deployment_path, yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False)
-    )
 
 
 def cmd_materialize(args: argparse.Namespace) -> int:
@@ -260,39 +239,6 @@ def cmd_render(args: argparse.Namespace) -> int:
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
     print("Rendered.")
     return 0
-
-
-def _load_deployment(config_dir: Path) -> dict:
-    deployment_path = config_dir / "deployment.yaml"
-    if not deployment_path.is_file():
-        return {}
-    return yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
-
-
-def _save_deployment(config_dir: Path, deployment: dict) -> None:
-    common.atomic_write(
-        config_dir / "deployment.yaml",
-        yaml.safe_dump(deployment, sort_keys=False, default_flow_style=False),
-    )
-
-
-def _resolve_addon_path(addon: dict, repo_root: Path) -> Path:
-    p = Path(addon["path"])
-    if not p.is_absolute():
-        p = repo_root / p
-    return p.resolve()
-
-
-def _load_addon_manifest(addon_path: Path) -> tuple[dict | None, str | None]:
-    """Load an addon's papaia-app.yaml. Returns (manifest, None) on success,
-    (None, reason) when the file is missing or not valid YAML."""
-    manifest_path = addon_path / "papaia-app.yaml"
-    if not manifest_path.is_file():
-        return None, f"{manifest_path} not found."
-    try:
-        return yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}, None
-    except yaml.YAMLError as exc:
-        return None, f"{manifest_path} is not valid YAML: {exc}"
 
 
 def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bool) -> None:
@@ -323,15 +269,15 @@ def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bo
 
 
 def _compat_gate_addon(
-    name: str, manifest: dict, deployment: dict, repo_root: Path, *, force: bool
+    name: str, manifest: dict, deployed: dict, repo_root: Path, *, force: bool
 ) -> int:
     """Evaluate one addon against this checkout's core and apply the gate
     policy. Returns 0 (proceed) or 2 (abort). Must run before any mutation,
     so a refused install/start leaves no trace."""
     core = compat.resolve_core_target(repo_root)
-    profiles = (deployment.get("core") or {}).get("profiles")
+    profiles = (deployed.get("core") or {}).get("profiles")
     result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
-    mode = compat.resolve_mode(deployment)
+    mode = compat.resolve_mode(deployed)
     exit_code = compat.gate([result], mode=mode, force=force)
     _report_compat_result(result, fatal=bool(exit_code), force=force)
     return exit_code
@@ -395,12 +341,12 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     name = args.name
 
-    deployment = _load_deployment(config_dir)
-    if not deployment:
+    deployed = deployment.load(config_dir)
+    if not deployed:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return 2
 
-    addons: list[dict] = deployment.setdefault("addons", [])
+    addons: list[dict] = deployed.setdefault("addons", [])
     existing = next((a for a in addons if a.get("name") == name), None)
 
     if existing is None and not args.path:
@@ -416,13 +362,13 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     if args.path:
         addon_path = Path(args.path).resolve()
     else:
-        addon_path = _resolve_addon_path(existing, repo_root)
+        addon_path = deployment.resolve_addon_path(existing, repo_root)
 
-    manifest, manifest_error = _load_addon_manifest(addon_path)
+    manifest, manifest_error = deployment.load_addon_manifest(addon_path)
     if manifest is None:
         print(f"ERROR: {manifest_error}", file=sys.stderr)
         return 2
-    if _compat_gate_addon(name, manifest, deployment, repo_root, force=args.force):
+    if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
         return 2
 
     if existing:
@@ -446,7 +392,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         env_vals.update(updates)
         common.write_env_file(bundle_env_path, env_vals)
 
-    _save_deployment(config_dir, deployment)
+    deployment.save(config_dir, deployed)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
 
@@ -465,8 +411,8 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     name = args.name
 
-    deployment = _load_deployment(config_dir)
-    addons: list[dict] = deployment.get("addons") or []
+    deployed = deployment.load(config_dir)
+    addons: list[dict] = deployed.get("addons") or []
     entry = next((a for a in addons if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
@@ -475,15 +421,15 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
         print(f"ERROR: addon '{name}' is not active. Run 'papaia-ctl addon install {name}' first.", file=sys.stderr)
         return 2
 
-    addon_path = _resolve_addon_path(entry, repo_root)
+    addon_path = deployment.resolve_addon_path(entry, repo_root)
 
     # Re-check compatibility on every start: the core may have been
     # upgraded since the addon was installed.
-    manifest, manifest_error = _load_addon_manifest(addon_path)
+    manifest, manifest_error = deployment.load_addon_manifest(addon_path)
     if manifest is None:
         print(f"ERROR: {manifest_error}", file=sys.stderr)
         return 2
-    if _compat_gate_addon(name, manifest, deployment, repo_root, force=args.force):
+    if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
         return 2
 
     bootstrap.materialize_addon_env(config_dir, addon_path, name)
@@ -505,8 +451,8 @@ def cmd_addon_check(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
 
-    deployment = _load_deployment(config_dir)
-    if not deployment:
+    deployed = deployment.load(config_dir)
+    if not deployed:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return 2
 
@@ -545,19 +491,19 @@ def cmd_addon_check(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    profiles = (deployment.get("core") or {}).get("profiles")
+    profiles = (deployed.get("core") or {}).get("profiles")
     results: list[compat.CompatResult] = []
-    for addon in deployment.get("addons") or []:
-        if not addon.get("active"):
-            continue
+    for addon in deployment.active_addons(deployed):
         name = addon.get("name", "?")
-        manifest, manifest_error = _load_addon_manifest(_resolve_addon_path(addon, repo_root))
+        manifest, manifest_error = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
         if manifest is None:
             results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
             continue
         results.append(compat.evaluate_addon(name, manifest, core, active_profiles=profiles))
 
-    mode = compat.resolve_mode(deployment)
+    mode = compat.resolve_mode(deployed)
     exit_code = compat.gate(results, mode=mode, force=args.force)
     if args.json:
         # Emitted even on exit 2 so fleet tooling can read `reason`.
@@ -583,19 +529,19 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     name = args.name
 
-    deployment = _load_deployment(config_dir)
-    if not deployment:
+    deployed = deployment.load(config_dir)
+    if not deployed:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return 2
 
-    addons: list[dict] = deployment.get("addons") or []
+    addons: list[dict] = deployed.get("addons") or []
     entry = next((a for a in addons if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
         return 2
 
     entry["active"] = False
-    _save_deployment(config_dir, deployment)
+    deployment.save(config_dir, deployed)
 
     override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
     override_file.unlink(missing_ok=True)
@@ -616,12 +562,12 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     name = args.name
 
-    deployment = _load_deployment(config_dir)
-    if not deployment:
+    deployed = deployment.load(config_dir)
+    if not deployed:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return 2
 
-    addons: list[dict] = deployment.get("addons") or []
+    addons: list[dict] = deployed.get("addons") or []
     entry = next((a for a in addons if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
@@ -643,8 +589,8 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
         import shutil
         shutil.rmtree(bundle_dir)
 
-    deployment["addons"] = [a for a in addons if a.get("name") != name]
-    _save_deployment(config_dir, deployment)
+    deployed["addons"] = [a for a in addons if a.get("name") != name]
+    deployment.save(config_dir, deployed)
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
@@ -665,15 +611,16 @@ def cmd_addon_networks(args: argparse.Namespace) -> int:
     """
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
-    deployment = _load_deployment(config_dir)
-    active_addons = [a for a in (deployment.get("addons") or []) if a.get("active")]
-    for addon in active_addons:
-        manifest_path = _resolve_addon_path(addon, repo_root) / "papaia-app.yaml"
-        if manifest_path.is_file():
-            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-            net = (manifest.get("networks") or {}).get("app_network")
-            if net:
-                print(net)
+    deployed = deployment.load(config_dir)
+    for addon in deployment.active_addons(deployed):
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        if manifest is None:
+            continue
+        net = (manifest.get("networks") or {}).get("app_network")
+        if net:
+            print(net)
     return 0
 
 
@@ -682,14 +629,14 @@ def cmd_addon_path(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     name = args.name
 
-    deployment = _load_deployment(config_dir)
-    addons: list[dict] = deployment.get("addons") or []
+    deployed = deployment.load(config_dir)
+    addons: list[dict] = deployed.get("addons") or []
     entry = next((a for a in addons if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
         return 2
 
-    print(_resolve_addon_path(entry, repo_root))
+    print(deployment.resolve_addon_path(entry, repo_root))
     return 0
 
 

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common
+from . import common, deployment
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -48,11 +48,7 @@ class RenderError(Exception):
 
 
 def render(config_dir: Path, repo_root: Path) -> None:
-    deployment_path = config_dir / "deployment.yaml"
-    deployment = {}
-    if deployment_path.is_file():
-        deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
-    active_addons = [a for a in (deployment.get("addons") or []) if a.get("active")]
+    active_addons = deployment.active_addons(deployment.load(config_dir))
 
     for target in BASE_RENDER_TARGETS:
         base_path = repo_root / "src" / target
