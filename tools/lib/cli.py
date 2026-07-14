@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from . import bootstrap, common, gen_override, render_core
+from . import bootstrap, common, compat, gen_override, render_core
 
 
 def _tristate(value: str | None) -> bool | None:
@@ -234,6 +234,11 @@ def _sync_deployment_manifest(config_dir: Path, tree, repo_root: Path) -> None:
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
     manifest.setdefault("core", {})["profiles"] = profiles
     manifest["platform_version"] = bootstrap.resolve_platform_version(repo_root)
+    # Display only -- the compatibility gate always reads the live ADDON_API
+    # file of the core it evaluates, never this stamped copy.
+    window = compat.resolve_addon_api_window(repo_root)
+    if window is not None:
+        manifest["core"]["addon_api"] = window[1]
     common.atomic_write(
         deployment_path, yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False)
     )
@@ -276,6 +281,60 @@ def _resolve_addon_path(addon: dict, repo_root: Path) -> Path:
     if not p.is_absolute():
         p = repo_root / p
     return p.resolve()
+
+
+def _load_addon_manifest(addon_path: Path) -> tuple[dict | None, str | None]:
+    """Load an addon's papaia-app.yaml. Returns (manifest, None) on success,
+    (None, reason) when the file is missing or not valid YAML."""
+    manifest_path = addon_path / "papaia-app.yaml"
+    if not manifest_path.is_file():
+        return None, f"{manifest_path} not found."
+    try:
+        return yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}, None
+    except yaml.YAMLError as exc:
+        return None, f"{manifest_path} is not valid YAML: {exc}"
+
+
+def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bool) -> None:
+    """Print the non-OK part of one gate verdict to stderr."""
+    if result.status == compat.STATUS_ERROR:
+        print(f"ERROR: addon '{result.name}': {result.reason}", file=sys.stderr)
+    elif result.status == compat.STATUS_INCOMPATIBLE:
+        if fatal:
+            print(
+                f"ERROR: addon '{result.name}' is incompatible with this core:"
+                f" {result.reason}",
+                file=sys.stderr,
+            )
+        else:
+            cause = "--force" if force else "warn mode"
+            print(
+                f"WARNING: addon '{result.name}' is incompatible ({result.reason})"
+                f" -- continuing due to {cause}",
+                file=sys.stderr,
+            )
+    elif result.status == compat.STATUS_UNKNOWN:
+        print(
+            f"WARNING: addon '{result.name}': compatibility unknown ({result.reason})",
+            file=sys.stderr,
+        )
+    for warning in result.warnings:
+        print(f"WARNING: addon '{result.name}': {warning}", file=sys.stderr)
+
+
+def _compat_gate_addon(
+    name: str, manifest: dict, deployment: dict, repo_root: Path, *, force: bool
+) -> int:
+    """Evaluate one addon against this checkout's core and apply the gate
+    policy. Returns 0 (proceed) or 2 (abort). Must run before any mutation,
+    so a refused install/start leaves no trace."""
+    core = compat.resolve_core_target(repo_root)
+    profiles = (deployment.get("core") or {}).get("profiles")
+    result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+    mode = compat.resolve_mode(deployment)
+    exit_code = compat.gate([result], mode=mode, force=force)
+    _report_compat_result(result, fatal=bool(exit_code), force=force)
+    return exit_code
 
 
 def _print_keycloak_checklist(
@@ -344,31 +403,39 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     addons: list[dict] = deployment.setdefault("addons", [])
     existing = next((a for a in addons if a.get("name") == name), None)
 
+    if existing is None and not args.path:
+        print(
+            f"ERROR: --path is required when installing a new addon '{name}'.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Resolve path + manifest and run the compatibility gate before the
+    # deployment entry is touched or anything is seeded to disk, so a
+    # refused install leaves deployment.yaml and the config dir unchanged.
+    if args.path:
+        addon_path = Path(args.path).resolve()
+    else:
+        addon_path = _resolve_addon_path(existing, repo_root)
+
+    manifest, manifest_error = _load_addon_manifest(addon_path)
+    if manifest is None:
+        print(f"ERROR: {manifest_error}", file=sys.stderr)
+        return 2
+    if _compat_gate_addon(name, manifest, deployment, repo_root, force=args.force):
+        return 2
+
     if existing:
         if args.path:
-            existing["path"] = str(Path(args.path).resolve())
+            existing["path"] = str(addon_path)
         if args.version:
             existing["version"] = args.version
         existing["active"] = True
-        addon_path = _resolve_addon_path(existing, repo_root)
     else:
-        if not args.path:
-            print(
-                f"ERROR: --path is required when installing a new addon '{name}'.",
-                file=sys.stderr,
-            )
-            return 2
-        addon_path = Path(args.path).resolve()
         entry: dict = {"name": name, "path": str(addon_path), "active": True}
         if args.version:
             entry["version"] = args.version
         addons.append(entry)
-
-    manifest_path = addon_path / "papaia-app.yaml"
-    if not manifest_path.is_file():
-        print(f"ERROR: {manifest_path} not found.", file=sys.stderr)
-        return 2
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
 
     bootstrap.seed_addon_env(addon_path, config_dir)
 
@@ -409,10 +476,105 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
         return 2
 
     addon_path = _resolve_addon_path(entry, repo_root)
+
+    # Re-check compatibility on every start: the core may have been
+    # upgraded since the addon was installed.
+    manifest, manifest_error = _load_addon_manifest(addon_path)
+    if manifest is None:
+        print(f"ERROR: {manifest_error}", file=sys.stderr)
+        return 2
+    if _compat_gate_addon(name, manifest, deployment, repo_root, force=args.force):
+        return 2
+
     bootstrap.materialize_addon_env(config_dir, addon_path, name)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
     return 0
+
+
+def cmd_addon_check(args: argparse.Namespace) -> int:
+    """Evaluate every active addon against a core and report the verdict
+    before anything changes.
+
+    The core defaults to this checkout. `--target-core=PATH` points at an
+    update candidate (git worktree, unpacked tarball) and reads VERSION,
+    ADDON_API, and the compose services from there -- a service rename in
+    the target is detected before the switch. `--target-version` /
+    `--target-addon-api` are manual fallbacks when no candidate checkout is
+    at hand; each evaluates only the axis it actually knows about."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+
+    deployment = _load_deployment(config_dir)
+    if not deployment:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+
+    core_label = "CORE"
+    try:
+        if args.target_core:
+            target_root = Path(args.target_core)
+            if not target_root.is_dir():
+                print(f"ERROR: --target-core path not found: {target_root}", file=sys.stderr)
+                return 2
+            core = compat.resolve_core_target(target_root)
+            core_label = "CORE(target)"
+        elif args.target_version or args.target_addon_api is not None:
+            window = None
+            if args.target_addon_api is not None:
+                # Without an explicit min the window is assumed closed at the
+                # target generation -- pessimistic (may block, never passes a
+                # break through).
+                minimum = (
+                    args.target_min_addon_api
+                    if args.target_min_addon_api is not None
+                    else args.target_addon_api
+                )
+                if minimum > args.target_addon_api:
+                    print(
+                        "ERROR: --target-min-addon-api must be <= --target-addon-api",
+                        file=sys.stderr,
+                    )
+                    return 2
+                window = (minimum, args.target_addon_api)
+            core = compat.CoreTarget(platform_version=args.target_version, addon_api=window)
+            core_label = "CORE(target)"
+        else:
+            core = compat.resolve_core_target(repo_root)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    profiles = (deployment.get("core") or {}).get("profiles")
+    results: list[compat.CompatResult] = []
+    for addon in deployment.get("addons") or []:
+        if not addon.get("active"):
+            continue
+        name = addon.get("name", "?")
+        manifest, manifest_error = _load_addon_manifest(_resolve_addon_path(addon, repo_root))
+        if manifest is None:
+            results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
+            continue
+        results.append(compat.evaluate_addon(name, manifest, core, active_profiles=profiles))
+
+    mode = compat.resolve_mode(deployment)
+    exit_code = compat.gate(results, mode=mode, force=args.force)
+    if args.json:
+        # Emitted even on exit 2 so fleet tooling can read `reason`.
+        print(compat.to_json(results))
+    elif results:
+        print(compat.format_table(results, core_label=core_label))
+    else:
+        print("No active addons.")
+    if not args.json and exit_code == 0:
+        degraded = [r for r in results if r.status == compat.STATUS_INCOMPATIBLE]
+        if degraded:
+            cause = "--force" if args.force else "warn mode"
+            print(
+                f"WARNING: incompatibilities degraded to warnings ({cause}).",
+                file=sys.stderr,
+            )
+    return exit_code
 
 
 def cmd_addon_remove(args: argparse.Namespace) -> int:
@@ -575,11 +737,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_install.add_argument("--name", required=True)
     p_addon_install.add_argument("--path", default=None)
     p_addon_install.add_argument("--version", default=None)
+    p_addon_install.add_argument("--force", action="store_true")
     p_addon_install.set_defaults(func=cmd_addon_install)
 
     p_addon_start = sub.add_parser("addon-start")
     p_addon_start.add_argument("--name", required=True)
+    p_addon_start.add_argument("--force", action="store_true")
     p_addon_start.set_defaults(func=cmd_addon_start)
+
+    p_addon_check = sub.add_parser("addon-check")
+    p_addon_check.add_argument("--target-core", default=None)
+    p_addon_check.add_argument("--target-version", default=None)
+    p_addon_check.add_argument("--target-addon-api", type=int, default=None)
+    p_addon_check.add_argument("--target-min-addon-api", type=int, default=None)
+    p_addon_check.add_argument("--json", action="store_true")
+    p_addon_check.add_argument("--force", action="store_true")
+    p_addon_check.set_defaults(func=cmd_addon_check)
 
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)

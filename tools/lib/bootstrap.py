@@ -129,9 +129,15 @@ def _seed_deployment_yaml(deployment_path: Path, repo_root: Path, env_name: str)
 
 
 def resolve_platform_version(repo_root: Path) -> str:
-    """Latest released version per CHANGELOG.md's first `## [x.y.z]`
-    header, falling back to "0.0.0-dev" (e.g. on a branch whose only
-    section is still [Unreleased])."""
+    """Platform version, in order of trust: the VERSION file (single source
+    of truth -- static so it also works from a tarball without .git),
+    CHANGELOG.md's first `## [x.y.z]` header (checkouts predating VERSION),
+    then "0.0.0-dev" (e.g. a branch whose only section is [Unreleased])."""
+    version_file = repo_root / "VERSION"
+    if version_file.is_file():
+        text = version_file.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", text):
+            return text
     changelog = repo_root / "CHANGELOG.md"
     if not changelog.is_file():
         return "0.0.0-dev"

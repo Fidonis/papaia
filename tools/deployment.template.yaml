@@ -10,6 +10,11 @@ customer: papaia
 platform_version: 0.0.0-dev
 hosting: self-hosted
 
+# Addon-compatibility gate policy: `production`/`enforce` refuses to
+# install or start incompatible addons (the default), `dev`/`warn` only
+# warns. The PAPAIA_COMPAT_MODE env var overrides this per invocation.
+# mode: production
+
 core:
   profiles:
     - keycloak

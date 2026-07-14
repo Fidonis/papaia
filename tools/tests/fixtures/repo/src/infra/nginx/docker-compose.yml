@@ -1,0 +1,4 @@
+services:
+  nginx-proxy-manager:
+    image: stub
+    profiles: [nginx]

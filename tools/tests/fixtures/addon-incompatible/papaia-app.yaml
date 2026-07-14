@@ -1,0 +1,9 @@
+name: broken
+version: 1.0.0
+addon_repo: papaia-addon-broken
+papaia_compat: ">=99.0.0"
+description: "Fixture addon requiring an impossible core version"
+
+networks:
+  app_network: papaia-broken-net
+  attach: [librechat]
