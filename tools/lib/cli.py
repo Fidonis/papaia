@@ -21,7 +21,19 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import addons, common, compat, deployment, envtree, gen_override, render_core, resolve, secrets
+from . import (
+    addons,
+    common,
+    compat,
+    defaults,
+    deployment,
+    envtree,
+    gen_override,
+    render_core,
+    reporting,
+    resolve,
+    secrets,
+)
 
 
 def _tristate(value: str | None) -> bool | None:
@@ -30,130 +42,13 @@ def _tristate(value: str | None) -> bool | None:
     return value == "true"
 
 
-
 def cmd_defaults(args: argparse.Namespace) -> int:
     """Print sticky/derived values as shell-safe KEY=VALUE lines, one per
     line, so the bash dispatcher can read them without a JSON parser."""
-    repo_root = Path(args.repo_root)
-    config_dir = Path(args.config_dir)
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    root = tree.get("", {})
-    librechat = tree.get("ai/librechat", {})
-    app_host = root.get("PAPAIA_HOST", "")
-    keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")
-    auth_host_sticky = root.get("AUTH_HOST", "")
-    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
-    # Only surface a sticky LibreChat URL once the config dir is actually seeded:
-    # on a fresh checkout the tree falls back to the shipped .env.example, whose
-    # DOMAIN_SERVER (host.docker.internal:8000) differs from the localhost-based
-    # default bash should prefill -- gating avoids a wrong sticky prefill.
-    config_seeded = (config_dir / ".env").is_file()
-    librechat_sticky = librechat.get("DOMAIN_SERVER", "") if config_seeded else ""
-    if common.is_placeholder(librechat_sticky):
-        librechat_sticky = ""
-    localai_sticky = root.get("LOCALAI_PUBLIC_URL", "") if config_seeded else ""
-    if common.is_placeholder(localai_sticky):
-        localai_sticky = ""
-    jinaai = tree.get("ai/jinaai", {})
-    reranker_model_sticky = jinaai.get("RERANKER_MODEL", "") if config_seeded else ""
-    if common.is_placeholder(reranker_model_sticky):
-        reranker_model_sticky = ""
-    out = {
-        "APP_HOST_STICKY": app_host,
-        "AUTH_HOST_STICKY": auth_host_sticky,
-        "AUTH_HOST_DERIVED": resolve.derive_auth_host_default(
-            app_host or "http://host.docker.internal", keycloak_port
-        ),
-        "LIBRECHAT_HOST_STICKY": librechat_sticky,
-        "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),
-        "LOCALAI_HOST_STICKY": localai_sticky,
-        "LOCALAI_EXT_PORT": root.get("LOCALAI_EXT_PORT", "8080"),
-        "LOCAL_AI_STICKY": (
-            ("true" if "localai" in profiles else "false") if config_seeded else ""
-        ),
-        "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
-        "REVERSE_PROXY_PROVIDER_STICKY": root.get("REVERSE_PROXY_PROVIDER", ""),
-        "NPM_ADMIN_HOST_STICKY": root.get("NPM_ADMIN_HOST", "") if config_seeded else "",
-        "NPM_ADMIN_HOST_DERIVED": resolve.derive_npm_admin_host_default(
-            app_host or "http://host.docker.internal",
-            root.get("NPM_ADMIN_EXT_PORT", "8100"),
-        ),
-        "EXTERNAL_REVERSE_PROXY_STICKY": (
-            "false" if "nginx" in profiles else ("true" if profiles else "")
-        ),
-        "WEB_SEARCH_STICKY": (
-            (
-                "true"
-                if "librechat-websearch" in profiles
-                or any(p in resolve._WEB_SEARCH_LEGACY_PROFILES for p in profiles)
-                else "false"
-            )
-            if config_seeded
-            else ""
-        ),
-        "RERANKER_MODEL_STICKY": reranker_model_sticky,
-        "COMPOSE_PROFILES_STICKY": ",".join(profiles),
-        "PLATFORM_VERSION": envtree.resolve_platform_version(repo_root),
-        "CONFIG_SEEDED": "true" if config_seeded else "false",
-    }
+    out = defaults.compute_defaults(Path(args.config_dir), Path(args.repo_root))
     for key, value in out.items():
         print(f"{key}={value}")
     return 0
-
-
-def _print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:
-    """Print a step-by-step operator checklist for completing an external OIDC
-    setup. Called after persist_tree so all resolved values are available."""
-    root = tree.get("", {})
-    librechat = tree.get("ai/librechat", {})
-    litellm = tree.get("ai/litellm", {})
-
-    issuer = root.get("OIDC_ISSUER", "<OIDC_ISSUER>")
-    app_host = root.get("PAPAIA_HOST", "<PAPAIA_HOST>")
-    librechat_url = librechat.get("DOMAIN_SERVER") or app_host
-    litellm_redirect = litellm.get("GENERIC_REDIRECT_URI", "")
-
-    # Collect env files that still contain REPLACE_WITH_VALID_SECRET
-    placeholder = secrets._EXTERNAL_SECRET_PLACEHOLDER
-    needs_edit: list[tuple[str, str]] = []
-    for rel_dir, values in sorted(tree.items()):
-        for key, value in sorted(values.items()):
-            if value == placeholder:
-                env_file = f"{rel_dir}.env" if rel_dir else ".env"
-                needs_edit.append((env_file, key))
-
-    clients = [
-        ("librechat", f"{librechat_url}/oauth/openid/callback"),
-        ("litellm", litellm_redirect or f"{app_host}/sso/callback"),
-        ("oauth2-proxy", f"{app_host}/oauth2/callback"),
-    ]
-
-    sep = "─" * 65
-    print()
-    print("External OIDC — manual steps required before 'papaia-ctl start'")
-    print(sep)
-    print()
-    print(f"1. Register these OIDC clients on {issuer}:")
-    print()
-    id_w = max(len(c[0]) for c in clients) + 2
-    for client_id, redirect_uri in clients:
-        print(f"   {client_id:<{id_w}} {redirect_uri}")
-    print()
-    if needs_edit:
-        print("2. Replace REPLACE_WITH_VALID_SECRET in:")
-        print()
-        path_w = max(len(e[0]) for e in needs_edit) + 2
-        for env_file, key in needs_edit:
-            print(f"   {env_file:<{path_w}} {key}")
-        print()
-    print("3. Apply and start the stack:")
-    print()
-    print("   papaia-ctl setup -y && papaia-ctl start")
-    print()
-    print(
-        "See src/infra/keycloak/README.md"
-        " 'Switching to an External OIDC Provider' for details."
-    )
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -219,7 +114,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(f"Setup complete. Run 'papaia-ctl start' to bring up the stack. PAPAIA_CONFIG_DIR={config_dir}")
     if effective_auth_provider == "external_oidc":
-        _print_external_oidc_checklist(config_dir, tree)
+        reporting.print_external_oidc_checklist(config_dir, tree)
     return 0
 
 
@@ -281,59 +176,6 @@ def _compat_gate_addon(
     exit_code = compat.gate([result], mode=mode, force=force)
     _report_compat_result(result, fatal=bool(exit_code), force=force)
     return exit_code
-
-
-def _print_keycloak_checklist(
-    name: str, manifest: dict, addon_path: Path, config_dir: Path
-) -> None:
-    integration = manifest.get("integration") or {}
-    keycloak_cfg = integration.get("keycloak") or {}
-    clients = keycloak_cfg.get("clients") or []
-    mappers = keycloak_cfg.get("client_mappers") or {}
-    replace_secret_cfg = manifest.get("env_replace_secrets") or {}
-
-    bundle_env = config_dir / "addons" / name / ".env"
-    bundle_vals = common.parse_env_file(bundle_env)
-    replace_keys = [k for k, v in bundle_vals.items() if v.startswith("REPLACE_WITH_")]
-
-    if not clients and not mappers and not replace_keys:
-        return
-
-    sep = "─" * 65
-    print()
-    print(f"Addon '{name}' — manual steps required before 'papaia-ctl addon start'")
-    print(sep)
-    print()
-    step = 1
-    if clients:
-        print(f"{step}. Import these OIDC clients in the 'papaia' realm:")
-        print()
-        for rel in clients:
-            print(f"   {addon_path / rel}")
-        print()
-        print("   Keycloak Admin UI → Clients → Import client.")
-        print()
-        step += 1
-    if mappers:
-        print(f"{step}. Add protocol mappers to these existing clients:")
-        print()
-        for client_name, mapper_paths in mappers.items():
-            for rel in mapper_paths:
-                print(f"   {client_name}: {addon_path / rel}")
-        print()
-        print("   Clients → <client> → Client scopes → Dedicated → Add mapper → By configuration.")
-        print()
-        step += 1
-    if replace_keys:
-        print(f"{step}. After importing, enter the client secrets in:")
-        print(f"   {bundle_env}")
-        print()
-        key_w = max(len(k) for k in replace_keys) + 2
-        for key in replace_keys:
-            hint = (replace_secret_cfg.get(key) or {}).get("hint", "")
-            suffix = f"  {hint}" if hint else ""
-            print(f"   {key:<{key_w}}{suffix}")
-        print()
 
 
 def cmd_addon_install(args: argparse.Namespace) -> int:
@@ -400,7 +242,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
-    _print_keycloak_checklist(name, manifest, addon_path, config_dir)
+    reporting.print_keycloak_checklist(name, manifest, addon_path, config_dir)
     print(f"Addon installed: {name}")
     return 0
 
