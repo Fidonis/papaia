@@ -577,7 +577,8 @@ def test_resolve_reverse_proxy_migrates_from_profile_only_state(repo_root):
 
 
 def test_resolve_reverse_proxy_autodetects_external_on_https_first_run(repo_root):
-    # First run with no stored value and no nginx in profiles: HTTPS host auto-detects external_proxy.
+    # First run with no stored value and no nginx in profiles: HTTPS host
+    # auto-detects external_proxy.
     tree = envtree.load_seed_tree(repo_root)
     tree[""]["PAPAIA_HOST"] = "https://papaia.example.com"
     del tree[""]["REVERSE_PROXY_PROVIDER"]
@@ -590,7 +591,8 @@ def test_resolve_reverse_proxy_autodetects_external_on_https_first_run(repo_root
 
 
 def test_resolve_reverse_proxy_autodetects_internal_on_http_first_run(repo_root):
-    # First run with no stored value and no nginx in profiles: HTTP host auto-detects internal_nginx.
+    # First run with no stored value and no nginx in profiles: HTTP host
+    # auto-detects internal_nginx.
     tree = envtree.load_seed_tree(repo_root)
     tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
     del tree[""]["REVERSE_PROXY_PROVIDER"]
@@ -726,7 +728,9 @@ def test_resolve_web_search_adds_unified_profile_when_enabled(repo_root):
 
 def test_resolve_web_search_removes_unified_profile_when_disabled(repo_root):
     tree = envtree.load_seed_tree(repo_root)
-    tree[""]["COMPOSE_PROFILES"] = "keycloak,oauth2-proxy,librechat,litellm,nginx,librechat-websearch"
+    tree[""]["COMPOSE_PROFILES"] = (
+        "keycloak,oauth2-proxy,librechat,litellm,nginx,librechat-websearch"
+    )
     args = resolve.SetupArgs(config_dir=repo_root, enable_web_search=False)
     tree = resolve.resolve_web_search(tree, args)
     profiles = tree[""]["COMPOSE_PROFILES"].split(",")

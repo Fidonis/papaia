@@ -4,7 +4,6 @@ import argparse
 import shutil
 from pathlib import Path
 
-import pytest
 import yaml
 
 from lib import common, envtree, gen_override

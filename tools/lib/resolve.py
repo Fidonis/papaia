@@ -38,7 +38,8 @@ class SetupArgs:
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
     external_reverse_proxy: bool | None = None  # None = unset / auto-detect (legacy alias)
-    reverse_proxy_provider: str | None = None  # None = sticky; "internal_nginx" | "external_proxy" | "no_proxy"
+    # None = sticky; "internal_nginx" | "external_proxy" | "no_proxy"
+    reverse_proxy_provider: str | None = None
     enable_web_search: bool | None = None  # None = sticky / no change
     enable_local_ai: bool | None = None  # None = sticky / no change
     reranker_model: str | None = None  # None = sticky / no change

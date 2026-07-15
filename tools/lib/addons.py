@@ -33,8 +33,8 @@ def seed_addon_env(addon_path: Path, config_dir: Path) -> None:
         return
 
     try:
-        manifest = yaml.safe_load((addon_path / "papaia-app.yaml").read_text(encoding="utf-8")) or {}
-        addon_name = manifest.get("name", addon_path.name)
+        manifest_text = (addon_path / "papaia-app.yaml").read_text(encoding="utf-8")
+        addon_name = (yaml.safe_load(manifest_text) or {}).get("name", addon_path.name)
     except Exception:
         addon_name = addon_path.name
 

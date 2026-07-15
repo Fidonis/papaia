@@ -112,7 +112,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
-    print(f"Setup complete. Run 'papaia-ctl start' to bring up the stack. PAPAIA_CONFIG_DIR={config_dir}")
+    print(
+        "Setup complete. Run 'papaia-ctl start' to bring up the stack."
+        f" PAPAIA_CONFIG_DIR={config_dir}"
+    )
     if effective_auth_provider == "external_oidc":
         reporting.print_external_oidc_checklist(config_dir, tree)
     return 0

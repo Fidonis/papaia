@@ -149,7 +149,10 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
         return 2
     if not entry.get("active"):
-        print(f"ERROR: addon '{name}' is not active. Run 'papaia-ctl addon install {name}' first.", file=sys.stderr)
+        print(
+            f"ERROR: addon '{name}' is not active. Run 'papaia-ctl addon install {name}' first.",
+            file=sys.stderr,
+        )
         return 2
 
     addon_path = deployment.resolve_addon_path(entry, repo_root)
