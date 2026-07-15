@@ -8,7 +8,8 @@ import pytest
 import yaml
 
 from lib import common, envtree, gen_override
-from lib.cli import (
+from lib.cli import cmd_override_external_nets
+from lib.cli_addon import (
     cmd_active_addons,
     cmd_addon_check,
     cmd_addon_install,
@@ -17,7 +18,6 @@ from lib.cli import (
     cmd_addon_remove,
     cmd_addon_start,
     cmd_addon_uninstall,
-    cmd_override_external_nets,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
