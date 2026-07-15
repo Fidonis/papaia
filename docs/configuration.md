@@ -24,13 +24,13 @@ operator-supplied:
 | Generated (see [Secrets handling](#secrets-handling)) | every `*_SECRET`/`*_PASSWORD`/`*_KEY`/`*_TOKEN` variable |
 | Static defaults | `*_EXT_PORT` variables, `TRUST_PROXY` |
 
-See `tools/lib/bootstrap.py` for the exact derivation logic, or run
+See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.
 
 ## Secrets handling
 
 `tools/papaia-ctl setup` generates secrets with a sticky-by-default
-algorithm (also documented in `tools/lib/bootstrap.py`'s module docstring):
+algorithm (also documented in `tools/lib/secrets.py`'s module docstring):
 
 1. **Which keys are secrets** — any `.env` key matching
    `SECRET|PASSWORD|KEY|TOKEN` (case-insensitive).
@@ -47,7 +47,7 @@ algorithm (also documented in `tools/lib/bootstrap.py`'s module docstring):
 4. **Cross-file aliases** — a handful of secrets must hold the *same* value
    in more than one service's `.env` (e.g. a Keycloak client secret and the
    matching `OPENID_CLIENT_SECRET`/`GENERIC_CLIENT_SECRET` in the consuming
-   service). `bootstrap.py`'s `SECRET_ALIASES` table generates the
+   service). `secrets.py`'s `SECRET_ALIASES` table generates the
    canonical value once and fans it out to every alias, overwriting a
    drifted alias copy even if it isn't a placeholder — a stale copy here
    silently breaks OIDC token exchanges.

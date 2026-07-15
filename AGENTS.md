@@ -67,9 +67,11 @@ tools/
   deployment.template.yaml    # template → $PAPAIA_CONFIG_DIR/deployment.yaml on setup
                               # describes active addons, core profiles, hosting type
   pyproject.toml              # ruff + pytest config for tools/lib
-  lib/                        # Python: render_core.py · gen_override.py · bootstrap.py
-                              #          common.py · cli.py
-  tests/                      # pytest suite (96 tests across bootstrap, common, render_core)
+  lib/                        # Python: cli.py · cli_addon.py · deployment.py · envtree.py
+                              #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
+                              #   compat.py · semver.py · render_core.py · gen_override.py · common.py
+    sh/                       # Bash command libraries sourced by papaia-ctl
+  tests/                      # pytest suite (mirrors the lib/ modules)
 src/
   docker-compose.yml          # Root compose — shared network + include list only
   .env.example                # All stack-wide variables (source of truth for env docs)

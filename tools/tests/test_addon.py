@@ -4,11 +4,12 @@ import argparse
 import shutil
 from pathlib import Path
 
-import pytest
 import yaml
 
-from lib import bootstrap, common, gen_override
-from lib.cli import (
+from lib import common, envtree, gen_override
+from lib.cli import cmd_override_external_nets
+from lib.cli_addon import (
+    cmd_active_addons,
     cmd_addon_check,
     cmd_addon_install,
     cmd_addon_networks,
@@ -69,7 +70,7 @@ def _check_args(config_dir: Path, repo_root: Path, **overrides) -> argparse.Name
 
 
 def _setup(repo_root: Path, config_dir: Path) -> None:
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
 
 
 # ── install ───────────────────────────────────────────────────────────────────
@@ -352,6 +353,65 @@ def test_addon_networks_empty_when_no_active_addons(repo_root, config_dir, capsy
     assert capsys.readouterr().out.strip() == ""
 
 
+# ── active-addons ─────────────────────────────────────────────────────────────
+
+
+def test_active_addons_lists_only_active_entries(repo_root, config_dir, capsys):
+    _setup(repo_root, config_dir)
+    addon_dst = repo_root / "addons" / "papaia-addon-paperless"
+    shutil.copytree(ADDON_PAPERLESS, addon_dst)
+    cmd_addon_install(_install_args(config_dir, repo_root, path=str(addon_dst)))
+    capsys.readouterr()
+
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    assert cmd_active_addons(args) == 0
+    assert capsys.readouterr().out.split() == ["paperless"]
+
+    # remove deactivates the entry -> no longer listed
+    cmd_addon_remove(_name_args(config_dir, repo_root))
+    capsys.readouterr()
+    assert cmd_active_addons(args) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_active_addons_empty_without_deployment(repo_root, config_dir, capsys):
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    assert cmd_active_addons(args) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+# ── override-external-nets ────────────────────────────────────────────────────
+
+
+def test_override_external_nets_prints_external_networks(tmp_path, capsys):
+    override = tmp_path / "docker-compose.paperless.override.yml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "services": {"nginx": {"networks": ["papaia-paperless-net"]}},
+                "networks": {
+                    "papaia-paperless-net": {"external": True},
+                    "papaia-net": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        config_dir=str(tmp_path), repo_root=str(tmp_path), file=str(override)
+    )
+    assert cmd_override_external_nets(args) == 0
+    assert capsys.readouterr().out.split() == ["papaia-paperless-net"]
+
+
+def test_override_external_nets_missing_file_is_empty(tmp_path, capsys):
+    args = argparse.Namespace(
+        config_dir=str(tmp_path), repo_root=str(tmp_path), file=str(tmp_path / "nope.yml")
+    )
+    assert cmd_override_external_nets(args) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
 # ── addon-path ────────────────────────────────────────────────────────────────
 
 
@@ -378,7 +438,7 @@ def test_addon_path_unknown_returns_2(repo_root, config_dir):
 
 def test_generate_overrides_uses_repo_root(repo_root, config_dir):
     """generate_overrides() must resolve addon paths via repo_root, not CWD."""
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
 
     deployment_path = config_dir / "deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
@@ -401,7 +461,7 @@ def test_generate_overrides_uses_repo_root(repo_root, config_dir):
 
 def test_generate_overrides_absolute_path_without_repo_root(repo_root, config_dir):
     """Absolute addon paths work even without passing repo_root."""
-    bootstrap.init(config_dir, repo_root, env_name="papaia")
+    envtree.init(config_dir, repo_root, env_name="papaia")
 
     deployment_path = config_dir / "deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}

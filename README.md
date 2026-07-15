@@ -723,8 +723,10 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · uninstall · addon)
 │   │   ├── deployment.template.yaml  # deployment.yaml template
 │   │   ├── pyproject.toml      # ruff + pytest config for tools/lib
-│   │   ├── lib/                # Python: bootstrap.py · render_core.py · gen_override.py
-│   │   │                       #          common.py · cli.py
+│   │   ├── lib/                # Python: cli.py · cli_addon.py · deployment.py · envtree.py
+│   │   │                       #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
+│   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py · common.py
+│   │   │   └── sh/             # Bash command libraries sourced by papaia-ctl
 │   │   └── tests/              # pytest suite
 │   ├── src/
 │   │   ├── docker-compose.yml  # root compose — shared network + include list only
