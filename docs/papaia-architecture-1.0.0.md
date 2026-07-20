@@ -182,7 +182,51 @@ integration:
   librechat: integration/librechat/<name>.yaml   # optional
   homepage:  integration/homepage/<name>.yaml    # optional
   nginx:     integration/nginx/<name>.conf        # optional
+
+env_prompts:                       # optional: Metadaten pro .env.example-Key
+  SOME_URL:
+    label: "Lesbare Beschriftung"  # Standardwert: KEY_NAME title-cased
+    hint:  "Kurzinfo für den Operator"
+    type:  url                     # text (default) | integer | decimal | url
+    secret: true                   # true | false; überschreibt Namensheuristik
+    min:   1                       # für integer/decimal: Untergrenze
+    max:   65535                   # für integer/decimal: Obergrenze
+    pattern: "^[a-z]+$"           # Regex für type: text (HTML + Server)
+    default: "http://localhost"    # statischer Fallback-Wert
+    default_from_core: ENV_KEY     # Wert aus der Core-.env (überschreibt default)
+  AUTO_SECRET:
+    secret: true                   # Pflicht bei GENERATE_*-Werten ohne _KEY-Suffix
+    label:  "Database password"
+
+env_replace_secrets:               # optional: Keys, die nach dem Keycloak-Import
+  OIDC_CLIENT_SECRET:              # durch papaia-ctl ersetzt werden
+    hint: "Aus Keycloak kopieren"  # hint wird in der Konfigurationsübersicht
+                                   # angezeigt
 ```
+
+#### `.env.example`-Wertmarker
+
+`papaia-manager` erkennt vier Sonderwerte in `.env.example`:
+
+| Wert | Bedeutung | Verhalten im Installations-Dialog |
+|---|---|---|
+| Literal | Betrieblicher Standard | Felder vorbelegt; Änderung optional |
+| `CHANGE_ME` | Operator muss Wert liefern | Pflichtfeld, leer |
+| `GENERATE_<NAME>` | Wert wird beim ersten `install` generiert | Nicht erforderlich, Hinweis „wird automatisch generiert"; secret erzwungen |
+| `REPLACE_WITH_<NAME>` | Wert wird nach dem Keycloak-Import gesetzt | Nicht erforderlich, Hinweis „nach Keycloak-Import eintragen"; secret erzwungen |
+
+Nur Werte, die sich gegenüber dem `.env.example`-Literal geändert haben, werden in die Config-Bundle-`.env` geschrieben (diff-basiertes Submit). `GENERATE_*`- und `REPLACE_WITH_*`-Felder werden leer gelassen, damit `seed_addon_env` seine Arbeit tun kann.
+
+#### Typ-Mapping (`type:`)
+
+| `type:` | HTML-`type=` | `inputmode` | `step` | Server-Coercion |
+|---|---|---|---|---|
+| `text` (Standard) | `text` | — | — | nur `\n`/`\r`-Ablehnung |
+| `integer` | `number` | `numeric` | `1` | `int(v)`, `min`/`max` |
+| `decimal` | `number` | `decimal` | `any` | `,`→`.`, dann `Decimal(v)`, `min`/`max` |
+| `url` | `url` | `url` | — | Schema in `{http, https}` und `netloc` vorhanden |
+
+`secret: true` hat Vorrang vor `type` für den HTML-Input-Typ (maskiertes Feld), steuert aber Validierung und `inputmode` weiterhin. Ein unbekannter `type:`-Wert wird still ignoriert (Fallback: Inferenz aus dem Literal).
 
 > **Kompatibilitäts-Prüfung** (`papaia-ctl addon check` sowie Gates an
 > `addon install`, `addon start`, `start`; siehe
