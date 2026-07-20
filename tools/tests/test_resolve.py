@@ -122,7 +122,7 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     # internal Docker DNS endpoints use https because Keycloak now terminates
     # TLS natively (port 8443); they must never be derived from the public host
     assert (
-        tree[""]["OIDC_ISSUER_KC_TOKEN"]
+        tree[""]["OIDC_TOKEN_URL"]
         == "https://keycloak:8443/realms/papaia/protocol/openid-connect/token"
     )
     # TRUST_PROXY is a static value resolve.py must never touch
@@ -763,6 +763,71 @@ def test_migrate_web_search_profiles_noop_when_already_migrated(repo_root):
     tree[""]["COMPOSE_PROFILES"] = original
     tree = resolve.migrate_web_search_profiles(tree)
     assert tree[""]["COMPOSE_PROFILES"] == original
+
+
+def test_migrate_env_keys_renames_oidc_endpoints(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    for new_key in ("OIDC_AUTH_URL", "OIDC_TOKEN_URL", "OIDC_JWKS_URL"):
+        tree[""].pop(new_key, None)
+    tree[""]["OIDC_ISSUER_KC_AUTH"] = "https://idp.example.com/auth"
+    tree[""]["OIDC_ISSUER_KC_TOKEN"] = "https://idp.example.com/token"
+    tree[""]["OIDC_ISSUER_KC_CERTS"] = "https://idp.example.com/certs"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert tree[""]["OIDC_AUTH_URL"] == "https://idp.example.com/auth"
+    assert tree[""]["OIDC_TOKEN_URL"] == "https://idp.example.com/token"
+    assert tree[""]["OIDC_JWKS_URL"] == "https://idp.example.com/certs"
+    assert "OIDC_ISSUER_KC_AUTH" not in tree[""]
+    assert "OIDC_ISSUER_KC_TOKEN" not in tree[""]
+    assert "OIDC_ISSUER_KC_CERTS" not in tree[""]
+
+
+def test_migrate_env_keys_relocates_librechat_dirs(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["LIBRECHAT_AGENTS_DIR"] = "/srv/my-agents"
+    tree[""]["LIBRECHAT_PROMPTS_DIR"] = "/srv/my-prompts"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert tree["ai/librechat"]["LIBRECHAT_AGENTS_DIR"] == "/srv/my-agents"
+    assert tree["ai/librechat"]["LIBRECHAT_PROMPTS_DIR"] == "/srv/my-prompts"
+    assert "LIBRECHAT_AGENTS_DIR" not in tree[""]
+    assert "LIBRECHAT_PROMPTS_DIR" not in tree[""]
+
+
+def test_migrate_env_keys_drops_dead_keys(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["TIMEZONE"] = "Europe/Berlin"
+    tree[""]["OIDC_CLIENT_ID"] = "librechat"
+    tree[""]["JINAAI_EXT_PORT"] = "8600"
+    tree.setdefault("infra/keycloak", {})["KC_QDRANT_RAG_CLIENT_SECRET"] = "deadbeef"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert "TIMEZONE" not in tree[""]
+    assert "OIDC_CLIENT_ID" not in tree[""]
+    assert "JINAAI_EXT_PORT" not in tree[""]
+    assert "KC_QDRANT_RAG_CLIENT_SECRET" not in tree["infra/keycloak"]
+
+
+def test_migrate_env_keys_keeps_existing_destination(repo_root):
+    """A half-migrated bundle must not lose the value the current code writes."""
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["OIDC_AUTH_URL"] = "https://new.example.com/auth"
+    tree[""]["OIDC_ISSUER_KC_AUTH"] = "https://stale.example.com/auth"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert tree[""]["OIDC_AUTH_URL"] == "https://new.example.com/auth"
+    assert "OIDC_ISSUER_KC_AUTH" not in tree[""]
+
+
+def test_migrate_env_keys_is_noop_on_current_seed(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    before = {d: dict(v) for d, v in tree.items()}
+    tree = resolve.migrate_env_keys(tree)
+    assert tree == before
 
 
 def test_resolve_reranker_model_writes_value(repo_root):

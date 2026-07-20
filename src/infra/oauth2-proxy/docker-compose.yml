@@ -17,11 +17,11 @@ services:
       - --oidc-issuer-url=${OIDC_ISSUER}
       - --skip-oidc-discovery=true
       # Browser redirect to Keycloak login (external URL, reachable by the browser)
-      - --login-url=${OIDC_ISSUER_KC_AUTH}
+      - --login-url=${OIDC_AUTH_URL}
       # Server-side token exchange (internal Docker DNS — no host.docker.internal needed)
-      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
+      - --redeem-url=${OIDC_TOKEN_URL}
       # JWKS for token verification (internal)
-      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --oidc-jwks-url=${OIDC_JWKS_URL}
       - --client-id=${OAUTH2_PROXY_CLIENT_ID}
       - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
       # Cookie. cookie-secure=true is required when the user reaches the stack

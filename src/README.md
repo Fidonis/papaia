@@ -237,13 +237,15 @@ The stack uses a **single shared `.env`** at `src/.env` that defines:
   client config).
 
 In addition, each service has its **own** `.env` file (e.g.
-`ai/librechat/.env`) for service-specific settings. Shared values
-(client secrets, `PAPAIA_HOST`-derived URLs) must be kept consistent by
-hand between `src/.env` and the per-service files.
+`ai/librechat/.env`) for service-specific settings. Shared values (client
+secrets, `PAPAIA_HOST`-derived URLs) are kept consistent by
+`tools/papaia-ctl setup`, which generates each secret once and fans it out to
+every consuming file — see `SECRET_ALIASES` in `tools/lib/secrets.py`.
 
-`realm-import/papaia-realm.json` is created by copying
-`papaia-realm.json.template`; its `${env.VAR}` client-secret placeholders
-are substituted by Keycloak at import time.
+`realm-import/papaia-realm.json` is rendered from
+`papaia-realm.json.template` by `render_core.bake_realm_secrets()`, which
+substitutes the `${env.VAR}` client-secret placeholders *before* Keycloak
+reads the file. Keycloak's own import-time substitution is not relied on.
 
 ### Selected variables
 
@@ -252,8 +254,8 @@ are substituted by Keycloak at import time.
 | `PAPAIA_HOST`                  | Public URL the browser uses (drives all OIDC redirects)  |
 | `PAPAIA_CONFIG_DIR`            | Absolute path to externalised service config (see above) |
 | `AUTH_PROVIDER`                | `internal_keycloak` (default) or `external_oidc`         |
-| `OIDC_ISSUER_KC_AUTH`          | Browser-facing Keycloak auth endpoint                    |
-| `OIDC_ISSUER_KC_TOKEN/CERTS`   | Server-side token + JWKS endpoints (internal Docker DNS) |
+| `OIDC_AUTH_URL`                | Browser-facing OIDC auth endpoint                        |
+| `OIDC_TOKEN_URL` / `OIDC_JWKS_URL` | Server-side token + JWKS endpoints (internal Docker DNS) |
 | `OAUTH2_PROXY_COOKIE_SECRET`   | 32-byte random — DO NOT shorten                          |
 | `COMPOSE_PROFILES`             | All known profiles, kept enabled by default              |
 | `DOCKER_NETWORK`               | Name of the shared bridge network                        |

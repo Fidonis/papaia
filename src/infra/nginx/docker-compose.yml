@@ -37,10 +37,10 @@ services:
       - --provider=oidc
       - --oidc-issuer-url=${OIDC_ISSUER}
       - --skip-oidc-discovery=true
-      - --login-url=${OIDC_ISSUER_KC_AUTH}
+      - --login-url=${OIDC_AUTH_URL}
       # Server-side token exchange via internal Docker DNS — needs CA cert trust (see SSL_CERT_FILE)
-      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
-      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --redeem-url=${OIDC_TOKEN_URL}
+      - --oidc-jwks-url=${OIDC_JWKS_URL}
       - --client-id=${OAUTH2_PROXY_CLIENT_ID}
       - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
       - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}

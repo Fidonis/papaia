@@ -41,11 +41,10 @@ services:
       # origin OIDC POSTs lose state and login fails. Set KC_PROXY_HEADERS
       # to empty if you ever expose Keycloak directly without a reverse proxy.
       KC_PROXY_HEADERS: ${KC_PROXY_HEADERS}
-      # Client secrets — injected into realm JSON via ${env.VAR} substitution at import time
-      KC_OAUTH2_PROXY_CLIENT_SECRET: ${KC_OAUTH2_PROXY_CLIENT_SECRET}
-      KC_LIBRECHAT_CLIENT_SECRET: ${KC_LIBRECHAT_CLIENT_SECRET}
-      KC_PAPERLESS_CLIENT_SECRET: ${KC_PAPERLESS_CLIENT_SECRET}
-      KC_LITELLM_CLIENT_SECRET: ${KC_LITELLM_CLIENT_SECRET}
+      # Client secrets are NOT passed in here. Keycloak's native ${env.VAR}
+      # substitution at realm-import time proved unreliable, so the secrets are
+      # baked into the realm JSON beforehand by render_core.bake_realm_secrets(),
+      # which reads them straight from infra/keycloak/.env.
     # --import-realm: imports realm-import/*.json on first start (skipped if realm exists)
     command: start --import-realm
     networks:
