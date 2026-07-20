@@ -197,4 +197,4 @@ def materialize_core_env(config_dir: Path, repo_root: Path) -> None:
         )
         if bundle_env.is_file():
             checkout_env.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundle_env, checkout_env)
+            shutil.copyfile(bundle_env, checkout_env)

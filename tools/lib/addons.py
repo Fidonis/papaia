@@ -127,4 +127,4 @@ def materialize_addon_env(config_dir: Path, addon_path: Path, addon_name: str) -
     bundle_env = config_dir / "addons" / addon_name / ".env"
     target_env = addon_path / ".env"
     if bundle_env.is_file():
-        shutil.copy2(bundle_env, target_env)
+        shutil.copyfile(bundle_env, target_env)
