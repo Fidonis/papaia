@@ -451,9 +451,9 @@ split is why oauth2-proxy runs with `--skip-oidc-discovery` and three explicit e
 
 | Variable | Purpose | Reachable from |
 |---|---|---|
-| `OIDC_ISSUER_KC_AUTH` | Browser redirect to the login page | Browser |
-| `OIDC_ISSUER_KC_TOKEN` | Server-side code → token exchange | Containers |
-| `OIDC_ISSUER_KC_CERTS` | JWKS for signature verification | Containers |
+| `OIDC_AUTH_URL` | Browser redirect to the login page | Browser |
+| `OIDC_TOKEN_URL` | Server-side code → token exchange | Containers |
+| `OIDC_JWKS_URL` | JWKS for signature verification | Containers |
 
 Services **without** native OIDC sit behind oauth2-proxy: Nginx PM calls `/oauth2/auth`
 before letting a request through and bounces the user to Keycloak on a 401.

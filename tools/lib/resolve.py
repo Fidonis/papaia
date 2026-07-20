@@ -219,11 +219,11 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
 
         # --- OIDC issuer + split endpoints ---
         root["OIDC_ISSUER"] = f"{auth_host}/realms/papaia"
-        root["OIDC_ISSUER_KC_AUTH"] = f"{auth_host}/realms/papaia/protocol/openid-connect/auth"
-        root["OIDC_ISSUER_KC_TOKEN"] = (
+        root["OIDC_AUTH_URL"] = f"{auth_host}/realms/papaia/protocol/openid-connect/auth"
+        root["OIDC_TOKEN_URL"] = (
             "https://keycloak:8443/realms/papaia/protocol/openid-connect/token"
         )
-        root["OIDC_ISSUER_KC_CERTS"] = (
+        root["OIDC_JWKS_URL"] = (
             "https://keycloak:8443/realms/papaia/protocol/openid-connect/certs"
         )
 
@@ -237,8 +237,8 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
 
         # --- LiteLLM ---
         litellm_port = root.get("LITELLM_EXT_PORT", "8200")
-        litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = root["OIDC_ISSUER_KC_AUTH"]
-        litellm["GENERIC_TOKEN_ENDPOINT"] = root["OIDC_ISSUER_KC_TOKEN"]
+        litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = root["OIDC_AUTH_URL"]
+        litellm["GENERIC_TOKEN_ENDPOINT"] = root["OIDC_TOKEN_URL"]
         litellm["GENERIC_USERINFO_ENDPOINT"] = (
             "https://keycloak:8443/realms/papaia/protocol/openid-connect/userinfo"
         )
@@ -416,6 +416,58 @@ def resolve_reverse_proxy(tree: EnvTree, args: SetupArgs) -> EnvTree:
 
 _WEB_SEARCH_PROFILE = "librechat-websearch"
 _WEB_SEARCH_LEGACY_PROFILES = {"searxng", "firecrawl", "jinaai"}
+
+# (dir, old_key) -> (dir, new_key). Renames and relocations of env keys that
+# shipped in earlier releases. Values carry over; the old key is dropped.
+_RENAMED_KEYS: dict[tuple[str, str], tuple[str, str]] = {
+    # The KC_ infix wrongly implied these were Keycloak-only and collided
+    # visually with the real KC_* vars in infra/keycloak/.env.
+    ("", "OIDC_ISSUER_KC_AUTH"): ("", "OIDC_AUTH_URL"),
+    ("", "OIDC_ISSUER_KC_TOKEN"): ("", "OIDC_TOKEN_URL"),
+    ("", "OIDC_ISSUER_KC_CERTS"): ("", "OIDC_JWKS_URL"),
+    # Single-consumer host paths: they belong to the service that reads them.
+    ("", "LIBRECHAT_AGENTS_DIR"): ("ai/librechat", "LIBRECHAT_AGENTS_DIR"),
+    ("", "LIBRECHAT_PROMPTS_DIR"): ("ai/librechat", "LIBRECHAT_PROMPTS_DIR"),
+}
+
+# (dir, key) pairs dropped outright -- nothing in the repo ever read them.
+# Addon client secrets are included: addons register their own OIDC client and
+# generate their own secret at install time, so the core value was never used.
+_REMOVED_KEYS: set[tuple[str, str]] = {
+    ("", "TIMEZONE"),
+    ("", "OIDC_CLIENT_ID"),
+    ("", "OIDC_ROLE_CLAIM"),
+    ("", "OIDC_USERNAME_CLAIM"),
+    ("", "OIDC_EMAIL_CLAIM"),
+    ("", "LITELLM_EXT_PG_PORT"),
+    ("", "LITELLM_EXT_PROMETHEUS_PORT"),
+    ("", "JINAAI_EXT_PORT"),
+    ("infra/keycloak", "KC_PAPERLESS_CLIENT_SECRET"),
+    ("infra/keycloak", "KC_QDRANT_RAG_CLIENT_SECRET"),
+}
+
+
+def migrate_env_keys(tree: EnvTree) -> EnvTree:
+    """Rename, relocate and drop env keys that changed shape between releases.
+
+    Runs unconditionally on every `papaia-ctl setup` so an existing config
+    bundle upgrades without operator action -- a no-op once migrated. A rename
+    never clobbers an already-present destination: if both keys exist the newer
+    one wins, since it is what the current code path writes."""
+    for (old_dir, old_key), (new_dir, new_key) in _RENAMED_KEYS.items():
+        source = tree.get(old_dir)
+        if source is None or old_key not in source:
+            continue
+        value = source.pop(old_key)
+        destination = tree.setdefault(new_dir, {})
+        destination.setdefault(new_key, value)
+
+    for rel_dir, key in _REMOVED_KEYS:
+        values = tree.get(rel_dir)
+        if values is not None:
+            values.pop(key, None)
+
+    return tree
 
 
 def migrate_web_search_profiles(tree: EnvTree) -> EnvTree:
