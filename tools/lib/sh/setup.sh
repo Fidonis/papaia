@@ -25,7 +25,7 @@ cmd_setup() {
     local host_ip="" app_host="" auth_host="" librechat_host="" localai_host="" manager_host="" npm_admin_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" reranker_model=""
+    local web_search="" local_ai="" manager="" reranker_model=""
     local force=0 non_interactive=0 env_only=0
 
     while [ $# -gt 0 ]; do
@@ -65,6 +65,8 @@ cmd_setup() {
             --local-ai) local_ai="true" ;;
             --no-local-ai) local_ai="false" ;;
             --localai-host=*) localai_host="${1#*=}" ;;
+            --manager) manager="true" ;;
+            --no-manager) manager="false" ;;
             --manager-host=*) manager_host="${1#*=}" ;;
             --reranker-model=*) reranker_model="${1#*=}" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
@@ -82,7 +84,7 @@ cmd_setup() {
 
     if [ "$env_only" -eq 1 ]; then
         info "Reusing existing configuration; re-rendering env files only."
-        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" ""
+        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" ""
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
             _ensure_keycloak_certs
         fi
@@ -124,9 +126,16 @@ cmd_setup() {
             [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_HOST_STICKY:-}" ] && \
                 info "  LocalAI URL       = $LOCALAI_HOST_STICKY"
         fi
+        if [ -n "${MANAGER_STICKY:-}" ]; then
+            local _mgr_label="disabled"
+            [ "$MANAGER_STICKY" = "true" ] && _mgr_label="enabled"
+            info "  Extension Manager = $_mgr_label"
+            [ "$MANAGER_STICKY" = "true" ] && [ -n "${MANAGER_HOST_STICKY:-}" ] && \
+                info "  Manager URL       = $MANAGER_HOST_STICKY"
+        fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" ""
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" ""
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
                 _ensure_keycloak_certs
             fi
@@ -254,6 +263,30 @@ cmd_setup() {
                 "Where browsers and LiteLLM reach LocalAI." \
                 "LOCALAI_PUBLIC_URL" "$localai_default")"
         fi
+        if [ -z "$manager" ]; then
+            local manager_default="2"
+            [ "${MANAGER_STICKY:-}" = "true" ] && manager_default="1"
+            printf '\n%sEnable Extension Manager%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons\n' >&2
+            printf '  2) No   — skip papaia-manager (default; the core runs without it)\n' >&2
+            local manager_choice
+            manager_choice="$(prompt_with_default "  Choose" "$manager_default")"
+            case "$manager_choice" in
+                1|yes) manager="true" ;;
+                2|no)  manager="false" ;;
+                *)
+                    warn "Unrecognized choice '$manager_choice'; defaulting to disabled."
+                    manager="false"
+                    ;;
+            esac
+        fi
+        if [ "$manager" = "true" ] && [ -z "$manager_host" ]; then
+            local manager_default_url="${MANAGER_HOST_STICKY:-}"
+            [ -z "$manager_default_url" ] && manager_default_url="$(_derive_manager_default "$app_host")"
+            manager_host="$(prompt_field "Public URL of papaia-manager" \
+                "Where browsers reach the extension management UI." \
+                "MANAGER_PUBLIC_URL" "$manager_default_url")"
+        fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
@@ -298,7 +331,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager"; then
         error "setup failed."
         exit 3
     fi
@@ -327,6 +360,14 @@ _derive_localai_default() {
     printf '%s:%s' "$base" "$port"
 }
 
+_derive_manager_default() {
+    # Best-effort bash-side prefill for the papaia-manager URL prompt; the
+    # authoritative derivation lives in resolve.derive_manager_url_default.
+    local host="$1" port="${MANAGER_EXT_PORT:-8120}" base
+    base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
+    printf '%s:%s' "$base" "$port"
+}
+
 _derive_librechat_default() {
     # Best-effort bash-side prefill for the LibreChat URL prompt; the
     # authoritative derivation lives in resolve.derive_librechat_url_default.
@@ -344,7 +385,7 @@ _derive_librechat_default() {
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
-    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}"
+    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -358,6 +399,7 @@ _run_setup_py() {
     [ -n "$external_rp" ] && extra+=(--external-reverse-proxy="$external_rp")
     [ -n "$web_search" ] && extra+=(--enable-web-search="$web_search")
     [ -n "$local_ai" ] && extra+=(--enable-local-ai="$local_ai")
+    [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")
     [ "$allow_direct" = "1" ] && extra+=(--allow-direct-port-access)

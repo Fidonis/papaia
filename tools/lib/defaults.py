@@ -52,6 +52,9 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "LOCAL_AI_STICKY": (
             ("true" if "localai" in profiles else "false") if config_seeded else ""
         ),
+        "MANAGER_STICKY": (
+            ("true" if "manager" in profiles else "false") if config_seeded else ""
+        ),
         "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
         "REVERSE_PROXY_PROVIDER_STICKY": root.get("REVERSE_PROXY_PROVIDER", ""),
         "NPM_ADMIN_HOST_STICKY": root.get("NPM_ADMIN_HOST", "") if config_seeded else "",

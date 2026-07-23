@@ -43,6 +43,7 @@ class SetupArgs:
     reverse_proxy_provider: str | None = None
     enable_web_search: bool | None = None  # None = sticky / no change
     enable_local_ai: bool | None = None  # None = sticky / no change
+    enable_manager: bool | None = None  # None = sticky / no change
     reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
@@ -312,6 +313,11 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if sticky_manager and common.is_placeholder(sticky_manager):
         sticky_manager = ""
     manager_url = args.manager_host or sticky_manager or derived_manager
+    if not args.manager_host and not args.non_interactive and args.prompt is not None:
+        manager_url = args.prompt(
+            "Public URL of papaia-manager (MANAGER_PUBLIC_URL)",
+            sticky_manager or derived_manager,
+        )
     root["MANAGER_PUBLIC_URL"] = manager_url
 
     homepage = tree.setdefault("services/homepage", {})
@@ -536,6 +542,22 @@ def resolve_local_ai(tree: EnvTree, args: SetupArgs) -> EnvTree:
     profiles = [p for p in profiles if p != "localai"]
     if args.enable_local_ai:
         profiles.append("localai")
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_manager(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `manager` Compose profile based on the operator's choice.
+
+    When `enable_manager` is None the call is a no-op — whatever was
+    already written to COMPOSE_PROFILES on a prior run is preserved (sticky)."""
+    if args.enable_manager is None:
+        return tree
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    profiles = [p for p in profiles if p != "manager"]
+    if args.enable_manager:
+        profiles.append("manager")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 

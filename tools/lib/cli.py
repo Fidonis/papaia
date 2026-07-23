@@ -75,6 +75,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
         enable_web_search=_tristate(args.enable_web_search),
         enable_local_ai=_tristate(args.enable_local_ai),
+        enable_manager=_tristate(args.enable_manager),
         reranker_model=args.reranker_model or None,
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
@@ -101,6 +102,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.migrate_web_search_profiles(tree)
         tree = resolve.resolve_web_search(tree, setup_args)
         tree = resolve.resolve_local_ai(tree, setup_args)
+        tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -186,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--reranker-model", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
     p_setup.add_argument("--force", action="store_true")
