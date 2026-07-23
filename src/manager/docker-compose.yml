@@ -25,10 +25,15 @@ services:
       # MANAGER_OIDC_CLIENT_SECRET and MANAGER_SESSION_SECRET are loaded
       # exclusively through env_file (environment: wins over env_file, so
       # listing them here would blank them out via empty ${VAR} resolution).
-      OIDC_ISSUER:          ${OIDC_ISSUER}
-      OIDC_AUTH_URL:        ${OIDC_AUTH_URL}
-      OIDC_TOKEN_URL:       ${OIDC_TOKEN_URL}
-      OIDC_JWKS_URL:        ${OIDC_JWKS_URL}
+      #
+      # The manager reads the three OIDC endpoints under OIDC_ISSUER_KC_*
+      # (browser-side auth URL; server-side token + certs URLs on the internal
+      # keycloak:8443 DNS name). The core exposes the same values under its
+      # canonical OIDC_*_URL names, so translate here.
+      OIDC_ISSUER_KC_AUTH:  ${OIDC_AUTH_URL}
+      OIDC_ISSUER_KC_TOKEN: ${OIDC_TOKEN_URL}
+      OIDC_ISSUER_KC_CERTS: ${OIDC_JWKS_URL}
+      AUTH_PROVIDER:        ${AUTH_PROVIDER}
       MANAGER_OIDC_CLIENT_ID: papaia-manager
       MANAGER_HOST:         ${MANAGER_PUBLIC_URL}
       PAPAIA_CONFIG_DIR:    ${PAPAIA_CONFIG_DIR}
