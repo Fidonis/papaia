@@ -30,6 +30,9 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
     localai_sticky = root.get("LOCALAI_PUBLIC_URL", "") if config_seeded else ""
     if common.is_placeholder(localai_sticky):
         localai_sticky = ""
+    manager_sticky = root.get("MANAGER_PUBLIC_URL", "") if config_seeded else ""
+    if common.is_placeholder(manager_sticky):
+        manager_sticky = ""
     jinaai = tree.get("ai/jinaai", {})
     reranker_model_sticky = jinaai.get("RERANKER_MODEL", "") if config_seeded else ""
     if common.is_placeholder(reranker_model_sticky):
@@ -44,6 +47,8 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),
         "LOCALAI_HOST_STICKY": localai_sticky,
         "LOCALAI_EXT_PORT": root.get("LOCALAI_EXT_PORT", "8080"),
+        "MANAGER_HOST_STICKY": manager_sticky,
+        "MANAGER_EXT_PORT": root.get("MANAGER_EXT_PORT", "8120"),
         "LOCAL_AI_STICKY": (
             ("true" if "localai" in profiles else "false") if config_seeded else ""
         ),

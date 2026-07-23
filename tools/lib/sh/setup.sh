@@ -22,7 +22,7 @@ load_defaults() {
 cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
-    local host_ip="" app_host="" auth_host="" librechat_host="" localai_host="" npm_admin_host=""
+    local host_ip="" app_host="" auth_host="" librechat_host="" localai_host="" manager_host="" npm_admin_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" reranker_model=""
@@ -65,6 +65,7 @@ cmd_setup() {
             --local-ai) local_ai="true" ;;
             --no-local-ai) local_ai="false" ;;
             --localai-host=*) localai_host="${1#*=}" ;;
+            --manager-host=*) manager_host="${1#*=}" ;;
             --reranker-model=*) reranker_model="${1#*=}" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
@@ -81,7 +82,7 @@ cmd_setup() {
 
     if [ "$env_only" -eq 1 ]; then
         info "Reusing existing configuration; re-rendering env files only."
-        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" ""
+        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" ""
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
             _ensure_keycloak_certs
         fi
@@ -125,7 +126,7 @@ cmd_setup() {
         fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" ""
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" ""
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
                 _ensure_keycloak_certs
             fi
@@ -272,6 +273,9 @@ cmd_setup() {
         if [ -z "$npm_admin_host" ] && [ -n "${NPM_ADMIN_HOST_STICKY:-}" ]; then
             npm_admin_host="$NPM_ADMIN_HOST_STICKY"
         fi
+        if [ -z "$manager_host" ] && [ -n "${MANAGER_HOST_STICKY:-}" ]; then
+            manager_host="$MANAGER_HOST_STICKY"
+        fi
     fi
 
     # --allow-direct-port-access is the explicit opt-in for "no proxy at
@@ -294,7 +298,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host"; then
         error "setup failed."
         exit 3
     fi
@@ -340,12 +344,13 @@ _derive_librechat_default() {
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
-    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}"
+    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
     [ -n "$librechat_host" ] && extra+=(--librechat-host="$librechat_host")
     [ -n "$localai_host" ] && extra+=(--localai-host="$localai_host")
+    [ -n "$manager_host" ] && extra+=(--manager-host="$manager_host")
     [ -n "$npm_admin_host" ] && extra+=(--npm-admin-host="$npm_admin_host")
     [ -n "$auth_provider" ] && extra+=(--auth-provider="$auth_provider")
     [ -n "$oidc_issuer" ] && extra+=(--oidc-issuer="$oidc_issuer")

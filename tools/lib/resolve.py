@@ -34,6 +34,7 @@ class SetupArgs:
     auth_host: str | None = None
     librechat_host: str | None = None  # public LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT)
     localai_host: str | None = None  # public LocalAI URL (LOCALAI_PUBLIC_URL)
+    manager_host: str | None = None  # public papaia-manager URL (MANAGER_PUBLIC_URL)
     npm_admin_host: str | None = None  # public NPM admin URL (NPM_ADMIN_HOST)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
@@ -103,6 +104,11 @@ def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
 def derive_localai_url_default(app_host: str, localai_port: str) -> str:
     """Default browser-facing LocalAI URL: the public host plus the external LocalAI port."""
     return f"{app_host}:{localai_port}"
+
+
+def derive_manager_url_default(app_host: str, manager_port: str) -> str:
+    """Default browser-facing papaia-manager URL: the public host plus the external manager port."""
+    return f"{app_host}:{manager_port}"
 
 
 def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str:
@@ -295,6 +301,18 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     localai["LOCALAI_OIDC_ISSUER"] = root["OIDC_ISSUER"]
     localai["LOCALAI_OIDC_CLIENT_ID"] = "localai"
     localai["LOCALAI_BASE_URL"] = localai_url
+
+    # --- papaia-manager public URL ---
+    # MANAGER_PUBLIC_URL is exposed in the root .env (consumed by docker compose
+    # ${VAR} expansion in manager/docker-compose.yml). Always derived and stored
+    # so the sticky value survives profile changes.
+    manager_port = root.get("MANAGER_EXT_PORT", "8120")
+    derived_manager = derive_manager_url_default(app_host, manager_port)
+    sticky_manager = "" if args.fresh_init else root.get("MANAGER_PUBLIC_URL", "")
+    if sticky_manager and common.is_placeholder(sticky_manager):
+        sticky_manager = ""
+    manager_url = args.manager_host or sticky_manager or derived_manager
+    root["MANAGER_PUBLIC_URL"] = manager_url
 
     homepage = tree.setdefault("services/homepage", {})
     if "HP_ALLOWED_HOSTS" in homepage:

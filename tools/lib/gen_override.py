@@ -92,7 +92,7 @@ def external_networks(override_path: Path) -> list[str]:
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For
 # external OIDC the cert file is absent, so SSL_CERT_FILE must be cleared to
 # let Python's ssl module fall back to the system CA bundle.
-_SSL_CERT_SERVICES = ("litellm", "oauth2-proxy", "localai")
+_SSL_CERT_SERVICES = ("litellm", "oauth2-proxy", "localai", "papaia-manager")
 
 
 def _load_addon_local_ca_env(addon: dict, repo_root: Path) -> dict:

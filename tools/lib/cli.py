@@ -67,6 +67,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         auth_host=args.auth_host,
         librechat_host=args.librechat_host,
         localai_host=args.localai_host,
+        manager_host=args.manager_host,
         npm_admin_host=args.npm_admin_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
@@ -171,6 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--auth-host")
     p_setup.add_argument("--librechat-host")
     p_setup.add_argument("--localai-host")
+    p_setup.add_argument("--manager-host")
     p_setup.add_argument("--npm-admin-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None

@@ -14,6 +14,7 @@ include:
   - path: ./infra/nginx/docker-compose.yml
 
   # Application Services
+  - path: ./manager/docker-compose.yml
   - path: ./services/firecrawl/docker-compose.yml
   - path: ./services/homepage/docker-compose.yml
   - path: ./services/searxng/docker-compose.yml
