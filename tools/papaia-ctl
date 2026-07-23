@@ -17,6 +17,7 @@
 #                       [--external-reverse-proxy|--no-external-reverse-proxy]
 #                       [--web-search|--no-web-search]
 #                       [--local-ai|--no-local-ai] [--localai-host=URL]
+#                       [--manager|--no-manager] [--manager-host=URL]
 #                       [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl start    [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
 #   papaia-ctl stop     [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]

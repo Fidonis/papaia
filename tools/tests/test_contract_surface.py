@@ -61,6 +61,7 @@ ATTACHABLE_SERVICES = {
     "nginx-proxy-manager": ["nginx"],
     "nginx-proxy-manager-auth": ["nginx"],
     "oauth2-proxy": ["oauth2-proxy"],
+    "papaia-manager": ["manager"],
     "searxng": ["librechat-websearch"],
 }
 
@@ -99,6 +100,7 @@ SECRET_ALIASES = {
     ("infra/keycloak", "KC_LITELLM_CLIENT_SECRET"): [("ai/litellm", "GENERIC_CLIENT_SECRET")],
     ("infra/keycloak", "KC_OAUTH2_PROXY_CLIENT_SECRET"): [("", "OAUTH2_PROXY_CLIENT_SECRET")],
     ("infra/keycloak", "KC_LOCALAI_CLIENT_SECRET"): [("ai/localai", "LOCALAI_OIDC_CLIENT_SECRET")],
+    ("infra/keycloak", "KC_MANAGER_CLIENT_SECRET"): [("manager", "MANAGER_OIDC_CLIENT_SECRET")],
     ("ai/litellm", "LITELLM_MASTER_KEY"): [
         ("ai/librechat", "LITELLM_API_KEY"),
         ("ai/jinaai", "LITELLM_API_KEY"),

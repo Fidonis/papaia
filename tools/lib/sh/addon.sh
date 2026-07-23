@@ -49,7 +49,30 @@ _addon_compose_up() {
             compose_files+=(-f "$f")
         done
     fi
-    docker compose "${compose_files[@]}" up -d
+    # Pass env files explicitly so root vars (COMPOSE_PROJECT_NAME, DOCKER_NETWORK,
+    # PAPAIA_HOST, …) are available for variable interpolation in the addon compose
+    # file even when papaia-ctl is invoked from a subprocess that does not inherit
+    # the full host shell environment (e.g. the papaia-manager container).
+    # Specifying --env-file disables compose's auto-discovery of the project .env,
+    # so the addon's own .env is passed second (higher precedence) to keep its
+    # vars available for interpolation as well.
+    local -a env_files=()
+    local root_env="$REPO_ROOT/src/.env"
+    [ -f "$root_env" ] && env_files+=(--env-file "$root_env")
+    local addon_env="$addon_path/.env"
+    [ -f "$addon_env" ] && env_files+=(--env-file "$addon_env")
+    # Pin the compose project name to the addon directory basename. Without this,
+    # the root .env passed above carries COMPOSE_PROJECT_NAME=papaia, which would
+    # bring the addon up under the core stack's project instead of its own. That
+    # breaks two things: papaia-manager's compute_status treats an addon as RUNNING
+    # only when a project named after the addon dir appears in `docker ps`, and
+    # `addon stop`/`addon uninstall` tear down using that same default project name
+    # -- so a mismatched project would leave the addon invisible and un-removable.
+    # This value matches docker compose's own default (basename of the compose
+    # file's directory), so `up` and the later `down` operate on the same project.
+    local project
+    project="$(basename "$addon_path")"
+    docker compose -p "$project" "${compose_files[@]}" "${env_files[@]}" up -d
 }
 
 cmd_addon_start() {

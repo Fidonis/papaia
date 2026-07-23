@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import types
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,73 @@ def test_stamp_config_dir_populates_papaia_config_dir(repo_root, config_dir):
     assert tree[""]["PAPAIA_CONFIG_DIR"] != str(config_dir)
     envtree.stamp_config_dir(tree, config_dir)
     assert tree[""]["PAPAIA_CONFIG_DIR"] == str(config_dir)
+
+
+def test_stamp_workspace_dir_derives_parent_of_papaia_checkout(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia"
+    checkout.mkdir(parents=True)
+    tree = {"": {"PAPAIA_WORKSPACE_DIR": "/srv/papaia/workspace"}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == str(tmp_path / "workspace")
+
+
+def test_stamp_workspace_dir_derives_when_value_empty(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia"
+    checkout.mkdir(parents=True)
+    tree: dict = {"": {}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == str(tmp_path / "workspace")
+
+
+def test_stamp_workspace_dir_keeps_operator_customised_value(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia"
+    checkout.mkdir(parents=True)
+    tree = {"": {"PAPAIA_WORKSPACE_DIR": "/opt/custom/workspace"}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == "/opt/custom/workspace"
+
+
+def test_stamp_workspace_dir_skips_when_checkout_not_named_papaia(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia-fork"
+    checkout.mkdir(parents=True)
+    tree = {"": {"PAPAIA_WORKSPACE_DIR": "/srv/papaia/workspace"}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    # Left as the placeholder -- no correct parent-derivation is possible.
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == "/srv/papaia/workspace"
+
+
+def test_stamp_docker_gid_detects_socket_gid_over_placeholder(monkeypatch):
+    tree = {"": {"DOCKER_GID": "999"}}
+    monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=1001))
+    envtree.stamp_docker_gid(tree)
+    assert tree[""]["DOCKER_GID"] == "1001"
+
+
+def test_stamp_docker_gid_detects_when_value_empty(monkeypatch):
+    tree: dict = {"": {}}
+    monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=1001))
+    envtree.stamp_docker_gid(tree)
+    assert tree[""]["DOCKER_GID"] == "1001"
+
+
+def test_stamp_docker_gid_keeps_operator_customised_value(monkeypatch):
+    tree = {"": {"DOCKER_GID": "1234"}}
+    # A real, non-placeholder value stays sticky even when a socket is present.
+    monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=1001))
+    envtree.stamp_docker_gid(tree)
+    assert tree[""]["DOCKER_GID"] == "1234"
+
+
+def test_stamp_docker_gid_keeps_value_when_socket_absent(monkeypatch):
+    tree = {"": {"DOCKER_GID": "999"}}
+
+    def _raise(_path):
+        raise OSError("no socket")
+
+    monkeypatch.setattr(envtree.os, "stat", _raise)
+    envtree.stamp_docker_gid(tree)
+    # No local socket to probe -- the existing value is left untouched.
+    assert tree[""]["DOCKER_GID"] == "999"
 
 
 def test_init_seeds_config_dir_without_touching_repo_tree(repo_root, config_dir):

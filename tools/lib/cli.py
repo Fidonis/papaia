@@ -67,6 +67,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         auth_host=args.auth_host,
         librechat_host=args.librechat_host,
         localai_host=args.localai_host,
+        manager_host=args.manager_host,
         npm_admin_host=args.npm_admin_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
@@ -74,6 +75,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
         enable_web_search=_tristate(args.enable_web_search),
         enable_local_ai=_tristate(args.enable_local_ai),
+        enable_manager=_tristate(args.enable_manager),
         reranker_model=args.reranker_model or None,
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
@@ -100,6 +102,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.migrate_web_search_profiles(tree)
         tree = resolve.resolve_web_search(tree, setup_args)
         tree = resolve.resolve_local_ai(tree, setup_args)
+        tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -107,6 +110,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
+    tree = envtree.stamp_workspace_dir(tree, repo_root)
+    tree = envtree.stamp_docker_gid(tree)
     envtree.persist_tree(tree, config_dir, repo_root)
     deployment.sync_manifest(config_dir, tree, repo_root)
 
@@ -171,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--auth-host")
     p_setup.add_argument("--librechat-host")
     p_setup.add_argument("--localai-host")
+    p_setup.add_argument("--manager-host")
     p_setup.add_argument("--npm-admin-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
@@ -184,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--reranker-model", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
     p_setup.add_argument("--force", action="store_true")
