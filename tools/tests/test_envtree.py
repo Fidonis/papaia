@@ -57,6 +57,39 @@ def test_stamp_config_dir_populates_papaia_config_dir(repo_root, config_dir):
     assert tree[""]["PAPAIA_CONFIG_DIR"] == str(config_dir)
 
 
+def test_stamp_workspace_dir_derives_parent_of_papaia_checkout(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia"
+    checkout.mkdir(parents=True)
+    tree = {"": {"PAPAIA_WORKSPACE_DIR": "/srv/papaia/workspace"}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == str(tmp_path / "workspace")
+
+
+def test_stamp_workspace_dir_derives_when_value_empty(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia"
+    checkout.mkdir(parents=True)
+    tree: dict = {"": {}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == str(tmp_path / "workspace")
+
+
+def test_stamp_workspace_dir_keeps_operator_customised_value(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia"
+    checkout.mkdir(parents=True)
+    tree = {"": {"PAPAIA_WORKSPACE_DIR": "/opt/custom/workspace"}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == "/opt/custom/workspace"
+
+
+def test_stamp_workspace_dir_skips_when_checkout_not_named_papaia(tmp_path):
+    checkout = tmp_path / "workspace" / "papaia-fork"
+    checkout.mkdir(parents=True)
+    tree = {"": {"PAPAIA_WORKSPACE_DIR": "/srv/papaia/workspace"}}
+    envtree.stamp_workspace_dir(tree, checkout)
+    # Left as the placeholder -- no correct parent-derivation is possible.
+    assert tree[""]["PAPAIA_WORKSPACE_DIR"] == "/srv/papaia/workspace"
+
+
 def test_init_seeds_config_dir_without_touching_repo_tree(repo_root, config_dir):
     src_files_before = sorted(
         p.relative_to(repo_root) for p in (repo_root / "src").rglob("*") if p.is_file()

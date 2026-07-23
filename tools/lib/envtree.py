@@ -125,6 +125,36 @@ def stamp_config_dir(tree: EnvTree, config_dir: Path) -> EnvTree:
     return tree
 
 
+# The placeholder shipped in src/.env.example -- treated as "not customised"
+# so it is overwritten by the derived path rather than kept sticky.
+_WORKSPACE_DIR_PLACEHOLDER = "/srv/papaia/workspace"
+
+
+def stamp_workspace_dir(tree: EnvTree, repo_root: Path) -> EnvTree:
+    """Populate the root .env's PAPAIA_WORKSPACE_DIR with the parent of this
+    checkout, so the optional papaia-manager's path-parity holds automatically.
+
+    The manager mounts ${PAPAIA_WORKSPACE_DIR} at the same path inside its
+    container and imports lib.* from ${PAPAIA_WORKSPACE_DIR}/papaia/tools (and
+    reads ${PAPAIA_WORKSPACE_DIR}/papaia/VERSION), so the workspace dir must be
+    the directory that *contains* this `papaia` checkout. Deriving it from
+    repo_root removes a hand-editing step that otherwise silently breaks addon
+    operations.
+
+    The derivation only applies when the checkout is named `papaia` (the
+    manager's hard-coded subpath); an operator who renamed the checkout, or
+    who set a real non-placeholder value by hand, keeps their value."""
+    root = tree.setdefault("", {})
+    current = root.get("PAPAIA_WORKSPACE_DIR", "")
+    if current and current != _WORKSPACE_DIR_PLACEHOLDER:
+        return tree  # operator-customised -- leave it sticky
+    # Resolve first so a relative repo_root (e.g. "..") yields a real basename.
+    resolved = repo_root.resolve()
+    if resolved.name == "papaia":
+        root["PAPAIA_WORKSPACE_DIR"] = str(resolved.parent)
+    return tree
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Run summary
 # ─────────────────────────────────────────────────────────────────────────
