@@ -264,11 +264,11 @@ cmd_setup() {
                 "LOCALAI_PUBLIC_URL" "$localai_default")"
         fi
         if [ -z "$manager" ]; then
-            local manager_default="2"
-            [ "${MANAGER_STICKY:-}" = "true" ] && manager_default="1"
+            local manager_default="1"
+            [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
             printf '\n%sEnable Extension Manager%s\n' "$CYAN" "$NC" >&2
-            printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons\n' >&2
-            printf '  2) No   — skip papaia-manager (default; the core runs without it)\n' >&2
+            printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons (default)\n' >&2
+            printf '  2) No   — skip papaia-manager (the core runs without it)\n' >&2
             local manager_choice
             manager_choice="$(prompt_with_default "  Choose" "$manager_default")"
             case "$manager_choice" in

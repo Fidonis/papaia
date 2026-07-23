@@ -14,6 +14,7 @@ derivation in resolve.py).
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -152,6 +153,41 @@ def stamp_workspace_dir(tree: EnvTree, repo_root: Path) -> EnvTree:
     resolved = repo_root.resolve()
     if resolved.name == "papaia":
         root["PAPAIA_WORKSPACE_DIR"] = str(resolved.parent)
+    return tree
+
+
+# The placeholder shipped in src/.env.example -- treated as "not customised"
+# so it is overwritten by the detected socket GID rather than kept sticky.
+_DOCKER_GID_PLACEHOLDER = "999"
+_DOCKER_SOCKET = "/var/run/docker.sock"
+
+
+def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> EnvTree:
+    """Populate the root .env's DOCKER_GID with the GID that actually owns the
+    Docker socket on this host, so the optional papaia-manager's non-root 'app'
+    user can reach the Docker API without a hand-editing step.
+
+    The manager joins this GID via `group_add`; a wrong value makes every
+    docker.sock access inside the container fail with EACCES. The owning GID
+    varies by host and context -- e.g. 999 on a stock Linux `docker` group,
+    but 1001 under Docker Desktop's WSL2 integration -- so it cannot be a fixed
+    shipped default, and a bare reseed (uninstall --clean-up + setup) would
+    otherwise silently restore the wrong placeholder.
+
+    Sticky, like stamp_workspace_dir: an operator who set a real, non-placeholder
+    value by hand keeps it. The placeholder shipped in .env.example, or an empty
+    value, is replaced by the detected socket GID. If the socket cannot be
+    stat'd (setup run on a host without a local Docker socket, e.g. a remote
+    daemon), the current value is left untouched."""
+    root = tree.setdefault("", {})
+    current = root.get("DOCKER_GID", "")
+    if current and current != _DOCKER_GID_PLACEHOLDER:
+        return tree  # operator-customised -- leave it sticky
+    try:
+        gid = os.stat(socket_path).st_gid
+    except OSError:
+        return tree  # no local socket to probe -- keep the existing value
+    root["DOCKER_GID"] = str(gid)
     return tree
 
 
