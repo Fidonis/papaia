@@ -112,6 +112,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
     tree = envtree.stamp_docker_gid(tree)
+    tree = envtree.stamp_host_uid_gid(tree)
     envtree.persist_tree(tree, config_dir, repo_root)
     deployment.sync_manifest(config_dir, tree, repo_root)
 

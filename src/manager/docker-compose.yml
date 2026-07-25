@@ -58,6 +58,10 @@ services:
     #     stat -c '%g' /var/run/docker.sock
     group_add:
       - "${DOCKER_GID:-999}"
+    # Run as the host user so write access to PAPAIA_CONFIG_DIR and
+    # PAPAIA_WORKSPACE_DIR (bind-mounted host paths) matches the owner set by
+    # papaia-ctl setup.  UID/GID are stamped into the root .env at setup time.
+    user: "${UID:-1000}:${GID:-1000}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
