@@ -287,6 +287,10 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     # LOCALAI_PUBLIC_URL is exposed in the root .env (docker compose ${VAR}
     # expansion in localai/docker-compose.yml). Per-service OIDC vars go into
     # the ai/localai env node, which is written to $PAPAIA_CONFIG_DIR/ai/localai/.env.
+    # NOTE: LOCALAI_BASE_URL is intentionally NOT written to ai/localai/.env —
+    # docker-compose.yml injects it via `environment: LOCALAI_BASE_URL: ${LOCALAI_PUBLIC_URL}`
+    # (environment: wins over env_file:), so a per-service copy would be dead code
+    # that misleads operators into editing the wrong file.
     localai_port = root.get("LOCALAI_EXT_PORT", "8080")
     derived_localai = derive_localai_url_default(app_host, localai_port)
     sticky_localai = "" if args.fresh_init else root.get("LOCALAI_PUBLIC_URL", "")
@@ -301,7 +305,6 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     root["LOCALAI_PUBLIC_URL"] = localai_url
     localai["LOCALAI_OIDC_ISSUER"] = root["OIDC_ISSUER"]
     localai["LOCALAI_OIDC_CLIENT_ID"] = "localai"
-    localai["LOCALAI_BASE_URL"] = localai_url
 
     # --- papaia-manager public URL ---
     # MANAGER_PUBLIC_URL is exposed in the root .env (consumed by docker compose
