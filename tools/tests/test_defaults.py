@@ -11,10 +11,12 @@ def test_compute_defaults_unseeded_config_dir_gates_sticky_values(repo_root, con
     # setup run actually seeded the config dir.
     assert out["LIBRECHAT_HOST_STICKY"] == ""
     assert out["LOCALAI_HOST_STICKY"] == ""
+    assert out["LITELLM_HOST_STICKY"] == ""
     assert out["LOCAL_AI_STICKY"] == ""
     assert out["NPM_ADMIN_HOST_STICKY"] == ""
     assert out["WEB_SEARCH_STICKY"] == ""
     assert out["RERANKER_MODEL_STICKY"] == ""
+    assert out["LITELLM_EXT_PORT"] == "8200"
     # Derived values still work off the seed's PAPAIA_HOST.
     assert out["AUTH_HOST_DERIVED"] == "https://host.docker.internal:8110"
     assert out["NPM_ADMIN_HOST_DERIVED"] == "http://localhost:8100"

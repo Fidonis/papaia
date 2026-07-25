@@ -34,6 +34,7 @@ class SetupArgs:
     auth_host: str | None = None
     librechat_host: str | None = None  # public LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT)
     localai_host: str | None = None  # public LocalAI URL (LOCALAI_PUBLIC_URL)
+    litellm_host: str | None = None  # public LiteLLM proxy URL (LITELLM_PUBLIC_URL)
     manager_host: str | None = None  # public papaia-manager URL (MANAGER_PUBLIC_URL)
     npm_admin_host: str | None = None  # public NPM admin URL (NPM_ADMIN_HOST)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
@@ -100,6 +101,11 @@ def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
     if parts.scheme == "http" and parts.hostname == "host.docker.internal":
         host = app_host.replace("host.docker.internal", "localhost", 1)
     return f"{host}:{librechat_port}"
+
+
+def derive_litellm_url_default(app_host: str, litellm_port: str) -> str:
+    """Default browser-facing LiteLLM proxy URL: the public host plus the external LiteLLM port."""
+    return f"{app_host}:{litellm_port}"
 
 
 def derive_localai_url_default(app_host: str, localai_port: str) -> str:
@@ -184,6 +190,22 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             )
     root["PAPAIA_HOST"] = app_host
 
+    # --- LITELLM_PUBLIC_URL (provider-independent) ---
+    # Resolved before the auth-provider branch so both branches can reference
+    # litellm_url for their OIDC redirect / logout URIs without duplication.
+    litellm_port = root.get("LITELLM_EXT_PORT", "8200")
+    derived_litellm = derive_litellm_url_default(app_host, litellm_port)
+    sticky_litellm = "" if args.fresh_init else root.get("LITELLM_PUBLIC_URL", "")
+    if sticky_litellm and common.is_placeholder(sticky_litellm):
+        sticky_litellm = ""
+    litellm_url = args.litellm_host or sticky_litellm or derived_litellm
+    if not args.litellm_host and not args.non_interactive and args.prompt is not None:
+        litellm_url = args.prompt(
+            "Public URL of LiteLLM Proxy (LITELLM_PUBLIC_URL)",
+            sticky_litellm or derived_litellm,
+        )
+    root["LITELLM_PUBLIC_URL"] = litellm_url
+
     if auth_provider == "external_oidc":
         # First-time transition (fresh init, or switching this run). The
         # seed/prior OIDC_ISSUER is bundled-Keycloak-shaped -- never kept
@@ -198,7 +220,6 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         # Keycloak and most other providers; operators using a non-standard path
         # layout can adjust these values manually after setup.
         issuer = root["OIDC_ISSUER"]
-        litellm_port = root.get("LITELLM_EXT_PORT", "8200")
         litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = (
             f"{issuer}/protocol/openid-connect/auth"
         )
@@ -208,11 +229,10 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         litellm["GENERIC_USERINFO_ENDPOINT"] = (
             f"{issuer}/protocol/openid-connect/userinfo"
         )
-        litellm["GENERIC_REDIRECT_URI"] = f"{app_host}:{litellm_port}/sso/callback"
+        litellm["GENERIC_REDIRECT_URI"] = f"{litellm_url}/sso/callback"
         litellm["PROXY_LOGOUT_URL"] = (
             f"{issuer}/protocol/openid-connect/logout"
-            f"?client_id=litellm&post_logout_redirect_uri="
-            f"{app_host}:{litellm_port}/sso/key/generate"
+            f"?client_id=litellm&post_logout_redirect_uri={litellm_url}/sso/key/generate"
         )
     else:
         # --- AUTH_HOST + KC_HOSTNAME ---
@@ -243,16 +263,15 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         # correct for every topology this repo supports.
 
         # --- LiteLLM ---
-        litellm_port = root.get("LITELLM_EXT_PORT", "8200")
         litellm["GENERIC_AUTHORIZATION_ENDPOINT"] = root["OIDC_AUTH_URL"]
         litellm["GENERIC_TOKEN_ENDPOINT"] = root["OIDC_TOKEN_URL"]
         litellm["GENERIC_USERINFO_ENDPOINT"] = (
             "https://keycloak:8443/realms/papaia/protocol/openid-connect/userinfo"
         )
-        litellm["GENERIC_REDIRECT_URI"] = f"{app_host}:{litellm_port}/sso/callback"
+        litellm["GENERIC_REDIRECT_URI"] = f"{litellm_url}/sso/callback"
         litellm["PROXY_LOGOUT_URL"] = (
             f"{auth_host}/realms/papaia/protocol/openid-connect/logout"
-            f"?client_id=litellm&post_logout_redirect_uri={app_host}:{litellm_port}/sso/key/generate"
+            f"?client_id=litellm&post_logout_redirect_uri={litellm_url}/sso/key/generate"
         )
 
     # --- LibreChat browser URL (DOMAIN_SERVER/DOMAIN_CLIENT) ---

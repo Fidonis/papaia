@@ -129,6 +129,60 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     assert tree["ai/librechat"]["TRUST_PROXY"] == "1"
 
 
+@pytest.mark.parametrize(
+    "app_host,expected",
+    [
+        ("http://host.docker.internal", "http://host.docker.internal:8200"),
+        ("http://localhost", "http://localhost:8200"),
+        ("http://192.168.1.50", "http://192.168.1.50:8200"),
+        ("https://papaia.example.com", "https://papaia.example.com:8200"),
+    ],
+)
+def test_derive_litellm_url_default(app_host, expected):
+    assert resolve.derive_litellm_url_default(app_host, "8200") == expected
+
+
+def test_resolve_hostnames_litellm_host_arg_wins(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="http://host.docker.internal",
+        litellm_host="https://llm.example.com",
+        non_interactive=True,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["LITELLM_PUBLIC_URL"] == "https://llm.example.com"
+    assert tree["ai/litellm"]["GENERIC_REDIRECT_URI"] == "https://llm.example.com/sso/callback"
+
+
+def test_resolve_hostnames_litellm_oidc_uses_litellm_url(repo_root):
+    # GENERIC_REDIRECT_URI must be derived from LITELLM_PUBLIC_URL, not app_host:port.
+    tree = envtree.load_seed_tree(repo_root)
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        litellm_host="https://llmproxy.example.com",
+        non_interactive=True,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree["ai/litellm"]["GENERIC_REDIRECT_URI"] == "https://llmproxy.example.com/sso/callback"
+    assert "llmproxy.example.com" in tree["ai/litellm"]["PROXY_LOGOUT_URL"]
+    assert "papaia.example.com:8200" not in tree["ai/litellm"]["GENERIC_REDIRECT_URI"]
+
+
+def test_resolve_hostnames_litellm_sticky_reused_when_not_fresh(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["LITELLM_PUBLIC_URL"] = "https://prior-llm.example.com"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="http://host.docker.internal",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["LITELLM_PUBLIC_URL"] == "https://prior-llm.example.com"
+
+
 def test_resolve_hostnames_cookie_secure_false_for_plain_http(repo_root):
     tree = envtree.load_seed_tree(repo_root)
     args = resolve.SetupArgs(
