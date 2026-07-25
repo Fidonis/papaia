@@ -69,6 +69,8 @@ def init(
     common.ensure_dir(config_dir / "overrides")
     common.ensure_dir(config_dir / "overrides" / "addons")
     common.ensure_dir(config_dir / "certs")
+    common.ensure_dir(config_dir / "infra" / "nginx" / "nginx-data")
+    common.ensure_dir(config_dir / "infra" / "nginx" / "nginx-letsencrypt")
 
     seed = load_seed_tree(repo_root)
     for rel_dir, values in seed.items():
