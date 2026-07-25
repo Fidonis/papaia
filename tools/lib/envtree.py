@@ -191,6 +191,40 @@ def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> Env
     return tree
 
 
+# Placeholders shipped in src/.env.example — overwritten on every setup run
+# with the IDs of the user who ran setup, keeping them sticky thereafter.
+_HOST_UID_PLACEHOLDER = "1000"
+_HOST_GID_PLACEHOLDER = "1000"
+
+
+def stamp_host_uid_gid(tree: EnvTree) -> EnvTree:
+    """Populate the root .env's UID/GID with the IDs of the user running
+    setup, so papaia-manager runs as the same identity that owns the
+    bind-mounted host directories (PAPAIA_CONFIG_DIR, PAPAIA_WORKSPACE_DIR).
+
+    Sticky like stamp_docker_gid: a non-placeholder value set by hand is
+    kept.  The shipped placeholder (UID=1000, GID=1000) is replaced with the
+    detected IDs on every setup run so re-running after a user change stays
+    correct.  No-op on Windows — Docker Desktop remaps bind-mount ownership
+    transparently, so UID/GID have no effect there."""
+    root = tree.setdefault("", {})
+    try:
+        uid = str(os.getuid())
+        gid = str(os.getgid())
+    except AttributeError:
+        return tree  # Windows — not applicable
+
+    current_uid = root.get("UID", "")
+    if not current_uid or current_uid == _HOST_UID_PLACEHOLDER:
+        root["UID"] = uid
+
+    current_gid = root.get("GID", "")
+    if not current_gid or current_gid == _HOST_GID_PLACEHOLDER:
+        root["GID"] = gid
+
+    return tree
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Run summary
 # ─────────────────────────────────────────────────────────────────────────
