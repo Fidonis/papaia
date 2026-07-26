@@ -110,8 +110,10 @@ def test_install_seeds_env_into_config_bundle(repo_root, config_dir):
     # Literal defaults are copied verbatim
     assert parsed["PAPERLESS_EXT_PORT"] == "8010"
     assert parsed["PAPERLESS_DBUSER"] == "paperless"
-    # CHANGE_ME keys stay as-is until prompted
-    assert parsed["PAPAIA_CONFIG_DIR"] == "CHANGE_ME"
+    # Keys with default_from_core are auto-filled from the core .env in non-interactive mode
+    assert parsed["PAPAIA_CONFIG_DIR"] == "/srv/papaia/config"
+    assert parsed["OIDC_ISSUER"] == "http://host.docker.internal:8110/realms/papaia"
+    # Keys without default_from_core stay as CHANGE_ME until set manually
     assert parsed["PAPERLESS_PUBLIC_URL"] == "CHANGE_ME"
     # Section banner is present
     env_content = bundle_env.read_text(encoding="utf-8")
@@ -487,15 +489,17 @@ def test_install_warns_about_change_me_in_noninteractive_mode(repo_root, config_
     cmd_addon_install(_install_args(config_dir, repo_root))
 
     err = capsys.readouterr().err
+    # Only PAPERLESS_PUBLIC_URL (no default_from_core) still triggers the warning
     assert "CHANGE_ME" in err
-    assert "PAPAIA_CONFIG_DIR" in err
-    assert "OIDC_ISSUER" in err
     assert "PAPERLESS_PUBLIC_URL" in err
+    # PAPAIA_CONFIG_DIR and OIDC_ISSUER are auto-filled from the core .env
+    assert "PAPAIA_CONFIG_DIR" not in err
+    assert "OIDC_ISSUER" not in err
 
     bundle_env = config_dir / "addons" / "paperless" / ".env"
     parsed = common.parse_env_file(bundle_env)
-    assert parsed["PAPAIA_CONFIG_DIR"] == "CHANGE_ME"
-    assert parsed["OIDC_ISSUER"] == "CHANGE_ME"
+    assert parsed["PAPAIA_CONFIG_DIR"] == "/srv/papaia/config"
+    assert parsed["OIDC_ISSUER"] == "http://host.docker.internal:8110/realms/papaia"
     assert parsed["PAPERLESS_PUBLIC_URL"] == "CHANGE_ME"
 
 
