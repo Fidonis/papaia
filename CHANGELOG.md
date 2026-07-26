@@ -12,6 +12,26 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.0.0] - 2026-07-26
+
+### 🚀 Features
+
+- feat: introduce add-on contract — `papaia-app.yaml` manifest schema, 5 standardised integration seams (network, OIDC, LibreChat-MCP, Homepage, Ingress)
+- feat: full add-on lifecycle in `papaia-ctl` — `addon install`, `addon start`, `addon stop`, `addon remove`, `addon uninstall`
+- feat: `papaia-ctl addon check` — pre-upgrade compatibility dry-run against an update candidate (`--target-core=PATH`)
+- feat: `ADDON_API` contract-generation window — integer-based compatibility axis independent of the product SemVer (see ADR 0002)
+- feat: structural `networks.attach` validation against Core Compose service names
+- feat: 3-layer config render (repo base + active add-on fragments + customer overlay)
+- feat: per-installation deployment manifest (`deployment.yaml`) as single source of truth for active add-ons and Core profiles
+- feat: `papaia-ctl start --addons` / `stop --addons` for full-stack lifecycle including add-ons
+- feat: Lean Core — application-specific services removed from Core compose; add-on infrastructure replaces hard-wired service includes
+
+### 📖 Documentation
+
+- docs: rename and translate architecture specification to `docs/architecture.md` (English)
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v0.7.0...v1.0.0
+
 ## [0.7.0] - 2026-06-11
 
 ### 🚀 Features
@@ -42,5 +62,6 @@ based on merged pull requests; this file mirrors the published releases.
 
 **Full Changelog**: https://github.com/Fidonis/papaia/compare/v0.6.0...v0.7.0
 
-[Unreleased]: https://github.com/Fidonis/papaia/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Fidonis/papaia/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Fidonis/papaia/compare/v0.7.0...v1.0.0
 [0.7.0]: https://github.com/Fidonis/papaia/compare/v0.6.0...v0.7.0

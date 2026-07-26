@@ -389,7 +389,7 @@ hand-editable for anything `papaia-ctl` does not manage.
 
 ```yaml
 customer: papaia            # set from --env
-platform_version: 0.8.0     # resolved from the VERSION file
+platform_version: 1.0.0     # resolved from the VERSION file
 hosting: self-hosted
 
 core:
@@ -737,7 +737,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai
 │   │   └── services/           # homepage · searxng · firecrawl
 │   └── docs/
-│       ├── papaia-architecture-1.0.0.md  # full architecture specification
+│       ├── architecture.md               # full architecture specification
 │       ├── configuration.md
 │       ├── deployment.md
 │       ├── troubleshooting.md
@@ -761,7 +761,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 - [`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) — Realm contents,
   client list, external-IdP migration, secret rotation.
 - [`src/ai/README.md`](src/ai/README.md) — Per-AI-service summary.
-- [`docs/papaia-architecture-1.0.0.md`](docs/papaia-architecture-1.0.0.md) — Full
+- [`docs/architecture.md`](docs/architecture.md) — Full
   architecture specification: 3-tier model, add-on contract, integration seams,
   deployment manifest schema.
 - [`docs/configuration.md`](docs/configuration.md) — Environment variable reference.
