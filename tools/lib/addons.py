@@ -85,16 +85,31 @@ def prompt_change_me_vars(env_path: Path, manifest: dict, config_dir: Path) -> d
     prompts_cfg = manifest.get("env_prompts") or {}
 
     if not sys.stdin.isatty():
-        print(
-            "\nWARNING: Non-interactive mode — the following keys still contain CHANGE_ME in\n"
-            f"  {env_path}\n"
-            "  Set them before running 'papaia-ctl addon start':\n",
-            file=sys.stderr,
-        )
+        core_env = common.parse_env_file(config_dir / ".env")
+        auto_filled: dict[str, str] = {}
+        still_change_me: list[str] = []
+
         for key in change_me_keys:
-            print(f"  {key}", file=sys.stderr)
-        print(file=sys.stderr)
-        return {}
+            cfg = prompts_cfg.get(key) or {}
+            if "default_from_core" in cfg:
+                value = core_env.get(cfg["default_from_core"], "")
+                if value and value != _CHANGE_ME and not common.marks_generated_secret(value):
+                    auto_filled[key] = value
+                    continue
+            still_change_me.append(key)
+
+        if still_change_me:
+            print(
+                "\nWARNING: Non-interactive mode — the following keys still contain CHANGE_ME in\n"
+                f"  {env_path}\n"
+                "  Set them before running 'papaia-ctl addon start':\n",
+                file=sys.stderr,
+            )
+            for key in still_change_me:
+                print(f"  {key}", file=sys.stderr)
+            print(file=sys.stderr)
+
+        return auto_filled
 
     print("\nFill in environment-specific values (press Enter to accept the default):\n")
     updates: dict[str, str] = {}
