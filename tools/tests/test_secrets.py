@@ -173,6 +173,32 @@ def test_generate_missing_secrets_fills_creds_iv(repo_root):
     assert len(bytes.fromhex(iv)) == 16
 
 
+def test_generate_missing_secrets_fills_key_absent_from_the_bundle(repo_root):
+    # An existing config bundle predates every secret a newer release adds, so
+    # the key is missing from the tree entirely -- not present as a GENERATE_
+    # placeholder. It must still be filled on the first setup run after the
+    # upgrade, otherwise the service starts with an empty credential.
+    tree = envtree.load_seed_tree(repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    del tree["ai/litellm"]["LITELLM_SALT_KEY"]
+
+    secrets.generate_missing_secrets(tree, seed)
+
+    assert not common.is_placeholder(tree["ai/litellm"]["LITELLM_SALT_KEY"])
+
+
+def test_generate_missing_secrets_fills_directory_absent_from_the_bundle(repo_root):
+    # Same case one level up: a whole service directory added by a newer
+    # release has no .env in the bundle yet.
+    tree = envtree.load_seed_tree(repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    del tree["ai/jinaai"]
+
+    secrets.generate_missing_secrets(tree, seed)
+
+    assert not common.is_placeholder(tree["ai/jinaai"]["JINAAI_RERANKER_API_KEY"])
+
+
 def test_generate_missing_secrets_ignores_keys_without_generate_marker(repo_root):
     # A secret-*named* key whose seed value lacks the GENERATE_ marker is never
     # generated -- not even when empty (which is_placeholder would otherwise

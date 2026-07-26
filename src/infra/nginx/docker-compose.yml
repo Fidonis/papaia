@@ -18,7 +18,15 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # Admin port 81 is NOT exposed directly — access only via nginx-proxy-manager-auth below
+      # Port 81 (admin) is bound to localhost only so papaia-ctl can call the NPM
+      # REST API for automatic proxy-host provisioning. External access is only
+      # possible through the nginx-proxy-manager-auth sidecar below.
+      - "127.0.0.1:${NPM_API_LOCAL_PORT:-8181}:81"
+    environment:
+      # Initial admin credentials — honoured by NPM on first boot only (fresh DB).
+      # Subsequent starts ignore these; the values are stable across restarts.
+      INITIAL_ADMIN_EMAIL: "${NPM_ADMIN_EMAIL:-admin@papaia.local}"
+      INITIAL_ADMIN_PASSWORD: "${NPM_ADMIN_PASSWORD}"
     networks:
       - papaia-net
     labels:

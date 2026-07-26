@@ -29,6 +29,7 @@ from . import (
     deployment,
     envtree,
     gen_override,
+    npm_provision,
     render_core,
     reporting,
     resolve,
@@ -66,6 +67,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         app_host=args.app_host,
         auth_host=args.auth_host,
         librechat_host=args.librechat_host,
+        litellm_host=args.litellm_host,
         localai_host=args.localai_host,
         manager_host=args.manager_host,
         npm_admin_host=args.npm_admin_host,
@@ -158,6 +160,14 @@ def cmd_override_external_nets(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_npm_provision(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    npm_provision.provision_npm_hosts(tree)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="papaia-ctl-py")
     parser.add_argument("--repo-root", required=True)
@@ -176,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--app-host")
     p_setup.add_argument("--auth-host")
     p_setup.add_argument("--librechat-host")
+    p_setup.add_argument("--litellm-host")
     p_setup.add_argument("--localai-host")
     p_setup.add_argument("--manager-host")
     p_setup.add_argument("--npm-admin-host")
@@ -234,6 +245,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_active_addons = sub.add_parser("active-addons")
     p_active_addons.set_defaults(func=cli_addon.cmd_active_addons)
+
+    p_npm = sub.add_parser("npm-provision")
+    p_npm.set_defaults(func=cmd_npm_provision)
 
     p_override_nets = sub.add_parser("override-external-nets")
     p_override_nets.add_argument("--file", required=True)

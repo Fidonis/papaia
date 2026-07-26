@@ -19,9 +19,10 @@
 #                       [--local-ai|--no-local-ai] [--localai-host=URL]
 #                       [--manager|--no-manager] [--manager-host=URL]
 #                       [--allow-direct-port-access] [--force] [-y]
-#   papaia-ctl start    [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
-#   papaia-ctl stop     [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
-#   papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
+#   papaia-ctl start         [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
+#   papaia-ctl stop          [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+#   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
+#   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
@@ -102,9 +103,10 @@ fi
 cmd="$1"; shift || true
 case "$cmd" in
     setup)     cmd_setup "$@" ;;
-    start)     cmd_start "$@" ;;
-    stop)      cmd_stop "$@" ;;
-    uninstall) cmd_uninstall "$@" ;;
+    start)         cmd_start "$@" ;;
+    stop)          cmd_stop "$@" ;;
+    uninstall)     cmd_uninstall "$@" ;;
+    npm-provision) py_cli npm-provision "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

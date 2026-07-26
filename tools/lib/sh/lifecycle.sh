@@ -92,6 +92,11 @@ cmd_start() {
     else
         docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
     fi
+
+    if ! py_cli npm-provision; then
+        warn "NPM proxy-host provisioning failed. Once the stack is healthy, run 'papaia-ctl npm-provision' to retry."
+    fi
+
     success "start complete."
 }
 

@@ -69,13 +69,17 @@ def generate_missing_secrets(
         if canon_dir in skip_dirs:
             skip_generated.update(aliases)
 
-    for rel_dir, values in tree.items():
+    # Driven by the seed, not by the tree: a secret introduced by a newer
+    # release is absent from an existing config bundle, and iterating the tree
+    # would skip it until a second setup run had written the placeholder out.
+    for rel_dir, seed_values in seed.items():
         if rel_dir in skip_dirs:
             continue
-        seed_values = seed.get(rel_dir, {})
-        for key, value in list(values.items()):
-            if not common.marks_generated_secret(seed_values.get(key, "")):
+        values = tree.setdefault(rel_dir, {})
+        for key, seed_value in seed_values.items():
+            if not common.marks_generated_secret(seed_value):
                 continue
+            value = values.get(key, "")
             if (rel_dir, key) in skip_generated:
                 if force or common.is_placeholder(value):
                     values[key] = _EXTERNAL_SECRET_PLACEHOLDER

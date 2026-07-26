@@ -22,7 +22,7 @@ load_defaults() {
 cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
-    local host_ip="" app_host="" auth_host="" librechat_host="" localai_host="" manager_host="" npm_admin_host=""
+    local host_ip="" app_host="" auth_host="" librechat_host="" litellm_host="" localai_host="" manager_host="" npm_admin_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" manager="" reranker_model=""
@@ -65,6 +65,7 @@ cmd_setup() {
             --local-ai) local_ai="true" ;;
             --no-local-ai) local_ai="false" ;;
             --localai-host=*) localai_host="${1#*=}" ;;
+            --litellm-host=*) litellm_host="${1#*=}" ;;
             --manager) manager="true" ;;
             --no-manager) manager="false" ;;
             --manager-host=*) manager_host="${1#*=}" ;;
@@ -217,6 +218,13 @@ cmd_setup() {
                 "Where browsers reach the chat UI." \
                 "DOMAIN_SERVER" "$librechat_default")"
         fi
+        if [ -z "$litellm_host" ]; then
+            local litellm_default="${LITELLM_HOST_STICKY:-}"
+            [ -z "$litellm_default" ] && litellm_default="$(_derive_litellm_default "$app_host")"
+            litellm_host="$(prompt_field "Public URL of LiteLLM Proxy" \
+                "Where browsers and services reach the LiteLLM proxy." \
+                "LITELLM_PUBLIC_URL" "$litellm_default")"
+        fi
         if [ -z "$web_search" ]; then
             local web_search_default="1"
             [ "${WEB_SEARCH_STICKY:-}" = "false" ] && web_search_default="2"
@@ -309,6 +317,9 @@ cmd_setup() {
         if [ -z "$manager_host" ] && [ -n "${MANAGER_HOST_STICKY:-}" ]; then
             manager_host="$MANAGER_HOST_STICKY"
         fi
+        if [ -z "$litellm_host" ] && [ -n "${LITELLM_HOST_STICKY:-}" ]; then
+            litellm_host="$LITELLM_HOST_STICKY"
+        fi
     fi
 
     # --allow-direct-port-access is the explicit opt-in for "no proxy at
@@ -331,7 +342,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host"; then
         error "setup failed."
         exit 3
     fi
@@ -352,6 +363,12 @@ _derive_auth_default() {
         *)
             printf '%s' "$1" | sed -E 's#^(https?://)([^:/]+).*#\1auth.\2#' ;;
     esac
+}
+
+_derive_litellm_default() {
+    local host="$1" port="${LITELLM_EXT_PORT:-8200}" base
+    base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
+    printf '%s:%s' "$base" "$port"
 }
 
 _derive_localai_default() {
@@ -385,11 +402,12 @@ _derive_librechat_default() {
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
-    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}"
+    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
     [ -n "$librechat_host" ] && extra+=(--librechat-host="$librechat_host")
+    [ -n "$litellm_host" ] && extra+=(--litellm-host="$litellm_host")
     [ -n "$localai_host" ] && extra+=(--localai-host="$localai_host")
     [ -n "$manager_host" ] && extra+=(--manager-host="$manager_host")
     [ -n "$npm_admin_host" ] && extra+=(--npm-admin-host="$npm_admin_host")
