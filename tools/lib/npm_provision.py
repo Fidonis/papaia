@@ -10,6 +10,7 @@ Uses only Python stdlib — no third-party dependencies.
 from __future__ import annotations
 
 import json
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -150,15 +151,16 @@ def _create_proxy_host(
         pass
 
 
-def provision_npm_hosts(tree: EnvTree) -> None:
+def provision_npm_hosts(tree: EnvTree) -> bool:
     """Create NPM proxy hosts for all active services, skipping existing ones.
 
     No-op when REVERSE_PROXY_PROVIDER is not 'internal_nginx'.
     Idempotent: already-existing domain names are silently skipped.
+    Returns False if the NPM API was not reachable; True otherwise.
     """
     root = tree.get("", {})
     if root.get("REVERSE_PROXY_PROVIDER") != "internal_nginx":
-        return
+        return True
 
     nginx = tree.get(_NGINX_NODE, {})
     npm_api_port = nginx.get("NPM_API_LOCAL_PORT", "8181")
@@ -174,7 +176,11 @@ def provision_npm_hosts(tree: EnvTree) -> None:
     active_profiles = set(root.get("COMPOSE_PROFILES", "").split(","))
 
     print("Waiting for NPM API to become ready...", flush=True)
-    _wait_for_npm(base_url)
+    try:
+        _wait_for_npm(base_url)
+    except TimeoutError as exc:
+        print(f"NPM provisioning skipped: {exc}", file=sys.stderr, flush=True)
+        return False
 
     token = _get_token(base_url, email, password)
     existing = _existing_domains(base_url, token)
@@ -207,3 +213,4 @@ def provision_npm_hosts(tree: EnvTree) -> None:
             f" {skipped_port_based} port-based).",
             flush=True,
         )
+    return True

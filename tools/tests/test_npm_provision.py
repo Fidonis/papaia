@@ -31,13 +31,13 @@ def test_is_subdomain_url(url, expected):
 
 
 def test_provision_noop_when_not_internal_nginx():
-    """provision_npm_hosts returns immediately without any network calls
+    """provision_npm_hosts returns True immediately without any network calls
     when REVERSE_PROXY_PROVIDER is not 'internal_nginx'."""
     for provider in ("external_proxy", "no_proxy", ""):
         tree = {"": {"REVERSE_PROXY_PROVIDER": provider}}
         # If it tries to make HTTP calls it would raise ConnectionRefusedError;
-        # completing silently proves it skipped them.
-        npm_provision.provision_npm_hosts(tree)
+        # returning True proves it skipped them.
+        assert npm_provision.provision_npm_hosts(tree) is True
 
 
 def _tree(npm_password: str) -> dict[str, dict[str, str]]:
@@ -72,3 +72,17 @@ def test_provision_raises_when_nginx_node_absent():
     tree = {"": {"REVERSE_PROXY_PROVIDER": "internal_nginx", "COMPOSE_PROFILES": "nginx"}}
     with pytest.raises(RuntimeError, match="NPM_ADMIN_PASSWORD"):
         npm_provision.provision_npm_hosts(tree)
+
+
+def test_provision_returns_false_on_timeout(monkeypatch, capsys):
+    """provision_npm_hosts returns False and prints a stderr message when NPM
+    does not become ready within the timeout — no exception is raised."""
+
+    def _fake_wait(base_url: str, timeout: int = 60) -> None:
+        raise TimeoutError(f"NPM API at {base_url} did not become ready within {timeout}s")
+
+    monkeypatch.setattr(npm_provision, "_wait_for_npm", _fake_wait)
+    result = npm_provision.provision_npm_hosts(_tree("correct-password"))
+    assert result is False
+    captured = capsys.readouterr()
+    assert "NPM" in captured.err
