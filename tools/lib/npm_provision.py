@@ -17,6 +17,15 @@ from urllib.parse import urlsplit
 
 from .envtree import EnvTree
 
+# Env-tree node holding the bundled proxy's own configuration. The NPM admin
+# credentials and the local API port binding are only consumed by the nginx
+# compose module, so they live in src/infra/nginx/.env rather than the root .env.
+_NGINX_NODE = "infra/nginx"
+
+# NPM groups all reverse-proxy resources under /api/nginx/ — /api/proxy-hosts
+# (without the segment) answers 404.
+_PROXY_HOSTS_PATH = "/api/nginx/proxy-hosts"
+
 
 # Ordered list of (compose-profile, url-node, url-key, forward-host, forward-port,
 # forward-scheme, ssl-verify, allow-websocket) tuples.  Only entries whose profile
@@ -88,7 +97,7 @@ def _get_token(base_url: str, email: str, password: str) -> str:
 def _existing_domains(base_url: str, token: str) -> set[str]:
     """Return the set of all domain names already registered as proxy hosts."""
     req = urllib.request.Request(
-        f"{base_url}/api/proxy-hosts?expand=domain_names",
+        f"{base_url}{_PROXY_HOSTS_PATH}",
         headers={"Authorization": f"Bearer {token}"},
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -129,7 +138,7 @@ def _create_proxy_host(
     }
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
-        f"{base_url}/api/proxy-hosts",
+        f"{base_url}{_PROXY_HOSTS_PATH}",
         data=data,
         headers={
             "Authorization": f"Bearer {token}",
@@ -151,13 +160,15 @@ def provision_npm_hosts(tree: EnvTree) -> None:
     if root.get("REVERSE_PROXY_PROVIDER") != "internal_nginx":
         return
 
-    npm_api_port = root.get("NPM_API_LOCAL_PORT", "8181")
+    nginx = tree.get(_NGINX_NODE, {})
+    npm_api_port = nginx.get("NPM_API_LOCAL_PORT", "8181")
     base_url = f"http://localhost:{npm_api_port}"
-    email = root.get("NPM_ADMIN_EMAIL", "admin@papaia.local")
-    password = root.get("NPM_ADMIN_PASSWORD", "")
+    email = nginx.get("NPM_ADMIN_EMAIL", "admin@papaia.local")
+    password = nginx.get("NPM_ADMIN_PASSWORD", "")
     if not password or password.startswith("GENERATE_"):
         raise RuntimeError(
-            "NPM_ADMIN_PASSWORD is not set. Run 'papaia-ctl setup' first."
+            f"NPM_ADMIN_PASSWORD is not set in {_NGINX_NODE}/.env. "
+            "Run 'papaia-ctl setup' first."
         )
 
     active_profiles = set(root.get("COMPOSE_PROFILES", "").split(","))

@@ -40,27 +40,35 @@ def test_provision_noop_when_not_internal_nginx():
         npm_provision.provision_npm_hosts(tree)
 
 
-def test_provision_raises_when_password_missing():
-    tree = {
+def _tree(npm_password: str) -> dict[str, dict[str, str]]:
+    """Minimal env tree with the bundled proxy selected. The NPM credentials
+    live in the nginx module's own .env, not the root one."""
+    return {
         "": {
             "REVERSE_PROXY_PROVIDER": "internal_nginx",
-            "NPM_ADMIN_EMAIL": "admin@papaia.local",
-            "NPM_ADMIN_PASSWORD": "",
             "COMPOSE_PROFILES": "keycloak,nginx,librechat,litellm",
-        }
+        },
+        "infra/nginx": {
+            "NPM_ADMIN_EMAIL": "admin@papaia.local",
+            "NPM_ADMIN_PASSWORD": npm_password,
+            "NPM_API_LOCAL_PORT": "8181",
+        },
     }
+
+
+def test_provision_raises_when_password_missing():
     with pytest.raises(RuntimeError, match="NPM_ADMIN_PASSWORD"):
-        npm_provision.provision_npm_hosts(tree)
+        npm_provision.provision_npm_hosts(_tree(""))
 
 
 def test_provision_raises_when_password_is_placeholder():
-    tree = {
-        "": {
-            "REVERSE_PROXY_PROVIDER": "internal_nginx",
-            "NPM_ADMIN_EMAIL": "admin@papaia.local",
-            "NPM_ADMIN_PASSWORD": "GENERATE_NPM_ADMIN_PASSWORD",
-            "COMPOSE_PROFILES": "keycloak,nginx,librechat,litellm",
-        }
-    }
+    with pytest.raises(RuntimeError, match="NPM_ADMIN_PASSWORD"):
+        npm_provision.provision_npm_hosts(_tree("GENERATE_NPM_ADMIN_PASSWORD"))
+
+
+def test_provision_raises_when_nginx_node_absent():
+    """A tree without the nginx node at all must fail loudly rather than
+    silently authenticate with an empty password."""
+    tree = {"": {"REVERSE_PROXY_PROVIDER": "internal_nginx", "COMPOSE_PROFILES": "nginx"}}
     with pytest.raises(RuntimeError, match="NPM_ADMIN_PASSWORD"):
         npm_provision.provision_npm_hosts(tree)

@@ -474,6 +474,12 @@ _RENAMED_KEYS: dict[tuple[str, str], tuple[str, str]] = {
     # Single-consumer host paths: they belong to the service that reads them.
     ("", "LIBRECHAT_AGENTS_DIR"): ("ai/librechat", "LIBRECHAT_AGENTS_DIR"),
     ("", "LIBRECHAT_PROMPTS_DIR"): ("ai/librechat", "LIBRECHAT_PROMPTS_DIR"),
+    # Only the nginx compose module reads these. Relocating rather than
+    # regenerating matters for the password: NPM honours INITIAL_ADMIN_* on
+    # first boot only, so a fresh value would no longer open its API.
+    ("", "NPM_ADMIN_EMAIL"): ("infra/nginx", "NPM_ADMIN_EMAIL"),
+    ("", "NPM_ADMIN_PASSWORD"): ("infra/nginx", "NPM_ADMIN_PASSWORD"),
+    ("", "NPM_API_LOCAL_PORT"): ("infra/nginx", "NPM_API_LOCAL_PORT"),
 }
 
 # (dir, key) pairs dropped outright -- nothing in the repo ever read them.

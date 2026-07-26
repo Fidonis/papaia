@@ -850,6 +850,23 @@ def test_migrate_env_keys_relocates_librechat_dirs(repo_root):
     assert "LIBRECHAT_PROMPTS_DIR" not in tree[""]
 
 
+def test_migrate_env_keys_relocates_npm_admin_keys(repo_root):
+    """The generated NPM password must survive the move: NPM honours
+    INITIAL_ADMIN_* on first boot only, so regenerating it would lock
+    papaia-ctl out of the API of an already-initialised instance."""
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["NPM_ADMIN_EMAIL"] = "admin@papaia.local"
+    tree[""]["NPM_ADMIN_PASSWORD"] = "already-generated-value"
+    tree[""]["NPM_API_LOCAL_PORT"] = "9181"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert tree["infra/nginx"]["NPM_ADMIN_EMAIL"] == "admin@papaia.local"
+    assert tree["infra/nginx"]["NPM_ADMIN_PASSWORD"] == "already-generated-value"
+    assert tree["infra/nginx"]["NPM_API_LOCAL_PORT"] == "9181"
+    assert "NPM_ADMIN_PASSWORD" not in tree[""]
+
+
 def test_migrate_env_keys_drops_dead_keys(repo_root):
     tree = envtree.load_seed_tree(repo_root)
     tree[""]["TIMEZONE"] = "Europe/Berlin"
