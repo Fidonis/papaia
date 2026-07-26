@@ -9,15 +9,15 @@ tiers:
 
 - **Lean Core** (always on): Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat,
   LiteLLM, LocalAI, Homepage. Self-sufficient — runs without any extension.
-- **First-party extensions** (Fidonis-maintained, each in its own repo, version-pinned):
+- **First-party add-ons** (Fidonis-maintained, each in its own repo, version-pinned):
   RAG / vector search (qdrant-rag), documents (Paperless-ngx + MCP bridge), workflow
   automation (n8n), metasearch (SearXNG), web crawling (Firecrawl).
-- **Custom extensions** (per-customer, same Extension Contract).
+- **Custom add-ons** (per-customer, same add-on contract).
 
-Extensions integrate through five standardised seams — network attachment, OIDC client
+Add-ons integrate through five standardised seams — network attachment, OIDC client
 registration, LibreChat-MCP fragments, dashboard cards, and Nginx ingress rules — without
-requiring changes to any tracked file in the Core repo. The extension manifest
-(`papaia-app.yaml`) in each extension repo declares all seams in machine-readable form.
+requiring changes to any tracked file in the Core repo. The add-on manifest
+(`papaia-app.yaml`) in each add-on repo declares all seams in machine-readable form.
 
 The repository is **configuration-as-code only** — no upstream service source code lives
 here. Changes are almost always YAML, shell scripts, or documentation.
@@ -48,12 +48,12 @@ checkout:
 ```
 [workspace root]/
 ├── papaia/                    ← this repo (read-only at deploy time)
-├── extensions/
-│   └── papaia-ext-<name>/     ← extension repos cloned alongside (opt-in)
+├── addons/
+│   └── papaia-addon-<name>/   ← add-on repos cloned alongside (opt-in)
 └── papaia-config/             ← PAPAIA_CONFIG_DIR (generated state, never committed)
-    ├── deployment.yaml         # installation manifest (active extensions, profiles)
+    ├── deployment.yaml         # installation manifest (active add-ons, profiles)
     ├── overlay/                # customer config overrides (highest merge layer)
-    └── overrides/              # auto-generated extension network Compose overrides
+    └── overrides/              # auto-generated add-on network Compose overrides
 ```
 
 `tools/lib/*.py` only reads from `src/` and writes to `$PAPAIA_CONFIG_DIR` plus the
@@ -101,8 +101,8 @@ src/
     minio/                    # S3-compatible object store
     home-assistant/           # Optional home automation
 docs/
-  papaia-architecture-1.0.0.md  # Full architecture specification (3-tier model,
-                                 # Extension Contract, integration seams, manifest schema)
+  architecture.md                # Full architecture specification (3-tier model,
+                                 # add-on contract, integration seams, manifest schema)
   configuration.md              # Environment variable reference
   deployment.md                 # Deployment guide
   troubleshooting.md            # Common issues and fixes
@@ -142,7 +142,7 @@ docs/
   active Core profiles, platform version, hosting type. Read by `gen_override.py` to
   generate the addon network attachment overrides.
 - `$PAPAIA_CONFIG_DIR/overrides/docker-compose.<name>.override.yml` — auto-generated
-  by `gen_override.py` for each active extension (Seam-1: network). Never edit manually.
+  by `gen_override.py` for each active add-on (Seam-1: network). Never edit manually.
 
 ## Branch Strategy
 
@@ -232,8 +232,8 @@ Issue titles must use the template prefix (`[Bug]:`, `[Feature]:`, `[Docs]:`).
 ## Further Reading
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contribution workflow and PR checklist
-- [docs/papaia-architecture-1.0.0.md](docs/papaia-architecture-1.0.0.md) — full
-  architecture specification: 3-tier model, Extension Contract, integration seams,
-  extension manifest schema, deployment manifest
+- [docs/architecture.md](docs/architecture.md) — full
+  architecture specification: 3-tier model, add-on contract, integration seams,
+  add-on manifest schema, deployment manifest
 - [SECURITY.md](SECURITY.md) — security reporting policy and scope
 - [CHANGELOG.md](CHANGELOG.md) — release history

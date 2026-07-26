@@ -119,7 +119,7 @@ Two defects blocked naive enforcement:
 
 ## References
 
-- `docs/papaia-architecture-1.0.0.md` §6.2 (manifest schema), §7 (the five
+- `docs/architecture.md` §6.2 (manifest schema), §7 (the five
   seams), §16 (resolves the "compat policy strictness" open point)
 - [ADR 0001](./0001-record-architecture-decisions.md)
 - papaia-addons commit `869dec7` (attach service rename — the motivating
