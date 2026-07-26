@@ -164,7 +164,8 @@ def cmd_npm_provision(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    npm_provision.provision_npm_hosts(tree)
+    if not npm_provision.provision_npm_hosts(tree):
+        return 1
     return 0
 
 
