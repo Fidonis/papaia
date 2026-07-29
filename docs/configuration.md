@@ -72,11 +72,28 @@ next to it, even when it has an inline `:-` default.
 | `LOCALAI_PUBLIC_URL` | Browser-facing LocalAI URL, derived by setup |
 | `HOMEPAGE_PUBLIC_URL` | Browser-facing Homepage URL, derived by setup |
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |
+| `MANAGER_EXT_PORT` | External port the manager (profile `manager`) is published on |
+| `MANAGER_PUBLIC_URL` | Browser-facing papaia-manager URL, derived by setup — interpolated as `MANAGER_HOST` in `src/manager/docker-compose.yml` |
 
 The `OIDC_*` endpoint variables are provider-independent: they apply to
 `AUTH_PROVIDER=external_oidc` exactly as they do to the bundled Keycloak. Do not
 confuse them with the `KC_*` variables in `src/infra/keycloak/.env`, which configure
 the bundled Keycloak container itself.
+
+## Manager variables
+
+`src/manager/.env` — everything only the manager container reads, via
+`env_file:` (path 2). This is why the role variables live here and not at
+root: the compose file never interpolates them, so a root-level copy would
+compile but never reach the container.
+
+| Variable | Purpose |
+|---|---|
+| `MANAGER_OIDC_CLIENT_SECRET` | Keycloak client secret, synced from `KC_MANAGER_CLIENT_SECRET` during setup |
+| `MANAGER_SESSION_SECRET` | Signing key for the manager's session cookie (generated) |
+| `MANAGER_ADMIN_ROLE` | Realm role granting full access — add-ons, catalogs, jobs and the dashboard |
+| `MANAGER_USER_ROLE` | Realm role granting dashboard-only access; admins hold it implicitly |
+| `LOG_LEVEL` | Manager application log level |
 
 ## Where values come from
 

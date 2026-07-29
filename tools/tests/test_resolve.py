@@ -882,6 +882,29 @@ def test_migrate_env_keys_drops_dead_keys(repo_root):
     assert "KC_QDRANT_RAG_CLIENT_SECRET" not in tree["infra/keycloak"]
 
 
+def test_migrate_env_keys_relocates_manager_admin_role(repo_root):
+    """A stale root-level copy never reached the container (env_file: only
+    pulls from the manager node) -- migration must move it there instead of
+    leaving a value the operator could mistake for effective."""
+    tree = envtree.load_seed_tree(repo_root)
+    tree.setdefault("manager", {}).pop("MANAGER_ADMIN_ROLE", None)
+    tree[""]["MANAGER_ADMIN_ROLE"] = "custom-admin"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert tree["manager"]["MANAGER_ADMIN_ROLE"] == "custom-admin"
+    assert "MANAGER_ADMIN_ROLE" not in tree[""]
+
+
+def test_migrate_env_keys_drops_manager_image_tag(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["MANAGER_IMAGE_TAG"] = "0.1.0"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert "MANAGER_IMAGE_TAG" not in tree[""]
+
+
 def test_migrate_env_keys_keeps_existing_destination(repo_root):
     """A half-migrated bundle must not lose the value the current code writes."""
     tree = envtree.load_seed_tree(repo_root)
