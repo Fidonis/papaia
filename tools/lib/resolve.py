@@ -480,6 +480,10 @@ _RENAMED_KEYS: dict[tuple[str, str], tuple[str, str]] = {
     ("", "NPM_ADMIN_EMAIL"): ("infra/nginx", "NPM_ADMIN_EMAIL"),
     ("", "NPM_ADMIN_PASSWORD"): ("infra/nginx", "NPM_ADMIN_PASSWORD"),
     ("", "NPM_API_LOCAL_PORT"): ("infra/nginx", "NPM_API_LOCAL_PORT"),
+    # The root copy never reached the container -- manager/docker-compose.yml
+    # delivers it via env_file: from the manager node only, so a root-level
+    # value was a silent no-op for the operator.
+    ("", "MANAGER_ADMIN_ROLE"): ("manager", "MANAGER_ADMIN_ROLE"),
 }
 
 # (dir, key) pairs dropped outright -- nothing in the repo ever read them.
@@ -496,6 +500,9 @@ _REMOVED_KEYS: set[tuple[str, str]] = {
     ("", "JINAAI_EXT_PORT"),
     ("infra/keycloak", "KC_PAPERLESS_CLIENT_SECRET"),
     ("infra/keycloak", "KC_QDRANT_RAG_CLIENT_SECRET"),
+    # The image tag is pinned directly in manager/docker-compose.yml; no
+    # ${MANAGER_IMAGE_TAG} interpolation is left to read it.
+    ("", "MANAGER_IMAGE_TAG"),
 }
 
 

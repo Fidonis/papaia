@@ -16,7 +16,7 @@
 # in the papaia realm.
 services:
   papaia-manager:
-    image: ghcr.io/fidonis/papaia-manager:${MANAGER_IMAGE_TAG:-0.1.0}
+    image: ghcr.io/fidonis/papaia-manager:0.2.0
     restart: unless-stopped
     env_file:
       - ./.env
