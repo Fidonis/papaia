@@ -292,7 +292,7 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
     try:
         backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
         entry, warnings = backup.resolve_restore_point(backup_dir, args.restore_point)
-        snapshot = Path(str(entry.get("path") or ""))
+        snapshot = backup.snapshot_path(backup_dir, entry)
         if not snapshot.is_dir():
             raise backup.BackupError(
                 f"Restore point {entry.get('id')} is catalogued but its directory is"

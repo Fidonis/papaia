@@ -585,6 +585,43 @@ def test_prune_rejects_a_negative_retention(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# snapshot location
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_path_ignores_a_recorded_path_from_another_environment(tmp_path: Path):
+    """A catalogue written under WSL records /mnt/c/...; read back from Windows
+    that path does not resolve, but <backup_dir>/<id> always does."""
+    backup_dir = tmp_path / "backups"
+    (backup_dir / "2026-07-30_11-42-47").mkdir(parents=True)
+    entry = {"id": "2026-07-30_11-42-47", "path": "/mnt/c/elsewhere/2026-07-30_11-42-47"}
+
+    assert backup.snapshot_path(backup_dir, entry) == backup_dir / "2026-07-30_11-42-47"
+
+
+def test_snapshot_path_falls_back_to_the_recorded_path(tmp_path: Path):
+    moved = tmp_path / "moved-aside"
+    moved.mkdir()
+    entry = {"id": "2026-07-30_11-42-47", "path": str(moved)}
+
+    assert backup.snapshot_path(tmp_path / "backups", entry) == moved
+
+
+def test_prune_finds_snapshots_recorded_with_a_foreign_path(tmp_path: Path):
+    backup_dir = tmp_path / "backups"
+    now = datetime(2026, 7, 30, tzinfo=timezone.utc)
+    entry = _entry(
+        "old", (now - timedelta(days=30)).isoformat(), path="/mnt/c/elsewhere/old"
+    )
+    backup_dir.mkdir(parents=True)
+    (backup_dir / "old").mkdir()
+    backup.save_index(backup_dir, {"version": 1, "backups": [entry]})
+
+    assert backup.prune(backup_dir, 1, now=now) == ["old"]
+    assert not (backup_dir / "old").exists()
+
+
+# ---------------------------------------------------------------------------
 # restore point selection
 # ---------------------------------------------------------------------------
 

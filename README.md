@@ -338,14 +338,23 @@ tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
 | `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to read restore points from |
 | `--restore-point=ID` | _(most recent usable)_ | Which restore point to restore, as listed by `--list` |
 | `--list` | — | Print the available restore points and exit |
-| `--restart-clean` | — | Remove the containers during the stop phase instead of only stopping them |
+| `--restart-clean` | — | Delete the named volumes during the teardown as well, so nothing survives that is not in the restore point |
 | `--no-restart` | — | Do not touch the running stack at all |
 | `-y` / `--yes` | — | Skip the confirmation prompt (required in non-interactive contexts) |
 
-By default the stack is **stopped before and started after** the restore — writing into a volume
-underneath a live process corrupts both. `--restart-clean` additionally removes the containers
-(`docker compose down`, without `-v`, so the volumes being repopulated survive) before they are
-recreated. `--no-restart` skips the lifecycle handling entirely; if it is combined with
+By default the stack is **torn down before and brought up after** the restore: containers are
+removed (`docker compose down`, without `-v`, so the volumes being repopulated survive) and
+recreated. Removing them is not optional. Writing into a volume underneath a live process
+corrupts both, and — more subtly — most core services bind-mount individual *files* out of
+`$PAPAIA_CONFIG_DIR` (`searxng/settings.yml`, `keycloak.conf`, `librechat.yaml`, …). A container
+that is merely stopped keeps the mount source it was created with, pinned to the inode behind it;
+restoring the config directory replaces those files, and starting the container again then fails
+in the daemon with `error mounting … no such file or directory`. Only a recreated container
+resolves its bind sources afresh and picks the restored files up.
+
+`--restart-clean` additionally deletes the named volumes (`docker compose down -v`) before the
+restore, so a volume that is not part of the restore point does not survive it — that data is
+gone permanently. `--no-restart` skips the lifecycle handling entirely; if it is combined with
 `--restart-clean` it wins, and the restore proceeds with the stack untouched.
 
 The config directory is restored into the config directory currently in use, not the path

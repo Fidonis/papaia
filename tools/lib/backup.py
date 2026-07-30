@@ -522,6 +522,21 @@ def save_index(backup_dir: Path, index: dict) -> None:
     )
 
 
+def snapshot_path(backup_dir: Path, entry: dict) -> Path:
+    """Locate a catalogued restore point on disk.
+
+    Derived from the backup directory and the id rather than taken from the
+    entry's recorded `path`: a snapshot always lives at <backup_dir>/<id>, and
+    the recorded absolute path does not survive being read from a different
+    environment than it was written in (a bundle on /mnt/c written from WSL is
+    C:\\... from Windows, and vice versa). The recorded path stays as the
+    fallback so a hand-moved snapshot is still found."""
+    candidate = backup_dir / str(entry.get("id") or "")
+    if candidate.is_dir():
+        return candidate
+    return Path(str(entry.get("path") or ""))
+
+
 def dir_size_mb(path: Path) -> float:
     total = 0
     for item in path.rglob("*"):
@@ -573,7 +588,7 @@ def prune(backup_dir: Path, retention_days: int, *, now: datetime | None = None)
         if created is None or created >= cutoff:
             kept.append(entry)
             continue
-        target = Path(str(entry.get("path") or ""))
+        target = snapshot_path(backup_dir, entry)
         if target.is_dir():
             try:
                 resolved = target.resolve()

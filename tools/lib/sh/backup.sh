@@ -371,8 +371,15 @@ cmd_restore() {
     warn "  the config directory $CONFIG_DIR"
     warn "  ${#kinds[@]} archived volumes / directories"
     if [ "$no_restart" -eq 1 ]; then
-        warn "  --no-restart: containers are NOT stopped. Volumes will be overwritten"
-        warn "  underneath live processes, which usually corrupts both."
+        warn "  --no-restart: containers are neither stopped nor recreated. Volumes"
+        warn "  will be overwritten underneath live processes, which usually corrupts"
+        warn "  both, and services keep the config files they started with."
+    else
+        warn "  all core and addon containers (removed and recreated)"
+    fi
+    if [ "$restart_clean" -eq 1 ]; then
+        warn "  --restart-clean: named volumes are DELETED first. Any volume not in"
+        warn "  this restore point loses its data permanently."
     fi
     if [ "$assume_yes" -eq 0 ]; then
         if ! is_tty; then
@@ -388,15 +395,7 @@ cmd_restore() {
     local started=$SECONDS
 
     if [ "$no_restart" -eq 0 ]; then
-        if [ "$restart_clean" -eq 1 ]; then
-            info "Stopping and removing containers (core + addons)..."
-            # `stop --clean-up` runs `docker compose down` WITHOUT -v, so the
-            # volumes we are about to repopulate survive the teardown.
-            cmd_stop --clean-up --addons --config-dir="$CONFIG_DIR"
-        else
-            info "Stopping containers (core + addons)..."
-            cmd_stop --addons --config-dir="$CONFIG_DIR"
-        fi
+        _restore_teardown "$restart_clean"
     fi
 
     local i failed=0
@@ -425,6 +424,34 @@ cmd_restore() {
         partial) warn "restore completed with errors: $restore_id ($failed of ${#kinds[@]} artifacts failed)" ;;
         failed)  error "restore failed: $restore_id (no artifact could be restored)"; exit 3 ;;
     esac
+}
+
+# Tear the stack down before restoring. $1 = 1 to drop named volumes as well.
+#
+# Containers are REMOVED, never merely stopped. Most core services bind-mount
+# individual *files* out of $PAPAIA_CONFIG_DIR (searxng/settings.yml,
+# keycloak.conf, librechat.yaml, the litellm and prometheus configs, ...). A
+# stopped container keeps the mount source it was created with, pinned to the
+# inode behind it -- and under Docker Desktop to a bind-mount proxy path
+# derived from it. Restoring the config directory replaces every one of those
+# files, so starting such a container again fails in the daemon with
+# "error mounting ... no such file or directory". Recreating the container
+# makes Docker resolve the bind sources afresh, which is the only way the
+# restored files are picked up.
+_restore_teardown() {
+    local with_volumes="$1"
+    local env_file="$REPO_ROOT/src/.env"
+    local -a extra=()
+    if [ "$with_volumes" -eq 1 ]; then
+        extra+=(-v)
+        info "Stopping and removing containers and named volumes (core + addons)..."
+    else
+        info "Stopping and removing containers (core + addons)..."
+    fi
+    if [ -f "$CONFIG_DIR/deployment.yaml" ]; then
+        _addon_compose_all down "${extra[@]}"
+    fi
+    docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down "${extra[@]}"
 }
 
 # $1 snapshot, $2 kind, $3 archive, $4 target, $5 owner
