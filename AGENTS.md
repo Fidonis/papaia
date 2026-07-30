@@ -69,14 +69,13 @@ tools/
   pyproject.toml              # ruff + pytest config for tools/lib
   lib/                        # Python: cli.py · cli_addon.py · deployment.py · envtree.py
                               #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
-                              #   compat.py · semver.py · render_core.py · gen_override.py · common.py
+                              #   compat.py · semver.py · render_core.py · gen_override.py
+                              #   backup.py · common.py
     sh/                       # Bash command libraries sourced by papaia-ctl
   tests/                      # pytest suite (mirrors the lib/ modules)
 src/
   docker-compose.yml          # Root compose — shared network + include list only
   .env.example                # All stack-wide variables (source of truth for env docs)
-  backup-papaia.sh            # Archive all Docker volumes + PAPAIA_CONFIG_DIR
-  restore-papaia.sh           # Restore a single named volume from archive
   infra/
     keycloak/                 # OIDC IdP (Java/PostgreSQL)
     nginx/                    # Nginx Proxy Manager (TLS termination)

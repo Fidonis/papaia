@@ -159,6 +159,38 @@ def stamp_workspace_dir(tree: EnvTree, repo_root: Path) -> EnvTree:
 
 
 # The placeholder shipped in src/.env.example -- treated as "not customised"
+# so it is overwritten by the derived path rather than kept sticky.
+_BACKUP_DIR_PLACEHOLDER = "/srv/papaia/backup"
+
+
+def stamp_backup_dir(tree: EnvTree, *, override: str | None = None) -> EnvTree:
+    """Populate the root .env's PAPAIA_BACKUP_DIR -- the default target of
+    `papaia-ctl backup` -- from `setup --backup-dir=PATH`, or derive it as
+    <PAPAIA_WORKSPACE_DIR>/backup.
+
+    Precedence: an explicit --backup-dir always wins; otherwise a real value
+    already in the tree is kept (sticky, like stamp_workspace_dir), and only
+    the shipped placeholder or an empty value is replaced by the derived path.
+
+    This lives here rather than in resolve.py because the derived default hangs
+    off the *stamped* PAPAIA_WORKSPACE_DIR, which is only final after every
+    resolve_* pass has run -- so it must be called after stamp_workspace_dir.
+    Keeping both halves of one variable in one function avoids splitting its
+    ownership across two modules."""
+    root = tree.setdefault("", {})
+    if override:
+        root["PAPAIA_BACKUP_DIR"] = override
+        return tree
+    current = root.get("PAPAIA_BACKUP_DIR", "")
+    if current and current != _BACKUP_DIR_PLACEHOLDER:
+        return tree  # operator-customised -- leave it sticky
+    workspace = root.get("PAPAIA_WORKSPACE_DIR", "")
+    if workspace:
+        root["PAPAIA_BACKUP_DIR"] = f"{workspace.rstrip('/')}/backup"
+    return tree
+
+
+# The placeholder shipped in src/.env.example -- treated as "not customised"
 # so it is overwritten by the detected socket GID rather than kept sticky.
 _DOCKER_GID_PLACEHOLDER = "999"
 _DOCKER_SOCKET = "/var/run/docker.sock"

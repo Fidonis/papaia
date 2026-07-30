@@ -81,6 +81,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
             else ""
         ),
         "RERANKER_MODEL_STICKY": reranker_model_sticky,
+        "BACKUP_DIR_STICKY": root.get("PAPAIA_BACKUP_DIR", "") if config_seeded else "",
         "COMPOSE_PROFILES_STICKY": ",".join(profiles),
         "PLATFORM_VERSION": envtree.resolve_platform_version(repo_root),
         "CONFIG_SEEDED": "true" if config_seeded else "false",
