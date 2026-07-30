@@ -107,7 +107,7 @@ def resolve_addon_api_window(repo_root: Path) -> tuple[int, int] | None:
     return (minimum, current)
 
 
-def _compose_files(root_compose: Path) -> list[Path]:
+def compose_files(root_compose: Path) -> list[Path]:
     doc = yaml.safe_load(root_compose.read_text(encoding="utf-8")) or {}
     files = [root_compose]
     for entry in doc.get("include") or []:
@@ -134,7 +134,7 @@ def resolve_core_services(repo_root: Path) -> dict[str, list[str]] | None:
     if not root_compose.is_file():
         return None
     services: dict[str, list[str]] = {}
-    for compose_path in _compose_files(root_compose):
+    for compose_path in compose_files(root_compose):
         if not compose_path.is_file():
             continue
         doc = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}

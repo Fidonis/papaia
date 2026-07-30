@@ -52,6 +52,8 @@ next to it, even when it has an inline `:-` default.
 | `COMPOSE_PROFILES` | Active Compose profiles — the enabled module set |
 | `DOCKER_NETWORK` | Name of the shared bridge network |
 | `PAPAIA_CONFIG_DIR` | Absolute host path holding all generated state and operator-editable config |
+| `PAPAIA_WORKSPACE_DIR` | Parent directory containing the papaia checkout and add-ons, stamped by setup |
+| `PAPAIA_BACKUP_DIR` | Default target of `papaia-ctl backup`; derived by setup as `$PAPAIA_WORKSPACE_DIR/backup` unless `--backup-dir` was passed |
 | `UID` / `GID` | Host ownership for bind-mounted files (Linux only) |
 | `HOST_IP` | Bind address for published ports — the network layer |
 | `PAPAIA_HOST` | Public base URL of the server — the application layer |
@@ -102,8 +104,8 @@ operator-supplied.
 
 | Origin | Examples |
 |---|---|
-| Operator-supplied (flag or interactive prompt) | `PAPAIA_HOST`, `AUTH_HOST`, `--env`, `--host-ip` |
-| Derived from the above | `OIDC_ISSUER`, `OIDC_AUTH_URL`/`OIDC_TOKEN_URL`/`OIDC_JWKS_URL`, `OPENID_ISSUER`, `GENERIC_*_ENDPOINT`, `DOMAIN_SERVER`/`DOMAIN_CLIENT`, `*_PUBLIC_URL`, `HP_ALLOWED_HOSTS`, `OAUTH2_PROXY_COOKIE_SECURE`, `COMPOSE_PROJECT_NAME`, `DOCKER_NETWORK` |
+| Operator-supplied (flag or interactive prompt) | `PAPAIA_HOST`, `AUTH_HOST`, `--env`, `--host-ip`, `--backup-dir` |
+| Derived from the above | `OIDC_ISSUER`, `OIDC_AUTH_URL`/`OIDC_TOKEN_URL`/`OIDC_JWKS_URL`, `OPENID_ISSUER`, `GENERIC_*_ENDPOINT`, `DOMAIN_SERVER`/`DOMAIN_CLIENT`, `*_PUBLIC_URL`, `HP_ALLOWED_HOSTS`, `OAUTH2_PROXY_COOKIE_SECURE`, `COMPOSE_PROJECT_NAME`, `DOCKER_NETWORK`, `PAPAIA_BACKUP_DIR` |
 | Generated (see [Secrets handling](#secrets-handling)) | every key shipped with a `GENERATE_…` placeholder |
 | Static defaults | `*_EXT_PORT` variables, `TRUST_PROXY` |
 

@@ -165,6 +165,9 @@ papaia-ctl setup     [OPTIONS]
 papaia-ctl start     [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl stop      [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
+papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
+papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
+                     [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl help
@@ -202,6 +205,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--allow-direct-port-access` | — | Skip the reverse proxy entirely; services expose ports directly (expert) |
 | `--web-search` / `--no-web-search` | _(prompted, default on)_ | Toggle the `librechat-websearch` profile |
 | `--reranker-model=NAME` | _(prompted, optional)_ | LiteLLM model name used for reranking |
+| `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
@@ -274,6 +278,80 @@ tools/papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 Stops and removes all core containers, then **permanently deletes the config directory**.
 Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
 Docker volumes. `--addons` stops and removes active add-on containers first.
+
+### `backup`
+
+```bash
+tools/papaia-ctl backup [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
+```
+
+Archives the complete installation into a timestamped subdirectory of the backup location:
+
+- **`$PAPAIA_CONFIG_DIR`** in full — this also captures the Nginx Proxy Manager database and the
+  Let's Encrypt certificates, which are bind mounts underneath it rather than named volumes.
+- **every named volume of the core stack**, resolved from the compose files and prefixed with the
+  configured `COMPOSE_PROJECT_NAME`.
+- **every named volume of an active add-on**, plus the host directories it bind-mounts for user
+  data. An add-on that only talks to an existing external instance owns no volumes, so that
+  external instance is never pulled into the backup.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to write this backup |
+| `--retention-period-days=N` | _(no pruning)_ | Delete restore points older than N days and drop their catalogue entries |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Backups run **hot** — nothing is stopped. Because copying a live database directory would
+otherwise capture it mid-transaction, the containers writing to a volume are paused for the
+duration of that one archive and unpaused immediately afterwards, including when the archive
+fails or the run is interrupted.
+
+The backup location holds one directory per restore point plus two shared files:
+
+```
+$PAPAIA_BACKUP_DIR/
+├── backup.yaml                 # catalogue: id, path, size in MB, result
+├── backup.log                  # one line per backup / restore, with its result
+└── 2026-07-30_14-05-33/
+    ├── manifest.yaml           # which archive belongs to which volume or path
+    ├── papaia-config.tar.gz
+    ├── volumes/*.tar.gz
+    └── binds/*.tar.gz
+```
+
+Restore-point ids use local time, so they line up with what an incident timeline says;
+`created_at` in the catalogue is UTC so sorting and retention stay unambiguous.
+
+A run whose archives partly failed is recorded as `partial` and is never selected automatically
+by `restore`. Volumes that a compose file declares but that were never created (a disabled
+profile) are reported and skipped rather than failing the run.
+
+### `restore`
+
+```bash
+tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
+                         [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to read restore points from |
+| `--restore-point=ID` | _(most recent usable)_ | Which restore point to restore, as listed by `--list` |
+| `--list` | — | Print the available restore points and exit |
+| `--restart-clean` | — | Remove the containers during the stop phase instead of only stopping them |
+| `--no-restart` | — | Do not touch the running stack at all |
+| `-y` / `--yes` | — | Skip the confirmation prompt (required in non-interactive contexts) |
+
+By default the stack is **stopped before and started after** the restore — writing into a volume
+underneath a live process corrupts both. `--restart-clean` additionally removes the containers
+(`docker compose down`, without `-v`, so the volumes being repopulated survive) before they are
+recreated. `--no-restart` skips the lifecycle handling entirely; if it is combined with
+`--restart-clean` it wins, and the restore proceeds with the stack untouched.
+
+The config directory is restored into the config directory currently in use, not the path
+recorded at backup time, so a snapshot can be replayed onto a host that keeps its bundle
+elsewhere. A bind-mount directory whose add-on is no longer installed is skipped with a warning
+rather than recreated.
 
 ### `addon`
 
@@ -725,14 +803,13 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── pyproject.toml      # ruff + pytest config for tools/lib
 │   │   ├── lib/                # Python: cli.py · cli_addon.py · deployment.py · envtree.py
 │   │   │                       #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
-│   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py · common.py
+│   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py
+│   │   │                       #   backup.py · common.py
 │   │   │   └── sh/             # Bash command libraries sourced by papaia-ctl
 │   │   └── tests/              # pytest suite
 │   ├── src/
 │   │   ├── docker-compose.yml  # root compose — shared network + include list only
 │   │   ├── .env.example        # all stack-wide variables (source of truth)
-│   │   ├── backup-papaia.sh    # archive Docker volumes + PAPAIA_CONFIG_DIR
-│   │   ├── restore-papaia.sh   # restore a single named volume from archive
 │   │   ├── infra/              # keycloak · nginx · oauth2-proxy
 │   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai
 │   │   └── services/           # homepage · searxng · firecrawl

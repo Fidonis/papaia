@@ -25,7 +25,7 @@ cmd_setup() {
     local host_ip="" app_host="" auth_host="" librechat_host="" litellm_host="" localai_host="" manager_host="" npm_admin_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" manager="" reranker_model=""
+    local web_search="" local_ai="" manager="" reranker_model="" backup_dir=""
     local force=0 non_interactive=0 env_only=0
 
     while [ $# -gt 0 ]; do
@@ -70,6 +70,7 @@ cmd_setup() {
             --no-manager) manager="false" ;;
             --manager-host=*) manager_host="${1#*=}" ;;
             --reranker-model=*) reranker_model="${1#*=}" ;;
+            --backup-dir=*) backup_dir="${1#*=}" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
@@ -85,7 +86,7 @@ cmd_setup() {
 
     if [ "$env_only" -eq 1 ]; then
         info "Reusing existing configuration; re-rendering env files only."
-        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" ""
+        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
             _ensure_keycloak_certs
         fi
@@ -136,7 +137,7 @@ cmd_setup() {
         fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" ""
+            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
                 _ensure_keycloak_certs
             fi
@@ -342,7 +343,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir"; then
         error "setup failed."
         exit 3
     fi
@@ -402,7 +403,7 @@ _derive_librechat_default() {
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
-    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}"
+    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -419,6 +420,7 @@ _run_setup_py() {
     [ -n "$local_ai" ] && extra+=(--enable-local-ai="$local_ai")
     [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
+    [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")
     [ "$allow_direct" = "1" ] && extra+=(--allow-direct-port-access)
     [ "$force" = "1" ] && extra+=(--force)

@@ -24,7 +24,9 @@ import sys
 from pathlib import Path
 
 from . import (
+    backup,
     cli_addon,
+    common,
     defaults,
     deployment,
     envtree,
@@ -113,6 +115,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
+    # After stamp_workspace_dir: the derived default is <workspace>/backup.
+    tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
     tree = envtree.stamp_host_uid_gid(tree)
     envtree.persist_tree(tree, config_dir, repo_root)
@@ -169,6 +173,149 @@ def cmd_npm_provision(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# backup / restore
+#
+# Output is TSV so the bash dispatcher can consume it with `read` and without
+# a JSON parser -- same contract as override-external-nets above.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _fail(exc: Exception) -> int:
+    print(f"ERROR: {exc}", file=sys.stderr)
+    return 3
+
+
+def _resolve_backup_dir(config_dir: Path, override: str | None) -> Path:
+    """--backup-dir wins; otherwise PAPAIA_BACKUP_DIR from the config bundle's
+    root .env, which setup stamps as <PAPAIA_WORKSPACE_DIR>/backup."""
+    if override:
+        return Path(override).expanduser()
+    value = common.parse_env_file(config_dir / ".env").get("PAPAIA_BACKUP_DIR", "")
+    if not value or common.is_placeholder(value):
+        raise backup.BackupError(
+            "PAPAIA_BACKUP_DIR is not set in the root .env. Pass --backup-dir=PATH,"
+            " or re-run 'papaia-ctl setup --backup-dir=PATH'."
+        )
+    return Path(value).expanduser()
+
+
+def cmd_backup_dir(args: argparse.Namespace) -> int:
+    try:
+        print(_resolve_backup_dir(Path(args.config_dir), args.backup_dir))
+    except backup.BackupError as exc:
+        return _fail(exc)
+    return 0
+
+
+def cmd_backup_plan(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    try:
+        backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
+        existing = backup.parse_existing_volumes(
+            Path(args.existing_volumes) if args.existing_volumes else None
+        )
+        plan = backup.build_plan(
+            config_dir, Path(args.repo_root), backup_dir, existing=existing
+        )
+        common.ensure_dir(plan.snapshot / "volumes")
+        common.ensure_dir(plan.snapshot / "binds")
+        backup.write_plan(plan)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    for name in plan.skipped:
+        print(f"WARNING: declared volume does not exist, skipping: {name}", file=sys.stderr)
+    print(f"SNAPSHOT\t{plan.snapshot}")
+    for artifact in plan.artifacts:
+        print(f"{artifact.kind}\t{artifact.archive}\t{artifact.source}\t{artifact.owner}")
+    return 0
+
+
+def cmd_backup_finish(args: argparse.Namespace) -> int:
+    snapshot = Path(args.snapshot)
+    try:
+        backup_dir = _resolve_backup_dir(Path(args.config_dir), args.backup_dir)
+        plan = backup.read_plan(snapshot)
+        manifest = backup.write_manifest(
+            snapshot,
+            plan,
+            backup.read_results(snapshot),
+            papaia_version=envtree.resolve_platform_version(Path(args.repo_root)),
+        )
+        entry = backup.record_backup(backup_dir, plan, manifest, args.result)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    # Intermediate state; the manifest supersedes it. results.tsv stays as the
+    # audit trail of which archives failed.
+    (snapshot / backup.PLAN_NAME).unlink(missing_ok=True)
+    print(f"ID\t{entry['id']}")
+    print(f"SIZE_MB\t{entry['size_mb']}")
+    print(f"ARTIFACTS\t{entry['artifacts']}")
+    return 0
+
+
+def cmd_backup_prune(args: argparse.Namespace) -> int:
+    try:
+        backup_dir = _resolve_backup_dir(Path(args.config_dir), args.backup_dir)
+        removed = backup.prune(backup_dir, args.retention_period_days)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    for backup_id in removed:
+        print(backup_id)
+    return 0
+
+
+def cmd_backup_list(args: argparse.Namespace) -> int:
+    try:
+        backup_dir = _resolve_backup_dir(Path(args.config_dir), args.backup_dir)
+        index = backup.load_index(backup_dir)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    backups = index.get("backups") or []
+    if not backups:
+        print(f"No restore points recorded in {backup_dir}.")
+        return 0
+    print(f"Restore points in {backup_dir}:")
+    print(f"  {'ID':<21} {'CREATED (UTC)':<21} {'SIZE (MB)':>10}  RESULT")
+    for entry in sorted(backups, key=lambda b: str(b.get("created_at", ""))):
+        print(
+            f"  {str(entry.get('id', '')):<21}"
+            f" {str(entry.get('created_at', '')):<21}"
+            f" {str(entry.get('size_mb', '')):>10}"
+            f"  {entry.get('result', '')}"
+        )
+    return 0
+
+
+def cmd_restore_resolve(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    try:
+        backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
+        entry, warnings = backup.resolve_restore_point(backup_dir, args.restore_point)
+        snapshot = Path(str(entry.get("path") or ""))
+        if not snapshot.is_dir():
+            raise backup.BackupError(
+                f"Restore point {entry.get('id')} is catalogued but its directory is"
+                f" gone: {snapshot}"
+            )
+        manifest = backup.read_manifest(snapshot)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
+    print(f"SNAPSHOT\t{snapshot}")
+    print(f"ID\t{entry.get('id')}")
+    for artifact in manifest.get("artifacts") or []:
+        target = str(artifact.get("target", ""))
+        if artifact.get("kind") == "configdir":
+            # Restore into the config dir the stack reads from *now*, not the
+            # one recorded at backup time -- the snapshot may be replayed onto
+            # a host that keeps its bundle somewhere else.
+            target = str(config_dir)
+        print(f"{artifact.get('kind')}\t{artifact.get('archive')}\t{target}\t{artifact.get('owner')}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="papaia-ctl-py")
     parser.add_argument("--repo-root", required=True)
@@ -205,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--reranker-model", default=None)
+    p_setup.add_argument("--backup-dir", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
     p_setup.add_argument("--force", action="store_true")
     p_setup.set_defaults(func=cmd_setup)
@@ -257,6 +405,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_path = sub.add_parser("addon-path")
     p_addon_path.add_argument("--name", required=True)
     p_addon_path.set_defaults(func=cli_addon.cmd_addon_path)
+
+    p_backup_dir = sub.add_parser("backup-dir")
+    p_backup_dir.add_argument("--backup-dir", default=None)
+    p_backup_dir.set_defaults(func=cmd_backup_dir)
+
+    p_backup_plan = sub.add_parser("backup-plan")
+    p_backup_plan.add_argument("--backup-dir", default=None)
+    p_backup_plan.add_argument("--existing-volumes", default=None)
+    p_backup_plan.set_defaults(func=cmd_backup_plan)
+
+    p_backup_finish = sub.add_parser("backup-finish")
+    p_backup_finish.add_argument("--backup-dir", default=None)
+    p_backup_finish.add_argument("--snapshot", required=True)
+    p_backup_finish.add_argument("--result", choices=["ok", "partial", "failed"], default="ok")
+    p_backup_finish.set_defaults(func=cmd_backup_finish)
+
+    p_backup_prune = sub.add_parser("backup-prune")
+    p_backup_prune.add_argument("--backup-dir", default=None)
+    p_backup_prune.add_argument("--retention-period-days", type=int, required=True)
+    p_backup_prune.set_defaults(func=cmd_backup_prune)
+
+    p_backup_list = sub.add_parser("backup-list")
+    p_backup_list.add_argument("--backup-dir", default=None)
+    p_backup_list.set_defaults(func=cmd_backup_list)
+
+    p_restore_resolve = sub.add_parser("restore-resolve")
+    p_restore_resolve.add_argument("--backup-dir", default=None)
+    p_restore_resolve.add_argument("--restore-point", default=None)
+    p_restore_resolve.set_defaults(func=cmd_restore_resolve)
 
     return parser
 

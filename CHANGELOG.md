@@ -12,6 +12,16 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### 🚀 Features
+
+- feat: `papaia-ctl backup` — hot backup of `PAPAIA_CONFIG_DIR`, all core volumes, and all add-on volumes and data bind mounts into timestamped restore points, with a `backup.yaml` catalogue, `--retention-period-days` pruning, and a result log
+- feat: `papaia-ctl restore` — restore a catalogued restore point, with `--list`, `--restore-point`, `--restart-clean` and `--no-restart`
+- feat: `PAPAIA_BACKUP_DIR` root variable, settable via `papaia-ctl setup --backup-dir=PATH` and derived as `$PAPAIA_WORKSPACE_DIR/backup`
+
+### 🧹 Maintenance
+
+- chore: remove `src/backup-papaia.sh` and `src/restore-papaia.sh`, superseded by the `papaia-ctl` commands
+
 ## [1.0.0] - 2026-07-26
 
 ### 🚀 Features

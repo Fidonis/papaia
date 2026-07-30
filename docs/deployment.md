@@ -90,15 +90,22 @@ The volume is prefixed with `COMPOSE_PROJECT_NAME`, so a stack created with `--e
 ### Backup and restore
 
 ```bash
-src/backup-papaia.sh          # gzipped archives of all named volumes + PAPAIA_CONFIG_DIR
-src/restore-papaia.sh <vol>   # restore one named volume from its archive
+tools/papaia-ctl backup                             # config dir + all core and add-on volumes
+tools/papaia-ctl backup --retention-period-days=14  # additionally prune anything older
+tools/papaia-ctl restore --list                     # show the available restore points
+tools/papaia-ctl restore                            # restore the most recent one
 ```
 
-The backup script retains the last 14 days locally.
+Backups run hot — containers are not stopped. Each archive is taken with its writers briefly
+paused, so a database volume is not copied mid-transaction.
+
+Every run writes a timestamped subdirectory of `$PAPAIA_BACKUP_DIR` and records it in
+`backup.yaml` next to it; `backup.log` in the same directory keeps the result of every backup and
+restore. See the [README](../README.md#backup) for the full flag reference.
 
 `$PAPAIA_CONFIG_DIR` is the single source of truth for all generated state — secrets, rendered
 configs, the Keycloak realm, and `deployment.yaml`. Backing up that directory plus the named
-Docker volumes captures the entire installation.
+Docker volumes captures the entire installation, which is exactly what `papaia-ctl backup` does.
 
 ## Server deployment
 
