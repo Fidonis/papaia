@@ -30,7 +30,9 @@ services:
     networks:
       - papaia-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/mcp || exit 1"]
+      # /mcp only accepts POST (GET returns 405) — /health is the status
+      # endpoint served by the same internal nginx.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
