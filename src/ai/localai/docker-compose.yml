@@ -95,7 +95,10 @@ services:
     networks:
       - papaia-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/models >/dev/null 2>&1 || exit 1"]
+      # /v1/models is behind the auth subsystem once LOCALAI_AUTH is enabled and
+      # answers 401 without credentials. /readyz is the unauthenticated
+      # readiness endpoint LocalAI uses for its own image healthcheck.
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/readyz >/dev/null 2>&1 || exit 1"]
       interval: ${LOCALAI_HEALTHCHECK_INTERVAL:-30s}
       timeout: ${LOCALAI_HEALTHCHECK_TIMEOUT:-10s}
       retries: ${LOCALAI_HEALTHCHECK_RETRIES:-5}
