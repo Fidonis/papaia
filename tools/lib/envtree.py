@@ -92,6 +92,36 @@ def _render_env_lines(values: dict[str, str]) -> str:
     return "\n".join(f"{k}={v}" for k, v in values.items()) + "\n"
 
 
+# Config-bundle subtrees of services that were removed from the stack.
+# Relative to $PAPAIA_CONFIG_DIR, POSIX-style, mirroring src/.
+_REMOVED_SERVICE_DIRS: tuple[str, ...] = (
+    # Superseded by papaia-manager, whose dashboard renders from manager/tiles.yaml.
+    "services/homepage",
+)
+
+
+def prune_removed_service_dirs(config_dir: Path) -> list[str]:
+    """Delete config-bundle subtrees left behind by removed services.
+
+    Nothing else reaches them: load_config_dir_tree only visits directories
+    that still ship a .env.example, and render_core only writes the targets it
+    is given -- neither ever deletes. Without this an existing bundle keeps a
+    stale .env and a rendered config directory forever.
+
+    Returns the paths actually removed, so the caller can report them."""
+    removed: list[str] = []
+    for rel_dir in _REMOVED_SERVICE_DIRS:
+        target = config_dir / rel_dir
+        # Guard against a rel_dir that escapes the bundle -- these are shipped
+        # constants today, but deleting outside config_dir must stay impossible.
+        if config_dir.resolve() not in target.resolve().parents:
+            continue
+        if target.is_dir():
+            shutil.rmtree(target)
+            removed.append(rel_dir)
+    return removed
+
+
 def resolve_platform_version(repo_root: Path) -> str:
     """Platform version, in order of trust: the VERSION file (single source
     of truth -- static so it also works from a tarball without .git),

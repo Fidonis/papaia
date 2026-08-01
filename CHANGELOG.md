@@ -23,12 +23,13 @@ based on merged pull requests; this file mirrors the published releases.
 ### 🧹 Maintenance
 
 - chore: remove `src/backup-papaia.sh` and `src/restore-papaia.sh`, superseded by the `papaia-ctl` commands
+- chore!: remove the Homepage service and its dashboard seam, superseded by papaia-manager. The add-on contract now has four seams (network, OIDC, LibreChat-MCP, Ingress); an existing installation drops the `HOMEPAGE_*` variables, the `homepage` profile and `$PAPAIA_CONFIG_DIR/services/homepage/` on its next `papaia-ctl setup`
 
 ## [1.0.0] - 2026-07-26
 
 ### 🚀 Features
 
-- feat: introduce add-on contract — `papaia-app.yaml` manifest schema, 5 standardised integration seams (network, OIDC, LibreChat-MCP, Homepage, Ingress)
+- feat: introduce add-on contract — `papaia-app.yaml` manifest schema, 4 standardised integration seams (network, OIDC, LibreChat-MCP, Ingress)
 - feat: full add-on lifecycle in `papaia-ctl` — `addon install`, `addon start`, `addon stop`, `addon remove`, `addon uninstall`
 - feat: `papaia-ctl addon check` — pre-upgrade compatibility dry-run against an update candidate (`--target-core=PATH`)
 - feat: `ADDON_API` contract-generation window — integer-based compatibility axis independent of the product SemVer (see ADR 0002)

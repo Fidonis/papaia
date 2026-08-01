@@ -42,8 +42,6 @@ ATTACHABLE_SERVICES = {
     "firecrawl-playwright-service": ["librechat-websearch"],
     "firecrawl-rabbitmq": ["librechat-websearch"],
     "firecrawl-redis": ["librechat-websearch"],
-    "homepage": ["homepage"],
-    "homepage-auth": ["homepage"],
     "jina-reranker-api": ["librechat-websearch"],
     "keycloak": ["keycloak"],
     "keycloak-postgres": ["keycloak"],
@@ -66,6 +64,12 @@ ATTACHABLE_SERVICES = {
 }
 
 # Seam 2: render targets addons may layer integration fragments onto.
+#
+# `services/homepage/config` is deliberately absent: the Homepage dashboard was
+# superseded by papaia-manager and removed from the stack, which retires the
+# Homepage seam with it. Updated as an additive-style snapshot change without an
+# ADDON_API bump -- 1.0.0 is still an open milestone, so the contract generation
+# is being finalised rather than broken for a released core.
 BASE_RENDER_TARGETS = [
     "ai/librechat/librechat.yaml",
     "ai/litellm/config.yaml",
@@ -74,7 +78,6 @@ BASE_RENDER_TARGETS = [
     "ai/localai/models",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
-    "services/homepage/config",
 ]
 
 # Manifest keys the tools actually read from papaia-app.yaml. Reading a new

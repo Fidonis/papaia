@@ -34,7 +34,6 @@ def test_render_writes_base_layer_files(repo_root, config_dir):
     assert (config_dir / "ai/litellm/config.yaml").is_file()
     assert (config_dir / "ai/litellm/prometheus.yml").is_file()
     assert (config_dir / "infra/keycloak/keycloak.conf").is_file()
-    assert (config_dir / "services/homepage/config/services.yaml").is_file()
     assert (config_dir / "ai/localai/models.txt").is_file()
     assert (config_dir / "ai/localai/models/stub.yaml").is_file()
 

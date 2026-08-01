@@ -27,7 +27,6 @@
 #   ai/n8n/nginx.conf
 #   infra/keycloak/keycloak.conf
 #   infra/keycloak/realm-import/papaia-realm.json.template
-#   services/homepage/config/            (entire directory)
 #   services/searxng/settings.yml
 #
 # Files that are ALWAYS overwritten on each sync (they carry secrets
@@ -111,7 +110,6 @@ FILES=(
 
 # Whole-directory trees to mirror (recursive).
 DIRS=(
-    "services/homepage/config"
     "ai/localai/models"
 )
 

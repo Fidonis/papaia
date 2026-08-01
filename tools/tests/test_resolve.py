@@ -116,7 +116,6 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     assert (
         tree["ai/litellm"]["GENERIC_REDIRECT_URI"] == "https://papaia.example.com:8200/sso/callback"
     )
-    assert tree[""]["HOMEPAGE_PUBLIC_URL"] == "https://papaia.example.com:8300"
     assert tree[""]["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
     assert tree[""]["OAUTH2_PROXY_COOKIE_SECURE"] == "true"
     # internal Docker DNS endpoints use https because Keycloak now terminates
@@ -817,6 +816,34 @@ def test_migrate_web_search_profiles_noop_when_already_migrated(repo_root):
     tree[""]["COMPOSE_PROFILES"] = original
     tree = resolve.migrate_web_search_profiles(tree)
     assert tree[""]["COMPOSE_PROFILES"] == original
+
+
+def test_migrate_removed_profiles_drops_homepage(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,nginx,homepage,librechat"
+    tree = resolve.migrate_removed_profiles(tree)
+    profiles = tree[""]["COMPOSE_PROFILES"].split(",")
+    assert "homepage" not in profiles
+    assert profiles == ["keycloak", "nginx", "librechat"]
+
+
+def test_migrate_removed_profiles_noop_without_removed_entry(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    original = "keycloak,nginx,librechat,litellm"
+    tree[""]["COMPOSE_PROFILES"] = original
+    tree = resolve.migrate_removed_profiles(tree)
+    assert tree[""]["COMPOSE_PROFILES"] == original
+
+
+def test_migrate_env_keys_drops_homepage_keys(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["HOMEPAGE_EXT_PORT"] = "8300"
+    tree[""]["HOMEPAGE_PUBLIC_URL"] = "http://host.docker.internal:8300"
+
+    tree = resolve.migrate_env_keys(tree)
+
+    assert "HOMEPAGE_EXT_PORT" not in tree[""]
+    assert "HOMEPAGE_PUBLIC_URL" not in tree[""]
 
 
 def test_migrate_env_keys_renames_oidc_endpoints(repo_root):

@@ -218,3 +218,22 @@ def test_materialize_core_env_skips_missing_bundle_files(repo_root, config_dir):
 
     # Root .env should still be restored from its bundle copy
     assert (repo_root / "src" / ".env").is_file()
+
+
+def test_prune_removed_service_dirs_removes_stale_bundle(config_dir):
+    stale = config_dir / "services" / "homepage" / "config"
+    stale.mkdir(parents=True)
+    (stale / "services.yaml").write_text("---\n", encoding="utf-8")
+    (config_dir / "services" / "homepage" / ".env").write_text("HP=1\n", encoding="utf-8")
+    kept = config_dir / "services" / "searxng"
+    kept.mkdir(parents=True)
+
+    removed = envtree.prune_removed_service_dirs(config_dir)
+
+    assert removed == ["services/homepage"]
+    assert not (config_dir / "services" / "homepage").exists()
+    assert kept.is_dir()
+
+
+def test_prune_removed_service_dirs_is_noop_when_absent(config_dir):
+    assert envtree.prune_removed_service_dirs(config_dir) == []

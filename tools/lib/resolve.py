@@ -66,10 +66,6 @@ def _is_https(url: str) -> bool:
     return url.startswith("https://")
 
 
-def _strip_scheme(url: str) -> str:
-    return urlsplit(url).netloc or url
-
-
 def derive_auth_host_default(app_host: str, keycloak_ext_port: str) -> str:
     """FQDN -> <scheme>://auth.<domain> (no port); IP/localhost/
     host.docker.internal -> https://<host>:<KEYCLOAK_EXT_PORT>.
@@ -296,12 +292,6 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     librechat["DOMAIN_SERVER"] = librechat_url
     librechat["DOMAIN_CLIENT"] = librechat_url
 
-    # --- Homepage: oauth2-proxy sidecar redirect URL ---
-    # Belongs in the root .env (consumed by docker compose ${VAR} expansion).
-    # Independent of AUTH_PROVIDER -- this is a server-reachability URL.
-    homepage_port = root.get("HOMEPAGE_EXT_PORT", "8300")
-    root["HOMEPAGE_PUBLIC_URL"] = f"{app_host}:{homepage_port}"
-
     # --- LocalAI public URL + native OIDC config ---
     # LOCALAI_PUBLIC_URL is exposed in the root .env (docker compose ${VAR}
     # expansion in localai/docker-compose.yml). Per-service OIDC vars go into
@@ -341,10 +331,6 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             sticky_manager or derived_manager,
         )
     root["MANAGER_PUBLIC_URL"] = manager_url
-
-    homepage = tree.setdefault("services/homepage", {})
-    if "HP_ALLOWED_HOSTS" in homepage:
-        homepage["HP_ALLOWED_HOSTS"] = f"{_strip_scheme(app_host)}:{homepage_port}"
 
     # --- NPM admin public URL ---
     # Always derived regardless of REVERSE_PROXY_PROVIDER: resolve_reverse_proxy
@@ -503,7 +489,17 @@ _REMOVED_KEYS: set[tuple[str, str]] = {
     # The image tag is pinned directly in manager/docker-compose.yml; no
     # ${MANAGER_IMAGE_TAG} interpolation is left to read it.
     ("", "MANAGER_IMAGE_TAG"),
+    # The Homepage dashboard was superseded by papaia-manager and removed from
+    # the stack. Without this, write_env_file would keep re-emitting both keys
+    # under its "not present in the shipped template" banner on every run.
+    ("", "HOMEPAGE_EXT_PORT"),
+    ("", "HOMEPAGE_PUBLIC_URL"),
 }
+
+# Compose profiles of services that no longer exist. A leftover entry is not
+# merely cosmetic: `docker compose` aborts with "env file not found" once the
+# profile's .env has stopped being generated.
+_REMOVED_PROFILES: set[str] = {"homepage"}
 
 
 def migrate_env_keys(tree: EnvTree) -> EnvTree:
@@ -526,6 +522,20 @@ def migrate_env_keys(tree: EnvTree) -> EnvTree:
         if values is not None:
             values.pop(key, None)
 
+    return tree
+
+
+def migrate_removed_profiles(tree: EnvTree) -> EnvTree:
+    """Drop Compose profiles of services that were removed from the stack.
+
+    Runs unconditionally on every `papaia-ctl setup`, like migrate_env_keys --
+    an operator who enabled such a profile by hand would otherwise keep a
+    COMPOSE_PROFILES entry that no compose file answers to."""
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    if not any(p in _REMOVED_PROFILES for p in profiles):
+        return tree
+    root["COMPOSE_PROFILES"] = ",".join(p for p in profiles if p not in _REMOVED_PROFILES)
     return tree
 
 

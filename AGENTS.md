@@ -8,14 +8,14 @@
 tiers:
 
 - **Lean Core** (always on): Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat,
-  LiteLLM, LocalAI, Homepage. Self-sufficient — runs without any extension.
+  LiteLLM, LocalAI. Self-sufficient — runs without any extension.
 - **First-party add-ons** (Fidonis-maintained, each in its own repo, version-pinned):
   RAG / vector search (qdrant-rag), documents (Paperless-ngx + MCP bridge), workflow
   automation (n8n), metasearch (SearXNG), web crawling (Firecrawl).
 - **Custom add-ons** (per-customer, same add-on contract).
 
-Add-ons integrate through five standardised seams — network attachment, OIDC client
-registration, LibreChat-MCP fragments, dashboard cards, and Nginx ingress rules — without
+Add-ons integrate through four standardised seams — network attachment, OIDC client
+registration, LibreChat-MCP fragments, and Nginx ingress rules — without
 requiring changes to any tracked file in the Core repo. The add-on manifest
 (`papaia-app.yaml`) in each add-on repo declares all seams in machine-readable form.
 
@@ -96,7 +96,6 @@ src/
     jinaai/                   # Optional Jina reranker
   services/
     paperless/                # Document management
-    homepage/                 # Service dashboard
     searxng/                  # Privacy-respecting metasearch
     firecrawl/                # Web crawler
     minio/                    # S3-compatible object store

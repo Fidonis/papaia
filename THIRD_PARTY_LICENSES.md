@@ -23,7 +23,6 @@ file. Adding a new service without updating this file will fail the check.
 | `KEYCLOAK_POSTGRES_IMAGE` | `postgres` | 18.3 | PostgreSQL License | |
 | `OAUTH2_PROXY_IMAGE` | `quay.io/oauth2-proxy/oauth2-proxy` | v7.9.0 | MIT | |
 | `NPM_IMAGE` | `jc21/nginx-proxy-manager` | 2.14.0 | MIT | |
-| `HOMEPAGE_IMAGE` | `ghcr.io/gethomepage/homepage` | v1.12.3 | GPL-3.0 | used as network service |
 | `PAPERLESS_IMAGE` | `ghcr.io/paperless-ngx/paperless-ngx` | 2.20.10 | GPL-3.0 | used as network service |
 | `PAPERLESS_REDIS_IMAGE` | `docker.io/library/redis` | 8 | RSALv2 / SSPLv1 / AGPLv3 | used as network service; Redis 8 is tri-licensed (AGPLv3 is OSI-approved) |
 | `PAPERLESS_DB_IMAGE` | `docker.io/library/postgres` | 18 | PostgreSQL License | |
