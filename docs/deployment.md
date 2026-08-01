@@ -16,7 +16,7 @@ tools/papaia-ctl start   # materialises .env files, renders config, starts the s
 every secret, derives the OIDC issuer and per-service hostnames from `PAPAIA_HOST` /
 `AUTH_HOST`, and renders the Keycloak realm import with secrets already baked in. Re-running
 it reuses every previously-resolved value (sticky) and only refreshes the rendered config —
-safe to run again after a `git pull`.
+safe to run again at any time.
 
 `tools/papaia-ctl stop` pauses all core containers (containers kept, volumes untouched);
 `tools/papaia-ctl stop --clean-up` removes them (volumes untouched).
@@ -52,20 +52,26 @@ The `localai` and `librechat-websearch` profiles have dedicated setup flags
 (`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`), which also keep
 `deployment.yaml` in sync. Prefer those over hand-editing.
 
-### Updating images
+### Upgrading to a new release
 
 Image tags are pinned directly in each service's `docker-compose.yml` (for example
-`src/infra/keycloak/docker-compose.yml`). The supported upgrade path is to pull a new release
-of the repository and restart:
+`src/infra/keycloak/docker-compose.yml`), so a new set of images comes with a new release of
+the repository. The supported upgrade path is:
 
 ```bash
-git pull
-tools/papaia-ctl start
+tools/papaia-ctl upgrade                 # to the newest release
+tools/papaia-ctl upgrade --version=1.5.0 # to a specific one
 ```
 
-`start` re-renders the configuration before bringing the stack up, so template changes
-shipped by the upgrade are applied automatically. Customer overrides under
-`$PAPAIA_CONFIG_DIR/overlay/` survive untouched.
+`upgrade` checks the active add-ons against the target release, takes a restore point, stops
+the stack, moves the checkout to the release tag, runs the migration scripts the release
+ships with, re-renders the configuration and starts the stack again. Customer overrides under
+`$PAPAIA_CONFIG_DIR/overlay/` survive untouched. Use `--dry-run` first to see the target
+version and the migrations that would run.
+
+If a migration fails, the upgrade stops and prints the commands to return to the previous
+release. Downgrades are not offered: restore a backup taken before the upgrade
+(`tools/papaia-ctl restore --list`).
 
 To pin a single service to a different tag ahead of a release, edit the `image:` line in that
 service's compose file and run `tools/papaia-ctl start`.

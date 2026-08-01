@@ -164,6 +164,8 @@ values unchanged.
 papaia-ctl setup     [OPTIONS]
 papaia-ctl start     [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl stop      [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
+                     [--config-dir=PATH]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
 papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
@@ -244,9 +246,10 @@ tools/papaia-ctl start [--addons] [--profiles=LIST] [--config-dir=PATH]
 Copies the `.env` files from the config directory into the checkout, re-renders the
 configuration, then runs `docker compose up -d`.
 
-Because rendering happens on **every** `start`, a `git pull` followed by
-`tools/papaia-ctl start` is the complete upgrade path — new templates, new add-on fragments,
-and edits under `overlay/` are all picked up automatically.
+Because rendering happens on **every** `start`, new templates, new add-on fragments and
+edits under `overlay/` are picked up automatically. To move the installation to a newer
+release, use [`upgrade`](#upgrade) rather than `git pull` — it also runs the migrations
+the release ships with.
 
 `--addons` starts every active add-on **before** bringing up the core, so that the add-on
 networks exist by the time the core's generated override files are applied. An override whose
@@ -268,6 +271,50 @@ tools/papaia-ctl stop [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PA
 Without `--clean-up`: `docker compose stop` — containers are paused but not removed; volumes
 and networks are kept. With `--clean-up`: `docker compose down` — containers are removed,
 volumes are kept. `--addons` applies the same operation to all active add-ons.
+
+### `upgrade`
+
+```bash
+tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y] \
+  [--config-dir=PATH]
+```
+
+Moves the installation to a release. Without `--version` the newest release is used;
+when the installation already runs it, the command reports so and exits 0, which makes
+it safe to run unattended. `--version` accepts `1.5.0` and `v1.5.0` alike and is the
+only way onto a pre-release. Downgrades are refused — restore a backup instead.
+
+The run, in order:
+
+1. Refuses to start unless the checkout is a git clone without uncommitted changes to
+   tracked files. Everything `papaia-ctl` writes into the checkout is gitignored, so a
+   healthy installation passes.
+2. Fetches the release tags and resolves the target version.
+3. Checks all active add-ons against the target release — the same evaluation as
+   `addon check --target-core=PATH`, run against a temporary worktree of the target
+   tag. An incompatible add-on aborts the upgrade before anything is touched;
+   `--force` demotes it to a warning.
+4. Creates a restore point (`backup`) unless `--no-backup` is given, and stops the
+   stack.
+5. Checks out the release tag and re-executes itself from the new tree, so the
+   migrations, the render logic and the setup pass of the target release are the ones
+   that run.
+6. Runs the pending migration scripts (see below), re-renders the configuration
+   through the sticky setup pass — every answered question is kept — and starts the
+   stack again.
+
+`--dry-run` stops after step 3 and prints the current version, the target version and
+the migrations that would run. `-y` skips the confirmation prompt; without a TTY it is
+required.
+
+**Migrations.** A release may ship scripts in `tools/migrations/` that adapt an
+existing config bundle to a change the render pass cannot express on its own. Every
+release carries the complete set, so a jump from 1.0.0 to 1.5.0 runs the 1.1.0 … 1.5.0
+steps in between, in order. Applied migrations are recorded in
+`$PAPAIA_CONFIG_DIR/migrations/applied.json` and never run twice. If one fails, the
+upgrade stops and prints the commands to return to the previous release; fixing the
+cause and re-running skips everything that already succeeded. The contract for writing
+one is documented in [`tools/migrations/README.md`](tools/migrations/README.md).
 
 ### `uninstall`
 
@@ -790,8 +837,8 @@ Day-to-day operations — enabling modules, upgrading images, backups, resetting
 documented in [`docs/deployment.md`](docs/deployment.md).
 
 The short version: edit `overlay/` or the profile list, then run `tools/papaia-ctl start`.
-Upgrades are `git pull` followed by `tools/papaia-ctl start`; the config directory and
-everything under `overlay/` survive untouched.
+Moving to a newer release is `tools/papaia-ctl upgrade`; the config directory and everything
+under `overlay/` survive untouched.
 
 ## Troubleshooting
 
@@ -807,14 +854,15 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 [workspace root]/
 ├── papaia/                    ← this repo (read-only at deploy time)
 │   ├── tools/
-│   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · uninstall · addon)
+│   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · upgrade · addon · …)
 │   │   ├── deployment.template.yaml  # deployment.yaml template
 │   │   ├── pyproject.toml      # ruff + pytest config for tools/lib
 │   │   ├── lib/                # Python: cli.py · cli_addon.py · deployment.py · envtree.py
 │   │   │                       #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
 │   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py
-│   │   │                       #   backup.py · common.py
+│   │   │                       #   backup.py · upgrade.py · migrations.py · common.py
 │   │   │   └── sh/             # Bash command libraries sourced by papaia-ctl
+│   │   ├── migrations/         # release migrations run by `papaia-ctl upgrade`
 │   │   └── tests/              # pytest suite
 │   ├── src/
 │   │   ├── docker-compose.yml  # root compose — shared network + include list only

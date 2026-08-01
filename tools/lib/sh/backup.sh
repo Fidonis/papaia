@@ -20,6 +20,10 @@ BACKUP_IMAGE="alpine:3"
 _PAUSED_CONTAINERS=()
 _BACKUP_TMPFILES=()
 
+# ID of the restore point written by the last cmd_backup call in this process.
+# `upgrade` reads it to name the point an operator can fall back to.
+LAST_BACKUP_ID=""
+
 _unpause_all() {
     local cid
     if [ ${#_PAUSED_CONTAINERS[@]} -gt 0 ]; then
@@ -231,6 +235,9 @@ cmd_backup() {
             ARTIFACTS) artifacts="$value" ;;
         esac
     done <<< "$summary"
+
+    # shellcheck disable=SC2034  # read by cmd_upgrade in lib/sh/upgrade.sh
+    LAST_BACKUP_ID="$backup_id"
 
     _backup_log "$backup_dir" backup "$backup_id" "$result" \
         "artifacts=$artifacts/$total size_mb=$size_mb duration=$((SECONDS - started))s"

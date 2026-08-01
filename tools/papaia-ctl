@@ -22,6 +22,8 @@
 #                       [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl start         [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
 #   papaia-ctl stop          [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+#   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
+#                            [--config-dir=PATH]
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
 #                            [--config-dir=PATH]
@@ -37,6 +39,10 @@
 #   papaia-ctl addon remove    <name> [--config-dir=PATH]
 #   papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
 #   papaia-ctl help
+#
+# Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
+# release it just checked out:
+#   --resume-from=X.Y.Z --resume-target=X.Y.Z [--resume-restore-point=ID]
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -46,7 +52,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -69,6 +75,8 @@ source "$SH_LIB/lifecycle.sh"
 source "$SH_LIB/addon.sh"
 # shellcheck source=lib/sh/backup.sh
 source "$SH_LIB/backup.sh"
+# shellcheck source=lib/sh/upgrade.sh
+source "$SH_LIB/upgrade.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -114,6 +122,11 @@ case "$cmd" in
     setup)     cmd_setup "$@" ;;
     start)         cmd_start "$@" ;;
     stop)          cmd_stop "$@" ;;
+    upgrade)       cmd_upgrade "$@" ;;
+    # One name for the operation, not two: 'update' means "refresh the package
+    # index" in the most widespread precedent (apt), which is the opposite of
+    # what this does.
+    update)        error "No 'update' command. Did you mean 'papaia-ctl upgrade'?"; exit 2 ;;
     uninstall)     cmd_uninstall "$@" ;;
     backup)        cmd_backup "$@" ;;
     restore)       cmd_restore "$@" ;;

@@ -31,11 +31,13 @@ from . import (
     deployment,
     envtree,
     gen_override,
+    migrations,
     npm_provision,
     render_core,
     reporting,
     resolve,
     secrets,
+    upgrade,
 )
 
 
@@ -316,6 +318,74 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# upgrade
+#
+# The bash side owns every git call; these three commands own the version
+# arithmetic and the migration ledger. Output is TSV for the same reason the
+# backup commands use it -- `read` consumes it without a JSON parser.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def cmd_upgrade_resolve(args: argparse.Namespace) -> int:
+    """Decide the target release from the tag list bash collected.
+
+    STATUS is `up-to-date` when there is nothing to do (exit 0, the caller
+    stops there) and `ok` otherwise. A downgrade is a refusal, not a status."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    try:
+        tags = Path(args.tags_file).read_text(encoding="utf-8").splitlines()
+        versions = upgrade.parse_tags(tags)
+        current = upgrade.resolve_current_version(config_dir, repo_root)
+        target = upgrade.select_target(versions, args.version)
+        status = upgrade.resolve_status(current, target, explicit=args.version is not None)
+    except (upgrade.UpgradeError, OSError) as exc:
+        return _fail(exc)
+    print(f"CURRENT\t{current}")
+    print(f"TARGET\t{target}")
+    print(f"TAG\t{upgrade.tag_for(target)}")
+    print(f"STATUS\t{status}")
+    return 0
+
+
+def cmd_upgrade_plan(args: argparse.Namespace) -> int:
+    """List the migrations due for `--from` -> `--to`, in execution order.
+
+    Reads them from --repo-root, which after the checkout is the *target*
+    release's tree -- the only tree that carries the intermediate steps of a
+    multi-release jump."""
+    config_dir = Path(args.config_dir)
+    try:
+        found = migrations.discover(Path(args.repo_root))
+        applied = migrations.applied_ids(migrations.load_state(config_dir))
+        due = migrations.pending(found, args.from_version, args.to_version, applied)
+    except ValueError as exc:
+        return _fail(exc)
+    for migration in due:
+        # as_posix(): the consumer is bash, which under Git Bash cannot resolve
+        # the backslash form a WindowsPath would render.
+        print(
+            f"MIGRATION\t{migration.id}\t{migration.version}"
+            f"\t{migration.path.as_posix()}\t{migration.kind}"
+        )
+    return 0
+
+
+def cmd_upgrade_record(args: argparse.Namespace) -> int:
+    """Append one successfully applied migration to the ledger."""
+    config_dir = Path(args.config_dir)
+    try:
+        found = {m.id: m for m in migrations.discover(Path(args.repo_root))}
+        migration = found.get(args.migration_id)
+        if migration is None:
+            raise ValueError(f"Unknown migration: {args.migration_id}")
+        migrations.record(config_dir, migration, duration_s=args.duration)
+    except ValueError as exc:
+        return _fail(exc)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="papaia-ctl-py")
     parser.add_argument("--repo-root", required=True)
@@ -429,6 +499,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_backup_list = sub.add_parser("backup-list")
     p_backup_list.add_argument("--backup-dir", default=None)
     p_backup_list.set_defaults(func=cmd_backup_list)
+
+    p_upgrade_resolve = sub.add_parser("upgrade-resolve")
+    p_upgrade_resolve.add_argument("--tags-file", required=True)
+    p_upgrade_resolve.add_argument("--version", default=None)
+    p_upgrade_resolve.set_defaults(func=cmd_upgrade_resolve)
+
+    p_upgrade_plan = sub.add_parser("upgrade-plan")
+    p_upgrade_plan.add_argument("--from", dest="from_version", required=True)
+    p_upgrade_plan.add_argument("--to", dest="to_version", required=True)
+    p_upgrade_plan.set_defaults(func=cmd_upgrade_plan)
+
+    p_upgrade_record = sub.add_parser("upgrade-record")
+    p_upgrade_record.add_argument("--migration-id", required=True)
+    p_upgrade_record.add_argument("--duration", type=int, default=0)
+    p_upgrade_record.set_defaults(func=cmd_upgrade_record)
 
     p_restore_resolve = sub.add_parser("restore-resolve")
     p_restore_resolve.add_argument("--backup-dir", default=None)
