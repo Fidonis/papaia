@@ -86,7 +86,13 @@ cmd_setup() {
 
     if [ "$env_only" -eq 1 ]; then
         info "Reusing existing configuration; re-rendering env files only."
-        _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"
+        # Checked rather than left to `set -e`: `upgrade` calls this in a
+        # condition context, where set -e is suppressed and an unchecked
+        # failure would report "setup complete" over a broken render.
+        if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"; then
+            error "setup failed."
+            return 3
+        fi
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
             _ensure_keycloak_certs
         fi
@@ -137,7 +143,10 @@ cmd_setup() {
         fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"
+            if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"; then
+                error "setup failed."
+                return 3
+            fi
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
                 _ensure_keycloak_certs
             fi
@@ -345,7 +354,7 @@ cmd_setup() {
 
     if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir"; then
         error "setup failed."
-        exit 3
+        return 3
     fi
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
         _ensure_keycloak_certs
