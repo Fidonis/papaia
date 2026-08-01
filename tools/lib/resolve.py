@@ -66,10 +66,6 @@ def _is_https(url: str) -> bool:
     return url.startswith("https://")
 
 
-def _strip_scheme(url: str) -> str:
-    return urlsplit(url).netloc or url
-
-
 def derive_auth_host_default(app_host: str, keycloak_ext_port: str) -> str:
     """FQDN -> <scheme>://auth.<domain> (no port); IP/localhost/
     host.docker.internal -> https://<host>:<KEYCLOAK_EXT_PORT>.
@@ -296,12 +292,6 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     librechat["DOMAIN_SERVER"] = librechat_url
     librechat["DOMAIN_CLIENT"] = librechat_url
 
-    # --- Homepage: oauth2-proxy sidecar redirect URL ---
-    # Belongs in the root .env (consumed by docker compose ${VAR} expansion).
-    # Independent of AUTH_PROVIDER -- this is a server-reachability URL.
-    homepage_port = root.get("HOMEPAGE_EXT_PORT", "8300")
-    root["HOMEPAGE_PUBLIC_URL"] = f"{app_host}:{homepage_port}"
-
     # --- LocalAI public URL + native OIDC config ---
     # LOCALAI_PUBLIC_URL is exposed in the root .env (docker compose ${VAR}
     # expansion in localai/docker-compose.yml). Per-service OIDC vars go into
@@ -341,10 +331,6 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             sticky_manager or derived_manager,
         )
     root["MANAGER_PUBLIC_URL"] = manager_url
-
-    homepage = tree.setdefault("services/homepage", {})
-    if "HP_ALLOWED_HOSTS" in homepage:
-        homepage["HP_ALLOWED_HOSTS"] = f"{_strip_scheme(app_host)}:{homepage_port}"
 
     # --- NPM admin public URL ---
     # Always derived regardless of REVERSE_PROXY_PROVIDER: resolve_reverse_proxy

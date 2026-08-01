@@ -23,7 +23,6 @@ are pulled in via `include:` into `papaia/src/docker-compose.yml`. Their
 integration points are **hard-wired into the Core configs**:
 
 - `librechat.yaml` → `mcpServers` / `allowedDomains`
-- `homepage/config/services.yaml` → service cards
 - Keycloak realm clients + audience mappers
 
 Every additional application grows the Core and couples it to services that
@@ -47,12 +46,12 @@ the Core.
                    ┌─────────────── PAPAIA PLATFORM (per customer, one host) ────────────────┐
                    │                                                                            │
   Tier 1: CORE     │  Identity (Keycloak + oauth2-proxy)  Ingress (Nginx Proxy Manager)       │
-  (always,         │  AI-Runtime (LibreChat + LiteLLM [+ LocalAI])  Dashboard (Homepage)      │
+  (always,         │  AI-Runtime (LibreChat + LiteLLM [+ LocalAI])  Management (papaia-manager) │
   self-sufficient) │                                                                            │
                    │  Integration Registry = EMPTY, app-agnostic intake points:                │
-                   │    mcpServers slot · Homepage slot · Realm (base clients) · NPM host      │
+                   │    mcpServers slot · Realm (base clients) · NPM host                       │
                    │                           ▲     ▲     ▲                                    │
-                   │          (5 seams: network · OIDC · MCP · Homepage · Ingress)             │
+                   │          (4 seams: network · OIDC · MCP · Ingress)                        │
                    └───────────────────────────┼─────┼─────┼──────────────────────────────────┘
                                                │     │     │   unified add-on contract
                ┌───────────────────────────────┘     │     └───────────────────────────────┐
@@ -86,7 +85,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | Identity | Keycloak (OIDC provider), oauth2-proxy (header injection) |
 | Ingress | Nginx Proxy Manager (NPM) |
 | AI-Runtime | LibreChat (chat UI), LiteLLM (LLM gateway), LocalAI (opt-in local inference) |
-| Dashboard | Homepage |
+| Management | papaia-manager (opt-in; dashboard + add-on lifecycle UI) |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
 points** — no hard-wired application references. The Core is **self-sufficient**:
@@ -139,10 +138,9 @@ addons/papaia-addon-<name>/
 ├── papaia-app.yaml          # Manifest: declarative contract (all metadata)
 ├── docker-compose.yml       # App + associated MCP server, on its OWN network
 ├── .env.example             # App secrets template (seeded into $PAPAIA_CONFIG_DIR/addons/<name>/.env)
-├── integration/             # The 5 seams as fragments (all optional)
+├── integration/             # The 4 seams as fragments (all optional)
 │   ├── keycloak/            # OIDC client + audience mapper JSONs
 │   ├── librechat/           # mcpServers + allowedDomains fragment (YAML)
-│   ├── homepage/            # Dashboard service entry (YAML)
 │   └── nginx/               # Optional ingress snippet
 └── README.md                # Self-contained manual integration path (public-clean)
 ```
@@ -178,7 +176,6 @@ integration:
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/<name>.yaml   # optional
-  homepage:  integration/homepage/<name>.yaml    # optional
   nginx:     integration/nginx/<name>.conf        # optional
 
 env_prompts:                       # optional: metadata per .env.example key
@@ -265,7 +262,6 @@ integration:
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/paperless.yaml
-  homepage:  integration/homepage/paperless.yaml
   nginx:     integration/nginx/paperless.conf
 ```
 
@@ -290,7 +286,6 @@ integration:
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/qdrant-rbac.yaml
-  homepage:  integration/homepage/qdrant-rbac.yaml
 ```
 
 **Data sovereignty:** `mcp-qdrant-rbac` validates the bearer token + audience and scopes
@@ -298,9 +293,9 @@ Qdrant queries to the collections the user has access to (JWT per collection ACL
 
 ---
 
-## 7. The 5 Seams (Add-on Integration Points)
+## 7. The 4 Seams (Add-on Integration Points)
 
-All 5 seams are **standardised**, not hand-wired. Which seams an add-on uses
+All 4 seams are **standardised**, not hand-wired. Which seams an add-on uses
 is optionally declared in the manifest.
 
 ### Seam 1 — Network: "Core attaches to app"
@@ -339,13 +334,7 @@ is **merged at render time** into the effective `librechat.yaml` in the config
 directory. Render process: base template + sum of active add-on fragments +
 customer overlay.
 
-### Seam 4 — Homepage
-
-The service entry from `integration/homepage/` is merged at render time into
-`services.yaml` in the config directory. Homepage mounts exclusively the
-rendered file from `$PAPAIA_CONFIG_DIR/services/homepage/config/`.
-
-### Seam 5 — Ingress (optional)
+### Seam 4 — Ingress (optional)
 
 Optional NPM proxy host entry for the add-on UI. Added additively via the
 Nginx fragment mechanism (or NPM API).
@@ -407,7 +396,6 @@ git-pristine; the source of truth lives in the config directory.
 │   │   └── integration/
 │   │       ├── keycloak/
 │   │       ├── librechat/
-│   │       ├── homepage/
 │   │       └── nginx/
 │   │
 │   └── papaia-addon-qdrant-rbac/
@@ -416,8 +404,7 @@ git-pristine; the source of truth lives in the config directory.
 │       ├── .env.example
 │       └── integration/
 │           ├── keycloak/
-│           ├── librechat/
-│           └── homepage/
+│           └── librechat/
 │
 ├── papaia/                              # Tier 1 — Core repo (Fidonis/papaia, public-bound)
 │   ├── docs/                            # Architecture docs, ADRs, add-on spec
@@ -426,7 +413,7 @@ git-pristine; the source of truth lives in the config directory.
 │   │   ├── .env.example                 # Core env template
 │   │   ├── ai/                          # Base templates (librechat.yaml.base, litellm.yaml.base)
 │   │   ├── infra/                       # Keycloak realm base, bootstrap scripts
-│   │   ├── services/                    # Homepage base config
+│   │   ├── services/                    # SearXNG base config
 │   │   └── catalog.yaml                 # Known add-ons (name, repo URL, tags, tier)
 │   └── tools/                           # Orchestrator
 │       ├── papaia-ctl                   # init · up/down · addon install|start|stop|remove|uninstall
@@ -444,11 +431,9 @@ git-pristine; the source of truth lives in the config directory.
     ├── ai/librechat/librechat.yaml      # GENERATED (base + add-ons + overlay)
     ├── ai/litellm/config.yaml           # GENERATED
     ├── infra/keycloak/realm-import/     # GENERATED (secrets baked in, always render-owned)
-    ├── services/homepage/config/        # GENERATED
     ├── overrides/                       # GENERATED docker-compose.<addon>.override.yml
     └── overlay/                         # Customer overlay (hand-authored, survives re-render)
-        ├── ai/librechat/librechat.yaml
-        └── services/homepage/config/services.yaml
+        └── ai/librechat/librechat.yaml
 ```
 
 ### Repo mapping
@@ -585,7 +570,7 @@ core:
     - nginx
     - librechat
     - litellm
-    - homepage
+    - manager
   inference: local-first | external # LLM inference mode
 
 addons:
@@ -635,13 +620,10 @@ endpoints:
         default: ["gpt-4o"]
 ```
 
-**Company links in the dashboard** (`overlay/services/homepage/config/services.yaml`):
+**SearXNG engine tuning** (`overlay/services/searxng/settings.yml`):
 ```yaml
-- Company:
-    - Intranet:
-        href: "https://intranet.customer.internal"
-        description: Corporate intranet
-        icon: mdi-home-city
+search:
+  default_lang: de
 ```
 
 ---
@@ -669,7 +651,7 @@ behind a Compose profile (`manager`).
 | Docker API | `docker` Python SDK + subprocess | Type-safe + fallback for `docker compose` |
 | Catalog | `catalog.yaml` in `papaia/src/` | Versioned, offline-capable |
 | Auth | oauth2-proxy (Seam 2, role `admin`) | Already present — no separate OIDC needed |
-| Ingress | Nginx fragment (Seam 5) | Analogous to add-on ingress rules |
+| Ingress | Nginx fragment (Seam 4) | Analogous to add-on ingress rules |
 
 ### File structure
 
@@ -743,13 +725,12 @@ papaia-manager:
     - papaia-net
 ```
 
-### Integration with the 5 seams
+### Integration with the 4 seams
 
 | Seam | Manager integration |
 |---|---|
 | Seam 2 (OIDC) | Behind `oauth2-proxy`; Keycloak role `admin` required |
-| Seam 4 (Dashboard) | Entry in `services.base.yaml` → appears in Homepage |
-| Seam 5 (Ingress) | `manager.${PAPAIA_HOST}` → Nginx forward to container port |
+| Seam 4 (Ingress) | `manager.${PAPAIA_HOST}` → Nginx forward to container port |
 | Seams 1, 3 | Not directly used |
 
 ### UI concept: add-on cards
@@ -826,4 +807,4 @@ Each card shows:
 - [ ] No reference to internal tooling repos in `papaia/docs/` + ADRs
 - [ ] No reference to internal scripts or installers
 - [ ] No "AI" except in the product name papAIa; no "agent" in the sense of tooling
-- [ ] All seams described in purely technical terms (LibreChat `mcpServers`, OIDC client, NPM, Homepage)
+- [ ] All seams described in purely technical terms (LibreChat `mcpServers`, OIDC client, NPM)

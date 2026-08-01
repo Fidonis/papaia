@@ -44,12 +44,10 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| Homepage | `homepage` | 8300 | Service dashboard, behind an oauth2-proxy sidecar |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 
 `localai` and `librechat-websearch` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--web-search`). `homepage` has no setup flag — add it to
-`COMPOSE_PROFILES` by hand.
+(`--local-ai`, `--web-search`).
 
 > Everything else — document management, RAG, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
@@ -64,7 +62,6 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | LibreChat | Native OIDC | `openid-client`, PKCE enforced |
 | LiteLLM (UI) | Generic OIDC | API key for programmatic access |
 | LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
-| Homepage | oauth2-proxy sidecar | — |
 | NPM admin UI | oauth2-proxy sidecar | — |
 | oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
 
@@ -133,7 +130,7 @@ Once the stack is up, the default endpoints for a local install are:
 
 - LibreChat — `http://host.docker.internal:8000`
 - Keycloak admin — `https://host.docker.internal:8110`, user `admin`, password `KC_ADMIN_PASSWORD`
-- Homepage — `http://host.docker.internal:8300` (if the `homepage` profile is active)
+- papaia-manager — `http://host.docker.internal:8120` (if the `manager` profile is active)
 
 The realm ships two test users: `admin` / `admin` (roles `admin`, `user`, `localai-access`)
 and `testuser` / `testuser` (roles `user`, `finance`).
@@ -489,7 +486,7 @@ wins.
 
 Render targets: `ai/librechat/librechat.yaml` · `ai/litellm/config.yaml` +
 `prometheus.yml` · `ai/localai/models.txt` + `models/` · `services/searxng/settings.yml` ·
-`services/homepage/config/` · `infra/keycloak/keycloak.conf`.
+`infra/keycloak/keycloak.conf`.
 
 The same pass also bakes the Keycloak realm (substituting secrets into
 `realm-import/papaia-realm.json`) and regenerates the Compose overrides in `overrides/` — one
@@ -506,7 +503,7 @@ ${PAPAIA_CONFIG_DIR}/
 ├── certs/                  # generated Keycloak CA + server certificate
 ├── ai/                     # librechat · litellm · localai · jinaai
 ├── infra/                  # keycloak (incl. realm-import/) · nginx · oauth2-proxy
-├── services/               # homepage · searxng · firecrawl
+├── services/               # searxng · firecrawl
 ├── addons/<name>/.env      # per-add-on secrets
 ├── overlay/                # customer config overrides (highest merge layer)
 └── overrides/              # auto-generated add-on network overrides
@@ -565,7 +562,7 @@ papAIa is structured in three tiers:
 │                                                                  │
 │  papaia/             ← Lean Core (this repo)                     │
 │  │  Keycloak · oauth2-proxy · Nginx Proxy Manager                │
-│  │  LibreChat · LiteLLM · LocalAI · Homepage                     │
+│  │  LibreChat · LiteLLM · LocalAI · papaia-manager               │
 │  │                                                               │
 │  papaia-addons/      ← Add-ons (separate repos, opt-in)          │
 │  │  paperless/       Document management + MCP bridge            │
@@ -611,7 +608,6 @@ The manifest declares every seam in machine-readable form, so integrating an add
 | Network | The add-on declares its bridge network and which core containers must attach; `papaia-ctl` writes the Compose override |
 | OIDC | Keycloak clients and protocol mappers registered additively |
 | LibreChat / MCP | `mcpServers` and `allowedDomains` fragments merged at render time |
-| Dashboard | Homepage service card merged at render time |
 | Ingress | Nginx Proxy Manager fragment merged at render time (optional) |
 | TLS trust | The add-on lists env vars that point at the bundled CA cert (`local_ca_env`); `papaia-ctl` clears them via a generated override when an external OIDC issuer is used |
 
@@ -869,7 +865,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── .env.example        # all stack-wide variables (source of truth)
 │   │   ├── infra/              # keycloak · nginx · oauth2-proxy
 │   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai
-│   │   └── services/           # homepage · searxng · firecrawl
+│   │   └── services/           # searxng · firecrawl
 │   └── docs/
 │       ├── architecture.md               # full architecture specification
 │       ├── configuration.md

@@ -33,7 +33,6 @@ src/
 ├── services/               # application services
 │   ├── firecrawl/          # web crawler (commented out by default)
 │   ├── home-assistant/     # home automation (host network, commented out)
-│   ├── homepage/           # service dashboard
 │   ├── minio/              # object storage backing Office Documents downloads
 │   ├── paperless/          # document management (OIDC)
 │   └── searxng/            # privacy-respecting metasearch
@@ -94,7 +93,7 @@ Key points when filling in the `.env` files:
   Linux use the host's primary IP; elsewhere `http://host.docker.internal`
   works out of the box.
 
-Enable optional modules (LocalAI, n8n, SearXNG, Homepage, Paperless-ngx)
+Enable optional modules (LocalAI, n8n, SearXNG, Paperless-ngx)
 by adding their profile to `COMPOSE_PROFILES` in `src/.env` and
 uncommenting their `include:` line in `docker-compose.yml` — see
 [Toggling modules](#toggling-modules) below.
@@ -149,7 +148,6 @@ include:
   # Application Services
   # - path: ./services/firecrawl/docker-compose.yml
   # - path: ./services/home-assistant/docker-compose.yml
-  - path: ./services/homepage/docker-compose.yml
   ...
   # AI Services
   - path: ./ai/librechat/docker-compose.yml
@@ -196,7 +194,6 @@ The directory layout inside `${PAPAIA_CONFIG_DIR}` mirrors `src/` exactly:
 | `${PAPAIA_CONFIG_DIR}/ai/n8n/nginx.conf`                                | `/etc/nginx/conf.d/default.conf`              | n8n-proxy   |
 | `${PAPAIA_CONFIG_DIR}/infra/keycloak/keycloak.conf`                     | `/opt/keycloak/conf/keycloak.conf`            | keycloak    |
 | `${PAPAIA_CONFIG_DIR}/infra/keycloak/realm-import/`                     | `/opt/keycloak/data/import`                   | keycloak    |
-| `${PAPAIA_CONFIG_DIR}/services/homepage/config/`                        | `/app/config`                                 | homepage    |
 | `${PAPAIA_CONFIG_DIR}/services/searxng/settings.yml`                    | `/etc/searxng/_data/settings.yml`             | searxng     |
 
 ### Populating the directory

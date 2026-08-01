@@ -116,7 +116,6 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     assert (
         tree["ai/litellm"]["GENERIC_REDIRECT_URI"] == "https://papaia.example.com:8200/sso/callback"
     )
-    assert tree[""]["HOMEPAGE_PUBLIC_URL"] == "https://papaia.example.com:8300"
     assert tree[""]["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
     assert tree[""]["OAUTH2_PROXY_COOKIE_SECURE"] == "true"
     # internal Docker DNS endpoints use https because Keycloak now terminates
