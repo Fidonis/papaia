@@ -23,7 +23,7 @@ based on merged pull requests; this file mirrors the published releases.
 ### 🧹 Maintenance
 
 - chore: remove `src/backup-papaia.sh` and `src/restore-papaia.sh`, superseded by the `papaia-ctl` commands
-- chore!: remove the Homepage service and its dashboard seam, superseded by papaia-manager. The add-on contract now has four seams (network, OIDC, LibreChat-MCP, Ingress); an existing installation drops the `HOMEPAGE_*` variables, the `homepage` profile and `$PAPAIA_CONFIG_DIR/services/homepage/` on its next `papaia-ctl setup`
+- chore: remove the Homepage service, superseded by papaia-manager, whose dashboard renders from `manager/tiles.yaml`. The add-on contract loses the Homepage seam with it and now has four seams (network, OIDC, LibreChat-MCP, Ingress)
 
 ## [1.0.0] - 2026-07-26
 

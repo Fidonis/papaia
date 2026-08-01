@@ -489,25 +489,7 @@ _REMOVED_KEYS: set[tuple[str, str]] = {
     # The image tag is pinned directly in manager/docker-compose.yml; no
     # ${MANAGER_IMAGE_TAG} interpolation is left to read it.
     ("", "MANAGER_IMAGE_TAG"),
-    # The Homepage dashboard was superseded by papaia-manager and removed from
-    # the stack. All four keys sat in the *root* .env of at least one shipped
-    # release (HOMEPAGE_IMAGE and HP_ALLOWED_HOSTS up to v0.8.0, the other two
-    # after it), so an installation upgrading to 1.0.0 carries them. Without
-    # this, write_env_file re-emits each one under its "not present in the
-    # shipped template" banner on every run, forever.
-    ("", "HOMEPAGE_IMAGE"),
-    ("", "HOMEPAGE_EXT_PORT"),
-    ("", "HOMEPAGE_PUBLIC_URL"),
-    ("", "HP_ALLOWED_HOSTS"),
 }
-
-# Compose profiles of services that no longer exist. Compose itself tolerates
-# an unknown profile (it simply enables nothing), so this is not about a
-# startup failure -- it is about deployment.yaml: sync_manifest mirrors
-# COMPOSE_PROFILES into core.profiles, which is the manifest the compat gate
-# and papaia-manager read. A profile no compose file answers to must not
-# appear there as if it were active.
-_REMOVED_PROFILES: set[str] = {"homepage"}
 
 
 def migrate_env_keys(tree: EnvTree) -> EnvTree:
@@ -530,20 +512,6 @@ def migrate_env_keys(tree: EnvTree) -> EnvTree:
         if values is not None:
             values.pop(key, None)
 
-    return tree
-
-
-def migrate_removed_profiles(tree: EnvTree) -> EnvTree:
-    """Drop Compose profiles of services that were removed from the stack.
-
-    Runs unconditionally on every `papaia-ctl setup`, like migrate_env_keys --
-    an operator who enabled such a profile by hand would otherwise keep a
-    COMPOSE_PROFILES entry that no compose file answers to."""
-    root = tree.setdefault("", {})
-    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
-    if not any(p in _REMOVED_PROFILES for p in profiles):
-        return tree
-    root["COMPOSE_PROFILES"] = ",".join(p for p in profiles if p not in _REMOVED_PROFILES)
     return tree
 
 
