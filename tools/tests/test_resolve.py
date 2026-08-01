@@ -836,14 +836,20 @@ def test_migrate_removed_profiles_noop_without_removed_entry(repo_root):
 
 
 def test_migrate_env_keys_drops_homepage_keys(repo_root):
+    # The shape a v0.6.0 - v0.8.0 bundle carries into a 1.0.0 upgrade: all four
+    # keys lived in the root .env, HOMEPAGE_IMAGE and HP_ALLOWED_HOSTS included.
     tree = envtree.load_seed_tree(repo_root)
+    tree[""]["HOMEPAGE_IMAGE"] = "ghcr.io/gethomepage/homepage:v1.12.3"
     tree[""]["HOMEPAGE_EXT_PORT"] = "8300"
     tree[""]["HOMEPAGE_PUBLIC_URL"] = "http://host.docker.internal:8300"
+    tree[""]["HP_ALLOWED_HOSTS"] = "localhost:8300"
 
     tree = resolve.migrate_env_keys(tree)
 
+    assert "HOMEPAGE_IMAGE" not in tree[""]
     assert "HOMEPAGE_EXT_PORT" not in tree[""]
     assert "HOMEPAGE_PUBLIC_URL" not in tree[""]
+    assert "HP_ALLOWED_HOSTS" not in tree[""]
 
 
 def test_migrate_env_keys_renames_oidc_endpoints(repo_root):
