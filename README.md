@@ -1,20 +1,27 @@
 # papAIa
 
 > Self-hosted, OIDC-first AI & document platform — Lean Core, built to extend.
-> by **Fidonis GmbH** · <https://fidonis.de>
+> Developed and maintained by **Fidonis GmbH** · <https://www.fidonis.de>
 
 papAIa is a Docker Compose platform that bundles a chat UI, an LLM proxy, local model
 hosting, and a Keycloak-based SSO layer into a self-sufficient **Lean Core**. Additional
 services — document management, RAG, workflow automation — attach through a standardised
 **add-on contract** rather than being hard-wired into the stack.
 
+It is built by [Fidonis GmbH](https://www.fidonis.de) on one premise: AI is only useful to
+a mid-sized company if the company keeps control of its own data. Everything here runs on
+the customer's own infrastructure, every model call leaves through a single auditable
+gateway, and no component depends on a vendor that could withdraw it. Local, modular,
+vendor-independent — that is what the architecture optimises for, and why the trade-offs
+throughout this document fall the way they do.
+
 This is the **1.0.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
 **Contents** — [Services](#services) · [Quick start](#quick-start) ·
-[papaia-ctl reference](#papaia-ctl-reference) · [Architecture](#architecture-overview) ·
-[Advanced configuration](#advanced-configuration)
+[papaia-ctl reference](#papaia-ctl-reference) · [papaia-manager](#papaia-manager) ·
+[Architecture](#architecture-overview) · [Advanced configuration](#advanced-configuration)
 
 ---
 
@@ -44,10 +51,11 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview and backup/restore. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 
-`localai` and `librechat-websearch` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--web-search`).
+`localai`, `manager` and `librechat-websearch` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`).
 
 > Everything else — document management, RAG, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
@@ -62,6 +70,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | LibreChat | Native OIDC | `openid-client`, PKCE enforced |
 | LiteLLM (UI) | Generic OIDC | API key for programmatic access |
 | LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
+| papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only |
 | NPM admin UI | oauth2-proxy sidecar | — |
 | oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
 
@@ -130,7 +139,8 @@ Once the stack is up, the default endpoints for a local install are:
 
 - LibreChat — `http://host.docker.internal:8000`
 - Keycloak admin — `https://host.docker.internal:8110`, user `admin`, password `KC_ADMIN_PASSWORD`
-- papaia-manager — `http://host.docker.internal:8120` (if the `manager` profile is active)
+- papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
+  (Linux hosts only — see [papaia-manager](#papaia-manager))
 
 The realm ships two test users: `admin` / `admin` (roles `admin`, `user`, `localai-access`)
 and `testuser` / `testuser` (roles `user`, `finance`).
@@ -167,6 +177,7 @@ papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
 papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl help
@@ -194,7 +205,9 @@ tools/papaia-ctl setup [OPTIONS]
 | `--app-host=URL` | _(prompted)_ | Public papAIa URL — scheme + host + optional port, no trailing path |
 | `--auth-host=URL` | _(derived)_ | Public Keycloak URL; only relevant with `internal_keycloak` |
 | `--librechat-host=URL` | _(derived)_ | Public LibreChat URL if it differs from `--app-host` |
+| `--litellm-host=URL` | _(derived)_ | Public LiteLLM URL if it differs from `--app-host` |
 | `--localai-host=URL` | _(derived)_ | Public LocalAI URL if it differs from `--app-host` |
+| `--manager-host=URL` | _(derived)_ | Public papaia-manager URL if it differs from `--app-host` |
 | `--npm-admin-host=URL` | _(derived)_ | Public URL of the Nginx PM admin UI |
 | `--auth-provider=VALUE` | `internal_keycloak` | `internal_keycloak` or `external_oidc` |
 | `--oidc-issuer=URL` | _(required for `external_oidc`)_ | External OIDC issuer URL |
@@ -206,6 +219,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--reranker-model=NAME` | _(prompted, optional)_ | LiteLLM model name used for reranking |
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
+| `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |
@@ -510,6 +524,8 @@ ${PAPAIA_CONFIG_DIR}/
 ├── ai/                     # librechat · litellm · localai · jinaai
 ├── infra/                  # keycloak (incl. realm-import/) · nginx · oauth2-proxy
 ├── services/               # searxng · firecrawl
+├── manager/                # papaia-manager state: catalogs.yaml · installed.yaml
+│                           #   tiles.yaml · jobs/ · audit.log
 ├── addons/<name>/.env      # per-add-on secrets
 ├── overlay/                # customer config overrides (highest merge layer)
 └── overrides/              # auto-generated add-on network overrides
@@ -552,15 +568,126 @@ of both without discarding its secrets.
 
 ---
 
+## papaia-manager
+
+`papaia-ctl` is a CLI: precise, scriptable, and shell access on the host is the price of
+admission. **papaia-manager** is the browser counterpart — an optional core service
+(profile `manager`, port 8120) that lets an operator discover, install, start, stop, update
+and remove add-ons, see what the stack is running, and take or replay a backup, without ever
+opening a terminal on the host.
+
+It does not reimplement any of it. Every mutating operation shells out to `papaia-ctl`, and
+status queries read the same modules under `tools/lib/`, so the UI and the CLI cannot drift
+apart in behaviour. Anything done in the browser is visible to the next `papaia-ctl` command
+and vice versa; `deployment.yaml` stays the single source of truth for both.
+
+```bash
+tools/papaia-ctl setup --manager --manager-host=https://manager.example.com
+tools/papaia-ctl start
+```
+
+`setup` prompts for it interactively (default: enabled) and derives `MANAGER_PUBLIC_URL`
+from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the profile off.
+
+### What it offers
+
+| Surface | Contents |
+|---|---|
+| **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. |
+| **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. |
+| **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. |
+| **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and an optional retention period. |
+
+### Catalogues
+
+A catalogue is a source of add-ons — a Git repository or a local directory — registered at
+runtime rather than shipped with the Core, in
+`$PAPAIA_CONFIG_DIR/manager/catalogs.yaml`. Each is scanned for top-level `papaia-app.yaml`
+manifests. Installing materialises a **pinned snapshot at a specific commit**, so refreshing
+a catalogue later never moves code out from under a running container. An update is an
+explicit operation: refresh, diff the candidate's `.env.example` against the installed
+bundle so new `CHANGE_ME` keys can be filled in first, then stop, re-materialise and start.
+
+### Access control
+
+Authentication is native OIDC against the realm client `papaia-manager` — there is no
+oauth2-proxy sidecar in front of it. Two realm roles gate the UI, and the same dependencies
+guard the JSON API:
+
+| Variable | Default | Grants |
+|---|---|---|
+| `MANAGER_ADMIN_ROLE` | `admin` | Every surface — add-ons, catalogues, services, backup, jobs |
+| `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
+
+An account holding neither role is rejected at login. Both variables live in
+`src/manager/.env`, not in the root `.env`: the compose file never interpolates them, so a
+root-level copy would resolve but never reach the container.
+
+### Host requirements
+
+The manager invokes `papaia-ctl`, which invokes `docker compose`, which resolves the
+bind-mount sources in the Core and add-on compose files. Those paths must therefore mean
+the same thing inside the container as on the host — **path parity**:
+
+- `PAPAIA_WORKSPACE_DIR`, `PAPAIA_CONFIG_DIR` and `PAPAIA_BACKUP_DIR` are each mounted at
+  their own host path, not remapped to `/workspace` or `/config`. `setup` stamps all three
+  automatically.
+- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it on the
+  host. Discover it with:
+
+  ```bash
+  docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine \
+    stat -c '%g' /var/run/docker.sock
+  ```
+
+- The container runs as the host `UID`/`GID` so that files it writes into the config
+  directory keep the ownership `setup` established.
+
+> **The `manager` profile therefore requires a Linux host.** Docker Desktop on Windows and
+> macOS does not preserve host-path parity across its VM boundary, so the mounts above
+> cannot be satisfied. Everything else in the stack runs on Docker Desktop as usual — leave
+> the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+
+Granting a container access to the Docker socket is granting it root on the host. That is
+inherent to what the manager does, and the reason its access is role-gated and its
+operations are recorded in `$PAPAIA_CONFIG_DIR/manager/audit.log`. Expose it behind TLS and
+treat `MANAGER_ADMIN_ROLE` as a host-administrator role.
+
+### State
+
+Everything the manager owns lives in `$PAPAIA_CONFIG_DIR/manager/`, so `papaia-ctl backup`
+captures it along with the rest of the installation:
+
+| File | Contents |
+|---|---|
+| `catalogs.yaml` | Registered add-on sources |
+| `installed.yaml` | Which add-on came from which catalogue, at which commit |
+| `tiles.yaml` | Dashboard tiles, grouped, with per-tile visibility |
+| `jobs/` | Records of long-running operations, with their streamed log output |
+| `audit.log` | Who triggered which operation |
+
+The application itself ships as the pinned image `ghcr.io/fidonis/papaia-manager`, built by
+[Fidonis](https://www.fidonis.de) in its own repository; `src/manager/` here carries only
+the compose file and `.env.example`. Upgrading the manager is an image-tag change,
+independent of the platform release cadence.
+
+---
+
 ## Architecture overview
 
 papAIa is structured in three tiers:
 
 - **Tier 1 — Core** (always on): identity, ingress, inference, and the chat layer.
   Self-sufficient; no add-on required.
-- **Tier 2 — First-party add-ons**: Fidonis-maintained services that plug in through the
-  add-on contract, each in its own repository, version-pinned.
+- **Tier 2 — First-party add-ons**: services maintained by [Fidonis](https://www.fidonis.de),
+  plugging in through the add-on contract, version-pinned.
 - **Tier 3 — Custom add-ons**: bespoke customer services following the same contract.
+
+The split is deliberate. A stack that grows every service a single customer once asked for
+becomes unmaintainable across a fleet, and a customer who cannot remove what they do not
+need is not sovereign over their own deployment. Keeping the Core lean and everything else
+behind one contract is how Fidonis runs the same artifact for every customer while each
+installation contains only what that customer chose.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -629,7 +756,13 @@ tools/papaia-ctl start                    # re-render the core with the new frag
 
 The reference add-on is **Paperless-ngx**: document management with native OIDC, plus an
 OIDC/RBAC MCP server that lets LibreChat query a user's documents under that user's own
-permissions — no shared admin credentials.
+permissions — no shared admin credentials. It is one of the first-party add-ons Fidonis
+maintains and version-pins against the `ADDON_API` contract, so a Core upgrade cannot
+silently break it.
+
+Because the contract is the only integration point, an add-on you write yourself is
+indistinguishable from one Fidonis ships. There is no privileged path, and nothing in the
+Core needs to know your add-on exists.
 
 ---
 
@@ -842,6 +975,10 @@ The short version: edit `overlay/` or the profile list, then run `tools/papaia-c
 Moving to a newer release is `tools/papaia-ctl upgrade`; the config directory and everything
 under `overlay/` survive untouched.
 
+These are the same commands Fidonis runs when it operates an installation on a customer's
+behalf. There is no separate operator edition and no privileged tooling behind the
+published path — anything an operator can do to a papAIa installation is in this README.
+
 ## Troubleshooting
 
 Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-proxy,
@@ -871,6 +1008,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── .env.example        # all stack-wide variables (source of truth)
 │   │   ├── infra/              # keycloak · nginx · oauth2-proxy
 │   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai
+│   │   ├── manager/            # papaia-manager (optional, profile: manager)
 │   │   └── services/           # searxng · firecrawl
 │   └── docs/
 │       ├── architecture.md               # full architecture specification
@@ -905,3 +1043,26 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — Common failure modes.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — How to contribute.
 - [`CHANGELOG.md`](CHANGELOG.md) — Release history.
+
+---
+
+## About Fidonis
+
+papAIa is developed and maintained by **[Fidonis GmbH](https://www.fidonis.de)**.
+
+Fidonis stands for technological sovereignty: bringing local, modular AI to mid-sized
+companies — dependable, secure, and vendor-independent. papAIa is how that looks in
+practice. Every component runs on infrastructure the customer controls, the model layer is
+replaceable without touching anything above it, and the whole stack can be taken over,
+audited, or moved elsewhere without asking anyone's permission.
+
+Fidonis operates papAIa for customers who would rather not run it themselves, and builds
+the first-party add-ons and the custom integrations that connect it to a company's existing
+systems. Either way it is the same artifact from this repository — the difference is who
+runs it, not what is installed.
+
+The stack is MIT-licensed and free to use, extend and self-host, with or without Fidonis.
+See [LICENSE](LICENSE) for the code and [TRADEMARK.md](TRADEMARK.md) for the rules covering
+the papAIa and Fidonis names.
+
+**[www.fidonis.de](https://www.fidonis.de)**
