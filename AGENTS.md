@@ -7,17 +7,20 @@
 **papAIa** is a self-hosted, OIDC-secured Docker Compose platform structured in three
 tiers:
 
-- **Lean Core** (always on): Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat,
-  LiteLLM, LocalAI. Self-sufficient — runs without any extension.
-- **First-party add-ons** (Fidonis-maintained, each in its own repo, version-pinned):
-  RAG / vector search (qdrant-rag), documents (Paperless-ngx + MCP bridge), workflow
-  automation (n8n), metasearch (SearXNG), web crawling (Firecrawl).
+- **Lean Core**: Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat and LiteLLM
+  always on; LocalAI and papaia-manager opt-in via their Compose profiles.
+  Self-sufficient — runs without any add-on.
+- **First-party add-ons** (Fidonis-maintained, version-pinned, installed by path):
+  documents (Paperless-ngx + MCP bridge), RAG / vector search (qdrant-rag), workflow
+  automation (n8n).
 - **Custom add-ons** (per-customer, same add-on contract).
 
 Add-ons integrate through four standardised seams — network attachment, OIDC client
 registration, LibreChat-MCP fragments, and Nginx ingress rules — without
-requiring changes to any tracked file in the Core repo. The add-on manifest
-(`papaia-app.yaml`) in each add-on repo declares all seams in machine-readable form.
+requiring changes to any tracked file in the Core repo. A fifth, non-seam mechanism
+(`local_ca_env`) lets an add-on declare which of its variables point at the bundled
+Keycloak CA, so `papaia-ctl` can clear them for an external OIDC issuer. The add-on
+manifest (`papaia-app.yaml`) declares all of it in machine-readable form.
 
 The repository is **configuration-as-code only** — no upstream service source code lives
 here. Changes are almost always YAML, shell scripts, or documentation.
@@ -42,14 +45,14 @@ Non-negotiable. Any change that violates them must be rejected and undone.
 
 ### Workspace topology
 
-papAIa is designed to run in a workspace where extension repos sit alongside the Core
+papAIa is designed to run in a workspace where add-on repos sit alongside the Core
 checkout:
 
 ```
 [workspace root]/
 ├── papaia/                    ← this repo (read-only at deploy time)
-├── addons/
-│   └── papaia-addon-<name>/   ← add-on repos cloned alongside (opt-in)
+├── papaia-addons/
+│   └── <name>/                ← add-ons cloned alongside (opt-in)
 └── papaia-config/             ← PAPAIA_CONFIG_DIR (generated state, never committed)
     ├── deployment.yaml         # installation manifest (active add-ons, profiles)
     ├── overlay/                # customer config overrides (highest merge layer)
@@ -70,7 +73,8 @@ tools/
   lib/                        # Python: cli.py · cli_addon.py · deployment.py · envtree.py
                               #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
                               #   compat.py · semver.py · render_core.py · gen_override.py
-                              #   backup.py · upgrade.py · migrations.py · common.py
+                              #   backup.py · upgrade.py · migrations.py · npm_provision.py
+                              #   common.py
     sh/                       # Bash command libraries sourced by papaia-ctl
   migrations/                 # Release migrations run by `papaia-ctl upgrade`
                               #   <x.y.z>__<slug>.sh|.py — contract in its README
@@ -78,28 +82,23 @@ tools/
 src/
   docker-compose.yml          # Root compose — shared network + include list only
   .env.example                # All stack-wide variables (source of truth for env docs)
+  sync-config.sh              # Deprecated low-level config-dir seeding; manual fallback
+  README.md                   # Compose-level orchestration notes
   infra/
     keycloak/                 # OIDC IdP (Java/PostgreSQL)
-    nginx/                    # Nginx Proxy Manager (TLS termination)
+    nginx/                    # Nginx Proxy Manager (TLS termination) + admin-UI sidecar
     oauth2-proxy/             # Forward-auth gateway (Go)
-    technitium/               # Optional DNS server
   ai/
+    README.md                 # Per-AI-service summary
     librechat/                # Multi-provider chat interface
     litellm/                  # LLM proxy gateway
     localai/                  # Local inference (CPU / NVIDIA GPU)
-    qdrant-rag/               # OIDC + RBAC vector search (MCP, FastMCP/Python)
-    qdrant-webdav-ingest/     # WebDAV → Qdrant ingestion worker
-    mcp-paperless/            # Per-user Paperless proxy (MCP, Node.js)
-    mcp-office-docs/          # Office document generation MCP server
     mcp-firecrawl/            # Firecrawl MCP server
-    n8n/                      # Workflow automation
     jinaai/                   # Optional Jina reranker
+  manager/                    # papaia-manager — addon lifecycle UI (image-based, profile: manager)
   services/
-    paperless/                # Document management
     searxng/                  # Privacy-respecting metasearch
     firecrawl/                # Web crawler
-    minio/                    # S3-compatible object store
-    home-assistant/           # Optional home automation
 docs/
   architecture.md                # Full architecture specification (3-tier model,
                                  # add-on contract, integration seams, manifest schema)
@@ -128,16 +127,17 @@ docs/
   `src/.env.example`)
 - Per-service `.env` files in subdirectories — service-specific secrets (all gitignored)
 - `$PAPAIA_CONFIG_DIR` — operator-editable config files, populated and kept in sync by
-  `tools/papaia-ctl setup` / `apps render` via a 3-layer merge:
+  `tools/papaia-ctl setup` / `start` via a 3-layer merge:
   ```
   repo base (src/<target>)
     + active addon fragments (<addon-path>/integration/<target>/)
     + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>/)
       → $PAPAIA_CONFIG_DIR/<target>
   ```
-  Rendering runs on `setup`, on every `start`, and on every `addon` operation.
-  `src/sync-config.sh` is the deprecated lower-level predecessor — still present as a
-  manual fallback, but not part of the normal operating path.
+  Rendering runs on `setup`, on every `start`, and on every `addon` operation. There is
+  no separate render command. `src/sync-config.sh` is the deprecated lower-level
+  predecessor — still present as a manual fallback, but not part of the normal
+  operating path.
 - `$PAPAIA_CONFIG_DIR/deployment.yaml` — the installation manifest: active addons,
   active Core profiles, platform version, hosting type. Read by `gen_override.py` to
   generate the addon network attachment overrides.
@@ -187,14 +187,21 @@ PR body must include all sections from the template:
 
 ## Linting & Code Style
 
-Run `make lint` locally before pushing. CI enforces the same checks.
+Run the linters locally before pushing; `.github/workflows/ci.yml` runs the same
+checks on every push and pull request.
 
 | Language | Tool | Requirement |
 |----------|------|-------------|
-| Shell (`*.sh`) | shellcheck | `--severity=warning` must pass |
+| Shell (`*.sh`, `tools/papaia-ctl`) | shellcheck | `--severity=warning` must pass |
 | YAML (`*.yml`, `*.yaml`) | yamllint | Project `.yamllint` config must pass |
 | Dockerfiles | hadolint | Project ignore list in CI must pass |
-| Python (`tools/lib/*.py`) | ruff (`tools/pyproject.toml`) | Run locally — not yet wired into CI |
+| Python (`tools/lib/*.py`) | ruff + pytest (`tools/pyproject.toml`) | Run locally — not yet wired into CI |
+
+```sh
+shellcheck --severity=warning tools/papaia-ctl tools/lib/sh/*.sh src/*.sh
+yamllint .
+cd tools && ruff check lib tests && pytest tests/
+```
 
 Shell conventions:
 - `set -euo pipefail` at the top of every script

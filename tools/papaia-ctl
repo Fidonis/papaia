@@ -11,14 +11,15 @@
 # Usage:
 #   papaia-ctl setup    [--config-dir=PATH] [--env=NAME] [--host-ip=IP]
 #                       [--app-host=URL] [--auth-host=URL] [--librechat-host=URL]
+#                       [--litellm-host=URL] [--npm-admin-host=URL]
 #                       [--auth-provider=internal_keycloak|external_oidc]
 #                       [--oidc-issuer=URL]
 #                       [--reverse-proxy-provider=internal_nginx|external_proxy|no_proxy]
 #                       [--external-reverse-proxy|--no-external-reverse-proxy]
-#                       [--web-search|--no-web-search]
+#                       [--web-search|--no-web-search] [--reranker-model=NAME]
 #                       [--local-ai|--no-local-ai] [--localai-host=URL]
 #                       [--manager|--no-manager] [--manager-host=URL]
-#                       [--backup-dir=PATH]
+#                       [--backup-dir=PATH] [--env-only]
 #                       [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl start         [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
 #   papaia-ctl stop          [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
@@ -52,7 +53,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
