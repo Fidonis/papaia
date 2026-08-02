@@ -9,8 +9,14 @@ services:
     depends_on:
       librechat-mongodb:
         condition: service_healthy
+      # litellm lives in its own profile. Without `required: false` a
+      # profile-restricted selection (COMPOSE_PROFILES=librechat) disables it,
+      # which makes the project invalid — and `docker compose stop` answers an
+      # invalid project by silently falling back to every container of the
+      # project instead of failing.
       litellm:
         condition: service_started
+        required: false
       keycloak:
         condition: service_healthy
         required: false

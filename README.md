@@ -257,7 +257,9 @@ before bringing up the core. If any add-on is INCOMPATIBLE the start is aborted.
 `--force` to demote incompatibility to a warning and proceed.
 
 `--profiles` takes a comma-separated list of Compose profiles and overrides `COMPOSE_PROFILES`
-for this invocation only.
+for this invocation only. The selection is validated up front: a profile list that names no
+service, or that cuts off a service from a dependency it hard-requires, is rejected with exit
+code 2 instead of being handed to Compose.
 
 ### `stop`
 
@@ -268,6 +270,10 @@ tools/papaia-ctl stop [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PA
 Without `--clean-up`: `docker compose stop` — containers are paused but not removed; volumes
 and networks are kept. With `--clean-up`: `docker compose down` — containers are removed,
 volumes are kept. `--addons` applies the same operation to all active add-ons.
+
+`--profiles` restricts the operation to the services of those profiles and is validated the
+same way as on [`start`](#start) — without that gate an unresolvable profile list would make
+Compose fall back to stopping every container of the project.
 
 ### `upgrade`
 
