@@ -17,6 +17,37 @@ _addon_compose_all() {
     done < <(py_cli active-addons 2>/dev/null)
 }
 
+# Guard for every profile-restricted compose call.
+#
+# A profile subset that disables a hard `depends_on` target makes the project
+# invalid. `docker compose stop`/`down` do not abort on that -- they fall back to
+# project-name-only mode and derive their target set from the running containers
+# of the project, so a scoped stop silently becomes a whole-stack stop. Resolve
+# the selection up front and refuse rather than hand compose a project it will
+# reinterpret.
+#
+# $1 = profile list, $2 = env file, rest = the `-f` args of the real call
+_require_profiles_resolve() {
+    local profiles="$1" env_file="$2"; shift 2
+    local -a files=("$@")
+    local services status=0
+    services="$(COMPOSE_PROFILES="$profiles" docker compose "${files[@]}" \
+        --env-file "$env_file" config --services 2>&1)" || status=$?
+
+    if [ "$status" -ne 0 ]; then
+        error "Profiles '$profiles' do not resolve to a valid compose project:"
+        error "  $services"
+        error "A service in these profiles depends on a service outside them. Add the"
+        error "missing profile to --profiles, or mark that dependency 'required: false'."
+        exit 2
+    fi
+    if [ -z "$services" ]; then
+        error "Profiles '$profiles' match no service. Check the profile names against"
+        error "COMPOSE_PROFILES in $env_file."
+        exit 2
+    fi
+}
+
 cmd_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0
     while [ $# -gt 0 ]; do
@@ -50,6 +81,13 @@ cmd_start() {
     py_cli render
 
     local env_file="$REPO_ROOT/src/.env"
+
+    # Before the addons, so an unresolvable profile set aborts the whole command
+    # instead of leaving the addons started and the core down. Checked against
+    # the core compose file only; a broken override still fails `up` loudly.
+    if [ -n "$profiles" ]; then
+        _require_profiles_resolve "$profiles" "$env_file" -f "$COMPOSE_FILE"
+    fi
 
     if [ "$addons" -eq 1 ]; then
         info "Starting active addons..."
@@ -115,6 +153,12 @@ cmd_stop() {
     done
     CONFIG_DIR="$config_dir"
     local env_file="$REPO_ROOT/src/.env"
+
+    # Before the addons, so an unresolvable profile set aborts the whole command
+    # instead of leaving the addons stopped and the core untouched.
+    if [ -n "$profiles" ]; then
+        _require_profiles_resolve "$profiles" "$env_file" -f "$COMPOSE_FILE"
+    fi
 
     if [ "$addons" -eq 1 ]; then
         info "Stopping active addons..."
