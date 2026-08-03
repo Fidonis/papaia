@@ -67,6 +67,110 @@ def test_generate_ssl_cert_override_removes_file_for_internal_keycloak(config_di
     assert not out_path.exists()
 
 
+def _localai_override(config_dir: Path) -> Path:
+    return config_dir / "overrides" / "docker-compose.localai-gpu.override.yml"
+
+
+def test_localai_gpu_override_inherits_the_pinned_version(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "nvidia-cuda-13")
+
+    override = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))
+    localai = override["services"]["localai"]
+    # v9.9.9 is the fixture's pin — proof the version is read back from the
+    # compose file rather than stored in the config dir.
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-nvidia-cuda-13"
+    device = localai["deploy"]["resources"]["reservations"]["devices"][0]
+    assert device["driver"] == "nvidia"
+
+
+def test_localai_gpu_override_intel_passes_dri(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "intel")
+
+    localai = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))["services"][
+        "localai"
+    ]
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-intel"
+    assert localai["devices"] == ["/dev/dri:/dev/dri"]
+    assert "deploy" not in localai
+
+
+def test_localai_gpu_override_hipblas_passes_kfd(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "hipblas")
+
+    localai = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))["services"][
+        "localai"
+    ]
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-hipblas"
+    assert localai["devices"] == ["/dev/dri:/dev/dri", "/dev/kfd:/dev/kfd"]
+    assert localai["group_add"] == ["video"]
+
+
+def test_localai_gpu_override_vulkan_uses_present_devices(config_dir, repo_root, tmp_path):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    dev_root = tmp_path / "dev"
+    (dev_root / "dri").mkdir(parents=True)
+
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "vulkan", dev_root)
+
+    localai = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))["services"][
+        "localai"
+    ]
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-vulkan"
+    assert localai["devices"] == ["/dev/dri:/dev/dri"]
+
+
+def test_localai_gpu_override_removed_for_cpu(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "intel")
+    assert _localai_override(config_dir).is_file()
+
+    # Switching a host back to CPU has to take the override away again,
+    # otherwise the GPU image would keep being pulled.
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "cpu")
+    assert not _localai_override(config_dir).exists()
+
+
+def test_localai_gpu_override_removed_for_unset_variant(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "intel")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "")
+    assert not _localai_override(config_dir).exists()
+
+
+def test_localai_gpu_override_ignores_unknown_variant(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "quantum")
+    assert not _localai_override(config_dir).exists()
+
+
+def test_localai_gpu_override_declares_no_external_networks(config_dir, repo_root):
+    """The start-up loop skips overrides whose external networks are absent —
+    this one must never be skipped."""
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "intel")
+    assert gen_override.external_networks(_localai_override(config_dir)) == []
+
+
+def test_localai_gpu_override_skipped_when_image_is_unpinned(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    compose = repo_root / "src/ai/localai/docker-compose.yml"
+    compose.write_text(
+        "services:\n  localai:\n    image: localai/localai\n", encoding="utf-8"
+    )
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "intel")
+    assert not _localai_override(config_dir).exists()
+
+
+def test_localai_gpu_override_skipped_when_compose_is_missing(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    (repo_root / "src/ai/localai/docker-compose.yml").unlink()
+    gen_override.generate_localai_gpu_override(config_dir, repo_root, "intel")
+    assert not _localai_override(config_dir).exists()
+
+
 def _write_addon_deployment(config_dir: Path, addons: list[dict]) -> None:
     deployment_path = config_dir / "deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}

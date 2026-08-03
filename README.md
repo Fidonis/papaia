@@ -55,7 +55,8 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 
 `localai`, `manager` and `librechat-websearch` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`).
+(`--local-ai`, `--manager`, `--web-search`). When LocalAI is enabled, setup also asks
+which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
 
 > Everything else — document management, RAG, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
@@ -116,7 +117,9 @@ tools/papaia-ctl setup --non-interactive \
 ```
 
 > In non-interactive mode, `--local-ai` and `--web-search` are **not** implied. Without those
-> flags the corresponding profiles stay as they are — off, on a fresh install.
+> flags the corresponding profiles stay as they are — off, on a fresh install. The same holds
+> for `--localai-variant`: omitted, the current image variant is kept. Pass
+> `--localai-variant=auto` to let the host detection decide.
 
 **3. Start the stack**
 
@@ -219,6 +222,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--reranker-model=NAME` | _(prompted, optional)_ | LiteLLM model name used for reranking |
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
+| `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
 | `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
@@ -922,6 +926,47 @@ server {
   login without an obvious error.
 - `--reverse-proxy-provider=no_proxy` together with `--allow-direct-port-access` runs the stack
   with no proxy and no TLS at all. `setup` asks for confirmation. Development only.
+
+### GPU acceleration for LocalAI
+
+LocalAI is pinned to the CPU image by default. Upstream publishes one image per accelerator
+for every release, and `papaia-ctl setup` picks between them: with the `localai` profile
+enabled it probes the host, reports what it found, and asks which image to install.
+
+| Choice | Image tag | Host prerequisites |
+|---|---|---|
+| CPU | `localai/localai:<version>` | none |
+| NVIDIA GPU (CUDA) | `…-gpu-nvidia-cuda-13` / `…-cuda-12` | proprietary driver + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) |
+| AMD GPU (ROCm) | `…-gpu-hipblas` | ROCm kernel driver (provides `/dev/kfd`) |
+| Intel GPU (SYCL) | `…-gpu-intel` | none — the backend ships its own driver |
+| Vulkan (generic) | `…-gpu-vulkan` | a Vulkan-capable GPU driver |
+
+**The stack installs none of these prerequisites.** Detection reports what the host exposes at
+the moment setup runs; every option stays selectable regardless, so you can configure the stack
+before installing the driver. Picking an undetected variant prints a warning.
+
+The CUDA major version is taken from the installed driver, so NVIDIA hosts get CUDA 13 on
+recent drivers and CUDA 12 on older ones. Non-interactively:
+
+```bash
+tools/papaia-ctl setup -y --app-host=https://papaia.example.com --localai-variant=auto
+```
+
+`auto` resolves to the best detected variant; a concrete name (`intel`, `hipblas`, …) forces
+one. Omitting the flag leaves the current choice untouched.
+
+Only the *variant* is stored, as `LOCALAI_IMAGE_VARIANT` in `$PAPAIA_CONFIG_DIR/.env`. The
+LocalAI version stays pinned in `src/ai/localai/docker-compose.yml`, and the accelerator tag is
+recomposed from it on every render — so `papaia-ctl upgrade` moves GPU installs forward just
+like CPU ones. The image swap and the device passthrough live in a generated
+`overrides/docker-compose.localai-gpu.override.yml`; selecting CPU deletes that file again.
+
+Two caveats worth knowing:
+
+- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in the model
+  YAMLs under `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+- **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
+  `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
 
 ### Multi-environment setup
 

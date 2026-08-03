@@ -31,6 +31,7 @@ from . import (
     deployment,
     envtree,
     gen_override,
+    gpu_detect,
     migrations,
     npm_provision,
     render_core,
@@ -52,6 +53,17 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     line, so the bash dispatcher can read them without a JSON parser."""
     out = defaults.compute_defaults(Path(args.config_dir), Path(args.repo_root))
     for key, value in out.items():
+        print(f"{key}={value}")
+    return 0
+
+
+def cmd_localai_variants(args: argparse.Namespace) -> int:
+    """Print the detected LocalAI image variants as shell-safe KEY=VALUE lines.
+
+    Kept out of `defaults` on purpose: this probe forks nvidia-smi and docker,
+    while `defaults` runs on every single papaia-ctl setup invocation. The
+    wizard calls it only when it is about to ask the question."""
+    for key, value in gpu_detect.detection_vars(gpu_detect.detect()).items():
         print(f"{key}={value}")
     return 0
 
@@ -81,6 +93,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         external_reverse_proxy=_tristate(args.external_reverse_proxy),
         enable_web_search=_tristate(args.enable_web_search),
         enable_local_ai=_tristate(args.enable_local_ai),
+        localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
         reranker_model=args.reranker_model or None,
         allow_direct_port_access=args.allow_direct_port_access,
@@ -108,6 +121,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.migrate_web_search_profiles(tree)
         tree = resolve.resolve_web_search(tree, setup_args)
         tree = resolve.resolve_local_ai(tree, setup_args)
+        tree = resolve.resolve_localai_variant(tree, setup_args)
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -128,6 +142,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
+    gen_override.generate_localai_gpu_override(
+        config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
+    )
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     print(
@@ -153,6 +170,12 @@ def cmd_render(args: argparse.Namespace) -> int:
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    # Also regenerated here, not just in cmd_setup: `papaia-ctl start` renders
+    # before bringing the stack up, so a stale override would otherwise survive
+    # both an upgrade and a variant change.
+    gen_override.generate_localai_gpu_override(
+        config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
+    )
     print("Rendered.")
     return 0
 
@@ -398,6 +421,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_defaults = sub.add_parser("defaults")
     p_defaults.set_defaults(func=cmd_defaults)
 
+    p_localai_variants = sub.add_parser("localai-variants")
+    p_localai_variants.set_defaults(func=cmd_localai_variants)
+
     p_setup = sub.add_parser("setup")
     p_setup.add_argument("--env", default="papaia")
     p_setup.add_argument("--host-ip")
@@ -420,6 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--external-reverse-proxy", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
+    p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--reranker-model", default=None)
     p_setup.add_argument("--backup-dir", default=None)

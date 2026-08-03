@@ -18,6 +18,7 @@
 #                       [--external-reverse-proxy|--no-external-reverse-proxy]
 #                       [--web-search|--no-web-search] [--reranker-model=NAME]
 #                       [--local-ai|--no-local-ai] [--localai-host=URL]
+#                       [--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto]
 #                       [--manager|--no-manager] [--manager-host=URL]
 #                       [--backup-dir=PATH] [--env-only]
 #                       [--allow-direct-port-access] [--force] [-y]
@@ -53,7 +54,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,48p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

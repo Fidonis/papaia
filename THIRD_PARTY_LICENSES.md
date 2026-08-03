@@ -36,7 +36,7 @@ their images there; the table below covers the Core only.
 | `ghcr.io/berriai/litellm` | v1.91.1 | MIT | `ai/litellm` | |
 | `postgres` | 16 | PostgreSQL License | `ai/litellm` | LiteLLM database |
 | `prom/prometheus` | v3.13.1 | Apache-2.0 | `ai/litellm` | |
-| `localai/localai` | v4.6.2 | MIT | `ai/localai` | CPU image; NVIDIA CUDA variant same license |
+| `localai/localai` | v4.7.1 | MIT | `ai/localai` | CPU image; the NVIDIA CUDA, Intel, hipBLAS and Vulkan variants are the same license |
 | `curlimages/curl` | latest | MIT | `ai/localai` | model-init helper |
 | `ghcr.io/fidonis/jina-reranker-api` | 0.1.2 | Apache-2.0 | `ai/jinaai` | Fidonis-maintained wrapper; Jina AI reranker base is Apache-2.0 |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |

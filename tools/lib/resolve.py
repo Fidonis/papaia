@@ -44,6 +44,8 @@ class SetupArgs:
     reverse_proxy_provider: str | None = None
     enable_web_search: bool | None = None  # None = sticky / no change
     enable_local_ai: bool | None = None  # None = sticky / no change
+    # LocalAI accelerator image variant (gpu_detect.VARIANTS); None = sticky / no change
+    localai_variant: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
@@ -564,6 +566,25 @@ def resolve_local_ai(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_local_ai:
         profiles.append("localai")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_localai_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write LOCALAI_IMAGE_VARIANT into the root env when the operator chose one.
+
+    Only the variant is stored, never a full image tag — the version stays
+    pinned in ai/localai/docker-compose.yml so an upgrade can move it.
+
+    The key lives in the root env rather than ai/localai because it is
+    consumed by the override generator, not by the container: ai/localai/.env
+    is mounted via env_file:, so a LOCALAI_-prefixed key there would be
+    injected into LocalAI's own environment for no reason.
+
+    When localai_variant is None the call is a no-op — whatever was already
+    written on a prior run is preserved (sticky)."""
+    if args.localai_variant is None:
+        return tree
+    tree.setdefault("", {})["LOCALAI_IMAGE_VARIANT"] = args.localai_variant
     return tree
 
 

@@ -64,3 +64,19 @@ def test_compute_defaults_web_search_sticky_recognizes_legacy_profiles(repo_root
     out = defaults.compute_defaults(config_dir, repo_root)
 
     assert out["WEB_SEARCH_STICKY"] == "true"
+
+
+def test_compute_defaults_surfaces_sticky_localai_variant(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    root_env = config_dir / ".env"
+    values = common.parse_env_file(root_env)
+    values["LOCALAI_IMAGE_VARIANT"] = "hipblas"
+    common.write_env_file(root_env, values)
+
+    out = defaults.compute_defaults(config_dir, repo_root)
+    assert out["LOCALAI_VARIANT_STICKY"] == "hipblas"
+
+
+def test_compute_defaults_localai_variant_not_sticky_before_seeding(repo_root, config_dir):
+    out = defaults.compute_defaults(config_dir, repo_root)
+    assert out["LOCALAI_VARIANT_STICKY"] == ""

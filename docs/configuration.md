@@ -72,6 +72,7 @@ next to it, even when it has an inline `:-` default.
 | `REVERSE_PROXY_PROVIDER` | `internal_nginx`, `external_proxy` or `no_proxy` |
 | `*_EXT_PORT` | External port allocation — kept together to stay collision-free |
 | `LOCALAI_PUBLIC_URL` | Browser-facing LocalAI URL, derived by setup |
+| `LOCALAI_IMAGE_VARIANT` | LocalAI accelerator image chosen during setup (`cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`); drives the generated GPU override |
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |
 | `MANAGER_EXT_PORT` | External port the manager (profile `manager`) is published on |
 | `MANAGER_PUBLIC_URL` | Browser-facing papaia-manager URL, derived by setup — interpolated as `MANAGER_HOST` in `src/manager/docker-compose.yml` |

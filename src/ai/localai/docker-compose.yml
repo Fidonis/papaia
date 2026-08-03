@@ -51,7 +51,10 @@ services:
   # LocalAI
   # ═══════════════════════════════════════════════════════════════════════════
   localai:
-    image: localai/localai:v4.6.2
+    # CPU image. `papaia-ctl setup` rewrites this to the matching accelerator
+    # tag (-gpu-nvidia-cuda-13, -gpu-intel, ...) via a generated override in
+    # $PAPAIA_CONFIG_DIR/overrides/, reusing the version pinned right here.
+    image: localai/localai:v4.7.1
     restart: unless-stopped
     ports:
       - "${HOST_IP:-0.0.0.0}:${LOCALAI_EXT_PORT}:8080"
