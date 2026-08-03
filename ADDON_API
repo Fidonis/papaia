@@ -1,0 +1,12 @@
+# Addon contract-generation window served by this core.
+# Read by tools/lib/compat.py -- both from this checkout and from an update
+# candidate passed to `papaia-ctl addon check --target-core=PATH`.
+#
+#   current: the contract generation this core ships.
+#   min:     the oldest generation this core still serves.
+#
+# Bump rules (see docs/adr/0002-addon-core-compatibility-gating.md):
+#   breaking seam change  -> current += 1 and min = current
+#   additive seam change  -> current += 1, min unchanged
+current=1
+min=1

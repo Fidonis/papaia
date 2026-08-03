@@ -2,6 +2,11 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # papAIa — sync-config.sh
 #
+# DEPRECATED: superseded by `tools/papaia-ctl setup` (which seeds secrets,
+# resolves hostnames, and renders this same file set via a 3-layer merge in
+# one step). Kept for now as a manual fallback; not referenced from the
+# README or CONTRIBUTING setup instructions anymore.
+#
 # Populates the externalised configuration directory (PAPAIA_CONFIG_DIR)
 # with the shipped defaults from src/. Idempotent and non-destructive:
 # existing files in the target are left untouched so customer edits survive
@@ -22,7 +27,6 @@
 #   ai/n8n/nginx.conf
 #   infra/keycloak/keycloak.conf
 #   infra/keycloak/realm-import/papaia-realm.json.template
-#   services/homepage/config/            (entire directory)
 #   services/searxng/settings.yml
 #
 # Files that are ALWAYS overwritten on each sync (they carry secrets
@@ -106,7 +110,6 @@ FILES=(
 
 # Whole-directory trees to mirror (recursive).
 DIRS=(
-    "services/homepage/config"
     "ai/localai/models"
 )
 

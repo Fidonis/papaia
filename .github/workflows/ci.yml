@@ -34,7 +34,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Check for Dockerfiles
+        id: dockerfiles
+        run: |
+          count=$(find . -name "Dockerfile" | wc -l)
+          echo "found=$([ "$count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Run hadolint
+        if: steps.dockerfiles.outputs.found == 'true'
         uses: hadolint/hadolint-action@v3.3.0
         with:
           recursive: true

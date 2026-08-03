@@ -28,12 +28,12 @@
         "description": "Read-only viewer"
       },
       {
-        "name": "qdrant-admin",
-        "description": "Qdrant RBAC administrator"
-      },
-      {
         "name": "finance",
         "description": "Finance demo user role"
+      },
+      {
+        "name": "localai-access",
+        "description": "Access to LocalAI local inference engine"
       }
     ]
   },
@@ -104,54 +104,6 @@
             "claim.name": "preferred_username",
             "jsonType.label": "String"
           }
-        },
-        {
-          "name": "mcp-paperless-audience",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-audience-mapper",
-          "consentRequired": false,
-          "config": {
-            "included.client.audience": "mcp-paperless",
-            "id.token.claim": "false",
-            "access.token.claim": "true",
-            "introspection.token.claim": "true"
-          }
-        }
-      ]
-    },
-    {
-      "clientId": "paperless",
-      "name": "Paperless-ngx",
-      "description": "Paperless document management",
-      "enabled": true,
-      "clientAuthenticatorType": "client-secret",
-      "secret": "${env.KC_PAPERLESS_CLIENT_SECRET}",
-      "redirectUris": [
-        "*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
-      "standardFlowEnabled": true,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
-      "publicClient": false,
-      "protocol": "openid-connect",
-      "fullScopeAllowed": true,
-      "protocolMappers": [
-        {
-          "name": "groups",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-realm-role-mapper",
-          "consentRequired": false,
-          "config": {
-            "multivalued": "true",
-            "userinfo.token.claim": "true",
-            "id.token.claim": "true",
-            "access.token.claim": "true",
-            "claim.name": "groups",
-            "jsonType.label": "String"
-          }
         }
       ]
     },
@@ -197,7 +149,7 @@
     {
       "clientId": "oauth2-proxy",
       "name": "oauth2-proxy (Forward Auth)",
-      "description": "Protects services without native OIDC (N8N, etc.) via Nginx forward auth",
+      "description": "Protects services without native OIDC via Nginx forward auth",
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "${env.KC_OAUTH2_PROXY_CLIENT_SECRET}",
@@ -231,51 +183,107 @@
       "fullScopeAllowed": true
     },
     {
-      "clientId": "qdrant-rag",
-      "name": "Qdrant Vector DB",
-      "description": "",
+      "clientId": "localai",
+      "name": "LocalAI",
+      "description": "LocalAI local inference engine",
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${env.KC_QDRANT_RAG_CLIENT_SECRET}",
+      "secret": "${env.KC_LOCALAI_CLIENT_SECRET}",
       "redirectUris": [
-        "/*"
+        "*"
       ],
       "webOrigins": [
-        "/*"
+        "+"
       ],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "publicClient": false,
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
+      "authenticationFlowBindingOverrides": {
+        "browser": "f3a8b2c1-4d5e-4f6a-8b9c-1d2e3f4a5b6c"
+      },
       "protocolMappers": [
         {
-          "name": "qdrant-rag-audience",
+          "name": "realm-roles",
           "protocol": "openid-connect",
-          "protocolMapper": "oidc-audience-mapper",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
           "consentRequired": false,
           "config": {
-            "included.client.audience": "qdrant-rag",
-            "id.token.claim": "false",
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
             "access.token.claim": "true",
-            "introspection.token.claim": "true"
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "username",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "preferred_username",
+            "jsonType.label": "String"
           }
         }
       ]
     },
     {
-      "clientId": "mcp-paperless",
-      "name": "MCP Paperless",
-      "description": "OIDC resource server — validates forwarded LibreChat user tokens; no login flows",
+      "clientId": "papaia-manager",
+      "name": "papaia-manager",
+      "description": "papaia-manager extension management UI",
       "enabled": true,
-      "protocol": "openid-connect",
-      "publicClient": false,
-      "standardFlowEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${env.KC_MANAGER_CLIENT_SECRET}",
+      "redirectUris": [
+        "*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
-      "fullScopeAllowed": false
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "username",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "preferred_username",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "users": [
@@ -296,7 +304,7 @@
       "realmRoles": [
         "admin",
         "user",
-        "qdrant-admin"
+        "localai-access"
       ]
     },
     {
@@ -317,6 +325,128 @@
         "user",
         "finance"
       ]
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "id": "f3a8b2c1-4d5e-4f6a-8b9c-1d2e3f4a5b6c",
+      "alias": "localai browser",
+      "description": "LocalAI browser login - requires 'localai' realm role",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "identity-provider-redirector",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 25,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 30,
+          "flowAlias": "localai browser - forms",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d",
+      "alias": "localai browser - forms",
+      "description": "Username, password, OTP, then LocalAI role gate",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "flowAlias": "localai browser - Conditional OTP",
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "flowAlias": "localai access gate",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "id": "b2c3d4e5-f6a7-4b5c-9d0e-1f2a3b4c5d6e",
+      "alias": "localai browser - Conditional OTP",
+      "description": "Flow to determine if OTP is required for LocalAI",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-configured",
+          "authenticatorFlow": false,
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "id": "c3d4e5f6-a7b8-4c5d-0e1f-2a3b4c5d6e7f",
+      "alias": "localai access gate",
+      "description": "Deny access if user lacks the 'localai' realm role",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "authenticatorConfig": "localai-role-condition",
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "deny-access-authenticator",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "localai-role-condition",
+      "config": {
+        "condUserRole": "localai-access",
+        "negate": "true"
+      }
     }
   ]
 }

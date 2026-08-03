@@ -16,52 +16,55 @@ without changing any application code.
 ```
 Browser / Client
       │
-      ├──▶  LibreChat (8000)     ─── native OIDC ──▶  Keycloak (8110)
+      ├──▶  LibreChat (8000)      ─── native OIDC ──▶  Keycloak (8110)
       │
-      ├──▶  Paperless-ngx (8010) ─── native OIDC ──▶  Keycloak (8110)
+      ├──▶  LocalAI (8080)        ─── native OIDC ──▶  Keycloak (8110)
       │
-      ├──▶  Nginx Proxy Manager  ─── forward auth ──▶  oauth2-proxy (4180)
-      │         │                                             │
-      │         └──▶  N8N (8400)                       Keycloak (8110)
+      ├──▶  papaia-manager (8120) ─── native OIDC ──▶  Keycloak (8110)
+      │
+      ├──▶  LiteLLM UI (8200)     ── generic OIDC ──▶  Keycloak (8110)
+      │
+      ├──▶  Nginx Proxy Manager   ─── forward auth ──▶  oauth2-proxy (4180)
+      │         │                                              │
+      │         └──▶  NPM admin UI (8100)              Keycloak (8110)
       │
       └──▶  Keycloak Admin (8110)
 ```
+
+Addon services attach to the same picture: each either speaks OIDC natively against
+the `papaia` realm or is routed through oauth2-proxy by an Nginx fragment.
 
 **OIDC coverage by approach:**
 
 | Service | Auth approach | Notes |
 |---------|--------------|-------|
 | LibreChat | native OIDC | openid-client strategy |
-| Paperless-ngx | native OIDC | django-allauth |
-| N8N | oauth2-proxy forward auth | NPM custom config required |
-| LiteLLM UI | — | SSO requires enterprise license; use API key |
-| Nginx Proxy Manager | — | protected by network / IP restriction |
+| LocalAI | native OIDC | role-restricted via custom browser flow (`localai-access` required) |
+| papaia-manager | native OIDC | role-restricted via `MANAGER_ADMIN_ROLE` / `MANAGER_USER_ROLE` |
+| LiteLLM UI | generic OIDC | admin UI only; API key for programmatic access |
+| NPM admin UI | oauth2-proxy forward auth | sidecar in `src/infra/nginx/docker-compose.yml` |
 
 ---
 
 ## Setup
 
-Before the first `docker compose up`, copy `.env.example` → `.env` in each component
-directory and fill in the required values:
+`tools/papaia-ctl setup` fills every `GENERATE_*` placeholder in the shipped
+`.env.example` files, so no secret has to be created by hand:
 
 ```bash
-cp src/infra/keycloak/.env.example src/infra/keycloak/.env
-cp src/infra/oauth2-proxy/.env.example src/infra/oauth2-proxy/.env
+tools/papaia-ctl setup
 ```
 
-Replace every `GENERATE_*` placeholder with a random secret, e.g.:
+Secrets that must hold the same value in more than one file — `KC_*_CLIENT_SECRET`
+and the consuming service's `OPENID_CLIENT_SECRET` / `GENERIC_CLIENT_SECRET` /
+`OAUTH2_PROXY_CLIENT_SECRET` — are generated once and fanned out to every consumer
+(`SECRET_ALIASES` in `tools/lib/secrets.py`). Re-running `setup` never rotates a value
+that is already set; `--force` regenerates all of them.
 
-```bash
-openssl rand -hex 24   # for client secrets
-openssl rand -hex 16   # for database passwords
-openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'  # for cookie secrets
-```
-
-Make sure the same secret is set in **both** Keycloak's `.env` and the consuming
-service's `.env` (e.g. `KC_OAUTH2_PROXY_CLIENT_SECRET` and `OAUTH2_PROXY_CLIENT_SECRET`
-must match).
-
-All `.env` files are gitignored — secrets never enter version control.
+The canonical copy of every `.env` lives under `$PAPAIA_CONFIG_DIR`; the files inside
+the checkout are derived copies that `papaia-ctl start` overwrites. Edit the config
+directory, never `src/**/.env`. All `.env` files are gitignored — secrets never enter
+version control.
 
 ---
 
@@ -70,21 +73,25 @@ All `.env` files are gitignored — secrets never enter version control.
 ### Starting
 
 ```bash
-cd src/
-docker compose -f docker-compose.yml up -d
+tools/papaia-ctl start
 ```
 
 Keycloak imports the `papaia` realm automatically on the first start
-(`realm-import/papaia-realm.json`). Re-runs skip the import if the realm already exists.
+(`$PAPAIA_CONFIG_DIR/infra/keycloak/realm-import/papaia-realm.json`). Re-runs skip the
+import if the realm already exists.
 
 ### Admin Console
 
+Keycloak terminates TLS itself, so the admin console is served over **HTTPS** — with
+the self-signed certificate `papaia-ctl setup` generated, which the browser will warn
+about on a local install.
+
 | URL | Credentials |
 |-----|-------------|
-| `http://host.docker.internal:8110` | `admin` / see `KC_ADMIN_PASSWORD` in `src/infra/keycloak/.env` |
+| `https://host.docker.internal:8110` | `admin` / see `KC_ADMIN_PASSWORD` |
 
-> Set `KC_ADMIN_PASSWORD` in `src/infra/keycloak/.env` before the first start.
-> Read the current value with: `grep KC_ADMIN_PASSWORD src/infra/keycloak/.env | cut -d= -f2`
+> Read the current password with:
+> `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`
 
 ### Pre-configured Realm: `papaia`
 
@@ -98,30 +105,35 @@ Keycloak imports the `papaia` realm automatically on the first start
 | Client ID | Service | Secret variable |
 |-----------|---------|----------------|
 | `librechat` | LibreChat | `KC_LIBRECHAT_CLIENT_SECRET` |
-| `paperless` | Paperless-ngx | `KC_PAPERLESS_CLIENT_SECRET` |
 | `litellm` | LiteLLM | `KC_LITELLM_CLIENT_SECRET` |
-| `oauth2-proxy` | N8N + others (forward auth) | `KC_OAUTH2_PROXY_CLIENT_SECRET` |
-| `qdrant-rag` | qdrant-rag MCP (OIDC + RBAC) | `KC_QDRANT_RAG_CLIENT_SECRET` |
-| `mcp-paperless` | MCP Paperless (resource server, no login flows) | — |
+| `oauth2-proxy` | Nginx Proxy Manager admin UI + other services without native OIDC | `KC_OAUTH2_PROXY_CLIENT_SECRET` |
+| `localai` | LocalAI (native OIDC, role-restricted) | `KC_LOCALAI_CLIENT_SECRET` |
+| `papaia-manager` | papaia-manager (native OIDC, role-restricted) | `KC_MANAGER_CLIENT_SECRET` |
+
+Addon clients (`paperless`, `qdrant-rag`, ...) are not listed here: an addon
+registers its own client and generates its own secret during installation. The
+core neither stores nor generates those values.
 
 **Audience Mappers for MCP servers**
 
-MCP Paperless and qdrant-rag receive access tokens forwarded by LibreChat
-(`Authorization: Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}`). Each server validates
-the incoming token against Keycloak's JWKS and checks the `aud` (audience) claim.
+An MCP server behind an addon receives access tokens forwarded by LibreChat
+(`Authorization: Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}`). It validates the
+incoming token against Keycloak's JWKS and checks the `aud` (audience) claim, so the
+token LibreChat sends must carry that server's client ID as an audience.
 
-| MCP server | Required audience | Mapper location |
-|---|---|---|
-| mcp-paperless | `mcp-paperless` | `mcp-paperless-audience` mapper on the **`librechat`** client |
-| qdrant-rag | `qdrant-rag` | `qdrant-rag-audience` mapper on the **`qdrant-rag`** client |
+The mappers that produce those audiences ship with the addon, not with the core: an
+addon's `integration/keycloak/` fragments contribute both its own client JSON and an
+audience mapper added to the **`librechat`** client. `papaia-ctl addon install`
+registers them additively; the core realm template stays free of addon references.
 
-The `mcp-paperless` client is registered in the realm as a resource server (no flows,
-no secret) so that the `included.client.audience` reference in the mapper resolves
-correctly. It never issues tokens itself.
+Where the MCP server is not a login client, the addon registers it as a resource
+server (no flows, no secret) so that the `included.client.audience` reference in the
+mapper resolves. It never issues tokens itself.
 
 > **External OIDC provider:** if you use Entra ID, Authentik, or another provider
 > instead of the built-in Keycloak, configure equivalent audience claims in that
-> provider's token issuance policy before enabling mcp-paperless or qdrant-rag.
+> provider's token issuance policy before installing an addon that ships an MCP
+> server.
 
 **Realm Roles**
 
@@ -130,13 +142,15 @@ correctly. It never issues tokens itself.
 | `admin` | Full administrator access |
 | `user` | Regular user (default for all new accounts) |
 | `viewer` | Read-only viewer |
+| `localai-access` | Required for SSO login to LocalAI |
+| `finance` | Finance department (demo role) |
 
 **Default Test Users** (local development only — do not use in production)
 
-| Username | Password | Role |
-|----------|----------|------|
-| `admin` | `admin` | admin, user |
-| `testuser` | `testuser` | user |
+| Username | Password | Roles |
+|----------|----------|-------|
+| `admin` | `admin` | admin, user, localai-access |
+| `testuser` | `testuser` | user, finance (no `localai-access` — cannot log in to LocalAI via SSO) |
 
 ### Linux Host Note
 
@@ -153,17 +167,19 @@ On macOS and Windows (Docker Desktop) it resolves out-of-the-box.
 
 ---
 
-## oauth2-proxy — Forward Auth for N8N and Other Services
+## oauth2-proxy — Forward Auth for Services Without Native OIDC
 
 oauth2-proxy runs on port `4180` and protects services that have no native OIDC support.
 Nginx Proxy Manager checks authentication via oauth2-proxy before forwarding requests.
+In the core it guards the Nginx Proxy Manager admin UI, which runs its own oauth2-proxy
+sidecar; addons use the same mechanism for their own UIs.
 
 Set `OAUTH2_PROXY_COOKIE_SECRET` and `OAUTH2_PROXY_CLIENT_SECRET` in
 `src/infra/oauth2-proxy/.env` (see the Setup section above).
 
 ### Configuring Nginx Proxy Manager for a protected service
 
-For each service to protect (e.g. N8N):
+For each service to protect:
 
 1. Open Nginx Proxy Manager → **Proxy Hosts** → edit/create the host.
 2. Go to the **Advanced** tab and paste:
@@ -198,23 +214,97 @@ location = /oauth2-proxy/auth {
 
 ## Switching to an External OIDC Provider
 
-### 1. Set `AUTH_PROVIDER=external_oidc` in `src/.env`
+### 1. Run setup with external OIDC
+
+```bash
+tools/papaia-ctl setup \
+  --auth-provider=external_oidc \
+  --oidc-issuer=https://your-provider.example.com/realms/your-realm
+```
+
+Or set manually in `src/.env`:
 
 ```dotenv
 AUTH_PROVIDER=external_oidc
-```
-
-### 2. Update OIDC variables in `src/.env`
-
-```dotenv
 OIDC_ISSUER=https://your-provider.example.com/realms/your-realm
-OIDC_CLIENT_ID=librechat
-OIDC_CLIENT_SECRET=your-secret
 ```
 
-Replace the `OPENID_*` / client vars in each service's `.env` as needed.
+`setup` derives all OIDC endpoints from the issuer URL. Client secrets are not derivable —
+copy each one from the external provider into the matching papaia env file (see below).
 
-### 3. Provider-specific notes
+### 2. Create OIDC clients in the external provider
+
+Register a confidential client for each service. When using an external Keycloak the client
+settings mirror the bundled realm (`src/infra/keycloak/realm-import/papaia-realm.json.template`):
+
+| Client ID | PKCE | Redirect URI(s) | papaia secret variable |
+|---|---|---|---|
+| `librechat` | required | `{LIBRECHAT_HOST}/oauth/openid/callback` | `OPENID_CLIENT_SECRET` in `src/ai/librechat/.env` |
+| `litellm` | — | `*` | `GENERIC_CLIENT_SECRET` in `src/ai/litellm/.env` |
+| `oauth2-proxy` | — | `*` | `OAUTH2_PROXY_CLIENT_SECRET` in `src/infra/oauth2-proxy/.env` |
+| `localai` | — | `{LOCALAI_PUBLIC_URL}/api/auth/oidc/callback` | `LOCALAI_OIDC_CLIENT_SECRET` in `src/ai/localai/.env` |
+
+All clients need a **realm-roles protocol mapper** (type: User Realm Role, claim name `roles`,
+multivalued, included in ID token, Access token, and userinfo).
+
+After creating each client, paste its secret from **Clients → `<id>` → Credentials** into the
+matching papaia env file. Then restart the affected services:
+
+```bash
+docker compose restart librechat localai litellm oauth2-proxy
+```
+
+### 3. LibreChat configuration for an external Keycloak
+
+LibreChat's OIDC variables in `src/ai/librechat/.env` (set automatically by `setup`):
+
+```env
+OPENID_ISSUER=https://keycloak.example.com/realms/papaia
+OPENID_CLIENT_ID=librechat
+OPENID_CLIENT_SECRET=<Clients → librechat → Credentials → Client secret>
+OPENID_CALLBACK_URL=https://librechat.example.com/oauth/openid/callback
+OPENID_USE_PKCE=true
+```
+
+In the external Keycloak, the `librechat` client requires:
+
+- **PKCE** enforced: set `pkce.code.challenge.method` to `S256` under the client's
+  Advanced settings.
+- **Realm-roles mapper**: protocol mapper of type "User Realm Role", claim name `roles`,
+  multivalued, included in ID token, Access token, and userinfo.
+- **Username mapper**: protocol mapper of type "User Property", property `username`,
+  claim name `preferred_username`.
+
+### 4. LocalAI configuration and role restriction for an external Keycloak
+
+LocalAI's OIDC variables in `src/ai/localai/.env` (set automatically by `setup`):
+
+```env
+LOCALAI_OIDC_ISSUER=https://keycloak.example.com/realms/papaia
+LOCALAI_OIDC_CLIENT_ID=localai
+LOCALAI_OIDC_CLIENT_SECRET=<Clients → localai → Credentials → Client secret>
+```
+
+To restrict SSO access to users with a specific realm role, configure a **custom browser
+flow** for the `localai` client:
+
+1. In Keycloak Admin Console → **Authentication → Flows**, duplicate the built-in
+   `browser` flow and rename it (e.g. `localai browser`).
+2. Inside the `browser forms` sub-flow, add a new **CONDITIONAL** sub-flow
+   (e.g. `localai access gate`).
+3. Inside `localai access gate` add two steps:
+   - **Condition - User Role** (set to `CONDITIONAL`): configure role `localai-access`,
+     enable **Negate** so the condition is true when the user *lacks* the role.
+   - **Deny Access** (set to `REQUIRED`).
+4. Under **Clients → `localai` → Advanced → Authentication flow overrides**, set
+   **Browser Flow** to `localai browser`.
+5. Create the realm role `localai-access` and assign it to users who should be allowed in.
+
+The bundled `papaia-realm.json.template` ships this flow pre-configured and imports it
+automatically on first Keycloak start — the manual steps above are only needed for an
+external Keycloak.
+
+### 5. Provider-specific notes
 
 | Provider | Issuer URL pattern | Notes |
 |----------|--------------------|-------|
@@ -236,10 +326,10 @@ Replace the `OPENID_*` / client vars in each service's `.env` as needed.
 | `KC_ADMIN_PASSWORD` | Bootstrap admin password (generated by setup) |
 | `KC_DB_PASSWORD` | Postgres password (generated by setup) |
 | `KC_LIBRECHAT_CLIENT_SECRET` | LibreChat OIDC secret |
-| `KC_PAPERLESS_CLIENT_SECRET` | Paperless OIDC secret |
 | `KC_LITELLM_CLIENT_SECRET` | LiteLLM OIDC secret |
 | `KC_OAUTH2_PROXY_CLIENT_SECRET` | oauth2-proxy OIDC secret |
-| `KC_QDRANT_RAG_CLIENT_SECRET` | qdrant-rag OIDC secret |
+| `KC_LOCALAI_CLIENT_SECRET` | LocalAI OIDC secret |
+| `KC_MANAGER_CLIENT_SECRET` | papaia-manager OIDC secret |
 
 ### `src/infra/oauth2-proxy/.env`
 
@@ -253,19 +343,30 @@ Replace the `OPENID_*` / client vars in each service's `.env` as needed.
 
 ## Rotating Client Secrets
 
-When rotating a client secret, update it in **two places**:
+Clear the `KC_*_CLIENT_SECRET` value in `$PAPAIA_CONFIG_DIR/infra/keycloak/.env` and
+re-run setup:
 
-1. `src/infra/keycloak/.env` — the `KC_*_CLIENT_SECRET` variable  
-2. The service's own `.env` — the `OPENID_CLIENT_SECRET` or equivalent
+```bash
+tools/papaia-ctl setup
+tools/papaia-ctl start
+```
 
-Then regenerate the secret in Keycloak Admin Console:
-`papaia → Clients → <client> → Credentials → Regenerate`
+An empty value counts as a placeholder, so setup generates a fresh secret and fans it
+out to every consuming `.env` — there is no second file to edit by hand. Because the
+realm is re-rendered from the same values, the new secret reaches Keycloak with the
+next realm import; on an already-imported realm, regenerate it in the Admin Console
+(`papaia → Clients → <client> → Credentials → Regenerate`) and paste that value into
+the config directory instead.
 
-Restart the affected service after the change.
+`tools/papaia-ctl setup --force` rotates **every** secret at once, which invalidates
+active sessions and any externally shared API key.
 
-> **Realm import note:** The realm JSON (`realm-import/papaia-realm.json`) contains
-> `${env.VAR}` placeholders that Keycloak substitutes at import time. The actual secrets
-> live only in `.env` files and never need to be edited in the realm JSON itself.
+> **Realm import note:** the realm template
+> (`realm-import/papaia-realm.json.template`) carries `${env.VAR}` placeholders, but
+> Keycloak's own import-time substitution is not relied on: `render_core.bake_realm_secrets()`
+> writes the real values into `$PAPAIA_CONFIG_DIR/infra/keycloak/realm-import/papaia-realm.json`
+> before Keycloak ever reads it. The rendered file is generated state and must never be
+> committed.
 > The import runs only on the **first** Keycloak start. To re-apply it (e.g. after adding
 > a new client), delete the `keycloak-postgresql` volume and restart — this wipes all
 > realm data including manually created users.

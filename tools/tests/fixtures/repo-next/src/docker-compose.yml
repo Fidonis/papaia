@@ -1,0 +1,10 @@
+# Update-target fixture: the addon_api window moved to [2..2] and the
+# reverse-proxy service was renamed, so both detection paths (window
+# intersection and attach-validation) can be exercised against a target.
+services:
+  ingress:
+    image: stub
+    profiles: [nginx]
+  librechat:
+    image: stub
+    profiles: [librechat]

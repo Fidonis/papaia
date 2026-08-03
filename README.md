@@ -1,703 +1,1113 @@
 # papAIa
 
-> Self-hosted, OIDC-first AI & document platform — built with Docker Compose.
-> by **Fidonis GmbH** · <https://fidonis.de>
+> Self-hosted, OIDC-first AI & document platform — Lean Core, built to extend.
+> Developed and maintained by **Fidonis GmbH** · <https://www.fidonis.de>
 
-papAIa is a unified Docker Compose stack that bundles a chat UI, an LLM proxy,
-local model hosting, document management, RAG over personal files, workflow
-automation and metasearch — all behind a single Keycloak SSO.
+papAIa is a Docker Compose platform that bundles a chat UI, an LLM proxy, local model
+hosting, and a Keycloak-based SSO layer into a self-sufficient **Lean Core**. Additional
+services — document management, RAG, workflow automation — attach through a standardised
+**add-on contract** rather than being hard-wired into the stack.
 
-This is the **0.7.0** release: the RAG and MCP layer is fully OIDC-secured,
-and the AI service roster has been significantly expanded.
+It is built by [Fidonis GmbH](https://www.fidonis.de) on one premise: AI is only useful to
+a mid-sized company if the company keeps control of its own data. Everything here runs on
+the customer's own infrastructure, every model call leaves through a single auditable
+gateway, and no component depends on a vendor that could withdraw it. Local, modular,
+vendor-independent — that is what the architecture optimises for, and why the trade-offs
+throughout this document fall the way they do.
 
----
+This is the **1.0.0** release: the Lean Core is stable, `papaia-ctl` is the single
+idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
+in place for first-party and custom service modules.
 
-## Highlights of 0.7.0
-
-- **Qdrant RBAC MCP** — new `qdrant-rbac` service exposes the vector store
-  behind a Keycloak-gated MCP interface; LibreChat forwards per-user OIDC
-  tokens so every query is scoped to the caller's identity.
-- **WebDAV → Qdrant ingestion** — `qdrant-webdav-ingest` pulls documents from
-  any WebDAV source (e.g. Nextcloud) and indexes them into Qdrant for RAG,
-  replacing the former `doc-rag` module.
-- **paperless-mcp-rbac** — replaces the previous `mcp-paperless`; uses
-  Keycloak token forwarding for per-user document isolation with no additional
-  service account needed.
-- **LibreChat operator provisioning** — agents and prompts can now be loaded
-  from operator-managed bind-mount directories; changes are picked up on
-  container restart without rebuilding the image.
-- **Configurable Paperless paths** — `PAPERLESS_MEDIA_ROOT`,
-  `PAPERLESS_EXPORT_DIR`, `PAPERLESS_CONSUMPTION_DIR`, and SSO / login
-  behaviour are now fully env-var-driven.
+**Contents** — [Services](#services) · [Quick start](#quick-start) ·
+[papaia-ctl reference](#papaia-ctl-reference) · [papaia-manager](#papaia-manager) ·
+[Architecture](#architecture-overview) · [Advanced configuration](#advanced-configuration)
 
 ---
 
-## Architecture overview
+## Services
 
-```
-                ┌───────────────────────────────────────────────┐
-                │                   Browser                     │
-                └───────────┬─────────────────┬─────────────────┘
-                            │                 │
-                            │  native OIDC    │  forward auth (oauth2-proxy)
-                            ▼                 ▼
-              ┌─────────────────────┐   ┌────────────────┐
-              │ LibreChat (8000)    │   │ n8n (8400)     │
-              │ Paperless (8010)    │   │ Homepage (8300)│
-              │ LiteLLM   (8200)    │   └───────┬────────┘
-              └──────┬──────────────┘           │
-                     │                          ▼
-                     ▼                ┌─────────────────────┐
-              ┌──────────────┐        │ oauth2-proxy (4180) │
-              │  Keycloak    │◀───────┤                     │
-              │   (8110)     │        └─────────────────────┘
-              └──────┬───────┘
-                     │
-                     │ realm: papaia
-                     │ clients: librechat, paperless, litellm, oauth2-proxy
-                     │ roles:   admin, user, viewer
-                     │
-                     ▼
-        ┌───────────────────────────────────────────────────┐
-        │                AI / Backend services              │
-        │ LocalAI · MCP Paperless · SearXNG · Mongo · ...   │
-        │ Postgres · qdrant-rag · n8n · ...                  │
-        └───────────────────────────────────────────────────┘
-```
+Every service belongs to a Docker Compose **profile**. Nothing starts unless its profile is
+listed in `COMPOSE_PROFILES`. The default set is
+`keycloak,nginx,oauth2-proxy,librechat,litellm`.
+
+### Core
+
+| Service | Profile | Port | Purpose |
+|---|---|---|---|
+| Keycloak | `keycloak` | 8110 | Identity & access management, OIDC issuer. Serves **HTTPS** directly. |
+| Nginx Proxy Manager | `nginx` | 80 / 443 | Bundled edge reverse proxy and TLS termination |
+| NPM admin UI | `nginx` | 8100 | Admin interface, guarded by an oauth2-proxy sidecar |
+| oauth2-proxy | `oauth2-proxy` | 4180 | Forward-auth gateway for services without native OIDC |
+| LibreChat | `librechat` | 8000 | Multi-provider chat UI, native OIDC with PKCE |
+| LiteLLM | `litellm` | 8200 | Unified LLM gateway; generic OIDC for the admin UI |
+
+Internal support containers (no published ports): `keycloak-postgres`,
+`librechat-mongodb`, `librechat-meilisearch`, `librechat-vectordb` (pgvector),
+`librechat-ragapi`, `litellm-db`, `litellm-prometheus`.
+
+### Optional
+
+| Module | Profile | Port | Purpose |
+|---|---|---|---|
+| LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview and backup/restore. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
+
+`localai`, `manager` and `librechat-websearch` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`). When LocalAI is enabled, setup also asks
+which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
+
+> Everything else — document management, RAG, workflow automation — ships as an
+> [add-on](#add-ons), not as a profile in this repository.
+
+> **Tip:** all `*_EXT_PORT` variables are listed in `src/.env.example`, grouped per service.
+> Change a single number to relocate a port.
 
 **Authentication coverage**
 
-| Service        | Approach                | Notes                                |
-|----------------|-------------------------|--------------------------------------|
-| LibreChat      | Native OIDC             | `openid-client`, PKCE enforced       |
-| Paperless-ngx  | Native OIDC             | `django-allauth`                     |
-| LiteLLM (UI)   | Generic OIDC            | API key for programmatic access      |
-| n8n            | oauth2-proxy forward    | NPM rule guards the upstream         |
-| Homepage       | oauth2-proxy forward    | optional, configurable per host      |
-| MCP Paperless  | OIDC token forwarding   | per-user RBAC view of Paperless documents |
-| qdrant-rag     | OIDC token forwarding   | per-user role-scoped vector search   |
-| Nginx PM admin | Network-level only      | bind to internal interfaces          |
-
----
-
-## Service catalogue & default port map
-
-External ports are configurable in `src/.env`. Defaults below.
-
-### Infrastructure
-
-| Service              | Port | Purpose                                        |
-|----------------------|------|------------------------------------------------|
-| Keycloak             | 8110 | Identity & access management (OIDC issuer)     |
-| Nginx Proxy Manager  | 8100 | Reverse proxy / TLS termination admin UI       |
-| oauth2-proxy         | 4180 | Forward-auth gateway for non-OIDC services     |
-| Technitium DNS       | 8120 | Optional DNS server (commented out by default) |
-
-### Application services
-
-| Service        | Port | Purpose                                              |
-|----------------|------|------------------------------------------------------|
-| LibreChat      | 8000 | Multi-provider chat UI                               |
-| Paperless-ngx  | 8010 | Document management system                           |
-| LiteLLM        | 8200 | Unified LLM proxy + Postgres (8210) + Prom. (8230)   |
-| Homepage       | 8300 | Service dashboard                                    |
-| n8n            | 8400 | Workflow automation                                  |
-| SearXNG        | 8500 | Privacy-respecting metasearch                        |
-| qdrant-rag          | 8800       | OIDC + RBAC MCP server for role-scoped vector search |
-| Qdrant (qdrant-rag) | 6333 / 6334| Vector store for qdrant-rag (REST + gRPC)            |
-| LocalAI             | 8080       | Local model inference, chat-completions API          |
-| Firecrawl      | 3002 | Web crawler (commented out by default)               |
-| Home Assistant | 8123 | Home automation (host-network mode, optional)        |
-
-### Internal-only / co-deployed
-
-- MCP Paperless (per-user Paperless proxy for LibreChat) — `:9520`
-- Office Documents MCP (generates downloadable office files for LibreChat) — `:9530`
-- MinIO object storage (backs Office Documents downloads) — `:9000` / `:9001`
-- Jina AI Reranker (optional, `:8600`)
-- LibreChat sidecars (Mongo, Meilisearch, pgvector, RAG API)
-- Paperless sidecars (Postgres, Redis, Tika, Gotenberg)
-
-> **Tip:** all `*_EXT_PORT` variables are listed in `src/.env.example` and
-> grouped per service. Change a single number to relocate a port.
+| Service | Approach | Notes |
+|---|---|---|
+| LibreChat | Native OIDC | `openid-client`, PKCE enforced |
+| LiteLLM (UI) | Generic OIDC | API key for programmatic access |
+| LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
+| papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only |
+| NPM admin UI | oauth2-proxy sidecar | — |
+| oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
 
 ---
 
 ## Quick start
 
 ### Prerequisites
-- Docker and Docker Compose installed
-- `openssl` to generate secrets; `python3` for the Keycloak bootstrap helper
-- At least 8GB RAM recommended
-- Linux, macOS or WSL2 environment
 
-### Single-host setup (default)
+- Docker and Docker Compose
+- Python 3.10+ — `papaia-ctl` generates secrets and renders configs itself
+- `openssl`, only when Keycloak TLS is enabled
+- At least 8 GB RAM recommended
+- Linux, macOS, or WSL2
 
-papAIa is deployed manually: copy the shipped `.env.example` templates,
-fill in your own secrets, and bring the stack up with Docker Compose.
+### Single-host setup
 
 **1. Clone the repository**
 
 ```bash
-git clone https://github.com/marko-boehm/papaia.git
+git clone https://github.com/Fidonis/papaia.git
 cd papaia
 ```
 
-**2. Create the environment files**
-
-Copy `src/.env.example` to `src/.env`, and one `.env` per service
-directory, then replace every `GENERATE_…` placeholder with a fresh
-secret:
+**2. Run setup**
 
 ```bash
-cp src/.env.example src/.env
-# repeat for each module you enable, e.g.:
-cp src/infra/keycloak/.env.example  src/infra/keycloak/.env
-cp src/ai/librechat/.env.example    src/ai/librechat/.env
-cp src/ai/litellm/.env.example      src/ai/litellm/.env
-# … and so on
-
-openssl rand -hex 24      # generic secret / password
-openssl rand -base64 32   # for any *_COOKIE_SECRET (must be 32 bytes)
+tools/papaia-ctl setup
 ```
 
-Review `src/.env` for the host-specific basics — `PAPAIA_HOST`, `HOST_IP`,
-`COMPOSE_PROFILES`, `PAPAIA_CONFIG_DIR` — and follow the
-[environment setup details](#environment-setup-details) for the one
-cross-file rule you must respect (matching Keycloak client secrets).
+With no flags, `setup` walks through the values it cannot derive on its own — the public URL
+of the server (`PAPAIA_HOST`), the public Keycloak URL (`AUTH_HOST`), whether to enable web
+search (and an optional reranker model), and whether to enable local AI (and its public URL).
+Each prompt is pre-filled with a sensible default. Everything else — secrets, OIDC endpoints,
+TLS certificates, rendered configs — is generated automatically.
 
-**3. Prepare the Keycloak realm file**
-
-The realm import keeps client secrets as `${env.…}` placeholders that
-Keycloak substitutes at import time, so a plain copy is enough:
+For unattended / CI use:
 
 ```bash
-cp src/infra/keycloak/realm-import/papaia-realm.json.template \
-   src/infra/keycloak/realm-import/papaia-realm.json
+tools/papaia-ctl setup --non-interactive \
+  --app-host=https://papaia.example.com \
+  --auth-host=https://auth.papaia.example.com
 ```
 
-**4. Seed the externalised config directory**
+> In non-interactive mode, `--local-ai` and `--web-search` are **not** implied. Without those
+> flags the corresponding profiles stay as they are — off, on a fresh install. The same holds
+> for `--localai-variant`: omitted, the current image variant is kept. Pass
+> `--localai-variant=auto` to let the host detection decide.
+
+**3. Start the stack**
 
 ```bash
-src/sync-config.sh
+tools/papaia-ctl start
 ```
 
-`src/sync-config.sh` copies the shipped service-configuration defaults
-from `src/` into the externalised config directory at `${PAPAIA_CONFIG_DIR}`
-(see [Externalised service configuration](#externalised-service-configuration)
-below). It is non-destructive: existing files in the target are kept, so
-running it again after a `git pull` only fills in newly added defaults.
+This copies the generated `.env` files into the checkout, re-renders the configuration, and
+runs `docker compose up -d`. Keycloak imports the `papaia` realm automatically on first start.
 
-**5. Start the stack**
+Start a subset of profiles for this run only:
 
 ```bash
-docker compose -f src/docker-compose.yml --env-file src/.env up -d
+tools/papaia-ctl start --profiles=keycloak,librechat,litellm
 ```
 
-Keycloak imports the `papaia` realm automatically on first start
-(`--import-realm`). To re-sync realm clients later without recreating the
-Keycloak volume, run `src/infra/keycloak/bootstrap.sh`.
+**4. Sign in**
+
+Once the stack is up, the default endpoints for a local install are:
+
+- LibreChat — `http://host.docker.internal:8000`
+- Keycloak admin — `https://host.docker.internal:8110`, user `admin`, password `KC_ADMIN_PASSWORD`
+- papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
+  (Linux hosts only — see [papaia-manager](#papaia-manager))
+
+The realm ships two test users: `admin` / `admin` (roles `admin`, `user`, `localai-access`)
+and `testuser` / `testuser` (roles `user`, `finance`).
+
+> The test users exist purely for local development. Disable or delete them before exposing
+> the stack to anything beyond `localhost`.
 
 ### Stopping
 
 ```bash
-docker compose -f src/docker-compose.yml --env-file src/.env stop      # keep volumes
-docker compose -f src/docker-compose.yml --env-file src/.env down      # also remove network
-docker compose -f src/docker-compose.yml --env-file src/.env down -v   # also wipe volumes
+tools/papaia-ctl stop              # pause containers, keep them (volumes untouched)
+tools/papaia-ctl stop --clean-up   # remove containers, keep volumes
 ```
 
-## Multi-environment deployments (dev / stage / demo on one host)
+---
 
-Multiple papAIa stacks can run side-by-side on a single host without
-forking the repo. Each environment gets its own:
+## papaia-ctl reference
 
-- `COMPOSE_PROJECT_NAME` (e.g. `papaia-dev`) — namespaces containers and
-  volumes so Docker doesn't reuse them across stacks.
-- `DOCKER_NETWORK` (e.g. `papaia-dev-net`) — every stack gets its own
-  bridge network.
-- `HOST_IP` — bind address for published ports. Combine with IP aliases
-  on the host's primary interface so two stacks with identical port
-  numbers can coexist (`papaia-dev` → `.102`, `papaia-stage` → `.103`,
-  `papaia-demo` → `.101`).
-- `PAPAIA_HOST` — public URL used in OIDC redirects and service public
-  URLs. The hostname depends on whether you are behind a reverse proxy
-  (Caddy / Traefik / NPM / …) and what scheme it terminates on. There is
-  no enforced hostname convention — pick what fits the platform. It can be
-  anything reachable from the browser: a LAN IP, the `host.docker.internal`
-  default for Docker Desktop, or a public FQDN.
-- HTTPS / `OAUTH2_PROXY_COOKIE_SECURE` — must match the scheme of
-  `PAPAIA_HOST`. An HTTPS `PAPAIA_HOST` requires
-  `OAUTH2_PROXY_COOKIE_SECURE=true` for every oauth2-proxy sidecar; HTTP
-  requires `false`. Browsers ignore Secure cookies over plain HTTP, so a
-  mismatch silently breaks login.
+`papaia-ctl` (`tools/papaia-ctl`) is the single orchestrator for the papAIa deployment
+lifecycle: bootstrapping, configuration rendering, and stack management. The Bash dispatcher
+handles CLI parsing, interactive prompts, and `docker compose` calls; all `.env` / YAML /
+JSON manipulation is delegated to `tools/lib/*.py`.
 
-Give each environment its own env file (e.g. `src/.env.dev`,
-`src/.env.stage`, …) and pass the active one with `--env-file`:
+All operations are **idempotent by default** — re-running any command leaves already-set
+values unchanged.
+
+```
+papaia-ctl setup     [OPTIONS]
+papaia-ctl start     [--addons] [--profiles=LIST] [--config-dir=PATH]
+papaia-ctl stop      [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
+                     [--config-dir=PATH]
+papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
+papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
+papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
+                     [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+papaia-ctl npm-provision [--config-dir=PATH]
+papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
+papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
+papaia-ctl help
+```
+
+All flags use the `--flag=VALUE` form. `papaia-ctl` is **flag-driven, not environment-driven**:
+exporting `PAPAIA_CONFIG_DIR` in your shell has no effect on the CLI — pass `--config-dir`
+instead.
+
+### `setup`
+
+Full bootstrap: prompts for public URLs, generates secrets, derives OIDC endpoints, renders
+the complete configuration, and writes `deployment.yaml`. Turns a fresh checkout into a
+runnable stack.
 
 ```bash
-docker compose -f src/docker-compose.yml --env-file src/.env.dev up -d
+tools/papaia-ctl setup [OPTIONS]
 ```
 
-Set `COMPOSE_PROJECT_NAME`, `DOCKER_NETWORK`, `HOST_IP` and `PAPAIA_HOST`
-to distinct values per environment. With the bind addresses pinned through
-`HOST_IP`, ports on the public interface stay isolated and can be filtered
-at the firewall.
+| Flag | Default | Purpose |
+|---|---|---|
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+| `--env=NAME` | `papaia` | Sets `COMPOSE_PROJECT_NAME` / `DOCKER_NETWORK` to `papaia-<NAME>` / `papaia-<NAME>-net` |
+| `--host-ip=IP` | `0.0.0.0` | Bind address for published ports |
+| `--app-host=URL` | _(prompted)_ | Public papAIa URL — scheme + host + optional port, no trailing path |
+| `--auth-host=URL` | _(derived)_ | Public Keycloak URL; only relevant with `internal_keycloak` |
+| `--librechat-host=URL` | _(derived)_ | Public LibreChat URL if it differs from `--app-host` |
+| `--litellm-host=URL` | _(derived)_ | Public LiteLLM URL if it differs from `--app-host` |
+| `--localai-host=URL` | _(derived)_ | Public LocalAI URL if it differs from `--app-host` |
+| `--manager-host=URL` | _(derived)_ | Public papaia-manager URL if it differs from `--app-host` |
+| `--npm-admin-host=URL` | _(derived)_ | Public URL of the Nginx PM admin UI |
+| `--auth-provider=VALUE` | `internal_keycloak` | `internal_keycloak` or `external_oidc` |
+| `--oidc-issuer=URL` | _(required for `external_oidc`)_ | External OIDC issuer URL |
+| `--reverse-proxy-provider=VALUE` | _(auto-detected)_ | `internal_nginx`, `external_proxy`, or `no_proxy` |
+| `--external-reverse-proxy` | _(auto from URL scheme)_ | Legacy alias for `--reverse-proxy-provider=external_proxy` |
+| `--no-external-reverse-proxy` | — | Legacy alias for `--reverse-proxy-provider=internal_nginx` |
+| `--allow-direct-port-access` | — | Skip the reverse proxy entirely; services expose ports directly (expert) |
+| `--web-search` / `--no-web-search` | _(prompted, default on)_ | Toggle the `librechat-websearch` profile |
+| `--reranker-model=NAME` | _(prompted, optional)_ | LiteLLM model name used for reranking |
+| `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
+| `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
+| `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
+| `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
+| `--force` | — | Regenerate all secrets unconditionally |
+| `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
+| `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |
 
-### Reverse Proxy Setup
+Omitting a toggle flag in non-interactive mode is **sticky**: the current profile set is left
+untouched rather than reset to a default.
 
-Two services need a TLS-terminating reverse proxy in front of them for
-OIDC login to work reliably:
+**What `setup` does automatically**
 
-- **Keycloak** (`AUTH_HOST`) — tokens are issued under this URL and the
-  browser POSTs the OIDC callback cross-origin. Behind a TLS-terminating
-  edge proxy Keycloak only sees plain HTTP and must trust
-  `X-Forwarded-*` headers; the bundled `KC_PROXY_HEADERS=xforwarded`
-  default takes care of that.
-- **LibreChat** — its container speaks plain HTTP on port 3080 (mapped to
-  `HOST_IP:LIBRECHAT_EXT_PORT`). Without HTTPS in front, Keycloak's
-  cross-origin POST + LibreChat's cookie / SameSite defaults break the
-  OIDC callback in subtle ways, so a TLS-terminating proxy in front of
-  LibreChat is strongly recommended for any non-local deployment.
+- **Secret generation** — fills every `GENERATE_*` placeholder in the shipped `.env.example`
+  files. Only values that literally start with `GENERATE_` are treated as secrets. Most get
+  24 bytes of hex; `*_COOKIE_SECRET` gets 32 raw bytes base64url; LibreChat's `CREDS_KEY` /
+  `CREDS_IV` get their exact required lengths.
+- **Sticky reuse** — an already-set secret is never rotated on re-run. `--force` regenerates
+  every one of them unconditionally.
+- **Secret aliasing** — canonical secrets (for example `KC_LIBRECHAT_CLIENT_SECRET`) are
+  fanned out to every service that must hold the same value. No manual copy-paste between
+  `.env` files.
+- **Hostname derivation** — the OIDC issuer, its split endpoints (auth / token / JWKS), and
+  the per-service public URLs are derived from `--app-host` / `--auth-host`.
+- **Reverse-proxy detection** — an HTTPS `--app-host` implies an external TLS terminator, so
+  the bundled Nginx Proxy Manager is omitted. Override with `--reverse-proxy-provider`.
+- **Keycloak TLS** — generates a local self-signed CA and a Keycloak server certificate.
+- **Realm secret baking** — writes secrets directly into `papaia-realm.json` before the realm
+  file reaches Keycloak, rather than relying on Keycloak's `${env.*}` substitution at import.
+- **Configuration render** — see [Configuration & render lifecycle](#configuration--render-lifecycle).
+- **`deployment.yaml`** — writes the resolved profiles, platform version, and add-on list.
 
-Each public URL must point at the corresponding `HOST_IP:port` mapping:
+### `start`
 
-```
-${AUTH_HOST}            →  HOST_IP : KEYCLOAK_EXT_PORT      (default 8110)
-${LIBRECHAT_HOST}       →  HOST_IP : LIBRECHAT_EXT_PORT     (default 8000)
-```
-
-Add similar routes for any other service exposed through the proxy
-(Paperless, n8n, Homepage, …).
-
-#### Caddyfile example
-
-```caddy
-auth.papaia-dev.example.com {
-    reverse_proxy 192.168.10.102:8110
-}
-
-chat.papaia-dev.example.com {
-    reverse_proxy 192.168.10.102:8000
-}
-```
-
-For Traefik / nginx the equivalent rules are a host header match plus
-`reverse_proxy` / `proxy_pass` to `HOST_IP:port`.
-
-If the host is already running an edge proxy on ports 80/443, remove
-`nginx` from `COMPOSE_PROFILES` in `src/.env` so the bundled Nginx Proxy
-Manager does not port-conflict on 80.
-
-### Externalised service configuration
-
-papAIa keeps customer-editable service configuration **outside** the repo so
-that local edits do not collide with `git pull` / fast-forward upgrades.
-The variable that drives this is `PAPAIA_CONFIG_DIR` in `src/.env`.
-
-```env
-# src/.env
-PAPAIA_CONFIG_DIR=/srv/papaia/config
+```bash
+tools/papaia-ctl start [--addons] [--profiles=LIST] [--config-dir=PATH]
 ```
 
-`PAPAIA_CONFIG_DIR` must be an **absolute path** — Docker Compose resolves
-relative paths in `include:`d files against each file's own directory, so a
-relative value would resolve differently per service.
+Copies the `.env` files from the config directory into the checkout, re-renders the
+configuration, then runs `docker compose up -d`.
 
-The directory layout inside `${PAPAIA_CONFIG_DIR}` mirrors `src/` exactly,
-so the diff between the shipped default and the customer copy stays
-obvious:
+Because rendering happens on **every** `start`, new templates, new add-on fragments and
+edits under `overlay/` are picked up automatically. To move the installation to a newer
+release, use [`upgrade`](#upgrade) rather than `git pull` — it also runs the migrations
+the release ships with.
+
+`--addons` starts every active add-on **before** bringing up the core, so that the add-on
+networks exist by the time the core's generated override files are applied. An override whose
+network does not exist yet is skipped rather than failing the start.
+
+When `--addons` is active, `start` runs a compatibility check against all active add-ons
+before bringing up the core. If any add-on is INCOMPATIBLE the start is aborted. Pass
+`--force` to demote incompatibility to a warning and proceed.
+
+`--profiles` takes a comma-separated list of Compose profiles and overrides `COMPOSE_PROFILES`
+for this invocation only. The selection is validated up front: a profile list that names no
+service, or that cuts off a service from a dependency it hard-requires, is rejected with exit
+code 2 instead of being handed to Compose.
+
+### `stop`
+
+```bash
+tools/papaia-ctl stop [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+```
+
+Without `--clean-up`: `docker compose stop` — containers are paused but not removed; volumes
+and networks are kept. With `--clean-up`: `docker compose down` — containers are removed,
+volumes are kept. `--addons` applies the same operation to all active add-ons.
+
+`--profiles` restricts the operation to the services of those profiles and is validated the
+same way as on [`start`](#start) — without that gate an unresolvable profile list would make
+Compose fall back to stopping every container of the project.
+
+### `upgrade`
+
+```bash
+tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y] \
+  [--config-dir=PATH]
+```
+
+Moves the installation to a release. Without `--version` the newest release is used;
+when the installation already runs it, the command reports so and exits 0, which makes
+it safe to run unattended. `--version` accepts `1.5.0` and `v1.5.0` alike and is the
+only way onto a pre-release. Downgrades are refused — restore a backup instead.
+
+The run, in order:
+
+1. Refuses to start unless the checkout is a git clone without uncommitted changes to
+   tracked files. Everything `papaia-ctl` writes into the checkout is gitignored, so a
+   healthy installation passes.
+2. Fetches the release tags and resolves the target version.
+3. Checks all active add-ons against the target release — the same evaluation as
+   `addon check --target-core=PATH`, run against a temporary worktree of the target
+   tag. An incompatible add-on aborts the upgrade before anything is touched;
+   `--force` demotes it to a warning.
+4. Creates a restore point (`backup`) unless `--no-backup` is given, and stops the
+   stack.
+5. Checks out the release tag and re-executes itself from the new tree, so the
+   migrations, the render logic and the setup pass of the target release are the ones
+   that run.
+6. Runs the pending migration scripts (see below), re-renders the configuration
+   through the sticky setup pass — every answered question is kept — and starts the
+   stack again.
+
+`--dry-run` stops after step 3 and prints the current version, the target version and
+the migrations that would run. `-y` skips the confirmation prompt; without a TTY it is
+required.
+
+**Migrations.** A release may ship scripts in `tools/migrations/` that adapt an
+existing config bundle to a change the render pass cannot express on its own. Every
+release carries the complete set, so a jump from 1.0.0 to 1.5.0 runs the 1.1.0 … 1.5.0
+steps in between, in order. Applied migrations are recorded in
+`$PAPAIA_CONFIG_DIR/migrations/applied.json` and never run twice. If one fails, the
+upgrade stops and prints the commands to return to the previous release; fixing the
+cause and re-running skips everything that already succeeded. The contract for writing
+one is documented in [`tools/migrations/README.md`](tools/migrations/README.md).
+
+### `uninstall`
+
+```bash
+tools/papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
+```
+
+Stops and removes all core containers, then **permanently deletes the config directory**.
+Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
+Docker volumes. `--addons` stops and removes active add-on containers first.
+
+### `backup`
+
+```bash
+tools/papaia-ctl backup [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
+```
+
+Archives the complete installation into a timestamped subdirectory of the backup location:
+
+- **`$PAPAIA_CONFIG_DIR`** in full — this also captures the Nginx Proxy Manager database and the
+  Let's Encrypt certificates, which are bind mounts underneath it rather than named volumes.
+- **every named volume of the core stack**, resolved from the compose files and prefixed with the
+  configured `COMPOSE_PROJECT_NAME`.
+- **every named volume of an active add-on**, plus the host directories it bind-mounts for user
+  data. An add-on that only talks to an existing external instance owns no volumes, so that
+  external instance is never pulled into the backup.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to write this backup |
+| `--retention-period-days=N` | _(no pruning)_ | Delete restore points older than N days and drop their catalogue entries |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Backups run **hot** — nothing is stopped. Because copying a live database directory would
+otherwise capture it mid-transaction, the containers writing to a volume are paused for the
+duration of that one archive and unpaused immediately afterwards, including when the archive
+fails or the run is interrupted.
+
+The backup location holds one directory per restore point plus two shared files:
+
+```
+$PAPAIA_BACKUP_DIR/
+├── backup.yaml                 # catalogue: id, path, size in MB, result
+├── backup.log                  # one line per backup / restore, with its result
+└── 2026-07-30_14-05-33/
+    ├── manifest.yaml           # which archive belongs to which volume or path
+    ├── papaia-config.tar.gz
+    ├── volumes/*.tar.gz
+    └── binds/*.tar.gz
+```
+
+Restore-point ids use local time, so they line up with what an incident timeline says;
+`created_at` in the catalogue is UTC so sorting and retention stay unambiguous.
+
+A run whose archives partly failed is recorded as `partial` and is never selected automatically
+by `restore`. Volumes that a compose file declares but that were never created (a disabled
+profile) are reported and skipped rather than failing the run.
+
+### `restore`
+
+```bash
+tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
+                         [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to read restore points from |
+| `--restore-point=ID` | _(most recent usable)_ | Which restore point to restore, as listed by `--list` |
+| `--list` | — | Print the available restore points and exit |
+| `--restart-clean` | — | Delete the named volumes during the teardown as well, so nothing survives that is not in the restore point |
+| `--no-restart` | — | Do not touch the running stack at all |
+| `-y` / `--yes` | — | Skip the confirmation prompt (required in non-interactive contexts) |
+
+By default the stack is **torn down before and brought up after** the restore: containers are
+removed (`docker compose down`, without `-v`, so the volumes being repopulated survive) and
+recreated. Removing them is not optional. Writing into a volume underneath a live process
+corrupts both, and — more subtly — most core services bind-mount individual *files* out of
+`$PAPAIA_CONFIG_DIR` (`searxng/settings.yml`, `keycloak.conf`, `librechat.yaml`, …). A container
+that is merely stopped keeps the mount source it was created with, pinned to the inode behind it;
+restoring the config directory replaces those files, and starting the container again then fails
+in the daemon with `error mounting … no such file or directory`. Only a recreated container
+resolves its bind sources afresh and picks the restored files up.
+
+`--restart-clean` additionally deletes the named volumes (`docker compose down -v`) before the
+restore, so a volume that is not part of the restore point does not survive it — that data is
+gone permanently. `--no-restart` skips the lifecycle handling entirely; if it is combined with
+`--restart-clean` it wins, and the restore proceeds with the stack untouched.
+
+The config directory is restored into the config directory currently in use, not the path
+recorded at backup time, so a snapshot can be replayed onto a host that keeps its bundle
+elsewhere. A bind-mount directory whose add-on is no longer installed is skipped with a warning
+rather than recreated.
+
+### `addon`
+
+```bash
+tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
+tools/papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
+tools/papaia-ctl addon remove    <name> [--config-dir=PATH]
+tools/papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
+tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
+  [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
+```
+
+| Command | Effect |
+|---|---|
+| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. |
+| `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
+| `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
+| `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. |
+| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. |
+| `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). |
+
+**`addon check` flags**
+
+| Flag | Purpose |
+|---|---|
+| `--target-core=PATH` | Check against a different core checkout instead of the current one (pre-upgrade dry-run). |
+| `--target-version=VER` | Override the core version used for the check. |
+| `--target-addon-api=N` | Override the `current` bound of the ADDON_API window. |
+| `--target-min-addon-api=N` | Override the `min` bound of the ADDON_API window. |
+| `--json` | Print results as a JSON array (also on exit 2). |
+| `--force` | Treat INCOMPATIBLE as a warning instead of a hard failure (exit 0). |
+
+After `addon install` or `addon remove`, run `tools/papaia-ctl start` to apply the changed
+core configuration.
+
+### Configuration & render lifecycle
+
+Understanding where state lives is the key to operating papAIa. There are **two** locations
+for every `.env` file:
+
+- **`$PAPAIA_CONFIG_DIR`** — the config directory, by default `../papaia-config`, a sibling of
+  the checkout. This is the **single source of truth**. It survives `git pull`, and it is the
+  only thing you need to back up.
+- **`src/**/.env` inside the checkout** — **derived copies**, gitignored, consumed by
+  `docker compose --env-file`. Never edit these; they are overwritten.
+
+`PAPAIA_CONFIG_DIR` must be an **absolute path** — Docker Compose resolves relative paths in
+`include:`d files against each file's own directory.
+
+**When each file is written**
+
+| Moment | What happens |
+|---|---|
+| First `setup` | Seeds one `.env` per service directory from the shipped `src/**/.env.example`, plus `deployment.yaml`. Existing files are left alone unless `--force`. |
+| Every `setup` | Resolves all values, fills `GENERATE_*` secrets, and writes each `.env` to **both** the config directory and the checkout. |
+| Every `start` | Copies the config directory's `.env` files into the checkout. A clean checkout — or a manually deleted `src/.env` — can therefore never start the stack with stale values. |
+| `addon start` | Copies `addons/<name>/.env` from the config directory into the add-on's own directory. |
+
+**When rendering happens**
+
+On `setup`, on **every** `start`, and on every `addon install` / `start` / `remove` /
+`uninstall`. There is no separate render command, and none is needed — rendering is
+idempotent and produces byte-identical output for unchanged inputs.
+
+Rendering merges three layers:
+
+```
+  repo base                 src/<target>
++ active add-on fragments   <addon-path>/integration/<target>
++ customer overlay          $PAPAIA_CONFIG_DIR/overlay/<target>
+                            ─────────────────────────────────────
+                          → $PAPAIA_CONFIG_DIR/<target>
+```
+
+Structured files (YAML / JSON) are deep-merged, with lists appended and de-duplicated. Any
+other file type is taken wholesale from the highest layer that provides it. The overlay always
+wins.
+
+Render targets: `ai/librechat/librechat.yaml` · `ai/litellm/config.yaml` +
+`prometheus.yml` · `ai/localai/models.txt` + `models/` · `services/searxng/settings.yml` ·
+`infra/keycloak/keycloak.conf`.
+
+The same pass also bakes the Keycloak realm (substituting secrets into
+`realm-import/papaia-realm.json`) and regenerates the Compose overrides in `overrides/` — one
+per active add-on, attaching the core containers to that add-on's isolated bridge network.
+With no add-ons installed, no override files are produced.
+
+**Directory layout of `$PAPAIA_CONFIG_DIR`** — it mirrors `src/`:
 
 ```
 ${PAPAIA_CONFIG_DIR}/
-├── ai/
-│   ├── librechat/librechat.yaml
-│   ├── librechat/patches/{entrypoint.sh, mcp-user-headers.js, openidStrategy.js}
-│   ├── litellm/{config.yaml, prometheus.yml}
-│   ├── localai/models.txt
-│   ├── localai/models/{nomic-embed-text.yaml, qwen2.5-1.5b-instruct.yaml}
-│   └── n8n/nginx.conf
-├── infra/
-│   └── keycloak/
-│       ├── keycloak.conf
-│       └── realm-import/papaia-realm.json[.template]
-└── services/
-    ├── homepage/config/{bookmarks,custom.css,custom.js,docker,kubernetes,
-    │                    proxmox,services,settings,widgets}.{yaml,css,js}
-    └── searxng/settings.yml
+├── .env                    # stack-wide variables (source of truth)
+├── deployment.yaml         # installation manifest
+├── deployed.lock           # JSON summary of the last setup run
+├── certs/                  # generated Keycloak CA + server certificate
+├── ai/                     # librechat · litellm · localai · jinaai
+├── infra/                  # keycloak (incl. realm-import/) · nginx · oauth2-proxy
+├── services/               # searxng · firecrawl
+├── manager/                # papaia-manager state: catalogs.yaml · installed.yaml
+│                           #   tiles.yaml · jobs/ · audit.log
+├── addons/<name>/.env      # per-add-on secrets
+├── overlay/                # customer config overrides (highest merge layer)
+└── overrides/              # auto-generated add-on network overrides
 ```
 
-Every bind-mount in `src/**/docker-compose.yml` references
-`${PAPAIA_CONFIG_DIR}/<mirrored-path>`. Editing a file inside the config
-directory and restarting the affected container therefore applies the
-change inside that container.
+To customise a rendered config, drop your changes into `overlay/` — mirroring the target's
+path — and run `tools/papaia-ctl start`. Overlay files survive every upgrade untouched.
 
-#### Initial population
+### `deployment.yaml`
 
-```bash
-src/sync-config.sh                # uses PAPAIA_CONFIG_DIR from src/.env
-src/sync-config.sh /custom/path   # or pass an explicit target
-src/sync-config.sh --force        # overwrite (DESTRUCTIVE — discards edits)
+Written into the config directory on the first `setup` from `tools/deployment.template.yaml`
+and refreshed on every subsequent run. It is the manifest for this installation, and it is
+hand-editable for anything `papaia-ctl` does not manage.
+
+```yaml
+customer: papaia            # set from --env
+platform_version: 1.0.0     # resolved from the VERSION file
+hosting: self-hosted
+
+core:
+  profiles:                 # kept in sync with COMPOSE_PROFILES in .env
+    - keycloak
+    - oauth2-proxy
+    - nginx
+    - librechat
+    - litellm
+  inference: local-first
+  addon_api: 1              # ADDON_API contract window served by this installation
+
+addons:                     # managed by `papaia-ctl addon ...`
+  - name: paperless
+    path: ../papaia-addons/paperless
+    version: 1.0.0
+    active: true
 ```
 
-The script copies every file listed above from `src/` into
-`${PAPAIA_CONFIG_DIR}`. By default existing target files are preserved, so
-the script is safe to re-run after upgrades.
-
-#### Upgrade flow
-
-```bash
-git pull                                                       # new repo version
-src/sync-config.sh                                             # add new defaults
-                                                               # (non-destructive)
-docker compose -f src/docker-compose.yml --env-file src/.env up -d
-```
-
-Customer overrides under `${PAPAIA_CONFIG_DIR}` survive the upgrade
-untouched. Any **new** files shipped by the upgrade land in the config
-directory next to the existing ones. To re-baseline a specific file to
-the new shipped default, delete it from `${PAPAIA_CONFIG_DIR}` first and
-re-run `src/sync-config.sh`.
-
-#### Backup
-
-`src/backup-papaia.sh` now also archives `${PAPAIA_CONFIG_DIR}` (as
-`papaia-config.tar.gz`) on every run if the directory exists. Restoring
-the config archive is a plain `tar xzf` into the target path — no Docker
-volume operations are required.
-
-### Environment setup details
-
-The [Single-host setup](#single-host-setup-default) above creates the
-`.env` files. Two things need extra care:
-
-1. **`GENERATE_…` placeholders** — every value still set to a `GENERATE_…`
-   string must be replaced with a real secret (`openssl rand -hex 24`, or
-   `openssl rand -base64 32` for the 32-byte `*_COOKIE_SECRET` values).
-2. **Matching Keycloak client secrets** — each `KC_<service>_CLIENT_SECRET`
-   in `src/infra/keycloak/.env` must hold the **same value** as the
-   corresponding client secret in the consuming service's `.env`
-   (`OPENID_CLIENT_SECRET` for LibreChat, `GENERIC_CLIENT_SECRET` for
-   LiteLLM, `OAUTH2_PROXY_CLIENT_SECRET` in `src/.env`). Generate one
-   secret per client and paste it into both files.
-
-Once the stack is up, the default endpoints are:
-
-- Keycloak admin: `http://host.docker.internal:8110` — login as `admin`
-  with the password in `src/infra/keycloak/.env` (`KC_ADMIN_PASSWORD`).
-- Realm login (e.g. via LibreChat): `admin` / `admin` in realm `papaia`
-  (test user — change for anything beyond local development).
-- LibreChat: `http://host.docker.internal:8000`
-- Paperless: `http://host.docker.internal:8010`
-- Homepage: `http://host.docker.internal:8300`
-- n8n: `http://host.docker.internal:8400`
-
-### 3. Stop / remove
-
-```bash
-docker compose stop      # stop containers, keep volumes
-docker compose down      # remove containers + network
-docker compose down -v   # also wipe volumes (destructive!)
-```
+Each `active` add-on contributes its integration fragments to the render and gets a generated
+network-attachment override. Setting `active: false` — what `addon remove` does — takes it out
+of both without discarding its secrets.
 
 ---
 
-## OIDC & SSO — how the pieces fit together
+## papaia-manager
 
-papAIa standardises on **OpenID Connect** for all human-facing
-authentication. There are two integration patterns:
+`papaia-ctl` is a CLI: precise, scriptable, and shell access on the host is the price of
+admission. **papaia-manager** is the browser counterpart — an optional core service
+(profile `manager`, port 8120) that lets an operator discover, install, start, stop, update
+and remove add-ons, see what the stack is running, and take or replay a backup, without ever
+opening a terminal on the host.
 
-### 1. Native OIDC clients (LibreChat, Paperless, LiteLLM)
+It does not reimplement any of it. Every mutating operation shells out to `papaia-ctl`, and
+status queries read the same modules under `tools/lib/`, so the UI and the CLI cannot drift
+apart in behaviour. Anything done in the browser is visible to the next `papaia-ctl` command
+and vice versa; `deployment.yaml` stays the single source of truth for both.
 
-These services speak OIDC themselves. The configuration model is:
+```bash
+tools/papaia-ctl setup --manager --manager-host=https://manager.example.com
+tools/papaia-ctl start
+```
 
-- A Keycloak client per service (`librechat`, `paperless`, `litellm`) is
-  created from `papaia-realm.json`, imported on Keycloak's first start.
-- Each client secret (`KC_<service>_CLIENT_SECRET`) must hold the same
-  value in `infra/keycloak/.env` and in the consuming service's `.env`.
-- `OPENID_ISSUER` / `GENERIC_AUTHORIZATION_ENDPOINT` must point at the
-  **public** Keycloak URL derived from `PAPAIA_HOST`, so the `iss` claim
-  the service receives matches what the browser hits at login.
-- PKCE (`OPENID_USE_PKCE=true`) is required where the realm enforces it
-  (mandatory for the LibreChat client).
+`setup` prompts for it interactively (default: enabled) and derives `MANAGER_PUBLIC_URL`
+from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the profile off.
 
-### 2. oauth2-proxy forward auth (n8n, optional Homepage and any custom service)
+### What it offers
 
-Services without native OIDC sit behind oauth2-proxy. NPM checks
-`/oauth2/auth` before letting requests through; on a 401, the user is
-bounced to Keycloak via oauth2-proxy.
+| Surface | Contents |
+|---|---|
+| **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. |
+| **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. |
+| **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. |
+| **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and an optional retention period. |
 
-oauth2-proxy runs in **`--skip-oidc-discovery` mode** with the three OIDC
-endpoints split into:
+### Catalogues
 
-| Variable                  | Purpose                            | Reachable from |
-|---------------------------|------------------------------------|----------------|
-| `OIDC_ISSUER_KC_AUTH`     | Browser redirect to login          | Browser        |
-| `OIDC_ISSUER_KC_TOKEN`    | Server-side code → token exchange  | Containers     |
-| `OIDC_ISSUER_KC_CERTS`    | JWKS for signature verification    | Containers     |
+A catalogue is a source of add-ons — a Git repository or a local directory — registered at
+runtime rather than shipped with the Core, in
+`$PAPAIA_CONFIG_DIR/manager/catalogs.yaml`. Each is scanned for top-level `papaia-app.yaml`
+manifests. Installing materialises a **pinned snapshot at a specific commit**, so refreshing
+a catalogue later never moves code out from under a running container. An update is an
+explicit operation: refresh, diff the candidate's `.env.example` against the installed
+bundle so new `CHANGE_ME` keys can be filled in first, then stop, re-materialise and start.
 
-The auth URL uses `PAPAIA_HOST` (e.g. `http://host.docker.internal:8110`)
-so it works in the user's browser. The token & JWKS URLs use the internal
-service name (`http://keycloak:8080`) so cross-container calls don't
-depend on host DNS. Both routes resolve to the **same realm**, which keeps
-the `iss` claim consistent.
+### Access control
 
-### Realm contents (out of the box)
+Authentication is native OIDC against the realm client `papaia-manager` — there is no
+oauth2-proxy sidecar in front of it. Two realm roles gate the UI, and the same dependencies
+guard the JSON API:
 
-| Item                | Value                                       |
-|---------------------|---------------------------------------------|
-| Realm               | `papaia`                                    |
-| Discovery URL       | `${PAPAIA_HOST}:8110/realms/papaia/.well-known/openid-configuration` |
-| Clients             | `librechat`, `paperless`, `litellm`, `oauth2-proxy` |
-| Realm roles         | `admin`, `user`, `viewer`                   |
-| Default test users  | `admin/admin`, `testuser/testuser`          |
+| Variable | Default | Grants |
+|---|---|---|
+| `MANAGER_ADMIN_ROLE` | `admin` | Every surface — add-ons, catalogues, services, backup, jobs |
+| `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 
-> ⚠️ The default test users exist purely for local development. Disable or
-> delete them before exposing the stack to anything beyond `localhost`.
+An account holding neither role is rejected at login. Both variables live in
+`src/manager/.env`, not in the root `.env`: the compose file never interpolates them, so a
+root-level copy would resolve but never reach the container.
 
-### Switching to an external IdP (Entra ID, Authentik, Okta …)
+### Host requirements
 
-In `src/.env`:
+The manager invokes `papaia-ctl`, which invokes `docker compose`, which resolves the
+bind-mount sources in the Core and add-on compose files. Those paths must therefore mean
+the same thing inside the container as on the host — **path parity**:
+
+- `PAPAIA_WORKSPACE_DIR`, `PAPAIA_CONFIG_DIR` and `PAPAIA_BACKUP_DIR` are each mounted at
+  their own host path, not remapped to `/workspace` or `/config`. `setup` stamps all three
+  automatically.
+- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it on the
+  host. Discover it with:
+
+  ```bash
+  docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine \
+    stat -c '%g' /var/run/docker.sock
+  ```
+
+- The container runs as the host `UID`/`GID` so that files it writes into the config
+  directory keep the ownership `setup` established.
+
+> **The `manager` profile therefore requires a Linux host.** Docker Desktop on Windows and
+> macOS does not preserve host-path parity across its VM boundary, so the mounts above
+> cannot be satisfied. Everything else in the stack runs on Docker Desktop as usual — leave
+> the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+
+Granting a container access to the Docker socket is granting it root on the host. That is
+inherent to what the manager does, and the reason its access is role-gated and its
+operations are recorded in `$PAPAIA_CONFIG_DIR/manager/audit.log`. Expose it behind TLS and
+treat `MANAGER_ADMIN_ROLE` as a host-administrator role.
+
+### State
+
+Everything the manager owns lives in `$PAPAIA_CONFIG_DIR/manager/`, so `papaia-ctl backup`
+captures it along with the rest of the installation:
+
+| File | Contents |
+|---|---|
+| `catalogs.yaml` | Registered add-on sources |
+| `installed.yaml` | Which add-on came from which catalogue, at which commit |
+| `tiles.yaml` | Dashboard tiles, grouped, with per-tile visibility |
+| `jobs/` | Records of long-running operations, with their streamed log output |
+| `audit.log` | Who triggered which operation |
+
+The application itself ships as the pinned image `ghcr.io/fidonis/papaia-manager`, built by
+[Fidonis](https://www.fidonis.de) in its own repository; `src/manager/` here carries only
+the compose file and `.env.example`. Upgrading the manager is an image-tag change,
+independent of the platform release cadence.
+
+---
+
+## Architecture overview
+
+papAIa is structured in three tiers:
+
+- **Tier 1 — Core** (always on): identity, ingress, inference, and the chat layer.
+  Self-sufficient; no add-on required.
+- **Tier 2 — First-party add-ons**: services maintained by [Fidonis](https://www.fidonis.de),
+  plugging in through the add-on contract, version-pinned.
+- **Tier 3 — Custom add-ons**: bespoke customer services following the same contract.
+
+The split is deliberate. A stack that grows every service a single customer once asked for
+becomes unmaintainable across a fleet, and a customer who cannot remove what they do not
+need is not sovereign over their own deployment. Keeping the Core lean and everything else
+behind one contract is how Fidonis runs the same artifact for every customer while each
+installation contains only what that customer chose.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Workspace (parent directory of this checkout)                   │
+│                                                                  │
+│  papaia/             ← Lean Core (this repo)                     │
+│  │  Keycloak · oauth2-proxy · Nginx Proxy Manager                │
+│  │  LibreChat · LiteLLM · LocalAI · papaia-manager               │
+│  │                                                               │
+│  papaia-addons/      ← Add-ons (separate repos, opt-in)          │
+│  │  paperless/       Document management + MCP bridge            │
+│  │  <name>/          further first-party or custom add-ons       │
+│  │                                                               │
+│  papaia-config/      ← PAPAIA_CONFIG_DIR (generated state)       │
+│     deployment.yaml  rendered configs  generated secrets         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Request flow
+
+A browser reaches the edge proxy on 80/443, which forwards to the target service. Services
+with native OIDC (LibreChat, LocalAI) redirect the user to Keycloak's **public** URL to log
+in; server-side token and JWKS lookups go to `keycloak:8443` over the internal network. That
+split is why oauth2-proxy runs with `--skip-oidc-discovery` and three explicit endpoints:
+
+| Variable | Purpose | Reachable from |
+|---|---|---|
+| `OIDC_AUTH_URL` | Browser redirect to the login page | Browser |
+| `OIDC_TOKEN_URL` | Server-side code → token exchange | Containers |
+| `OIDC_JWKS_URL` | JWKS for signature verification | Containers |
+
+Services **without** native OIDC sit behind oauth2-proxy: Nginx PM calls `/oauth2/auth`
+before letting a request through and bounces the user to Keycloak on a 401.
+
+All core containers share one bridge network, `papaia-net` (or `papaia-<env>-net`).
+
+### Add-ons
+
+An add-on is a self-contained directory — usually its own repository — holding:
+
+- `papaia-app.yaml`, the manifest;
+- its own `docker-compose.yml`, on its **own isolated bridge network**;
+- an `.env.example`;
+- an `integration/` tree with the fragments it contributes to the core.
+
+The manifest declares every seam in machine-readable form, so integrating an add-on requires
+**no edits to the core**:
+
+| Seam | Mechanism |
+|---|---|
+| Network | The add-on declares its bridge network and which core containers must attach; `papaia-ctl` writes the Compose override |
+| OIDC | Keycloak clients and protocol mappers registered additively |
+| LibreChat / MCP | `mcpServers` and `allowedDomains` fragments merged at render time |
+| Ingress | Nginx Proxy Manager fragment merged at render time (optional) |
+| TLS trust | The add-on lists env vars that point at the bundled CA cert (`local_ca_env`); `papaia-ctl` clears them via a generated override when an external OIDC issuer is used |
+
+Add-ons are registered explicitly by path — there is no auto-discovery:
+
+```bash
+tools/papaia-ctl addon install paperless --path=../papaia-addons/paperless
+# fill in the CHANGE_ME values in $PAPAIA_CONFIG_DIR/addons/paperless/.env
+# register the Keycloak clients printed by the checklist
+tools/papaia-ctl addon start paperless
+tools/papaia-ctl start                    # re-render the core with the new fragments
+```
+
+The reference add-on is **Paperless-ngx**: document management with native OIDC, plus an
+OIDC/RBAC MCP server that lets LibreChat query a user's documents under that user's own
+permissions — no shared admin credentials. It is one of the first-party add-ons Fidonis
+maintains and version-pins against the `ADDON_API` contract, so a Core upgrade cannot
+silently break it.
+
+Because the contract is the only integration point, an add-on you write yourself is
+indistinguishable from one Fidonis ships. There is no privileged path, and nothing in the
+Core needs to know your add-on exists.
+
+---
+
+## Advanced configuration
+
+### External Keycloak / external OIDC
+
+When your organisation already runs an identity provider, papAIa can use it instead of the
+bundled Keycloak. The bundled Keycloak and its database are then excluded from the stack.
+
+**1. Point setup at the external issuer**
+
+```bash
+tools/papaia-ctl setup \
+  --auth-provider=external_oidc \
+  --oidc-issuer=https://keycloak.example.com/realms/your-realm
+```
+
+`--oidc-issuer` is mandatory the first time you switch, if you are running non-interactively.
+`setup` derives all OIDC endpoints from the issuer URL (RFC 8414 layout), drops the `keycloak`
+profile, and clears `SSL_CERT_FILE` for LiteLLM, oauth2-proxy, and LocalAI so they validate
+the issuer against the system CA bundle instead of the bundled self-signed CA.
+
+Client secrets cannot be generated for an issuer papAIa does not control, so each one is
+written as the literal placeholder `REPLACE_WITH_VALID_SECRET`. `setup` prints the full list.
+
+**2. Create a confidential OIDC client per service**
+
+| Client ID | PKCE | Redirect URI | Secret lands in |
+|---|---|---|---|
+| `librechat` | required | `{LIBRECHAT_HOST}/oauth/openid/callback` | `OPENID_CLIENT_SECRET` in `src/ai/librechat/.env` |
+| `litellm` | — | `*` | `GENERIC_CLIENT_SECRET` in `src/ai/litellm/.env` |
+| `oauth2-proxy` | — | `*` | `OAUTH2_PROXY_CLIENT_SECRET` in `src/infra/oauth2-proxy/.env` |
+| `localai` | — | `{LOCALAI_PUBLIC_URL}/api/auth/oidc/callback` | `LOCALAI_OIDC_CLIENT_SECRET` in `src/ai/localai/.env` |
+
+Every client needs a **realm-roles protocol mapper** that puts the user's roles into the token
+under the claim name `roles` — multivalued, type String, included in the ID token, the access
+token, and userinfo. The claim names papAIa reads are configurable:
 
 ```env
-AUTH_PROVIDER=external_oidc
-OIDC_ISSUER=https://idp.example.com/realms/your-realm
-OIDC_CLIENT_ID=librechat
-OIDC_ISSUER_KC_AUTH=https://idp.example.com/realms/your-realm/protocol/openid-connect/auth
-OIDC_ISSUER_KC_TOKEN=https://idp.example.com/realms/your-realm/protocol/openid-connect/token
-OIDC_ISSUER_KC_CERTS=https://idp.example.com/realms/your-realm/protocol/openid-connect/certs
+OIDC_ROLE_CLAIM=roles
+OIDC_USERNAME_CLAIM=preferred_username
+OIDC_EMAIL_CLAIM=email
 ```
 
-See [`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) for
-provider-specific notes.
+**3. Write the secrets into the config directory**
 
----
+Copy each client secret from the identity provider into the matching `.env` file under
+`$PAPAIA_CONFIG_DIR`, replacing `REPLACE_WITH_VALID_SECRET`. Then:
 
-## Service highlights
+```bash
+tools/papaia-ctl start
+```
 
-### LibreChat
-- Multi-provider chat UI — hosted and local models via LiteLLM.
-- Native Keycloak OIDC login with PKCE.
-- Built-in RAG with Meilisearch + pgvector for uploaded files.
+**4. Restrict LocalAI to a role (optional)**
 
-### LiteLLM
-- Unified API gateway across providers.
-- Generic OIDC SSO for the admin UI; master key for programmatic clients.
-- Prometheus metrics on `:8230`.
+Create the realm role `localai-access` and a custom browser flow on the `localai` client — a
+CONDITIONAL sub-flow with a *Condition – User Role* authenticator negating `localai-access`,
+followed by *Deny Access*. Assign the role to the users who should be allowed in.
 
-### LocalAI
-- Local model inference with a chat-completions API (CPU or NVIDIA GPU image).
-- Models to download are listed in `ai/localai/models.txt` (one URL per
-  line); edit that file to add or remove models.
+Configuring a non-Keycloak provider (Entra ID, Authentik, Okta, Auth0) works the same way; only
+the issuer URL layout differs. See
+[`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) for the per-provider issuer
+patterns and the step-by-step browser-flow configuration.
 
-### MCP Paperless
-- OIDC-secured MCP server that bridges LibreChat to Paperless-ngx.
-- Validates the logged-in user's Keycloak Bearer token (forwarded automatically
-  via the `Paperless` entry in `librechat.yaml`), then calls Paperless on the
-  user's behalf via a remote-user header — **no admin credentials stored**.
-- Paperless enforces its own per-user permissions, so each user only ever sees
-  **their own** documents.
-- `OIDC_ISSUER` is reused from the global OIDC block; service-internal settings
-  live in `ai/mcp-paperless/.env`. See `src/ai/mcp-paperless/.env.example`.
+### External reverse proxy
 
-### qdrant-rag
-- OIDC + RBAC MCP server that exposes Qdrant vector search to LibreChat.
-- Validates the logged-in user's Keycloak Bearer token and maps Keycloak roles
-  to per-collection Qdrant access, so each user can only search collections
-  they are authorized for.
-- LibreChat forwards the user's token automatically via the `QdrantRAG` MCP
-  server entry in `librechat.yaml` — no custom patch required.
-- Ships its own Qdrant instance; configured via `QDRANT_RAG_*` variables.
-  `OIDC_ISSUER` is reused from the global OIDC block — no duplicate needed.
-- Optional profile `qdrant-rag`; see `src/ai/qdrant-rag/.env.example` for
-  the full variable reference.
+If the host already terminates TLS — or already runs something on ports 80/443 — exclude the
+bundled Nginx Proxy Manager:
 
-### MCP Office Documents
-- MCP server that generates Word, Excel, PowerPoint, email-draft and XML files
-  from a LibreChat prompt and returns a clickable, time-limited download link.
-- Generated files are uploaded to the bundled MinIO object store; the tool
-  response carries a pre-signed URL that resolves from the user's browser.
-- LibreChat reaches it via the `OfficeDocuments` MCP server entry in
-  `librechat.yaml`; an optional `MCP_OFFICE_DOCS_API_KEY` guards the endpoint.
-- Optional profile `mcp-office-docs`; see `src/ai/mcp-office-docs/.env.example`
-  for the full variable reference.
+```bash
+tools/papaia-ctl setup --reverse-proxy-provider=external_proxy \
+  --app-host=https://chat.example.com \
+  --auth-host=https://auth.example.com
+```
 
-### MinIO
-- Self-hosted, S3-compatible object storage backing the Office Documents MCP
-  server. `MINIO_SERVER_URL` is derived from `PAPAIA_HOST` so pre-signed
-  download URLs resolve from the user's browser, not the internal Docker host.
-- A cleanup sidecar prunes objects past their retention window
-  (`CLEANUP_RETENTION_HOURS`); state persists in the `minio-data` volume.
-- Enabled together with the MCP server via the `mcp-office-docs` profile; see
-  `src/services/minio/.env.example`.
+This drops the `nginx` profile, so there is no port conflict. `setup` auto-detects this case
+when `--app-host` is HTTPS; pass the flag explicitly to be sure.
 
-### n8n
-- Self-hosted workflow automation behind oauth2-proxy.
-- Postgres-backed state; public URL set from `PAPAIA_HOST` so the
-  oauth2-proxy redirect callback stays correct.
+Your proxy must map two public URLs onto the published container ports:
 
-### Paperless-ngx
-- Document management with native Keycloak OIDC.
-- Pre-wired with Tika + Gotenberg for OCR.
-- Accepts a remote-user header from MCP Paperless
-  (`PAPERLESS_ENABLE_HTTP_REMOTE_USER`) so per-user document access works
-  without sharing admin credentials.
+| Public URL | Target | Scheme on the target |
+|---|---|---|
+| `${AUTH_HOST}` | `HOST_IP:KEYCLOAK_EXT_PORT` (default 8110) | **HTTPS** |
+| `${LIBRECHAT_HOST}` | `HOST_IP:LIBRECHAT_EXT_PORT` (default 8000) | HTTP |
 
-### SearXNG
-- Privacy-respecting metasearch.
-- Bound to LibreChat's web-search integration via
-  `SEARXNG_INSTANCE_URL=http://searxng:8080`.
+Keycloak terminates TLS itself, on port 8443 inside the container, using the self-signed
+certificate `papaia-ctl` generated. Its plain-HTTP listener is never published. **Your proxy
+must therefore speak HTTPS to Keycloak and skip certificate verification on that hop** — a
+plain-HTTP `proxy_pass` to port 8110 will fail.
 
-### Homepage
-- Curated dashboard for all enabled services.
-- `HP_ALLOWED_HOSTS` is derived from `PAPAIA_HOST` so the dashboard is
-  reachable on whichever URL the rest of the stack uses.
+Keycloak runs with `KC_PROXY_HEADERS=xforwarded`, so the `X-Forwarded-*` headers are
+mandatory. Without them Keycloak treats the request as plain HTTP, drops the `Secure` flag
+from its cookies, and cross-origin OIDC POSTs silently lose their state.
+
+#### Caddy
+
+```caddy
+auth.example.com {
+    reverse_proxy https://10.0.0.10:8110 {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
+}
+
+chat.example.com {
+    reverse_proxy 10.0.0.10:8000
+}
+```
+
+Caddy sets `X-Forwarded-*` on its own.
+
+#### nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name auth.example.com;
+    # ssl_certificate / ssl_certificate_key ...
+
+    location / {
+        proxy_pass              https://10.0.0.10:8110;
+        proxy_ssl_verify        off;          # Keycloak serves a self-signed certificate
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name chat.example.com;
+    # ssl_certificate / ssl_certificate_key ...
+
+    location / {
+        proxy_pass              http://10.0.0.10:8000;
+        proxy_http_version      1.1;
+        proxy_set_header Upgrade           $http_upgrade;   # LibreChat uses WebSockets
+        proxy_set_header Connection        "upgrade";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+    }
+}
+```
+
+**Related settings**
+
+- `HOST_IP=127.0.0.1` keeps every published port off the LAN when the proxy runs on the same
+  host.
+- `OAUTH2_PROXY_COOKIE_SECURE` must match the scheme of `PAPAIA_HOST`: `true` for HTTPS,
+  `false` for plain HTTP. Browsers ignore `Secure` cookies over HTTP, so a mismatch breaks
+  login without an obvious error.
+- `--reverse-proxy-provider=no_proxy` together with `--allow-direct-port-access` runs the stack
+  with no proxy and no TLS at all. `setup` asks for confirmation. Development only.
+
+### GPU acceleration for LocalAI
+
+LocalAI is pinned to the CPU image by default. Upstream publishes one image per accelerator
+for every release, and `papaia-ctl setup` picks between them: with the `localai` profile
+enabled it probes the host, reports what it found, and asks which image to install.
+
+| Choice | Image tag | Host prerequisites |
+|---|---|---|
+| CPU | `localai/localai:<version>` | none |
+| NVIDIA GPU (CUDA) | `…-gpu-nvidia-cuda-13` / `…-cuda-12` | proprietary driver + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) |
+| AMD GPU (ROCm) | `…-gpu-hipblas` | ROCm kernel driver (provides `/dev/kfd`) |
+| Intel GPU (SYCL) | `…-gpu-intel` | none — the backend ships its own driver |
+| Vulkan (generic) | `…-gpu-vulkan` | a Vulkan-capable GPU driver |
+
+**The stack installs none of these prerequisites.** Detection reports what the host exposes at
+the moment setup runs; every option stays selectable regardless, so you can configure the stack
+before installing the driver. Picking an undetected variant prints a warning.
+
+The CUDA major version is taken from the installed driver, so NVIDIA hosts get CUDA 13 on
+recent drivers and CUDA 12 on older ones. Non-interactively:
+
+```bash
+tools/papaia-ctl setup -y --app-host=https://papaia.example.com --localai-variant=auto
+```
+
+`auto` resolves to the best detected variant; a concrete name (`intel`, `hipblas`, …) forces
+one. Omitting the flag leaves the current choice untouched.
+
+Only the *variant* is stored, as `LOCALAI_IMAGE_VARIANT` in `$PAPAIA_CONFIG_DIR/.env`. The
+LocalAI version stays pinned in `src/ai/localai/docker-compose.yml`, and the accelerator tag is
+recomposed from it on every render — so `papaia-ctl upgrade` moves GPU installs forward just
+like CPU ones. The image swap and the device passthrough live in a generated
+`overrides/docker-compose.localai-gpu.override.yml`; selecting CPU deletes that file again.
+
+Two caveats worth knowing:
+
+- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in the model
+  YAMLs under `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+- **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
+  `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
+
+### Multi-environment setup
+
+Several papAIa stacks can run side by side on one host without forking the repo.
+`--env=NAME` namespaces the installation:
+
+| `--env` | `COMPOSE_PROJECT_NAME` | `DOCKER_NETWORK` |
+|---|---|---|
+| _(unset)_ | `papaia` | `papaia-net` |
+| `dev` | `papaia-dev` | `papaia-dev-net` |
+| `stage` | `papaia-stage` | `papaia-stage-net` |
+
+Two rules make this work:
+
+1. **`--env` is a `setup`-only flag.** `start` and `stop` read the project name from the
+   persisted `.env`; you select an environment by pointing them at its `--config-dir`.
+2. **Every environment needs its own `--config-dir`.** Otherwise the second `setup`
+   overwrites the first environment's generated state.
+
+Give each stack its own bind address — add IP aliases to the host's primary interface — so two
+environments can keep identical port numbers:
+
+```bash
+tools/papaia-ctl setup --env=dev \
+  --config-dir=/srv/papaia-dev/config \
+  --host-ip=192.168.1.102 --app-host=http://192.168.1.102
+
+tools/papaia-ctl setup --env=stage \
+  --config-dir=/srv/papaia-stage/config \
+  --host-ip=192.168.1.103 --app-host=http://192.168.1.103
+```
+
+Afterwards, operate each one by its config directory:
+
+```bash
+tools/papaia-ctl start --config-dir=/srv/papaia-dev/config
+tools/papaia-ctl stop  --config-dir=/srv/papaia-stage/config
+```
+
+Remember that `PAPAIA_HOST` feeds the OIDC redirect URIs, and that
+`OAUTH2_PROXY_COOKIE_SECURE` must match its scheme in every environment.
 
 ---
 
 ## Operations
 
-### Backup
+Day-to-day operations — enabling modules, upgrading images, backups, resetting Keycloak — are
+documented in [`docs/deployment.md`](docs/deployment.md).
 
-```bash
-src/backup-papaia.sh         # gzipped archives of all named volumes
-src/restore-papaia.sh <vol>  # restore one volume from a backup archive
-```
+The short version: edit `overlay/` or the profile list, then run `tools/papaia-ctl start`.
+Moving to a newer release is `tools/papaia-ctl upgrade`; the config directory and everything
+under `overlay/` survive untouched.
 
-The backup script keeps the last 14 days locally. Off-site sync (e.g. to
-OneDrive or S3) is left to your environment.
-
-### Selective module enable / disable
-
-`src/docker-compose.yml` aggregates services via `include:`, and each
-service declares a Compose `profile`. Enable a module by adding its
-profile to `COMPOSE_PROFILES` in `src/.env`; fully optional modules
-(commented out in the `include:` list) also need their `include:` line
-uncommented. Restart with `docker compose up -d` afterwards.
-
-### Updating images
-
-Image tags are pinned in `src/.env.example`. To upgrade a service, bump the
-corresponding `*_IMAGE` variable in `src/.env` and `docker compose up -d
-<service>`.
-
-### Resetting Keycloak
-
-The realm import only runs on the **first** Keycloak start. To re-import
-(after editing the realm template, for example):
-
-```bash
-docker compose down keycloak keycloak-postgresql
-docker volume rm papaia_keycloak-postgresql
-docker compose up -d
-```
-
-This also wipes any users created through the admin UI — back them up first
-if you need them.
-
----
+These are the same commands Fidonis runs when it operates an installation on a customer's
+behalf. There is no separate operator edition and no privileged tooling behind the
+published path — anything an operator can do to a papAIa installation is in this README.
 
 ## Troubleshooting
 
-### "redirect_uri does not match" from Keycloak after login
-
-Cause: `PAPAIA_HOST` and the Keycloak client's registered redirect URIs
-disagree.
-
-- Check `src/.env` — `PAPAIA_HOST` must be the URL you actually type into
-  the browser (host **and** port, scheme included).
-- After changing `PAPAIA_HOST`, update every URL derived from it —
-  `OIDC_ISSUER`, `OIDC_ISSUER_KC_AUTH`, the LibreChat / LiteLLM /
-  Paperless / n8n public URLs and Homepage's `HP_ALLOWED_HOSTS` — then
-  recreate the affected containers.
-- For first-time changes you may also need to update redirect URIs in the
-  Keycloak admin UI (Clients → `librechat` / etc. → Valid redirect URIs).
-
-### LibreChat OIDC login: "invalid_token" or signature errors
-
-Cause: the `iss` claim in the access token doesn't match what LibreChat
-expects.
-
-- The token's `iss` always equals `KC_HOSTNAME` (= `PAPAIA_HOST:8110`).
-- Make sure `OPENID_ISSUER` in `ai/librechat/.env` is the same URL.
-- On Linux, ensure `host.docker.internal` resolves to `127.0.0.1` in
-  `/etc/hosts` (add it manually — see the troubleshooting entry below).
-
-### Cookies don't stick / login loops behind oauth2-proxy
-
-oauth2-proxy issues a session cookie tied to the host that served the
-login. If you reach n8n via `http://host.docker.internal:8400` but
-oauth2-proxy was configured with a different `--redirect-url`, the cookie
-won't be sent on subsequent requests.
-
-- Verify that `OAUTH2_PROXY_COOKIE_SECRET` is exactly **32 base64 bytes**
-  (`openssl rand -base64 32`); don't shorten it.
-- Use the same scheme + host + port in NPM, oauth2-proxy `--redirect-url`,
-  and the Keycloak client's "Valid redirect URIs". A mismatch on **any** of
-  these breaks the loop.
-- When testing, clear cookies for the affected host between attempts —
-  stale `_oauth2_proxy*` cookies survive container restarts.
-
-### LibreChat Keycloak login fails over HTTP (issue #40)
-
-Browsers refuse to send `Secure` cookies over plain HTTP. Either:
-
-- Run the stack behind HTTPS (recommended for any non-local deployment), or
-- Stay on `http://host.docker.internal` for local development — the realm
-  is preconfigured to allow it.
-
-### "host.docker.internal: cannot resolve" on Linux
-
-On Linux, add `127.0.0.1 host.docker.internal` to `/etc/hosts` (requires
-sudo):
-
-```bash
-echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
-```
-
-Or set `PAPAIA_HOST` to the LAN IP of the host instead.
-
-### Out-of-memory when running LocalAI
-
-LocalAI is the heaviest module. If RAM is tight, run a smaller model
-(`Qwen2.5 1.5B Q4`), disable LocalAI entirely (comment its line in
-`src/docker-compose.yml`) and route LibreChat to a hosted provider via
-LiteLLM.
-
-### General debugging
-
-```bash
-docker compose ps                 # what's running
-docker compose logs -f <service>  # follow one service
-docker compose config             # render the merged compose file
-```
+Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-proxy,
+`host.docker.internal` resolution on Linux — are collected in
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ---
 
 ## Repository layout
 
 ```
-.
-├── README.md                  # this file
-└── src/
-    ├── README.md              # Compose-level operational guide
-    ├── docker-compose.yml     # root compose, includes per-service files
-    ├── .env.example           # all stack-wide env vars, grouped per service
-    ├── sync-config.sh         # seed/refresh PAPAIA_CONFIG_DIR from src/
-    ├── backup-papaia.sh       # volume + PAPAIA_CONFIG_DIR backup
-    ├── restore-papaia.sh      # volume restore
-    ├── infra/                 # keycloak, nginx, oauth2-proxy, technitium
-    ├── services/              # firecrawl, home-assistant, homepage,
-    │                          # minio, paperless, searxng
-    └── ai/                    # jinaai, librechat, litellm, localai,
-                               # mcp-office-docs, mcp-paperless, n8n, qdrant-rag
+[workspace root]/
+├── papaia/                    ← this repo (read-only at deploy time)
+│   ├── tools/
+│   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · upgrade · addon · …)
+│   │   ├── deployment.template.yaml  # deployment.yaml template
+│   │   ├── pyproject.toml      # ruff + pytest config for tools/lib
+│   │   ├── lib/                # Python: cli.py · cli_addon.py · deployment.py · envtree.py
+│   │   │                       #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
+│   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py
+│   │   │                       #   backup.py · upgrade.py · migrations.py · common.py
+│   │   │   └── sh/             # Bash command libraries sourced by papaia-ctl
+│   │   ├── migrations/         # release migrations run by `papaia-ctl upgrade`
+│   │   └── tests/              # pytest suite
+│   ├── src/
+│   │   ├── docker-compose.yml  # root compose — shared network + include list only
+│   │   ├── .env.example        # all stack-wide variables (source of truth)
+│   │   ├── infra/              # keycloak · nginx · oauth2-proxy
+│   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai
+│   │   ├── manager/            # papaia-manager (optional, profile: manager)
+│   │   └── services/           # searxng · firecrawl
+│   └── docs/
+│       ├── architecture.md               # full architecture specification
+│       ├── configuration.md
+│       ├── deployment.md
+│       ├── troubleshooting.md
+│       └── adr/                # Architecture Decision Records
+│
+├── papaia-addons/             ← add-on repos cloned alongside (opt-in)
+│   └── <name>/                # papaia-app.yaml + compose + integration fragments
+│
+└── papaia-config/             ← PAPAIA_CONFIG_DIR (generated, never committed)
+    ├── deployment.yaml         # installation manifest
+    ├── overlay/                # customer config overrides (highest merge layer)
+    └── overrides/              # auto-generated add-on network overrides
 ```
 
 ---
 
 ## Further reading
 
-- [`src/README.md`](src/README.md) — Compose-level orchestration, service
-  toggles, common commands.
-- [`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) —
-  Realm contents, client list, external-IdP migration, secret rotation.
+- [`src/README.md`](src/README.md) — Compose-level orchestration, service toggles,
+  common commands.
+- [`src/infra/keycloak/README.md`](src/infra/keycloak/README.md) — Realm contents,
+  client list, external-IdP migration, secret rotation.
 - [`src/ai/README.md`](src/ai/README.md) — Per-AI-service summary.
+- [`docs/architecture.md`](docs/architecture.md) — Full
+  architecture specification: 3-tier model, add-on contract, integration seams,
+  deployment manifest schema.
+- [`docs/configuration.md`](docs/configuration.md) — Environment variable reference.
+- [`docs/deployment.md`](docs/deployment.md) — Deployment guide and operations.
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — Common failure modes.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — How to contribute.
+- [`CHANGELOG.md`](CHANGELOG.md) — Release history.
+
+---
+
+## About Fidonis
+
+papAIa is developed and maintained by **[Fidonis GmbH](https://www.fidonis.de)**.
+
+Fidonis stands for technological sovereignty: bringing local, modular AI to mid-sized
+companies — dependable, secure, and vendor-independent. papAIa is how that looks in
+practice. Every component runs on infrastructure the customer controls, the model layer is
+replaceable without touching anything above it, and the whole stack can be taken over,
+audited, or moved elsewhere without asking anyone's permission.
+
+Fidonis operates papAIa for customers who would rather not run it themselves, and builds
+the first-party add-ons and the custom integrations that connect it to a company's existing
+systems. Either way it is the same artifact from this repository — the difference is who
+runs it, not what is installed.
+
+The stack is MIT-licensed and free to use, extend and self-host, with or without Fidonis.
+See [LICENSE](LICENSE) for the code and [TRADEMARK.md](TRADEMARK.md) for the rules covering
+the papAIa and Fidonis names.
+
+**[www.fidonis.de](https://www.fidonis.de)**

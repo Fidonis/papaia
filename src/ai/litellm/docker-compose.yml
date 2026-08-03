@@ -4,18 +4,24 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   litellm:
-    image: ${LITELLM_IMAGE}
+    image: ghcr.io/berriai/litellm:v1.91.1
     restart: unless-stopped
     env_file:
       - ./.env
     environment:
       DATABASE_URL: "postgresql://llmproxy:${LITELLM_PG_PASSWORD}@litellm-db:5432/litellm"
+      SSL_CERT_FILE: /tmp/ca-bundle.crt
     volumes:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/ai/litellm/config.yaml
         target: /app/config.yaml
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/certs
+        target: /certs
+        read_only: true
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - "--config=/app/config.yaml"
+      - "python -c 'import certifi,shutil; shutil.copy(certifi.where(), \"/tmp/ca-bundle.crt\")' && cat /certs/local-ca.crt >> /tmp/ca-bundle.crt && exec litellm --config=/app/config.yaml"
     depends_on:
       litellm-db:
         condition: service_healthy
@@ -29,7 +35,7 @@ services:
     profiles: [litellm]
 
   litellm-db:
-    image: ${LITELLM_DB_IMAGE}
+    image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_DB: litellm
@@ -51,17 +57,18 @@ services:
     profiles: [litellm]
 
   litellm-prometheus:
-    image: ${LITELLM_PROMETHEUS_IMAGE}
+    image: prom/prometheus:v3.13.1
     restart: unless-stopped
+    env_file:
+      - ./.env
     volumes:
       - litellm-prometheus:/prometheus
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/ai/litellm/prometheus.yml
         target: /etc/prometheus/prometheus.yml
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=15d"
+      - "printf '%s' $$LITELLM_MASTER_KEY > /etc/prometheus/litellm-token && exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=15d"
     # Port not exposed — access via NPM reverse proxy with auth if needed
     networks:
       - papaia-net

@@ -1,0 +1,7 @@
+mcpServers:
+  PaperlessMCP:
+    type: streamable-http
+    url: http://paperless-mcp:3000/mcp
+mcpSettings:
+  allowedDomains:
+    - "http://paperless-mcp:8000"

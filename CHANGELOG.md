@@ -12,6 +12,66 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.0.0] - 2026-08-03
+
+### 🚀 Features
+
+- feat: introduce add-on contract — `papaia-app.yaml` manifest schema, 4 standardised integration seams (network, OIDC, LibreChat-MCP, Ingress)
+- feat: full add-on lifecycle in `papaia-ctl` — `addon install`, `addon start`, `addon stop`, `addon remove`, `addon uninstall`
+- feat: `papaia-ctl addon check` — pre-upgrade compatibility dry-run against an update candidate (`--target-core=PATH`)
+- feat: `ADDON_API` contract-generation window — integer-based compatibility axis independent of the product SemVer (see ADR 0002)
+- feat: structural `networks.attach` validation against Core Compose service names
+- feat: 3-layer config render (repo base + active add-on fragments + customer overlay)
+- feat: per-installation deployment manifest (`deployment.yaml`) as single source of truth for active add-ons and Core profiles
+- feat: `papaia-ctl start --addons` / `stop --addons` for full-stack lifecycle including add-ons
+- feat: Lean Core — application-specific services removed from Core compose; add-on infrastructure replaces hard-wired service includes
+- feat: `papaia-ctl upgrade [--version=X.Y.Z]` — move an installation to a release. Resolves the newest release when no version is given, refuses downgrades, checks active add-ons against the target before anything is touched, takes a restore point, and re-executes itself from the checked-out release so its own render and setup logic applies the change
+- feat: release migrations in `tools/migrations/`, run by `upgrade` for every release between the installed and the target version, recorded in `$PAPAIA_CONFIG_DIR/migrations/applied.json` so they never run twice
+- feat: `papaia-ctl backup` — hot backup of `PAPAIA_CONFIG_DIR`, all core volumes, and all add-on volumes and data bind mounts into timestamped restore points, with a `backup.yaml` catalogue, `--retention-period-days` pruning, and a result log
+- feat: `papaia-ctl restore` — restore a catalogued restore point, with `--list`, `--restore-point`, `--restart-clean` and `--no-restart`. Containers are removed and recreated around the restore, not merely stopped: a stopped container keeps the mount source of every config file it bind-mounts, which the restore replaces
+- feat: `PAPAIA_BACKUP_DIR` root variable, settable via `papaia-ctl setup --backup-dir=PATH` and derived as `$PAPAIA_WORKSPACE_DIR/backup`
+- feat: `papaia-manager` as an optional core service (profile `manager`) — web UI for the add-on lifecycle plus a dashboard, with native OIDC and role gating via `MANAGER_ADMIN_ROLE` / `MANAGER_USER_ROLE`
+- feat: auto-provision Nginx Proxy Manager proxy hosts on start, and `papaia-ctl npm-provision` to run it on demand
+- feat: native OIDC for LocalAI, replacing its oauth2-proxy sidecar, gated by the `localai-access` realm role
+- feat: select the LocalAI accelerator image variant (CPU / NVIDIA / AMD / Intel / Vulkan) during setup, proposed by a hardware probe of the host
+
+### 🧹 Maintenance
+
+- chore: remove `src/backup-papaia.sh` and `src/restore-papaia.sh`, superseded by the `papaia-ctl` commands
+- chore: remove the Homepage service, superseded by papaia-manager, whose dashboard renders from `manager/tiles.yaml`. The add-on contract loses the Homepage seam with it and now has four seams (network, OIDC, LibreChat-MCP, Ingress)
+- chore: pin image tags directly in each service's compose file and drop the `*_IMAGE` variables from `src/.env.example`
+- chore: bump LocalAI to `v4.7.1`
+
+### 📖 Documentation
+
+- docs: rename and translate architecture specification to `docs/architecture.md` (English)
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v0.8.0...v1.0.0
+
+## [0.8.0] - 2026-06-29
+
+### 🚀 Features
+
+- feat(firecrawl): activate as internal LibreChat scraper (#84)
+- feat(mcp-firecrawl): add Firecrawl MCP server to the stack (#86)
+- feat(mcp-office-docs): add office-document generation MCP server with minio-backed downloads (#88)
+- feat(jinaai): enable jina-reranker-api with env wiring and healthcheck (#89)
+
+### 🧹 Maintenance
+
+- chore: add public-repo hardening files (#78)
+- ci(deps): bump hadolint/hadolint-action from 3.1.0 to 3.3.0 (#79)
+- ci(deps): bump amannn/action-semantic-pull-request from 5 to 6 (#80)
+- ci(deps): bump release-drafter/release-drafter from 6 to 7 (#81)
+- ci(deps): bump actions/checkout from 4 to 6 (#82), then from 6 to 7 (#90)
+- ci(deps): bump actions/github-script from 7 to 9 (#83)
+
+### 📖 Documentation
+
+- docs: add engineering reference for contributors (#87)
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v0.7.0...v0.8.0
+
 ## [0.7.0] - 2026-06-11
 
 ### 🚀 Features
@@ -42,5 +102,7 @@ based on merged pull requests; this file mirrors the published releases.
 
 **Full Changelog**: https://github.com/Fidonis/papaia/compare/v0.6.0...v0.7.0
 
-[Unreleased]: https://github.com/Fidonis/papaia/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Fidonis/papaia/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Fidonis/papaia/compare/v0.8.0...v1.0.0
+[0.8.0]: https://github.com/Fidonis/papaia/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Fidonis/papaia/compare/v0.6.0...v0.7.0

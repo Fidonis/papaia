@@ -12,11 +12,11 @@
 #
 #  Requires:
 #    - MCP_FIRECRAWL_IMAGE in root .env
-#    - firecrawl service running (profile: firecrawl) on papaia-net
+#    - firecrawl service running (profile: librechat-websearch) on papaia-net
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-firecrawl:
-    image: ${MCP_FIRECRAWL_IMAGE}
+    image: ghcr.io/firecrawl/firecrawl-mcp-server@sha256:77f1a6f861c8a644684cf8c10000b18c5d73d6549763bf8df0994a5649e5efce
     restart: unless-stopped
     environment:
       FIRECRAWL_API_URL: ${FIRECRAWL_API_URL:-http://firecrawl:3002}
@@ -30,7 +30,9 @@ services:
     networks:
       - papaia-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/mcp || exit 1"]
+      # /mcp only accepts POST (GET returns 405) — /health is the status
+      # endpoint served by the same internal nginx.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -38,4 +40,4 @@ services:
     labels:
       de.fidonis.module: papaia-mcp-firecrawl
       de.fidonis.role:   mcp-server
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]

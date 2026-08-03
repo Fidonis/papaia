@@ -1,0 +1,188 @@
+"""Shared helpers for the papaia-ctl Python library.
+
+Env-file parsing/writing, secret-marker detection, and secret generation. Pure
+functions wherever feasible so the rest of tools/lib stays unit-testable
+without mocking the filesystem.
+
+Which keys get a generated value is declared by the shipped .env.example, not
+guessed from the key name: any value carrying the GENERATE_ marker (e.g.
+CREDS_IV=GENERATE_CREDS_IV) is filled in. This keeps the intent visible in the
+template and avoids both missing an unconventionally-named secret and
+clobbering a literal value that merely happens to sit under a *_KEY name.
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+import secrets
+import shutil
+import time
+from pathlib import Path
+
+# Exact-key overrides for secrets whose consuming service requires a precise
+# byte length, where the generic 24-byte hex default would be wrong:
+#   - oauth2-proxy cookie secrets must be exactly 32 raw bytes (AES-256).
+#   - LibreChat's CREDS_KEY/CREDS_IV are AES-256-CBC key/IV pairs and must be
+#     exactly 32 and 16 raw bytes respectively, or LibreChat refuses to start.
+_EXACT_GENERATORS: dict[str, callable[[], str]] = {}
+
+
+def _register_exact(key: str):
+    def deco(fn):
+        _EXACT_GENERATORS[key] = fn
+        return fn
+
+    return deco
+
+
+@_register_exact("CREDS_KEY")
+def _gen_creds_key() -> str:
+    return secrets.token_hex(32)  # 64 hex chars = 32 bytes
+
+
+@_register_exact("CREDS_IV")
+def _gen_creds_iv() -> str:
+    return secrets.token_hex(16)  # 32 hex chars = 16 bytes
+
+
+def marks_generated_secret(value: str) -> bool:
+    """Whether a .env.example value is marked for secret generation, per the
+    shipped GENERATE_ convention (e.g. CREDS_IV=GENERATE_CREDS_IV). This is the
+    single source of truth for *which* keys get a generated value."""
+    return value.startswith("GENERATE_")
+
+
+def is_placeholder(value: str) -> bool:
+    """Whether a .env value is an unfilled placeholder, per the shipped
+    GENERATE_* convention (or simply empty)."""
+    return value == "" or value.startswith("GENERATE_")
+
+
+def generate_secret(key: str) -> str:
+    """Generate a value for the given secret-shaped key.
+
+    Dispatch order:
+      1. Exact-key overrides (CREDS_KEY, CREDS_IV) for keys with a strict
+         required byte length.
+      2. Suffix match on *_COOKIE_SECRET — must be exactly 32 raw bytes,
+         base64-encoded (oauth2-proxy's documented requirement).
+      3. Default — 24 raw bytes, hex-encoded (matches the README's existing
+         manual instruction `openssl rand -hex 24` byte-for-byte).
+    """
+    if key in _EXACT_GENERATORS:
+        return _EXACT_GENERATORS[key]()
+    if key.endswith("_COOKIE_SECRET"):
+        return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+    return secrets.token_hex(24)
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env-style file into a flat dict. Blank lines, comments, and
+    malformed lines are silently skipped."""
+    result: dict[str, str] = {}
+    if not path.is_file():
+        return result
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        if key:
+            result[key] = value
+    return result
+
+
+def write_env_file(
+    path: Path, values: dict[str, str], *, template_path: Path | None = None
+) -> None:
+    """Write a .env file, preserving comments/blank lines/ordering from
+    `template_path` (or the existing file at `path` if no template is given)
+    and only rewriting the value portion of lines whose key changed. Keys
+    present in `values` but absent from the template are appended at the
+    end under a generated-by-papaia-ctl banner.
+
+    This preserves byte-identical output for unchanged keys across repeated
+    runs, which is what makes render/setup idempotent at the file level.
+    """
+    source = template_path if template_path is not None and template_path.is_file() else path
+    existing_lines: list[str] = []
+    if source.is_file():
+        existing_lines = source.read_text(encoding="utf-8").splitlines()
+
+    seen_keys: set[str] = set()
+    out_lines: list[str] = []
+    for raw_line in existing_lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out_lines.append(raw_line)
+            continue
+        key, _, _old_value = stripped.partition("=")
+        key = key.strip()
+        if key in values:
+            out_lines.append(f"{key}={values[key]}")
+            seen_keys.add(key)
+        else:
+            # Key from the template that we don't have a value for (e.g. an
+            # optional, commented-out var) — keep the line as shipped.
+            out_lines.append(raw_line)
+
+    missing = [k for k in values if k not in seen_keys]
+    if missing:
+        if out_lines and out_lines[-1].strip() != "":
+            out_lines.append("")
+        out_lines.append("# --- Generated by papaia-ctl (not present in the shipped template) ---")
+        for key in missing:
+            out_lines.append(f"{key}={values[key]}")
+
+    atomic_write(path, "\n".join(out_lines) + "\n")
+
+
+def ensure_dir(path: Path) -> None:
+    """Path.mkdir(parents=True, exist_ok=True), hardened against a transient
+    race observed on WSL2's /mnt/c (DrvFs) mounts: the metadata cache can
+    momentarily report a just-created directory as both "already exists"
+    (FileExistsError from the mkdir syscall) and "not a directory" (the
+    is_dir() check pathlib's own exist_ok handling uses), which makes
+    Path.mkdir(parents=True, exist_ok=True) spuriously raise. A brief
+    settle-and-retry clears it; a real conflict (e.g. a file occupying the
+    path) still raises."""
+    last_exc: OSError | None = None
+    for attempt in range(5):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return
+        except FileExistsError as exc:
+            last_exc = exc
+            if path.is_dir():
+                return
+            time.sleep(0.05 * (attempt + 1))
+    raise last_exc
+
+
+def atomic_write(path: Path, content: str) -> None:
+    """Write `content` to `path` atomically (write to a sibling temp file,
+    then os.replace) so a crash mid-write never leaves a half-written file.
+
+    Self-heals a directory sitting at `path`: Docker auto-vivifies a bind
+    mount's host source as an empty directory when a container with
+    `restart: unless-stopped` (re)starts while the source file doesn't yet
+    exist (e.g. a fresh checkout's `.env` files, before the first `setup`
+    run). `os.replace` refuses tmp-file-over-directory with IsADirectoryError,
+    which would otherwise crash every subsequent `setup` run as long as that
+    container keeps retrying. A `.env`/rendered-config path is never
+    legitimately a directory, so removing it here is always correct."""
+    ensure_dir(path.parent)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(content, encoding="utf-8", newline="\n")
+    if path.is_dir():
+        shutil.rmtree(path)
+    os.replace(tmp_path, path)

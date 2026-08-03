@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — papaia-ctl · core orchestrator
+# by Fidonis GmbH · https://fidonis.de
+#
+# Bootstraps a fresh papAIa checkout into a runnable core stack with one
+# idempotent command. Bash owns arg-parsing, interactive prompts, and
+# `docker compose` invocations; all YAML/JSON/.env manipulation is
+# delegated to tools/lib/*.py (invoked via `python3 -m lib.cli`).
+#
+# Usage:
+#   papaia-ctl setup    [--config-dir=PATH] [--env=NAME] [--host-ip=IP]
+#                       [--app-host=URL] [--auth-host=URL] [--librechat-host=URL]
+#                       [--litellm-host=URL] [--npm-admin-host=URL]
+#                       [--auth-provider=internal_keycloak|external_oidc]
+#                       [--oidc-issuer=URL]
+#                       [--reverse-proxy-provider=internal_nginx|external_proxy|no_proxy]
+#                       [--external-reverse-proxy|--no-external-reverse-proxy]
+#                       [--web-search|--no-web-search] [--reranker-model=NAME]
+#                       [--local-ai|--no-local-ai] [--localai-host=URL]
+#                       [--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto]
+#                       [--manager|--no-manager] [--manager-host=URL]
+#                       [--backup-dir=PATH] [--env-only]
+#                       [--allow-direct-port-access] [--force] [-y]
+#   papaia-ctl start         [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
+#   papaia-ctl stop          [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+#   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
+#                            [--config-dir=PATH]
+#   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
+#   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
+#                            [--config-dir=PATH]
+#   papaia-ctl restore       [--backup-dir=PATH] [--restore-point=ID] [--list]
+#                            [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+#   papaia-ctl npm-provision [--config-dir=PATH]
+#   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
+#   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
+#   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
+#                              [--target-addon-api=N [--target-min-addon-api=M]]
+#                              [--json] [--force] [--config-dir=PATH]
+#   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
+#   papaia-ctl addon remove    <name> [--config-dir=PATH]
+#   papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
+#   papaia-ctl help
+#
+# Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
+# release it just checked out:
+#   --resume-from=X.Y.Z --resume-target=X.Y.Z [--resume-restore-point=ID]
+# ═══════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
+
+usage() {
+    # Prints the header block above verbatim -- keep this range in step with it
+    # whenever a command or flag line is added.
+    sed -n '2,48p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+# --- command libraries --------------------------------------------------------
+# All command implementations live in tools/lib/sh/ next to this script;
+# whatever installs papaia-ctl must ship that directory alongside the
+# entrypoint. Sourcing order matters only for log.sh (preflight below logs).
+# shellcheck source-path=SCRIPTDIR
+SH_LIB="$REPO_ROOT/tools/lib/sh"
+# shellcheck source=lib/sh/log.sh
+source "$SH_LIB/log.sh"
+# shellcheck source=lib/sh/prompt.sh
+source "$SH_LIB/prompt.sh"
+# shellcheck source=lib/sh/certs.sh
+source "$SH_LIB/certs.sh"
+# shellcheck source=lib/sh/setup.sh
+source "$SH_LIB/setup.sh"
+# shellcheck source=lib/sh/lifecycle.sh
+source "$SH_LIB/lifecycle.sh"
+# shellcheck source=lib/sh/addon.sh
+source "$SH_LIB/addon.sh"
+# shellcheck source=lib/sh/backup.sh
+source "$SH_LIB/backup.sh"
+# shellcheck source=lib/sh/upgrade.sh
+source "$SH_LIB/upgrade.sh"
+
+# --- preflight ---------------------------------------------------------------
+if [ ! -f "$COMPOSE_FILE" ]; then
+    error "Marker file not found: $COMPOSE_FILE"
+    error "papaia-ctl must be run from within a papAIa checkout."
+    exit 2
+fi
+
+PYTHON_BIN=""
+for candidate in python3 python; do
+    # command -v alone isn't enough: on Windows, `python3`/`python` may
+    # resolve to the Microsoft Store's inert app-execution-alias stub even
+    # when no real interpreter is installed under that name. Only accept a
+    # candidate that actually runs.
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+if [ -z "$PYTHON_BIN" ]; then
+    error "python3 not found on PATH. papaia-ctl requires Python 3.10+."
+    exit 2
+fi
+
+# shellcheck disable=SC2034  # consumed by the sourced command libraries
+DEFAULT_CONFIG_DIR="$(dirname "$REPO_ROOT")/papaia-config"
+
+py_cli() {
+    PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON_BIN" -m lib.cli --repo-root "$REPO_ROOT" --config-dir "$CONFIG_DIR" "$@"
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# dispatch
+# ─────────────────────────────────────────────────────────────────────────
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
+fi
+
+cmd="$1"; shift || true
+case "$cmd" in
+    setup)     cmd_setup "$@" ;;
+    start)         cmd_start "$@" ;;
+    stop)          cmd_stop "$@" ;;
+    upgrade)       cmd_upgrade "$@" ;;
+    # One name for the operation, not two: 'update' means "refresh the package
+    # index" in the most widespread precedent (apt), which is the opposite of
+    # what this does.
+    update)        error "No 'update' command. Did you mean 'papaia-ctl upgrade'?"; exit 2 ;;
+    uninstall)     cmd_uninstall "$@" ;;
+    backup)        cmd_backup "$@" ;;
+    restore)       cmd_restore "$@" ;;
+    npm-provision) py_cli npm-provision "$@" ;;
+    addon)
+        sub="${1:-}"; shift || true
+        case "$sub" in
+            install)   cmd_addon_install "$@" ;;
+            start)     cmd_addon_start "$@" ;;
+            check)     cmd_addon_check "$@" ;;
+            stop)      cmd_addon_stop "$@" ;;
+            remove)    cmd_addon_remove "$@" ;;
+            uninstall) cmd_addon_uninstall "$@" ;;
+            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, check, stop, remove, uninstall."; exit 2 ;;
+        esac
+        ;;
+    help|-h|--help) usage ;;
+    *) error "Unknown command: $cmd"; usage; exit 2 ;;
+esac

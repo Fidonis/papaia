@@ -1,0 +1,14 @@
+customer: papaia
+platform_version: 0.0.0-dev
+hosting: self-hosted
+
+core:
+  profiles:
+    - keycloak
+    - oauth2-proxy
+    - nginx
+    - librechat
+    - litellm
+  inference: local-first
+
+addons: []

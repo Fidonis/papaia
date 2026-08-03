@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/.env.example"
+      - "src/**/docker-compose.yml"
       - "THIRD_PARTY_LICENSES.md"
   pull_request:
     branches: [main]
     paths:
-      - "src/.env.example"
+      - "src/**/docker-compose.yml"
       - "THIRD_PARTY_LICENSES.md"
 
 jobs:
@@ -19,15 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Verify all images in .env.example are documented
+      - name: Verify all images in the compose files are documented
         run: |
           set -euo pipefail
 
-          env_file="src/.env.example"
           doc_file="THIRD_PARTY_LICENSES.md"
 
-          if [ ! -f "$env_file" ]; then
-            echo "ERROR: $env_file not found"
+          if [ ! -d src ]; then
+            echo "ERROR: src/ not found"
             exit 1
           fi
           if [ ! -f "$doc_file" ]; then
@@ -35,28 +34,36 @@ jobs:
             exit 1
           fi
 
-          mapfile -t image_vars < <(grep -oP '^[A-Z0-9_]+_IMAGE(?=\s*=)' "$env_file" | sort -u)
+          # Image references are pinned inline in each service's compose file.
+          # The tag or digest is stripped so a version bump does not have to be
+          # matched literally here; the repository name is what this job gates.
+          mapfile -t images < <(
+            find src -name docker-compose.yml -print0 \
+              | xargs -0 grep -hoP '^\s*image:\s*\K\S+' \
+              | sed -E 's/@sha256:.*$//; s/:[^:/]+$//' \
+              | sort -u
+          )
 
-          if [ ${#image_vars[@]} -eq 0 ]; then
-            echo "No *_IMAGE variables found in $env_file — nothing to check."
-            exit 0
+          if [ ${#images[@]} -eq 0 ]; then
+            echo "ERROR: no image references found under src/ — the extraction is broken."
+            exit 1
           fi
 
           missing=()
-          for var in "${image_vars[@]}"; do
-            if ! grep -qF "$var" "$doc_file"; then
-              missing+=("$var")
+          for image in "${images[@]}"; do
+            if ! grep -qF "\`$image\`" "$doc_file"; then
+              missing+=("$image")
             fi
           done
 
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "The following image variables are not documented in $doc_file:"
-            for var in "${missing[@]}"; do
-              echo "  - $var"
+            echo "The following images are not documented in $doc_file:"
+            for image in "${missing[@]}"; do
+              echo "  - $image"
             done
             echo ""
-            echo "Add an entry for each variable to $doc_file before merging."
+            echo "Add an entry for each image to $doc_file before merging."
             exit 1
           fi
 
-          echo "OK — all ${#image_vars[@]} image variable(s) are documented in $doc_file."
+          echo "OK — all ${#images[@]} image(s) are documented in $doc_file."

@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   firecrawl:
-    image: ${FIRECRAWL_IMAGE}
+    image: ghcr.io/firecrawl/firecrawl:2.11.85
     restart: unless-stopped
     environment:
       REDIS_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
@@ -75,10 +75,10 @@ services:
         max-size: "10m"
         max-file: "3"
         compress: "true"
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-playwright-service:
-    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE}
+    image: ghcr.io/firecrawl/playwright-service@sha256:6359b0d9070f27400b4a9b615509be06919e40121fc1fdc42d4efeddf02653d2
     restart: unless-stopped
     environment:
       PORT: 3000
@@ -105,10 +105,10 @@ services:
     labels:
       de.fidonis.module: papaia-firecrawl
       de.fidonis.role:   browser
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-redis:
-    image: ${FIRECRAWL_REDIS_IMAGE}
+    image: redis:8.8.0-alpine
     restart: unless-stopped
     command: redis-server --bind 0.0.0.0
     networks:
@@ -122,10 +122,10 @@ services:
         max-size: "5m"
         max-file: "2"
         compress: "true"
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-rabbitmq:
-    image: ${FIRECRAWL_RABBITMQ_IMAGE}
+    image: rabbitmq:3-management
     restart: unless-stopped
     command: rabbitmq-server
     networks:
@@ -145,10 +145,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]
 
   firecrawl-nuq-postgres:
-    image: ${FIRECRAWL_NUCPOSTGRES_IMAGE}
+    image: ghcr.io/firecrawl/nuq-postgres@sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -165,4 +165,4 @@ services:
         max-size: "10m"
         max-file: "3"
         compress: "true"
-    profiles: [firecrawl]
+    profiles: [librechat-websearch]

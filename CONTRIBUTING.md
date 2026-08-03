@@ -80,12 +80,20 @@ Linters run on every push and pull request:
 
 Please run them locally before pushing if you can. Configuration lives in `.github/workflows/ci.yml`.
 
+**Python** (`tools/lib/*.py`) - [ruff](https://docs.astral.sh/ruff/) (config in `tools/pyproject.toml`) and `pytest` (`tools/tests/`). Not yet wired into CI; run locally before pushing changes under `tools/`:
+
+    cd tools && pip install -e ".[dev]"
+    ruff check lib tests && ruff format --check lib tests
+    pytest tests/
+
 ## Local development
 
 See [`docs/deployment.md`](./docs/deployment.md) (work in progress) for local setup. The short version:
 
-    cp src/.env.example src/.env       # adjust as needed
-    docker compose up -d
+    tools/papaia-ctl setup       # interactive by default; --non-interactive + --*-host flags for CI/scripted use
+    tools/papaia-ctl start
+
+`setup` generates secrets, derives the OIDC issuer and per-service hostnames, and renders every config file into the external `PAPAIA_CONFIG_DIR` — see the root [README's Quick start](./README.md#quick-start) for the full flag reference.
 
 ## Documentation contributions
 

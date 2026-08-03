@@ -4,15 +4,22 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   librechat:
-    image: ${LIBRECHAT_IMAGE}
+    image: ghcr.io/danny-avila/librechat:v0.8.7
     restart: unless-stopped
     depends_on:
       librechat-mongodb:
         condition: service_healthy
+      # litellm lives in its own profile. Without `required: false` a
+      # profile-restricted selection (COMPOSE_PROFILES=librechat) disables it,
+      # which makes the project invalid — and `docker compose stop` answers an
+      # invalid project by silently falling back to every container of the
+      # project instead of failing.
       litellm:
         condition: service_started
+        required: false
       keycloak:
         condition: service_healthy
+        required: false
     env_file:
       - ./.env
     extra_hosts:
@@ -23,6 +30,10 @@ services:
       MEILI_HOST: http://librechat-meilisearch:7700
       RAG_PORT: ${RAG_PORT:-8020}
       RAG_API_URL: http://librechat-ragapi:${RAG_PORT:-8020}
+      # Trust the locally-generated Keycloak CA so openid-client v6 can connect
+      # to https://keycloak:8443 and https://host.docker.internal:8110 without
+      # the allowInsecureRequests workaround.
+      NODE_EXTRA_CA_CERTS: /certs/local-ca.crt
     entrypoint: ["/bin/sh", "/app/patches/entrypoint.sh"]
     volumes:
       - type: bind
@@ -34,15 +45,10 @@ services:
       - librechat-images:/app/client/public/images
       - librechat-uploads:/app/uploads
       - librechat-logs:/app/logs
-      # Patch: allows HTTP OIDC issuers (e.g. local Keycloak without TLS).
-      # Remove once HTTPS is configured for the identity provider.
       - type: bind
-        source: ./patches/openidStrategy.js
-        target: /app/api/strategies/openidStrategy.js
-      # Patch: injects x-librechat-user-email / x-librechat-user-id into MCP requests.
-      - type: bind
-        source: ./patches/mcp-user-headers.js
-        target: /app/patches/mcp-user-headers.js
+        source: ${PAPAIA_CONFIG_DIR}/certs
+        target: /certs
+        read_only: true
       # Patch: upserts agents from /app/api/data/agents/ into MongoDB on startup.
       - type: bind
         source: ./patches/agents-init.js
@@ -81,7 +87,11 @@ services:
       de.fidonis.module: papaia-librechat
       de.fidonis.role:   chat-interface
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3080/health || exit 1"]
+      # 127.0.0.1, not localhost: the container resolves "localhost" to the
+      # IPv6 loopback first, but the app only binds 0.0.0.0 (IPv4) -- with
+      # "localhost" every probe fails with connection refused even though
+      # the server is up.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3080/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -90,7 +100,7 @@ services:
 
   librechat-mongodb:
     restart: unless-stopped
-    image: ${LIBRECHAT_MONGODB_IMAGE}
+    image: mongo:8.0.20
     volumes:
       - librechat-mongodb:/data/db
     command: mongod --noauth
@@ -108,7 +118,7 @@ services:
     profiles: [librechat]
 
   librechat-meilisearch:
-    image: ${LIBRECHAT_MEILISEARCH_IMAGE}
+    image: getmeili/meilisearch:v1.35.1
     restart: unless-stopped
     environment:
       MEILI_NO_ANALYTICS: true
@@ -123,7 +133,7 @@ services:
     profiles: [librechat]
 
   librechat-vectordb:
-    image: ${LIBRECHAT_VECTORDB_IMAGE}
+    image: pgvector/pgvector:0.8.0-pg15-trixie
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${VECTORDB_NAME}
@@ -145,7 +155,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ${LIBRECHAT_RAGAPI_IMAGE}
+    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:v0.8.0
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb
@@ -153,6 +163,9 @@ services:
       POSTGRES_DB: ${VECTORDB_NAME}
       POSTGRES_USER: ${VECTORDB_USER}
       POSTGRES_PASSWORD: ${VECTORDB_PASSWORD}
+      OPENAI_API_KEY: ${LITELLM_API_KEY}
+      OPENAI_API_BASE: http://litellm:4000
+      EMBEDDINGS_MODEL: nomic-embed-text
     depends_on:
       librechat-vectordb:
         condition: service_healthy

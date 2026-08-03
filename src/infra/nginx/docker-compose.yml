@@ -4,11 +4,11 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   nginx-proxy-manager:
-    image: ${NPM_IMAGE}
+    image: jc21/nginx-proxy-manager:2.15.1
     restart: unless-stopped
     volumes:
-      - nginx-proxy-manager-data:/data
-      - nginx-proxy-manager-letsencrypt:/etc/letsencrypt
+      - ${PAPAIA_CONFIG_DIR}/infra/nginx/nginx-data:/data
+      - ${PAPAIA_CONFIG_DIR}/infra/nginx/nginx-letsencrypt:/etc/letsencrypt
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:81/api/ || exit 1"]
       interval: 30s
@@ -18,7 +18,15 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # Admin port 81 is NOT exposed directly — access only via nginx-proxy-manager-auth below
+      # Port 81 (admin) is bound to localhost only so papaia-ctl can call the NPM
+      # REST API for automatic proxy-host provisioning. External access is only
+      # possible through the nginx-proxy-manager-auth sidecar below.
+      - "127.0.0.1:${NPM_API_LOCAL_PORT:-8181}:81"
+    environment:
+      # Initial admin credentials — honoured by NPM on first boot only (fresh DB).
+      # Subsequent starts ignore these; the values are stable across restarts.
+      INITIAL_ADMIN_EMAIL: "${NPM_ADMIN_EMAIL:-admin@papaia.local}"
+      INITIAL_ADMIN_PASSWORD: "${NPM_ADMIN_PASSWORD}"
     networks:
       - papaia-net
     labels:
@@ -29,7 +37,7 @@ services:
   # oauth2-proxy sidecar — protects the NPM admin UI with Keycloak authentication.
   # Exposed on NPM_ADMIN_EXT_PORT; NPM admin (port 81) is only reachable inside Docker.
   nginx-proxy-manager-auth:
-    image: ${OAUTH2_PROXY_IMAGE}
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     restart: unless-stopped
     ports:
       - "${HOST_IP:-0.0.0.0}:${NPM_ADMIN_EXT_PORT:-8100}:4180"
@@ -37,14 +45,22 @@ services:
       - --provider=oidc
       - --oidc-issuer-url=${OIDC_ISSUER}
       - --skip-oidc-discovery=true
-      - --login-url=${OIDC_ISSUER_KC_AUTH}
-      - --redeem-url=${OIDC_ISSUER_KC_TOKEN}
-      - --oidc-jwks-url=${OIDC_ISSUER_KC_CERTS}
+      - --login-url=${OIDC_AUTH_URL}
+      # Server-side token exchange via internal Docker DNS — needs CA cert trust (see SSL_CERT_FILE)
+      - --redeem-url=${OIDC_TOKEN_URL}
+      - --oidc-jwks-url=${OIDC_JWKS_URL}
       - --client-id=${OAUTH2_PROXY_CLIENT_ID}
       - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
       - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
       - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
-      - --redirect-url=${PAPAIA_HOST}:${NPM_ADMIN_EXT_PORT:-8100}/oauth2/callback
+      # Distinct cookie name avoids collision with the main oauth2-proxy cookie
+      # (browsers don't scope cookies by port, so both proxies share the same cookie jar)
+      - --cookie-name=_oauth2_proxy_npm
+      # Embed CSRF nonce in the encrypted state parameter instead of a separate cookie.
+      # Prevents "invalid CSRF token" on first login in Chromium-based browsers when
+      # Keycloak (HTTPS) redirects back to the HTTP admin URL (schemeful-same-site).
+      - --cookie-csrf-per-request=true
+      - --redirect-url=${NPM_ADMIN_HOST}/oauth2/callback
       - --upstream=http://nginx-proxy-manager:81
       - --http-address=0.0.0.0:4180
       - --email-domain=*
@@ -53,6 +69,14 @@ services:
       - --insecure-oidc-allow-unverified-email=true
       - --pass-user-headers=true
       - --provider-display-name=Keycloak (papAIa)
+    environment:
+      # Trust the locally-generated CA cert so the token exchange with keycloak:8443 succeeds
+      SSL_CERT_FILE: /certs/local-ca.crt
+    volumes:
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/certs
+        target: /certs
+        read_only: true
     depends_on:
       nginx-proxy-manager:
         condition: service_healthy
@@ -64,9 +88,3 @@ services:
       de.fidonis.module: papaia-nginx
       de.fidonis.role:   sso-proxy
     profiles: [nginx]
-
-# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
-# Volumes mounted on Linux: /var/lib/docker/volumes
-volumes:
-  nginx-proxy-manager-data:
-  nginx-proxy-manager-letsencrypt:

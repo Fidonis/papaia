@@ -7,9 +7,9 @@
 # Models are only downloaded if not already present in the volume.
 #
 # Edit this file manually to add or remove models (one URL per line).
-# GPU vs CPU: select the matching image in src/.env
-#   CPU:  LOCALAI_IMAGE=localai/localai:sha-6c635e8
-#   GPU:  LOCALAI_IMAGE=localai/localai:sha-6c635e8-gpu-nvidia-cuda-13
+# GPU vs CPU: pick the accelerator image during setup —
+#   papaia-ctl setup --localai-variant=nvidia-cuda-13   (or intel, hipblas, vulkan, cpu)
+# The GPU models below need one of the GPU variants to be of any use.
 
 # ── CPU — small, fast, runs on any hardware ────────────────────────────────
 # https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
