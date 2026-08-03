@@ -106,6 +106,7 @@ cmd_setup() {
     # Resolved here rather than in Python so the CLI contract downstream only
     # ever carries a concrete variant, and so the probe stays opt-in.
     if [ "$localai_variant" = "auto" ]; then
+        info "Detecting available GPU accelerators, this can take a few seconds..."
         load_localai_variants
         localai_variant="${LOCALAI_VARIANT_RECOMMENDED:-cpu}"
         info "Detected LocalAI image variant: $localai_variant"
@@ -451,6 +452,10 @@ _localai_variant_unverified() {
 # Asks which LocalAI accelerator image to install. Everything the operator sees
 # goes to stderr; only the chosen variant id reaches stdout.
 _prompt_localai_variant() {
+    # Announced before the probe, not after: it shells out to nvidia-smi and
+    # docker info, which takes long enough on a cold host to look like a hang.
+    printf '\n%sLocalAI Image%s\n' "$CYAN" "$NC" >&2
+    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
     load_localai_variants
 
     local default_slot
@@ -460,8 +465,7 @@ _prompt_localai_variant() {
         default_slot="$(_localai_variant_slot "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
     fi
 
-    printf '\n%sLocalAI Image%s\n' "$CYAN" "$NC" >&2
-    printf '  The GPU images need the matching host prerequisites to be in place already:\n' >&2
+    printf '\n  The GPU images need the matching host prerequisites to be in place already:\n' >&2
     printf '    NVIDIA  proprietary driver + NVIDIA Container Toolkit\n' >&2
     printf '    AMD     ROCm kernel driver (provides /dev/kfd)\n' >&2
     printf '    Intel   none - the backend ships its own driver\n' >&2
