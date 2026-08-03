@@ -52,11 +52,19 @@ The `localai` and `librechat-websearch` profiles have dedicated setup flags
 (`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`), which also keep
 `deployment.yaml` in sync. Prefer those over hand-editing.
 
+With `localai` enabled, setup additionally asks which accelerator image to install and
+detects what the host supports. `--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|
+hipblas|vulkan|auto` answers that question non-interactively. The GPU images need the host
+drivers — and, for NVIDIA, the NVIDIA Container Toolkit — to be installed beforehand; the
+stack does not provide them. See the README's *GPU acceleration for LocalAI*.
+
 ### Upgrading to a new release
 
 Image tags are pinned directly in each service's `docker-compose.yml` (for example
 `src/infra/keycloak/docker-compose.yml`), so a new set of images comes with a new release of
-the repository. The supported upgrade path is:
+the repository. LocalAI's accelerator variants follow along automatically: only the variant
+is stored in the config dir, and the tag is recomposed from the compose pin on every render.
+The supported upgrade path is:
 
 ```bash
 tools/papaia-ctl upgrade                 # to the newest release

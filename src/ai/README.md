@@ -77,7 +77,8 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
 ### LocalAI — local chat-completions inference
 
 - Profile: `localai`
-- Image: `localai/localai` (CPU) or its NVIDIA CUDA variant
+- Image: `localai/localai` — CPU by default; `papaia-ctl setup` can select the
+  NVIDIA CUDA, Intel, AMD hipBLAS or Vulkan variant instead
 - External port: `8080`
 - Auth: native OIDC, gated by the `localai-access` realm role
 - The models to download are listed in `localai/models.txt`; per-model YAML

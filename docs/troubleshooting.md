@@ -70,6 +70,28 @@ tools/papaia-ctl setup --no-local-ai
 tools/papaia-ctl start
 ```
 
+### LocalAI ignores the GPU
+
+Check that the accelerator variant is actually set — `LOCALAI_IMAGE_VARIANT` in
+`$PAPAIA_CONFIG_DIR/.env` — and that the generated override exists:
+
+```bash
+cat "$PAPAIA_CONFIG_DIR/overrides/docker-compose.localai-gpu.override.yml"
+```
+
+If it is missing, the variant is `cpu`; re-run `tools/papaia-ctl setup` and pick another.
+
+The image alone is not enough — the host prerequisites have to be in place:
+
+- **NVIDIA:** the proprietary driver plus the NVIDIA Container Toolkit. `nvidia-smi` must
+  work on the host and `docker info` must list the `nvidia` runtime.
+- **AMD:** the ROCm kernel driver, so that `/dev/kfd` exists. Without it, use the Vulkan
+  variant instead. Cards ROCm does not target by default need `HSA_OVERRIDE_GFX_VERSION` /
+  `GPU_TARGETS` in `src/ai/localai/.env`.
+- **Intel:** a render node under `/dev/dri`. Upstream also reports hangs with memory-mapped
+  models — set `mmap: false` in the model YAMLs under
+  `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+
 ### A service does not start at all
 
 Most likely its Compose profile is not active. Check `COMPOSE_PROFILES` in

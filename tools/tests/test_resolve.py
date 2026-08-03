@@ -939,3 +939,29 @@ def test_resolve_reranker_model_sticky_when_none(repo_root):
     args = resolve.SetupArgs(config_dir=repo_root, reranker_model=None)
     tree = resolve.resolve_reranker_model(tree, args)
     assert tree["ai/jinaai"]["RERANKER_MODEL"] == "existing-model"
+
+
+def test_resolve_localai_variant_writes_root_key(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    args = resolve.SetupArgs(config_dir=repo_root, localai_variant="nvidia-cuda-13")
+    tree = resolve.resolve_localai_variant(tree, args)
+    # Root env, not ai/localai: the key drives override generation, it is not
+    # meant to reach LocalAI's own environment via env_file.
+    assert tree[""]["LOCALAI_IMAGE_VARIANT"] == "nvidia-cuda-13"
+    assert "LOCALAI_IMAGE_VARIANT" not in tree.get("ai/localai", {})
+
+
+def test_resolve_localai_variant_sticky_when_none(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree.setdefault("", {})["LOCALAI_IMAGE_VARIANT"] = "intel"
+    args = resolve.SetupArgs(config_dir=repo_root, localai_variant=None)
+    tree = resolve.resolve_localai_variant(tree, args)
+    assert tree[""]["LOCALAI_IMAGE_VARIANT"] == "intel"
+
+
+def test_resolve_localai_variant_can_switch_back_to_cpu(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree.setdefault("", {})["LOCALAI_IMAGE_VARIANT"] = "hipblas"
+    args = resolve.SetupArgs(config_dir=repo_root, localai_variant="cpu")
+    tree = resolve.resolve_localai_variant(tree, args)
+    assert tree[""]["LOCALAI_IMAGE_VARIANT"] == "cpu"

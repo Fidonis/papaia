@@ -3,9 +3,9 @@
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
-# Reads `defaults` output (KEY=VALUE lines) into the current shell's
-# variables (APP_HOST_STICKY, AUTH_HOST_STICKY, AUTH_HOST_DERIVED, ...).
-load_defaults() {
+# Reads a py_cli subcommand's KEY=VALUE output into the current shell's
+# variables.
+_load_kv() {
     local line key value
     while IFS= read -r line; do
         # Strip a trailing CR: on Windows the Python interpreter emits CRLF
@@ -16,8 +16,17 @@ load_defaults() {
         key="${line%%=*}"
         value="${line#*=}"
         printf -v "$key" '%s' "$value"
-    done < <(py_cli defaults)
+    done < <(py_cli "$@")
 }
+
+# Sticky/derived prompt defaults (APP_HOST_STICKY, AUTH_HOST_STICKY,
+# AUTH_HOST_DERIVED, ...).
+load_defaults() { _load_kv defaults; }
+
+# LocalAI accelerator detection (LOCALAI_VARIANT_NVIDIA, ..._LABEL, ..._WARN,
+# LOCALAI_VARIANT_RECOMMENDED). Loaded lazily: it forks nvidia-smi and docker,
+# so it must not run on every setup invocation the way load_defaults does.
+load_localai_variants() { _load_kv localai-variants; }
 
 cmd_setup() {
     local orig_argc=$#
@@ -25,7 +34,7 @@ cmd_setup() {
     local host_ip="" app_host="" auth_host="" librechat_host="" litellm_host="" localai_host="" manager_host="" npm_admin_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" manager="" reranker_model="" backup_dir=""
+    local web_search="" local_ai="" localai_variant="" manager="" reranker_model="" backup_dir=""
     local force=0 non_interactive=0 env_only=0
 
     while [ $# -gt 0 ]; do
@@ -65,6 +74,16 @@ cmd_setup() {
             --local-ai) local_ai="true" ;;
             --no-local-ai) local_ai="false" ;;
             --localai-host=*) localai_host="${1#*=}" ;;
+            --localai-variant=*)
+                localai_variant="${1#*=}"
+                case "$localai_variant" in
+                    cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto) : ;;
+                    *)
+                        error "Invalid --localai-variant value: '$localai_variant' (must be 'cpu', 'nvidia-cuda-12', 'nvidia-cuda-13', 'intel', 'hipblas', 'vulkan', or 'auto')"
+                        exit 2
+                        ;;
+                esac
+                ;;
             --litellm-host=*) litellm_host="${1#*=}" ;;
             --manager) manager="true" ;;
             --no-manager) manager="false" ;;
@@ -84,12 +103,21 @@ cmd_setup() {
 
     load_defaults
 
+    # Resolved here rather than in Python so the CLI contract downstream only
+    # ever carries a concrete variant, and so the probe stays opt-in.
+    if [ "$localai_variant" = "auto" ]; then
+        info "Detecting available GPU accelerators, this can take a few seconds..."
+        load_localai_variants
+        localai_variant="${LOCALAI_VARIANT_RECOMMENDED:-cpu}"
+        info "Detected LocalAI image variant: $localai_variant"
+    fi
+
     if [ "$env_only" -eq 1 ]; then
         info "Reusing existing configuration; re-rendering env files only."
         # Checked rather than left to `set -e`: `upgrade` calls this in a
         # condition context, where set -e is suppressed and an unchecked
         # failure would report "setup complete" over a broken render.
-        if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"; then
+        if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" ""; then
             error "setup failed."
             return 3
         fi
@@ -133,6 +161,8 @@ cmd_setup() {
             info "  Local AI          = $_lai_label"
             [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_HOST_STICKY:-}" ] && \
                 info "  LocalAI URL       = $LOCALAI_HOST_STICKY"
+            [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_VARIANT_STICKY:-}" ] && \
+                info "  LocalAI Image     = $LOCALAI_VARIANT_STICKY"
         fi
         if [ -n "${MANAGER_STICKY:-}" ]; then
             local _mgr_label="disabled"
@@ -143,7 +173,7 @@ cmd_setup() {
         fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir"; then
+            if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" ""; then
                 error "setup failed."
                 return 3
             fi
@@ -281,6 +311,9 @@ cmd_setup() {
                 "Where browsers and LiteLLM reach LocalAI." \
                 "LOCALAI_PUBLIC_URL" "$localai_default")"
         fi
+        if [ "$local_ai" = "true" ] && [ -z "$localai_variant" ]; then
+            localai_variant="$(_prompt_localai_variant)"
+        fi
         if [ -z "$manager" ]; then
             local manager_default="1"
             [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
@@ -352,7 +385,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant"; then
         error "setup failed."
         return 3
     fi
@@ -387,6 +420,100 @@ _derive_localai_default() {
     printf '%s:%s' "$base" "$port"
 }
 
+# Menu position of a variant. The slots are fixed so the numbering stays the
+# same no matter what was detected -- the operator's muscle memory and any
+# copy-pasted instructions keep working on a host without a GPU.
+_localai_variant_slot() {
+    case "$1" in
+        nvidia-cuda-12|nvidia-cuda-13) printf '1' ;;
+        hipblas)                       printf '2' ;;
+        intel)                         printf '3' ;;
+        vulkan)                        printf '4' ;;
+        *)                             printf '5' ;;
+    esac
+}
+
+# One menu line: title, what detection found, and any unmet prerequisite.
+_localai_variant_option() {
+    local number="$1" title="$2" variant="$3" label="$4" warning="$5" marker=""
+    [ -n "$variant" ] && [ "$variant" = "${LOCALAI_VARIANT_RECOMMENDED:-}" ] && marker="  (recommended)"
+    printf '  %s) %-20s %s%s\n' "$number" "$title" "$label" "$marker" >&2
+    [ -n "$warning" ] && printf '     %s%s%s\n' "$YELLOW" "$warning" "$NC" >&2
+    return 0
+}
+
+# Picking a variant the host does not currently expose is allowed on purpose --
+# an operator may run setup before installing the driver or container runtime --
+# but it must not pass silently.
+_localai_variant_unverified() {
+    warn "$1 was not detected on this host. Install the driver and container runtime before starting the stack, or re-run setup and choose CPU."
+}
+
+# Asks which LocalAI accelerator image to install. Everything the operator sees
+# goes to stderr; only the chosen variant id reaches stdout.
+_prompt_localai_variant() {
+    # Announced before the probe, not after: it shells out to nvidia-smi and
+    # docker info, which takes long enough on a cold host to look like a hang.
+    printf '\n%sLocalAI Image%s\n' "$CYAN" "$NC" >&2
+    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    load_localai_variants
+
+    local default_slot
+    if [ -n "${LOCALAI_VARIANT_STICKY:-}" ]; then
+        default_slot="$(_localai_variant_slot "$LOCALAI_VARIANT_STICKY")"
+    else
+        default_slot="$(_localai_variant_slot "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
+    fi
+
+    printf '\n  The GPU images need the matching host prerequisites to be in place already:\n' >&2
+    printf '    NVIDIA  proprietary driver + NVIDIA Container Toolkit\n' >&2
+    printf '    AMD     ROCm kernel driver (provides /dev/kfd)\n' >&2
+    printf '    Intel   none - the backend ships its own driver\n' >&2
+    printf '    Vulkan  a Vulkan-capable GPU driver on the host\n' >&2
+    printf '  The stack does not install any of these. Detection below reports only what\n' >&2
+    printf '  this host exposes right now.\n\n' >&2
+
+    _localai_variant_option 1 "NVIDIA GPU (CUDA)" \
+        "${LOCALAI_VARIANT_NVIDIA:-}" "${LOCALAI_VARIANT_NVIDIA_LABEL:-}" "${LOCALAI_VARIANT_NVIDIA_WARN:-}"
+    _localai_variant_option 2 "AMD GPU (ROCm)" \
+        "${LOCALAI_VARIANT_AMD:-}" "${LOCALAI_VARIANT_AMD_LABEL:-}" "${LOCALAI_VARIANT_AMD_WARN:-}"
+    _localai_variant_option 3 "Intel GPU (SYCL)" \
+        "${LOCALAI_VARIANT_INTEL:-}" "${LOCALAI_VARIANT_INTEL_LABEL:-}" "${LOCALAI_VARIANT_INTEL_WARN:-}"
+    _localai_variant_option 4 "Vulkan (generic)" \
+        "${LOCALAI_VARIANT_VULKAN:-}" "${LOCALAI_VARIANT_VULKAN_LABEL:-}" "${LOCALAI_VARIANT_VULKAN_WARN:-}"
+    _localai_variant_option 5 "CPU only" \
+        "${LOCALAI_VARIANT_CPU:-cpu}" "${LOCALAI_VARIANT_CPU_LABEL:-runs on any hardware}" ""
+
+    local choice variant
+    choice="$(prompt_with_default "  Choose" "$default_slot")"
+    case "$choice" in
+        1|nvidia)
+            variant="${LOCALAI_VARIANT_NVIDIA:-}"
+            # Unknown driver means an unknown CUDA major; the newest published
+            # image is the better guess than refusing the choice outright.
+            [ -z "$variant" ] && { variant="nvidia-cuda-13"; _localai_variant_unverified "An NVIDIA GPU"; }
+            ;;
+        2|amd|hipblas)
+            variant="hipblas"
+            [ -z "${LOCALAI_VARIANT_AMD:-}" ] && _localai_variant_unverified "An AMD GPU with ROCm"
+            ;;
+        3|intel)
+            variant="intel"
+            [ -z "${LOCALAI_VARIANT_INTEL:-}" ] && _localai_variant_unverified "An Intel GPU"
+            ;;
+        4|vulkan)
+            variant="vulkan"
+            [ -z "${LOCALAI_VARIANT_VULKAN:-}" ] && _localai_variant_unverified "A Vulkan-capable GPU"
+            ;;
+        5|cpu) variant="cpu" ;;
+        *)
+            warn "Unrecognized choice '$choice'; defaulting to the CPU image."
+            variant="cpu"
+            ;;
+    esac
+    printf '%s' "$variant"
+}
+
 _derive_manager_default() {
     # Best-effort bash-side prefill for the papaia-manager URL prompt; the
     # authoritative derivation lives in resolve.derive_manager_url_default.
@@ -412,7 +539,7 @@ _derive_librechat_default() {
 _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
-    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}"
+    local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}" localai_variant="${21:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -427,6 +554,7 @@ _run_setup_py() {
     [ -n "$external_rp" ] && extra+=(--external-reverse-proxy="$external_rp")
     [ -n "$web_search" ] && extra+=(--enable-web-search="$web_search")
     [ -n "$local_ai" ] && extra+=(--enable-local-ai="$local_ai")
+    [ -n "$localai_variant" ] && extra+=(--localai-variant="$localai_variant")
     [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
     [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")

@@ -1,0 +1,6 @@
+services:
+  localai:
+    # Pinned tag, not "stub": generate_localai_gpu_override reads the version
+    # back out of here to build the accelerator tag.
+    image: localai/localai:v9.9.9
+    profiles: [localai]

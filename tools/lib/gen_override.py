@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, deployment
+from . import common, deployment, gpu_detect
 
 
 def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
@@ -153,6 +153,62 @@ def generate_addon_ssl_cert_overrides(
         common.atomic_write(
             out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
         )
+
+
+_LOCALAI_COMPOSE = "src/ai/localai/docker-compose.yml"
+
+
+def _localai_base_image(repo_root: Path) -> tuple[str, str] | None:
+    """The (name, version) of the LocalAI image pinned in the core compose file.
+
+    The version is never persisted to the config dir: reading it back here on
+    every render means a release that bumps the pin carries straight through
+    into the GPU variant, instead of a stale tag surviving `papaia-ctl upgrade`
+    via sticky reuse.
+    """
+    try:
+        doc = yaml.safe_load((repo_root / _LOCALAI_COMPOSE).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    image = ((doc.get("services") or {}).get("localai") or {}).get("image")
+    if not isinstance(image, str):
+        return None
+    name, sep, version = image.rpartition(":")
+    # No separator, or a colon that belongs to a registry:port rather than a
+    # tag -- an unpinned image cannot be rewritten into a variant.
+    if not sep or "/" in version:
+        return None
+    return name, version
+
+
+def generate_localai_gpu_override(
+    config_dir: Path,
+    repo_root: Path,
+    variant: str,
+    dev_root: Path = Path("/dev"),
+) -> None:
+    """Write or remove the LocalAI accelerator override.
+
+    CPU is the image pinned in the core compose file, so it needs no override
+    at all -- the file is removed instead, which is also what makes switching
+    a host back from GPU to CPU actually take effect.
+    """
+    out_path = config_dir / "overrides" / "docker-compose.localai-gpu.override.yml"
+
+    suffix = gpu_detect.TAG_SUFFIX.get(variant)
+    base = _localai_base_image(repo_root) if suffix else None
+    if not suffix or base is None:
+        out_path.unlink(missing_ok=True)
+        return
+
+    name, version = base
+    service: dict = {"image": f"{name}:{version}{suffix}"}
+    service.update(gpu_detect.compose_fragment(variant, dev_root))
+
+    override = {"services": {"localai": service}}
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
 
 
 def generate_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:

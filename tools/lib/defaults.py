@@ -30,6 +30,9 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
     localai_sticky = root.get("LOCALAI_PUBLIC_URL", "") if config_seeded else ""
     if common.is_placeholder(localai_sticky):
         localai_sticky = ""
+    localai_variant_sticky = root.get("LOCALAI_IMAGE_VARIANT", "") if config_seeded else ""
+    if common.is_placeholder(localai_variant_sticky):
+        localai_variant_sticky = ""
     litellm_sticky = root.get("LITELLM_PUBLIC_URL", "") if config_seeded else ""
     if common.is_placeholder(litellm_sticky):
         litellm_sticky = ""
@@ -50,6 +53,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),
         "LOCALAI_HOST_STICKY": localai_sticky,
         "LOCALAI_EXT_PORT": root.get("LOCALAI_EXT_PORT", "8080"),
+        "LOCALAI_VARIANT_STICKY": localai_variant_sticky,
         "LITELLM_HOST_STICKY": litellm_sticky,
         "LITELLM_EXT_PORT": root.get("LITELLM_EXT_PORT", "8200"),
         "MANAGER_HOST_STICKY": manager_sticky,
