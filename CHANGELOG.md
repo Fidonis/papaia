@@ -12,7 +12,7 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
-## [1.0.0] - 2026-07-26
+## [1.0.0] - 2026-08-03
 
 ### 🚀 Features
 
@@ -33,12 +33,14 @@ based on merged pull requests; this file mirrors the published releases.
 - feat: `papaia-manager` as an optional core service (profile `manager`) — web UI for the add-on lifecycle plus a dashboard, with native OIDC and role gating via `MANAGER_ADMIN_ROLE` / `MANAGER_USER_ROLE`
 - feat: auto-provision Nginx Proxy Manager proxy hosts on start, and `papaia-ctl npm-provision` to run it on demand
 - feat: native OIDC for LocalAI, replacing its oauth2-proxy sidecar, gated by the `localai-access` realm role
+- feat: select the LocalAI accelerator image variant (CPU / NVIDIA / AMD / Intel / Vulkan) during setup, proposed by a hardware probe of the host
 
 ### 🧹 Maintenance
 
 - chore: remove `src/backup-papaia.sh` and `src/restore-papaia.sh`, superseded by the `papaia-ctl` commands
 - chore: remove the Homepage service, superseded by papaia-manager, whose dashboard renders from `manager/tiles.yaml`. The add-on contract loses the Homepage seam with it and now has four seams (network, OIDC, LibreChat-MCP, Ingress)
 - chore: pin image tags directly in each service's compose file and drop the `*_IMAGE` variables from `src/.env.example`
+- chore: bump LocalAI to `v4.7.1`
 
 ### 📖 Documentation
 
