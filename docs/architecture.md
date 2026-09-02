@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.0.0 |
-| **Date** | 2026-08-02 |
-| **Status** | Active — describes the 1.0.0 release as built |
+| **Version** | 1.1.0 |
+| **Date** | 2026-09-02 |
+| **Status** | Active — describes the 1.1.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -384,7 +384,7 @@ No Core changes required.
 | `papaia-ctl stop [--clean-up] [--addons]` | `docker compose stop` (stop containers, do not remove). With `--clean-up`: `docker compose down` (remove containers, keep volumes). With `--addons`: same for active add-ons. |
 | `papaia-ctl upgrade [--version=X.Y.Z] [--dry-run]` | Move the installation to a release: check active add-ons against the target, take a restore point, check out the tag, re-execute from the new tree, run the pending migrations, re-render, start. Downgrades are refused. |
 | `papaia-ctl backup [--retention-period-days=N]` | Hot backup of `$PAPAIA_CONFIG_DIR`, every Core volume, and every add-on volume and data bind mount into a timestamped restore point |
-| `papaia-ctl restore [--restore-point=ID] [--list]` | Restore a catalogued restore point. Containers are removed and recreated around the restore, not merely stopped. |
+| `papaia-ctl restore [--restore-point=ID] [--list] [--only=SEL[,SEL]]` | Restore a catalogued restore point. Containers are removed and recreated around the restore, not merely stopped. `--only` (`module:`, `addon:` or `volume:` selectors) scopes both the teardown and the restart to the selected units, leaving everything else running; it reads the `version: 2` manifest and is refused with `--restart-clean`, a config-directory selection, or the `manager` profile. |
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
@@ -861,7 +861,7 @@ for the same reason.
 | Compat policy strictness | Warn vs. hard-fail on compat violation | **Decided** ([ADR 0002](adr/0002-addon-core-compatibility-gating.md)): hard-fail in production, warn in dev mode; `--force` as escape hatch |
 | Add-on catalogue source | Where the manager reads available add-ons from | **Decided**: git-backed catalogues in `$PAPAIA_CONFIG_DIR/manager/catalogs.yaml`; the manager fetches and installs from them |
 | Pre-release channels | `>=x.y.z-rc` or separate channel for beta add-ons | Open — `upgrade --version` already accepts a pre-release tag; there is no channel concept yet |
-| Rollback granularity | Restore point vs. per-add-on rollback | Open — today a bad upgrade is undone by restoring the point `upgrade` took beforehand |
+| Rollback granularity | Restore point vs. per-add-on rollback | Partly addressed — `restore --only=` scopes a restore to selected modules, add-ons or volumes; a bad upgrade is still undone by restoring the point `upgrade` took beforehand, now optionally only for the units it broke |
 
 ---
 
