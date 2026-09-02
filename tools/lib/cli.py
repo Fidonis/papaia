@@ -324,20 +324,55 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
                 f" gone: {snapshot}"
             )
         manifest = backup.read_manifest(snapshot)
+        selection = backup.resolve_selection(manifest, args.only) if args.only else None
     except backup.BackupError as exc:
         return _fail(exc)
     for warning in warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
     print(f"SNAPSHOT\t{snapshot}")
     print(f"ID\t{entry.get('id')}")
-    for artifact in manifest.get("artifacts") or []:
-        target = str(artifact.get("target", ""))
-        if artifact.get("kind") == "configdir":
+    if selection is not None:
+        # The teardown scope travels as its own line kinds rather than as extra
+        # columns: bash reads artifact rows with `read -r kind archive target
+        # owner`, which would fold a fifth column into $owner. Resolving it here
+        # also keeps the compose parsing on the Python side of the split.
+        print(f"PROFILES\t{','.join(selection.profiles)}")
+        print(f"ADDONS\t{','.join(selection.addons)}")
+        artifacts = selection.artifacts
+    else:
+        artifacts = backup.manifest_artifacts(manifest)
+    for artifact in artifacts:
+        try:
+            backup.validate_target(artifact, config_dir)
+        except backup.BackupError as exc:
+            return _fail(exc)
+        target = artifact.source
+        if artifact.kind == "configdir":
             # Restore into the config dir the stack reads from *now*, not the
             # one recorded at backup time -- the snapshot may be replayed onto
             # a host that keeps its bundle somewhere else.
             target = str(config_dir)
-        print(f"{artifact.get('kind')}\t{artifact.get('archive')}\t{target}\t{artifact.get('owner')}")
+        print(f"{artifact.kind}\t{artifact.archive}\t{target}\t{artifact.owner}")
+    return 0
+
+
+def cmd_restore_selectors(args: argparse.Namespace) -> int:
+    """What a restore point offers a picker: SELECTOR<TAB>KIND<TAB>ARCHIVES<TAB>VOLUMES.
+
+    Prints nothing for a v1 snapshot, which is the honest answer -- it carries
+    no grouping, so it is restorable only as a whole."""
+    config_dir = Path(args.config_dir)
+    try:
+        backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
+        entry, _warnings = backup.resolve_restore_point(backup_dir, args.restore_point)
+        manifest = backup.read_manifest(backup.snapshot_path(backup_dir, entry))
+    except backup.BackupError as exc:
+        return _fail(exc)
+    for item in backup.selectors(manifest):
+        print(
+            f"{item['selector']}\t{item['kind']}\t{len(item['archives'])}"
+            f"\t{','.join(item['volumes'])}\t{','.join(item['profiles'])}"
+        )
     return 0
 
 
@@ -545,7 +580,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_restore_resolve = sub.add_parser("restore-resolve")
     p_restore_resolve.add_argument("--backup-dir", default=None)
     p_restore_resolve.add_argument("--restore-point", default=None)
+    p_restore_resolve.add_argument("--only", default=None)
     p_restore_resolve.set_defaults(func=cmd_restore_resolve)
+
+    p_restore_selectors = sub.add_parser("restore-selectors")
+    p_restore_selectors.add_argument("--backup-dir", default=None)
+    p_restore_selectors.add_argument("--restore-point", default=None)
+    p_restore_selectors.set_defaults(func=cmd_restore_selectors)
 
     return parser
 
