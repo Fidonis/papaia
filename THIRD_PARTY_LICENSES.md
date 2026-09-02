@@ -27,7 +27,7 @@ their images there; the table below covers the Core only.
 | `postgres` | 18.3 | PostgreSQL License | `infra/keycloak` | Keycloak database |
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.3 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
-| `ghcr.io/fidonis/papaia-manager` | 0.4.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
+| `ghcr.io/fidonis/papaia-manager` | 0.6.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
 | `ghcr.io/danny-avila/librechat` | v0.8.7 | MIT | `ai/librechat` | |
 | `mongo` | 8.0.20 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |

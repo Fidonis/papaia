@@ -309,13 +309,14 @@ _backup_artifact() {
 # restore
 # ─────────────────────────────────────────────────────────────────────────
 cmd_restore() {
-    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" restore_point=""
+    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" restore_point="" only=""
     local no_restart=0 restart_clean=0 list_only=0 assume_yes=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --restore-point=*) restore_point="${1#*=}" ;;
+            --only=*) only="${1#*=}" ;;
             --no-restart) no_restart=1 ;;
             --restart-clean) restart_clean=1 ;;
             --list) list_only=1 ;;
@@ -335,6 +336,16 @@ cmd_restore() {
         return 0
     fi
 
+    # A selection restores part of the snapshot and leaves the rest of the stack
+    # serving. --restart-clean deletes every named volume of the projects it
+    # touches, including the ones outside the selection that nothing will
+    # repopulate, so the combination is data loss with extra steps.
+    if [ -n "$only" ] && [ "$restart_clean" -eq 1 ]; then
+        error "--restart-clean cannot be combined with --only: it would delete volumes"
+        error "outside the selection that nothing in this restore point repopulates."
+        exit 2
+    fi
+
     # --no-restart wins over --restart-clean: it is the explicit "do not touch
     # the running stack" instruction, and honouring the weaker flag as well
     # would do exactly what the operator ruled out.
@@ -345,6 +356,7 @@ cmd_restore() {
 
     local -a extra=()
     [ -n "$restore_point" ] && extra+=(--restore-point="$restore_point")
+    [ -n "$only" ] && extra+=(--only="$only")
     local plan_file
     plan_file="$(mktemp)"
     _BACKUP_TMPFILES+=("$plan_file")
@@ -357,7 +369,7 @@ cmd_restore() {
         exit 3
     fi
 
-    local snapshot="" restore_id=""
+    local snapshot="" restore_id="" sel_profiles="" sel_addons="" has_configdir=0
     local kind archive target owner
     local -a kinds=() archives=() targets=() owners=()
     while IFS=$'\t' read -r kind archive target owner; do
@@ -365,22 +377,50 @@ cmd_restore() {
         case "$kind" in
             SNAPSHOT) snapshot="$archive"; continue ;;
             ID) restore_id="$archive"; continue ;;
+            PROFILES) sel_profiles="$archive"; continue ;;
+            ADDONS) sel_addons="$archive"; continue ;;
         esac
+        [ "$kind" = "configdir" ] && has_configdir=1
         kinds+=("$kind"); archives+=("$archive"); targets+=("$target"); owners+=("$owner")
     done < "$plan_file"
 
     if [ -z "$snapshot" ] || [ ${#kinds[@]} -eq 0 ]; then
-        error "Restore point $restore_id contains no restorable artifacts."
+        if [ -n "$only" ]; then
+            error "Selection '$only' matches nothing in restore point $restore_id."
+        else
+            error "Restore point $restore_id contains no restorable artifacts."
+        fi
         exit 3
     fi
 
+    # Defence in depth. The grammar cannot name a configdir artifact -- it has
+    # no module and no volume name to match on -- and resolve_selection asserts
+    # the same thing. This is the invariant that lets a scoped restore run
+    # in-process at all, so it is checked once more on the resolved set.
+    if [ -n "$only" ] && [ "$has_configdir" -eq 1 ]; then
+        error "A selection resolved to the configuration directory. Refusing."
+        exit 2
+    fi
+    if [ -n "$only" ] && _list_contains "$sel_profiles" manager; then
+        error "A selection resolved to the 'manager' profile. Refusing."
+        exit 2
+    fi
+
     warn "Restore point $restore_id will overwrite:"
-    warn "  the config directory $CONFIG_DIR"
-    warn "  ${#kinds[@]} archived volumes / directories"
+    if [ -n "$only" ]; then
+        warn "  ${#kinds[@]} archived volumes / directories matching '$only'"
+    else
+        warn "  the config directory $CONFIG_DIR"
+        warn "  ${#kinds[@]} archived volumes / directories"
+    fi
     if [ "$no_restart" -eq 1 ]; then
         warn "  --no-restart: containers are neither stopped nor recreated. Volumes"
         warn "  will be overwritten underneath live processes, which usually corrupts"
         warn "  both, and services keep the config files they started with."
+    elif [ -n "$only" ]; then
+        [ -n "$sel_profiles" ] && warn "  core containers in profiles: $sel_profiles (removed and recreated)"
+        [ -n "$sel_addons" ] && warn "  addon containers: $sel_addons (removed and recreated)"
+        warn "  everything else keeps running"
     else
         warn "  all core and addon containers (removed and recreated)"
     fi
@@ -402,15 +442,37 @@ cmd_restore() {
     local started=$SECONDS
 
     if [ "$no_restart" -eq 0 ]; then
-        _restore_teardown "$restart_clean"
+        if [ -n "$only" ]; then
+            _restore_teardown_scoped "$sel_profiles" "$sel_addons"
+        else
+            _restore_teardown "$restart_clean"
+        fi
     fi
 
     local i failed=0
     for i in "${!kinds[@]}"; do
+        _restore_step artifact "${targets[$i]}" begin
+        # A scoped teardown leaves most of the stack up, so a volume can still
+        # have a user here -- an override outside the selected profiles, or a
+        # container the teardown could not reach. Wiping it underneath a live
+        # process corrupts both sides, so skip it and say which containers hold it.
+        if [ -n "$only" ] && [ "${kinds[$i]}" = "volume" ] && [ "$no_restart" -eq 0 ]; then
+            local holders
+            holders="$(_containers_using_volume "${targets[$i]}")"
+            if [ -n "$holders" ]; then
+                warn "  skipped ${targets[$i]}: still in use by $(echo "$holders" | tr '\n' ' ')"
+                _restore_step artifact "${targets[$i]}" in-use
+                failed=$((failed + 1))
+                continue
+            fi
+        fi
         if ! _restore_artifact "$snapshot" "${kinds[$i]}" "${archives[$i]}" \
                 "${targets[$i]}" "${owners[$i]}"; then
             failed=$((failed + 1))
             warn "  failed: ${archives[$i]}"
+            _restore_step artifact "${targets[$i]}" failed
+        else
+            _restore_step artifact "${targets[$i]}" ok
         fi
     done
 
@@ -419,11 +481,17 @@ cmd_restore() {
     [ "$failed" -eq "${#kinds[@]}" ] && result="failed"
 
     if [ "$no_restart" -eq 0 ]; then
-        info "Starting the stack again..."
-        cmd_start --addons --config-dir="$CONFIG_DIR"
+        if [ -n "$only" ]; then
+            _restore_restart_scoped "$sel_profiles" "$sel_addons"
+        else
+            info "Starting the stack again..."
+            cmd_start --addons --config-dir="$CONFIG_DIR"
+        fi
     fi
 
-    _backup_log "$backup_dir" restore "$restore_id" "$result" \
+    local op="restore"
+    [ -n "$only" ] && op="restore-scoped"
+    _backup_log "$backup_dir" "$op" "$restore_id" "$result" \
         "artifacts=$(( ${#kinds[@]} - failed ))/${#kinds[@]} duration=$((SECONDS - started))s"
 
     case "$result" in
@@ -445,6 +513,149 @@ cmd_restore() {
 # "error mounting ... no such file or directory". Recreating the container
 # makes Docker resolve the bind sources afresh, which is the only way the
 # restored files are picked up.
+# restore, narrowed so that it cannot replace the configuration directory.
+#
+# A caller that runs inside the stack -- papaia-manager is a service of the very
+# compose project a restore tears down -- can only survive an operation that
+# provably leaves $PAPAIA_CONFIG_DIR and the manager profile alone. `restore`
+# with the right flags does that too, but only by argument: one missing flag or
+# one empty variable and it is a whole-stack restore again. This entry point
+# makes the property structural instead, so the caller's allowlist can name a
+# verb rather than trust a flag combination.
+#
+# Everything else is cmd_restore. --only is mandatory, --restart-clean is
+# rejected outright rather than silently dropped.
+cmd_restore_scoped() {
+    local arg only=""
+    for arg in "$@"; do
+        case "$arg" in
+            --only=*) only="${arg#*=}" ;;
+            --restart-clean)
+                error "restore-scoped does not accept --restart-clean."
+                exit 2
+                ;;
+        esac
+    done
+    if [ -z "$only" ]; then
+        error "restore-scoped requires --only=SELECTOR[,SELECTOR]."
+        error "Use 'papaia-ctl restore' to restore a point as a whole."
+        exit 2
+    fi
+    cmd_restore "$@"
+}
+
+# Comma-separated list to one item per line. Empty input yields no lines.
+#
+# The trailing newline is load-bearing: `read` returns non-zero on a final line
+# without one, so a `while read` loop silently drops the last item -- which here
+# would mean the last add-on of a selection never being brought down.
+_split_list() {
+    [ -n "$1" ] || return 0
+    printf '%s\n' "$1" | tr ',' '\n'
+}
+
+# Comma-separated list membership. $1 = list, $2 = needle.
+_list_contains() {
+    local needle="$2" item
+    while IFS= read -r item; do
+        [ "$item" = "$needle" ] && return 0
+    done < <(_split_list "$1")
+    return 1
+}
+
+# One machine-readable progress line per step, for a caller rendering per-item
+# state. Deliberately not the info/warn prose above it: that text is written for
+# an operator reading a terminal and is expected to be reworded, so parsing it
+# would make every copy edit a breaking change.
+# $1 = phase (teardown|artifact|restart), $2 = subject, $3 = state
+_restore_step() {
+    printf 'RESTORE-STEP\t%s\t%s\t%s\n' "$1" "$2" "$3"
+}
+
+# Tear down only what a selection touches. $1 = comma-separated core profiles,
+# $2 = comma-separated addon names. Either may be empty.
+#
+# Same removal rationale as _restore_teardown, and the same ordering as
+# cmd_start: add-ons first, because their compose projects are independent and
+# a core `down` scoped by profile must not race them.
+_restore_teardown_scoped() {
+    local profiles="$1" addons="$2"
+    local env_file="$REPO_ROOT/src/.env"
+    local addon_name addon_path
+
+    # Resolve before stopping anything. A profile subset that disables a hard
+    # depends_on target makes compose fall back to project-name-only mode, where
+    # a scoped down silently becomes a whole-stack down -- exactly what this
+    # guard exists for. Failing here costs nothing; failing after the add-ons
+    # are down leaves half a stack.
+    if [ -n "$profiles" ]; then
+        _require_profiles_resolve "$profiles" "$env_file" -f "$COMPOSE_FILE"
+    fi
+
+    while IFS= read -r addon_name; do
+        [ -z "$addon_name" ] && continue
+        _restore_step teardown "addon:$addon_name" begin
+        addon_path="$(_addon_path "$addon_name" 2>/dev/null || true)"
+        if [ -z "$addon_path" ] || [ ! -f "$addon_path/docker-compose.yml" ]; then
+            warn "  addon $addon_name is no longer installed; skipping its teardown"
+            _restore_step teardown "addon:$addon_name" missing
+            continue
+        fi
+        info "  addon $addon_name: docker compose down"
+        docker compose -f "$addon_path/docker-compose.yml" down
+        _restore_step teardown "addon:$addon_name" ok
+    done < <(_split_list "$addons")
+
+    if [ -n "$profiles" ]; then
+        info "Stopping and removing containers in profiles: $profiles"
+        _restore_step teardown "$profiles" begin
+        # The project network still carries endpoints from the profiles that
+        # stay up, so compose reports it cannot be removed. That is expected and
+        # is a warning, not a failure -- but the script runs under `set -e`, so
+        # the status is captured and the outcome is asserted below instead.
+        local status=0
+        COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" \
+            --env-file "$env_file" down || status=$?
+        if [ "$status" -ne 0 ]; then
+            warn "  compose down reported status $status (usually the shared network still in use)"
+        fi
+        _restore_step teardown "$profiles" ok
+    fi
+}
+
+# Bring back only what the selection took down. $1 = profiles, $2 = addon names.
+#
+# Add-ons come up before the core on purpose: cmd_start only includes an
+# override from $CONFIG_DIR/overrides/ when its external network already
+# exists, and otherwise drops it with a warning. A still-down add-on would
+# therefore lose its core-side integration until the next full start.
+# cmd_start --addons orders it the same way.
+_restore_restart_scoped() {
+    local profiles="$1" addons="$2"
+    local addon_name addon_path
+
+    while IFS= read -r addon_name; do
+        [ -z "$addon_name" ] && continue
+        addon_path="$(_addon_path "$addon_name" 2>/dev/null || true)"
+        if [ -z "$addon_path" ] || [ ! -f "$addon_path/docker-compose.yml" ]; then
+            _restore_step restart "addon:$addon_name" missing
+            continue
+        fi
+        info "Starting addon $addon_name from $addon_path"
+        _addon_compose_up "$addon_name" "$addon_path"
+        _restore_step restart "addon:$addon_name" ok
+    done < <(_split_list "$addons")
+
+    if [ -n "$profiles" ]; then
+        info "Starting core profiles again: $profiles"
+        _restore_step restart "$profiles" begin
+        # No --addons: they were handled above, and starting the ones outside
+        # the selection would turn a scoped restore into a stack-wide operation.
+        cmd_start --profiles="$profiles" --config-dir="$CONFIG_DIR"
+        _restore_step restart "$profiles" ok
+    fi
+}
+
 _restore_teardown() {
     local with_volumes="$1"
     local env_file="$REPO_ROOT/src/.env"

@@ -18,7 +18,7 @@
 # in the papaia realm.
 services:
   papaia-manager:
-    image: ghcr.io/fidonis/papaia-manager:0.4.0
+    image: ghcr.io/fidonis/papaia-manager:0.6.0
     restart: unless-stopped
     env_file:
       - ./.env

@@ -30,7 +30,12 @@
 #   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
 #                            [--config-dir=PATH]
 #   papaia-ctl restore       [--backup-dir=PATH] [--restore-point=ID] [--list]
-#                            [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+#                            [--only=SELECTOR[,SELECTOR]] [--restart-clean]
+#                            [--no-restart] [-y] [--config-dir=PATH]
+#                            SELECTOR is module:NAME, addon:NAME or volume:NAME
+#   papaia-ctl restore-scoped --only=SELECTOR[,SELECTOR] [as restore, minus
+#                            --restart-clean] — restore that cannot replace the
+#                            configuration directory, for in-stack callers
 #   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
@@ -54,7 +59,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,48p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -132,6 +137,7 @@ case "$cmd" in
     uninstall)     cmd_uninstall "$@" ;;
     backup)        cmd_backup "$@" ;;
     restore)       cmd_restore "$@" ;;
+    restore-scoped) cmd_restore_scoped "$@" ;;
     npm-provision) py_cli npm-provision "$@" ;;
     addon)
         sub="${1:-}"; shift || true

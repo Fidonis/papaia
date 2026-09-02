@@ -51,6 +51,35 @@ def _core_repo(tmp_path: Path, *, project_volumes: dict[str, list[str]] | None =
     return repo
 
 
+def _grouped_core_repo(tmp_path: Path) -> Path:
+    """Like _core_repo, but the services actually mount their volumes and carry
+    the module label -- which is what the grouping is read out of."""
+    repo = tmp_path / "papaia-grouped"
+    _write(
+        repo / "src" / "docker-compose.yml",
+        """
+        include:
+          - path: ./ai/librechat/docker-compose.yml
+        """,
+    )
+    _write(
+        repo / "src" / "ai" / "librechat" / "docker-compose.yml",
+        """
+        services:
+          librechat-mongodb:
+            image: stub
+            profiles: [librechat]
+            labels:
+              de.fidonis.module: papaia-librechat
+            volumes:
+              - librechat-mongodb:/data/db
+        volumes:
+          librechat-mongodb:
+        """,
+    )
+    return repo
+
+
 def _config_dir(
     tmp_path: Path, *, project: str = "papaia", addons: list[dict] | None = None
 ) -> Path:
@@ -437,6 +466,69 @@ def test_write_manifest_treats_unreported_artifacts_as_failed(tmp_path: Path):
     manifest = backup.write_manifest(plan.snapshot, plan, {}, papaia_version="1.0.0")
 
     assert manifest["artifacts"] == []
+
+
+def test_write_manifest_carries_the_grouping_fields(tmp_path: Path):
+    """A partial restore selects on these, so they have to survive the plan ->
+    manifest hop. `project` used to be computed and then dropped here."""
+    plan = backup.build_plan(
+        _config_dir(tmp_path), _grouped_core_repo(tmp_path), tmp_path / "backups", existing=[]
+    )
+    plan.snapshot.mkdir(parents=True)
+    results = {a.archive: "ok" for a in plan.artifacts}
+
+    manifest = backup.write_manifest(plan.snapshot, plan, results, papaia_version="1.0.0")
+
+    assert manifest["version"] == backup.MANIFEST_VERSION
+    mongodb = next(
+        a for a in manifest["artifacts"] if a["target"] == "papaia_librechat-mongodb"
+    )
+    assert mongodb["module"] == "librechat"
+    assert mongodb["profiles"] == ["librechat"]
+    assert mongodb["services"] == ["librechat-mongodb"]
+    assert mongodb["project"] == "papaia"
+    # The config archive stays ungrouped: it is not selectable on its own.
+    config = next(a for a in manifest["artifacts"] if a["kind"] == "configdir")
+    assert config["module"] == ""
+
+
+def test_build_plan_leaves_an_undeclared_volume_ungrouped(tmp_path: Path):
+    """A volume that carries the project label but is no longer declared has no
+    owner record. It keeps its data and stays reachable by name, but must not
+    be invented into a module."""
+    plan = backup.build_plan(
+        _config_dir(tmp_path),
+        _grouped_core_repo(tmp_path),
+        tmp_path / "backups",
+        existing=[("papaia", "papaia_leftover")],
+    )
+    leftover = next(a for a in plan.artifacts if a.source == "papaia_leftover")
+    assert leftover.module == ""
+    assert leftover.profiles == []
+
+
+def test_build_plan_groups_addon_artifacts_under_the_addon_name(tmp_path: Path):
+    addon_path = _addon(
+        tmp_path,
+        "paperless-dir",
+        "services:\n  app:\n    image: stub\nvolumes:\n  paperless-data:\n",
+    )
+    config_dir = _config_dir(
+        tmp_path,
+        addons=[{"name": "paperless", "path": str(addon_path), "active": True}],
+    )
+    plan = backup.build_plan(
+        config_dir,
+        _grouped_core_repo(tmp_path),
+        tmp_path / "backups",
+        existing=[("paperless-dir", "paperless-dir_paperless-data")],
+    )
+    volume = next(a for a in plan.artifacts if a.owner == "addon:paperless")
+    # Manifest name for the module, directory basename for the project -- the
+    # two differ by design and a scoped restore needs both.
+    assert volume.module == "paperless"
+    assert volume.project == "paperless-dir"
+    assert volume.profiles == []
 
 
 def test_read_results_parses_tsv(tmp_path: Path):

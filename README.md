@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.0.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.1.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -179,7 +179,8 @@ papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
 papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
-                     [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+                     [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
+                     [-y] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
@@ -398,7 +399,8 @@ profile) are reported and skipped rather than failing the run.
 
 ```bash
 tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
-                         [--restart-clean] [--no-restart] [-y] [--config-dir=PATH]
+                         [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
+                         [-y] [--config-dir=PATH]
 ```
 
 | Flag | Default | Purpose |
@@ -406,6 +408,7 @@ tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
 | `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to read restore points from |
 | `--restore-point=ID` | _(most recent usable)_ | Which restore point to restore, as listed by `--list` |
 | `--list` | — | Print the available restore points and exit |
+| `--only=SELECTOR[,SELECTOR]` | _(whole snapshot)_ | Restore only the selected units and scope the teardown and restart to them. Each `SELECTOR` is `module:NAME`, `addon:NAME` or `volume:NAME`; the prefix is mandatory. Cannot be combined with `--restart-clean`, and is refused for a selection that touches the config directory or resolves to the `manager` profile |
 | `--restart-clean` | — | Delete the named volumes during the teardown as well, so nothing survives that is not in the restore point |
 | `--no-restart` | — | Do not touch the running stack at all |
 | `-y` / `--yes` | — | Skip the confirmation prompt (required in non-interactive contexts) |
@@ -424,6 +427,17 @@ resolves its bind sources afresh and picks the restored files up.
 restore, so a volume that is not part of the restore point does not survive it — that data is
 gone permanently. `--no-restart` skips the lifecycle handling entirely; if it is combined with
 `--restart-clean` it wins, and the restore proceeds with the stack untouched.
+
+`--only` narrows the operation to the units you name instead of unpacking the whole snapshot.
+A selector is `module:NAME` (a service group such as `librechat`), `addon:NAME` (an installed
+add-on) or `volume:NAME` (one named volume); the prefix is required because a bare name like
+`librechat` is at once a module, a service, a profile and the prefix of several volumes. Only
+the Compose profiles and add-ons the selection resolves to are torn down and brought back up —
+everything else keeps serving — and a volume still in use after that scoped teardown is skipped
+rather than wiped. Add-ons are restarted before the core, matching `start --addons`. The
+selection is read from a manifest written as `version: 2`, which records the `project`,
+`module`, `services` and `profiles` behind every artifact; an older `version: 1` manifest still
+restores, but only as a whole.
 
 The config directory is restored into the config directory currently in use, not the path
 recorded at backup time, so a snapshot can be replayed onto a host that keeps its bundle
