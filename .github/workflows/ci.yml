@@ -41,7 +41,7 @@ jobs:
           echo "found=$([ "$count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Run hadolint
         if: steps.dockerfiles.outputs.found == 'true'
-        uses: hadolint/hadolint-action@v3.4.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           recursive: true
           dockerfile: "Dockerfile"
