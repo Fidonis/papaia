@@ -12,6 +12,18 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.1.0] - 2026-09-02
+
+### 🚀 Features
+
+- feat: `papaia-ctl restore --only=SELECTOR[,SELECTOR]` — scoped restore. `module:NAME`, `addon:NAME` or `volume:NAME` selectors limit the teardown and the restart to the units the selection touches; everything outside it keeps serving. Backup manifests gain a v2 form recording `project`, `module`, `services` and `profiles` per artifact (v1 manifests still restore as a whole). Refuses `--restart-clean`, a config-directory selection, or a selection that resolves to the `manager` profile
+
+### 🧹 Maintenance
+
+- chore: bump papaia-manager to `0.6.0`
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.0.0...v1.1.0
+
 ## [1.0.0] - 2026-08-03
 
 ### 🚀 Features
