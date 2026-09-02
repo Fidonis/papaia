@@ -30,7 +30,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 import yaml
 
@@ -43,6 +43,10 @@ PLAN_NAME = "plan.yaml"
 RESULTS_NAME = "results.tsv"
 
 CONFIG_ARCHIVE = "papaia-config.tar.gz"
+
+# v2 added the per-artifact grouping fields a partial restore selects on.
+# v1 snapshots stay readable and restorable, but only as a whole.
+MANIFEST_VERSION = 2
 
 _ID_FORMAT = "%Y-%m-%d_%H-%M-%S"
 
@@ -63,6 +67,13 @@ class Artifact:
     source: str  # docker volume name, or absolute host path
     owner: str  # "core" | "addon:<name>"
     project: str = ""  # compose project the source belongs to
+    # Grouping, for a restore that touches only part of the snapshot. `module`
+    # is the unit an operator picks; `profiles` is the only thing the scoped
+    # teardown can act on. Empty on a configdir artifact, which is never
+    # selectable on its own.
+    module: str = ""
+    services: list[str] = field(default_factory=list)
+    profiles: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -104,6 +115,116 @@ def resolve_core_volumes(repo_root: Path) -> list[str]:
             if key not in volumes:
                 volumes.append(key)
     return volumes
+
+
+# The module label is namespaced by product; the prefix carries no information
+# once volumes are grouped by it, so selectors read `module:librechat`.
+_MODULE_PREFIX = "papaia-"
+
+
+@dataclass(frozen=True)
+class VolumeOwner:
+    """Who mounts one core volume: the services, their `de.fidonis.module`
+    labels, and the union of their compose profiles."""
+
+    services: tuple[str, ...] = ()
+    modules: tuple[str, ...] = ()
+    profiles: tuple[str, ...] = ()
+
+
+def module_name(label: str) -> str:
+    """The `de.fidonis.module` label as a selector name."""
+    return label[len(_MODULE_PREFIX):] if label.startswith(_MODULE_PREFIX) else label
+
+
+def _service_labels(body: dict) -> dict[str, str]:
+    """Container labels, from either Compose spelling. The papAIa fragments use
+    the mapping form; `- key=value` is equally valid Compose."""
+    raw = (body or {}).get("labels")
+    if isinstance(raw, dict):
+        return {str(key): str(value) for key, value in raw.items()}
+    if isinstance(raw, list):
+        pairs = (str(item).partition("=") for item in raw)
+        return {key.strip(): value.strip() for key, _, value in pairs if key.strip()}
+    return {}
+
+
+def _mounted_volume_keys(body: dict, declared: set[str]) -> list[str]:
+    """The named volumes one service mounts, in both mount notations.
+
+    A source counts only when it is a declared top-level key. That is what
+    separates a named volume from a bind mount here, and it is the same test
+    `addon_bind_dirs` makes from the other side."""
+    keys: list[str] = []
+    for entry in (body or {}).get("volumes") or []:
+        if isinstance(entry, dict):
+            if entry.get("type") not in (None, "volume"):
+                continue
+            source = str(entry.get("source") or "")
+        elif isinstance(entry, str):
+            source, _target, _mode = _split_mount(entry)
+        else:
+            continue
+        if not source or _is_host_path(source) or source not in declared:
+            continue
+        if source not in keys:
+            keys.append(source)
+    return keys
+
+
+def _extend_unique(bucket: list[str], values) -> None:
+    for value in values:
+        if value and value not in bucket:
+            bucket.append(value)
+
+
+def resolve_core_volume_owners(repo_root: Path) -> dict[str, VolumeOwner]:
+    """Undecorated core volume key -> the services mounting it, their module
+    labels and the union of their profiles.
+
+    `resolve_core_volumes` reads only the top-level `volumes:` keys, which says
+    *that* a volume exists but never *who* uses it. A restore that touches part
+    of the snapshot needs the second half: the profile set is the only thing
+    `_require_profiles_resolve` and `cmd_start --profiles=` accept, so it is
+    what decides which containers have to be bounced.
+
+    Deriving the grouping from the volume name instead is not an option:
+    `litellm-postgresql` is mounted by `litellm-db`, `keycloak-postgresql` by
+    `keycloak-postgres`, and `searxng_config` is the only key spelled with an
+    underscore. The prefixes line up by coincidence, not by contract.
+
+    A volume can have more than one mounter -- `localai-models` is mounted by
+    both `localai-model-init` and `localai` -- which is why `services` is a
+    list and the service name is not the grouping key.
+
+    Returns {} when src/docker-compose.yml is absent, matching
+    resolve_core_volumes' degradation contract."""
+    root_compose = repo_root / "src" / "docker-compose.yml"
+    if not root_compose.is_file():
+        return {}
+    declared = set(resolve_core_volumes(repo_root))
+    services: dict[str, list[str]] = {}
+    modules: dict[str, list[str]] = {}
+    profiles: dict[str, list[str]] = {}
+    for compose_path in compat.compose_files(root_compose):
+        if not compose_path.is_file():
+            continue
+        doc = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+        for service, body in (doc.get("services") or {}).items():
+            label = _service_labels(body).get("de.fidonis.module", "")
+            declared_profiles = list((body or {}).get("profiles") or [])
+            for key in _mounted_volume_keys(body, declared):
+                _extend_unique(services.setdefault(key, []), [service])
+                _extend_unique(modules.setdefault(key, []), [module_name(label)])
+                _extend_unique(profiles.setdefault(key, []), declared_profiles)
+    return {
+        key: VolumeOwner(
+            services=tuple(services.get(key, ())),
+            modules=tuple(modules.get(key, ())),
+            profiles=tuple(profiles.get(key, ())),
+        )
+        for key in sorted(declared | set(services))
+    }
 
 
 _VAR_RE = re.compile(
@@ -290,7 +411,14 @@ def build_plan(
     core_names, core_skipped = _project_volumes(
         core_project, resolve_core_volumes(repo_root), existing
     )
+    owners = resolve_core_volume_owners(repo_root)
+    prefix = f"{core_project}_" if core_project else ""
     for name in core_names:
+        # A volume that carries the project label but is no longer declared has
+        # no owner record. It keeps its data and stays restorable by name; it is
+        # simply not reachable through a module selector, which is honest.
+        key = name[len(prefix):] if prefix and name.startswith(prefix) else name
+        owner_record = owners.get(key, VolumeOwner())
         plan.artifacts.append(
             Artifact(
                 kind="volume",
@@ -298,6 +426,9 @@ def build_plan(
                 source=name,
                 owner="core",
                 project=core_project,
+                module=owner_record.modules[0] if owner_record.modules else "",
+                services=list(owner_record.services),
+                profiles=list(owner_record.profiles),
             )
         )
     plan.skipped.extend(core_skipped)
@@ -316,6 +447,9 @@ def build_plan(
         volume_names, skipped = _project_volumes(
             project, _top_level_volumes(addon_path / "docker-compose.yml"), existing
         )
+        # An add-on groups under its own name and carries no profiles: the
+        # teardown unit is the whole add-on compose project, so per-service
+        # precision would buy nothing a scoped restore could act on.
         for volume in volume_names:
             plan.artifacts.append(
                 Artifact(
@@ -324,6 +458,7 @@ def build_plan(
                     source=volume,
                     owner=owner,
                     project=project,
+                    module=name,
                 )
             )
         plan.skipped.extend(skipped)
@@ -349,6 +484,7 @@ def build_plan(
                     source=str(bind),
                     owner=owner,
                     project=project,
+                    module=name,
                 )
             )
 
@@ -381,6 +517,9 @@ def write_plan(plan: BackupPlan) -> None:
                         "source": a.source,
                         "owner": a.owner,
                         "project": a.project,
+                        "module": a.module,
+                        "services": a.services,
+                        "profiles": a.profiles,
                     }
                     for a in plan.artifacts
                 ],
@@ -412,6 +551,9 @@ def read_plan(snapshot: Path) -> BackupPlan:
                 source=str(a.get("source", "")),
                 owner=str(a.get("owner", "")),
                 project=str(a.get("project", "")),
+                module=str(a.get("module", "")),
+                services=[str(s) for s in (a.get("services") or [])],
+                profiles=[str(p) for p in (a.get("profiles") or [])],
             )
             for a in (data.get("artifacts") or [])
         ],
@@ -450,12 +592,16 @@ def write_manifest(
             "archive": a.archive,
             "target": a.source,
             "owner": a.owner,
+            "project": a.project,
+            "module": a.module,
+            "services": a.services,
+            "profiles": a.profiles,
         }
         for a in plan.artifacts
         if results.get(a.archive, "failed") == "ok"
     ]
     manifest = {
-        "version": 1,
+        "version": MANIFEST_VERSION,
         "id": plan.backup_id,
         "created_at": _utc_now(),
         "papaia_version": papaia_version,
@@ -479,6 +625,232 @@ def read_manifest(snapshot: Path) -> dict:
         return yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         raise BackupError(f"{manifest_path} is not valid YAML: {exc}") from exc
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Partial restore: selection
+# ─────────────────────────────────────────────────────────────────────────
+
+# Prefixes are mandatory. `librechat` is at once a module, a service, a profile
+# and the prefix of six volume names, so a bare word cannot be resolved without
+# guessing. `profile:` is deliberately absent from the grammar: a profile is
+# the teardown unit, not something an operator picks, and offering it would
+# invite `profile:manager` -- the one profile a restore must never bounce,
+# because it serves the request.
+SELECTOR_KINDS = ("module", "volume", "addon")
+MAX_SELECTORS = 32
+
+_MODULE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+_VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+# The profile papaia-manager runs under. A selection that resolved to it would
+# tear down the container serving the operation.
+SELF_PROFILE = "manager"
+
+
+def _artifact_of(entry: dict) -> Artifact:
+    return Artifact(
+        kind=str(entry.get("kind", "")),
+        archive=str(entry.get("archive", "")),
+        source=str(entry.get("target", "")),
+        owner=str(entry.get("owner", "")),
+        project=str(entry.get("project", "")),
+        module=str(entry.get("module", "")),
+        services=[str(s) for s in (entry.get("services") or [])],
+        profiles=[str(p) for p in (entry.get("profiles") or [])],
+    )
+
+
+def manifest_artifacts(manifest: dict) -> list[Artifact]:
+    """Artifacts of a manifest of either version.
+
+    A v1 manifest carries none of the grouping fields. They stay empty rather
+    than being reconstructed from the volume name -- see
+    resolve_core_volume_owners for why the name is not a reliable source."""
+    return [_artifact_of(entry) for entry in (manifest.get("artifacts") or [])]
+
+
+def selectors(manifest: dict) -> list[dict]:
+    """The selectable units of a restore point, for a picker.
+
+    Empty for a v1 manifest: without a module on the artifacts there is no
+    honest grouping to offer, and the restore point stays restorable only as a
+    whole. Empty is also the correct answer for a snapshot whose every artifact
+    failed."""
+    grouped: dict[str, dict] = {}
+    for artifact in manifest_artifacts(manifest):
+        if artifact.kind == "configdir" or not artifact.module:
+            continue
+        is_addon = artifact.owner.startswith("addon:")
+        selector = f"{'addon' if is_addon else 'module'}:{artifact.module}"
+        entry = grouped.setdefault(
+            selector,
+            {
+                "selector": selector,
+                "name": artifact.module,
+                "kind": "addon" if is_addon else "module",
+                "owner": artifact.owner,
+                "archives": [],
+                "volumes": [],
+                "profiles": [],
+                "services": [],
+            },
+        )
+        entry["archives"].append(artifact.archive)
+        if artifact.kind == "volume":
+            entry["volumes"].append(artifact.source)
+        _extend_unique(entry["profiles"], artifact.profiles)
+        _extend_unique(entry["services"], artifact.services)
+    return list(grouped.values())
+
+
+def parse_selectors(raw: str) -> list[tuple[str, str]]:
+    """Split and validate a `--only` value into (kind, name) pairs.
+
+    Validation is a refusal, never a repair: every name reaches an argv and a
+    path join further down, so an unrecognised shape must not be normalised
+    into something that happens to parse."""
+    parts = [part.strip() for part in (raw or "").split(",")]
+    parts = [part for part in parts if part]
+    if not parts:
+        raise BackupError("Empty selection: --only needs at least one selector.")
+    if len(parts) > MAX_SELECTORS:
+        raise BackupError(f"Too many selectors ({len(parts)}); at most {MAX_SELECTORS}.")
+    parsed: list[tuple[str, str]] = []
+    for part in parts:
+        kind, sep, name = part.partition(":")
+        if not sep or kind not in SELECTOR_KINDS:
+            raise BackupError(
+                f"Invalid selector {part!r}: expected one of "
+                f"{', '.join(k + ':NAME' for k in SELECTOR_KINDS)}."
+            )
+        pattern = _VOLUME_NAME_RE if kind == "volume" else _MODULE_NAME_RE
+        if not pattern.match(name):
+            raise BackupError(f"Invalid selector name in {part!r}.")
+        if kind == "module" and name == SELF_PROFILE:
+            raise BackupError(
+                f"Refusing selector {part!r}: the manager cannot restore over itself."
+            )
+        if (kind, name) not in parsed:
+            parsed.append((kind, name))
+    return parsed
+
+
+def _matches(artifact: Artifact, kind: str, name: str) -> bool:
+    if kind == "volume":
+        return artifact.kind == "volume" and artifact.source == name
+    if kind == "addon":
+        return artifact.owner == f"addon:{name}"
+    return not artifact.owner.startswith("addon:") and artifact.module == name
+
+
+@dataclass
+class Selection:
+    """What a `--only` value resolves to against one snapshot."""
+
+    artifacts: list[Artifact] = field(default_factory=list)
+    profiles: list[str] = field(default_factory=list)
+    # Add-on *names*, not compose projects: `_addon_path` resolves a name
+    # through deployment.yaml, and the two differ by design -- the project is
+    # the directory basename. Bash needs the name to find either.
+    addons: list[str] = field(default_factory=list)
+
+
+def resolve_selection(manifest: dict, raw: str) -> Selection:
+    """Filter a manifest's artifacts to a selection, and work out what has to
+    be bounced for it.
+
+    The profile set is resolved here rather than in bash because it comes out
+    of the compose files, and the bash/Python split documented in cli.py puts
+    compose parsing on this side. Bash receives it pre-resolved."""
+    parsed = parse_selectors(raw)
+    available = sorted(entry["selector"] for entry in selectors(manifest))
+    all_artifacts = manifest_artifacts(manifest)
+
+    unknown = [
+        f"{kind}:{name}"
+        for kind, name in parsed
+        if not any(_matches(a, kind, name) for a in all_artifacts)
+    ]
+    if unknown:
+        hint = ", ".join(available) if available else "none -- this snapshot predates selection"
+        raise BackupError(
+            f"No artifact matches {', '.join(unknown)}. Available selectors: {hint}"
+        )
+
+    selection = Selection()
+    for artifact in all_artifacts:
+        if not any(_matches(artifact, kind, name) for kind, name in parsed):
+            continue
+        # Unreachable through the grammar -- a configdir artifact carries no
+        # module and no volume name to match on. Asserted anyway: this is the
+        # invariant that lets a scoped restore run in-process at all.
+        if artifact.kind == "configdir":
+            raise BackupError(
+                "A selection cannot contain the configuration directory; "
+                "restore the point as a whole instead."
+            )
+        selection.artifacts.append(artifact)
+        if artifact.owner.startswith("addon:"):
+            _extend_unique(selection.addons, [artifact.owner.split(":", 1)[1]])
+        else:
+            _extend_unique(selection.profiles, artifact.profiles)
+
+    if not selection.artifacts:
+        raise BackupError(f"Selection matched no artifact. Available selectors: {available}")
+    if SELF_PROFILE in selection.profiles:
+        raise BackupError(
+            f"Refusing a selection that resolves to the {SELF_PROFILE!r} profile."
+        )
+    selection.profiles.sort()
+    selection.addons.sort()
+    return selection
+
+
+def _is_absolute_target(value: str) -> bool:
+    """Absolute in either platform's spelling.
+
+    `Path.is_absolute()` answers only for the platform currently running:
+    '/srv/papaia-config' is not absolute on Windows, and 'C:\\papaia-config' is
+    not absolute on Linux. A snapshot is routinely written on one and read on
+    the other -- the manager reads a manifest its host wrote, and the catalogue
+    already carries both spellings -- so this has to accept both or it would
+    reject every well-formed manifest on the wrong side."""
+    return value.startswith("/") or bool(_WINDOWS_DRIVE.match(value))
+
+
+def _pure_path(value: str) -> PurePath:
+    """Interpret a path in the flavour it was written in, without touching the
+    filesystem -- the target may well not exist on the reading host."""
+    if _WINDOWS_DRIVE.match(value):
+        return PureWindowsPath(value)
+    return PurePosixPath(value.replace("\\", "/"))
+
+
+def validate_target(artifact: Artifact, config_dir: Path) -> None:
+    """Refuse a manifest target that must not reach `docker run -v`.
+
+    The manifest is a plain file on a mounted path, and partial restore turns
+    it into an operator-visible index of selectable things. A volume name has
+    to look like one; a directory target has to be absolute and must not be an
+    ancestor of the config directory, since restoring wipes the target first."""
+    if artifact.kind == "volume":
+        if not _VOLUME_NAME_RE.match(artifact.source):
+            raise BackupError(f"Refusing volume target {artifact.source!r} from the manifest.")
+        return
+    if not _is_absolute_target(artifact.source):
+        raise BackupError(f"Refusing relative target {artifact.source!r} from the manifest.")
+    target_path = _pure_path(artifact.source)
+    config_path = _pure_path(str(config_dir))
+    if target_path.__class__ is not config_path.__class__:
+        # The snapshot was written on the other platform. Containment cannot be
+        # decided across flavours, and guessing would be worse than not asking;
+        # the absoluteness check above still applies.
+        return
+    if target_path == config_path or target_path in config_path.parents:
+        raise BackupError(
+            f"Refusing target {artifact.source!r}: it is or contains the config directory."
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────
