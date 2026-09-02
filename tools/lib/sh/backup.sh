@@ -513,6 +513,37 @@ cmd_restore() {
 # "error mounting ... no such file or directory". Recreating the container
 # makes Docker resolve the bind sources afresh, which is the only way the
 # restored files are picked up.
+# restore, narrowed so that it cannot replace the configuration directory.
+#
+# A caller that runs inside the stack -- papaia-manager is a service of the very
+# compose project a restore tears down -- can only survive an operation that
+# provably leaves $PAPAIA_CONFIG_DIR and the manager profile alone. `restore`
+# with the right flags does that too, but only by argument: one missing flag or
+# one empty variable and it is a whole-stack restore again. This entry point
+# makes the property structural instead, so the caller's allowlist can name a
+# verb rather than trust a flag combination.
+#
+# Everything else is cmd_restore. --only is mandatory, --restart-clean is
+# rejected outright rather than silently dropped.
+cmd_restore_scoped() {
+    local arg only=""
+    for arg in "$@"; do
+        case "$arg" in
+            --only=*) only="${arg#*=}" ;;
+            --restart-clean)
+                error "restore-scoped does not accept --restart-clean."
+                exit 2
+                ;;
+        esac
+    done
+    if [ -z "$only" ]; then
+        error "restore-scoped requires --only=SELECTOR[,SELECTOR]."
+        error "Use 'papaia-ctl restore' to restore a point as a whole."
+        exit 2
+    fi
+    cmd_restore "$@"
+}
+
 # Comma-separated list to one item per line. Empty input yields no lines.
 #
 # The trailing newline is load-bearing: `read` returns non-zero on a final line
