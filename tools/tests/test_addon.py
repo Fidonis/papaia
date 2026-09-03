@@ -13,6 +13,7 @@ from lib.cli_addon import (
     cmd_addon_check,
     cmd_addon_install,
     cmd_addon_networks,
+    cmd_addon_override_files,
     cmd_addon_path,
     cmd_addon_remove,
     cmd_addon_start,
@@ -379,6 +380,76 @@ def test_active_addons_lists_only_active_entries(repo_root, config_dir, capsys):
 def test_active_addons_empty_without_deployment(repo_root, config_dir, capsys):
     args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
     assert cmd_active_addons(args) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+# ── addon-override-files ──────────────────────────────────────────────────────
+
+
+def _override_files_ns(root: Path, name: str) -> argparse.Namespace:
+    return argparse.Namespace(config_dir=str(root), repo_root=str(root), name=name)
+
+
+def _register_addons(root: Path, names: list[str]) -> None:
+    (root / "deployment.yaml").write_text(
+        yaml.safe_dump(
+            {"addons": [{"name": n, "path": f"/opt/{n}", "active": True} for n in names]}
+        ),
+        encoding="utf-8",
+    )
+
+
+def _make_addon_override(root: Path, segment: str) -> None:
+    d = root / "overrides" / "addons"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"docker-compose.{segment}.override.yml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+
+
+def test_override_files_does_not_cross_a_shared_name_prefix(tmp_path, capsys):
+    # addon "qdrant" must not pick up addon "qdrant-ingest"'s override files
+    # just because the names share the "qdrant-" prefix.
+    _register_addons(tmp_path, ["qdrant", "qdrant-ingest"])
+    _make_addon_override(tmp_path, "qdrant-ssl-cert")
+    _make_addon_override(tmp_path, "qdrant-ingest-ports")
+    _make_addon_override(tmp_path, "qdrant-ingest-ssl-cert")
+
+    assert cmd_addon_override_files(_override_files_ns(tmp_path, "qdrant")) == 0
+    out = capsys.readouterr().out
+    assert Path(out.strip()).name == "docker-compose.qdrant-ssl-cert.override.yml"
+    assert "qdrant-ingest" not in out
+
+
+def test_override_files_lists_every_file_of_the_owning_addon(tmp_path, capsys):
+    _register_addons(tmp_path, ["qdrant", "qdrant-ingest"])
+    _make_addon_override(tmp_path, "qdrant-ssl-cert")
+    _make_addon_override(tmp_path, "qdrant-ingest")  # exact name, no suffix
+    _make_addon_override(tmp_path, "qdrant-ingest-ports")
+    _make_addon_override(tmp_path, "qdrant-ingest-ssl-cert")
+
+    assert cmd_addon_override_files(_override_files_ns(tmp_path, "qdrant-ingest")) == 0
+    names = sorted(Path(p).name for p in capsys.readouterr().out.split())
+    assert names == [
+        "docker-compose.qdrant-ingest-ports.override.yml",
+        "docker-compose.qdrant-ingest-ssl-cert.override.yml",
+        "docker-compose.qdrant-ingest.override.yml",
+    ]
+
+
+def test_override_files_attributes_untagged_operator_file_to_longest_prefix(tmp_path, capsys):
+    # No addon is named "qdrant-extra", so the file falls to the longest
+    # registered name that prefixes it -- "qdrant".
+    _register_addons(tmp_path, ["qdrant", "qdrant-ingest"])
+    _make_addon_override(tmp_path, "qdrant-extra")
+
+    assert cmd_addon_override_files(_override_files_ns(tmp_path, "qdrant")) == 0
+    assert Path(capsys.readouterr().out.strip()).name == "docker-compose.qdrant-extra.override.yml"
+
+
+def test_override_files_empty_when_no_overrides_dir(tmp_path, capsys):
+    _register_addons(tmp_path, ["qdrant"])
+    assert cmd_addon_override_files(_override_files_ns(tmp_path, "qdrant")) == 0
     assert capsys.readouterr().out.strip() == ""
 
 
