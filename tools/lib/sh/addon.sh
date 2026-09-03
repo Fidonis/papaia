@@ -38,16 +38,20 @@ cmd_addon_install() {
 
 # Start an addon via docker compose, including any addon-specific overrides
 # from $CONFIG_DIR/overrides/addons/.  Override files in that subdirectory
-# follow the naming pattern docker-compose.<addon_name>-*.override.yml and
-# are not picked up by the core compose loop (which globs overrides/ directly).
+# follow the naming pattern docker-compose.<addon_name>[-<suffix>].override.yml
+# and are not picked up by the core compose loop (which globs overrides/
+# directly).  `py_cli addon-override-files` attributes each file to its
+# owning addon by longest registered-name match, so starting `qdrant` does
+# not pull in `qdrant-ingest`'s overrides -- a bare
+# docker-compose.${addon_name}-* glob cannot tell the two apart.
 _addon_compose_up() {
     local addon_name="$1" addon_path="$2"
     local -a compose_files=(-f "$addon_path/docker-compose.yml")
     if [ -d "$CONFIG_DIR/overrides/addons" ]; then
-        for f in "$CONFIG_DIR/overrides/addons/docker-compose.${addon_name}-"*.override.yml; do
-            [ -f "$f" ] || continue
-            compose_files+=(-f "$f")
-        done
+        local f
+        while IFS= read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] && compose_files+=(-f "$f")
+        done < <(py_cli addon-override-files --name="$addon_name" 2>/dev/null)
     fi
     # Pass env files explicitly so root vars (COMPOSE_PROJECT_NAME, DOCKER_NETWORK,
     # PAPAIA_HOST, …) are available for variable interpolation in the addon compose

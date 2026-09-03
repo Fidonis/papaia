@@ -538,6 +538,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_path.add_argument("--name", required=True)
     p_addon_path.set_defaults(func=cli_addon.cmd_addon_path)
 
+    p_addon_override_files = sub.add_parser("addon-override-files")
+    p_addon_override_files.add_argument("--name", required=True)
+    p_addon_override_files.set_defaults(func=cli_addon.cmd_addon_override_files)
+
     p_backup_dir = sub.add_parser("backup-dir")
     p_backup_dir.add_argument("--backup-dir", default=None)
     p_backup_dir.set_defaults(func=cmd_backup_dir)

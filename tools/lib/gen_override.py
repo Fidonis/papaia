@@ -122,8 +122,9 @@ def generate_addon_ssl_cert_overrides(
     requests/httpx fall back to the system CA bundle instead of failing on
     the absent local-ca.crt.  The files live in overrides/addons/ so the
     core compose loop (which globs overrides/docker-compose.*.override.yml)
-    does not pick them up; the addon compose loop applies
-    overrides/addons/docker-compose.<name>-*.override.yml instead.
+    does not pick them up; `papaia-ctl addon start` instead applies the
+    files there that `py_cli addon-override-files` attributes to the addon
+    being started.
     """
     deployed = deployment.load(config_dir)
 
