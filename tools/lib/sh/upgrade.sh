@@ -245,7 +245,12 @@ cmd_upgrade() {
     )
     [ -n "$restore_point" ] && resume_flags+=(--resume-restore-point="$restore_point")
     [ "$force" -eq 1 ] && resume_flags+=(--force)
-    exec "$REPO_ROOT/tools/papaia-ctl" upgrade "${resume_flags[@]}"
+    # Hand off through the interpreter, not by executing the path: the git
+    # checkout just above rewrote tools/papaia-ctl from the target tree, and it
+    # is not guaranteed to carry the execute bit (nor is the checkout guaranteed
+    # to sit on an exec-permitting mount). This mirrors how the manager and every
+    # migration invoke the script.
+    exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" upgrade "${resume_flags[@]}"
 }
 
 # Phase 2 — runs from the target release's checkout.
