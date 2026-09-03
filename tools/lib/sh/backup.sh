@@ -306,6 +306,82 @@ _backup_artifact() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────
+# backup-delete
+# ─────────────────────────────────────────────────────────────────────────
+# Remove one or more restore points -- the snapshot directory and the
+# backup.yaml entry. Every id is checked against the catalogue before anything
+# is removed (delete_backups in lib/backup.py), so a single unknown id aborts
+# the whole call. Nothing in the running stack is touched.
+cmd_backup_delete() {
+    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" assume_yes=0
+    local -a points=()
+    local item
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --backup-dir=*) backup_dir="${1#*=}" ;;
+            --restore-point=*)
+                # Repeatable, and each value may itself be comma-separated.
+                while IFS= read -r item; do
+                    [ -n "$item" ] && points+=("$item")
+                done < <(_split_list "${1#*=}")
+                ;;
+            -y|--yes) assume_yes=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for backup-delete: $1"; exit 2 ;;
+        esac
+        shift
+    done
+
+    if [ ${#points[@]} -eq 0 ]; then
+        error "backup-delete requires --restore-point=ID (repeatable, or comma-separated)."
+        exit 2
+    fi
+
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+
+    backup_dir="$(_resolve_backup_dir "$backup_dir")" || exit 3
+
+    if [ "$assume_yes" -eq 0 ]; then
+        if ! is_tty; then
+            error "Refusing to delete without confirmation. Re-run with -y in non-interactive contexts."
+            exit 2
+        fi
+        warn "About to permanently delete ${#points[@]} restore point(s):"
+        printf '  %s\n' "${points[@]}" >&2
+        if ! confirm "Delete permanently?" "N"; then
+            error "Aborted."
+            exit 3
+        fi
+    fi
+
+    local -a args=()
+    local p
+    for p in "${points[@]}"; do
+        args+=(--restore-point="$p")
+    done
+
+    # tr -d '\r': see the note in cmd_backup -- a CR on the id would otherwise
+    # travel into the backup.log line and the info output.
+    local removed
+    if ! removed="$(py_cli backup-delete --backup-dir="$backup_dir" "${args[@]}" | tr -d '\r')"; then
+        error "Could not delete the requested restore point(s)."
+        exit 3
+    fi
+
+    local id count=0
+    while IFS= read -r id; do
+        [ -z "$id" ] && continue
+        count=$((count + 1))
+        _backup_log "$backup_dir" delete "$id" ok "reason=manual"
+        info "  deleted restore point: $id"
+    done <<< "$removed"
+
+    success "Deleted $count restore point(s) from $backup_dir"
+}
+
+# ─────────────────────────────────────────────────────────────────────────
 # restore
 # ─────────────────────────────────────────────────────────────────────────
 cmd_restore() {
