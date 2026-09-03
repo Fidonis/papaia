@@ -312,6 +312,23 @@ def cmd_backup_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backup_delete(args: argparse.Namespace) -> int:
+    # --restore-point is repeatable, and each value may itself be a
+    # comma-separated list -- bash passes one flag per id, an operator may do
+    # either.
+    ids: list[str] = []
+    for chunk in args.restore_point or []:
+        ids.extend(part.strip() for part in chunk.split(",") if part.strip())
+    try:
+        backup_dir = _resolve_backup_dir(Path(args.config_dir), args.backup_dir)
+        removed = backup.delete_backups(backup_dir, ids)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    for backup_id in removed:
+        print(backup_id)
+    return 0
+
+
 def cmd_restore_resolve(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     try:
@@ -565,6 +582,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_backup_list = sub.add_parser("backup-list")
     p_backup_list.add_argument("--backup-dir", default=None)
     p_backup_list.set_defaults(func=cmd_backup_list)
+
+    p_backup_delete = sub.add_parser("backup-delete")
+    p_backup_delete.add_argument("--backup-dir", default=None)
+    p_backup_delete.add_argument("--restore-point", action="append", required=True)
+    p_backup_delete.set_defaults(func=cmd_backup_delete)
 
     p_upgrade_resolve = sub.add_parser("upgrade-resolve")
     p_upgrade_resolve.add_argument("--tags-file", required=True)

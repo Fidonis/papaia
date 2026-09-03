@@ -677,6 +677,105 @@ def test_prune_rejects_a_negative_retention(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# deleting specific restore points
+# ---------------------------------------------------------------------------
+
+
+def test_delete_backups_removes_the_snapshot_and_its_entry(tmp_path: Path):
+    backup_dir = tmp_path / "backups"
+    _seed_index(
+        backup_dir,
+        [
+            _entry("keep", "2026-07-01T00:00:00Z", path=str(backup_dir / "keep")),
+            _entry("drop", "2026-07-02T00:00:00Z", path=str(backup_dir / "drop")),
+        ],
+    )
+
+    removed = backup.delete_backups(backup_dir, ["drop"])
+
+    assert removed == ["drop"]
+    assert not (backup_dir / "drop").exists()
+    assert (backup_dir / "keep").is_dir()
+    assert [b["id"] for b in backup.load_index(backup_dir)["backups"]] == ["keep"]
+
+
+def test_delete_backups_removes_several_in_one_call(tmp_path: Path):
+    backup_dir = tmp_path / "backups"
+    _seed_index(
+        backup_dir,
+        [
+            _entry("a", "2026-07-01T00:00:00Z", path=str(backup_dir / "a")),
+            _entry("b", "2026-07-02T00:00:00Z", path=str(backup_dir / "b")),
+            _entry("c", "2026-07-03T00:00:00Z", path=str(backup_dir / "c")),
+        ],
+    )
+
+    removed = backup.delete_backups(backup_dir, ["a", "c"])
+
+    assert removed == ["a", "c"]
+    assert not (backup_dir / "a").exists()
+    assert not (backup_dir / "c").exists()
+    assert [b["id"] for b in backup.load_index(backup_dir)["backups"]] == ["b"]
+
+
+def test_delete_backups_deduplicates_repeated_ids(tmp_path: Path):
+    backup_dir = tmp_path / "backups"
+    _seed_index(
+        backup_dir,
+        [_entry("x", "2026-07-01T00:00:00Z", path=str(backup_dir / "x"))],
+    )
+
+    assert backup.delete_backups(backup_dir, ["x", "x"]) == ["x"]
+    assert backup.load_index(backup_dir)["backups"] == []
+
+
+def test_delete_backups_unknown_id_removes_nothing(tmp_path: Path):
+    backup_dir = tmp_path / "backups"
+    _seed_index(
+        backup_dir,
+        [_entry("real", "2026-07-01T00:00:00Z", path=str(backup_dir / "real"))],
+    )
+
+    with pytest.raises(backup.BackupError, match="ghost"):
+        backup.delete_backups(backup_dir, ["real", "ghost"])
+
+    assert (backup_dir / "real").is_dir()
+    assert [b["id"] for b in backup.load_index(backup_dir)["backups"]] == ["real"]
+
+
+def test_delete_backups_rejects_an_empty_id_list(tmp_path: Path):
+    with pytest.raises(backup.BackupError):
+        backup.delete_backups(tmp_path / "backups", [])
+
+
+def test_delete_backups_refuses_to_delete_outside_the_backup_dir(tmp_path: Path):
+    """A `path` pointing elsewhere loses its catalogue entry but must not take
+    an unrelated directory with it."""
+    backup_dir = tmp_path / "backups"
+    outsider = tmp_path / "important"
+    _seed_index(
+        backup_dir,
+        [_entry("escape", "2026-07-01T00:00:00Z", path=str(outsider))],
+    )
+
+    assert backup.delete_backups(backup_dir, ["escape"]) == ["escape"]
+    assert outsider.is_dir()
+    assert backup.load_index(backup_dir)["backups"] == []
+
+
+def test_delete_backups_tolerates_an_already_missing_directory(tmp_path: Path):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(parents=True)
+    backup.save_index(
+        backup_dir,
+        {"version": 1, "backups": [_entry("gone", "2026-07-01T00:00:00Z")]},
+    )
+
+    assert backup.delete_backups(backup_dir, ["gone"]) == ["gone"]
+    assert backup.load_index(backup_dir)["backups"] == []
+
+
+# ---------------------------------------------------------------------------
 # snapshot location
 # ---------------------------------------------------------------------------
 

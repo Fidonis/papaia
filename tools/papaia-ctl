@@ -29,6 +29,9 @@
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
 #                            [--config-dir=PATH]
+#   papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...]
+#                            [--backup-dir=PATH] [-y] [--config-dir=PATH]
+#                            --restore-point is repeatable or comma-separated
 #   papaia-ctl restore       [--backup-dir=PATH] [--restore-point=ID] [--list]
 #                            [--only=SELECTOR[,SELECTOR]] [--restart-clean]
 #                            [--no-restart] [-y] [--config-dir=PATH]
@@ -59,7 +62,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -136,6 +139,7 @@ case "$cmd" in
     update)        error "No 'update' command. Did you mean 'papaia-ctl upgrade'?"; exit 2 ;;
     uninstall)     cmd_uninstall "$@" ;;
     backup)        cmd_backup "$@" ;;
+    backup-delete) cmd_backup_delete "$@" ;;
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
     npm-provision) py_cli npm-provision "$@" ;;

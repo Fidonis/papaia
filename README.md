@@ -178,6 +178,8 @@ papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
+papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...] [--backup-dir=PATH]
+                     [-y] [--config-dir=PATH]
 papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                      [-y] [--config-dir=PATH]
@@ -394,6 +396,29 @@ Restore-point ids use local time, so they line up with what an incident timeline
 A run whose archives partly failed is recorded as `partial` and is never selected automatically
 by `restore`. Volumes that a compose file declares but that were never created (a disabled
 profile) are reported and skipped rather than failing the run.
+
+### `backup-delete`
+
+```bash
+tools/papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...] [--backup-dir=PATH] \
+                               [-y] [--config-dir=PATH]
+```
+
+Removes specific restore points — the snapshot directory and its `backup.yaml` entry — when
+the age-based `--retention-period-days` of `backup` is too blunt (a single known-bad snapshot,
+or reclaiming space without moving the retention window).
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--restore-point=ID` | _(required)_ | Restore point to delete. Repeatable, and each value may be a comma-separated list |
+| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where the restore points live |
+| `-y` / `--yes` | _(prompt)_ | Skip the confirmation prompt |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Every id is checked against the catalogue first: one unknown id aborts the whole call and
+nothing is removed. Only a directory that is catalogued **and** located inside the backup
+directory is deleted — a snapshot moved elsewhere loses its catalogue entry but is left on
+disk. The running stack is not touched. Each deletion adds a `delete` line to `backup.log`.
 
 ### `restore`
 
