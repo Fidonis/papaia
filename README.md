@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.1.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.2.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 

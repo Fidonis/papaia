@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.1.0 |
-| **Date** | 2026-09-02 |
-| **Status** | Active — describes the 1.1.0 release as built |
+| **Version** | 1.2.0 |
+| **Date** | 2026-09-04 |
+| **Status** | Active — describes the 1.2.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |

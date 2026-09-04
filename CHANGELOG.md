@@ -12,6 +12,23 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.2.0] - 2026-09-04
+
+### 🚀 Features
+
+- feat: `papaia-ctl backup-delete --restore-point=ID` — delete specific restore points (the snapshot directory and its `backup.yaml` catalogue entry) for cases the age-based `backup --retention-period-days` is too coarse. `--restore-point` is required, repeatable, and accepts comma-separated values; every id is validated against the catalogue before anything is removed, so one unknown id aborts the whole call. The running stack is not touched; each deletion is recorded in `backup.log`
+
+### 🐛 Bug Fixes
+
+- fix(addon): `addon start <name>` now resolves an add-on's compose overrides in `overrides/addons/` by longest registered-name match instead of a `docker-compose.<name>-*.override.yml` glob, so starting an add-on whose name prefixes another's (e.g. `qdrant` vs. `qdrant-ingest`) no longer pulls in the other add-on's override files and aborts with "neither an image nor a build context specified"
+- fix(upgrade): `upgrade` now hands off from phase 1 to phase 2 through `"${BASH:-bash}"` instead of `exec`-ing `tools/papaia-ctl` by path, since the preceding `git checkout <tag>` rewrites that tracked file and made the direct `execve()` fail with exit 126 right after "Moving the checkout to <tag>...". `tools/papaia-ctl` is also now tracked executable (`100755`)
+
+### 🧹 Maintenance
+
+- chore: bump papaia-manager to `1.0.0`
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.1.0...v1.2.0
+
 ## [1.1.0] - 2026-09-02
 
 ### 🚀 Features
