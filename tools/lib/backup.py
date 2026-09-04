@@ -1009,3 +1009,43 @@ def resolve_restore_point(
             " during that backup. Check backup.log before relying on it."
         )
     return entry, warnings
+
+
+def delete_backups(backup_dir: Path, restore_point_ids: list[str]) -> list[str]:
+    """Delete one or more restore points: remove each snapshot directory and
+    drop its catalogue entry.
+
+    Every id is checked against the catalogue before anything is removed, so a
+    single unknown id fails the whole call and leaves every restore point in
+    place. Ids are de-duplicated; the returned list is the ids actually removed,
+    in the order given.
+
+    The same guard as prune(): a directory is deleted only when it is recorded
+    in backup.yaml *and* located inside backup_dir -- a snapshot an operator
+    moved out of the backup location, or a doctored `path`, loses its catalogue
+    entry but is never removed from disk."""
+    wanted: list[str] = list(dict.fromkeys(restore_point_ids))
+    if not wanted:
+        raise BackupError("No restore point id given.")
+    index = load_index(backup_dir)
+    by_id = {str(entry.get("id")): entry for entry in index["backups"]}
+    unknown = [rp for rp in wanted if rp not in by_id]
+    if unknown:
+        available = ", ".join(by_id) or "(none)"
+        raise BackupError(
+            f"Unknown restore point(s): {', '.join(unknown)}. Available: {available}"
+        )
+    resolved_root = backup_dir.resolve()
+    for rp in wanted:
+        target = snapshot_path(backup_dir, by_id[rp])
+        if target.is_dir():
+            try:
+                resolved = target.resolve()
+            except OSError:
+                resolved = target
+            if resolved_root in resolved.parents:
+                shutil.rmtree(resolved, ignore_errors=True)
+    dropped = set(wanted)
+    index["backups"] = [b for b in index["backups"] if str(b.get("id")) not in dropped]
+    save_index(backup_dir, index)
+    return wanted

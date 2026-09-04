@@ -384,3 +384,41 @@ def cmd_addon_path(args: argparse.Namespace) -> int:
 
     print(deployment.resolve_addon_path(entry, repo_root))
     return 0
+
+
+def cmd_addon_override_files(args: argparse.Namespace) -> int:
+    """Print the overrides/addons/ compose files that belong to one addon,
+    one absolute path per line.
+
+    Files there are named docker-compose.<segment>.override.yml, where
+    <segment> is the addon name, optionally followed by a "-<suffix>" tag
+    (the generated "-ssl-cert", or an operator's own e.g. "-ports"). Addon
+    names contain hyphens themselves, so a bare "<name>-*" glob cannot tell
+    addon "qdrant" apart from addon "qdrant-ingest" -- starting the former
+    would otherwise sweep in the latter's overrides and hand docker compose
+    a service with no image. Each file is attributed to the longest
+    registered addon name that equals <segment> or is a prefix of it before
+    a "-"; only the files owned by `name` are printed.
+    """
+    config_dir = Path(args.config_dir)
+    addons_dir = config_dir / "overrides" / "addons"
+    if not addons_dir.is_dir():
+        return 0
+
+    deployed = deployment.load(config_dir) or {}
+    names = {a.get("name") for a in (deployed.get("addons") or []) if a.get("name")}
+    # The addon being started is always registered by the time bash reaches
+    # here, but tolerate a caller that races an install.
+    names.add(args.name)
+
+    prefix, suffix = "docker-compose.", ".override.yml"
+    for path in sorted(addons_dir.glob(f"{prefix}*{suffix}")):
+        segment = path.name[len(prefix) : -len(suffix)]
+        owner = max(
+            (n for n in names if segment == n or segment.startswith(f"{n}-")),
+            key=len,
+            default=None,
+        )
+        if owner == args.name:
+            print(path)
+    return 0
