@@ -141,7 +141,8 @@ tools/papaia-ctl start --profiles=keycloak,librechat,litellm
 Once the stack is up, the default endpoints for a local install are:
 
 - LibreChat — `http://host.docker.internal:8000`
-- Keycloak admin — `https://host.docker.internal:8110`, user `admin`, password `KC_ADMIN_PASSWORD`
+- Keycloak admin — `https://host.docker.internal:8110`, user `admin` (setup generates the
+  password; read it with `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`)
 - papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
   (Linux hosts only — see [papaia-manager](#papaia-manager))
 
