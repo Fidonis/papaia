@@ -12,11 +12,45 @@ no-op rather than a special case.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
 
 from . import common, deployment, gpu_detect
+
+# `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
+# `networks.app_network` may use to scope its bridge name to the deployment
+# (in practice `${PAPAIA_PROJECT:-papaia}-<name>-net`).
+_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _expand_env_refs(value: str, env: dict[str, str]) -> str:
+    """Resolve `${VAR}` / `${VAR:-default}` in *value* against *env*, matching
+    docker compose interpolation: an unset or empty `VAR` falls back to the
+    default (or "" when none is given). Text without a `${...}` match is
+    returned untouched."""
+
+    def repl(match: re.Match[str]) -> str:
+        name, default = match.group(1), match.group(2)
+        resolved = env.get(name) or ""
+        if resolved:
+            return resolved
+        return default if default is not None else ""
+
+    return _ENV_REF_RE.sub(repl, value)
+
+
+def resolve_app_network(raw: str, config_dir: Path) -> str:
+    """The add-on's Seam-1 network name with any deployment-scoping reference
+    (`${PAPAIA_PROJECT:-papaia}-<name>-net`) resolved against the rendered core
+    `.env`, so the generated override names the same bridge the add-on's own
+    compose file creates. The same `.env` is passed to that compose file as an
+    --env-file, so both sides read the identical value. A plain literal (no
+    `${`) is returned unchanged, which keeps pre-templating manifests working."""
+    if "${" not in raw:
+        return raw
+    return _expand_env_refs(raw, common.parse_env_file(config_dir / ".env"))
 
 
 def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
@@ -37,6 +71,8 @@ def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
     attach = networks.get("attach") or []
     if not name or not app_network or not attach:
         return None
+
+    app_network = resolve_app_network(app_network, config_dir)
 
     override = {
         "services": {service: {"networks": [app_network]} for service in attach},

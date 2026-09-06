@@ -33,7 +33,13 @@ _SURFACE_CHANGED = (
 )
 
 # The window this snapshot was taken against.
-ADDON_API_WINDOW = (1, 1)
+#
+# Gen 2 (additive): `networks.app_network` may carry a
+# `${PAPAIA_PROJECT:-papaia}-<name>-net` template that gen_override.py and
+# `py_cli addon-networks` resolve against the rendered core .env, so add-on
+# bridges are scoped per deployment. A plain literal still works, so `min`
+# stays 1; add-ons that adopt the template declare `requires.addon_api: 2`.
+ADDON_API_WINDOW = (1, 2)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -82,6 +88,9 @@ BASE_RENDER_TARGETS = [
 
 # Manifest keys the tools actually read from papaia-app.yaml. Reading a new
 # key is additive; renaming or dropping one breaks shipped manifests.
+# `networks.app_network` may be a literal name or, since addon_api 2, a
+# `${PAPAIA_PROJECT:-papaia}-<name>-net` template resolved against the core .env
+# (gen_override.resolve_app_network).
 MANIFEST_KEYS = [
     "name",
     "networks.app_network",

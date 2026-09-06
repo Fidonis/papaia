@@ -8,5 +8,5 @@
 # Bump rules (see docs/adr/0002-addon-core-compatibility-gating.md):
 #   breaking seam change  -> current += 1 and min = current
 #   additive seam change  -> current += 1, min unchanged
-current=1
+current=2
 min=1
