@@ -83,6 +83,10 @@ which accelerator image to install — see [GPU acceleration](#gpu-acceleration-
 
 - Docker and Docker Compose
 - Python 3.10+ — `papaia-ctl` generates secrets and renders configs itself
+- PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
+  library. On a minimal host install it with `sudo apt-get install -y
+  python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
+  (Fedora/RHEL), or `pip install 'PyYAML>=6.0'`
 - `openssl`, only when Keycloak TLS is enabled
 - At least 8 GB RAM recommended
 - Linux, macOS, or WSL2
