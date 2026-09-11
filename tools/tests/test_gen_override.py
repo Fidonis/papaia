@@ -42,6 +42,80 @@ def test_generate_override_returns_none_without_networks():
     assert out_path is None
 
 
+# ── deployment-scoped app_network (addon_api 2) ──────────────────────────────
+
+
+def _templated_manifest() -> dict:
+    return {
+        "name": "paperless",
+        "networks": {
+            "app_network": "${PAPAIA_PROJECT:-papaia}-paperless-net",
+            "attach": ["librechat", "litellm"],
+        },
+    }
+
+
+def _set_papaia_project(config_dir: Path, value: str) -> None:
+    env = common.parse_env_file(config_dir / ".env")
+    env["PAPAIA_PROJECT"] = value
+    common.write_env_file(config_dir / ".env", env)
+
+
+def test_resolve_app_network_literal_is_returned_unchanged(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    assert (
+        gen_override.resolve_app_network("papaia-qdrant-net", config_dir)
+        == "papaia-qdrant-net"
+    )
+
+
+def test_resolve_app_network_falls_back_to_default_without_env(tmp_path):
+    # No rendered .env yet -> ${PAPAIA_PROJECT:-papaia} takes the default.
+    assert (
+        gen_override.resolve_app_network(
+            "${PAPAIA_PROJECT:-papaia}-qdrant-net", tmp_path
+        )
+        == "papaia-qdrant-net"
+    )
+
+
+def test_resolve_app_network_scopes_to_papaia_project(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _set_papaia_project(config_dir, "papaia-dev")
+    assert (
+        gen_override.resolve_app_network(
+            "${PAPAIA_PROJECT:-papaia}-qdrant-net", config_dir
+        )
+        == "papaia-dev-qdrant-net"
+    )
+
+
+def test_generate_override_resolves_templated_app_network(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _set_papaia_project(config_dir, "papaia-dev")
+
+    out_path = gen_override.generate_override(_templated_manifest(), config_dir)
+
+    assert out_path is not None
+    override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
+    assert override["services"]["librechat"]["networks"] == ["papaia-dev-paperless-net"]
+    assert override["services"]["litellm"]["networks"] == ["papaia-dev-paperless-net"]
+    assert override["networks"]["papaia-dev-paperless-net"]["external"] is True
+    # The start-up guard reads the resolved name back out of the file.
+    assert gen_override.external_networks(out_path) == ["papaia-dev-paperless-net"]
+
+
+def test_generate_override_templated_default_env_matches_legacy_name(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+
+    out_path = gen_override.generate_override(_templated_manifest(), config_dir)
+
+    override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
+    # PAPAIA_PROJECT=papaia (the shipped default) -> the pre-templating name,
+    # so single-deployment hosts are unaffected.
+    assert override["networks"]["papaia-paperless-net"]["external"] is True
+
+
 def test_generate_ssl_cert_override_creates_file_for_external_oidc(config_dir, repo_root):
     envtree.init(config_dir, repo_root, env_name="papaia")
     gen_override.generate_ssl_cert_override(config_dir, "external_oidc")

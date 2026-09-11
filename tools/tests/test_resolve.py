@@ -397,6 +397,7 @@ def test_resolve_multi_env_default_identity_unchanged(repo_root):
     tree = resolve.resolve_multi_env(tree, args)
     assert tree[""]["COMPOSE_PROJECT_NAME"] == "papaia"
     assert tree[""]["DOCKER_NETWORK"] == "papaia-net"
+    assert tree[""]["PAPAIA_PROJECT"] == "papaia"
 
 
 def test_resolve_multi_env_named_env(repo_root):
@@ -405,7 +406,19 @@ def test_resolve_multi_env_named_env(repo_root):
     tree = resolve.resolve_multi_env(tree, args)
     assert tree[""]["COMPOSE_PROJECT_NAME"] == "papaia-stage"
     assert tree[""]["DOCKER_NETWORK"] == "papaia-stage-net"
+    assert tree[""]["PAPAIA_PROJECT"] == "papaia-stage"
     assert tree[""]["HOST_IP"] == "10.0.0.5"
+
+
+def test_resolve_multi_env_papaia_project_tracks_sticky_compose_name(repo_root):
+    # A host set up as --env=acme, re-run without --env: the sticky
+    # COMPOSE_PROJECT_NAME must carry into PAPAIA_PROJECT, not reset to "papaia".
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROJECT_NAME"] = "papaia-acme"
+    args = resolve.SetupArgs(config_dir=repo_root, env_name="papaia")
+    tree = resolve.resolve_multi_env(tree, args)
+    assert tree[""]["COMPOSE_PROJECT_NAME"] == "papaia-acme"
+    assert tree[""]["PAPAIA_PROJECT"] == "papaia-acme"
 
 
 def test_resolve_reverse_proxy_excludes_nginx_when_external(repo_root):

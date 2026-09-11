@@ -3,7 +3,10 @@
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
-# Run docker compose start/stop/up/down on every active addon.
+# Run docker compose start/stop/up/down on every active addon. Goes through
+# _addon_compose (addon.sh) so teardown uses the same project name and env files
+# as bring-up -- a templated `networks.*.name` otherwise resolves to its bare
+# fallback here and leaves the per-deployment bridge orphaned.
 # $1 = compose verb ("stop" or "down"), rest = extra docker compose flags
 _addon_compose_all() {
     local verb="$1"; shift
@@ -13,7 +16,7 @@ _addon_compose_all() {
         [ -z "$addon_name" ] && continue
         addon_path="$(_addon_path "$addon_name")"
         info "  addon $addon_name: docker compose $verb"
-        docker compose -f "$addon_path/docker-compose.yml" "$verb" "${extra[@]}"
+        _addon_compose "$verb" "$addon_name" "$addon_path" "${extra[@]}"
     done < <(py_cli active-addons 2>/dev/null)
 }
 

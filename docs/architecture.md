@@ -177,7 +177,17 @@ papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core ver
 description: "<description>"
 
 networks:
-  app_network: papaia-<name>-net   # Add-on's own bridge network
+  app_network: ${PAPAIA_PROJECT:-papaia}-<name>-net
+                                   # Add-on's own bridge network. A literal name
+                                   # still works; the ${…} template (addon_api 2)
+                                   # is resolved against the core .env by the
+                                   # orchestrator so the bridge is scoped per
+                                   # deployment. Use the same string in the
+                                   # add-on's own compose `networks.<key>.name`.
+                                   # PAPAIA_PROJECT (not COMPOSE_PROJECT_NAME):
+                                   # the add-on is brought up with `-p <addon>`,
+                                   # which pins COMPOSE_PROJECT_NAME during
+                                   # compose interpolation.
   attach: [nginx-proxy-manager, librechat]
                                    # Core containers to attach to the app network;
                                    # validated against the Core Compose service names
@@ -265,11 +275,11 @@ name: paperless
 version: 1.0.0
 addon_repo: papaia-addon-paperless
 requires:
-  addon_api: 1
+  addon_api: 2
 papaia_compat: ">=0.8.0"
 description: "Paperless-ngx document management + OIDC/RBAC MCP server"
 networks:
-  app_network: papaia-paperless-net
+  app_network: ${PAPAIA_PROJECT:-papaia}-paperless-net
   attach: [nginx-proxy-manager, librechat]
 local_ca_env:
   paperless: [REQUESTS_CA_BUNDLE]
@@ -325,6 +335,14 @@ a **Compose override** (`$PAPAIA_CONFIG_DIR/overrides/docker-compose.<name>.over
 that references the app network as `external: true` and attaches the Core containers
 listed under `attach:` (e.g. `nginx`, `librechat`) to the app network.
 The Core Compose remains unchanged.
+
+When `networks.app_network` is a `${PAPAIA_PROJECT:-papaia}-<name>-net` template
+(addon_api 2), the orchestrator resolves it against the rendered core `.env` before
+writing the override, so each deployment on a shared host gets its own add-on bridge.
+`PAPAIA_PROJECT` mirrors `COMPOSE_PROJECT_NAME` (`papaia`, or `papaia-<env>`) under a
+key `docker compose` does not special-case, so the name still scopes correctly when
+the add-on is brought up with `-p <addon>`. The default `papaia` resolves to the
+legacy `papaia-<name>-net`, so single-deployment hosts are unaffected.
 
 ```yaml
 # Example: generated override for paperless
@@ -500,7 +518,7 @@ directory name above is a convention, not a requirement. What matters is the
 | Workspace directory | `papaia-addons/<name>/` | `papaia-addons/paperless/` |
 | Manifest field `name:` | `<name>` (short name) | `paperless` |
 | `deployment.yaml` → `path:` | path as passed to `addon install` | `../papaia-addons/paperless` |
-| Docker network | `papaia-<name>-net` | `papaia-paperless-net` |
+| Docker network | `${PAPAIA_PROJECT:-papaia}-<name>-net` | `papaia-paperless-net` (default env) |
 | Config bundle | `$PAPAIA_CONFIG_DIR/addons/<name>/` | `.../addons/paperless/.env` |
 
 ### Config directory
