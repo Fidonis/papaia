@@ -199,6 +199,38 @@ def test_generate_missing_secrets_fills_directory_absent_from_the_bundle(repo_ro
     assert not common.is_placeholder(tree["ai/jinaai"]["JINAAI_RERANKER_API_KEY"])
 
 
+def test_generate_missing_secrets_fills_kc_admin_password(repo_root):
+    # Regression (Fidonis/papaia#175): the Keycloak master-realm bootstrap admin
+    # password ships with the GENERATE_ marker, so a fresh setup never boots
+    # Keycloak with a known default. It also must carry no inline-comment or
+    # whitespace cruft the way the old `KC_ADMIN_PASSWORD=password  # ...` line did.
+    tree = envtree.load_seed_tree(repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    assert tree["infra/keycloak"]["KC_ADMIN_PASSWORD"] == "GENERATE_KC_ADMIN_PASSWORD"  # sanity
+
+    secrets.generate_missing_secrets(tree, seed)
+
+    admin_pw = tree["infra/keycloak"]["KC_ADMIN_PASSWORD"]
+    assert not common.is_placeholder(admin_pw)
+    assert admin_pw not in ("password", "")
+    assert admin_pw == admin_pw.strip()
+    assert "#" not in admin_pw
+
+
+def test_generate_missing_secrets_kc_admin_password_is_sticky(repo_root):
+    # The bootstrap password only takes effect on Keycloak's first start, so a
+    # value already in the .env (operator-chosen, or from an earlier run) must
+    # survive a sticky re-run -- regenerating it would desync the .env from the
+    # account Keycloak already created.
+    tree = envtree.load_seed_tree(repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    tree["infra/keycloak"]["KC_ADMIN_PASSWORD"] = "operator-chosen-value"
+
+    secrets.generate_missing_secrets(tree, seed)
+
+    assert tree["infra/keycloak"]["KC_ADMIN_PASSWORD"] == "operator-chosen-value"
+
+
 def test_generate_missing_secrets_ignores_keys_without_generate_marker(repo_root):
     # A secret-*named* key whose seed value lacks the GENERATE_ marker is never
     # generated -- not even when empty (which is_placeholder would otherwise
