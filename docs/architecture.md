@@ -813,7 +813,7 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `admin` | Full access — add-ons, catalogues, jobs, dashboard |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 
 Both name **realm roles**; the backend reads them from the access token's `roles`

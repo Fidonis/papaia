@@ -38,11 +38,11 @@ the `papaia` realm or is routed through oauth2-proxy by an Nginx fragment.
 
 | Service | Auth approach | Notes |
 |---------|--------------|-------|
-| LibreChat | native OIDC | openid-client strategy |
+| LibreChat | native OIDC | login gated by `librechat-user` (`OPENID_REQUIRED_ROLE`); `librechat-admin` grants LibreChat's internal ADMIN role (`OPENID_ADMIN_ROLE`) |
 | LocalAI | native OIDC | role-restricted via custom browser flow (`localai-access` required) |
-| papaia-manager | native OIDC | role-restricted via `MANAGER_ADMIN_ROLE` / `MANAGER_USER_ROLE` |
-| LiteLLM UI | generic OIDC | admin UI only; API key for programmatic access |
-| NPM admin UI | oauth2-proxy forward auth | sidecar in `src/infra/nginx/docker-compose.yml` |
+| papaia-manager | native OIDC | role-restricted via `MANAGER_ADMIN_ROLE` / `MANAGER_USER_ROLE` (default `manager-admin` / `user`) |
+| LiteLLM UI | generic OIDC | admin UI only (`litellm-admin` → `proxy_admin`); API key for programmatic access |
+| NPM admin UI | oauth2-proxy forward auth | sidecar in `src/infra/nginx/docker-compose.yml`; restricted to `npm-admin` via `--allowed-group` |
 
 ---
 
@@ -137,20 +137,47 @@ mapper resolves. It never issues tokens itself.
 
 **Realm Roles**
 
+Each service that supports role-gated administration gets its own admin role
+rather than sharing one. `papaia-admin` is a composite role that bundles
+every per-service admin role, so granting it alone still means "admin
+everywhere" — the granular roles stay independently assignable for narrower
+access.
+
 | Role | Description |
 |------|-------------|
-| `admin` | Full administrator access |
+| `papaia-admin` | Composite: `librechat-admin`, `litellm-admin`, `manager-admin`, `npm-admin`, `localai-access` |
+| `librechat-admin` | LibreChat administrator (composite: `librechat-user`) — grants LibreChat's internal ADMIN role |
+| `librechat-user` | Required to sign in to LibreChat at all |
+| `litellm-admin` | LiteLLM proxy administrator (Admin UI: models, teams, keys) |
+| `manager-admin` | papaia-manager administrator (add-ons, catalogues, services, backup, jobs) |
+| `npm-admin` | Nginx Proxy Manager administrator |
 | `user` | Regular user (default for all new accounts) |
 | `viewer` | Read-only viewer |
 | `localai-access` | Required for SSO login to LocalAI |
 | `finance` | Finance department (demo role) |
 
+LocalAI has no realm role of its own for admin *elevation* (only
+`localai-access` for login): its own admin promotion is a LocalAI-side
+concept (`LOCALAI_ADMIN_EMAIL` — a single email, or "first user becomes
+admin"), independent of any OIDC role or group claim. Set
+`LOCALAI_ADMIN_EMAIL` to the seeded admin's address for parity with the
+other services.
+
+**Existing installations:** these roles, their composites, and the
+`oauth2-proxy` client's `groups` mapper are synced into an already-imported
+realm automatically on every `papaia-ctl start` (only when
+`AUTH_PROVIDER=internal_keycloak`) — Keycloak's own `--import-realm` only
+runs once, on a realm that doesn't exist yet. The sync also grants
+`papaia-admin` to every account that already held the old flat `admin` role,
+without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
+to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).
+
 **Default Test Users** (local development only — do not use in production)
 
 | Username | Password | Roles |
 |----------|----------|-------|
-| `admin` | `admin` | admin, user, localai-access |
-| `testuser` | `testuser` | user, finance (no `localai-access` — cannot log in to LocalAI via SSO) |
+| `admin` | `admin` | papaia-admin, user, localai-access |
+| `testuser` | `testuser` | user, finance, librechat-user (no `localai-access` — cannot log in to LocalAI via SSO) |
 
 ### Linux Host Note
 
@@ -247,6 +274,18 @@ settings mirror the bundled realm (`src/infra/keycloak/realm-import/papaia-realm
 All clients need a **realm-roles protocol mapper** (type: User Realm Role, claim name `roles`,
 multivalued, included in ID token, Access token, and userinfo).
 
+The `oauth2-proxy` client additionally needs a **second** copy of that same
+mapper with claim name `groups` instead of `roles` — oauth2-proxy's generic
+`oidc` provider only honours `--allowed-group` (checked against a `groups`
+claim), not `--allowed-role`. This is what lets `nginx-proxy-manager-auth`
+restrict the NPM admin UI to `npm-admin` via `--allowed-group=npm-admin`.
+
+You'll also need to create the per-service roles listed in the Realm Roles
+table above (`papaia-admin`, `librechat-admin`, `librechat-user`,
+`litellm-admin`, `manager-admin`, `npm-admin`) with the same composite
+structure, since an external provider isn't reached by the start-time role
+sync described there (that only touches the bundled internal Keycloak).
+
 After creating each client, paste its secret from **Clients → `<id>` → Credentials** into the
 matching papaia env file. Then restart the affected services:
 
@@ -264,6 +303,8 @@ OPENID_CLIENT_ID=librechat
 OPENID_CLIENT_SECRET=<Clients → librechat → Credentials → Client secret>
 OPENID_CALLBACK_URL=https://librechat.example.com/oauth/openid/callback
 OPENID_USE_PKCE=true
+OPENID_REQUIRED_ROLE=librechat-user
+OPENID_ADMIN_ROLE=librechat-admin
 ```
 
 In the external Keycloak, the `librechat` client requires:

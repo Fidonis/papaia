@@ -32,6 +32,7 @@ from . import (
     envtree,
     gen_override,
     gpu_detect,
+    keycloak_role_sync,
     migrations,
     npm_provision,
     render_core,
@@ -194,6 +195,15 @@ def cmd_npm_provision(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     if not npm_provision.provision_npm_hosts(tree):
+        return 1
+    return 0
+
+
+def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    if not keycloak_role_sync.sync_roles(tree, config_dir):
         return 1
     return 0
 
@@ -546,6 +556,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_npm = sub.add_parser("npm-provision")
     p_npm.set_defaults(func=cmd_npm_provision)
+
+    p_kc_role_sync = sub.add_parser("keycloak-role-sync")
+    p_kc_role_sync.set_defaults(func=cmd_keycloak_role_sync)
 
     p_override_nets = sub.add_parser("override-external-nets")
     p_override_nets.add_argument("--file", required=True)

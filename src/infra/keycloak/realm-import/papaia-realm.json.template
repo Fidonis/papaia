@@ -16,8 +16,44 @@
   "roles": {
     "realm": [
       {
-        "name": "admin",
-        "description": "Administrator with full access"
+        "name": "papaia-admin",
+        "description": "Full administrator access across every service — composite of every per-service admin role",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "librechat-admin",
+            "litellm-admin",
+            "manager-admin",
+            "npm-admin",
+            "localai-access"
+          ]
+        }
+      },
+      {
+        "name": "librechat-admin",
+        "description": "LibreChat administrator",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "librechat-user"
+          ]
+        }
+      },
+      {
+        "name": "librechat-user",
+        "description": "Required to sign in to LibreChat"
+      },
+      {
+        "name": "litellm-admin",
+        "description": "LiteLLM proxy administrator (Admin UI: models, teams, keys)"
+      },
+      {
+        "name": "manager-admin",
+        "description": "papaia-manager administrator (add-ons, catalogues, services, backup, jobs)"
+      },
+      {
+        "name": "npm-admin",
+        "description": "Nginx Proxy Manager administrator"
       },
       {
         "name": "user",
@@ -167,6 +203,20 @@
             "claim.name": "roles",
             "jsonType.label": "String"
           }
+        },
+        {
+          "name": "realm-roles-as-groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "jsonType.label": "String"
+          }
         }
       ],
       "redirectUris": [
@@ -302,7 +352,7 @@
         }
       ],
       "realmRoles": [
-        "admin",
+        "papaia-admin",
         "user",
         "localai-access"
       ]
@@ -323,7 +373,8 @@
       ],
       "realmRoles": [
         "user",
-        "finance"
+        "finance",
+        "librechat-user"
       ]
     }
   ],
