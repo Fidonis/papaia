@@ -406,6 +406,7 @@ No Core changes required.
 | `papaia-ctl restore [--restore-point=ID] [--list] [--only=SEL[,SEL]]` | Restore a catalogued restore point. Containers are removed and recreated around the restore, not merely stopped. `--only` (`module:`, `addon:` or `volume:` selectors) scopes both the teardown and the restart to the selected units, leaving everything else running; it reads the `version: 2` manifest and is refused with `--restart-clean`, a config-directory selection, or the `manager` profile. |
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
+| `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
@@ -813,7 +814,7 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `admin` | Full access — add-ons, catalogues, jobs, dashboard |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 
 Both name **realm roles**; the backend reads them from the access token's `roles`

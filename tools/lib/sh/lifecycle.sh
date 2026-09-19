@@ -138,6 +138,10 @@ cmd_start() {
         warn "NPM proxy-host provisioning failed. Once the stack is healthy, run 'papaia-ctl npm-provision' to retry."
     fi
 
+    if ! py_cli keycloak-role-sync; then
+        warn "Keycloak role sync failed. Once Keycloak is healthy, run 'papaia-ctl keycloak-role-sync' to retry."
+    fi
+
     success "start complete."
 }
 

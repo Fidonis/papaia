@@ -40,6 +40,7 @@
 #                            --restart-clean] — restore that cannot replace the
 #                            configuration directory, for in-stack callers
 #   papaia-ctl npm-provision [--config-dir=PATH]
+#   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
@@ -155,6 +156,7 @@ case "$cmd" in
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
     npm-provision) py_cli npm-provision "$@" ;;
+    keycloak-role-sync) py_cli keycloak-role-sync "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

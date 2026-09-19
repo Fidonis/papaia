@@ -68,12 +68,17 @@ which accelerator image to install — see [GPU acceleration](#gpu-acceleration-
 
 | Service | Approach | Notes |
 |---|---|---|
-| LibreChat | Native OIDC | `openid-client`, PKCE enforced |
-| LiteLLM (UI) | Generic OIDC | API key for programmatic access |
+| LibreChat | Native OIDC | `openid-client`, PKCE enforced; login requires `librechat-user`, `librechat-admin` grants LibreChat's ADMIN role |
+| LiteLLM (UI) | Generic OIDC | API key for programmatic access; `litellm-admin` grants Admin UI access |
 | LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
 | papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only |
-| NPM admin UI | oauth2-proxy sidecar | — |
+| NPM admin UI | oauth2-proxy sidecar | Restricted to `npm-admin` via `--allowed-group` |
 | oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
+
+Per-service admin roles (`librechat-admin`, `litellm-admin`, `manager-admin`,
+`npm-admin`, ...) compose under one umbrella role, `papaia-admin` — grant that
+for "admin everywhere", or grant a single per-service role for narrower
+access. See `src/infra/keycloak/README.md` for the full role table.
 
 ---
 
@@ -189,6 +194,7 @@ papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                      [-y] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
+papaia-ctl keycloak-role-sync [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl help
@@ -664,7 +670,7 @@ guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `admin` | Every surface — add-ons, catalogues, services, backup, jobs |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, backup, jobs |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 
 An account holding neither role is rejected at login. Both variables live in
