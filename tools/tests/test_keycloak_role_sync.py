@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import re
+import urllib.error
 
 import pytest
 
@@ -266,3 +268,74 @@ def test_sync_migrates_legacy_admin_users_without_touching_the_role(tmp_path, mo
     # Idempotent: running again must not re-grant or error.
     assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
     assert fake.users["u1"]["roles"] == {"admin", "user", "papaia-admin"}
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("secret", "secret"),
+        ("secret   # Change this! Used only on first start.", "secret"),
+        ("secret # note", "secret"),
+        ("pass#word", "pass#word"),
+        ('"quoted pw"  # note', "quoted pw"),
+        ("'single'", "single"),
+        ("", ""),
+    ],
+)
+def test_compose_value_matches_docker_compose_inline_comment_handling(raw, expected):
+    assert kcs._compose_value(raw) == expected
+
+
+def test_sync_sends_the_password_without_its_inline_comment(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _realm_def())
+    sent = {}
+
+    def _capture(base_url, ctx, password):
+        sent["password"] = password
+        return "fake-token"
+
+    fake = FakeKeycloak(roles={"user": _role("user")})
+    _patch_common(monkeypatch, fake)
+    monkeypatch.setattr(kcs, "_get_admin_token", _capture)
+    tree = _tree()
+    tree["infra/keycloak"]["KC_ADMIN_PASSWORD"] = "correct-password   # First start only."
+
+    assert kcs.sync_roles(tree, config_dir=tmp_path) is True
+    assert sent["password"] == "correct-password"
+
+
+def _http_error(code: int, body: bytes) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "https://localhost:8110/x", code, "Bad Request", {}, io.BytesIO(body)
+    )
+
+
+def test_sync_returns_false_with_a_hint_when_admin_login_is_rejected(
+    tmp_path, monkeypatch, capsys
+):
+    _write_realm_json(tmp_path, _realm_def())
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", lambda base_url, ctx, timeout=90: None)
+
+    def _reject(base_url, ctx, password):
+        raise _http_error(400, b'{"error_description":"Invalid user credentials"}')
+
+    monkeypatch.setattr(kcs, "_get_admin_token", _reject)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is False
+    err = capsys.readouterr().err
+    assert "Invalid user credentials" in err
+    assert "KC_ADMIN_PASSWORD" in err
+
+
+def test_sync_returns_false_when_an_api_call_fails_midway(tmp_path, monkeypatch, capsys):
+    _write_realm_json(tmp_path, _realm_def())
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", lambda base_url, ctx, timeout=90: None)
+    monkeypatch.setattr(kcs, "_get_admin_token", lambda base_url, ctx, password: "fake-token")
+
+    def _boom(*args, **kwargs):
+        raise _http_error(403, b"forbidden")
+
+    monkeypatch.setattr(kcs, "_api", _boom)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is False
+    assert "HTTP 403" in capsys.readouterr().err

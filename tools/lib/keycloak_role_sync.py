@@ -18,6 +18,7 @@ npm_provision.py).
 from __future__ import annotations
 
 import json
+import re
 import ssl
 import sys
 import time
@@ -32,6 +33,24 @@ _KEYCLOAK_NODE = "infra/keycloak"
 _REALM = "papaia"
 _LEGACY_ADMIN_ROLE = "admin"
 _MIGRATION_TARGET_ROLE = "papaia-admin"
+
+
+def _compose_value(raw: str) -> str:
+    """Resolve a raw .env value the way docker compose does. `parse_env_file`
+    keeps a trailing ` # comment` (the shipped KC_ADMIN_PASSWORD line carries
+    one), but Keycloak was started with the comment stripped, so sending the
+    unresolved value as the admin password is rejected."""
+    if raw.startswith(('"', "'")):
+        end = raw.find(raw[0], 1)
+        return raw[1:end] if end != -1 else raw
+    return re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+
+
+def _error_detail(exc: urllib.error.HTTPError) -> str:
+    try:
+        return exc.read().decode("utf-8", "replace").strip()[:300]
+    except Exception:
+        return exc.reason if isinstance(exc.reason, str) else ""
 
 
 def _ssl_context(config_dir: Path) -> ssl.SSLContext:
@@ -213,7 +232,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         return True
 
     keycloak = tree.get(_KEYCLOAK_NODE, {})
-    admin_password = keycloak.get("KC_ADMIN_PASSWORD", "")
+    admin_password = _compose_value(keycloak.get("KC_ADMIN_PASSWORD", ""))
     if not admin_password or admin_password.startswith("GENERATE_"):
         raise RuntimeError(
             f"KC_ADMIN_PASSWORD is not set in {_KEYCLOAK_NODE}/.env. Run 'papaia-ctl setup' first."
@@ -240,12 +259,34 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         print(f"Keycloak role sync skipped: {exc}", file=sys.stderr, flush=True)
         return False
 
-    token = _get_admin_token(base_url, ctx, admin_password)
+    try:
+        token = _get_admin_token(base_url, ctx, admin_password)
+    except urllib.error.HTTPError as exc:
+        print(
+            f"Keycloak role sync skipped: admin login failed (HTTP {exc.code}: "
+            f"{_error_detail(exc)}). KC_ADMIN_PASSWORD in {_KEYCLOAK_NODE}/.env is only "
+            "used on Keycloak's first start — if the admin password was changed "
+            "since, update it there.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
 
-    existing_roles, roles_created = _sync_roles(base_url, ctx, token, realm_def)
-    composites_added = _sync_composites(base_url, ctx, token, realm_def)
-    mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
-    migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
+    try:
+        existing_roles, roles_created = _sync_roles(base_url, ctx, token, realm_def)
+        composites_added = _sync_composites(base_url, ctx, token, realm_def)
+        mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
+        migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
+    except urllib.error.HTTPError as exc:
+        print(
+            f"Keycloak role sync failed: HTTP {exc.code} on {exc.url}: {_error_detail(exc)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+    except OSError as exc:
+        print(f"Keycloak role sync failed: {exc}", file=sys.stderr, flush=True)
+        return False
 
     print(
         f"Keycloak role sync complete: {roles_created} role(s) created, "
