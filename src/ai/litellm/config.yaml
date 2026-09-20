@@ -3,7 +3,7 @@
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
 # LITELLM_MASTER_KEY, LITELLM_SALT_KEY, DATABASE_URL are set via .env.
-# Additional models and teams can be managed in the Admin UI.
+# No models are shipped by default. Add models and teams in the Admin UI.
 
 general_settings:
   ui_access_mode: "sso_only"
@@ -28,43 +28,54 @@ router_settings:
 # Per-user budgets and rate limits can be set under Settings → Users.
 
 # ── Models ─────────────────────────────────────────────────────────────────
-# LocalAI models are pre-configured here.
-# All other models (cloud APIs) should be added via the Admin UI so that
-# API keys are stored in the database and not in this file.
+# No models are shipped by default. A model registered here without a usable
+# backend (missing .gguf download, missing API key) only fails on first use, so
+# the operator adds the models that are actually available.
+#
+# Add models via Admin UI → Models, so that API keys are stored in the
+# database and not in this file. The examples below can be used instead:
+# replace `model_list: []` with `model_list:`, uncomment the entries you need
+# and set the API keys in litellm/.env.
+#
+# Other services refer to these model names:
+#   • qwen2.5-1.5b-instruct — LibreChat memory agent (ai/librechat/librechat.yaml)
+#   • nomic-embed-text      — LibreChat RAG API (EMBEDDINGS_MODEL in
+#                             ai/librechat/docker-compose.yml)
+# Register models under these names or change the references there.
 
-model_list:
+model_list: []
+
   # ── LocalAI — available when LocalAI service is running ──────────────────
   # Models are only usable if the corresponding .gguf file was downloaded
   # (configured via src/ai/localai/models.txt).
 
-  - model_name: qwen2.5-1.5b-instruct
-    litellm_params:
-      model: "openai/qwen2.5-1.5b-instruct"
-      api_base: "http://localai:8080/v1"
-      api_key: "sk-notused"
+  # - model_name: qwen2.5-1.5b-instruct
+  #   litellm_params:
+  #     model: "openai/qwen2.5-1.5b-instruct"
+  #     api_base: "http://localai:8080/v1"
+  #     api_key: "sk-notused"
 
-  - model_name: nomic-embed-text
-    litellm_params:
-      model: "openai/nomic-embed-text"
-      api_base: "http://localai:8080/v1"
-      api_key: "sk-notused"
+  # - model_name: nomic-embed-text
+  #   litellm_params:
+  #     model: "openai/nomic-embed-text"
+  #     api_base: "http://localai:8080/v1"
+  #     api_key: "sk-notused"
 
   # ── Cloud models ──────────────────────────────────────────────────────────
-  # Add via Admin UI → Models, or uncomment and set API keys in litellm/.env.
 
   # Mammouth.ai — requires MAMMOUTH_API_KEY in litellm/.env
   # Check available model IDs in your Mammouth dashboard.
-  - model_name: mammouth-chat
-    litellm_params:
-      model: "openai/gpt-4.1-mini"
-      api_base: "os.environ/MAMMOUTH_API_BASE"
-      api_key: "os.environ/MAMMOUTH_API_KEY"
+  # - model_name: mammouth-chat
+  #   litellm_params:
+  #     model: "openai/gpt-4.1-mini"
+  #     api_base: "os.environ/MAMMOUTH_API_BASE"
+  #     api_key: "os.environ/MAMMOUTH_API_KEY"
 
-  - model_name: mammouth-embed
-    litellm_params:
-      model: "openai/text-embedding-3-small"
-      api_base: "os.environ/MAMMOUTH_API_BASE"
-      api_key: "os.environ/MAMMOUTH_API_KEY"
+  # - model_name: mammouth-embed
+  #   litellm_params:
+  #     model: "openai/text-embedding-3-small"
+  #     api_base: "os.environ/MAMMOUTH_API_BASE"
+  #     api_key: "os.environ/MAMMOUTH_API_KEY"
 
   # OpenRouter — requires OPENROUTER_API_KEY in litellm/.env
   # - model_name: openrouter/mistral-large
