@@ -314,7 +314,7 @@ def persist_tree(tree: EnvTree, config_dir: Path, repo_root: Path) -> None:
         )
 
 
-_NEW_KEYS_BANNER = "# --- Added by papaia-ctl (new in this release) ---"
+_NEW_KEYS_BANNER = "# --- Added by papaia-ctl during release upgrade ---"
 
 
 def _example_comment_blocks(example_path: Path) -> dict[str, list[str]]:

@@ -261,7 +261,7 @@ def test_sync_new_env_keys_appends_only_the_missing_key(repo_root, config_dir):
     assert after.startswith(before), "existing content must stay byte-identical"
     assert "TRUST_PROXY=1" in after[len(before):]
     assert "OPENID_CLIENT_ID=custom" in after
-    assert after.count("# --- Added by papaia-ctl") == 1
+    assert after.count("# --- Added by papaia-ctl during release upgrade ---") == 1
 
 
 def test_sync_new_env_keys_is_idempotent(repo_root, config_dir):
