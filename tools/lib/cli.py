@@ -157,6 +157,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync_env(args: argparse.Namespace) -> int:
+    added = envtree.sync_new_env_keys(Path(args.config_dir), Path(args.repo_root))
+    for rel_dir, keys in added.items():
+        target = f"{rel_dir}/.env" if rel_dir else ".env"
+        print(f"Added {len(keys)} new variable(s) to {target}: {', '.join(keys)}")
+    return 0
+
+
 def cmd_materialize(args: argparse.Namespace) -> int:
     envtree.materialize_core_env(Path(args.config_dir), Path(args.repo_root))
     return 0
@@ -476,6 +484,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--config-dir", required=True)
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_sync_env = sub.add_parser("sync-env")
+    p_sync_env.set_defaults(func=cmd_sync_env)
 
     p_materialize = sub.add_parser("materialize-core")
     p_materialize.set_defaults(func=cmd_materialize)
