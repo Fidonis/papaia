@@ -272,8 +272,9 @@ untouched rather than reset to a default.
 tools/papaia-ctl start [--addons] [--profiles=LIST] [--config-dir=PATH]
 ```
 
-Copies the `.env` files from the config directory into the checkout, re-renders the
-configuration, then runs `docker compose up -d`.
+Adds any variable the checkout's `.env.example` files ship and the config directory's
+`.env` lacks (existing values are never changed), copies the `.env` files from the config
+directory into the checkout, re-renders the configuration, then runs `docker compose up -d`.
 
 Because rendering happens on **every** `start`, new templates, new add-on fragments and
 edits under `overlay/` are picked up automatically. To move the installation to a newer

@@ -77,6 +77,10 @@ cmd_start() {
         exit 2
     fi
 
+    # Before materialising, so variables a newer checkout ships reach the
+    # checkout copy in the same start. Silent unless something was added.
+    py_cli sync-env
+
     info "Materialising configuration into checkout..."
     py_cli materialize-core
 

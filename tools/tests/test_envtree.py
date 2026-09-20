@@ -218,3 +218,198 @@ def test_materialize_core_env_skips_missing_bundle_files(repo_root, config_dir):
 
     # Root .env should still be restored from its bundle copy
     assert (repo_root / "src" / ".env").is_file()
+
+
+# ── sync_new_env_keys ─────────────────────────────────────────────────────────
+
+
+def _bundle(config_dir: Path, rel_dir: str = "") -> Path:
+    return config_dir / rel_dir / ".env" if rel_dir else config_dir / ".env"
+
+
+def _drop_key(path: Path, key: str) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = [line for line in lines if not line.startswith(f"{key}=")]
+    assert len(kept) == len(lines) - 1, f"{key} not found in {path}"
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+def _add_example_lines(repo_root: Path, rel_dir: str, lines: list[str]) -> None:
+    example = repo_root / "src" / rel_dir / ".env.example" if rel_dir else (
+        repo_root / "src" / ".env.example"
+    )
+    text = example.read_text(encoding="utf-8")
+    example.write_text(text + "\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_sync_new_env_keys_appends_only_the_missing_key(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    bundle = _bundle(config_dir, "ai/librechat")
+    _drop_key(bundle, "TRUST_PROXY")
+    bundle.write_text(
+        "# my own note\n" + bundle.read_text(encoding="utf-8").replace(
+            "OPENID_CLIENT_ID=librechat", "OPENID_CLIENT_ID=custom"
+        ),
+        encoding="utf-8",
+    )
+    before = bundle.read_text(encoding="utf-8")
+
+    added = envtree.sync_new_env_keys(config_dir, repo_root)
+
+    assert added == {"ai/librechat": ["TRUST_PROXY"]}
+    after = bundle.read_text(encoding="utf-8")
+    assert after.startswith(before), "existing content must stay byte-identical"
+    assert "TRUST_PROXY=1" in after[len(before):]
+    assert "OPENID_CLIENT_ID=custom" in after
+    assert after.count("# --- Added by papaia-ctl") == 1
+
+
+def test_sync_new_env_keys_is_idempotent(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _drop_key(_bundle(config_dir, "ai/librechat"), "TRUST_PROXY")
+    envtree.sync_new_env_keys(config_dir, repo_root)
+    snapshot = {p: p.read_bytes() for p in config_dir.rglob(".env")}
+
+    assert envtree.sync_new_env_keys(config_dir, repo_root) == {}
+    assert {p: p.read_bytes() for p in config_dir.rglob(".env")} == snapshot
+
+
+def test_sync_new_env_keys_does_nothing_on_a_complete_bundle(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    assert envtree.sync_new_env_keys(config_dir, repo_root) == {}
+
+
+def test_sync_new_env_keys_carries_the_example_comment_block(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _add_example_lines(
+        repo_root,
+        "ai/librechat",
+        [
+            "",
+            "# Grants the admin role.",
+            "# Independent of the login gate.",
+            "NEW_ROLE=admin",
+            "OTHER=1",
+        ],
+    )
+
+    added = envtree.sync_new_env_keys(config_dir, repo_root)
+
+    assert added == {"ai/librechat": ["NEW_ROLE", "OTHER"]}
+    text = _bundle(config_dir, "ai/librechat").read_text(encoding="utf-8")
+    assert (
+        "# Grants the admin role.\n# Independent of the login gate.\nNEW_ROLE=admin\nOTHER=1\n"
+        in text
+    )
+
+
+def test_sync_new_env_keys_generates_a_new_secret(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _add_example_lines(repo_root, "ai/librechat", ["NEW_TOKEN=GENERATE_NEW_TOKEN"])
+
+    envtree.sync_new_env_keys(config_dir, repo_root)
+
+    value = re.search(
+        r"^NEW_TOKEN=(.*)$", _bundle(config_dir, "ai/librechat").read_text(encoding="utf-8"), re.M
+    ).group(1)
+    assert value and not value.startswith("GENERATE_")
+
+
+def test_sync_new_env_keys_gives_a_new_alias_the_canonical_value(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    keycloak = _bundle(config_dir, "infra/keycloak")
+    keycloak.write_text(
+        keycloak.read_text(encoding="utf-8").replace(
+            "KC_LIBRECHAT_CLIENT_SECRET=GENERATE_KC_LIBRECHAT_CLIENT_SECRET",
+            "KC_LIBRECHAT_CLIENT_SECRET=shared-secret",
+        ),
+        encoding="utf-8",
+    )
+    _drop_key(_bundle(config_dir, "ai/librechat"), "OPENID_CLIENT_SECRET")
+
+    envtree.sync_new_env_keys(config_dir, repo_root)
+
+    assert "OPENID_CLIENT_SECRET=shared-secret" in _bundle(
+        config_dir, "ai/librechat"
+    ).read_text(encoding="utf-8")
+
+
+def test_sync_new_env_keys_never_changes_an_existing_key(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _drop_key(_bundle(config_dir, "ai/librechat"), "TRUST_PROXY")
+    # Drifted from its canonical value: `setup` would overwrite it, `start` must not.
+    librechat = _bundle(config_dir, "ai/librechat")
+    librechat.write_text(
+        librechat.read_text(encoding="utf-8").replace(
+            "OPENID_CLIENT_SECRET=GENERATE_LIBRECHAT_CLIENT_SECRET",
+            "OPENID_CLIENT_SECRET=hand-set",
+        ),
+        encoding="utf-8",
+    )
+
+    envtree.sync_new_env_keys(config_dir, repo_root)
+
+    assert "OPENID_CLIENT_SECRET=hand-set" in librechat.read_text(encoding="utf-8")
+
+
+def test_sync_new_env_keys_leaves_a_rename_target_to_setup(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    root = _bundle(config_dir)
+    _drop_key(root, "OIDC_AUTH_URL")
+    root.write_text(
+        root.read_text(encoding="utf-8") + "OIDC_ISSUER_KC_AUTH=https://old.example/auth\n",
+        encoding="utf-8",
+    )
+
+    added = envtree.sync_new_env_keys(config_dir, repo_root)
+
+    assert "OIDC_AUTH_URL" not in added.get("", [])
+    assert "OIDC_AUTH_URL" not in root.read_text(encoding="utf-8")
+
+    _drop_key(root, "OIDC_ISSUER_KC_AUTH")
+    assert envtree.sync_new_env_keys(config_dir, repo_root) == {"": ["OIDC_AUTH_URL"]}
+
+
+def test_sync_new_env_keys_skips_keycloak_for_an_external_provider(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    root = _bundle(config_dir)
+    root.write_text(
+        root.read_text(encoding="utf-8").replace(
+            "AUTH_PROVIDER=internal_keycloak", "AUTH_PROVIDER=external_oidc"
+        ),
+        encoding="utf-8",
+    )
+    _drop_key(_bundle(config_dir, "infra/keycloak"), "KC_HOSTNAME")
+
+    assert envtree.sync_new_env_keys(config_dir, repo_root) == {}
+
+    root.write_text(
+        root.read_text(encoding="utf-8").replace("external_oidc", "internal_keycloak"),
+        encoding="utf-8",
+    )
+    assert envtree.sync_new_env_keys(config_dir, repo_root) == {"infra/keycloak": ["KC_HOSTNAME"]}
+
+
+def test_sync_new_env_keys_ignores_a_service_without_a_bundle(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _bundle(config_dir, "infra/keycloak").unlink()
+    _drop_key(_bundle(config_dir, "ai/librechat"), "TRUST_PROXY")
+
+    assert envtree.sync_new_env_keys(config_dir, repo_root) == {"ai/librechat": ["TRUST_PROXY"]}
+    assert not _bundle(config_dir, "infra/keycloak").exists()
+
+
+def test_sync_env_command_reports_what_it_added(repo_root, config_dir, capsys):
+    from lib import cli
+
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _drop_key(_bundle(config_dir, "ai/librechat"), "TRUST_PROXY")
+
+    args = types.SimpleNamespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    assert cli.cmd_sync_env(args) == 0
+    assert (
+        "Added 1 new variable(s) to ai/librechat/.env: TRUST_PROXY" in capsys.readouterr().out
+    )
+
+    assert cli.cmd_sync_env(args) == 0
+    assert capsys.readouterr().out == ""

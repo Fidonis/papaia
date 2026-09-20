@@ -113,6 +113,28 @@ operator-supplied.
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.
 
+## New variables in a newer release
+
+A release can add variables to a `.env.example`. The canonical `.env` files under
+`$PAPAIA_CONFIG_DIR` pick them up without operator action:
+
+- `papaia-ctl start` appends every variable the checkout's `.env.example` ships and the
+  bundle `.env` lacks, before the bundle is copied into the checkout. This covers a
+  checkout moved by `git pull` or a branch switch, not only by `upgrade`.
+- `papaia-ctl setup` and `papaia-ctl upgrade` (which runs `setup`) add them as well, in
+  the position the template gives them.
+
+Only missing variables are added. An existing value is never changed, and `start` appends
+to the file instead of rewriting it, so hand-written values and comments survive. New
+keys are listed on the console (`Added 3 new variable(s) to ai/librechat/.env: …`); a
+second start adds nothing. A new `GENERATE_…` secret receives a generated value, and a
+new alias of a shared secret takes the canonical value. Nothing is added to
+`infra/keycloak/.env` with `AUTH_PROVIDER=external_oidc`, and a key that `setup` still has
+to migrate from a renamed one is left to `setup`.
+
+A *changed default* of a variable that already exists is not applied: the value in the
+bundle is yours. Change it in `$PAPAIA_CONFIG_DIR` by hand when a release note asks for it.
+
 ## Secrets handling
 
 `tools/papaia-ctl setup` generates secrets with a sticky-by-default algorithm (also
