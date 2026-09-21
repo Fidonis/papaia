@@ -706,6 +706,17 @@ endpoints:
         default: ["gpt-4o"]
 ```
 
+**Enable the LibreChat memory agent** (`overlay/ai/librechat/librechat.yaml`). The
+base config ships no memory model, and automatic extraction is opt-in. The overlay
+adds the agent to the base `memory` section; the model must exist in LiteLLM:
+```yaml
+memory:
+  agent:
+    enabled: true
+    provider: "Private-LLM"
+    model: "my-chat-model"
+```
+
 **SearXNG engine tuning** (`overlay/services/searxng/settings.yml`):
 ```yaml
 search:
