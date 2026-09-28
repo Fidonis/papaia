@@ -12,6 +12,27 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.3.0] - 2026-09-28
+
+### 🚀 Features
+
+- feat(litellm): ship no default models and make librechat models configurable (#202) @marko-boehm
+- feat!: split the shared Keycloak admin role into per-service admin roles (#198) @marko-boehm
+
+### 🐛 Bug Fixes
+
+- fix: add new .env.example variables to the active .env on start (#200) @marko-boehm
+- fix(addon): scope the Seam-1 network to the deployment (#194) @marko-boehm
+- fix(papaia-ctl): check for PyYAML in preflight and document it (#192) @marko-boehm
+- fix(keycloak): generate the bootstrap admin password (#191) @marko-boehm
+
+### 🧹 Maintenance
+
+- chore: bump litellm to v1.100.0 (#196) @marko-boehm
+- chore: bump papaia-manager to `1.1.0`
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.2.0...v1.3.0
+
 ## [1.2.0] - 2026-09-04
 
 ### 🚀 Features
