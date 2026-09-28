@@ -70,21 +70,26 @@ memory:
   personalize: true  # Gives users the ability to toggle memory on/off, true by default
   tokenLimit: 4000  # Maximum tokens for memory storage
   messageWindowSize: 5  # Number of recent messages to consider
-  agent:
-    provider: "Private-LLM"
-    model: "qwen2.5-1.5b-instruct"
-    instructions: |
-      Store memory using only the specified validKeys. For user_preferences: save
-      explicitly stated preferences about communication style, topics of interest,
-      or workflow preferences. For conversation_context: save important facts or
-      ongoing projects mentioned. For learned_facts: save objective information
-      about the user. For personal_information: save only what the user explicitly
-      shares about themselves. Delete outdated or incorrect information promptly.
-    model_parameters:
-      temperature: 0.2
-      max_tokens: 4000
-      top_p: 0.8
-      frequency_penalty: 0.1
+  # Automatic memory extraction is opt-in: without `enabled: true` no agent runs.
+  # No model is shipped by default. To turn it on, set an existing LiteLLM model in
+  # the customer overlay (overlay/ai/librechat/librechat.yaml), see
+  # docs/architecture.md, or uncomment this block here.
+  # agent:
+  #   enabled: true
+  #   provider: "Private-LLM"
+  #   model: "<your-model>"
+  #   instructions: |
+  #     Store memory using only the specified validKeys. For user_preferences: save
+  #     explicitly stated preferences about communication style, topics of interest,
+  #     or workflow preferences. For conversation_context: save important facts or
+  #     ongoing projects mentioned. For learned_facts: save objective information
+  #     about the user. For personal_information: save only what the user explicitly
+  #     shares about themselves. Delete outdated or incorrect information promptly.
+  #   model_parameters:
+  #     temperature: 0.2
+  #     max_tokens: 4000
+  #     top_p: 0.8
+  #     frequency_penalty: 0.1
 
 fileConfig:
   # Maximum tokens from text files before truncation

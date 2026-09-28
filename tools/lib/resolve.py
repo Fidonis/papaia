@@ -367,6 +367,12 @@ def resolve_multi_env(tree: EnvTree, args: SetupArgs) -> EnvTree:
     else:
         root["COMPOSE_PROJECT_NAME"] = f"papaia-{env_name}"
         root["DOCKER_NETWORK"] = f"papaia-{env_name}-net"
+    # Track the (possibly sticky) compose project name under a key docker compose
+    # does not special-case, so an add-on's ${PAPAIA_PROJECT:-papaia}-<name>-net
+    # survives `docker compose -p <addon>` and its Seam-1 bridge scopes per
+    # deployment. Unconditional so a re-run without --env still syncs it to a
+    # previously stuck papaia-<env> value.
+    root["PAPAIA_PROJECT"] = root["COMPOSE_PROJECT_NAME"]
     if args.host_ip:
         root["HOST_IP"] = args.host_ip
     else:

@@ -40,6 +40,7 @@
 #                            --restart-clean] — restore that cannot replace the
 #                            configuration directory, for in-stack callers
 #   papaia-ctl npm-provision [--config-dir=PATH]
+#   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
@@ -111,6 +112,18 @@ if [ -z "$PYTHON_BIN" ]; then
     exit 2
 fi
 
+# Every `lib.cli` subcommand pulls in PyYAML transitively (lib/backup.py imports
+# it at module load), so without it each command aborts with a bare
+# "No module named 'yaml'" that names the import, not the package to install.
+# Check once here and point at the fix instead.
+if ! "$PYTHON_BIN" -c 'import yaml' >/dev/null 2>&1; then
+    error "Python module 'yaml' (PyYAML) not found for '$PYTHON_BIN'. Install it and re-run:"
+    error "  Debian/Ubuntu: sudo apt-get install -y python3-yaml"
+    error "  Fedora/RHEL:   sudo dnf install -y python3-pyyaml"
+    error "  macOS / other: $PYTHON_BIN -m pip install 'PyYAML>=6.0'"
+    exit 2
+fi
+
 # shellcheck disable=SC2034  # consumed by the sourced command libraries
 DEFAULT_CONFIG_DIR="$(dirname "$REPO_ROOT")/papaia-config"
 
@@ -143,6 +156,7 @@ case "$cmd" in
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
     npm-provision) py_cli npm-provision "$@" ;;
+    keycloak-role-sync) py_cli keycloak-role-sync "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

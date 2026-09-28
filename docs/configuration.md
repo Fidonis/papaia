@@ -51,6 +51,7 @@ next to it, even when it has an inline `:-` default.
 | `COMPOSE_PROJECT_NAME` | Compose project name; keeps parallel environments apart |
 | `COMPOSE_PROFILES` | Active Compose profiles — the enabled module set |
 | `DOCKER_NETWORK` | Name of the shared bridge network |
+| `PAPAIA_PROJECT` | Mirrors `COMPOSE_PROJECT_NAME` under a key Compose does not special-case; scopes add-on Seam-1 networks per deployment (`${PAPAIA_PROJECT:-papaia}-<addon>-net`) |
 | `PAPAIA_CONFIG_DIR` | Absolute host path holding all generated state and operator-editable config |
 | `PAPAIA_WORKSPACE_DIR` | Parent directory containing the papaia checkout and add-ons, stamped by setup |
 | `PAPAIA_BACKUP_DIR` | Default target of `papaia-ctl backup`; derived by setup as `$PAPAIA_WORKSPACE_DIR/backup` unless `--backup-dir` was passed |
@@ -105,12 +106,34 @@ operator-supplied.
 | Origin | Examples |
 |---|---|
 | Operator-supplied (flag or interactive prompt) | `PAPAIA_HOST`, `AUTH_HOST`, `--env`, `--host-ip`, `--backup-dir` |
-| Derived from the above | `OIDC_ISSUER`, `OIDC_AUTH_URL`/`OIDC_TOKEN_URL`/`OIDC_JWKS_URL`, `OPENID_ISSUER`, `GENERIC_*_ENDPOINT`, `DOMAIN_SERVER`/`DOMAIN_CLIENT`, `*_PUBLIC_URL`, `OAUTH2_PROXY_COOKIE_SECURE`, `COMPOSE_PROJECT_NAME`, `DOCKER_NETWORK`, `PAPAIA_BACKUP_DIR` |
+| Derived from the above | `OIDC_ISSUER`, `OIDC_AUTH_URL`/`OIDC_TOKEN_URL`/`OIDC_JWKS_URL`, `OPENID_ISSUER`, `GENERIC_*_ENDPOINT`, `DOMAIN_SERVER`/`DOMAIN_CLIENT`, `*_PUBLIC_URL`, `OAUTH2_PROXY_COOKIE_SECURE`, `COMPOSE_PROJECT_NAME`, `PAPAIA_PROJECT`, `DOCKER_NETWORK`, `PAPAIA_BACKUP_DIR` |
 | Generated (see [Secrets handling](#secrets-handling)) | every key shipped with a `GENERATE_…` placeholder |
 | Static defaults | `*_EXT_PORT` variables, `TRUST_PROXY` |
 
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.
+
+## New variables in a newer release
+
+A release can add variables to a `.env.example`. The canonical `.env` files under
+`$PAPAIA_CONFIG_DIR` pick them up without operator action:
+
+- `papaia-ctl start` appends every variable the checkout's `.env.example` ships and the
+  bundle `.env` lacks, before the bundle is copied into the checkout. This covers a
+  checkout moved by `git pull` or a branch switch, not only by `upgrade`.
+- `papaia-ctl setup` and `papaia-ctl upgrade` (which runs `setup`) add them as well, in
+  the position the template gives them.
+
+Only missing variables are added. An existing value is never changed, and `start` appends
+to the file instead of rewriting it, so hand-written values and comments survive. New
+keys are listed on the console (`Added 3 new variable(s) to ai/librechat/.env: …`); a
+second start adds nothing. A new `GENERATE_…` secret receives a generated value, and a
+new alias of a shared secret takes the canonical value. Nothing is added to
+`infra/keycloak/.env` with `AUTH_PROVIDER=external_oidc`, and a key that `setup` still has
+to migrate from a renamed one is left to `setup`.
+
+A *changed default* of a variable that already exists is not applied: the value in the
+bundle is yours. Change it in `$PAPAIA_CONFIG_DIR` by hand when a release note asks for it.
 
 ## Secrets handling
 

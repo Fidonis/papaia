@@ -356,6 +356,33 @@ def test_addon_networks_empty_when_no_active_addons(repo_root, config_dir, capsy
     assert capsys.readouterr().out.strip() == ""
 
 
+def test_addon_networks_resolves_templated_name_per_deployment(
+    repo_root, config_dir, capsys, tmp_path
+):
+    _setup(repo_root, config_dir)
+    env = common.parse_env_file(config_dir / ".env")
+    env["PAPAIA_PROJECT"] = "papaia-dev"
+    common.write_env_file(config_dir / ".env", env)
+
+    addon_dir = tmp_path / "addon-templated"
+    addon_dir.mkdir()
+    (addon_dir / "papaia-app.yaml").write_text(
+        "name: templated\n"
+        "networks:\n"
+        '  app_network: "${PAPAIA_PROJECT:-papaia}-templated-net"\n'
+        "  attach: [librechat]\n",
+        encoding="utf-8",
+    )
+    deployment_path = config_dir / "deployment.yaml"
+    dep = yaml.safe_load(deployment_path.read_text(encoding="utf-8")) or {}
+    dep["addons"] = [{"name": "templated", "path": str(addon_dir), "active": True}]
+    common.atomic_write(deployment_path, yaml.safe_dump(dep, sort_keys=False))
+
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root))
+    assert cmd_addon_networks(args) == 0
+    assert capsys.readouterr().out.strip() == "papaia-dev-templated-net"
+
+
 # ── active-addons ─────────────────────────────────────────────────────────────
 
 

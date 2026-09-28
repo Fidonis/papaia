@@ -340,7 +340,9 @@ def cmd_addon_networks(args: argparse.Namespace) -> int:
 
     Used by papaia-ctl start to pre-create external networks before the core
     compose starts, so the stack comes up cleanly even when no addon container
-    is running yet.
+    is running yet. Any `${PAPAIA_PROJECT:-...}` scoping in the manifest is
+    resolved here against the rendered core .env, so the printed name matches the
+    bridge the addon's own compose file creates.
     """
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -353,7 +355,7 @@ def cmd_addon_networks(args: argparse.Namespace) -> int:
             continue
         net = (manifest.get("networks") or {}).get("app_network")
         if net:
-            print(net)
+            print(gen_override.resolve_app_network(net, config_dir))
     return 0
 
 

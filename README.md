@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.2.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.3.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -68,12 +68,17 @@ which accelerator image to install — see [GPU acceleration](#gpu-acceleration-
 
 | Service | Approach | Notes |
 |---|---|---|
-| LibreChat | Native OIDC | `openid-client`, PKCE enforced |
-| LiteLLM (UI) | Generic OIDC | API key for programmatic access |
+| LibreChat | Native OIDC | `openid-client`, PKCE enforced; login requires `librechat-user`, `librechat-admin` grants LibreChat's ADMIN role |
+| LiteLLM (UI) | Generic OIDC | API key for programmatic access; `litellm-admin` grants Admin UI access |
 | LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
 | papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only |
-| NPM admin UI | oauth2-proxy sidecar | — |
+| NPM admin UI | oauth2-proxy sidecar | Restricted to `npm-admin` via `--allowed-group` |
 | oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
+
+Per-service admin roles (`librechat-admin`, `litellm-admin`, `manager-admin`,
+`npm-admin`, ...) compose under one umbrella role, `papaia-admin` — grant that
+for "admin everywhere", or grant a single per-service role for narrower
+access. See `src/infra/keycloak/README.md` for the full role table.
 
 ---
 
@@ -83,6 +88,10 @@ which accelerator image to install — see [GPU acceleration](#gpu-acceleration-
 
 - Docker and Docker Compose
 - Python 3.10+ — `papaia-ctl` generates secrets and renders configs itself
+- PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
+  library. On a minimal host install it with `sudo apt-get install -y
+  python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
+  (Fedora/RHEL), or `pip install 'PyYAML>=6.0'`
 - `openssl`, only when Keycloak TLS is enabled
 - At least 8 GB RAM recommended
 - Linux, macOS, or WSL2
@@ -141,7 +150,8 @@ tools/papaia-ctl start --profiles=keycloak,librechat,litellm
 Once the stack is up, the default endpoints for a local install are:
 
 - LibreChat — `http://host.docker.internal:8000`
-- Keycloak admin — `https://host.docker.internal:8110`, user `admin`, password `KC_ADMIN_PASSWORD`
+- Keycloak admin — `https://host.docker.internal:8110`, user `admin` (setup generates the
+  password; read it with `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`)
 - papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
   (Linux hosts only — see [papaia-manager](#papaia-manager))
 
@@ -184,6 +194,7 @@ papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                      [-y] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
+papaia-ctl keycloak-role-sync [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl help
@@ -261,8 +272,9 @@ untouched rather than reset to a default.
 tools/papaia-ctl start [--addons] [--profiles=LIST] [--config-dir=PATH]
 ```
 
-Copies the `.env` files from the config directory into the checkout, re-renders the
-configuration, then runs `docker compose up -d`.
+Adds any variable the checkout's `.env.example` files ship and the config directory's
+`.env` lacks (existing values are never changed), copies the `.env` files from the config
+directory into the checkout, re-renders the configuration, then runs `docker compose up -d`.
 
 Because rendering happens on **every** `start`, new templates, new add-on fragments and
 edits under `overlay/` are picked up automatically. To move the installation to a newer
@@ -659,7 +671,7 @@ guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `admin` | Every surface — add-ons, catalogues, services, backup, jobs |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, backup, jobs |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 
 An account holding neither role is rejected at login. Both variables live in

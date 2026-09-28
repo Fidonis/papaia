@@ -314,6 +314,95 @@ def persist_tree(tree: EnvTree, config_dir: Path, repo_root: Path) -> None:
         )
 
 
+_NEW_KEYS_BANNER = "# --- Added by papaia-ctl during release upgrade ---"
+
+
+def _example_comment_blocks(example_path: Path) -> dict[str, list[str]]:
+    """Map each key of an .env.example to the comment lines directly above it."""
+    blocks: dict[str, list[str]] = {}
+    pending: list[str] = []
+    for raw_line in example_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("#"):
+            pending.append(raw_line)
+            continue
+        if stripped and "=" in stripped:
+            blocks[stripped.partition("=")[0].strip()] = pending
+        pending = []
+    return blocks
+
+
+def sync_new_env_keys(config_dir: Path, repo_root: Path) -> dict[str, list[str]]:
+    """Append every variable the shipped .env.example files carry and the bundle
+    .env lacks to that bundle .env. Returns {service dir: [added keys]}.
+
+    A checkout moved to a newer release by anything other than `upgrade` (git
+    pull, a branch switch) would otherwise start with the new variables absent:
+    only `setup` adds them, and `start` merely copies the bundle. Strictly
+    additive -- an existing key is never touched and the file is appended to,
+    not rewritten, so operator edits and comments survive; a second run finds
+    nothing to add and writes nothing."""
+    # Local imports: both modules import this one at module level.
+    from . import resolve, secrets
+
+    seed = load_seed_tree(repo_root)
+    bundles: dict[str, dict[str, str]] = {}
+    for rel_dir in seed:
+        bundle_env = config_dir / rel_dir / ".env" if rel_dir else config_dir / ".env"
+        if bundle_env.is_file():
+            bundles[rel_dir] = common.parse_env_file(bundle_env)
+
+    external_oidc = bundles.get("", {}).get("AUTH_PROVIDER") == "external_oidc"
+    # A renamed key's destination is filled by `setup` from the old key's value;
+    # a shipped default here would win over that value.
+    pending_renames = {
+        new for old, new in resolve._RENAMED_KEYS.items() if old[1] in bundles.get(old[0], {})
+    }
+
+    missing: dict[str, list[str]] = {}
+    for rel_dir, seed_values in seed.items():
+        if rel_dir not in bundles or (external_oidc and rel_dir == "infra/keycloak"):
+            continue
+        keys = [
+            key
+            for key in seed_values
+            if key not in bundles[rel_dir] and (rel_dir, key) not in pending_renames
+        ]
+        if keys:
+            missing[rel_dir] = keys
+    if not missing:
+        return {}
+
+    # Reuse the setup pass for the secrets: a tree holding only the new keys
+    # (plus the canonical values they alias) gets GENERATE_ placeholders filled
+    # and shared secrets fanned out, without touching any existing value.
+    seed_new: EnvTree = {d: {k: seed[d][k] for k in keys} for d, keys in missing.items()}
+    new_tree: EnvTree = {d: dict(values) for d, values in seed_new.items()}
+    missing_pairs = {(d, k) for d, keys in missing.items() for k in keys}
+    for (canon_dir, canon_key), aliases in secrets.SECRET_ALIASES.items():
+        if canon_key in bundles.get(canon_dir, {}) and missing_pairs.intersection(aliases):
+            new_tree.setdefault(canon_dir, {})[canon_key] = bundles[canon_dir][canon_key]
+    secrets.generate_missing_secrets(
+        new_tree, seed_new, auth_provider="external_oidc" if external_oidc else None
+    )
+
+    for rel_dir, keys in missing.items():
+        src = repo_root / "src"
+        example = src / rel_dir / ".env.example" if rel_dir else src / ".env.example"
+        comments = _example_comment_blocks(example)
+        bundle_env = config_dir / rel_dir / ".env" if rel_dir else config_dir / ".env"
+        text = bundle_env.read_text(encoding="utf-8")
+        head = text if text.endswith("\n") or not text else text + "\n"
+        block = [""] if head.strip() else []
+        if _NEW_KEYS_BANNER not in text:
+            block.append(_NEW_KEYS_BANNER)
+        for key in keys:
+            block.extend(comments.get(key, []))
+            block.append(f"{key}={new_tree[rel_dir][key]}")
+        common.atomic_write(bundle_env, head + "\n".join(block) + "\n")
+    return missing
+
+
 def materialize_core_env(config_dir: Path, repo_root: Path) -> None:
     """Copy each core .env from the config bundle into the checkout before compose up.
 

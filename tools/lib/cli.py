@@ -32,6 +32,7 @@ from . import (
     envtree,
     gen_override,
     gpu_detect,
+    keycloak_role_sync,
     migrations,
     npm_provision,
     render_core,
@@ -156,6 +157,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync_env(args: argparse.Namespace) -> int:
+    added = envtree.sync_new_env_keys(Path(args.config_dir), Path(args.repo_root))
+    for rel_dir, keys in added.items():
+        target = f"{rel_dir}/.env" if rel_dir else ".env"
+        print(f"Added {len(keys)} new variable(s) to {target}: {', '.join(keys)}")
+    return 0
+
+
 def cmd_materialize(args: argparse.Namespace) -> int:
     envtree.materialize_core_env(Path(args.config_dir), Path(args.repo_root))
     return 0
@@ -194,6 +203,15 @@ def cmd_npm_provision(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     if not npm_provision.provision_npm_hosts(tree):
+        return 1
+    return 0
+
+
+def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    if not keycloak_role_sync.sync_roles(tree, config_dir):
         return 1
     return 0
 
@@ -467,6 +485,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-dir", required=True)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_sync_env = sub.add_parser("sync-env")
+    p_sync_env.set_defaults(func=cmd_sync_env)
+
     p_materialize = sub.add_parser("materialize-core")
     p_materialize.set_defaults(func=cmd_materialize)
 
@@ -546,6 +567,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_npm = sub.add_parser("npm-provision")
     p_npm.set_defaults(func=cmd_npm_provision)
+
+    p_kc_role_sync = sub.add_parser("keycloak-role-sync")
+    p_kc_role_sync.set_defaults(func=cmd_keycloak_role_sync)
 
     p_override_nets = sub.add_parser("override-external-nets")
     p_override_nets.add_argument("--file", required=True)

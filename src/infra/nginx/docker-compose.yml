@@ -51,6 +51,11 @@ services:
       - --oidc-jwks-url=${OIDC_JWKS_URL}
       - --client-id=${OAUTH2_PROXY_CLIENT_ID}
       - --client-secret=${OAUTH2_PROXY_CLIENT_SECRET}
+      # Restrict the NPM admin UI to realm users holding npm-admin (or a role that
+      # composites it, e.g. papaia-admin). oauth2-proxy's generic oidc provider
+      # silently ignores --allowed-role; --allowed-group is the only mechanism
+      # that works, and it reads the "groups" claim the oauth2-proxy client emits.
+      - --allowed-group=npm-admin
       - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
       - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
       # Distinct cookie name avoids collision with the main oauth2-proxy cookie

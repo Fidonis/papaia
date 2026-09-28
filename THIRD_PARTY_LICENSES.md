@@ -33,7 +33,7 @@ their images there; the table below covers the Core only.
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |
 | `pgvector/pgvector` | 0.8.0-pg15-trixie | PostgreSQL License | `ai/librechat` | |
 | `ghcr.io/danny-avila/librechat-rag-api-dev-lite` | v0.8.0 | MIT | `ai/librechat` | |
-| `ghcr.io/berriai/litellm` | v1.91.1 | MIT | `ai/litellm` | |
+| `ghcr.io/berriai/litellm` | v1.100.0 | MIT | `ai/litellm` | |
 | `postgres` | 16 | PostgreSQL License | `ai/litellm` | LiteLLM database |
 | `prom/prometheus` | v3.13.1 | Apache-2.0 | `ai/litellm` | |
 | `localai/localai` | v4.7.1 | MIT | `ai/localai` | CPU image; the NVIDIA CUDA, Intel, hipBLAS and Vulkan variants are the same license |

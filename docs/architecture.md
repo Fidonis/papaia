@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.2.0 |
-| **Date** | 2026-09-04 |
-| **Status** | Active — describes the 1.2.0 release as built |
+| **Version** | 1.3.0 |
+| **Date** | 2026-09-28 |
+| **Status** | Active — describes the 1.3.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -177,7 +177,17 @@ papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core ver
 description: "<description>"
 
 networks:
-  app_network: papaia-<name>-net   # Add-on's own bridge network
+  app_network: ${PAPAIA_PROJECT:-papaia}-<name>-net
+                                   # Add-on's own bridge network. A literal name
+                                   # still works; the ${…} template (addon_api 2)
+                                   # is resolved against the core .env by the
+                                   # orchestrator so the bridge is scoped per
+                                   # deployment. Use the same string in the
+                                   # add-on's own compose `networks.<key>.name`.
+                                   # PAPAIA_PROJECT (not COMPOSE_PROJECT_NAME):
+                                   # the add-on is brought up with `-p <addon>`,
+                                   # which pins COMPOSE_PROJECT_NAME during
+                                   # compose interpolation.
   attach: [nginx-proxy-manager, librechat]
                                    # Core containers to attach to the app network;
                                    # validated against the Core Compose service names
@@ -265,11 +275,11 @@ name: paperless
 version: 1.0.0
 addon_repo: papaia-addon-paperless
 requires:
-  addon_api: 1
+  addon_api: 2
 papaia_compat: ">=0.8.0"
 description: "Paperless-ngx document management + OIDC/RBAC MCP server"
 networks:
-  app_network: papaia-paperless-net
+  app_network: ${PAPAIA_PROJECT:-papaia}-paperless-net
   attach: [nginx-proxy-manager, librechat]
 local_ca_env:
   paperless: [REQUESTS_CA_BUNDLE]
@@ -325,6 +335,14 @@ a **Compose override** (`$PAPAIA_CONFIG_DIR/overrides/docker-compose.<name>.over
 that references the app network as `external: true` and attaches the Core containers
 listed under `attach:` (e.g. `nginx`, `librechat`) to the app network.
 The Core Compose remains unchanged.
+
+When `networks.app_network` is a `${PAPAIA_PROJECT:-papaia}-<name>-net` template
+(addon_api 2), the orchestrator resolves it against the rendered core `.env` before
+writing the override, so each deployment on a shared host gets its own add-on bridge.
+`PAPAIA_PROJECT` mirrors `COMPOSE_PROJECT_NAME` (`papaia`, or `papaia-<env>`) under a
+key `docker compose` does not special-case, so the name still scopes correctly when
+the add-on is brought up with `-p <addon>`. The default `papaia` resolves to the
+legacy `papaia-<name>-net`, so single-deployment hosts are unaffected.
 
 ```yaml
 # Example: generated override for paperless
@@ -388,6 +406,7 @@ No Core changes required.
 | `papaia-ctl restore [--restore-point=ID] [--list] [--only=SEL[,SEL]]` | Restore a catalogued restore point. Containers are removed and recreated around the restore, not merely stopped. `--only` (`module:`, `addon:` or `volume:` selectors) scopes both the teardown and the restart to the selected units, leaving everything else running; it reads the `version: 2` manifest and is refused with `--restart-clean`, a config-directory selection, or the `manager` profile. |
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
+| `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
@@ -500,7 +519,7 @@ directory name above is a convention, not a requirement. What matters is the
 | Workspace directory | `papaia-addons/<name>/` | `papaia-addons/paperless/` |
 | Manifest field `name:` | `<name>` (short name) | `paperless` |
 | `deployment.yaml` → `path:` | path as passed to `addon install` | `../papaia-addons/paperless` |
-| Docker network | `papaia-<name>-net` | `papaia-paperless-net` |
+| Docker network | `${PAPAIA_PROJECT:-papaia}-<name>-net` | `papaia-paperless-net` (default env) |
 | Config bundle | `$PAPAIA_CONFIG_DIR/addons/<name>/` | `.../addons/paperless/.env` |
 
 ### Config directory
@@ -687,6 +706,17 @@ endpoints:
         default: ["gpt-4o"]
 ```
 
+**Enable the LibreChat memory agent** (`overlay/ai/librechat/librechat.yaml`). The
+base config ships no memory model, and automatic extraction is opt-in. The overlay
+adds the agent to the base `memory` section; the model must exist in LiteLLM:
+```yaml
+memory:
+  agent:
+    enabled: true
+    provider: "Private-LLM"
+    model: "my-chat-model"
+```
+
 **SearXNG engine tuning** (`overlay/services/searxng/settings.yml`):
 ```yaml
 search:
@@ -795,7 +825,7 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `admin` | Full access — add-ons, catalogues, jobs, dashboard |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 
 Both name **realm roles**; the backend reads them from the access token's `roles`
