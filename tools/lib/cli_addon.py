@@ -172,6 +172,28 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def evaluate_active_addons(
+    deployed: dict, repo_root: Path, core: compat.CoreTarget
+) -> list[compat.CompatResult]:
+    """Evaluate every active addon of `deployed` against `core`.
+
+    Shared by `addon check` and `doctor`, so the two cannot disagree about what
+    a verdict is. An addon whose manifest cannot be loaded is an ERROR result,
+    not an exception."""
+    profiles = (deployed.get("core") or {}).get("profiles")
+    results: list[compat.CompatResult] = []
+    for addon in deployment.active_addons(deployed):
+        name = addon.get("name", "?")
+        manifest, manifest_error = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        if manifest is None:
+            results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
+            continue
+        results.append(compat.evaluate_addon(name, manifest, core, active_profiles=profiles))
+    return results
+
+
 def cmd_addon_check(args: argparse.Namespace) -> int:
     """Evaluate every active addon against a core and report the verdict
     before anything changes.
@@ -225,17 +247,7 @@ def cmd_addon_check(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    profiles = (deployed.get("core") or {}).get("profiles")
-    results: list[compat.CompatResult] = []
-    for addon in deployment.active_addons(deployed):
-        name = addon.get("name", "?")
-        manifest, manifest_error = deployment.load_addon_manifest(
-            deployment.resolve_addon_path(addon, repo_root)
-        )
-        if manifest is None:
-            results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
-            continue
-        results.append(compat.evaluate_addon(name, manifest, core, active_profiles=profiles))
+    results = evaluate_active_addons(deployed, repo_root, core)
 
     mode = compat.resolve_mode(deployed)
     exit_code = compat.gate(results, mode=mode, force=args.force)

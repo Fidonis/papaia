@@ -29,6 +29,7 @@ from . import (
     common,
     defaults,
     deployment,
+    doctor,
     envtree,
     gen_override,
     gpu_detect,
@@ -39,6 +40,7 @@ from . import (
     reporting,
     resolve,
     secrets,
+    status,
     upgrade,
 )
 
@@ -479,6 +481,54 @@ def cmd_upgrade_record(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# status and doctor
+#
+# Read-only. With --json the only thing written to stdout is the JSON document;
+# a caller (the papaia-manager, a health gate) parses it as is.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _csv(values: list[str] | None) -> list[str]:
+    """--flag may be repeated and each value may itself be comma-separated."""
+    items: list[str] = []
+    for chunk in values or []:
+        items.extend(part.strip() for part in chunk.split(",") if part.strip())
+    return items
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Declared state next to live state. Exit 0 whenever a report was
+    produced -- an unreachable Docker socket is part of the report
+    (`docker.reachable`), not a failure of this command."""
+    try:
+        report = status.collect(
+            Path(args.config_dir),
+            Path(args.repo_root),
+            profiles=_csv(args.profiles) or None,
+            include_addons=args.addons,
+        )
+    except status.StatusError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(status.to_json(report) if args.json else status.format_table(report))
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
+    and `skip` never fail the run. Works before `setup`."""
+    try:
+        report = doctor.run_checks(
+            Path(args.config_dir), Path(args.repo_root), skip=_csv(args.skip)
+        )
+    except doctor.DoctorError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(doctor.to_json(report) if args.json else doctor.format_table(report))
+    return report.exit_code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="papaia-ctl-py")
     parser.add_argument("--repo-root", required=True)
@@ -637,6 +687,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_restore_selectors.add_argument("--backup-dir", default=None)
     p_restore_selectors.add_argument("--restore-point", default=None)
     p_restore_selectors.set_defaults(func=cmd_restore_selectors)
+
+    p_status = sub.add_parser("status")
+    p_status.add_argument("--profiles", action="append", default=None)
+    p_status.add_argument("--addons", action="store_true")
+    p_status.add_argument("--json", action="store_true")
+    p_status.set_defaults(func=cmd_status)
+
+    p_doctor = sub.add_parser("doctor")
+    p_doctor.add_argument("--skip", action="append", default=None)
+    p_doctor.add_argument("--json", action="store_true")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     return parser
 

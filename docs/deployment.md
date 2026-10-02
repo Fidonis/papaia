@@ -101,6 +101,20 @@ The volume is prefixed with `COMPOSE_PROJECT_NAME`, so a stack created with `--e
 > This wipes every user, client secret, and role created through the Keycloak admin UI. Back
 > them up first if they matter.
 
+### Health check and diagnostics
+
+```bash
+tools/papaia-ctl status                  # what each module of the core is doing
+tools/papaia-ctl status --addons         # ... including the active add-ons
+tools/papaia-ctl doctor                  # is the host in shape? exit 2 if a check fails
+tools/papaia-ctl doctor --skip=dns,certs # on a host without internet access
+```
+
+Both are read-only. `status` is cheap and also available as `--json`; `doctor` is the check
+to run before `setup` and `upgrade`, or whenever something seems wrong. The check list, the
+thresholds and the JSON formats are documented in the README, under
+[`status`](../README.md#status) and [`doctor`](../README.md#doctor).
+
 ### Backup and restore
 
 ```bash
