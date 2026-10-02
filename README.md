@@ -86,7 +86,8 @@ access. See `src/infra/keycloak/README.md` for the full role table.
 
 ### Prerequisites
 
-- Docker and Docker Compose
+- Docker and Docker Compose 2.20.0 or newer (the Compose files use `include:` and
+  `depends_on.required`; [`doctor`](#doctor) checks it)
 - Python 3.10+ — `papaia-ctl` generates secrets and renders configs itself
 - PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
   library. On a minimal host install it with `sudo apt-get install -y
@@ -195,6 +196,8 @@ papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [-y] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl keycloak-role-sync [--config-dir=PATH]
+papaia-ctl status    [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
+papaia-ctl doctor    [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl help
@@ -515,6 +518,104 @@ tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
 
 After `addon install` or `addon remove`, run `tools/papaia-ctl start` to apply the changed
 core configuration.
+
+### `status`
+
+```bash
+tools/papaia-ctl status [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
+```
+
+Read-only. Reports the declared state next to the live state, per module: the services the
+Compose files declare for the active profiles, matched against the containers Docker reports.
+A *module* is a `de.fidonis.module` label, not a Compose profile. One profile can bring up
+several modules (`librechat-websearch`), and the `oauth2-proxy` profile is the module `auth`.
+
+It costs one `docker ps -a`, plus one `docker inspect` for exited containers only, and starts,
+stops and writes nothing, so it is cheap enough to run on a short interval.
+
+| Flag | Purpose |
+|---|---|
+| `--json` | Print the report as JSON; nothing else is written to stdout. The format is described by [`tools/schemas/status.schema.json`](tools/schemas/status.schema.json), and `schema_version` increases on a breaking change. |
+| `--profiles=LIST` | Restrict the core section to these Compose profiles (comma-separated or repeated). A profile that is not in `COMPOSE_PROFILES` is rejected with exit code 2. |
+| `--addons` | Include the active add-ons, each of which runs in its own Compose project. Without it only the core is reported. |
+
+Status values, worst first:
+
+| Value | Meaning |
+|---|---|
+| `missing` | Declared, but no container exists ("not deployed"): the profile was never started, or the container was removed. |
+| `stopped` | Exited with an error, paused or dead, or exited cleanly although its restart policy (`always`, `unless-stopped`) says it should keep running. |
+| `unhealthy` | The healthcheck fails, or the container is restarting in a loop. |
+| `starting` | Created, or the healthcheck has not passed yet. |
+| `unknown` | A Docker state `papaia-ctl` does not recognise. |
+| `completed` | A one-shot job that exited with code 0 (for example the LocalAI model download). It does not count against its module. |
+| `healthy` | Running with a passing healthcheck, or without a healthcheck, which is not treated as a problem. |
+
+A module takes the worst value of its containers; the `aggregate` of the core and of the add-ons
+takes the worst value of their modules. `modules` lists the worst first, and `groups` maps every
+active Compose profile to the modules it brings up.
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-27T10:15:00Z",
+  "platform_version": "1.3.0",
+  "compose_project": "papaia",
+  "docker": { "reachable": true, "reason": null },
+  "modules": [
+    { "name": "keycloak", "kind": "core", "compose_project": "papaia",
+      "profiles": ["keycloak"], "declared": true, "status": "healthy",
+      "containers": [
+        { "name": "papaia-keycloak-1", "service": "keycloak", "role": "identity-provider",
+          "state": "running", "health": "healthy", "status_text": "Up 2 hours (healthy)",
+          "host_ports": [8110] }
+      ] }
+  ],
+  "groups": [
+    { "profile": "keycloak", "modules": ["keycloak"], "containers": 2, "status": "healthy" }
+  ],
+  "aggregate": { "core": "healthy", "addons": null }
+}
+```
+
+If the Docker daemon cannot be reached, the report says so (`docker.reachable` is `false`, there
+are no modules and the aggregate is `unknown`) instead of listing every service as `missing`:
+not knowing is not the same as knowing it is gone. The exit code is 0 whenever a report was
+produced, and 2 when `setup` has not run yet or a flag is invalid.
+
+### `doctor`
+
+```bash
+tools/papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+```
+
+Preflight and diagnostics, to run before `setup` or `upgrade` and whenever something seems
+wrong. Read-only: it never changes anything. It may take a few seconds (name lookups, port
+probes) and is not meant for tight polling; use [`status`](#status) for that.
+
+Every check reports `pass`, `warn`, `fail` or `skip` (not applicable here: offline, not set up
+yet, nothing to look at). The exit code is 2 if any check is `fail`, otherwise 0. With
+`--json` the same results are printed as a document described by
+[`tools/schemas/doctor.schema.json`](tools/schemas/doctor.schema.json); each check carries the
+raw values behind its summary in `details`.
+
+| Check | Verifies | Result |
+|---|---|---|
+| `docker_version` | The Docker daemon is reachable and the Compose plugin is 2.20.0 or newer. | `fail` otherwise |
+| `disk_space` | Free space for the config directory, `PAPAIA_BACKUP_DIR` and the Docker data root (skipped when the host cannot see it, as with Docker Desktop). | `warn` below 10 GiB, `fail` below 2 GiB |
+| `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
+| `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
+| `certs` | Days until expiry of `certs/*.crt` and of the Let's Encrypt certificates under `infra/nginx/nginx-letsencrypt/live/`. Needs `openssl`. | `warn` below 30 days, `fail` below 7 days or expired |
+| `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
+| `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
+
+Before `setup` has run, the checks that need the installation's configuration report `skip`
+instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as
+`skip` without running them, for example `--skip=dns,certs` on a host without internet access.
+
+Not covered: Python and PyYAML (`papaia-ctl` verifies both before any command runs), the ports
+of add-ons, and certificates that were uploaded to Nginx Proxy Manager instead of requested
+through it.
 
 ### Configuration & render lifecycle
 
@@ -1069,7 +1170,8 @@ documented in [`docs/deployment.md`](docs/deployment.md).
 
 The short version: edit `overlay/` or the profile list, then run `tools/papaia-ctl start`.
 Moving to a newer release is `tools/papaia-ctl upgrade`; the config directory and everything
-under `overlay/` survive untouched.
+under `overlay/` survive untouched. To see what is running and whether the host is in shape,
+use [`status`](#status) and [`doctor`](#doctor).
 
 These are the same commands Fidonis runs when it operates an installation on a customer's
 behalf. There is no separate operator edition and no privileged tooling behind the
@@ -1089,14 +1191,16 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 [workspace root]/
 ├── papaia/                    ← this repo (read-only at deploy time)
 │   ├── tools/
-│   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · upgrade · addon · …)
+│   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · upgrade · status · doctor · addon · …)
 │   │   ├── deployment.template.yaml  # deployment.yaml template
 │   │   ├── pyproject.toml      # ruff + pytest config for tools/lib
 │   │   ├── lib/                # Python: cli.py · cli_addon.py · deployment.py · envtree.py
 │   │   │                       #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
 │   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py
 │   │   │                       #   backup.py · upgrade.py · migrations.py · common.py
+│   │   │                       #   status.py · doctor.py
 │   │   │   └── sh/             # Bash command libraries sourced by papaia-ctl
+│   │   ├── schemas/            # JSON Schemas of `status --json` and `doctor --json`
 │   │   ├── migrations/         # release migrations run by `papaia-ctl upgrade`
 │   │   └── tests/              # pytest suite
 │   ├── src/

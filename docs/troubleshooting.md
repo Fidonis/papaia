@@ -100,6 +100,10 @@ Most likely its Compose profile is not active. Check `COMPOSE_PROFILES` in
 
 ## Logs
 
+Start with `tools/papaia-ctl status` (what is running, and which module is unhealthy or not
+deployed) and `tools/papaia-ctl doctor` (Docker version, disk space, ports, certificates). Then
+look at the logs of the service they point to:
+
 ```bash
 docker compose -f src/docker-compose.yml --env-file src/.env ps       # what is running
 docker compose -f src/docker-compose.yml --env-file src/.env logs -f <service>

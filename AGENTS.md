@@ -66,7 +66,7 @@ gitignored `src/**/.env` files — never to any other tracked path in the repo.
 
 ```
 tools/
-  papaia-ctl                  # Bash dispatcher: setup · start · stop · upgrade · addon · …
+  papaia-ctl                  # Bash dispatcher: setup · start · stop · upgrade · status · doctor · addon · …
   deployment.template.yaml    # template → $PAPAIA_CONFIG_DIR/deployment.yaml on setup
                               # describes active addons, core profiles, hosting type
   pyproject.toml              # ruff + pytest config for tools/lib
@@ -74,8 +74,9 @@ tools/
                               #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
                               #   compat.py · semver.py · render_core.py · gen_override.py
                               #   backup.py · upgrade.py · migrations.py · npm_provision.py
-                              #   common.py
+                              #   status.py · doctor.py · common.py
     sh/                       # Bash command libraries sourced by papaia-ctl
+  schemas/                    # JSON Schemas of `status --json` and `doctor --json`
   migrations/                 # Release migrations run by `papaia-ctl upgrade`
                               #   <x.y.z>__<slug>.sh|.py — contract in its README
   tests/                      # pytest suite (mirrors the lib/ modules)

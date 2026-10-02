@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "papaia-ctl-status.schema.json",
+  "title": "papaia-ctl status --json",
+  "description": "Declared state next to live state, per module and per Compose profile. Additive changes keep schema_version; a breaking change increments it.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "platform_version",
+    "compose_project",
+    "docker",
+    "modules",
+    "groups",
+    "aggregate"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "platform_version": { "type": "string" },
+    "compose_project": { "type": "string" },
+    "docker": {
+      "type": "object",
+      "description": "reachable is false when the Docker daemon could not be queried; modules is then empty and the status unknown, not down.",
+      "required": ["reachable", "reason"],
+      "properties": {
+        "reachable": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "description": "Worst first. Core modules, then the modules of the active add-ons when --addons was given.",
+      "items": { "$ref": "#/$defs/module" }
+    },
+    "groups": {
+      "type": "array",
+      "description": "Compose profiles of the core and the modules each one brings up (many-to-many).",
+      "items": { "$ref": "#/$defs/group" }
+    },
+    "aggregate": {
+      "type": "object",
+      "description": "Worst module status per section; null when the section was not requested or holds no module.",
+      "required": ["core", "addons"],
+      "properties": {
+        "core": { "oneOf": [{ "$ref": "#/$defs/health" }, { "type": "null" }] },
+        "addons": { "oneOf": [{ "$ref": "#/$defs/health" }, { "type": "null" }] }
+      }
+    }
+  },
+  "$defs": {
+    "health": {
+      "description": "Worst first. missing means declared but never started (not deployed).",
+      "enum": ["missing", "stopped", "unhealthy", "starting", "unknown", "completed", "healthy"]
+    },
+    "module": {
+      "type": "object",
+      "required": ["name", "kind", "compose_project", "profiles", "declared", "status", "containers"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "enum": ["core", "addon"] },
+        "compose_project": { "type": "string" },
+        "profiles": { "type": "array", "items": { "type": "string" } },
+        "declared": {
+          "type": "boolean",
+          "description": "False for a module Docker reports that no Compose file of this deployment declares."
+        },
+        "status": { "$ref": "#/$defs/health" },
+        "containers": { "type": "array", "items": { "$ref": "#/$defs/container" } }
+      }
+    },
+    "container": {
+      "type": "object",
+      "required": ["name", "service", "role", "state", "health", "status_text", "host_ports"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Empty for a declared service that has no container."
+        },
+        "service": { "type": "string" },
+        "role": { "type": "string" },
+        "state": { "type": "string", "description": "Docker's container state, or \"missing\"." },
+        "health": { "$ref": "#/$defs/health" },
+        "status_text": { "type": "string" },
+        "host_ports": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "required": ["profile", "modules", "containers", "status"],
+      "properties": {
+        "profile": { "type": "string" },
+        "modules": { "type": "array", "items": { "type": "string" } },
+        "containers": { "type": "integer", "minimum": 0 },
+        "status": { "$ref": "#/$defs/health" }
+      }
+    }
+  }
+}
