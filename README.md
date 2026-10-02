@@ -94,7 +94,7 @@ access. See `src/infra/keycloak/README.md` for the full role table.
   python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
   (Fedora/RHEL), or `pip install 'PyYAML>=6.0'`
 - `openssl`, only when Keycloak TLS is enabled
-- At least 8 GB RAM recommended
+- At least 8 GB RAM recommended ([`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
 
 ### Single-host setup
@@ -603,8 +603,12 @@ raw values behind its summary in `details`.
 |---|---|---|
 | `docker_version` | The Docker daemon is reachable and the Compose plugin is 2.20.0 or newer. | `fail` otherwise |
 | `disk_space` | Free space for the config directory, `PAPAIA_BACKUP_DIR` and the Docker data root (skipped when the host cannot see it, as with Docker Desktop). | `warn` below 10 GiB, `fail` below 2 GiB |
+| `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
+| `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
+| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image or when LocalAI is not enabled |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
+| `time_sync` | The system clock is synchronized by NTP (`timedatectl`). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where `timedatectl` is not usable |
 | `certs` | Days until expiry of `certs/*.crt` and of the Let's Encrypt certificates under `infra/nginx/nginx-letsencrypt/live/`. Needs `openssl`. | `warn` below 30 days, `fail` below 7 days or expired |
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
@@ -612,6 +616,19 @@ raw values behind its summary in `details`.
 Before `setup` has run, the checks that need the installation's configuration report `skip`
 instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as
 `skip` without running them, for example `--skip=dns,certs` on a host without internet access.
+
+Memory, CPU load, VRAM use, GPU temperature and clock drift never make `doctor` fail: a busy host
+is not a broken installation, and `doctor` is also the preflight before `setup` and `upgrade`. GPU
+utilization is reported in `details` but does not count, because it is high during any inference.
+Only a GPU variant that cannot start is a `fail`. The thresholds are constants at the top of
+[`tools/lib/doctor.py`](tools/lib/doctor.py).
+
+Run inside a container, as `papaia-manager` does, `memory` and `cpu` are correct (`/proc/meminfo`
+and the load average describe the host), while `gpu` and `time_sync` report `skip`: the host's
+driver tools, device nodes and clock settings are not visible there. AMD utilization is read from
+the JSON of `rocm-smi`, whose key names differ between ROCm releases; if they are not recognised
+the check passes and says that utilization was not measured. Utilization is never measured for Intel
+and Vulkan GPUs.
 
 Not covered: Python and PyYAML (`papaia-ctl` verifies both before any command runs), the ports
 of add-ons, and certificates that were uploaded to Nginx Proxy Manager instead of requested

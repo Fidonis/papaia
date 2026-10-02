@@ -7,8 +7,14 @@ here: offline, not set up yet, nothing to look at). Only `fail` makes the
 command exit non-zero.
 
 Nothing here changes anything. The probes are reads: `docker version/info`,
-`shutil.disk_usage`, a TCP connect to localhost, a name lookup, `openssl x509`
-on a file, plus everything `status` reads.
+`shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
+`rocm-smi` / `timedatectl`, a TCP connect to localhost, a name lookup,
+`openssl x509` on a file, plus everything `status` reads.
+
+Load and pressure findings (memory, CPU, VRAM, temperature, clock) are at most
+`warn`: a busy host is not a broken installation, and `doctor` is also the
+preflight before `setup` and `upgrade`. The one `fail` among the host checks is
+a GPU variant that cannot start (driver, runtime or device missing).
 
 `doctor` may be slower than `status` (lookups, connects) and is not meant for
 tight polling. It works before `setup`: checks that need the installation's
@@ -24,6 +30,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import math
+import os
 import re
 import shutil
 import socket
@@ -34,7 +42,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import backup, cli_addon, common, compat, deployment, envtree, semver, status
+from . import backup, cli_addon, common, compat, deployment, envtree, gpu_detect, semver, status
 from .status import Runner
 
 SCHEMA_VERSION = 1
@@ -56,9 +64,31 @@ DISK_FAIL_FREE_BYTES = 2 * _GIB
 CERT_WARN_DAYS = 30
 CERT_FAIL_DAYS = 7
 
+# The documented recommendation is "8 GB". Decimal on purpose: a host sold as
+# 8 GiB reports less than that as MemTotal once the kernel has taken its share,
+# and would warn on every run against a binary threshold.
+MEMORY_WARN_TOTAL_BYTES = 8 * 10**9
+MEMORY_WARN_AVAILABLE_BYTES = 1 * _GIB
+MEMORY_WARN_AVAILABLE_FRACTION = 0.10
+
+# Runnable tasks per core, over five minutes. At 1.0 the CPUs are saturated for
+# a sustained stretch; LocalAI inference on the CPU image does that by design,
+# which is why this is a warning and never a failure.
+CPU_WARN_LOAD_PER_CORE = 1.0
+
+# Utilization is reported but does not count: it is high during any inference.
+GPU_VRAM_WARN_PERCENT = 90
+GPU_TEMP_WARN_CELSIUS = 85
+
 DNS_TIMEOUT_SECONDS = 3.0
 PORT_PROBE_TIMEOUT_SECONDS = 0.5
 DOCKER_PROBE_TIMEOUT_SECONDS = 10.0
+# nvidia-smi is known to hang on a broken driver, hence its own bound.
+GPU_PROBE_TIMEOUT_SECONDS = 10.0
+TIME_PROBE_TIMEOUT_SECONDS = 5.0
+
+LOCALAI_PROFILE = "localai"
+GPU_OVERRIDE = Path("overrides") / "docker-compose.localai-gpu.override.yml"
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
 
@@ -145,12 +175,77 @@ def _cert_enddate(path: Path, run: Runner) -> datetime:
         raise CertReadError(f"unexpected date format: {value}") from exc
 
 
+@dataclass(frozen=True)
+class MemInfo:
+    """Host memory in bytes. Swap is zero on a host without any."""
+
+    total: int
+    available: int
+    swap_total: int
+    swap_free: int
+
+
+def parse_meminfo(text: str) -> MemInfo | None:
+    """`/proc/meminfo` as MemInfo, or None if it does not carry a total.
+
+    The kernel prints `kB` but means KiB. `MemAvailable` exists since Linux 3.14;
+    on anything older free plus reclaimable caches is the closest honest answer.
+    """
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        key, _, rest = line.partition(":")
+        fields = rest.split()
+        if fields and fields[0].isdigit():
+            values[key.strip()] = int(fields[0]) * 1024
+    total = values.get("MemTotal")
+    if not total:
+        return None
+    available = values.get("MemAvailable")
+    if available is None:
+        available = values.get("MemFree", 0) + values.get("Buffers", 0) + values.get("Cached", 0)
+    return MemInfo(
+        total=total,
+        available=min(available, total),
+        swap_total=values.get("SwapTotal", 0),
+        swap_free=values.get("SwapFree", 0),
+    )
+
+
+def _meminfo() -> MemInfo | None:
+    """None where there is no /proc (macOS, Windows): the caller falls back to
+    what the Docker daemon reports."""
+    try:
+        return parse_meminfo(Path("/proc/meminfo").read_text(encoding="ascii", errors="replace"))
+    except OSError:
+        return None
+
+
+def _loadavg() -> tuple[float, float, float] | None:
+    try:
+        return os.getloadavg()
+    except (AttributeError, OSError):  # not available on Windows
+        return None
+
+
+def _in_container() -> bool:
+    """Whether this process runs inside a container, where the host's driver
+    tools, device nodes and clock settings are not visible. `papaia-manager`
+    runs `doctor` in its own container."""
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
 @dataclass
 class Probes:
     disk_usage: Callable[[Path], tuple[int, int]] = _disk_usage
     connect: Callable[[str, int], bool] = _connect
     resolve: Callable[[str], str] = _resolve
     cert_enddate: Callable[[Path, Runner], datetime] = _cert_enddate
+    meminfo: Callable[[], MemInfo | None] = _meminfo
+    loadavg: Callable[[], tuple[float, float, float] | None] = _loadavg
+    cpu_count: Callable[[], int | None] = os.cpu_count
+    in_container: Callable[[], bool] = _in_container
+    # Where device nodes live; the same seam `gpu_detect.compose_fragment` has.
+    dev_root: Path = Path("/dev")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -178,6 +273,26 @@ class Context:
         self.now = now
         self._status: status.StatusReport | None = None
         self._env: dict[str, dict[str, str]] | None = None
+        self._totals: tuple[int | None, int | None] | None = None
+
+    def docker_totals(self) -> tuple[int | None, int | None]:
+        """(CPU count, memory in bytes) as the Docker daemon sees them.
+
+        The platform-neutral answer for hosts without /proc: on Docker Desktop
+        and WSL2 it describes the VM the containers actually run in. Asked
+        lazily and once, so a Linux host never pays for it."""
+        if self._totals is None:
+            cpus: int | None = None
+            memory: int | None = None
+            result = self.run(
+                ["docker", "info", "--format", "{{.NCPU}} {{.MemTotal}}"],
+                DOCKER_PROBE_TIMEOUT_SECONDS,
+            )
+            parts = status.first_line(result.stdout).split()
+            if result.returncode == 0 and len(parts) == 2 and all(p.isdigit() for p in parts):
+                cpus, memory = int(parts[0]) or None, int(parts[1]) or None
+            self._totals = (cpus, memory)
+        return self._totals
 
     @property
     def configured(self) -> bool:
@@ -341,6 +456,408 @@ def check_disk_space(ctx: Context) -> CheckResult:
     return CheckResult(name, overall, summary, {"paths": measured, "notes": notes})
 
 
+def check_memory(ctx: Context) -> CheckResult:
+    name = "memory"
+    info = ctx.probes.meminfo()
+    available: int | None
+    if info is not None:
+        total, available = info.total, info.available
+        details: dict[str, Any] = {
+            "source": "proc",
+            "total_bytes": total,
+            "available_bytes": available,
+            "used_percent": round(100 * (total - available) / total, 1),
+            "swap_total_bytes": info.swap_total,
+            "swap_used_bytes": max(info.swap_total - info.swap_free, 0),
+        }
+    else:
+        # No /proc: the daemon knows the total of the machine (or VM) the
+        # containers run on, but not how much of it is taken.
+        docker_total = ctx.docker_totals()[1]
+        if docker_total is None:
+            return CheckResult(name, SKIP, "memory figures are not available on this platform")
+        total, available = docker_total, None
+        details = {
+            "source": "docker_info",
+            "total_bytes": total,
+            "available_bytes": None,
+            "used_percent": None,
+            "swap_total_bytes": None,
+            "swap_used_bytes": None,
+        }
+
+    reasons: list[str] = []
+    if total < MEMORY_WARN_TOTAL_BYTES:
+        reasons.append(f"total is below the recommended {MEMORY_WARN_TOTAL_BYTES // 10**9} GB")
+    if available is not None and (
+        available < MEMORY_WARN_AVAILABLE_BYTES
+        or available < total * MEMORY_WARN_AVAILABLE_FRACTION
+    ):
+        reasons.append(
+            f"available memory is low (warn below {MEMORY_WARN_AVAILABLE_FRACTION:.0%}"
+            f" or {_fmt_bytes(MEMORY_WARN_AVAILABLE_BYTES)})"
+        )
+
+    if available is None:
+        summary = f"{_fmt_bytes(total)} total (usage cannot be read on this platform)"
+    else:
+        summary = (
+            f"{_fmt_bytes(total)} total, {_fmt_bytes(available)} available"
+            f" ({details['used_percent']:.0f} % used)"
+        )
+    if reasons:
+        summary += f" - {'; '.join(reasons)}"
+    return CheckResult(name, WARN if reasons else PASS, summary, details)
+
+
+def check_cpu(ctx: Context) -> CheckResult:
+    name = "cpu"
+    cores = ctx.probes.cpu_count()
+    source = "os"
+    if not cores:
+        cores, source = ctx.docker_totals()[0], "docker_info"
+    load = ctx.probes.loadavg()
+    details: dict[str, Any] = {
+        "source": source,
+        "cores": cores,
+        "load1": None,
+        "load5": None,
+        "load15": None,
+        "load_per_core": None,
+    }
+    if not cores:
+        return CheckResult(name, SKIP, "cannot determine the number of CPU cores", details)
+    if load is None:
+        return CheckResult(
+            name, SKIP, f"{cores} core(s), no load average on this platform", details
+        )
+
+    load1, load5, load15 = load
+    per_core = load5 / cores
+    details.update(
+        load1=round(load1, 2),
+        load5=round(load5, 2),
+        load15=round(load15, 2),
+        load_per_core=round(per_core, 2),
+    )
+    summary = (
+        f"{cores} core(s), load {load1:.2f} {load5:.2f} {load15:.2f}"
+        f" (5 min: {per_core:.2f} per core)"
+    )
+    if per_core >= CPU_WARN_LOAD_PER_CORE:
+        summary += f" - sustained load (warn at {CPU_WARN_LOAD_PER_CORE:g} per core)"
+        return CheckResult(name, WARN, summary, details)
+    return CheckResult(name, PASS, summary, details)
+
+
+# ─── gpu ─────────────────────────────────────────────────────────────────
+
+_NVIDIA_QUERY = "index,name,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu"
+_NVIDIA_FIELDS = 7
+_MIB = 1024**2
+
+
+def _number(text: str) -> float | None:
+    """A number out of tool output; None for `[N/A]`, `[Not Supported]` and the like."""
+    try:
+        value = float(text.strip())
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _whole(value: float | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def _gpu_entry(
+    index: int,
+    name: str | None,
+    driver: str | None,
+    total_mib: int | None,
+    used_mib: int | None,
+    utilization: int | None,
+    temperature: int | None,
+) -> dict[str, Any]:
+    percent = round(100 * used_mib / total_mib, 1) if total_mib and used_mib is not None else None
+    return {
+        "index": index,
+        "name": name,
+        "driver": driver,
+        "memory_total_mib": total_mib,
+        "memory_used_mib": used_mib,
+        "vram_percent": percent,
+        "utilization_percent": utilization,
+        "temperature_c": temperature,
+    }
+
+
+def parse_nvidia_smi(text: str) -> list[dict[str, Any]]:
+    """One entry per GPU out of `nvidia-smi --query-gpu=... --format=csv,noheader,nounits`.
+
+    Parsed from both ends because only the name is free text, and it is the one
+    field that could carry a comma. A line that does not fit is dropped, which
+    is what a changed format looks like."""
+    gpus: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < _NVIDIA_FIELDS:
+            continue
+        index = _number(parts[0])
+        if index is None:
+            continue
+        total, used, utilization, temperature = (_whole(_number(p)) for p in parts[-4:])
+        gpus.append(
+            _gpu_entry(
+                int(index),
+                ", ".join(parts[1:-5]),
+                parts[-5],
+                total,
+                used,
+                utilization,
+                temperature,
+            )
+        )
+    return gpus
+
+
+def parse_rocm_smi(text: str) -> list[dict[str, Any]]:
+    """One entry per card out of `rocm-smi --showmeminfo vram --showuse --showtemp --json`.
+
+    The key names differ between ROCm releases (`VRAM Total Memory (B)`,
+    `GPU use (%)`, `Temperature (Sensor edge) (C)`), so they are matched by what
+    they say rather than by exact spelling. Anything unrecognised yields no
+    entry; the caller then reports the GPU without figures instead of guessing."""
+    try:
+        document = json.loads(text)
+    except ValueError:
+        return []
+    if not isinstance(document, dict):
+        return []
+    gpus: list[dict[str, Any]] = []
+    for key, card in document.items():
+        match = re.fullmatch(r"card(\d+)", str(key))
+        if not match or not isinstance(card, dict):
+            continue
+        total = used = utilization = temperature = None
+        for label, raw in card.items():
+            lower = str(label).lower()
+            value = _number(str(raw))
+            if "vram" in lower and "used" in lower:
+                used = value
+            elif "vram" in lower and "total" in lower:
+                total = value
+            elif lower.startswith("gpu use"):
+                utilization = value
+            elif "temperature" in lower and (temperature is None or "edge" in lower):
+                temperature = value
+        if all(v is None for v in (total, used, utilization, temperature)):
+            continue
+        gpus.append(
+            _gpu_entry(
+                int(match.group(1)),
+                None,
+                None,
+                _whole(None if total is None else total / _MIB),
+                _whole(None if used is None else used / _MIB),
+                _whole(utilization),
+                _whole(temperature),
+            )
+        )
+    return sorted(gpus, key=lambda g: g["index"])
+
+
+def _gpu_warnings(gpus: Sequence[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
+    for gpu in gpus:
+        label = f"GPU {gpu['index']}"
+        total, used = gpu["memory_total_mib"], gpu["memory_used_mib"]
+        # The exact figures decide; `vram_percent` is rounded for display and
+        # would turn 89.96 % into a warning.
+        if total and used is not None and used * 100 >= total * GPU_VRAM_WARN_PERCENT:
+            warnings.append(
+                f"{label} VRAM {gpu['vram_percent']:.0f} % used (warn at {GPU_VRAM_WARN_PERCENT} %)"
+            )
+        temperature = gpu["temperature_c"]
+        if temperature is not None and temperature >= GPU_TEMP_WARN_CELSIUS:
+            warnings.append(f"{label} at {temperature}C (warn at {GPU_TEMP_WARN_CELSIUS}C)")
+    return warnings
+
+
+def _gpu_line(gpu: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if gpu["memory_total_mib"] and gpu["memory_used_mib"] is not None:
+        parts.append(
+            f"{gpu['memory_used_mib'] / 1024:.1f}/{gpu['memory_total_mib'] / 1024:.1f} GiB VRAM"
+        )
+    if gpu["utilization_percent"] is not None:
+        parts.append(f"{gpu['utilization_percent']} % util")
+    if gpu["temperature_c"] is not None:
+        parts.append(f"{gpu['temperature_c']}C")
+    label = gpu["name"] or f"GPU {gpu['index']}"
+    return f"{label}: {', '.join(parts)}" if parts else label
+
+
+def _gpu_measured(
+    name: str, gpus: Sequence[dict[str, Any]], details: dict[str, Any]
+) -> CheckResult:
+    details["gpus"] = list(gpus)
+    summary = "; ".join(_gpu_line(g) for g in gpus)
+    warnings = _gpu_warnings(gpus)
+    if warnings:
+        return CheckResult(name, WARN, f"{summary} ({'; '.join(warnings)})", details)
+    return CheckResult(name, PASS, summary, details)
+
+
+def _runtime_names(text: str) -> set[str] | None:
+    """The runtimes registered with Docker, from `docker info --format '{{json .Runtimes}}'`.
+
+    Keys of the JSON object, not a substring search: the values carry long
+    feature annotations of their own. None if the output is not that object."""
+    try:
+        document = json.loads(text)
+    except ValueError:
+        return None
+    return set(document) if isinstance(document, dict) else None
+
+
+def _gpu_nvidia(ctx: Context, variant: str, details: dict[str, Any]) -> CheckResult:
+    name = "gpu"
+    result = ctx.run(
+        ["nvidia-smi", f"--query-gpu={_NVIDIA_QUERY}", "--format=csv,noheader,nounits"],
+        GPU_PROBE_TIMEOUT_SECONDS,
+    )
+    if result.returncode == 127:
+        return CheckResult(
+            name,
+            FAIL,
+            f"nvidia-smi not found: the NVIDIA driver is not installed ({variant} is configured)",
+            details,
+        )
+    if result.returncode == 124:
+        return CheckResult(name, WARN, "nvidia-smi timed out: the driver does not answer", details)
+    if result.returncode != 0:
+        # nvidia-smi reports a broken driver on stdout as often as on stderr.
+        reason = (
+            status.first_line(result.stderr)
+            or status.first_line(result.stdout)
+            or f"exit {result.returncode}"
+        )
+        return CheckResult(name, FAIL, f"nvidia-smi failed: {reason}", details)
+    gpus = parse_nvidia_smi(result.stdout)
+    if not gpus:
+        return CheckResult(name, WARN, "cannot read the nvidia-smi output", details)
+
+    # The Compose reservation names the `nvidia` runtime; without it registered
+    # Docker refuses to start LocalAI. If the daemon cannot be asked, that is
+    # not evidence of a missing runtime.
+    runtimes = ctx.run(
+        ["docker", "info", "--format", "{{json .Runtimes}}"], DOCKER_PROBE_TIMEOUT_SECONDS
+    )
+    names = _runtime_names(runtimes.stdout) if runtimes.returncode == 0 else None
+    details["nvidia_runtime"] = None if names is None else "nvidia" in names
+    if details["nvidia_runtime"] is False:
+        details["gpus"] = gpus
+        return CheckResult(
+            name,
+            FAIL,
+            "the 'nvidia' runtime is not registered with Docker: install the NVIDIA Container"
+            " Toolkit, otherwise LocalAI cannot start",
+            details,
+        )
+    return _gpu_measured(name, gpus, details)
+
+
+def _gpu_amd(ctx: Context, details: dict[str, Any]) -> CheckResult:
+    name = "gpu"
+    if not (ctx.probes.dev_root / "kfd").exists():
+        return CheckResult(
+            name,
+            FAIL,
+            "/dev/kfd is missing: the ROCm kernel driver is not loaded, LocalAI cannot start",
+            details,
+        )
+    result = ctx.run(
+        ["rocm-smi", "--showmeminfo", "vram", "--showuse", "--showtemp", "--json"],
+        GPU_PROBE_TIMEOUT_SECONDS,
+    )
+    if result.returncode == 124:
+        return CheckResult(name, WARN, "rocm-smi timed out: the driver does not answer", details)
+    gpus = parse_rocm_smi(result.stdout) if result.returncode == 0 else []
+    if not gpus:
+        # The ROCm stack lives in the LocalAI image, so a host without rocm-smi
+        # is no fault; there is just nothing to measure with.
+        reason = "rocm-smi not installed" if result.returncode == 127 else "rocm-smi unreadable"
+        details["utilization_measured"] = False
+        return CheckResult(
+            name, PASS, f"/dev/kfd present, utilization not measured ({reason})", details
+        )
+    return _gpu_measured(name, gpus, details)
+
+
+def _gpu_render_node(ctx: Context, variant: str, details: dict[str, Any]) -> CheckResult:
+    name = "gpu"
+    present = gpu_detect.has_render_node(ctx.probes.dev_root)
+    details["render_node"] = present
+    if present:
+        return CheckResult(
+            name,
+            PASS,
+            f"render node under /dev/dri present ({variant}; utilization is not measured)",
+            details,
+        )
+    if variant == gpu_detect.INTEL:
+        # The generated override maps /dev/dri into the container, so a missing
+        # directory stops the start.
+        return CheckResult(
+            name,
+            FAIL,
+            "no render node under /dev/dri: the Intel GPU is not accessible, LocalAI cannot start",
+            details,
+        )
+    # Vulkan maps whatever nodes exist; with none, LocalAI starts and quietly
+    # runs on the CPU.
+    return CheckResult(
+        name, WARN, "no render node under /dev/dri: LocalAI falls back to the CPU", details
+    )
+
+
+def check_gpu(ctx: Context) -> CheckResult:
+    name = "gpu"
+    if not ctx.configured:
+        return _not_set_up(name)
+    if LOCALAI_PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "LocalAI is not enabled")
+    variant = ctx.env.get("LOCALAI_IMAGE_VARIANT", "").strip() or gpu_detect.CPU
+    if variant == gpu_detect.CPU:
+        return CheckResult(name, SKIP, "LocalAI runs on the CPU image")
+
+    details: dict[str, Any] = {
+        "variant": variant,
+        "override_present": (ctx.config_dir / GPU_OVERRIDE).is_file(),
+    }
+    if variant not in gpu_detect.VARIANTS:
+        return CheckResult(
+            name,
+            WARN,
+            f"unknown LOCALAI_IMAGE_VARIANT '{variant}' (one of: {', '.join(gpu_detect.VARIANTS)})",
+            details,
+        )
+    if ctx.probes.in_container():
+        return CheckResult(
+            name,
+            SKIP,
+            "not measurable from inside a container: the host's driver tools and devices"
+            " are not visible",
+            details,
+        )
+    if variant in (gpu_detect.NVIDIA_CUDA_12, gpu_detect.NVIDIA_CUDA_13):
+        return _gpu_nvidia(ctx, variant, details)
+    if variant == gpu_detect.HIPBLAS:
+        return _gpu_amd(ctx, details)
+    return _gpu_render_node(ctx, variant, details)
+
+
 def _published_host_port(entry: str, env: dict[str, str]) -> tuple[str, int] | None:
     """(bind address, host port) of one short-syntax `ports:` entry, or None
     when the host side is not a single resolvable port (ephemeral, range,
@@ -467,6 +984,39 @@ def check_dns(ctx: Context) -> CheckResult:
     if all(r == UNAVAILABLE for r in outcomes.values()):
         return CheckResult(name, SKIP, "resolver not reachable (offline?)", details)
     return CheckResult(name, PASS, f"{len(hosts)} hostname(s) resolve", details)
+
+
+def check_time_sync(ctx: Context) -> CheckResult:
+    """Whether the host clock is disciplined by NTP.
+
+    OIDC tokens carry `iat` / `exp` / `nbf`, and TLS certificates a validity
+    window; a clock that drifted makes logins and certificate checks fail in
+    ways that point everywhere but at the clock."""
+    name = "time_sync"
+    if ctx.probes.in_container():
+        return CheckResult(
+            name, SKIP, "not measurable from inside a container (the host clock is not visible)"
+        )
+    result = ctx.run(
+        ["timedatectl", "show", "-p", "NTPSynchronized", "--value"], TIME_PROBE_TIMEOUT_SECONDS
+    )
+    if result.returncode != 0:
+        # Not systemd (macOS, WSL2 without it, Alpine): nothing to read, which
+        # is not a finding about the clock.
+        reason = status.first_line(result.stderr) or f"exit {result.returncode}"
+        return CheckResult(name, SKIP, f"timedatectl is not usable here ({reason})")
+    value = status.first_line(result.stdout).lower()
+    if value == "yes":
+        return CheckResult(name, PASS, "system clock is synchronized", {"ntp_synchronized": True})
+    if value == "no":
+        return CheckResult(
+            name,
+            WARN,
+            "system clock is not synchronized: OIDC token and TLS certificate validation"
+            " depend on it",
+            {"ntp_synchronized": False},
+        )
+    return CheckResult(name, SKIP, f"unexpected timedatectl output: '{value}'")
 
 
 def _certificate_files(config_dir: Path) -> list[Path]:
@@ -624,8 +1174,12 @@ def check_container_health(ctx: Context) -> CheckResult:
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
+    ("memory", check_memory),
+    ("cpu", check_cpu),
+    ("gpu", check_gpu),
     ("ports", check_ports),
     ("dns", check_dns),
+    ("time_sync", check_time_sync),
     ("certs", check_certs),
     ("addon_compat", check_addon_compat),
     ("container_health", check_container_health),
