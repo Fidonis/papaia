@@ -36,9 +36,28 @@ def ps_line(
     )
 
 
+GIB = 1024**3
+
+# Runtimes as `docker info --format '{{json .Runtimes}}'` prints them.
+RUNTIMES_RUNC_ONLY = '{"io.containerd.runc.v2":{"path":"runc"},"runc":{"path":"runc"}}'
+RUNTIMES_WITH_NVIDIA = (
+    '{"io.containerd.runc.v2":{"path":"runc"},"nvidia":{"path":"nvidia-container-runtime"},'
+    '"runc":{"path":"runc"}}'
+)
+
+# Host tools the doctor checks run through the same runner as `docker`. Unless a
+# test says otherwise they are absent, except the clock, which is in sync.
+HOST_TOOLS = ("nvidia-smi", "rocm-smi", "timedatectl")
+
+
+def not_found(tool: str) -> CommandResult:
+    return CommandResult(127, "", f"{tool}: command not found")
+
+
 class FakeDocker:
-    """Stands in for `docker`: answers ps/inspect/version/compose/info with
-    canned text and records every call."""
+    """Stands in for `docker` and the host tools next to it: answers
+    ps/inspect/version/compose/info, `nvidia-smi`, `rocm-smi` and `timedatectl`
+    with canned text and records every call."""
 
     def __init__(
         self,
@@ -49,12 +68,20 @@ class FakeDocker:
         engine: CommandResult | None = None,
         compose: CommandResult | None = None,
         root_dir: str = "",
+        totals: CommandResult | None = None,
+        runtimes: CommandResult | None = None,
+        tools: dict[str, CommandResult] | None = None,
     ):
         self.ps_result = ps_result or CommandResult(0, "\n".join(ps or []) + "\n", "")
         self.policies = policies or {}
         self.engine = engine or CommandResult(0, "27.0.3\n", "")
         self.compose = compose or CommandResult(0, "2.29.1\n", "")
         self.root_dir = root_dir
+        # `docker info --format '{{.NCPU}} {{.MemTotal}}'`: 8 cores, 16 GiB.
+        self.totals = totals or CommandResult(0, f"8 {16 * GIB}\n", "")
+        self.runtimes = runtimes or CommandResult(0, RUNTIMES_RUNC_ONLY + "\n", "")
+        self.tools = {"timedatectl": CommandResult(0, "yes\n", "")}
+        self.tools.update(tools or {})
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, timeout):
@@ -70,10 +97,21 @@ class FakeDocker:
         if cmd[:3] == ["docker", "compose", "version"]:
             return self.compose
         if cmd[:2] == ["docker", "info"]:
+            return self._info(cmd[-1])
+        if cmd[0] in HOST_TOOLS:
+            return self.tools.get(cmd[0]) or not_found(cmd[0])
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    def _info(self, fmt: str) -> CommandResult:
+        if fmt == "{{.DockerRootDir}}":
             if self.root_dir:
                 return CommandResult(0, self.root_dir + "\n", "")
             return CommandResult(1, "", "no data root")
-        raise AssertionError(f"unexpected command: {cmd}")
+        if fmt == "{{.NCPU}} {{.MemTotal}}":
+            return self.totals
+        if fmt == "{{json .Runtimes}}":
+            return self.runtimes
+        raise AssertionError(f"unexpected docker info format: {fmt}")
 
 
 def _write_yaml(path: Path, document: dict) -> None:

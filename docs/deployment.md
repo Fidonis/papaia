@@ -111,8 +111,10 @@ tools/papaia-ctl doctor --skip=dns,certs # on a host without internet access
 ```
 
 Both are read-only. `status` is cheap and also available as `--json`; `doctor` is the check
-to run before `setup` and `upgrade`, or whenever something seems wrong. The check list, the
-thresholds and the JSON formats are documented in the README, under
+to run before `setup` and `upgrade`, or whenever something seems wrong. Besides Docker, disk,
+ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant and
+clock synchronization. The check list, the thresholds and the JSON formats are documented in the
+README, under
 [`status`](../README.md#status) and [`doctor`](../README.md#doctor).
 
 ### Backup and restore
