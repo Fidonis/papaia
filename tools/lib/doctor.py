@@ -9,7 +9,10 @@ command exit non-zero.
 Nothing here changes anything. The probes are reads: `docker version/info`,
 `shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
 `rocm-smi` / `timedatectl`, a TCP connect to localhost, a name lookup,
-`openssl x509` on a file, plus everything `status` reads.
+`openssl x509` on a file, plus everything `status` reads. Inside a container,
+where the host's driver tools and `timedatectl` are out of reach, the NVIDIA GPU
+is read with a `docker exec` of `nvidia-smi` into the LocalAI container and the
+clock with `adjtimex(2)`, which only reads.
 
 Load and pressure findings (memory, CPU, VRAM, temperature, clock) are at most
 `warn`: a busy host is not a broken installation, and `doctor` is also the
@@ -29,12 +32,14 @@ keeps the checks testable without a Docker daemon, a network or a certificate.
 from __future__ import annotations
 
 import concurrent.futures
+import ctypes
 import json
 import math
 import os
 import re
 import shutil
 import socket
+import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -85,9 +90,19 @@ PORT_PROBE_TIMEOUT_SECONDS = 0.5
 DOCKER_PROBE_TIMEOUT_SECONDS = 10.0
 # nvidia-smi is known to hang on a broken driver, hence its own bound.
 GPU_PROBE_TIMEOUT_SECONDS = 10.0
+# Through `docker exec` the bound has to be set inside the container as well:
+# killing the CLI that started an exec leaves its process running there. The
+# inner one is the shorter, so a hang is `timeout`'s exit 124 and not a kill.
+GPU_EXEC_TIMEOUT_SECONDS = 8
 TIME_PROBE_TIMEOUT_SECONDS = 5.0
 
+# What systemd's `NTPSynchronized` means: the kernel's estimated maximum error is
+# under sixteen seconds. The kernel starts at exactly that figure and only lowers
+# it while something disciplines the clock.
+KERNEL_CLOCK_SYNCED_MAXERROR_US = 16_000_000
+
 LOCALAI_PROFILE = "localai"
+LOCALAI_SERVICE = "localai"
 GPU_OVERRIDE = Path("overrides") / "docker-compose.localai-gpu.override.yml"
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
@@ -229,9 +244,73 @@ def _loadavg() -> tuple[float, float, float] | None:
 
 def _in_container() -> bool:
     """Whether this process runs inside a container, where the host's driver
-    tools, device nodes and clock settings are not visible. `papaia-manager`
+    tools, device nodes and `timedatectl` are not visible. `papaia-manager`
     runs `doctor` in its own container."""
     return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
+class _Timeval(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
+
+
+class _Timex(ctypes.Structure):
+    """`struct timex` of the 64-bit Linux ABI (glibc and musl alike, 208 bytes).
+
+    Only `maxerror` is read; the rest is here because the kernel fills the whole
+    structure and the buffer must be as large as it expects."""
+
+    _fields_ = [
+        ("modes", ctypes.c_uint),
+        ("offset", ctypes.c_long),
+        ("freq", ctypes.c_long),
+        ("maxerror", ctypes.c_long),
+        ("esterror", ctypes.c_long),
+        ("status", ctypes.c_int),
+        ("constant", ctypes.c_long),
+        ("precision", ctypes.c_long),
+        ("tolerance", ctypes.c_long),
+        ("time", _Timeval),
+        ("tick", ctypes.c_long),
+        ("ppsfreq", ctypes.c_long),
+        ("jitter", ctypes.c_long),
+        ("shift", ctypes.c_int),
+        ("stabil", ctypes.c_long),
+        ("jitcnt", ctypes.c_long),
+        ("calcnt", ctypes.c_long),
+        ("errcnt", ctypes.c_long),
+        ("stbcnt", ctypes.c_long),
+        ("tai", ctypes.c_int),
+        ("reserved", ctypes.c_int * 11),
+    ]
+
+
+def _kernel_clock_synchronized() -> bool | None:
+    """Whether the kernel considers the clock synchronized, read with `adjtimex(2)`.
+
+    The clock belongs to the kernel, which a container shares with its host, so
+    this answers the same as `timedatectl` does without needing systemd or its bus.
+    With `modes` zero the call only reads and needs no capability; Docker's default
+    seccomp profile allows it.
+
+    Judged the way systemd judges `NTPSynchronized`: by `maxerror`, not by the
+    `STA_UNSYNC` flag. systemd ignores the flag on purpose, because it can be set
+    to keep the kernel from writing the RTC, and a flag-based check would call a
+    host unsynchronized that `timedatectl` calls synchronized.
+
+    None where it cannot be read: not 64-bit Linux, no `adjtimex` in the C
+    library, or the call refused."""
+    if not sys.platform.startswith("linux") or ctypes.sizeof(ctypes.c_long) != 8:
+        return None
+    try:
+        adjtimex = ctypes.CDLL(None, use_errno=True).adjtimex
+    except (OSError, AttributeError):
+        return None
+    adjtimex.argtypes = [ctypes.POINTER(_Timex)]
+    adjtimex.restype = ctypes.c_int
+    state = _Timex()
+    if adjtimex(ctypes.byref(state)) < 0:
+        return None
+    return state.maxerror < KERNEL_CLOCK_SYNCED_MAXERROR_US
 
 
 @dataclass
@@ -244,6 +323,7 @@ class Probes:
     loadavg: Callable[[], tuple[float, float, float] | None] = _loadavg
     cpu_count: Callable[[], int | None] = os.cpu_count
     in_container: Callable[[], bool] = _in_container
+    kernel_clock_synchronized: Callable[[], bool | None] = _kernel_clock_synchronized
     # Where device nodes live; the same seam `gpu_detect.compose_fragment` has.
     dev_root: Path = Path("/dev")
 
@@ -721,12 +801,64 @@ def _runtime_names(text: str) -> set[str] | None:
     return set(document) if isinstance(document, dict) else None
 
 
-def _gpu_nvidia(ctx: Context, variant: str, details: dict[str, Any]) -> CheckResult:
+def _localai_container(ctx: Context) -> str | None:
+    """Name of the running LocalAI container of the core stack, from the status
+    report `container_health` shares. None if there is none: not started, or
+    declared and never created."""
+    for module in ctx.status_report().modules:
+        if module.kind != "core":
+            continue
+        for container in module.containers:
+            if (
+                container.service == LOCALAI_SERVICE
+                and container.state == "running"
+                and container.name
+            ):
+                return container.name
+    return None
+
+
+def _exec_failure(result: status.CommandResult) -> str | None:
+    """Why a `docker exec ... nvidia-smi` never reached `nvidia-smi`, or None when
+    it did and the exit status is its own.
+
+    `docker exec` hands back the command's exit status, so 126 and 127 (found but
+    not runnable, not found) mean this image has no usable tool, and a refusal by
+    the daemon (no such container, not running, no socket access) is exit 1 with a
+    message of its own. Neither says anything about the driver, which is why they
+    are not held against the host the way the same words from a local
+    `nvidia-smi` are."""
+    reason = status.first_line(result.stderr)
+    if result.returncode in (126, 127):
+        return f"nvidia-smi cannot be run in the LocalAI container (exit {result.returncode})"
+    if (
+        result.returncode == 125
+        or reason.startswith("Error response from daemon")
+        or "docker daemon" in reason.lower()
+    ):
+        return f"cannot reach the LocalAI container: {reason or 'docker exec failed'}"
+    return None
+
+
+def _gpu_nvidia(
+    ctx: Context, variant: str, details: dict[str, Any], *, container: str | None = None
+) -> CheckResult:
+    """`nvidia-smi` on this host, or, given a `container`, inside that one.
+
+    The figures are judged by the same parser and the same limits either way; only
+    where the tool runs differs, and with it what a failure to run it proves."""
     name = "gpu"
-    result = ctx.run(
-        ["nvidia-smi", f"--query-gpu={_NVIDIA_QUERY}", "--format=csv,noheader,nounits"],
-        GPU_PROBE_TIMEOUT_SECONDS,
-    )
+    query = ["nvidia-smi", f"--query-gpu={_NVIDIA_QUERY}", "--format=csv,noheader,nounits"]
+    if container is None:
+        result = ctx.run(query, GPU_PROBE_TIMEOUT_SECONDS)
+    else:
+        result = ctx.run(
+            ["docker", "exec", container, "timeout", str(GPU_EXEC_TIMEOUT_SECONDS), *query],
+            GPU_PROBE_TIMEOUT_SECONDS,
+        )
+        unreachable = _exec_failure(result)
+        if unreachable is not None:
+            return CheckResult(name, SKIP, unreachable, details)
     if result.returncode == 127:
         return CheckResult(
             name,
@@ -843,15 +975,32 @@ def check_gpu(ctx: Context) -> CheckResult:
             f"unknown LOCALAI_IMAGE_VARIANT '{variant}' (one of: {', '.join(gpu_detect.VARIANTS)})",
             details,
         )
+    nvidia = variant in (gpu_detect.NVIDIA_CUDA_12, gpu_detect.NVIDIA_CUDA_13)
     if ctx.probes.in_container():
-        return CheckResult(
-            name,
-            SKIP,
-            "not measurable from inside a container: the host's driver tools and devices"
-            " are not visible",
-            details,
-        )
-    if variant in (gpu_detect.NVIDIA_CUDA_12, gpu_detect.NVIDIA_CUDA_13):
+        if not nvidia:
+            # /dev/kfd and the render nodes are the host's devices, and the
+            # manager's own /dev has neither; AMD's tool is not on offer either.
+            return CheckResult(
+                name,
+                SKIP,
+                "not measurable from inside a container: the host's driver tools and devices"
+                " are not visible",
+                details,
+            )
+        # The container with the GPU is the one place NVIDIA's tool is guaranteed
+        # to be: the toolkit puts `nvidia-smi` into every container that asked for
+        # the `utility` capability, which LocalAI's image does.
+        container = _localai_container(ctx)
+        if container is None:
+            return CheckResult(
+                name,
+                SKIP,
+                "LocalAI is not running, and from inside a container the GPU can only be"
+                " read through its container",
+                details,
+            )
+        return _gpu_nvidia(ctx, variant, details, container=container)
+    if nvidia:
         return _gpu_nvidia(ctx, variant, details)
     if variant == gpu_detect.HIPBLAS:
         return _gpu_amd(ctx, details)
@@ -986,17 +1135,35 @@ def check_dns(ctx: Context) -> CheckResult:
     return CheckResult(name, PASS, f"{len(hosts)} hostname(s) resolve", details)
 
 
+def _clock_result(name: str, synchronized: bool) -> CheckResult:
+    if synchronized:
+        return CheckResult(name, PASS, "system clock is synchronized", {"ntp_synchronized": True})
+    return CheckResult(
+        name,
+        WARN,
+        "system clock is not synchronized: OIDC token and TLS certificate validation"
+        " depend on it",
+        {"ntp_synchronized": False},
+    )
+
+
 def check_time_sync(ctx: Context) -> CheckResult:
     """Whether the host clock is disciplined by NTP.
 
     OIDC tokens carry `iat` / `exp` / `nbf`, and TLS certificates a validity
     window; a clock that drifted makes logins and certificate checks fail in
-    ways that point everywhere but at the clock."""
+    ways that point everywhere but at the clock.
+
+    On a host this asks `timedatectl`. Inside a container that is out of reach,
+    but the clock is the host's, so the kernel's own state is read instead."""
     name = "time_sync"
     if ctx.probes.in_container():
-        return CheckResult(
-            name, SKIP, "not measurable from inside a container (the host clock is not visible)"
-        )
+        synchronized = ctx.probes.kernel_clock_synchronized()
+        if synchronized is None:
+            return CheckResult(
+                name, SKIP, "not measurable from inside a container (adjtimex is not available)"
+            )
+        return _clock_result(name, synchronized)
     result = ctx.run(
         ["timedatectl", "show", "-p", "NTPSynchronized", "--value"], TIME_PROBE_TIMEOUT_SECONDS
     )
@@ -1006,16 +1173,8 @@ def check_time_sync(ctx: Context) -> CheckResult:
         reason = status.first_line(result.stderr) or f"exit {result.returncode}"
         return CheckResult(name, SKIP, f"timedatectl is not usable here ({reason})")
     value = status.first_line(result.stdout).lower()
-    if value == "yes":
-        return CheckResult(name, PASS, "system clock is synchronized", {"ntp_synchronized": True})
-    if value == "no":
-        return CheckResult(
-            name,
-            WARN,
-            "system clock is not synchronized: OIDC token and TLS certificate validation"
-            " depend on it",
-            {"ntp_synchronized": False},
-        )
+    if value in ("yes", "no"):
+        return _clock_result(name, value == "yes")
     return CheckResult(name, SKIP, f"unexpected timedatectl output: '{value}'")
 
 
