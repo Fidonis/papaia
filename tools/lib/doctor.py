@@ -6,8 +6,8 @@ follow. Each check answers `pass`, `warn`, `fail` or `skip` (not applicable
 here: offline, not set up yet, nothing to look at). Only `fail` makes the
 command exit non-zero.
 
-Nothing here changes anything. The probes are reads: `docker version/info`,
-`shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
+Nothing here changes anything. The probes are reads: `docker version/info` and
+`docker system df`, `shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
 `rocm-smi` / `timedatectl`, a TCP connect to localhost, a name lookup,
 `openssl x509` on a file, plus everything `status` reads. Inside a container,
 where the host's driver tools and `timedatectl` are out of reach, the NVIDIA GPU
@@ -88,6 +88,9 @@ GPU_TEMP_WARN_CELSIUS = 85
 DNS_TIMEOUT_SECONDS = 3.0
 PORT_PROBE_TIMEOUT_SECONDS = 0.5
 DOCKER_PROBE_TIMEOUT_SECONDS = 10.0
+# `docker system df` makes the daemon work out the size of every volume and of the
+# build cache, which grows with the data: 1.5 s on a stack with 75 volumes.
+DOCKER_USAGE_TIMEOUT_SECONDS = 20.0
 # nvidia-smi is known to hang on a broken driver, hence its own bound.
 GPU_PROBE_TIMEOUT_SECONDS = 10.0
 # Through `docker exec` the bound has to be set inside the container as well:
@@ -534,6 +537,115 @@ def check_disk_space(ctx: Context) -> CheckResult:
             f" fail below {_fmt_bytes(DISK_FAIL_FREE_BYTES)})"
         )
     return CheckResult(name, overall, summary, {"paths": measured, "notes": notes})
+
+
+# ─── docker_usage ────────────────────────────────────────────────────────
+
+# The rows of `docker system df`, which names them in prose, and the keys the
+# details use for them. Docker's own order, which is also the summary's.
+_DOCKER_USAGE_TYPES = {
+    "Images": "images",
+    "Containers": "containers",
+    "Local Volumes": "volumes",
+    "Build Cache": "build_cache",
+}
+
+# Docker prints decimal units with four significant digits: `50.46GB`, `16.38kB`.
+_DOCKER_UNITS = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4, "PB": 1000**5}
+_DOCKER_SIZE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([kKMGTP]?B)\b")
+
+
+def parse_docker_size(text: Any) -> int | None:
+    """Bytes out of Docker's size text. `14.08GB (27 %)` reads as 14.08GB: the
+    reclaimable column carries a share after the size, build cache's does not.
+    The figure is as exact as the four digits Docker prints."""
+    match = _DOCKER_SIZE.match(text) if isinstance(text, str) else None
+    if match is None:
+        return None
+    return round(float(match.group(1)) * _DOCKER_UNITS[match.group(2).upper()])
+
+
+def _fmt_docker_size(value: int) -> str:
+    """Back to the spelling Docker uses, so the summary reads like `docker system df`."""
+    size = float(value)
+    for unit in ("B", "kB", "MB", "GB"):
+        if size < 1000:
+            return f"{size:.4g}{unit}"
+        size /= 1000
+    return f"{size:.4g}TB"
+
+
+def _count(text: Any) -> int | None:
+    return int(text) if isinstance(text, str) and text.strip().isdigit() else None
+
+
+def parse_docker_system_df(text: str) -> dict[str, dict[str, int | None]]:
+    """One entry per row of `docker system df --format '{{json .}}'`, by `_DOCKER_USAGE_TYPES`.
+
+    A line that is not a JSON object, a row Docker adds later and a row whose size
+    cannot be read are dropped; the caller reports what is left."""
+    usage: dict[str, dict[str, int | None]] = {}
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        key = _DOCKER_USAGE_TYPES.get(str(row.get("Type")))
+        size = parse_docker_size(row.get("Size"))
+        if key is None or size is None:
+            continue
+        usage[key] = {
+            "count": _count(row.get("TotalCount")),
+            "active": _count(row.get("Active")),
+            "size_bytes": size,
+            "reclaimable_bytes": parse_docker_size(row.get("Reclaimable")),
+        }
+    return usage
+
+
+def check_docker_usage(ctx: Context) -> CheckResult:
+    """What Docker's data takes, as the daemon reports it.
+
+    `disk_space` says how much room is left, and only where the data root can be
+    seen: not on Docker Desktop, not inside a container. The daemon answers the
+    other question, how much of the disk is Docker's, over the socket wherever the
+    CLI runs. Report-only: how much Docker may take is the operator's call, and
+    "reclaimable" volumes are ones no container uses now, not ones safe to delete."""
+    name = "docker_usage"
+    result = ctx.run(
+        ["docker", "system", "df", "--format", "{{json .}}"], DOCKER_USAGE_TIMEOUT_SECONDS
+    )
+    # Nothing here is a finding about the installation: `docker_version` is the
+    # check that fails for a daemon that is not there.
+    if result.returncode == 127:
+        return CheckResult(name, SKIP, "docker not found")
+    if result.returncode == 124:
+        return CheckResult(
+            name, SKIP, f"docker system df timed out after {DOCKER_USAGE_TIMEOUT_SECONDS:g}s"
+        )
+    if result.returncode != 0:
+        reason = status.first_line(result.stderr) or f"exit {result.returncode}"
+        return CheckResult(name, SKIP, f"docker system df failed: {reason}")
+    usage = parse_docker_system_df(result.stdout)
+    if not usage:
+        return CheckResult(name, SKIP, "cannot read the docker system df output")
+
+    total = sum(row["size_bytes"] or 0 for row in usage.values())
+    reclaimable = sum(row["reclaimable_bytes"] or 0 for row in usage.values())
+    parts = []
+    for key in _DOCKER_USAGE_TYPES.values():
+        row = usage.get(key)
+        if row is None:
+            continue
+        part = f"{key.replace('_', ' ')} {_fmt_docker_size(row['size_bytes'] or 0)}"
+        if row["reclaimable_bytes"]:
+            part += f" ({_fmt_docker_size(row['reclaimable_bytes'])} reclaimable)"
+        parts.append(part)
+    summary = f"Docker uses {_fmt_docker_size(total)}: " + ", ".join(parts)
+    details = {"types": usage, "total_bytes": total, "reclaimable_bytes": reclaimable}
+    return CheckResult(name, PASS, summary, details)
 
 
 def check_memory(ctx: Context) -> CheckResult:
@@ -1333,6 +1445,7 @@ def check_container_health(ctx: Context) -> CheckResult:
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
+    ("docker_usage", check_docker_usage),
     ("memory", check_memory),
     ("cpu", check_cpu),
     ("gpu", check_gpu),

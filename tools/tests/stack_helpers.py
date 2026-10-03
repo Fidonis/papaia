@@ -45,6 +45,20 @@ RUNTIMES_WITH_NVIDIA = (
     '"runc":{"path":"runc"}}'
 )
 
+# `docker system df --format '{{json .}}'`, as Docker 29 prints it: one object per
+# line, sizes as decimal text, and no share after the reclaimable size of the
+# build cache.
+SYSTEM_DF = (
+    '{"Active":"31","Reclaimable":"14.08GB (27%)","Size":"50.46GB","TotalCount":"53",'
+    '"Type":"Images"}\n'
+    '{"Active":"31","Reclaimable":"16.38kB (0%)","Size":"235.9MB","TotalCount":"32",'
+    '"Type":"Containers"}\n'
+    '{"Active":"22","Reclaimable":"23.46GB (89%)","Size":"26.08GB","TotalCount":"75",'
+    '"Type":"Local Volumes"}\n'
+    '{"Active":"0","Reclaimable":"20.73GB","Size":"25.53GB","TotalCount":"897",'
+    '"Type":"Build Cache"}\n'
+)
+
 # Host tools the doctor checks run through the same runner as `docker`. Unless a
 # test says otherwise they are absent, except the clock, which is in sync.
 HOST_TOOLS = ("nvidia-smi", "rocm-smi", "timedatectl")
@@ -77,9 +91,11 @@ class FakeDocker:
         runtimes: CommandResult | None = None,
         tools: dict[str, CommandResult] | None = None,
         exec_failure: CommandResult | None = None,
+        df: CommandResult | None = None,
     ):
         self.ps_result = ps_result or CommandResult(0, "\n".join(ps or []) + "\n", "")
         self.exec_failure = exec_failure
+        self.df = df or CommandResult(0, SYSTEM_DF, "")
         self.policies = policies or {}
         self.engine = engine or CommandResult(0, "27.0.3\n", "")
         self.compose = compose or CommandResult(0, "2.29.1\n", "")
@@ -105,6 +121,8 @@ class FakeDocker:
             return self.compose
         if cmd[:2] == ["docker", "info"]:
             return self._info(cmd[-1])
+        if cmd[:3] == ["docker", "system", "df"]:
+            return self.df
         if cmd[0] in HOST_TOOLS:
             return self.tools.get(cmd[0]) or not_found(cmd[0])
         if cmd[:2] == ["docker", "exec"]:

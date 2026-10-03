@@ -18,6 +18,7 @@ from jsonschema import Draft202012Validator
 from stack_helpers import (
     NOW,
     RUNTIMES_WITH_NVIDIA,
+    SYSTEM_DF,
     FakeDocker,
     healthy_addon,
     healthy_core,
@@ -180,6 +181,7 @@ def test_healthy_installation_passes_and_validates(stack):
     assert [c.status for c in report.checks] == [
         PASS,  # docker_version
         PASS,  # disk_space
+        PASS,  # docker_usage
         PASS,  # memory
         PASS,  # cpu
         SKIP,  # gpu: LocalAI is not enabled
@@ -199,6 +201,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
     assert doctor.CHECK_NAMES == (
         "docker_version",
         "disk_space",
+        "docker_usage",
         "memory",
         "cpu",
         "gpu",
@@ -397,6 +400,203 @@ def test_docker_data_root_inside_a_vm_is_skipped_with_a_note(stack):
 
     assert "docker_root" not in {p["label"] for p in check.details["paths"]}
     assert any("docker_root" in note for note in check.details["notes"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# docker_usage
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def df_docker(output: str | CommandResult = SYSTEM_DF, **kwargs) -> FakeDocker:
+    answer = CommandResult(0, output, "") if isinstance(output, str) else output
+    return healthy_docker(df=answer, **kwargs)
+
+
+def test_docker_usage_reports_every_row_with_its_size_and_what_is_reclaimable(stack):
+    report = run_doctor(stack)
+    check = result(report, "docker_usage")
+
+    assert check.status == PASS
+    assert check.summary == (
+        "Docker uses 102.3GB: images 50.46GB (14.08GB reclaimable),"
+        " containers 235.9MB (16.38kB reclaimable),"
+        " volumes 26.08GB (23.46GB reclaimable),"
+        " build cache 25.53GB (20.73GB reclaimable)"
+    )
+    assert check.details["types"] == {
+        "images": {
+            "count": 53,
+            "active": 31,
+            "size_bytes": 50_460_000_000,
+            "reclaimable_bytes": 14_080_000_000,
+        },
+        "containers": {
+            "count": 32,
+            "active": 31,
+            "size_bytes": 235_900_000,
+            "reclaimable_bytes": 16_380,
+        },
+        "volumes": {
+            "count": 75,
+            "active": 22,
+            "size_bytes": 26_080_000_000,
+            "reclaimable_bytes": 23_460_000_000,
+        },
+        "build_cache": {
+            "count": 897,
+            "active": 0,
+            "size_bytes": 25_530_000_000,
+            "reclaimable_bytes": 20_730_000_000,
+        },
+    }
+    assert check.details["total_bytes"] == 102_305_900_000
+    assert check.details["reclaimable_bytes"] == 58_270_016_380
+    assert not list(VALIDATOR.iter_errors(json.loads(doctor.to_json(report))))
+
+
+def test_docker_usage_asks_the_daemon_one_read_only_question(stack):
+    docker = healthy_docker()
+    run_doctor(stack, docker=docker)
+
+    asked = [c for c in docker.calls if c[:2] == ["docker", "system"]]
+    assert asked == [["docker", "system", "df", "--format", "{{json .}}"]]
+
+
+def test_docker_usage_never_warns_however_much_docker_has_taken(stack):
+    huge = (
+        '{"Active":"1","Reclaimable":"900.0TB (99%)","Size":"1000TB","TotalCount":"9",'
+        '"Type":"Local Volumes"}\n'
+    )
+    report = run_doctor(stack, docker=df_docker(huge))
+
+    assert result(report, "docker_usage").status == PASS
+    assert report.exit_code == 0
+
+
+def test_docker_usage_works_the_same_inside_a_container(stack):
+    # It asks the daemon over the socket, not the file system, so a container
+    # that cannot see the data root can still read it.
+    docker = healthy_docker()
+    inside = result(run_doctor(stack, docker=docker, in_container=lambda: True), "docker_usage")
+
+    assert inside.status == PASS
+    assert inside.details["total_bytes"] == 102_305_900_000
+
+
+def test_docker_usage_can_be_left_out_and_then_costs_nothing(stack):
+    docker = healthy_docker()
+    check = result(run_doctor(stack, docker=docker, skip=["docker_usage"]), "docker_usage")
+
+    assert check.status == SKIP
+    assert not any(c[:2] == ["docker", "system"] for c in docker.calls)
+
+
+def test_docker_usage_runs_before_setup_because_it_needs_no_configuration(tmp_path):
+    check = result(
+        doctor.run_checks(
+            tmp_path / "nowhere",
+            tmp_path / "repo",
+            run=healthy_docker(),
+            probes=probes(),
+            now=NOW,
+        ),
+        "docker_usage",
+    )
+
+    assert check.status == PASS
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        (not_found("docker"), "docker not found"),
+        (CommandResult(124, "", "docker timed out after 20s"), "timed out after 20s"),
+        (
+            CommandResult(1, "", "Cannot connect to the Docker daemon at unix:///docker.sock"),
+            "Cannot connect to the Docker daemon",
+        ),
+        (CommandResult(1, "", ""), "exit 1"),
+        (CommandResult(0, "", ""), "cannot read the docker system df output"),
+        (CommandResult(0, "TYPE  TOTAL  ACTIVE\nImages 53 31\n", ""), "cannot read"),
+    ],
+)
+def test_docker_usage_that_cannot_be_read_is_skipped_with_the_reason_and_never_failed(
+    stack, answer, reason
+):
+    report = run_doctor(stack, docker=df_docker(answer))
+    check = result(report, "docker_usage")
+
+    assert check.status == SKIP
+    assert reason in check.summary
+    assert check.details == {}
+    assert report.exit_code == 0
+
+
+def test_docker_usage_keeps_what_it_can_read_of_a_changed_output(stack):
+    # A line that is not JSON, a row Docker may add later, a size that is not one,
+    # and a build cache with no share after its reclaimable size.
+    output = (
+        "WARNING: something on the way\n"
+        '{"Active":"2","Reclaimable":"1.5GB (30%)","Size":"5GB","TotalCount":"4","Type":"Images"}\n'
+        '{"Active":"1","Reclaimable":"0B","Size":"1GB","TotalCount":"1","Type":"Plugins"}\n'
+        '{"Active":"1","Reclaimable":"0B","Size":"lots","TotalCount":"1","Type":"Containers"}\n'
+        '{"Active":"x","Reclaimable":"200MB","Size":"1.2GB","TotalCount":"","Type":"Build Cache"}\n'
+        "[1, 2]\n"
+    )
+    check = result(run_doctor(stack, docker=df_docker(output)), "docker_usage")
+
+    assert check.status == PASS
+    assert list(check.details["types"]) == ["images", "build_cache"]
+    # Counts that are not numbers are unknown, not zero; the sizes still count.
+    assert check.details["types"]["build_cache"] == {
+        "count": None,
+        "active": None,
+        "size_bytes": 1_200_000_000,
+        "reclaimable_bytes": 200_000_000,
+    }
+    assert check.details["total_bytes"] == 6_200_000_000
+    assert check.summary == (
+        "Docker uses 6.2GB: images 5GB (1.5GB reclaimable), build cache 1.2GB"
+        " (200MB reclaimable)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("50.46GB", 50_460_000_000),
+        ("235.9MB", 235_900_000),
+        ("16.38kB", 16_380),
+        ("16.38KB", 16_380),
+        ("0B", 0),
+        ("14.08GB (27%)", 14_080_000_000),
+        ("1.5TB", 1_500_000_000_000),
+        ("  7 MB", 7_000_000),
+        ("lots", None),
+        ("GB", None),
+        ("", None),
+        (None, None),
+        (12, None),
+    ],
+)
+def test_docker_sizes_are_decimal_with_the_share_after_them_ignored(text, expected):
+    assert doctor.parse_docker_size(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (0, "0B"),
+        (999, "999B"),
+        (16_380, "16.38kB"),
+        (235_900_000, "235.9MB"),
+        (50_460_000_000, "50.46GB"),
+        (102_305_900_000, "102.3GB"),
+        (1_500_000_000_000, "1.5TB"),
+    ],
+)
+def test_sizes_are_written_back_the_way_docker_spells_them(value, text):
+    assert doctor._fmt_docker_size(value) == text
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1661,11 +1861,14 @@ def test_doctor_writes_nothing(stack, tmp_path, variant):
         ("docker", "version"),
         ("docker", "compose"),
         ("docker", "info"),
+        ("docker", "system"),
         ("nvidia-smi", "--query-gpu=" + doctor._NVIDIA_QUERY),
         ("rocm-smi", "--showmeminfo"),
         ("timedatectl", "show"),
     }
     assert {tuple(c[:2]) for c in docker.calls} <= allowed
+    # `docker system` also holds `prune`; only `df` is a read.
+    assert all(c[2] == "df" for c in docker.calls if c[:2] == ["docker", "system"])
 
 
 # ─────────────────────────────────────────────────────────────────────────
