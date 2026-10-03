@@ -6,19 +6,25 @@ network, the name resolver and the certificates are stubbed through `Probes`.
 
 from __future__ import annotations
 
+import ctypes
 import json
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator
 from stack_helpers import (
     NOW,
     RUNTIMES_WITH_NVIDIA,
+    SYSTEM_DF,
     FakeDocker,
     healthy_addon,
     healthy_core,
+    localai_container,
     not_found,
+    ps_line,
 )
 
 from lib import cli, doctor, status
@@ -47,6 +53,7 @@ def probes(**overrides) -> Probes:
         "loadavg": lambda: (0.3, 0.2, 0.1),
         "cpu_count": lambda: 8,
         "in_container": lambda: False,
+        "kernel_clock_synchronized": lambda: True,
         "dev_root": Path("/papaia-test-has-no-devices"),
     }
     values.update(overrides)
@@ -137,6 +144,31 @@ def nvidia_docker(
     )
 
 
+def container_docker(
+    smi: CommandResult | str = NVIDIA_ONE,
+    *,
+    runtimes: str = RUNTIMES_WITH_NVIDIA,
+    localai: str | None = "running",
+    **kwargs,
+) -> FakeDocker:
+    """The same GPU host as `nvidia_docker`, for a `doctor` that runs in a
+    container: `nvidia-smi` answers only when it is exec'd into LocalAI's, which
+    is `localai` (a container state, or None for one that was never created)."""
+    answer = CommandResult(0, smi, "") if isinstance(smi, str) else smi
+    containers = localai_container(localai) if localai else []
+    return FakeDocker(
+        healthy_core() + containers + healthy_addon(),
+        tools={"nvidia-smi": answer},
+        runtimes=CommandResult(0, runtimes + "\n", ""),
+        **kwargs,
+    )
+
+
+def gpu_in_a_container(stack, docker: FakeDocker, variant: str = "nvidia-cuda-13"):
+    enable_localai(stack, variant)
+    return result(run_doctor(stack, docker=docker, in_container=lambda: True), "gpu")
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # the report as a whole
 # ─────────────────────────────────────────────────────────────────────────
@@ -149,6 +181,7 @@ def test_healthy_installation_passes_and_validates(stack):
     assert [c.status for c in report.checks] == [
         PASS,  # docker_version
         PASS,  # disk_space
+        PASS,  # docker_usage
         PASS,  # memory
         PASS,  # cpu
         SKIP,  # gpu: LocalAI is not enabled
@@ -168,6 +201,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
     assert doctor.CHECK_NAMES == (
         "docker_version",
         "disk_space",
+        "docker_usage",
         "memory",
         "cpu",
         "gpu",
@@ -366,6 +400,203 @@ def test_docker_data_root_inside_a_vm_is_skipped_with_a_note(stack):
 
     assert "docker_root" not in {p["label"] for p in check.details["paths"]}
     assert any("docker_root" in note for note in check.details["notes"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# docker_usage
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def df_docker(output: str | CommandResult = SYSTEM_DF, **kwargs) -> FakeDocker:
+    answer = CommandResult(0, output, "") if isinstance(output, str) else output
+    return healthy_docker(df=answer, **kwargs)
+
+
+def test_docker_usage_reports_every_row_with_its_size_and_what_is_reclaimable(stack):
+    report = run_doctor(stack)
+    check = result(report, "docker_usage")
+
+    assert check.status == PASS
+    assert check.summary == (
+        "Docker uses 102.3GB: images 50.46GB (14.08GB reclaimable),"
+        " containers 235.9MB (16.38kB reclaimable),"
+        " volumes 26.08GB (23.46GB reclaimable),"
+        " build cache 25.53GB (20.73GB reclaimable)"
+    )
+    assert check.details["types"] == {
+        "images": {
+            "count": 53,
+            "active": 31,
+            "size_bytes": 50_460_000_000,
+            "reclaimable_bytes": 14_080_000_000,
+        },
+        "containers": {
+            "count": 32,
+            "active": 31,
+            "size_bytes": 235_900_000,
+            "reclaimable_bytes": 16_380,
+        },
+        "volumes": {
+            "count": 75,
+            "active": 22,
+            "size_bytes": 26_080_000_000,
+            "reclaimable_bytes": 23_460_000_000,
+        },
+        "build_cache": {
+            "count": 897,
+            "active": 0,
+            "size_bytes": 25_530_000_000,
+            "reclaimable_bytes": 20_730_000_000,
+        },
+    }
+    assert check.details["total_bytes"] == 102_305_900_000
+    assert check.details["reclaimable_bytes"] == 58_270_016_380
+    assert not list(VALIDATOR.iter_errors(json.loads(doctor.to_json(report))))
+
+
+def test_docker_usage_asks_the_daemon_one_read_only_question(stack):
+    docker = healthy_docker()
+    run_doctor(stack, docker=docker)
+
+    asked = [c for c in docker.calls if c[:2] == ["docker", "system"]]
+    assert asked == [["docker", "system", "df", "--format", "{{json .}}"]]
+
+
+def test_docker_usage_never_warns_however_much_docker_has_taken(stack):
+    huge = (
+        '{"Active":"1","Reclaimable":"900.0TB (99%)","Size":"1000TB","TotalCount":"9",'
+        '"Type":"Local Volumes"}\n'
+    )
+    report = run_doctor(stack, docker=df_docker(huge))
+
+    assert result(report, "docker_usage").status == PASS
+    assert report.exit_code == 0
+
+
+def test_docker_usage_works_the_same_inside_a_container(stack):
+    # It asks the daemon over the socket, not the file system, so a container
+    # that cannot see the data root can still read it.
+    docker = healthy_docker()
+    inside = result(run_doctor(stack, docker=docker, in_container=lambda: True), "docker_usage")
+
+    assert inside.status == PASS
+    assert inside.details["total_bytes"] == 102_305_900_000
+
+
+def test_docker_usage_can_be_left_out_and_then_costs_nothing(stack):
+    docker = healthy_docker()
+    check = result(run_doctor(stack, docker=docker, skip=["docker_usage"]), "docker_usage")
+
+    assert check.status == SKIP
+    assert not any(c[:2] == ["docker", "system"] for c in docker.calls)
+
+
+def test_docker_usage_runs_before_setup_because_it_needs_no_configuration(tmp_path):
+    check = result(
+        doctor.run_checks(
+            tmp_path / "nowhere",
+            tmp_path / "repo",
+            run=healthy_docker(),
+            probes=probes(),
+            now=NOW,
+        ),
+        "docker_usage",
+    )
+
+    assert check.status == PASS
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        (not_found("docker"), "docker not found"),
+        (CommandResult(124, "", "docker timed out after 20s"), "timed out after 20s"),
+        (
+            CommandResult(1, "", "Cannot connect to the Docker daemon at unix:///docker.sock"),
+            "Cannot connect to the Docker daemon",
+        ),
+        (CommandResult(1, "", ""), "exit 1"),
+        (CommandResult(0, "", ""), "cannot read the docker system df output"),
+        (CommandResult(0, "TYPE  TOTAL  ACTIVE\nImages 53 31\n", ""), "cannot read"),
+    ],
+)
+def test_docker_usage_that_cannot_be_read_is_skipped_with_the_reason_and_never_failed(
+    stack, answer, reason
+):
+    report = run_doctor(stack, docker=df_docker(answer))
+    check = result(report, "docker_usage")
+
+    assert check.status == SKIP
+    assert reason in check.summary
+    assert check.details == {}
+    assert report.exit_code == 0
+
+
+def test_docker_usage_keeps_what_it_can_read_of_a_changed_output(stack):
+    # A line that is not JSON, a row Docker may add later, a size that is not one,
+    # and a build cache with no share after its reclaimable size.
+    output = (
+        "WARNING: something on the way\n"
+        '{"Active":"2","Reclaimable":"1.5GB (30%)","Size":"5GB","TotalCount":"4","Type":"Images"}\n'
+        '{"Active":"1","Reclaimable":"0B","Size":"1GB","TotalCount":"1","Type":"Plugins"}\n'
+        '{"Active":"1","Reclaimable":"0B","Size":"lots","TotalCount":"1","Type":"Containers"}\n'
+        '{"Active":"x","Reclaimable":"200MB","Size":"1.2GB","TotalCount":"","Type":"Build Cache"}\n'
+        "[1, 2]\n"
+    )
+    check = result(run_doctor(stack, docker=df_docker(output)), "docker_usage")
+
+    assert check.status == PASS
+    assert list(check.details["types"]) == ["images", "build_cache"]
+    # Counts that are not numbers are unknown, not zero; the sizes still count.
+    assert check.details["types"]["build_cache"] == {
+        "count": None,
+        "active": None,
+        "size_bytes": 1_200_000_000,
+        "reclaimable_bytes": 200_000_000,
+    }
+    assert check.details["total_bytes"] == 6_200_000_000
+    assert check.summary == (
+        "Docker uses 6.2GB: images 5GB (1.5GB reclaimable), build cache 1.2GB"
+        " (200MB reclaimable)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("50.46GB", 50_460_000_000),
+        ("235.9MB", 235_900_000),
+        ("16.38kB", 16_380),
+        ("16.38KB", 16_380),
+        ("0B", 0),
+        ("14.08GB (27%)", 14_080_000_000),
+        ("1.5TB", 1_500_000_000_000),
+        ("  7 MB", 7_000_000),
+        ("lots", None),
+        ("GB", None),
+        ("", None),
+        (None, None),
+        (12, None),
+    ],
+)
+def test_docker_sizes_are_decimal_with_the_share_after_them_ignored(text, expected):
+    assert doctor.parse_docker_size(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (0, "0B"),
+        (999, "999B"),
+        (16_380, "16.38kB"),
+        (235_900_000, "235.9MB"),
+        (50_460_000_000, "50.46GB"),
+        (102_305_900_000, "102.3GB"),
+        (1_500_000_000_000, "1.5TB"),
+    ],
+)
+def test_sizes_are_written_back_the_way_docker_spells_them(value, text):
+    assert doctor._fmt_docker_size(value) == text
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -589,15 +820,162 @@ def test_gpu_unknown_variant_is_a_warning_naming_the_valid_ones(stack):
     assert "tpu" in check.summary and "nvidia-cuda-13" in check.summary
 
 
-def test_gpu_is_skipped_inside_a_container_without_calling_host_tools(stack):
+def test_gpu_in_a_container_is_read_through_the_localai_container(stack):
     enable_localai(stack, "nvidia-cuda-13")
-    docker = nvidia_docker()
-    check = result(run_doctor(stack, docker=docker, in_container=lambda: True), "gpu")
+    docker = container_docker()
+    report = run_doctor(stack, docker=docker, in_container=lambda: True)
+    check = result(report, "gpu")
+
+    assert check.status == PASS
+    assert check.summary == "NVIDIA GeForce RTX 4090: 2.9/24.0 GiB VRAM, 12 % util, 54C"
+    assert check.details["variant"] == "nvidia-cuda-13"
+    assert check.details["nvidia_runtime"] is True
+    assert check.details["gpus"][0]["driver"] == "560.35.03"
+    assert not list(VALIDATOR.iter_errors(json.loads(doctor.to_json(report))))
+    # Asked of the container that has the GPU, bounded from inside, and never of
+    # a local `nvidia-smi`, which this container does not have.
+    query = ["nvidia-smi", "--query-gpu=" + doctor._NVIDIA_QUERY, "--format=csv,noheader,nounits"]
+    assert ["docker", "exec", "papaia-localai-1", "timeout", "8", *query] in docker.calls
+    assert not any(c[0] == "nvidia-smi" for c in docker.calls)
+    # The only thing exec'd is that one question.
+    assert all(c[3:6] == ["timeout", "8", "nvidia-smi"] for c in docker.calls if c[1] == "exec")
+
+
+@pytest.mark.parametrize("variant", ["nvidia-cuda-12", "nvidia-cuda-13"])
+def test_gpu_in_a_container_covers_both_cuda_variants(stack, variant):
+    check = gpu_in_a_container(stack, container_docker(), variant)
+
+    assert check.status == PASS
+    assert check.details["variant"] == variant
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("0, RTX 4090, 560.35, 24000, 21600, 3, 50", WARN),  # 90 % VRAM
+        ("0, RTX 4090, 560.35, 24000, 21599, 3, 50", PASS),
+        ("0, RTX 4090, 560.35, 24000, 1000, 3, 85", WARN),  # 85 C
+        ("0, RTX 4090, 560.35, 24000, 1000, 100, 50", PASS),  # busy is not a problem
+    ],
+)
+def test_gpu_in_a_container_is_judged_by_the_same_limits_as_on_the_host(stack, line, expected):
+    check = gpu_in_a_container(stack, container_docker(line + "\n"))
+
+    assert check.status == expected
+
+
+@pytest.mark.parametrize("localai", [None, "exited"])
+def test_gpu_in_a_container_without_a_running_localai_is_skipped_not_failed(stack, localai):
+    docker = container_docker(localai=localai)
+    check = gpu_in_a_container(stack, docker)
+
+    assert check.status == SKIP
+    assert "LocalAI is not running" in check.summary
+    assert check.details["variant"] == "nvidia-cuda-13"
+    assert not any(c[1] == "exec" for c in docker.calls)
+
+
+def test_gpu_in_a_container_ignores_a_localai_service_of_an_add_on(stack):
+    # Only the core stack's LocalAI counts: an add-on may name a service anything.
+    stranger = ps_line("other-localai-1", "running", "Up", "localai", project="other")
+    docker = FakeDocker(
+        healthy_core() + [stranger], tools={"nvidia-smi": CommandResult(0, NVIDIA_ONE, "")}
+    )
+
+    check = gpu_in_a_container(stack, docker)
+
+    assert check.status == SKIP
+    assert not any(c[1] == "exec" for c in docker.calls)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        CommandResult(127, "", "exec: \"timeout\": executable file not found in $PATH"),
+        CommandResult(127, "", ""),
+        CommandResult(126, "", "permission denied"),
+    ],
+)
+def test_gpu_in_a_container_without_a_usable_tool_in_the_image_is_skipped(stack, answer):
+    # Unlike a host, where a missing nvidia-smi means a missing driver, this says
+    # only that the image has no tool to ask.
+    check = gpu_in_a_container(stack, container_docker(answer))
+
+    assert check.status == SKIP
+    assert "cannot be run in the LocalAI container" in check.summary
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        CommandResult(1, "", "Error response from daemon: container abc is not running\n"),
+        CommandResult(
+            1, "", "permission denied while trying to connect to the Docker daemon socket\n"
+        ),
+        CommandResult(1, "", "Cannot connect to the Docker daemon. Is the docker daemon running?"),
+        CommandResult(125, "", "docker: unknown flag: --nope\n"),
+    ],
+)
+def test_gpu_in_a_container_that_docker_refuses_to_exec_into_is_skipped(stack, refusal):
+    docker = container_docker(exec_failure=refusal)
+    check = gpu_in_a_container(stack, docker)
+
+    assert check.status == SKIP
+    assert "cannot reach the LocalAI container" in check.summary
+
+
+@pytest.mark.parametrize(
+    ("smi", "reason"),
+    [
+        (CommandResult(9, "No devices were found\n", ""), "No devices were found"),
+        (CommandResult(1, "", "Failed to initialize NVML\n"), "Failed to initialize NVML"),
+    ],
+)
+def test_gpu_in_a_container_still_fails_when_nvidia_smi_itself_reports_a_broken_driver(
+    stack, smi, reason
+):
+    check = gpu_in_a_container(stack, container_docker(smi))
+
+    assert check.status == FAIL
+    assert reason in check.summary
+
+
+def test_gpu_in_a_container_that_hangs_is_a_warning(stack):
+    # `timeout` inside the container ends the hang and says so with 124.
+    check = gpu_in_a_container(stack, container_docker(CommandResult(124, "", "")))
+
+    assert check.status == WARN
+    assert "timed out" in check.summary
+
+
+def test_gpu_in_a_container_still_fails_for_a_missing_docker_runtime(stack):
+    # The one host-level fact a container can ask the daemon for.
+    docker = container_docker(runtimes='{"runc":{"path":"runc"}}')
+    check = gpu_in_a_container(stack, docker)
+
+    assert check.status == FAIL
+    assert "'nvidia' runtime is not registered" in check.summary
+
+
+@pytest.mark.parametrize("variant", ["hipblas", "intel", "vulkan"])
+def test_gpu_in_a_container_stays_skipped_for_the_variants_without_a_tool_to_exec(stack, variant):
+    docker = container_docker()
+    check = gpu_in_a_container(stack, docker, variant)
 
     assert check.status == SKIP
     assert "inside a container" in check.summary
-    assert check.details["variant"] == "nvidia-cuda-13"
-    assert not any(c[0] == "nvidia-smi" for c in docker.calls)
+    assert check.details["variant"] == variant
+    assert not any(c[1] == "exec" for c in docker.calls)
+
+
+def test_gpu_on_a_host_still_asks_the_local_tool_and_never_execs(stack):
+    enable_localai(stack, "nvidia-cuda-13")
+    docker = nvidia_docker()
+    check = result(run_doctor(stack, docker=docker), "gpu")
+
+    assert check.status == PASS
+    assert any(c[0] == "nvidia-smi" for c in docker.calls)
+    assert not any(c[:2] == ["docker", "exec"] for c in docker.calls)
 
 
 @pytest.mark.parametrize("variant", ["nvidia-cuda-12", "nvidia-cuda-13"])
@@ -902,12 +1280,166 @@ def test_time_sync_is_skipped_where_the_clock_state_cannot_be_read(stack, answer
     assert result(run_doctor(stack, docker=docker), "time_sync").status == SKIP
 
 
-def test_time_sync_is_skipped_inside_a_container_without_asking(stack):
+def test_time_sync_in_a_container_reads_the_kernel_clock_and_never_asks_timedatectl(stack):
     docker = healthy_docker()
-    check = result(run_doctor(stack, docker=docker, in_container=lambda: True), "time_sync")
+    check = result(
+        run_doctor(
+            stack,
+            docker=docker,
+            in_container=lambda: True,
+            kernel_clock_synchronized=lambda: True,
+        ),
+        "time_sync",
+    )
+
+    assert check.status == PASS
+    assert check.summary == "system clock is synchronized"
+    assert check.details == {"ntp_synchronized": True}
+    assert not any(c[0] == "timedatectl" for c in docker.calls)
+
+
+def test_time_sync_in_a_container_warns_when_the_kernel_clock_is_not_synchronized(stack):
+    report = run_doctor(
+        stack, in_container=lambda: True, kernel_clock_synchronized=lambda: False
+    )
+    check = result(report, "time_sync")
+
+    assert check.status == WARN
+    assert check.details == {"ntp_synchronized": False}
+    assert "not synchronized" in check.summary
+    assert report.exit_code == 0
+
+
+def test_time_sync_in_a_container_is_skipped_where_adjtimex_cannot_be_read(stack):
+    check = result(
+        run_doctor(stack, in_container=lambda: True, kernel_clock_synchronized=lambda: None),
+        "time_sync",
+    )
 
     assert check.status == SKIP
-    assert not any(c[0] == "timedatectl" for c in docker.calls)
+    assert "adjtimex" in check.summary
+    assert check.details == {}
+
+
+def test_time_sync_on_a_host_leaves_the_kernel_probe_alone(stack):
+    def forbidden() -> bool | None:
+        raise AssertionError("the host path asks timedatectl")
+
+    check = result(run_doctor(stack, kernel_clock_synchronized=forbidden), "time_sync")
+
+    assert check.status == PASS
+
+
+# The probe itself. The layout and the real call only exist on 64-bit Linux; the
+# judgement and the ways it gives up are tested against a stand-in everywhere
+# the guard lets them through.
+LINUX_64 = sys.platform.startswith("linux") and ctypes.sizeof(ctypes.c_long) == 8
+needs_linux_64 = pytest.mark.skipif(not LINUX_64, reason="struct timex of the 64-bit Linux ABI")
+
+
+class FakeAdjtimex:
+    """`libc.adjtimex`, filling in the one field the probe reads."""
+
+    def __init__(self, maxerror: int = 0, returns: int = 0):
+        self.maxerror, self.returns = maxerror, returns
+        self.argtypes = None
+        self.restype = None
+        self.calls = 0
+
+    def __call__(self, pointer):
+        self.calls += 1
+        pointer._obj.maxerror = self.maxerror
+        return self.returns
+
+
+def fake_libc(monkeypatch, adjtimex) -> None:
+    monkeypatch.setattr(
+        doctor.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(adjtimex=adjtimex)
+    )
+
+
+@needs_linux_64
+def test_the_timex_buffer_is_as_large_as_the_kernel_writes():
+    assert ctypes.sizeof(doctor._Timex) == 208
+    # modes, four bytes of padding, offset, freq, then maxerror.
+    assert doctor._Timex.maxerror.offset == 24
+
+
+@needs_linux_64
+@pytest.mark.parametrize(
+    ("maxerror", "synchronized"),
+    [
+        (0, True),
+        (55_506, True),  # a host disciplined by NTP, as measured on one
+        (15_999_999, True),
+        (16_000_000, False),  # what the kernel starts at, and keeps until NTP lowers it
+        (16_000_001, False),
+    ],
+)
+def test_the_kernel_clock_is_judged_by_maxerror_the_way_systemd_does(
+    monkeypatch, maxerror, synchronized
+):
+    adjtimex = FakeAdjtimex(maxerror)
+    fake_libc(monkeypatch, adjtimex)
+
+    assert doctor._kernel_clock_synchronized() is synchronized
+    assert adjtimex.calls == 1
+
+
+@needs_linux_64
+def test_the_kernel_clock_probe_only_ever_reads(monkeypatch):
+    seen = []
+
+    class Recording(FakeAdjtimex):
+        def __call__(self, pointer):
+            seen.append(pointer._obj.modes)
+            return super().__call__(pointer)
+
+    fake_libc(monkeypatch, Recording())
+    doctor._kernel_clock_synchronized()
+
+    # `modes` zero is the read-only form: anything else would set the clock.
+    assert seen == [0]
+
+
+@needs_linux_64
+def test_the_kernel_clock_probe_gives_up_when_the_call_is_refused(monkeypatch):
+    fake_libc(monkeypatch, FakeAdjtimex(returns=-1))
+
+    assert doctor._kernel_clock_synchronized() is None
+
+
+@needs_linux_64
+def test_the_kernel_clock_probe_gives_up_without_adjtimex_in_the_c_library(monkeypatch):
+    monkeypatch.setattr(doctor.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace())
+
+    assert doctor._kernel_clock_synchronized() is None
+
+
+@needs_linux_64
+def test_the_kernel_clock_probe_gives_up_when_the_c_library_cannot_be_loaded(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError("no libc")
+
+    monkeypatch.setattr(doctor.ctypes, "CDLL", refuse)
+
+    assert doctor._kernel_clock_synchronized() is None
+
+
+def test_the_kernel_clock_probe_is_not_attempted_off_linux(monkeypatch):
+    monkeypatch.setattr(doctor, "sys", SimpleNamespace(platform="win32"))
+
+    def fail(*args, **kwargs):
+        raise AssertionError("the C library is not touched off Linux")
+
+    monkeypatch.setattr(doctor.ctypes, "CDLL", fail)
+
+    assert doctor._kernel_clock_synchronized() is None
+
+
+@needs_linux_64
+def test_the_real_kernel_clock_probe_answers_or_declines_but_never_raises():
+    assert doctor._kernel_clock_synchronized() in (True, False, None)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1329,11 +1861,14 @@ def test_doctor_writes_nothing(stack, tmp_path, variant):
         ("docker", "version"),
         ("docker", "compose"),
         ("docker", "info"),
+        ("docker", "system"),
         ("nvidia-smi", "--query-gpu=" + doctor._NVIDIA_QUERY),
         ("rocm-smi", "--showmeminfo"),
         ("timedatectl", "show"),
     }
     assert {tuple(c[:2]) for c in docker.calls} <= allowed
+    # `docker system` also holds `prune`; only `df` is a read.
+    assert all(c[2] == "df" for c in docker.calls if c[:2] == ["docker", "system"])
 
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -45,6 +45,20 @@ RUNTIMES_WITH_NVIDIA = (
     '"runc":{"path":"runc"}}'
 )
 
+# `docker system df --format '{{json .}}'`, as Docker 29 prints it: one object per
+# line, sizes as decimal text, and no share after the reclaimable size of the
+# build cache.
+SYSTEM_DF = (
+    '{"Active":"31","Reclaimable":"14.08GB (27%)","Size":"50.46GB","TotalCount":"53",'
+    '"Type":"Images"}\n'
+    '{"Active":"31","Reclaimable":"16.38kB (0%)","Size":"235.9MB","TotalCount":"32",'
+    '"Type":"Containers"}\n'
+    '{"Active":"22","Reclaimable":"23.46GB (89%)","Size":"26.08GB","TotalCount":"75",'
+    '"Type":"Local Volumes"}\n'
+    '{"Active":"0","Reclaimable":"20.73GB","Size":"25.53GB","TotalCount":"897",'
+    '"Type":"Build Cache"}\n'
+)
+
 # Host tools the doctor checks run through the same runner as `docker`. Unless a
 # test says otherwise they are absent, except the clock, which is in sync.
 HOST_TOOLS = ("nvidia-smi", "rocm-smi", "timedatectl")
@@ -57,7 +71,12 @@ def not_found(tool: str) -> CommandResult:
 class FakeDocker:
     """Stands in for `docker` and the host tools next to it: answers
     ps/inspect/version/compose/info, `nvidia-smi`, `rocm-smi` and `timedatectl`
-    with canned text and records every call."""
+    with canned text and records every call.
+
+    `docker exec <container> [timeout N] <tool> ...` is answered from the same
+    tool table, as the tool would answer inside the container, unless the test
+    gives `exec_failure`: what the Docker CLI itself says when it cannot get as
+    far as the tool (no such container, not running, no socket access)."""
 
     def __init__(
         self,
@@ -71,8 +90,12 @@ class FakeDocker:
         totals: CommandResult | None = None,
         runtimes: CommandResult | None = None,
         tools: dict[str, CommandResult] | None = None,
+        exec_failure: CommandResult | None = None,
+        df: CommandResult | None = None,
     ):
         self.ps_result = ps_result or CommandResult(0, "\n".join(ps or []) + "\n", "")
+        self.exec_failure = exec_failure
+        self.df = df or CommandResult(0, SYSTEM_DF, "")
         self.policies = policies or {}
         self.engine = engine or CommandResult(0, "27.0.3\n", "")
         self.compose = compose or CommandResult(0, "2.29.1\n", "")
@@ -98,9 +121,22 @@ class FakeDocker:
             return self.compose
         if cmd[:2] == ["docker", "info"]:
             return self._info(cmd[-1])
+        if cmd[:3] == ["docker", "system", "df"]:
+            return self.df
         if cmd[0] in HOST_TOOLS:
             return self.tools.get(cmd[0]) or not_found(cmd[0])
+        if cmd[:2] == ["docker", "exec"]:
+            return self._exec(cmd[3:])
         raise AssertionError(f"unexpected command: {cmd}")
+
+    def _exec(self, argv: list[str]) -> CommandResult:
+        if self.exec_failure is not None:
+            return self.exec_failure
+        if argv[:1] == ["timeout"]:
+            argv = argv[2:]
+        if not argv or argv[0] not in HOST_TOOLS:
+            raise AssertionError(f"unexpected exec: {argv}")
+        return self.tools.get(argv[0]) or not_found(argv[0])
 
     def _info(self, fmt: str) -> CommandResult:
         if fmt == "{{.DockerRootDir}}":
@@ -258,6 +294,29 @@ def healthy_core() -> list[str]:
             "searxng",
             "papaia-searxng",
             "search-engine",
+        ),
+    ]
+
+
+def localai_container(state: str = "running") -> list[str]:
+    """The `docker ps` lines of a LocalAI that was started (its one-shot model
+    init is a sibling and has run)."""
+    return [
+        ps_line(
+            "papaia-localai-1",
+            state,
+            "Up 2 hours (healthy)" if state == "running" else "Exited (1) 3 minutes ago",
+            "localai",
+            "papaia-localai",
+            "inference-engine",
+        ),
+        ps_line(
+            "papaia-localai-model-init-1",
+            "exited",
+            "Exited (0) 2 hours ago",
+            "localai-model-init",
+            "papaia-localai",
+            "model-init",
         ),
     ]
 

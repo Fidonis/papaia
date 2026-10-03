@@ -6,10 +6,13 @@ follow. Each check answers `pass`, `warn`, `fail` or `skip` (not applicable
 here: offline, not set up yet, nothing to look at). Only `fail` makes the
 command exit non-zero.
 
-Nothing here changes anything. The probes are reads: `docker version/info`,
-`shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
+Nothing here changes anything. The probes are reads: `docker version/info` and
+`docker system df`, `shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
 `rocm-smi` / `timedatectl`, a TCP connect to localhost, a name lookup,
-`openssl x509` on a file, plus everything `status` reads.
+`openssl x509` on a file, plus everything `status` reads. Inside a container,
+where the host's driver tools and `timedatectl` are out of reach, the NVIDIA GPU
+is read with a `docker exec` of `nvidia-smi` into the LocalAI container and the
+clock with `adjtimex(2)`, which only reads.
 
 Load and pressure findings (memory, CPU, VRAM, temperature, clock) are at most
 `warn`: a busy host is not a broken installation, and `doctor` is also the
@@ -29,12 +32,14 @@ keeps the checks testable without a Docker daemon, a network or a certificate.
 from __future__ import annotations
 
 import concurrent.futures
+import ctypes
 import json
 import math
 import os
 import re
 import shutil
 import socket
+import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -83,11 +88,24 @@ GPU_TEMP_WARN_CELSIUS = 85
 DNS_TIMEOUT_SECONDS = 3.0
 PORT_PROBE_TIMEOUT_SECONDS = 0.5
 DOCKER_PROBE_TIMEOUT_SECONDS = 10.0
+# `docker system df` makes the daemon work out the size of every volume and of the
+# build cache, which grows with the data: 1.5 s on a stack with 75 volumes.
+DOCKER_USAGE_TIMEOUT_SECONDS = 20.0
 # nvidia-smi is known to hang on a broken driver, hence its own bound.
 GPU_PROBE_TIMEOUT_SECONDS = 10.0
+# Through `docker exec` the bound has to be set inside the container as well:
+# killing the CLI that started an exec leaves its process running there. The
+# inner one is the shorter, so a hang is `timeout`'s exit 124 and not a kill.
+GPU_EXEC_TIMEOUT_SECONDS = 8
 TIME_PROBE_TIMEOUT_SECONDS = 5.0
 
+# What systemd's `NTPSynchronized` means: the kernel's estimated maximum error is
+# under sixteen seconds. The kernel starts at exactly that figure and only lowers
+# it while something disciplines the clock.
+KERNEL_CLOCK_SYNCED_MAXERROR_US = 16_000_000
+
 LOCALAI_PROFILE = "localai"
+LOCALAI_SERVICE = "localai"
 GPU_OVERRIDE = Path("overrides") / "docker-compose.localai-gpu.override.yml"
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
@@ -229,9 +247,73 @@ def _loadavg() -> tuple[float, float, float] | None:
 
 def _in_container() -> bool:
     """Whether this process runs inside a container, where the host's driver
-    tools, device nodes and clock settings are not visible. `papaia-manager`
+    tools, device nodes and `timedatectl` are not visible. `papaia-manager`
     runs `doctor` in its own container."""
     return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
+class _Timeval(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
+
+
+class _Timex(ctypes.Structure):
+    """`struct timex` of the 64-bit Linux ABI (glibc and musl alike, 208 bytes).
+
+    Only `maxerror` is read; the rest is here because the kernel fills the whole
+    structure and the buffer must be as large as it expects."""
+
+    _fields_ = [
+        ("modes", ctypes.c_uint),
+        ("offset", ctypes.c_long),
+        ("freq", ctypes.c_long),
+        ("maxerror", ctypes.c_long),
+        ("esterror", ctypes.c_long),
+        ("status", ctypes.c_int),
+        ("constant", ctypes.c_long),
+        ("precision", ctypes.c_long),
+        ("tolerance", ctypes.c_long),
+        ("time", _Timeval),
+        ("tick", ctypes.c_long),
+        ("ppsfreq", ctypes.c_long),
+        ("jitter", ctypes.c_long),
+        ("shift", ctypes.c_int),
+        ("stabil", ctypes.c_long),
+        ("jitcnt", ctypes.c_long),
+        ("calcnt", ctypes.c_long),
+        ("errcnt", ctypes.c_long),
+        ("stbcnt", ctypes.c_long),
+        ("tai", ctypes.c_int),
+        ("reserved", ctypes.c_int * 11),
+    ]
+
+
+def _kernel_clock_synchronized() -> bool | None:
+    """Whether the kernel considers the clock synchronized, read with `adjtimex(2)`.
+
+    The clock belongs to the kernel, which a container shares with its host, so
+    this answers the same as `timedatectl` does without needing systemd or its bus.
+    With `modes` zero the call only reads and needs no capability; Docker's default
+    seccomp profile allows it.
+
+    Judged the way systemd judges `NTPSynchronized`: by `maxerror`, not by the
+    `STA_UNSYNC` flag. systemd ignores the flag on purpose, because it can be set
+    to keep the kernel from writing the RTC, and a flag-based check would call a
+    host unsynchronized that `timedatectl` calls synchronized.
+
+    None where it cannot be read: not 64-bit Linux, no `adjtimex` in the C
+    library, or the call refused."""
+    if not sys.platform.startswith("linux") or ctypes.sizeof(ctypes.c_long) != 8:
+        return None
+    try:
+        adjtimex = ctypes.CDLL(None, use_errno=True).adjtimex
+    except (OSError, AttributeError):
+        return None
+    adjtimex.argtypes = [ctypes.POINTER(_Timex)]
+    adjtimex.restype = ctypes.c_int
+    state = _Timex()
+    if adjtimex(ctypes.byref(state)) < 0:
+        return None
+    return state.maxerror < KERNEL_CLOCK_SYNCED_MAXERROR_US
 
 
 @dataclass
@@ -244,6 +326,7 @@ class Probes:
     loadavg: Callable[[], tuple[float, float, float] | None] = _loadavg
     cpu_count: Callable[[], int | None] = os.cpu_count
     in_container: Callable[[], bool] = _in_container
+    kernel_clock_synchronized: Callable[[], bool | None] = _kernel_clock_synchronized
     # Where device nodes live; the same seam `gpu_detect.compose_fragment` has.
     dev_root: Path = Path("/dev")
 
@@ -454,6 +537,115 @@ def check_disk_space(ctx: Context) -> CheckResult:
             f" fail below {_fmt_bytes(DISK_FAIL_FREE_BYTES)})"
         )
     return CheckResult(name, overall, summary, {"paths": measured, "notes": notes})
+
+
+# ─── docker_usage ────────────────────────────────────────────────────────
+
+# The rows of `docker system df`, which names them in prose, and the keys the
+# details use for them. Docker's own order, which is also the summary's.
+_DOCKER_USAGE_TYPES = {
+    "Images": "images",
+    "Containers": "containers",
+    "Local Volumes": "volumes",
+    "Build Cache": "build_cache",
+}
+
+# Docker prints decimal units with four significant digits: `50.46GB`, `16.38kB`.
+_DOCKER_UNITS = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4, "PB": 1000**5}
+_DOCKER_SIZE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([kKMGTP]?B)\b")
+
+
+def parse_docker_size(text: Any) -> int | None:
+    """Bytes out of Docker's size text. `14.08GB (27 %)` reads as 14.08GB: the
+    reclaimable column carries a share after the size, build cache's does not.
+    The figure is as exact as the four digits Docker prints."""
+    match = _DOCKER_SIZE.match(text) if isinstance(text, str) else None
+    if match is None:
+        return None
+    return round(float(match.group(1)) * _DOCKER_UNITS[match.group(2).upper()])
+
+
+def _fmt_docker_size(value: int) -> str:
+    """Back to the spelling Docker uses, so the summary reads like `docker system df`."""
+    size = float(value)
+    for unit in ("B", "kB", "MB", "GB"):
+        if size < 1000:
+            return f"{size:.4g}{unit}"
+        size /= 1000
+    return f"{size:.4g}TB"
+
+
+def _count(text: Any) -> int | None:
+    return int(text) if isinstance(text, str) and text.strip().isdigit() else None
+
+
+def parse_docker_system_df(text: str) -> dict[str, dict[str, int | None]]:
+    """One entry per row of `docker system df --format '{{json .}}'`, by `_DOCKER_USAGE_TYPES`.
+
+    A line that is not a JSON object, a row Docker adds later and a row whose size
+    cannot be read are dropped; the caller reports what is left."""
+    usage: dict[str, dict[str, int | None]] = {}
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        key = _DOCKER_USAGE_TYPES.get(str(row.get("Type")))
+        size = parse_docker_size(row.get("Size"))
+        if key is None or size is None:
+            continue
+        usage[key] = {
+            "count": _count(row.get("TotalCount")),
+            "active": _count(row.get("Active")),
+            "size_bytes": size,
+            "reclaimable_bytes": parse_docker_size(row.get("Reclaimable")),
+        }
+    return usage
+
+
+def check_docker_usage(ctx: Context) -> CheckResult:
+    """What Docker's data takes, as the daemon reports it.
+
+    `disk_space` says how much room is left, and only where the data root can be
+    seen: not on Docker Desktop, not inside a container. The daemon answers the
+    other question, how much of the disk is Docker's, over the socket wherever the
+    CLI runs. Report-only: how much Docker may take is the operator's call, and
+    "reclaimable" volumes are ones no container uses now, not ones safe to delete."""
+    name = "docker_usage"
+    result = ctx.run(
+        ["docker", "system", "df", "--format", "{{json .}}"], DOCKER_USAGE_TIMEOUT_SECONDS
+    )
+    # Nothing here is a finding about the installation: `docker_version` is the
+    # check that fails for a daemon that is not there.
+    if result.returncode == 127:
+        return CheckResult(name, SKIP, "docker not found")
+    if result.returncode == 124:
+        return CheckResult(
+            name, SKIP, f"docker system df timed out after {DOCKER_USAGE_TIMEOUT_SECONDS:g}s"
+        )
+    if result.returncode != 0:
+        reason = status.first_line(result.stderr) or f"exit {result.returncode}"
+        return CheckResult(name, SKIP, f"docker system df failed: {reason}")
+    usage = parse_docker_system_df(result.stdout)
+    if not usage:
+        return CheckResult(name, SKIP, "cannot read the docker system df output")
+
+    total = sum(row["size_bytes"] or 0 for row in usage.values())
+    reclaimable = sum(row["reclaimable_bytes"] or 0 for row in usage.values())
+    parts = []
+    for key in _DOCKER_USAGE_TYPES.values():
+        row = usage.get(key)
+        if row is None:
+            continue
+        part = f"{key.replace('_', ' ')} {_fmt_docker_size(row['size_bytes'] or 0)}"
+        if row["reclaimable_bytes"]:
+            part += f" ({_fmt_docker_size(row['reclaimable_bytes'])} reclaimable)"
+        parts.append(part)
+    summary = f"Docker uses {_fmt_docker_size(total)}: " + ", ".join(parts)
+    details = {"types": usage, "total_bytes": total, "reclaimable_bytes": reclaimable}
+    return CheckResult(name, PASS, summary, details)
 
 
 def check_memory(ctx: Context) -> CheckResult:
@@ -721,12 +913,64 @@ def _runtime_names(text: str) -> set[str] | None:
     return set(document) if isinstance(document, dict) else None
 
 
-def _gpu_nvidia(ctx: Context, variant: str, details: dict[str, Any]) -> CheckResult:
+def _localai_container(ctx: Context) -> str | None:
+    """Name of the running LocalAI container of the core stack, from the status
+    report `container_health` shares. None if there is none: not started, or
+    declared and never created."""
+    for module in ctx.status_report().modules:
+        if module.kind != "core":
+            continue
+        for container in module.containers:
+            if (
+                container.service == LOCALAI_SERVICE
+                and container.state == "running"
+                and container.name
+            ):
+                return container.name
+    return None
+
+
+def _exec_failure(result: status.CommandResult) -> str | None:
+    """Why a `docker exec ... nvidia-smi` never reached `nvidia-smi`, or None when
+    it did and the exit status is its own.
+
+    `docker exec` hands back the command's exit status, so 126 and 127 (found but
+    not runnable, not found) mean this image has no usable tool, and a refusal by
+    the daemon (no such container, not running, no socket access) is exit 1 with a
+    message of its own. Neither says anything about the driver, which is why they
+    are not held against the host the way the same words from a local
+    `nvidia-smi` are."""
+    reason = status.first_line(result.stderr)
+    if result.returncode in (126, 127):
+        return f"nvidia-smi cannot be run in the LocalAI container (exit {result.returncode})"
+    if (
+        result.returncode == 125
+        or reason.startswith("Error response from daemon")
+        or "docker daemon" in reason.lower()
+    ):
+        return f"cannot reach the LocalAI container: {reason or 'docker exec failed'}"
+    return None
+
+
+def _gpu_nvidia(
+    ctx: Context, variant: str, details: dict[str, Any], *, container: str | None = None
+) -> CheckResult:
+    """`nvidia-smi` on this host, or, given a `container`, inside that one.
+
+    The figures are judged by the same parser and the same limits either way; only
+    where the tool runs differs, and with it what a failure to run it proves."""
     name = "gpu"
-    result = ctx.run(
-        ["nvidia-smi", f"--query-gpu={_NVIDIA_QUERY}", "--format=csv,noheader,nounits"],
-        GPU_PROBE_TIMEOUT_SECONDS,
-    )
+    query = ["nvidia-smi", f"--query-gpu={_NVIDIA_QUERY}", "--format=csv,noheader,nounits"]
+    if container is None:
+        result = ctx.run(query, GPU_PROBE_TIMEOUT_SECONDS)
+    else:
+        result = ctx.run(
+            ["docker", "exec", container, "timeout", str(GPU_EXEC_TIMEOUT_SECONDS), *query],
+            GPU_PROBE_TIMEOUT_SECONDS,
+        )
+        unreachable = _exec_failure(result)
+        if unreachable is not None:
+            return CheckResult(name, SKIP, unreachable, details)
     if result.returncode == 127:
         return CheckResult(
             name,
@@ -843,15 +1087,32 @@ def check_gpu(ctx: Context) -> CheckResult:
             f"unknown LOCALAI_IMAGE_VARIANT '{variant}' (one of: {', '.join(gpu_detect.VARIANTS)})",
             details,
         )
+    nvidia = variant in (gpu_detect.NVIDIA_CUDA_12, gpu_detect.NVIDIA_CUDA_13)
     if ctx.probes.in_container():
-        return CheckResult(
-            name,
-            SKIP,
-            "not measurable from inside a container: the host's driver tools and devices"
-            " are not visible",
-            details,
-        )
-    if variant in (gpu_detect.NVIDIA_CUDA_12, gpu_detect.NVIDIA_CUDA_13):
+        if not nvidia:
+            # /dev/kfd and the render nodes are the host's devices, and the
+            # manager's own /dev has neither; AMD's tool is not on offer either.
+            return CheckResult(
+                name,
+                SKIP,
+                "not measurable from inside a container: the host's driver tools and devices"
+                " are not visible",
+                details,
+            )
+        # The container with the GPU is the one place NVIDIA's tool is guaranteed
+        # to be: the toolkit puts `nvidia-smi` into every container that asked for
+        # the `utility` capability, which LocalAI's image does.
+        container = _localai_container(ctx)
+        if container is None:
+            return CheckResult(
+                name,
+                SKIP,
+                "LocalAI is not running, and from inside a container the GPU can only be"
+                " read through its container",
+                details,
+            )
+        return _gpu_nvidia(ctx, variant, details, container=container)
+    if nvidia:
         return _gpu_nvidia(ctx, variant, details)
     if variant == gpu_detect.HIPBLAS:
         return _gpu_amd(ctx, details)
@@ -986,17 +1247,35 @@ def check_dns(ctx: Context) -> CheckResult:
     return CheckResult(name, PASS, f"{len(hosts)} hostname(s) resolve", details)
 
 
+def _clock_result(name: str, synchronized: bool) -> CheckResult:
+    if synchronized:
+        return CheckResult(name, PASS, "system clock is synchronized", {"ntp_synchronized": True})
+    return CheckResult(
+        name,
+        WARN,
+        "system clock is not synchronized: OIDC token and TLS certificate validation"
+        " depend on it",
+        {"ntp_synchronized": False},
+    )
+
+
 def check_time_sync(ctx: Context) -> CheckResult:
     """Whether the host clock is disciplined by NTP.
 
     OIDC tokens carry `iat` / `exp` / `nbf`, and TLS certificates a validity
     window; a clock that drifted makes logins and certificate checks fail in
-    ways that point everywhere but at the clock."""
+    ways that point everywhere but at the clock.
+
+    On a host this asks `timedatectl`. Inside a container that is out of reach,
+    but the clock is the host's, so the kernel's own state is read instead."""
     name = "time_sync"
     if ctx.probes.in_container():
-        return CheckResult(
-            name, SKIP, "not measurable from inside a container (the host clock is not visible)"
-        )
+        synchronized = ctx.probes.kernel_clock_synchronized()
+        if synchronized is None:
+            return CheckResult(
+                name, SKIP, "not measurable from inside a container (adjtimex is not available)"
+            )
+        return _clock_result(name, synchronized)
     result = ctx.run(
         ["timedatectl", "show", "-p", "NTPSynchronized", "--value"], TIME_PROBE_TIMEOUT_SECONDS
     )
@@ -1006,16 +1285,8 @@ def check_time_sync(ctx: Context) -> CheckResult:
         reason = status.first_line(result.stderr) or f"exit {result.returncode}"
         return CheckResult(name, SKIP, f"timedatectl is not usable here ({reason})")
     value = status.first_line(result.stdout).lower()
-    if value == "yes":
-        return CheckResult(name, PASS, "system clock is synchronized", {"ntp_synchronized": True})
-    if value == "no":
-        return CheckResult(
-            name,
-            WARN,
-            "system clock is not synchronized: OIDC token and TLS certificate validation"
-            " depend on it",
-            {"ntp_synchronized": False},
-        )
+    if value in ("yes", "no"):
+        return _clock_result(name, value == "yes")
     return CheckResult(name, SKIP, f"unexpected timedatectl output: '{value}'")
 
 
@@ -1174,6 +1445,7 @@ def check_container_health(ctx: Context) -> CheckResult:
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
+    ("docker_usage", check_docker_usage),
     ("memory", check_memory),
     ("cpu", check_cpu),
     ("gpu", check_gpu),

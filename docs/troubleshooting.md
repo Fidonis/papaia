@@ -86,7 +86,9 @@ If it is missing, the variant is `cpu`; re-run `tools/papaia-ctl setup` and pick
 `tools/papaia-ctl doctor` runs these host checks for the configured variant (the `gpu` check):
 whether `nvidia-smi` works and Docker has the `nvidia` runtime, whether `/dev/kfd` or a render
 node under `/dev/dri` exists, and, for NVIDIA and AMD, how much VRAM is in use. It reports `skip`
-for the CPU image and when run inside a container (as `papaia-manager` does).
+for the CPU image. Inside a container (as `papaia-manager` runs it) the NVIDIA GPU is read with
+`nvidia-smi` in the running LocalAI container instead, and reports `skip` if LocalAI is not
+running; AMD, Intel and Vulkan report `skip` there, because their devices are the host's.
 
 The image alone is not enough — the host prerequisites have to be in place:
 

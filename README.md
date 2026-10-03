@@ -603,12 +603,13 @@ raw values behind its summary in `details`.
 |---|---|---|
 | `docker_version` | The Docker daemon is reachable and the Compose plugin is 2.20.0 or newer. | `fail` otherwise |
 | `disk_space` | Free space for the config directory, `PAPAIA_BACKUP_DIR` and the Docker data root (skipped when the host cannot see it, as with Docker Desktop). | `warn` below 10 GiB, `fail` below 2 GiB |
+| `docker_usage` | What Docker's data takes, from `docker system df`: images, containers, volumes and build cache, each with its size and the part the daemon calls reclaimable. It asks the daemon, so it also works where `disk_space` cannot see the data root (Docker Desktop, inside a container). | never `warn` or `fail`; `skip` if Docker cannot be asked, the call times out or the output is not recognised |
 | `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
 | `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
-| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image or when LocalAI is not enabled |
+| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
-| `time_sync` | The system clock is synchronized by NTP (`timedatectl`). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where `timedatectl` is not usable |
+| `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
 | `certs` | Days until expiry of `certs/*.crt` and of the Let's Encrypt certificates under `infra/nginx/nginx-letsencrypt/live/`. Needs `openssl`. | `warn` below 30 days, `fail` below 7 days or expired |
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
@@ -617,6 +618,15 @@ Before `setup` has run, the checks that need the installation's configuration re
 instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as
 `skip` without running them, for example `--skip=dns,certs` on a host without internet access.
 
+`docker_usage` is a report, not a verdict: how much room is left is `disk_space`'s question, and how
+much Docker may take is yours to decide. "Reclaimable" is Docker's word for what no container uses
+right now, which for volumes is not the same as safe to delete. Sizes are Docker's own decimal
+figures with four significant digits, so the byte counts in `details` are as exact as that. The
+daemon works out the size of every volume to answer, which took about 1.5 s on a stack with 75
+volumes and grows with the data; the check stops waiting after 20 s, and `--skip=docker_usage`
+leaves it out on a host where that is too slow. Anything that runs `doctor` on a timer should skip
+it or accept that cost on every run.
+
 Memory, CPU load, VRAM use, GPU temperature and clock drift never make `doctor` fail: a busy host
 is not a broken installation, and `doctor` is also the preflight before `setup` and `upgrade`. GPU
 utilization is reported in `details` but does not count, because it is high during any inference.
@@ -624,11 +634,24 @@ Only a GPU variant that cannot start is a `fail`. The thresholds are constants a
 [`tools/lib/doctor.py`](tools/lib/doctor.py).
 
 Run inside a container, as `papaia-manager` does, `memory` and `cpu` are correct (`/proc/meminfo`
-and the load average describe the host), while `gpu` and `time_sync` report `skip`: the host's
-driver tools, device nodes and clock settings are not visible there. AMD utilization is read from
-the JSON of `rocm-smi`, whose key names differ between ROCm releases; if they are not recognised
-the check passes and says that utilization was not measured. Utilization is never measured for Intel
-and Vulkan GPUs.
+and the load average describe the host), and the two checks that need the host's tools are read
+another way:
+
+- `gpu` for NVIDIA runs `nvidia-smi` inside the running LocalAI container with `docker exec`
+  (bounded by `timeout` from inside, so a hung driver cannot outlive the check) and judges the
+  answer by the same limits as on a host. The `nvidia` runtime is still asked of the Docker daemon.
+  If LocalAI is not running, the image has no usable `nvidia-smi`, or Docker refuses the `exec`,
+  the check reports `skip` with the reason: from inside a container that says nothing about the
+  driver, so it is never a `fail`. AMD, Intel and Vulkan still report `skip` there, because
+  `/dev/kfd` and the render nodes are the host's devices.
+- `time_sync` reads the kernel's clock state with `adjtimex(2)`, which only reads and needs no
+  capability, and calls the clock synchronized when its estimated maximum error is under 16
+  seconds, which is how `timedatectl` decides. It reports `skip` where the call is not available
+  (not 64-bit Linux, or a container runtime that refuses it).
+
+AMD utilization is read from the JSON of `rocm-smi`, whose key names differ between ROCm releases;
+if they are not recognised the check passes and says that utilization was not measured.
+Utilization is never measured for Intel and Vulkan GPUs.
 
 Not covered: Python and PyYAML (`papaia-ctl` verifies both before any command runs), the ports
 of add-ons, and certificates that were uploaded to Nginx Proxy Manager instead of requested
