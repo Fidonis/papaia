@@ -112,8 +112,8 @@ tools/papaia-ctl doctor --skip=dns,certs # on a host without internet access
 
 Both are read-only. `status` is cheap and also available as `--json`; `doctor` is the check
 to run before `setup` and `upgrade`, or whenever something seems wrong. Besides Docker, disk,
-ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant and
-clock synchronization. The check list, the thresholds and the JSON formats are documented in the
+ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant,
+clock synchronization and what Docker's data takes. The check list, the thresholds and the JSON formats are documented in the
 README, under
 [`status`](../README.md#status) and [`doctor`](../README.md#doctor).
 
@@ -128,7 +128,9 @@ tools/papaia-ctl backup-delete --restore-point=ID   # delete one restore point (
 ```
 
 Backups run hot — containers are not stopped. Each archive is taken with its writers briefly
-paused, so a database volume is not copied mid-transaction.
+paused, so a database volume is not copied mid-transaction. With the `manager` profile enabled, the
+Backup page of [papaia-manager](../README.md#papaia-manager) can run `backup` on a schedule with a
+configurable retention, so the host needs no cron job.
 
 Every run writes a timestamped subdirectory of `$PAPAIA_BACKUP_DIR` and records it in
 `backup.yaml` next to it; `backup.log` in the same directory keeps the result of every backup and

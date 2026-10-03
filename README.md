@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.3.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.4.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -51,7 +51,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview and backup/restore. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 
 `localai`, `manager` and `librechat-websearch` are toggled by `papaia-ctl setup`
@@ -559,7 +559,7 @@ active Compose profile to the modules it brings up.
 {
   "schema_version": 1,
   "generated_at": "2026-09-27T10:15:00Z",
-  "platform_version": "1.3.0",
+  "platform_version": "1.4.0",
   "compose_project": "papaia",
   "docker": { "reachable": true, "reason": null },
   "modules": [
@@ -769,8 +769,8 @@ of both without discarding its secrets.
 `papaia-ctl` is a CLI: precise, scriptable, and shell access on the host is the price of
 admission. **papaia-manager** is the browser counterpart — an optional core service
 (profile `manager`, port 8120) that lets an operator discover, install, start, stop, update
-and remove add-ons, see what the stack is running, and take or replay a backup, without ever
-opening a terminal on the host.
+and remove add-ons, see what the stack is running and how the host is doing, and take,
+schedule or replay a backup, without ever opening a terminal on the host.
 
 It does not reimplement any of it. Every mutating operation shells out to `papaia-ctl`, and
 status queries read the same modules under `tools/lib/`, so the UI and the CLI cannot drift
@@ -790,9 +790,11 @@ from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the pr
 | Surface | Contents |
 |---|---|
 | **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. |
-| **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. |
+| **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. A status row in the sidebar of every page summarises the core, the add-ons and the host for every signed-in role, as counts only. |
 | **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. |
-| **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and an optional retention period. |
+| **Host** (`/host`) | The state of the machine under the deployment: memory, CPU load, GPU, clock synchronisation, free disk space and certificate expiry, plus what Docker's data takes. The manager measures nothing itself: it shows the verdicts of [`papaia-ctl doctor`](#doctor), so the page and a shell on the host cannot disagree about a threshold. It needs a core that ships `doctor` (1.4.0 or newer); on an older one the page says so. How often the host is re-measured is a setting. |
+| **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and a configurable retention period. Backups can run on a schedule (every day, on chosen days, every few hours or a cron expression, in a timezone of choice), run by a scheduler inside the manager, so the host needs no cron job or systemd timer. |
+| **Settings** | The manager's own configuration: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. |
 
 ### Catalogues
 
@@ -812,7 +814,7 @@ guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, backup, jobs |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, host, backup, settings, jobs |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 
 An account holding neither role is rejected at login. Both variables live in
@@ -859,6 +861,9 @@ captures it along with the rest of the installation:
 | `catalogs.yaml` | Registered add-on sources |
 | `installed.yaml` | Which add-on came from which catalogue, at which commit |
 | `tiles.yaml` | Dashboard tiles, grouped, with per-tile visibility |
+| `settings.yaml` | The manager's own settings, one section per topic: branding and the host-monitoring interval |
+| `branding/` | The uploaded logo |
+| `schedule.yaml` | The backup schedule |
 | `jobs/` | Records of long-running operations, with their streamed log output |
 | `audit.log` | Who triggered which operation |
 

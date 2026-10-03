@@ -12,6 +12,20 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.4.0] - 2026-10-03
+
+### 🚀 Features
+
+- feat(doctor): read gpu and time_sync from a container and report docker usage (#210) @marko-boehm
+- feat(doctor): add memory, cpu, gpu and time sync checks (#208) @marko-boehm
+- feat: add status and doctor commands (#206) @marko-boehm
+
+### 🧹 Maintenance
+
+- chore: bump papaia-manager to `1.2.0`
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.3.0...v1.4.0
+
 ## [1.3.0] - 2026-09-28
 
 ### 🚀 Features
