@@ -192,7 +192,7 @@ def _drm_vendors(sys_class_drm: Path) -> set[str]:
     return vendors
 
 
-def _has_render_node(dev_root: Path) -> bool:
+def has_render_node(dev_root: Path) -> bool:
     try:
         return any((dev_root / "dri").glob("renderD*"))
     except OSError:
@@ -271,13 +271,13 @@ def _detect_amd(vendors: set[str], dev_root: Path) -> SlotInfo:
 def _detect_intel(vendors: set[str], dev_root: Path) -> SlotInfo:
     if _VENDOR_INTEL not in vendors:
         return SlotInfo(label="no Intel GPU detected")
-    if not _has_render_node(dev_root):
+    if not has_render_node(dev_root):
         return SlotInfo(label="Intel GPU detected, but no render node under /dev/dri")
     return SlotInfo(variant=INTEL, label="Intel GPU detected")
 
 
 def _detect_vulkan(dev_root: Path) -> SlotInfo:
-    if not _has_render_node(dev_root):
+    if not has_render_node(dev_root):
         return SlotInfo(label="no render node under /dev/dri")
     return SlotInfo(variant=VULKAN, label="render node under /dev/dri available")
 

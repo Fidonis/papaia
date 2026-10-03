@@ -62,8 +62,10 @@ Or set `PAPAIA_HOST` to the host's LAN IP instead and re-run `tools/papaia-ctl s
 
 ### Out-of-memory when running LocalAI
 
-Run a smaller model — edit `ai/localai/models.txt` (or its `overlay/` copy) — or disable
-LocalAI altogether and route LibreChat to a hosted provider through LiteLLM:
+`tools/papaia-ctl doctor` shows how much memory the host has and how much of it is still
+available (the `memory` check). Then run a smaller model — edit `ai/localai/models.txt` (or its
+`overlay/` copy) — or disable LocalAI altogether and route LibreChat to a hosted provider
+through LiteLLM:
 
 ```bash
 tools/papaia-ctl setup --no-local-ai
@@ -80,6 +82,13 @@ cat "$PAPAIA_CONFIG_DIR/overrides/docker-compose.localai-gpu.override.yml"
 ```
 
 If it is missing, the variant is `cpu`; re-run `tools/papaia-ctl setup` and pick another.
+
+`tools/papaia-ctl doctor` runs these host checks for the configured variant (the `gpu` check):
+whether `nvidia-smi` works and Docker has the `nvidia` runtime, whether `/dev/kfd` or a render
+node under `/dev/dri` exists, and, for NVIDIA and AMD, how much VRAM is in use. It reports `skip`
+for the CPU image. Inside a container (as `papaia-manager` runs it) the NVIDIA GPU is read with
+`nvidia-smi` in the running LocalAI container instead, and reports `skip` if LocalAI is not
+running; AMD, Intel and Vulkan report `skip` there, because their devices are the host's.
 
 The image alone is not enough — the host prerequisites have to be in place:
 
@@ -99,6 +108,10 @@ Most likely its Compose profile is not active. Check `COMPOSE_PROFILES` in
 [Selective module enable / disable](deployment.md#selective-module-enable--disable).
 
 ## Logs
+
+Start with `tools/papaia-ctl status` (what is running, and which module is unhealthy or not
+deployed) and `tools/papaia-ctl doctor` (Docker version, disk space, memory, CPU load, GPU,
+ports, clock synchronization, certificates). Then look at the logs of the service they point to:
 
 ```bash
 docker compose -f src/docker-compose.yml --env-file src/.env ps       # what is running

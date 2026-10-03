@@ -41,6 +41,8 @@
 #                            configuration directory, for in-stack callers
 #   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
+#   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
+#   papaia-ctl doctor        [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
@@ -63,7 +65,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,58p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -88,6 +90,8 @@ source "$SH_LIB/addon.sh"
 source "$SH_LIB/backup.sh"
 # shellcheck source=lib/sh/upgrade.sh
 source "$SH_LIB/upgrade.sh"
+# shellcheck source=lib/sh/diag.sh
+source "$SH_LIB/diag.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -157,6 +161,8 @@ case "$cmd" in
     restore-scoped) cmd_restore_scoped "$@" ;;
     npm-provision) py_cli npm-provision "$@" ;;
     keycloak-role-sync) py_cli keycloak-role-sync "$@" ;;
+    status)        cmd_status "$@" ;;
+    doctor)        cmd_doctor "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.3.0 |
-| **Date** | 2026-09-28 |
-| **Status** | Active — describes the 1.3.0 release as built |
+| **Version** | 1.4.0 |
+| **Date** | 2026-10-03 |
+| **Status** | Active — describes the 1.4.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -96,7 +96,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | Identity | Keycloak (OIDC provider), oauth2-proxy (forward auth for services without native OIDC) |
 | Ingress | Nginx Proxy Manager (NPM) |
 | AI-Runtime | LibreChat (chat UI), LiteLLM (LLM gateway), LocalAI (opt-in local inference) |
-| Management | papaia-manager (opt-in; dashboard + add-on lifecycle UI) |
+| Management | papaia-manager (opt-in; dashboard, add-on lifecycle, host health and backup scheduling UI) |
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
@@ -407,6 +407,8 @@ No Core changes required.
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
+| `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
+| `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
@@ -815,6 +817,9 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 | `catalogs.yaml` | Configured add-on sources (`type: git`, URL, ref, enabled) |
 | `installed.yaml` | Which add-on came from which catalogue, at which commit — catalogue provenance on top of `deployment.yaml` |
 | `tiles.yaml` | Dashboard tiles, grouped, with per-tile `visibility: all \| admin` |
+| `settings.yaml` | The manager's own settings, one section per topic: branding (name, second line) and the host-monitoring interval |
+| `branding/` | The uploaded logo |
+| `schedule.yaml` | The backup schedule |
 | `jobs/` | Records of long-running operations (install, start, upgrade) |
 | `audit.log` | Who triggered which operation |
 
@@ -825,7 +830,7 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard, host, backup, settings |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 
 Both name **realm roles**; the backend reads them from the access token's `roles`
@@ -868,6 +873,30 @@ from the manager's own container spec** (same image, binds, user and groups, so 
 parity holds by construction), started without `--rm` so its status and log survive
 for the recreated manager to read. Stack-wide stop and restart use the same mechanism
 for the same reason.
+
+### Host health and scheduled backups
+
+**Host health.** The Host page and the host row of the sidebar status row read the
+machine underneath the deployment, not the containers. The manager measures nothing
+itself: it runs the Core's read-only `papaia-ctl doctor --json` (the `memory`, `cpu`,
+`gpu`, `time_sync`, `disk_space` and `certs` checks, and `docker_usage` in a run of its
+own, because sizing every volume costs the daemon real work) and shows the Core's
+verdicts and thresholds, so the page and a shell on the host cannot disagree. A Core
+without `doctor` — detected by the absence of `lib/doctor.py` in the workspace, not by
+comparing versions — leaves the host out, and the page says so instead of reporting a
+problem. A reading is cached for a configurable interval (10 seconds to 60 minutes,
+60 seconds by default) and shared between everyone who has a page open. The host's
+counts reach every role through the sidebar status row; names, paths and certificate
+details stay on the admin-only page.
+
+**Scheduled backups.** The Backup page can start `papaia-ctl backup` on a schedule held
+in `$PAPAIA_CONFIG_DIR/manager/schedule.yaml` and run by a scheduler inside the manager
+process, so the host needs neither a cron job nor a systemd timer. A scheduled run takes
+the same path as the *Create backup* button (same job, log and audit entry); while a
+restore, an upgrade or another job is running it is held back and retried. After a
+restart a missed run is made up, and the retention period is only passed on while the
+newest successful restore point is recent, so a series of failed backups cannot prune
+every usable one.
 
 ---
 

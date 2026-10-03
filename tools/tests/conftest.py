@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from stack_helpers import build_stack
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -21,3 +22,10 @@ def repo_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
     return tmp_path / "papaia-config"
+
+
+@pytest.fixture
+def stack(tmp_path: Path) -> dict[str, Path]:
+    """A synthetic checkout with core fragments, a config dir and one active
+    add-on; see stack_helpers.build_stack."""
+    return build_stack(tmp_path)

@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.3.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.4.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -51,7 +51,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview and backup/restore. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 
 `localai`, `manager` and `librechat-websearch` are toggled by `papaia-ctl setup`
@@ -86,14 +86,15 @@ access. See `src/infra/keycloak/README.md` for the full role table.
 
 ### Prerequisites
 
-- Docker and Docker Compose
+- Docker and Docker Compose 2.20.0 or newer (the Compose files use `include:` and
+  `depends_on.required`; [`doctor`](#doctor) checks it)
 - Python 3.10+ — `papaia-ctl` generates secrets and renders configs itself
 - PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
   library. On a minimal host install it with `sudo apt-get install -y
   python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
   (Fedora/RHEL), or `pip install 'PyYAML>=6.0'`
 - `openssl`, only when Keycloak TLS is enabled
-- At least 8 GB RAM recommended
+- At least 8 GB RAM recommended ([`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
 
 ### Single-host setup
@@ -195,6 +196,8 @@ papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [-y] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl keycloak-role-sync [--config-dir=PATH]
+papaia-ctl status    [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
+papaia-ctl doctor    [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl help
@@ -516,6 +519,144 @@ tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
 After `addon install` or `addon remove`, run `tools/papaia-ctl start` to apply the changed
 core configuration.
 
+### `status`
+
+```bash
+tools/papaia-ctl status [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
+```
+
+Read-only. Reports the declared state next to the live state, per module: the services the
+Compose files declare for the active profiles, matched against the containers Docker reports.
+A *module* is a `de.fidonis.module` label, not a Compose profile. One profile can bring up
+several modules (`librechat-websearch`), and the `oauth2-proxy` profile is the module `auth`.
+
+It costs one `docker ps -a`, plus one `docker inspect` for exited containers only, and starts,
+stops and writes nothing, so it is cheap enough to run on a short interval.
+
+| Flag | Purpose |
+|---|---|
+| `--json` | Print the report as JSON; nothing else is written to stdout. The format is described by [`tools/schemas/status.schema.json`](tools/schemas/status.schema.json), and `schema_version` increases on a breaking change. |
+| `--profiles=LIST` | Restrict the core section to these Compose profiles (comma-separated or repeated). A profile that is not in `COMPOSE_PROFILES` is rejected with exit code 2. |
+| `--addons` | Include the active add-ons, each of which runs in its own Compose project. Without it only the core is reported. |
+
+Status values, worst first:
+
+| Value | Meaning |
+|---|---|
+| `missing` | Declared, but no container exists ("not deployed"): the profile was never started, or the container was removed. |
+| `stopped` | Exited with an error, paused or dead, or exited cleanly although its restart policy (`always`, `unless-stopped`) says it should keep running. |
+| `unhealthy` | The healthcheck fails, or the container is restarting in a loop. |
+| `starting` | Created, or the healthcheck has not passed yet. |
+| `unknown` | A Docker state `papaia-ctl` does not recognise. |
+| `completed` | A one-shot job that exited with code 0 (for example the LocalAI model download). It does not count against its module. |
+| `healthy` | Running with a passing healthcheck, or without a healthcheck, which is not treated as a problem. |
+
+A module takes the worst value of its containers; the `aggregate` of the core and of the add-ons
+takes the worst value of their modules. `modules` lists the worst first, and `groups` maps every
+active Compose profile to the modules it brings up.
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-27T10:15:00Z",
+  "platform_version": "1.4.0",
+  "compose_project": "papaia",
+  "docker": { "reachable": true, "reason": null },
+  "modules": [
+    { "name": "keycloak", "kind": "core", "compose_project": "papaia",
+      "profiles": ["keycloak"], "declared": true, "status": "healthy",
+      "containers": [
+        { "name": "papaia-keycloak-1", "service": "keycloak", "role": "identity-provider",
+          "state": "running", "health": "healthy", "status_text": "Up 2 hours (healthy)",
+          "host_ports": [8110] }
+      ] }
+  ],
+  "groups": [
+    { "profile": "keycloak", "modules": ["keycloak"], "containers": 2, "status": "healthy" }
+  ],
+  "aggregate": { "core": "healthy", "addons": null }
+}
+```
+
+If the Docker daemon cannot be reached, the report says so (`docker.reachable` is `false`, there
+are no modules and the aggregate is `unknown`) instead of listing every service as `missing`:
+not knowing is not the same as knowing it is gone. The exit code is 0 whenever a report was
+produced, and 2 when `setup` has not run yet or a flag is invalid.
+
+### `doctor`
+
+```bash
+tools/papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+```
+
+Preflight and diagnostics, to run before `setup` or `upgrade` and whenever something seems
+wrong. Read-only: it never changes anything. It may take a few seconds (name lookups, port
+probes) and is not meant for tight polling; use [`status`](#status) for that.
+
+Every check reports `pass`, `warn`, `fail` or `skip` (not applicable here: offline, not set up
+yet, nothing to look at). The exit code is 2 if any check is `fail`, otherwise 0. With
+`--json` the same results are printed as a document described by
+[`tools/schemas/doctor.schema.json`](tools/schemas/doctor.schema.json); each check carries the
+raw values behind its summary in `details`.
+
+| Check | Verifies | Result |
+|---|---|---|
+| `docker_version` | The Docker daemon is reachable and the Compose plugin is 2.20.0 or newer. | `fail` otherwise |
+| `disk_space` | Free space for the config directory, `PAPAIA_BACKUP_DIR` and the Docker data root (skipped when the host cannot see it, as with Docker Desktop). | `warn` below 10 GiB, `fail` below 2 GiB |
+| `docker_usage` | What Docker's data takes, from `docker system df`: images, containers, volumes and build cache, each with its size and the part the daemon calls reclaimable. It asks the daemon, so it also works where `disk_space` cannot see the data root (Docker Desktop, inside a container). | never `warn` or `fail`; `skip` if Docker cannot be asked, the call times out or the output is not recognised |
+| `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
+| `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
+| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
+| `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
+| `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
+| `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
+| `certs` | Days until expiry of `certs/*.crt` and of the Let's Encrypt certificates under `infra/nginx/nginx-letsencrypt/live/`. Needs `openssl`. | `warn` below 30 days, `fail` below 7 days or expired |
+| `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
+| `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
+
+Before `setup` has run, the checks that need the installation's configuration report `skip`
+instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as
+`skip` without running them, for example `--skip=dns,certs` on a host without internet access.
+
+`docker_usage` is a report, not a verdict: how much room is left is `disk_space`'s question, and how
+much Docker may take is yours to decide. "Reclaimable" is Docker's word for what no container uses
+right now, which for volumes is not the same as safe to delete. Sizes are Docker's own decimal
+figures with four significant digits, so the byte counts in `details` are as exact as that. The
+daemon works out the size of every volume to answer, which took about 1.5 s on a stack with 75
+volumes and grows with the data; the check stops waiting after 20 s, and `--skip=docker_usage`
+leaves it out on a host where that is too slow. Anything that runs `doctor` on a timer should skip
+it or accept that cost on every run.
+
+Memory, CPU load, VRAM use, GPU temperature and clock drift never make `doctor` fail: a busy host
+is not a broken installation, and `doctor` is also the preflight before `setup` and `upgrade`. GPU
+utilization is reported in `details` but does not count, because it is high during any inference.
+Only a GPU variant that cannot start is a `fail`. The thresholds are constants at the top of
+[`tools/lib/doctor.py`](tools/lib/doctor.py).
+
+Run inside a container, as `papaia-manager` does, `memory` and `cpu` are correct (`/proc/meminfo`
+and the load average describe the host), and the two checks that need the host's tools are read
+another way:
+
+- `gpu` for NVIDIA runs `nvidia-smi` inside the running LocalAI container with `docker exec`
+  (bounded by `timeout` from inside, so a hung driver cannot outlive the check) and judges the
+  answer by the same limits as on a host. The `nvidia` runtime is still asked of the Docker daemon.
+  If LocalAI is not running, the image has no usable `nvidia-smi`, or Docker refuses the `exec`,
+  the check reports `skip` with the reason: from inside a container that says nothing about the
+  driver, so it is never a `fail`. AMD, Intel and Vulkan still report `skip` there, because
+  `/dev/kfd` and the render nodes are the host's devices.
+- `time_sync` reads the kernel's clock state with `adjtimex(2)`, which only reads and needs no
+  capability, and calls the clock synchronized when its estimated maximum error is under 16
+  seconds, which is how `timedatectl` decides. It reports `skip` where the call is not available
+  (not 64-bit Linux, or a container runtime that refuses it).
+
+AMD utilization is read from the JSON of `rocm-smi`, whose key names differ between ROCm releases;
+if they are not recognised the check passes and says that utilization was not measured.
+Utilization is never measured for Intel and Vulkan GPUs.
+
+Not covered: Python and PyYAML (`papaia-ctl` verifies both before any command runs), the ports
+of add-ons, and certificates that were uploaded to Nginx Proxy Manager instead of requested
+through it.
+
 ### Configuration & render lifecycle
 
 Understanding where state lives is the key to operating papAIa. There are **two** locations
@@ -628,8 +769,8 @@ of both without discarding its secrets.
 `papaia-ctl` is a CLI: precise, scriptable, and shell access on the host is the price of
 admission. **papaia-manager** is the browser counterpart — an optional core service
 (profile `manager`, port 8120) that lets an operator discover, install, start, stop, update
-and remove add-ons, see what the stack is running, and take or replay a backup, without ever
-opening a terminal on the host.
+and remove add-ons, see what the stack is running and how the host is doing, and take,
+schedule or replay a backup, without ever opening a terminal on the host.
 
 It does not reimplement any of it. Every mutating operation shells out to `papaia-ctl`, and
 status queries read the same modules under `tools/lib/`, so the UI and the CLI cannot drift
@@ -649,9 +790,11 @@ from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the pr
 | Surface | Contents |
 |---|---|
 | **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. |
-| **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. |
+| **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. A status row in the sidebar of every page summarises the core, the add-ons and the host for every signed-in role, as counts only. |
 | **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. |
-| **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and an optional retention period. |
+| **Host** (`/host`) | The state of the machine under the deployment: memory, CPU load, GPU, clock synchronisation, free disk space and certificate expiry, plus what Docker's data takes. The manager measures nothing itself: it shows the verdicts of [`papaia-ctl doctor`](#doctor), so the page and a shell on the host cannot disagree about a threshold. It needs a core that ships `doctor` (1.4.0 or newer); on an older one the page says so. How often the host is re-measured is a setting. |
+| **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and a configurable retention period. Backups can run on a schedule (every day, on chosen days, every few hours or a cron expression, in a timezone of choice), run by a scheduler inside the manager, so the host needs no cron job or systemd timer. |
+| **Settings** | The manager's own configuration: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. |
 
 ### Catalogues
 
@@ -671,7 +814,7 @@ guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, backup, jobs |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, host, backup, settings, jobs |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 
 An account holding neither role is rejected at login. Both variables live in
@@ -718,6 +861,9 @@ captures it along with the rest of the installation:
 | `catalogs.yaml` | Registered add-on sources |
 | `installed.yaml` | Which add-on came from which catalogue, at which commit |
 | `tiles.yaml` | Dashboard tiles, grouped, with per-tile visibility |
+| `settings.yaml` | The manager's own settings, one section per topic: branding and the host-monitoring interval |
+| `branding/` | The uploaded logo |
+| `schedule.yaml` | The backup schedule |
 | `jobs/` | Records of long-running operations, with their streamed log output |
 | `audit.log` | Who triggered which operation |
 
@@ -1069,7 +1215,8 @@ documented in [`docs/deployment.md`](docs/deployment.md).
 
 The short version: edit `overlay/` or the profile list, then run `tools/papaia-ctl start`.
 Moving to a newer release is `tools/papaia-ctl upgrade`; the config directory and everything
-under `overlay/` survive untouched.
+under `overlay/` survive untouched. To see what is running and whether the host is in shape,
+use [`status`](#status) and [`doctor`](#doctor).
 
 These are the same commands Fidonis runs when it operates an installation on a customer's
 behalf. There is no separate operator edition and no privileged tooling behind the
@@ -1089,14 +1236,16 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 [workspace root]/
 ├── papaia/                    ← this repo (read-only at deploy time)
 │   ├── tools/
-│   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · upgrade · addon · …)
+│   │   ├── papaia-ctl          # Bash dispatcher (setup · start · stop · upgrade · status · doctor · addon · …)
 │   │   ├── deployment.template.yaml  # deployment.yaml template
 │   │   ├── pyproject.toml      # ruff + pytest config for tools/lib
 │   │   ├── lib/                # Python: cli.py · cli_addon.py · deployment.py · envtree.py
 │   │   │                       #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
 │   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py
 │   │   │                       #   backup.py · upgrade.py · migrations.py · common.py
+│   │   │                       #   status.py · doctor.py
 │   │   │   └── sh/             # Bash command libraries sourced by papaia-ctl
+│   │   ├── schemas/            # JSON Schemas of `status --json` and `doctor --json`
 │   │   ├── migrations/         # release migrations run by `papaia-ctl upgrade`
 │   │   └── tests/              # pytest suite
 │   ├── src/
