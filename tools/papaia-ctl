@@ -160,8 +160,8 @@ case "$cmd" in
     backup-delete) cmd_backup_delete "$@" ;;
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
-    npm-provision) py_cli npm-provision "$@" ;;
-    keycloak-role-sync) py_cli keycloak-role-sync "$@" ;;
+    npm-provision) cmd_npm_provision "$@" ;;
+    keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;
     doctor)        cmd_doctor "$@" ;;
     addon)
