@@ -8,11 +8,11 @@
 tiers:
 
 - **Lean Core**: Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat and LiteLLM
-  always on; LocalAI and papaia-manager opt-in via their Compose profiles.
-  Self-sufficient — runs without any add-on.
+  always on; LocalAI, papaia-manager and the RAG system (Qdrant, its MCP server and
+  the ingester) opt-in via their Compose profiles. Self-sufficient — runs without any
+  add-on.
 - **First-party add-ons** (Fidonis-maintained, version-pinned, installed by path):
-  documents (Paperless-ngx + MCP bridge), RAG / vector search (qdrant-rag), workflow
-  automation (n8n).
+  documents (Paperless-ngx + MCP bridge), workflow automation (n8n).
 - **Custom add-ons** (per-customer, same add-on contract).
 
 Add-ons integrate through four standardised seams — network attachment, OIDC client
@@ -96,6 +96,7 @@ src/
     localai/                  # Local inference (CPU / NVIDIA GPU)
     mcp-firecrawl/            # Firecrawl MCP server
     jinaai/                   # Optional Jina reranker
+    rag/                      # Optional RAG system: Qdrant + MCP server + ingester (profile: rag)
   manager/                    # papaia-manager — addon lifecycle UI (image-based, profile: manager)
   services/
     searxng/                  # Privacy-respecting metasearch

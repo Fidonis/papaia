@@ -6,9 +6,10 @@ from pathlib import Path
 
 import yaml
 
-from lib import envtree, render_core, resolve, secrets
+from lib import common, envtree, render_core, resolve, secrets
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+REAL_REPO = Path(__file__).resolve().parents[2]
 
 
 def _setup_minimal(repo_root, config_dir):
@@ -166,3 +167,76 @@ def test_bake_realm_secrets_resolves_all_placeholders(repo_root, config_dir):
     parsed = json.loads(realm)
     secret = parsed["clients"][0]["secret"]
     assert secret and not secret.startswith("GENERATE_")
+
+
+def _install_rag_fragment(repo_root):
+    """The real rag module's integration fragments, not a stand-in, so the test
+    breaks when the fragment and the render layering drift apart."""
+    shutil.copytree(
+        REAL_REPO / "src" / "ai" / "rag" / "integration",
+        repo_root / "src" / "ai" / "rag" / "integration",
+    )
+
+
+def _set_profiles(config_dir, profiles):
+    env_path = config_dir / ".env"
+    values = common.parse_env_file(env_path)
+    values["COMPOSE_PROFILES"] = profiles
+    env_path.write_text("".join(f"{k}={v}\n" for k, v in values.items()), encoding="utf-8")
+
+
+def _rendered_librechat(config_dir):
+    return yaml.safe_load((config_dir / "ai/librechat/librechat.yaml").read_text(encoding="utf-8"))
+
+
+def test_render_merges_the_rag_fragment_only_while_the_profile_is_active(repo_root, config_dir):
+    _install_rag_fragment(repo_root)
+    _setup_minimal(repo_root, config_dir)
+
+    _set_profiles(config_dir, "keycloak,librechat,rag")
+    render_core.render(config_dir, repo_root)
+    rendered = _rendered_librechat(config_dir)
+
+    assert rendered["mcpServers"]["Qdrant"]["url"] == "http://qdrant-mcp:8000/mcp"
+    assert rendered["mcpServers"]["QdrantIngest"]["url"] == "http://qdrant-ingest:8300/mcp"
+    assert "FirecrawlMCP" in rendered["mcpServers"], "base servers must be preserved"
+    domains = rendered["mcpSettings"]["allowedDomains"]
+    assert "http://mcp-firecrawl:8080" in domains
+    assert "http://qdrant-mcp:8000" in domains
+    assert "http://qdrant-ingest:8300" in domains
+
+
+def test_render_drops_the_rag_servers_again_when_the_profile_is_removed(repo_root, config_dir):
+    _install_rag_fragment(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "librechat,rag")
+    render_core.render(config_dir, repo_root)
+    assert "Qdrant" in _rendered_librechat(config_dir)["mcpServers"]
+
+    _set_profiles(config_dir, "librechat")
+    render_core.render(config_dir, repo_root)
+
+    rendered = _rendered_librechat(config_dir)
+    assert set(rendered["mcpServers"]) == {"FirecrawlMCP"}
+    assert rendered["mcpSettings"]["allowedDomains"] == ["http://mcp-firecrawl:8080"]
+
+
+def test_render_rag_fragment_is_idempotent_and_loses_to_the_overlay(repo_root, config_dir):
+    _install_rag_fragment(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "librechat,rag")
+    overlay = config_dir / "overlay" / "ai/librechat/librechat.yaml"
+    overlay.parent.mkdir(parents=True, exist_ok=True)
+    overlay.write_text(
+        yaml.safe_dump({"mcpServers": {"Qdrant": {"title": "Company search"}}}), encoding="utf-8"
+    )
+
+    render_core.render(config_dir, repo_root)
+    first = (config_dir / "ai/librechat/librechat.yaml").read_bytes()
+    render_core.render(config_dir, repo_root)
+
+    assert (config_dir / "ai/librechat/librechat.yaml").read_bytes() == first
+    rendered = _rendered_librechat(config_dir)
+    assert rendered["mcpServers"]["Qdrant"]["title"] == "Company search"
+    assert rendered["mcpServers"]["Qdrant"]["url"] == "http://qdrant-mcp:8000/mcp"
+    assert rendered["mcpSettings"]["allowedDomains"].count("http://qdrant-mcp:8000") == 1

@@ -144,6 +144,21 @@ def test_init_seeds_config_dir_without_touching_repo_tree(repo_root, config_dir)
     assert src_files_before == src_files_after
 
 
+def test_init_creates_the_rag_bind_directories_as_the_calling_user(repo_root, config_dir):
+    """Docker would create a missing bind source as root; the ingester runs as
+    UID:GID and must be able to write its catalog."""
+    envtree.init(config_dir, repo_root, env_name="papaia")
+
+    assert (config_dir / "ai" / "rag" / "catalog").is_dir()
+    assert (config_dir / "ai" / "rag" / "documents").is_dir()
+
+    # A repeat run, as `setup --rag` on an existing install is, leaves content alone.
+    jobs = config_dir / "ai" / "rag" / "catalog" / "jobs.yaml"
+    jobs.write_text("jobs: []\n", encoding="utf-8")
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    assert jobs.read_text(encoding="utf-8") == "jobs: []\n"
+
+
 def test_init_is_idempotent_without_force(repo_root, config_dir):
     envtree.init(config_dir, repo_root, env_name="papaia")
     (config_dir / ".env").write_text("CUSTOM=1\n", encoding="utf-8")

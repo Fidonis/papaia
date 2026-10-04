@@ -39,6 +39,10 @@ their images there; the table below covers the Core only.
 | `localai/localai` | v4.7.1 | MIT | `ai/localai` | CPU image; the NVIDIA CUDA, Intel, hipBLAS and Vulkan variants are the same license |
 | `curlimages/curl` | latest | MIT | `ai/localai` | model-init helper |
 | `ghcr.io/fidonis/jina-reranker-api` | 0.1.2 | Apache-2.0 | `ai/jinaai` | Fidonis-maintained wrapper; Jina AI reranker base is Apache-2.0 |
+| `qdrant/qdrant` | v1.19.0 | Apache-2.0 | `ai/rag` | vector database |
+| `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.3.0 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
+| `ghcr.io/fidonis/qdrant-ingest` | 0.3.0 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service with a web interface |
+| `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |
 | `ghcr.io/firecrawl/firecrawl` | 2.11.85 | AGPL-3.0 | `services/firecrawl` | used as network service |
 | `ghcr.io/firecrawl/playwright-service` | (digest-pinned) | Apache-2.0 | `services/firecrawl` | |
