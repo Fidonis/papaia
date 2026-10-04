@@ -58,6 +58,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 `localai`, `manager`, `librechat-websearch` and `rag` are toggled by `papaia-ctl setup`
 (`--local-ai`, `--manager`, `--web-search`, `--rag`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
+The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
 > Everything else — document management, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
