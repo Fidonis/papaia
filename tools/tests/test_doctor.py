@@ -1549,6 +1549,27 @@ def test_public_hostnames_are_looked_up(stack):
     assert asked == ["papaia.example.org", "auth.example.org"]
 
 
+def test_the_rag_hostnames_are_looked_up_only_while_the_profile_is_active(stack):
+    urls = {
+        "QDRANT_PUBLIC_URL": "https://qdrant.example.org",
+        "QDRANT_INGEST_PUBLIC_URL": "https://ingest.example.org",
+    }
+
+    set_env(stack, **urls)
+    asked: list[str] = []
+    run_doctor(stack, resolve=lambda host: asked.append(host) or doctor.RESOLVED)
+    assert "qdrant.example.org" not in asked, "profile rag is not active"
+
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},rag")
+    asked.clear()
+    check = result(
+        run_doctor(stack, resolve=lambda host: asked.append(host) or doctor.RESOLVED), "dns"
+    )
+
+    assert check.status == PASS
+    assert {"qdrant.example.org", "ingest.example.org"} <= set(asked)
+
+
 def test_a_name_that_does_not_resolve_is_a_warning(stack):
     set_env(stack, PAPAIA_HOST="https://gone.example.org")
     check = result(run_doctor(stack, resolve=lambda host: doctor.NOT_FOUND), "dns")

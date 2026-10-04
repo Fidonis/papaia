@@ -36,6 +36,8 @@ class SetupArgs:
     localai_host: str | None = None  # public LocalAI URL (LOCALAI_PUBLIC_URL)
     litellm_host: str | None = None  # public LiteLLM proxy URL (LITELLM_PUBLIC_URL)
     manager_host: str | None = None  # public papaia-manager URL (MANAGER_PUBLIC_URL)
+    qdrant_host: str | None = None  # public Qdrant URL (QDRANT_PUBLIC_URL)
+    qdrant_ingest_host: str | None = None  # public qdrant-ingest URL (QDRANT_INGEST_PUBLIC_URL)
     npm_admin_host: str | None = None  # public NPM admin URL (NPM_ADMIN_HOST)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
@@ -47,6 +49,7 @@ class SetupArgs:
     # LocalAI accelerator image variant (gpu_detect.VARIANTS); None = sticky / no change
     localai_variant: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
+    enable_rag: bool | None = None  # None = sticky / no change
     reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
@@ -114,6 +117,22 @@ def derive_localai_url_default(app_host: str, localai_port: str) -> str:
 def derive_manager_url_default(app_host: str, manager_port: str) -> str:
     """Default browser-facing papaia-manager URL: the public host plus the external manager port."""
     return f"{app_host}:{manager_port}"
+
+
+def derive_qdrant_url_default(app_host: str, qdrant_port: str) -> str:
+    """Default browser-facing Qdrant URL: the public host plus the external Qdrant port.
+
+    Plain app_host:port, like the other services without a session cookie of their own:
+    the dashboard authenticates with the api-key per request."""
+    return f"{app_host}:{qdrant_port}"
+
+
+def derive_qdrant_ingest_url_default(app_host: str, ingest_port: str) -> str:
+    """Default browser-facing qdrant-ingest URL: the public host plus the external ingest port.
+
+    No host.docker.internal -> localhost rewrite as for LibreChat: the ingester marks its
+    session cookie Secure only for an https:// public URL, so plain HTTP keeps working."""
+    return f"{app_host}:{ingest_port}"
 
 
 def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str:
@@ -606,6 +625,104 @@ def resolve_manager(tree: EnvTree, args: SetupArgs) -> EnvTree:
     profiles = [p for p in profiles if p != "manager"]
     if args.enable_manager:
         profiles.append("manager")
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+# The public host the shipped .env.example carries in its URL defaults.
+_SHIPPED_APP_HOST = "http://host.docker.internal"
+
+# Add-ons that ship the same services as the `rag` profile. Both cannot run on one
+# host: ports 6333 and 8300 and the service names qdrant-mcp and qdrant-ingest collide.
+_RAG_CONFLICTING_ADDONS = ("qdrant", "qdrant-connect", "qdrant-ingest")
+
+
+def sticky_service_url(value: str, derive, port: str) -> str:
+    """A stored service URL worth keeping, or "".
+
+    Empty values, GENERATE_ placeholders and the value .env.example ships are not worth
+    keeping: `start` appends keys a newer release added from the example, so a stored
+    value equal to it was never chosen by the operator. Keeping it would pin a wrong
+    default on a host that is not host.docker.internal."""
+    if not value or common.is_placeholder(value):
+        return ""
+    return "" if value == derive(_SHIPPED_APP_HOST, port) else value
+
+
+def resolve_rag_hosts(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Derive and store QDRANT_PUBLIC_URL and QDRANT_INGEST_PUBLIC_URL.
+
+    Always resolved, also while the `rag` profile is off, so a sticky value survives a
+    temporary opt-out and a later opt-in finds the URLs ready. A separate pass instead of
+    part of resolve_hostnames, which returns early for an already configured external
+    OIDC provider and would skip them there.
+
+    Precedence per URL: flag > stored value > derived default."""
+    root = tree.setdefault("", {})
+    app_host = root.get("PAPAIA_HOST", "")
+    specs = (
+        (
+            "QDRANT_PUBLIC_URL",
+            "QDRANT_EXT_PORT",
+            "6333",
+            args.qdrant_host,
+            derive_qdrant_url_default,
+            "Public URL of Qdrant (QDRANT_PUBLIC_URL)",
+        ),
+        (
+            "QDRANT_INGEST_PUBLIC_URL",
+            "QDRANT_INGEST_EXT_PORT",
+            "8300",
+            args.qdrant_ingest_host,
+            derive_qdrant_ingest_url_default,
+            "Public URL of qdrant-ingest (QDRANT_INGEST_PUBLIC_URL)",
+        ),
+    )
+    for key, port_key, default_port, override, derive, label in specs:
+        port = root.get(port_key, default_port)
+        derived = derive(app_host, port)
+        sticky = "" if args.fresh_init else sticky_service_url(root.get(key, ""), derive, port)
+        url = override or sticky or derived
+        if not override and not args.non_interactive and args.prompt is not None:
+            url = args.prompt(label, sticky or derived)
+        root[key] = url
+    return tree
+
+
+def _refuse_conflicting_rag_addons(config_dir: Path) -> None:
+    # Local import: deployment imports compat, which nothing else here needs.
+    from . import deployment
+
+    active = {a.get("name") for a in deployment.active_addons(deployment.load(config_dir))}
+    clash = sorted(active & set(_RAG_CONFLICTING_ADDONS))
+    if clash:
+        names = ", ".join(clash)
+        steps = "; ".join(
+            f"papaia-ctl addon stop {name} --clean-up && papaia-ctl addon remove {name}"
+            for name in clash
+        )
+        raise SetupError(
+            f"The rag profile cannot run next to the add-on(s) {names}: both start services"
+            " named qdrant-mcp or qdrant-ingest and publish ports 6333 and 8300."
+            f" Stop and deactivate the add-on first ({steps}), then run setup again."
+            " Volumes are kept by both commands."
+        )
+
+
+def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `rag` Compose profile based on the operator's choice.
+
+    When `enable_rag` is None the call is a no-op -- whatever was already written to
+    COMPOSE_PROFILES on a prior run is preserved (sticky). Enabling is refused while an
+    add-on with the same services is active; switching off never is."""
+    if args.enable_rag is None:
+        return tree
+    if args.enable_rag:
+        _refuse_conflicting_rag_addons(args.config_dir)
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "rag"]
+    if args.enable_rag:
+        profiles.append("rag")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 
