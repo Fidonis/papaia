@@ -112,6 +112,15 @@ class FakeKeycloak:
                 if name in u["roles"]
             ]
 
+        if path == "/clients" and method == "POST":
+            uuid = f"uuid-{body['clientId']}"
+            self.clients[uuid] = {
+                "clientId": body["clientId"],
+                "mappers": {mp["name"]: mp for mp in body.get("protocolMappers", [])},
+                "created_from": body,
+            }
+            return None
+
         m = re.fullmatch(r"/clients\?clientId=([^&]+)", path)
         if m and method == "GET":
             client_id = m.group(1)
@@ -339,3 +348,109 @@ def test_sync_returns_false_when_an_api_call_fails_midway(tmp_path, monkeypatch,
 
     assert kcs.sync_roles(_tree(), config_dir=tmp_path) is False
     assert "HTTP 403" in capsys.readouterr().err
+
+
+def _rag_realm_def(*, ui_secret: str = "baked-ui-secret") -> dict:
+    audience_mapper = {
+        "name": "mcp-qdrant-audience",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-audience-mapper",
+        "config": {"included.client.audience": "mcp-qdrant"},
+    }
+    return {
+        "roles": {"realm": [{"name": "qdrant-ingest-operator", "description": "Operator"}]},
+        "clients": [
+            {"clientId": "librechat", "protocolMappers": [audience_mapper]},
+            {"clientId": "mcp-qdrant", "bearerOnly": False, "publicClient": False},
+            {
+                "clientId": "qdrant-ingest-ui",
+                "clientAuthenticatorType": "client-secret",
+                "secret": ui_secret,
+            },
+            {
+                "clientId": "papaia-manager",
+                "clientAuthenticatorType": "client-secret",
+                "secret": "manager-secret",
+            },
+        ],
+    }
+
+
+def _rag_tree(profiles: str) -> dict[str, dict[str, str]]:
+    tree = _tree()
+    tree[""]["COMPOSE_PROFILES"] = profiles
+    return tree
+
+
+def _librechat_client() -> dict:
+    return {"uuid-librechat": {"clientId": "librechat", "mappers": {}}}
+
+
+def test_sync_creates_the_rag_clients_only_while_the_profile_is_active(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _rag_realm_def())
+    fake = FakeKeycloak(roles={}, clients=_librechat_client())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_rag_tree("keycloak,librechat,rag"), config_dir=tmp_path) is True
+
+    created = {c["clientId"] for c in fake.clients.values()}
+    assert created == {"librechat", "mcp-qdrant", "qdrant-ingest-ui"}
+    assert fake.clients["uuid-qdrant-ingest-ui"]["created_from"]["secret"] == "baked-ui-secret"
+    # Clients come before mappers, so the audience mapper lands on librechat too.
+    assert "mcp-qdrant-audience" in fake.clients["uuid-librechat"]["mappers"]
+
+
+def test_sync_leaves_the_realm_without_rag_clients_when_the_profile_is_off(
+    tmp_path, monkeypatch
+):
+    _write_realm_json(tmp_path, _rag_realm_def())
+    fake = FakeKeycloak(roles={}, clients=_librechat_client())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_rag_tree("keycloak,librechat"), config_dir=tmp_path) is True
+
+    assert {c["clientId"] for c in fake.clients.values()} == {"librechat"}
+
+
+def test_sync_creates_only_clients_a_profile_asks_for(tmp_path, monkeypatch):
+    # papaia-manager is in the template but belongs to no entry of PROFILE_CLIENTS,
+    # so enabling the rag profile must not pull it in.
+    _write_realm_json(tmp_path, _rag_realm_def())
+    fake = FakeKeycloak(roles={}, clients=_librechat_client())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_rag_tree("rag,manager"), config_dir=tmp_path) is True
+
+    assert "papaia-manager" not in {c["clientId"] for c in fake.clients.values()}
+
+
+def test_sync_never_overwrites_an_existing_client(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _rag_realm_def())
+    existing = {
+        "uuid-ui": {"clientId": "qdrant-ingest-ui", "mappers": {}, "rotated": True},
+        **_librechat_client(),
+    }
+    fake = FakeKeycloak(roles={}, clients=existing)
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
+    assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
+
+    ui_clients = [c for c in fake.clients.values() if c["clientId"] == "qdrant-ingest-ui"]
+    assert len(ui_clients) == 1
+    assert ui_clients[0].get("rotated") is True
+    assert "created_from" not in ui_clients[0]
+
+
+def test_sync_skips_a_client_whose_secret_is_still_a_placeholder(tmp_path, monkeypatch, capsys):
+    placeholder = "GENERATE_KC_QDRANT_INGEST_UI_CLIENT_SECRET"
+    _write_realm_json(tmp_path, _rag_realm_def(ui_secret=placeholder))
+    fake = FakeKeycloak(roles={}, clients=_librechat_client())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
+
+    created = {c["clientId"] for c in fake.clients.values()}
+    assert "qdrant-ingest-ui" not in created, "a placeholder must never become a real secret"
+    assert "mcp-qdrant" in created
+    assert "qdrant-ingest-ui" in capsys.readouterr().err

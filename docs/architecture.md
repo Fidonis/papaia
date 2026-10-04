@@ -71,9 +71,9 @@ same contract a customer would use for their own; there is no privileged path.
   (Fidonis-maintained, subscribable, own repo each)   │   (bespoke per customer, own repo   │
                                                        │    each, same contract)             │
   • Documents (Paperless + paperless-mcp-rbac)         │   • Pattern A: wrap existing app    │
-  • RAG bundle (qdrant-rbac + Qdrant)                  │     with MCP server                 │
-  • Automation (n8n)                                   │   • Pattern B: ingest customer      │
-  • further first-party modules                        │     data into RAG (role-scoped)     │
+  • Automation (n8n)                                   │     with MCP server                 │
+  • further first-party modules                        │   • Pattern B: ingest customer      │
+                                                       │     data into RAG (role-scoped)     │
                                                        │   • Pattern C: hybrid               │
                │                                       │                                      │
                └─────── each add-on: own network, only MCP seam exposed to AI-Runtime ───────┘
@@ -98,6 +98,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | AI-Runtime | LibreChat (chat UI), LiteLLM (LLM gateway), LocalAI (opt-in local inference) |
 | Management | papaia-manager (opt-in; dashboard, add-on lifecycle, host health and backup scheduling UI) |
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
+| RAG | Qdrant, `qdrant-mcp-rbac` and `qdrant-ingest` (opt-in, profile `rag`) — retrieval is a capability of the chat layer that an installation either wants or does not; see [ADR 0004](adr/0004-rag-system-as-optional-core-profile.md) |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
 points** — no hard-wired application references. The Core is **self-sufficient**:
@@ -136,7 +137,7 @@ Bespoke per customer, own repo each, same contract. Three recurring patterns:
 | Pattern | Description | Example |
 |---|---|---|
 | **A** — MCP-wrap | Wrap an existing app with an OIDC/RBAC MCP server | CRM system + `mcp-crm-rbac` |
-| **B** — RAG ingest | Ingest customer data into the RAG bundle, role-scoped retrieval | Product database → Qdrant |
+| **B** — RAG ingest | Ingest customer data into the core RAG system (profile `rag`), role-scoped retrieval | Product database → Qdrant |
 | **C** — Hybrid | MCP-wrap + RAG ingest combined | ERP with MCP + knowledge RAG |
 
 "Onboarding a new customer app" = create repo from template + add entry to `deployment.yaml`.
@@ -298,6 +299,10 @@ forwards requests as `X-Papaia-Remote-User` — Paperless enforces its own per-u
 No admin credential in the MCP layer.
 
 ### 6.4 Example B: `papaia-addon-qdrant-rbac`
+
+> Illustration of a vector-store add-on. The RAG system the stack ships itself is the
+> core profile `rag` since 1.5.0 ([ADR 0004](adr/0004-rag-system-as-optional-core-profile.md));
+> the manifest below shows the shape for a customer's own store.
 
 ```yaml
 name: qdrant-rbac
@@ -907,7 +912,7 @@ every usable one.
 | **Phase 0** — Spec & blueprint | Architecture spec, add-on contract schema, ADR definition; validate manifest schema against existing examples | Completed |
 | **Phase 1** — Lean Core + pilot Paperless | Decouple app-specific includes + hard-wired configs from Core; `paperless` as first companion add-on; `papaia-ctl` verbs; end-to-end verification | Completed (1.0.0) |
 | **Phase 2** — Harden tooling | Full add-on lifecycle in `papaia-ctl addon`; merge helpers (YAML merge, Keycloak registration, override network generation); per-customer deployment manifest drives composition; compat gating via `ADDON_API`; `upgrade` with release migrations; `backup` / `restore` | Completed (1.0.0) |
-| **Phase 3** — Catalog + customer apps + fleet | Migrate the remaining first-party modules into the catalogue (RAG bundle, automation, search); companion app template repo for customers (patterns A + B); fleet update distribution (version pinning, compat gating, rollback) | In progress — `papaia-manager` ships the catalogue UI; per-module migration ongoing |
+| **Phase 3** — Catalog + customer apps + fleet | Migrate the remaining first-party modules into the catalogue (automation, search; RAG became the optional core profile `rag` instead, see ADR 0004); companion app template repo for customers (patterns A + B); fleet update distribution (version pinning, compat gating, rollback) | In progress — `papaia-manager` ships the catalogue UI; per-module migration ongoing |
 
 ---
 

@@ -71,6 +71,11 @@ def init(
     common.ensure_dir(config_dir / "certs")
     common.ensure_dir(config_dir / "infra" / "nginx" / "nginx-data")
     common.ensure_dir(config_dir / "infra" / "nginx" / "nginx-letsencrypt")
+    # Bind mounts of the rag profile's ingester. Created here, as the user
+    # running setup, because Docker would create a missing bind source as root
+    # and the ingester runs as UID:GID.
+    common.ensure_dir(config_dir / "ai" / "rag" / "catalog")
+    common.ensure_dir(config_dir / "ai" / "rag" / "documents")
 
     seed = load_seed_tree(repo_root)
     for rel_dir, values in seed.items():

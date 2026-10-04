@@ -77,6 +77,10 @@ next to it, even when it has an inline `:-` default.
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |
 | `MANAGER_EXT_PORT` | External port the manager (profile `manager`) is published on |
 | `MANAGER_PUBLIC_URL` | Browser-facing papaia-manager URL, derived by setup — interpolated as `MANAGER_HOST` in `src/manager/docker-compose.yml` |
+| `QDRANT_EXT_PORT` | Host port of the Qdrant REST API and dashboard (profile `rag`) |
+| `QDRANT_PUBLIC_URL` | Browser-facing Qdrant URL — the dashboard lives under `/dashboard` |
+| `QDRANT_INGEST_EXT_PORT` | Host port of the ingester's web interface, REST API and MCP endpoint (profile `rag`) |
+| `QDRANT_INGEST_PUBLIC_URL` | Browser-facing URL of the ingester — interpolated as `QI_UI_PUBLIC_URL` in `src/ai/rag/docker-compose.yml`, which builds the OIDC redirect from it |
 
 The `OIDC_*` endpoint variables are provider-independent: they apply to
 `AUTH_PROVIDER=external_oidc` exactly as they do to the bundled Keycloak. Do not
@@ -97,6 +101,27 @@ compile but never reach the container.
 | `MANAGER_ADMIN_ROLE` | Realm role granting full access — add-ons, catalogs, jobs and the dashboard |
 | `MANAGER_USER_ROLE` | Realm role granting dashboard-only access; admins hold it implicitly |
 | `LOG_LEVEL` | Manager application log level |
+
+## RAG variables
+
+`src/ai/rag/.env` (profile `rag`). The ports and public URLs of the two published
+services are root variables, see above. `qdrant` and `qdrant-mcp` take their values only
+through `environment:`; `qdrant-ingest` additionally receives the whole file through
+`env_file:` (path 2), because operators may append `QI_SECRET_<NAME>` keys for their own
+sources. A key that `qdrant-ingest` already gets from its `environment:` block therefore
+must not be set in this file.
+
+| Variable | Purpose |
+|---|---|
+| `QDRANT_JWT_SECRET` | Qdrant's api-key and the signing secret of the per-request tokens `qdrant-mcp` derives (generated). Also the api-key of the ingester's connection to `http://qdrant:6333`. |
+| `QDRANT_MCP_EMBEDDING_API_KEY`, `QI_EMBEDDING_API_KEY` | LiteLLM key for embedding calls, synced from `LITELLM_MASTER_KEY` during setup |
+| `QI_UI_CLIENT_SECRET` | Keycloak client secret of the ingest web interface, synced from `KC_QDRANT_INGEST_UI_CLIENT_SECRET` during setup |
+| `QI_API_TOKEN` | Static bearer token of the ingester's REST API (generated) |
+| `QI_CONNECTIONS_SECRET` | Encrypts the Qdrant api-keys stored in `connections.yaml` (generated) |
+| `QI_UI_SESSION_SECRET` | Signing key of the web interface's session cookie (generated) |
+| `QDRANT_MCP_OIDC_JWKS_CACHE_TTL`, `QDRANT_MCP_QDRANT_JWT_TTL`, `QDRANT_MCP_RBAC_ACL_CACHE_TTL`, `QDRANT_MCP_RBAC_SERVICE_TOKEN_TTL`, `QDRANT_MCP_LOG_LEVEL` | Optional tuning of `qdrant-mcp`, commented out with their defaults |
+| `QI_LOCAL_MOUNT`, `QI_TIKA_HEAP` | Document directory for local sources and the Tika heap, interpolated in the compose file |
+| `QI_*` | Every other ingester setting (scheduling, extraction, embedding batches, metrics) is read straight from this file; the list is in the `qdrant-ingest` repository's `docs/operations.md` |
 
 ## Where values come from
 
@@ -160,9 +185,9 @@ documented in `tools/lib/secrets.py`'s module docstring):
    out to every alias, overwriting a drifted copy even when it is not a placeholder — a
    stale copy here silently breaks OIDC token exchanges.
 
-Only core clients are covered. Addon clients (`paperless`, `qdrant-rag`, …) register
-their own OIDC client and generate their own secret during addon installation; the core
-neither stores nor generates those values.
+Only core clients are covered. Addon clients (`paperless`, …) register their own OIDC
+client and generate their own secret during addon installation; the core neither stores
+nor generates those values.
 
 Secrets live only in gitignored `.env` files — the per-service `src/**/.env` files
 Compose reads, and the canonical copy under `$PAPAIA_CONFIG_DIR` that `papaia-ctl` reads

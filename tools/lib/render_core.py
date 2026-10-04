@@ -3,6 +3,7 @@
 Renders the effective core configuration into $PAPAIA_CONFIG_DIR:
 
     repo base (src/<target>)
+      + active-profile fragments (src/<module>/integration/<target>, PROFILE_FRAGMENTS)
       + active-addon fragments (addons/<name>/integration/<target>)
       + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>)
       --render--> $PAPAIA_CONFIG_DIR/<target>
@@ -41,13 +42,32 @@ BASE_RENDER_TARGETS: list[str] = [
 
 _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 
+# Core modules that ship integration fragments of their own (same layout as an
+# add-on: `<path>/integration/<target>`), merged only while the module's Compose
+# profile is active -- a stack without the RAG system must not list its MCP
+# servers in LibreChat. The fragments sit between the repo base and the add-on
+# layer.
+PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag"}
+
 
 class RenderError(Exception):
     """A user-facing rendering failure (e.g. an unresolved realm placeholder)."""
 
 
+def _profile_layers(config_dir: Path) -> list[dict]:
+    """One add-on-shaped layer per active profile that ships fragments.
+
+    COMPOSE_PROFILES is read from the root .env, which is what compose itself
+    uses; deployment.yaml only mirrors it."""
+    raw = common.parse_env_file(config_dir / ".env").get("COMPOSE_PROFILES", "")
+    active = {p.strip() for p in raw.split(",") if p.strip()}
+    return [{"path": path} for profile, path in PROFILE_FRAGMENTS.items() if profile in active]
+
+
 def render(config_dir: Path, repo_root: Path) -> None:
-    active_addons = deployment.active_addons(deployment.load(config_dir))
+    active_addons = _profile_layers(config_dir) + deployment.active_addons(
+        deployment.load(config_dir)
+    )
 
     for target in BASE_RENDER_TARGETS:
         base_path = repo_root / "src" / target
