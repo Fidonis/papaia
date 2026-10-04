@@ -180,9 +180,13 @@ other services.
 are synced into an already-imported realm automatically on every
 `papaia-ctl start` (only when `AUTH_PROVIDER=internal_keycloak`) — Keycloak's own
 `--import-realm` only runs once, on a realm that doesn't exist yet. The three
-`rag` clients are created the same way while the `rag` profile is active; an
-existing client is never changed, so a secret rotated in the admin console
-stays. The sync also grants
+`rag` clients are created the same way while the `rag` profile is active. For one
+that already exists, for example left over from the older `qdrant-ingest` add-on,
+only the secret is set, to the value in the core `.env` (`KC_QDRANT_INGEST_UI_CLIENT_SECRET`,
+which `ai/rag/.env` mirrors): that file is canonical, and a client holding another
+secret makes the ingest web interface fail at sign-in with `401 login failed`. A
+secret rotated in the admin console is therefore reset on the next `start`; rotate it
+in the `.env` instead. The sync also grants
 `papaia-admin` to every account that already held the old flat `admin` role,
 without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
 to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).

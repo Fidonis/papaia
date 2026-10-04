@@ -5,13 +5,17 @@ AUTH_PROVIDER=internal_keycloak. Keycloak's own `--import-realm` only fires
 on a realm that doesn't exist yet, so an existing installation never picks up
 new roles, composites, clients or protocol mappers shipped by a newer
 papaia-realm.json template on its own. This module reconciles the live realm
-against the rendered template instead: additive only, it never deletes or
-overwrites a role, a composite edge, a client, a protocol mapper or a user's
-existing role mapping.
+against the rendered template instead: additive only, it never deletes
+anything and never overwrites a role, a composite edge, a protocol mapper or a
+user's existing role mapping.
 
-Clients are created only for the Compose profiles that need them
+Clients are handled only for the Compose profiles that need them
 (PROFILE_CLIENTS), so an installation that never enables such a profile keeps
-a realm without them.
+a realm without them. A missing client is created. For one that exists, the
+secret is aligned with the rendered template and nothing else about it is
+changed: the core `.env` is canonical for that secret, and a client left over
+from an earlier add-on install would otherwise refuse the service that signs in
+with the generated one.
 
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
@@ -188,19 +192,56 @@ def _active_profile_clients(root: dict[str, str]) -> set[str]:
     return {cid for profile, cids in PROFILE_CLIENTS.items() if profile in profiles for cid in cids}
 
 
-def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> int:
-    """Create the wanted clients that the live realm lacks, from the rendered
-    template (client secrets are already baked in). An existing client is left
-    alone, so a secret rotated in the admin console is never overwritten."""
+def _has_secret_to_enforce(client: dict) -> bool:
+    """Whether the rendered template carries a real secret for this client.
+
+    Resource-server clients have none, and a placeholder must never become one."""
+    return client.get("clientAuthenticatorType") == "client-secret" and not common.is_placeholder(
+        client.get("secret", "")
+    )
+
+
+def _align_secret(base_url, ctx, token, client_uuid: str, client: dict) -> bool:
+    """Set an existing client's secret to the one in the rendered template.
+
+    The core `.env` is canonical for these clients: setup generates the secret there, bakes
+    it into the realm and hands the same value to the service that signs in with it. A
+    client that already existed, from an earlier add-on install for instance, keeps the
+    secret it was created with, and the service is then refused at the token endpoint
+    (HTTP 401, "Invalid client credentials"). Only the secret is written; the rest of the
+    client is left as it is."""
+    secret = client["secret"]
+    current = _api(base_url, ctx, token, "GET", f"/clients/{client_uuid}/client-secret") or {}
+    if current.get("value") == secret:
+        return False
+    _api(base_url, ctx, token, "PUT", f"/clients/{client_uuid}", {"secret": secret})
+    print(f"  client secret updated: {client['clientId']}", flush=True)
+    return True
+
+
+def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tuple[int, int]:
+    """Create the wanted clients that the live realm lacks, from the rendered template
+    (client secrets are already baked in), and align the secret of those that exist.
+
+    Returns (clients created, secrets updated). Nothing else about an existing client
+    is changed."""
     created = 0
+    updated = 0
     for client in realm_def.get("clients", []):
         client_id = client["clientId"]
         if client_id not in wanted:
             continue
-        if _api(base_url, ctx, token, "GET", f"/clients?clientId={urllib.parse.quote(client_id)}"):
+        matches = _api(
+            base_url, ctx, token, "GET", f"/clients?clientId={urllib.parse.quote(client_id)}"
+        )
+        if matches:
+            if _has_secret_to_enforce(client) and _align_secret(
+                base_url, ctx, token, matches[0]["id"], client
+            ):
+                updated += 1
             continue
-        if client.get("clientAuthenticatorType") == "client-secret" and common.is_placeholder(
-            client.get("secret", "")
+        if client.get("clientAuthenticatorType") == "client-secret" and not _has_secret_to_enforce(
+            client
         ):
             # A placeholder would become the client's real secret. `setup` (or the
             # sync-env step of `start`) fills it in; the next start creates the client.
@@ -213,7 +254,7 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> in
         _api(base_url, ctx, token, "POST", "/clients", client)
         created += 1
         print(f"  client created: {client_id}", flush=True)
-    return created
+    return created, updated
 
 
 def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
@@ -323,7 +364,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         existing_roles, roles_created = _sync_roles(base_url, ctx, token, realm_def)
         composites_added = _sync_composites(base_url, ctx, token, realm_def)
         # Clients before mappers: a mapper is only synced onto a client that exists.
-        clients_created = _sync_clients(
+        clients_created, secrets_updated = _sync_clients(
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
@@ -342,8 +383,9 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
     print(
         f"Keycloak role sync complete: {roles_created} role(s) created, "
         f"{composites_added} composite edge(s) added, {clients_created} client(s) "
-        f"created, {mappers_added} protocol mapper(s) created, {migrated} user(s) "
-        f"migrated to {_MIGRATION_TARGET_ROLE}.",
+        f"created, {secrets_updated} client secret(s) updated, {mappers_added} "
+        f"protocol mapper(s) created, {migrated} user(s) migrated to "
+        f"{_MIGRATION_TARGET_ROLE}.",
         flush=True,
     )
     return True
