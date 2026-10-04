@@ -1153,8 +1153,11 @@ OIDC redirect of the web interface is built from the second one. The secrets are
 With the bundled Keycloak, `start` also creates what the module needs in an existing realm: the
 clients `mcp-qdrant`, `mcp-qdrant-ingest` and `qdrant-ingest-ui`, the audience mappers on the
 `librechat` client, and the realm roles `qdrant-admin` and `qdrant-ingest-operator` (both are part
-of `papaia-admin`). A realm that already has them is left alone. With an external OIDC provider,
-create the same objects there yourself.
+of `papaia-admin`). A client that already exists, for example one left over from the older
+`qdrant-ingest` add-on, keeps everything except its secret: that is set to the value in
+`ai/rag/.env`, which is canonical. Without this the ingest web interface would be refused at
+sign-in with `401 login failed`. With an external OIDC provider, create the same objects there
+yourself, using the `QI_UI_CLIENT_SECRET` from `ai/rag/.env` for `qdrant-ingest-ui`.
 
 **First steps after the first start**
 
