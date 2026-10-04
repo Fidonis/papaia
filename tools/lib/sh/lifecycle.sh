@@ -149,6 +149,32 @@ cmd_start() {
     success "start complete."
 }
 
+# The two provisioning steps `start` runs after `docker compose up`, as commands of their
+# own so an operator can retry one when `start` reports it failed. `start` calls py_cli
+# directly with the CONFIG_DIR it parsed; standalone, the command has to parse
+# --config-dir itself like every other command, or py_cli expands an unset CONFIG_DIR.
+cmd_npm_provision() { _provisioning_step npm-provision "$@"; }
+
+cmd_keycloak_role_sync() { _provisioning_step keycloak-role-sync "$@"; }
+
+_provisioning_step() {
+    local step="$1"
+    shift
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for $step: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    # The step's own exit status is the command's, so a retry that fails is visible.
+    py_cli "$step"
+}
+
 cmd_stop() {
     local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 profiles=""
     while [ $# -gt 0 ]; do
