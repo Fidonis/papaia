@@ -146,7 +146,7 @@ services:
   #  into the root .env at setup, as for papaia-manager.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest:
-    image: ghcr.io/fidonis/qdrant-ingest:0.3.0
+    image: ghcr.io/fidonis/qdrant-ingest:1.0.0
     restart: unless-stopped
     # Jobs stop cooperatively between documents; give them room to finish.
     stop_grace_period: 60s
