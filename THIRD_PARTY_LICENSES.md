@@ -27,7 +27,7 @@ their images there; the table below covers the Core only.
 | `postgres` | 18.3 | PostgreSQL License | `infra/keycloak` | Keycloak database |
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.3 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
-| `ghcr.io/fidonis/papaia-manager` | 0.6.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
+| `ghcr.io/fidonis/papaia-manager` | 1.3.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
 | `ghcr.io/danny-avila/librechat` | v0.8.7 | MIT | `ai/librechat` | |
 | `mongo` | 8.0.20 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |
@@ -41,7 +41,7 @@ their images there; the table below covers the Core only.
 | `ghcr.io/fidonis/jina-reranker-api` | 0.1.2 | Apache-2.0 | `ai/jinaai` | Fidonis-maintained wrapper; Jina AI reranker base is Apache-2.0 |
 | `qdrant/qdrant` | v1.19.0 | Apache-2.0 | `ai/rag` | vector database |
 | `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.3.0 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
-| `ghcr.io/fidonis/qdrant-ingest` | 0.3.0 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service with a web interface |
+| `ghcr.io/fidonis/qdrant-ingest` | 1.0.0 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service |
 | `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |
 | `ghcr.io/firecrawl/firecrawl` | 2.11.85 | AGPL-3.0 | `services/firecrawl` | used as network service |
