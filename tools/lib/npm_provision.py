@@ -38,20 +38,7 @@ _PROXY_HOST_SPECS: list[tuple[str, str, str, str, int, str, bool, bool]] = [
     ("localai", "", "LOCALAI_PUBLIC_URL", "localai", 8080, "http", True, False),
     ("manager", "", "MANAGER_PUBLIC_URL", "papaia-manager", 8000, "http", True, False),
     ("rag", "", "QDRANT_PUBLIC_URL", "qdrant", 6333, "http", True, False),
-    ("rag", "", "QDRANT_INGEST_PUBLIC_URL", "qdrant-ingest", 8300, "http", True, False),
 ]
-
-# Extra nginx configuration for a proxy host, by url-key, appended to the host's
-# advanced config (NPM renders it at server level, ahead of the default location, and a
-# regex location there wins over `location /`).
-#
-# qdrant-ingest carries three planes on one port: the web interface (/ui), a REST API
-# guarded by a static token (/v1) and an MCP endpoint (/mcp). Only the web interface
-# belongs behind a public hostname, so everything but /ui and /health answers 404 there.
-# LibreChat reaches /mcp over papaia-net and does not go through this host.
-_PROXY_HOST_EXTRA_CONFIG: dict[str, str] = {
-    "QDRANT_INGEST_PUBLIC_URL": "location ~ ^/(?!ui(/|$)|health$) { return 404; }\n",
-}
 
 
 def _is_subdomain_url(url: str) -> bool:
@@ -132,11 +119,8 @@ def _create_proxy_host(
     forward_scheme: str,
     ssl_verify: bool,
     allow_websocket: bool,
-    extra_config: str = "",
 ) -> None:
-    """Create a single proxy host entry via the NPM REST API.
-
-    `extra_config` is appended to the host's advanced nginx configuration."""
+    """Create a single proxy host entry via the NPM REST API."""
     payload: dict = {
         "domain_names": [domain],
         "forward_host": forward_host,
@@ -152,7 +136,7 @@ def _create_proxy_host(
         "hsts_enabled": False,
         "hsts_subdomains": False,
         "locations": [],
-        "advanced_config": ("" if ssl_verify else "proxy_ssl_verify off;\n") + extra_config,
+        "advanced_config": "" if ssl_verify else "proxy_ssl_verify off;\n",
     }
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -226,7 +210,6 @@ def provision_npm_hosts(tree: EnvTree) -> bool:
             fwd_scheme,
             ssl_verify,
             ws,
-            _PROXY_HOST_EXTRA_CONFIG.get(key, ""),
         )
         existing.add(domain)
         print(f"  created proxy host: {domain} -> {fwd_scheme}://{fwd_host}:{fwd_port}", flush=True)

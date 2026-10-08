@@ -1197,7 +1197,6 @@ _HOST_KEYS: tuple[tuple[str | None, str], ...] = (
     ("localai", "LOCALAI_PUBLIC_URL"),
     ("manager", "MANAGER_PUBLIC_URL"),
     ("rag", "QDRANT_PUBLIC_URL"),
-    ("rag", "QDRANT_INGEST_PUBLIC_URL"),
 )
 
 _LOCAL_HOSTS = frozenset({"localhost", "host.docker.internal"})

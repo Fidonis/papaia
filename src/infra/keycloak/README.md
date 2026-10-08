@@ -109,7 +109,6 @@ about on a local install.
 | `oauth2-proxy` | Nginx Proxy Manager admin UI + other services without native OIDC | `KC_OAUTH2_PROXY_CLIENT_SECRET` |
 | `localai` | LocalAI (native OIDC, role-restricted) | `KC_LOCALAI_CLIENT_SECRET` |
 | `papaia-manager` | papaia-manager (native OIDC, role-restricted) | `KC_MANAGER_CLIENT_SECRET` |
-| `qdrant-ingest-ui` | Web interface of the RAG system's ingester (profile `rag`; native OIDC, needs `qdrant-ingest-operator`) | `KC_QDRANT_INGEST_UI_CLIENT_SECRET` |
 | `mcp-qdrant` | Resource server of `qdrant-mcp` (profile `rag`; no flows, no secret) | — |
 | `mcp-qdrant-ingest` | Resource server of the ingester's MCP endpoint (profile `rag`; no flows, no secret) | — |
 
@@ -165,7 +164,7 @@ access.
 | `viewer` | Read-only viewer |
 | `localai-access` | Required for SSO login to LocalAI |
 | `qdrant-admin` | Break-glass administrator of the RAG system's MCP server (profile `rag`): holders get a global Qdrant manage token and can edit the access rules |
-| `qdrant-ingest-operator` | Operator of the RAG system's ingester (profile `rag`): required for its web interface and its MCP tools |
+| `qdrant-ingest-operator` | Operator of the RAG system's ingester (profile `rag`): required for its MCP tools |
 | `finance` | Finance department (demo role) |
 
 LocalAI has no realm role of its own for admin *elevation* (only
@@ -179,14 +178,10 @@ other services.
 `oauth2-proxy` client's `groups` mapper and the `librechat` audience mappers
 are synced into an already-imported realm automatically on every
 `papaia-ctl start` (only when `AUTH_PROVIDER=internal_keycloak`) — Keycloak's own
-`--import-realm` only runs once, on a realm that doesn't exist yet. The three
-`rag` clients are created the same way while the `rag` profile is active. For one
-that already exists, for example left over from the older `qdrant-ingest` add-on,
-only the secret is set, to the value in the core `.env` (`KC_QDRANT_INGEST_UI_CLIENT_SECRET`,
-which `ai/rag/.env` mirrors): that file is canonical, and a client holding another
-secret makes the ingest web interface fail at sign-in with `401 login failed`. A
-secret rotated in the admin console is therefore reset on the next `start`; rotate it
-in the `.env` instead. The sync also grants
+`--import-realm` only runs once, on a realm that doesn't exist yet. The two
+`rag` clients are created the same way while the `rag` profile is active; one that
+already exists is left as it is (the `qdrant-ingest-ui` client of an older install is
+no longer used and can be deleted). The sync also grants
 `papaia-admin` to every account that already held the old flat `admin` role,
 without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
 to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).

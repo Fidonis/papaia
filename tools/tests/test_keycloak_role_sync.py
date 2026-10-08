@@ -364,7 +364,17 @@ def test_sync_returns_false_when_an_api_call_fails_midway(tmp_path, monkeypatch,
     assert "HTTP 403" in capsys.readouterr().err
 
 
-def _rag_realm_def(*, ui_secret: str = "baked-ui-secret") -> dict:
+@pytest.fixture(autouse=True)
+def _confidential_profile_client(monkeypatch):
+    """The clients the rag profile ships today are all resource servers without a secret.
+    The secret handling of the sync is generic, so it is exercised with a stand-in
+    confidential client that the profile is made to ask for."""
+    monkeypatch.setitem(
+        kcs.PROFILE_CLIENTS, "rag", (*kcs.PROFILE_CLIENTS["rag"], "rag-confidential-client")
+    )
+
+
+def _rag_realm_def(*, secret: str = "baked-secret") -> dict:
     audience_mapper = {
         "name": "mcp-qdrant-audience",
         "protocol": "openid-connect",
@@ -377,9 +387,9 @@ def _rag_realm_def(*, ui_secret: str = "baked-ui-secret") -> dict:
             {"clientId": "librechat", "protocolMappers": [audience_mapper]},
             {"clientId": "mcp-qdrant", "bearerOnly": False, "publicClient": False},
             {
-                "clientId": "qdrant-ingest-ui",
+                "clientId": "rag-confidential-client",
                 "clientAuthenticatorType": "client-secret",
-                "secret": ui_secret,
+                "secret": secret,
             },
             {
                 "clientId": "papaia-manager",
@@ -408,8 +418,8 @@ def test_sync_creates_the_rag_clients_only_while_the_profile_is_active(tmp_path,
     assert kcs.sync_roles(_rag_tree("keycloak,librechat,rag"), config_dir=tmp_path) is True
 
     created = {c["clientId"] for c in fake.clients.values()}
-    assert created == {"librechat", "mcp-qdrant", "qdrant-ingest-ui"}
-    assert fake.clients["uuid-qdrant-ingest-ui"]["created_from"]["secret"] == "baked-ui-secret"
+    assert created == {"librechat", "mcp-qdrant", "rag-confidential-client"}
+    assert fake.clients["uuid-rag-confidential-client"]["created_from"]["secret"] == "baked-secret"
     # Clients come before mappers, so the audience mapper lands on librechat too.
     assert "mcp-qdrant-audience" in fake.clients["uuid-librechat"]["mappers"]
 
@@ -438,28 +448,29 @@ def test_sync_creates_only_clients_a_profile_asks_for(tmp_path, monkeypatch):
     assert "papaia-manager" not in {c["clientId"] for c in fake.clients.values()}
 
 
-def _existing_ui(secret=None, **extra) -> dict:
-    client = {"clientId": "qdrant-ingest-ui", "mappers": {}, **extra}
+def _existing_confidential(secret=None, **extra) -> dict:
+    client = {"clientId": "rag-confidential-client", "mappers": {}, **extra}
     if secret is not None:
         client["secret"] = secret
     return {"uuid-ui": client, **_librechat_client()}
 
 
-def _ui_clients(fake: FakeKeycloak) -> list[dict]:
-    return [c for c in fake.clients.values() if c["clientId"] == "qdrant-ingest-ui"]
+def _confidential_clients(fake: FakeKeycloak) -> list[dict]:
+    return [c for c in fake.clients.values() if c["clientId"] == "rag-confidential-client"]
 
 
 def test_an_existing_client_keeps_everything_but_its_secret(tmp_path, monkeypatch):
     _write_realm_json(tmp_path, _rag_realm_def())
-    fake = FakeKeycloak(roles={}, clients=_existing_ui("secret-from-the-addon", rotated=True))
+    clients = _existing_confidential("secret-from-the-addon", rotated=True)
+    fake = FakeKeycloak(roles={}, clients=clients)
     _patch_common(monkeypatch, fake)
 
     assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
 
-    (ui,) = _ui_clients(fake)
+    (ui,) = _confidential_clients(fake)
     assert ui.get("rotated") is True, "the rest of the client is not touched"
     assert "created_from" not in ui, "it is not recreated"
-    assert ui["put_bodies"] == [{"secret": "baked-ui-secret"}], "only the secret is written"
+    assert ui["put_bodies"] == [{"secret": "baked-secret"}], "only the secret is written"
 
 
 def test_a_secret_left_over_from_an_earlier_install_is_aligned_once(
@@ -468,7 +479,7 @@ def test_a_secret_left_over_from_an_earlier_install_is_aligned_once(
     """The add-on's client already exists with the secret it was created with; the
     service signs in with the one setup generated and Keycloak answers 401."""
     _write_realm_json(tmp_path, _rag_realm_def())
-    fake = FakeKeycloak(roles={}, clients=_existing_ui("secret-from-the-addon"))
+    fake = FakeKeycloak(roles={}, clients=_existing_confidential("secret-from-the-addon"))
     _patch_common(monkeypatch, fake)
 
     assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
@@ -476,10 +487,10 @@ def test_a_secret_left_over_from_an_earlier_install_is_aligned_once(
     assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
     second = capsys.readouterr().out
 
-    (ui,) = _ui_clients(fake)
-    assert ui["secret"] == "baked-ui-secret"
+    (ui,) = _confidential_clients(fake)
+    assert ui["secret"] == "baked-secret"
     assert len(ui["put_bodies"]) == 1, "the second run finds nothing to change"
-    assert "client secret updated: qdrant-ingest-ui" in first
+    assert "client secret updated: rag-confidential-client" in first
     assert "1 client secret(s) updated" in first
     assert "client secret updated" not in second
     assert "0 client secret(s) updated" in second
@@ -487,23 +498,23 @@ def test_a_secret_left_over_from_an_earlier_install_is_aligned_once(
 
 def test_a_secret_that_already_matches_is_not_written(tmp_path, monkeypatch):
     _write_realm_json(tmp_path, _rag_realm_def())
-    fake = FakeKeycloak(roles={}, clients=_existing_ui("baked-ui-secret"))
+    fake = FakeKeycloak(roles={}, clients=_existing_confidential("baked-secret"))
     _patch_common(monkeypatch, fake)
 
     assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
 
-    assert "put_bodies" not in _ui_clients(fake)[0]
+    assert "put_bodies" not in _confidential_clients(fake)[0]
 
 
 def test_a_placeholder_never_replaces_the_secret_of_an_existing_client(tmp_path, monkeypatch):
-    placeholder = "GENERATE_KC_QDRANT_INGEST_UI_CLIENT_SECRET"
-    _write_realm_json(tmp_path, _rag_realm_def(ui_secret=placeholder))
-    fake = FakeKeycloak(roles={}, clients=_existing_ui("working-secret"))
+    placeholder = "GENERATE_KC_RAG_CONFIDENTIAL_CLIENT_SECRET"
+    _write_realm_json(tmp_path, _rag_realm_def(secret=placeholder))
+    fake = FakeKeycloak(roles={}, clients=_existing_confidential("working-secret"))
     _patch_common(monkeypatch, fake)
 
     assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
 
-    (ui,) = _ui_clients(fake)
+    (ui,) = _confidential_clients(fake)
     assert ui["secret"] == "working-secret"
     assert "put_bodies" not in ui
 
@@ -512,7 +523,7 @@ def test_a_resource_server_client_is_not_asked_for_a_secret(tmp_path, monkeypatc
     _write_realm_json(tmp_path, _rag_realm_def())
     clients = {
         "uuid-mcp": {"clientId": "mcp-qdrant", "mappers": {}},
-        **_existing_ui("baked-ui-secret"),
+        **_existing_confidential("baked-secret"),
     }
     fake = FakeKeycloak(roles={}, clients=clients)
     _patch_common(monkeypatch, fake)
@@ -525,24 +536,24 @@ def test_a_resource_server_client_is_not_asked_for_a_secret(tmp_path, monkeypatc
 
 def test_no_secret_is_touched_while_the_profile_is_off(tmp_path, monkeypatch):
     _write_realm_json(tmp_path, _rag_realm_def())
-    fake = FakeKeycloak(roles={}, clients=_existing_ui("secret-from-the-addon"))
+    fake = FakeKeycloak(roles={}, clients=_existing_confidential("secret-from-the-addon"))
     _patch_common(monkeypatch, fake)
 
     assert kcs.sync_roles(_rag_tree("keycloak,librechat"), config_dir=tmp_path) is True
 
-    assert _ui_clients(fake)[0]["secret"] == "secret-from-the-addon"
+    assert _confidential_clients(fake)[0]["secret"] == "secret-from-the-addon"
     assert fake.secret_reads == 0
 
 
 def test_sync_skips_a_client_whose_secret_is_still_a_placeholder(tmp_path, monkeypatch, capsys):
-    placeholder = "GENERATE_KC_QDRANT_INGEST_UI_CLIENT_SECRET"
-    _write_realm_json(tmp_path, _rag_realm_def(ui_secret=placeholder))
+    placeholder = "GENERATE_KC_RAG_CONFIDENTIAL_CLIENT_SECRET"
+    _write_realm_json(tmp_path, _rag_realm_def(secret=placeholder))
     fake = FakeKeycloak(roles={}, clients=_librechat_client())
     _patch_common(monkeypatch, fake)
 
     assert kcs.sync_roles(_rag_tree("rag"), config_dir=tmp_path) is True
 
     created = {c["clientId"] for c in fake.clients.values()}
-    assert "qdrant-ingest-ui" not in created, "a placeholder must never become a real secret"
+    assert "rag-confidential-client" not in created, "a placeholder must never become a real secret"
     assert "mcp-qdrant" in created
-    assert "qdrant-ingest-ui" in capsys.readouterr().err
+    assert "rag-confidential-client" in capsys.readouterr().err

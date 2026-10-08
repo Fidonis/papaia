@@ -79,7 +79,7 @@
       },
       {
         "name": "qdrant-ingest-operator",
-        "description": "Operator for the qdrant-ingest service (profile rag) — may sign in to its web interface and list jobs, inspect runs and trigger reindexing over MCP"
+        "description": "Operator for the qdrant-ingest service (profile rag) — may list jobs, inspect runs and trigger reindexing over MCP"
       }
     ]
   },
@@ -394,27 +394,6 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "fullScopeAllowed": false
-    },
-    {
-      "clientId": "qdrant-ingest-ui",
-      "name": "Qdrant Ingest — Web UI",
-      "description": "Operator web interface of qdrant-ingest (profile rag) — OIDC login via Keycloak; requires the qdrant-ingest-operator realm role",
-      "enabled": true,
-      "clientAuthenticatorType": "client-secret",
-      "secret": "${env.KC_QDRANT_INGEST_UI_CLIENT_SECRET}",
-      "redirectUris": [
-        "*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
-      "standardFlowEnabled": true,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
-      "publicClient": false,
-      "protocol": "openid-connect",
-      "fullScopeAllowed": true
     }
   ],
   "users": [

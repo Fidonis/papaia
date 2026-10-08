@@ -109,7 +109,8 @@ def test_root_env_example_carries_the_derivable_urls_and_ports():
     assert root["QDRANT_EXT_PORT"] == "6333"
     assert root["QDRANT_INGEST_EXT_PORT"] == "8300"
     assert root["QDRANT_PUBLIC_URL"].endswith(":" + root["QDRANT_EXT_PORT"])
-    assert root["QDRANT_INGEST_PUBLIC_URL"].endswith(":" + root["QDRANT_INGEST_EXT_PORT"])
+    # The ingester has no web interface, so there is no browser-facing URL for it.
+    assert "QDRANT_INGEST_PUBLIC_URL" not in root
 
 
 def test_alias_targets_in_the_module_are_generated_placeholders():
@@ -122,11 +123,7 @@ def test_alias_targets_in_the_module_are_generated_placeholders():
         for alias_dir, key in aliases
         if alias_dir == "ai/rag"
     ]
-    assert sorted(targets) == [
-        "QDRANT_MCP_EMBEDDING_API_KEY",
-        "QI_EMBEDDING_API_KEY",
-        "QI_UI_CLIENT_SECRET",
-    ]
+    assert sorted(targets) == ["QDRANT_MCP_EMBEDDING_API_KEY", "QI_EMBEDDING_API_KEY"]
     for key in targets:
         assert common.marks_generated_secret(seed[key]), key
 
@@ -135,7 +132,6 @@ def test_every_secret_of_the_module_is_generated_by_setup():
     seed = envtree.load_seed_tree(REPO)["ai/rag"]
     generated = {key for key, value in seed.items() if common.marks_generated_secret(value)}
     assert {"QDRANT_JWT_SECRET", "QI_CONNECTIONS_SECRET", "QI_API_TOKEN"} <= generated
-    assert "QI_UI_SESSION_SECRET" in generated
 
 
 def test_no_key_of_the_module_is_deleted_by_the_removed_keys_cleanup():
@@ -158,11 +154,6 @@ def test_realm_template_ships_the_rag_clients_roles_and_mappers():
         assert client["fullScopeAllowed"] is False
         assert "secret" not in client
 
-    ui = clients["qdrant-ingest-ui"]
-    assert ui["standardFlowEnabled"] is True
-    assert ui["publicClient"] is False
-    assert ui["secret"] == "secret-of-KC_QDRANT_INGEST_UI_CLIENT_SECRET"
-
     roles = {r["name"]: r for r in realm["roles"]["realm"]}
     assert {"qdrant-admin", "qdrant-ingest-operator"} <= set(roles)
     composite = set(roles["papaia-admin"]["composites"]["realm"])
@@ -176,9 +167,27 @@ def test_realm_template_ships_the_rag_clients_roles_and_mappers():
     assert audiences == {"mcp-qdrant", "mcp-qdrant-ingest"}
 
 
-def test_the_realm_secret_has_a_generated_key_in_the_keycloak_env():
-    seed = envtree.load_seed_tree(REPO)["infra/keycloak"]
-    assert common.marks_generated_secret(seed["KC_QDRANT_INGEST_UI_CLIENT_SECRET"])
+def test_the_removed_ingest_web_interface_leaves_nothing_behind():
+    """qdrant-ingest 1.0.0 serves no web interface (`/ui` answers 404) and ignores its
+    settings, so none of its client, secrets or URLs may stay in the module."""
+    seed = envtree.load_seed_tree(REPO)
+    assert not [key for key in seed["ai/rag"] if key.startswith("QI_UI_")]
+    assert "KC_QDRANT_INGEST_UI_CLIENT_SECRET" not in seed["infra/keycloak"]
+
+    clients = {c["clientId"] for c in _realm()["clients"]}
+    assert "qdrant-ingest-ui" not in clients
+
+    ingest = _compose()["services"]["qdrant-ingest"]
+    assert not [key for key in ingest["environment"] if key.startswith("QI_UI_")]
+    assert "QDRANT_INGEST_PUBLIC_URL" not in (RAG_DIR / "docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_the_ingester_only_reads_the_catalog_papaia_manager_writes():
+    volumes = _compose()["services"]["qdrant-ingest"]["volumes"]
+    catalog = [v for v in volumes if ":/config/catalog" in v]
+    assert catalog == ["${PAPAIA_CONFIG_DIR}/ai/rag/catalog:/config/catalog:ro"]
 
 
 def test_compose_constants_match_the_realm_and_the_librechat_fragment():
@@ -200,11 +209,6 @@ def test_compose_constants_match_the_realm_and_the_librechat_fragment():
     assert servers["QdrantIngest"]["url"] == f"http://qdrant-ingest:{ingest_port}/mcp"
     allowed = set(fragment["mcpSettings"]["allowedDomains"])
     assert allowed == {f"http://qdrant-mcp:{mcp['MCP_PORT']}", f"http://qdrant-ingest:{ingest_port}"}
-
-
-def test_the_ingest_web_interface_redirect_is_built_from_the_public_url():
-    environment = _compose()["services"]["qdrant-ingest"]["environment"]
-    assert environment["QI_UI_PUBLIC_URL"] == "${QDRANT_INGEST_PUBLIC_URL}"
 
 
 def test_the_profile_fragment_registered_with_render_core_exists():

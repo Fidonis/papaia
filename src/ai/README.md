@@ -112,17 +112,17 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
   `qdrant` (`qdrant/qdrant`, JWT RBAC on), `qdrant-mcp`
   (`ghcr.io/fidonis/qdrant-mcp-rbac`), `qdrant-ingest`
   (`ghcr.io/fidonis/qdrant-ingest`) and `qdrant-ingest-tika` (`apache/tika`)
-- External ports: `6333` (Qdrant REST and dashboard) and `8300` (ingester web
-  interface, REST and MCP); `qdrant-mcp` and Tika are reachable from `papaia-net`
-  only
+- External ports: `6333` (Qdrant REST and dashboard) and `8300` (ingester REST and
+  MCP; it has no web interface); `qdrant-mcp` and Tika are reachable from
+  `papaia-net` only
 - Auth: `qdrant-mcp` and the ingester's MCP endpoint validate the bearer token
-  LibreChat forwards (audiences `mcp-qdrant` and `mcp-qdrant-ingest`); the ingest
-  web interface signs in through the `qdrant-ingest-ui` client and needs the
-  `qdrant-ingest-operator` realm role
+  LibreChat forwards (audiences `mcp-qdrant` and `mcp-qdrant-ingest`); the ingester
+  also needs the `qdrant-ingest-operator` realm role in it
 - Not LibreChat's built-in file search (`librechat-ragapi`, `librechat-vectordb`),
   which stays in the `librechat` profile
 - Configuration: `.env` (generated secrets, tuning); the ingest catalog
-  (`jobs.yaml`, `connections.yaml`) lives in `$PAPAIA_CONFIG_DIR/ai/rag/catalog`.
+  (`jobs.yaml`, `connections.yaml`, `secrets.yaml`) lives in
+  `$PAPAIA_CONFIG_DIR/ai/rag/catalog` and is edited in papaia-manager.
   The LibreChat MCP entries are the fragment
   `rag/integration/ai/librechat/librechat.yaml`, merged into `librechat.yaml`
   only while the profile is active (`PROFILE_FRAGMENTS` in
