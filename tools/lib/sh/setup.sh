@@ -32,7 +32,7 @@ cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
     local host_ip="" app_host="" auth_host="" librechat_host="" litellm_host="" localai_host="" manager_host="" npm_admin_host=""
-    local qdrant_host="" qdrant_ingest_host=""
+    local qdrant_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" localai_variant="" manager="" rag="" reranker_model="" backup_dir=""
@@ -92,7 +92,6 @@ cmd_setup() {
             --rag) rag="true" ;;
             --no-rag) rag="false" ;;
             --qdrant-host=*) qdrant_host="${1#*=}" ;;
-            --qdrant-ingest-host=*) qdrant_ingest_host="${1#*=}" ;;
             --reranker-model=*) reranker_model="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
@@ -122,7 +121,7 @@ cmd_setup() {
         # Checked rather than left to `set -e`: `upgrade` calls this in a
         # condition context, where set -e is suppressed and an unchecked
         # failure would report "setup complete" over a broken render.
-        if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" "" "" "" ""; then
+        if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" "" "" ""; then
             error "setup failed."
             return 3
         fi
@@ -182,12 +181,10 @@ cmd_setup() {
             info "  RAG System        = $_rag_label"
             [ "$RAG_STICKY" = "true" ] && [ -n "${QDRANT_HOST_STICKY:-}" ] && \
                 info "  Qdrant URL        = $QDRANT_HOST_STICKY"
-            [ "$RAG_STICKY" = "true" ] && [ -n "${QDRANT_INGEST_HOST_STICKY:-}" ] && \
-                info "  Qdrant Ingest URL = $QDRANT_INGEST_HOST_STICKY"
         fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
-            if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" "" "" "" ""; then
+            if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" "" "" ""; then
                 error "setup failed."
                 return 3
             fi
@@ -378,13 +375,6 @@ cmd_setup() {
                 "Where browsers reach Qdrant (REST API; the dashboard is under /dashboard)." \
                 "QDRANT_PUBLIC_URL" "$qdrant_default")"
         fi
-        if [ "$rag" = "true" ] && [ -z "$qdrant_ingest_host" ]; then
-            local qdrant_ingest_default="${QDRANT_INGEST_HOST_STICKY:-}"
-            [ -z "$qdrant_ingest_default" ] && qdrant_ingest_default="$(_derive_qdrant_ingest_default "$app_host")"
-            qdrant_ingest_host="$(prompt_field "Public URL of Qdrant Ingest" \
-                "Where browsers reach the ingest web interface (under /ui)." \
-                "QDRANT_INGEST_PUBLIC_URL" "$qdrant_ingest_default")"
-        fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
@@ -432,7 +422,7 @@ cmd_setup() {
         esac
     fi
 
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$qdrant_ingest_host"; then
+    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host"; then
         error "setup failed."
         return 3
     fi
@@ -577,14 +567,6 @@ _derive_qdrant_default() {
     printf '%s:%s' "$base" "$port"
 }
 
-_derive_qdrant_ingest_default() {
-    # Best-effort bash-side prefill for the qdrant-ingest URL prompt; the
-    # authoritative derivation lives in resolve.derive_qdrant_ingest_url_default.
-    local host="$1" port="${QDRANT_INGEST_EXT_PORT:-8300}" base
-    base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
-    printf '%s:%s' "$base" "$port"
-}
-
 _derive_librechat_default() {
     # Best-effort bash-side prefill for the LibreChat URL prompt; the
     # authoritative derivation lives in resolve.derive_librechat_url_default.
@@ -603,7 +585,7 @@ _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
     local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}" localai_variant="${21:-}"
-    local rag="${22:-}" qdrant_host="${23:-}" qdrant_ingest_host="${24:-}"
+    local rag="${22:-}" qdrant_host="${23:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -612,7 +594,6 @@ _run_setup_py() {
     [ -n "$localai_host" ] && extra+=(--localai-host="$localai_host")
     [ -n "$manager_host" ] && extra+=(--manager-host="$manager_host")
     [ -n "$qdrant_host" ] && extra+=(--qdrant-host="$qdrant_host")
-    [ -n "$qdrant_ingest_host" ] && extra+=(--qdrant-ingest-host="$qdrant_ingest_host")
     [ -n "$npm_admin_host" ] && extra+=(--npm-admin-host="$npm_admin_host")
     [ -n "$auth_provider" ] && extra+=(--auth-provider="$auth_provider")
     [ -n "$oidc_issuer" ] && extra+=(--oidc-issuer="$oidc_issuer")

@@ -47,16 +47,6 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         if config_seeded
         else ""
     )
-    ingest_port = root.get("QDRANT_INGEST_EXT_PORT", "8300")
-    qdrant_ingest_sticky = (
-        resolve.sticky_service_url(
-            root.get("QDRANT_INGEST_PUBLIC_URL", ""),
-            resolve.derive_qdrant_ingest_url_default,
-            ingest_port,
-        )
-        if config_seeded
-        else ""
-    )
     jinaai = tree.get("ai/jinaai", {})
     reranker_model_sticky = jinaai.get("RERANKER_MODEL", "") if config_seeded else ""
     if common.is_placeholder(reranker_model_sticky):
@@ -78,8 +68,6 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "MANAGER_EXT_PORT": root.get("MANAGER_EXT_PORT", "8120"),
         "QDRANT_HOST_STICKY": qdrant_sticky,
         "QDRANT_EXT_PORT": qdrant_port,
-        "QDRANT_INGEST_HOST_STICKY": qdrant_ingest_sticky,
-        "QDRANT_INGEST_EXT_PORT": ingest_port,
         "LOCAL_AI_STICKY": (
             ("true" if "localai" in profiles else "false") if config_seeded else ""
         ),

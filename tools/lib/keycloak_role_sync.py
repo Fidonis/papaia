@@ -48,7 +48,7 @@ _MIGRATION_TARGET_ROLE = "papaia-admin"
 # install gets them from the realm import; an existing realm gets them from
 # this sync, and only once the profile is enabled.
 PROFILE_CLIENTS: dict[str, tuple[str, ...]] = {
-    "rag": ("mcp-qdrant", "mcp-qdrant-ingest", "qdrant-ingest-ui"),
+    "rag": ("mcp-qdrant", "mcp-qdrant-ingest"),
 }
 
 

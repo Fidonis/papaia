@@ -91,7 +91,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_host=args.localai_host,
         manager_host=args.manager_host,
         qdrant_host=args.qdrant_host,
-        qdrant_ingest_host=args.qdrant_ingest_host,
         npm_admin_host=args.npm_admin_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
@@ -566,7 +565,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-host")
     p_setup.add_argument("--manager-host")
     p_setup.add_argument("--qdrant-host")
-    p_setup.add_argument("--qdrant-ingest-host")
     p_setup.add_argument("--npm-admin-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None

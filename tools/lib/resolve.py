@@ -37,7 +37,6 @@ class SetupArgs:
     litellm_host: str | None = None  # public LiteLLM proxy URL (LITELLM_PUBLIC_URL)
     manager_host: str | None = None  # public papaia-manager URL (MANAGER_PUBLIC_URL)
     qdrant_host: str | None = None  # public Qdrant URL (QDRANT_PUBLIC_URL)
-    qdrant_ingest_host: str | None = None  # public qdrant-ingest URL (QDRANT_INGEST_PUBLIC_URL)
     npm_admin_host: str | None = None  # public NPM admin URL (NPM_ADMIN_HOST)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
@@ -125,14 +124,6 @@ def derive_qdrant_url_default(app_host: str, qdrant_port: str) -> str:
     Plain app_host:port, like the other services without a session cookie of their own:
     the dashboard authenticates with the api-key per request."""
     return f"{app_host}:{qdrant_port}"
-
-
-def derive_qdrant_ingest_url_default(app_host: str, ingest_port: str) -> str:
-    """Default browser-facing qdrant-ingest URL: the public host plus the external ingest port.
-
-    No host.docker.internal -> localhost rewrite as for LibreChat: the ingester marks its
-    session cookie Secure only for an https:// public URL, so plain HTTP keeps working."""
-    return f"{app_host}:{ingest_port}"
 
 
 def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str:
@@ -650,42 +641,30 @@ def sticky_service_url(value: str, derive, port: str) -> str:
 
 
 def resolve_rag_hosts(tree: EnvTree, args: SetupArgs) -> EnvTree:
-    """Derive and store QDRANT_PUBLIC_URL and QDRANT_INGEST_PUBLIC_URL.
+    """Derive and store QDRANT_PUBLIC_URL.
 
     Always resolved, also while the `rag` profile is off, so a sticky value survives a
-    temporary opt-out and a later opt-in finds the URLs ready. A separate pass instead of
+    temporary opt-out and a later opt-in finds the URL ready. A separate pass instead of
     part of resolve_hostnames, which returns early for an already configured external
-    OIDC provider and would skip them there.
+    OIDC provider and would skip it there.
 
-    Precedence per URL: flag > stored value > derived default."""
+    Precedence: flag > stored value > derived default. The ingester has no URL of its own:
+    it has no web interface, and papaia-manager reaches it over papaia-net."""
     root = tree.setdefault("", {})
     app_host = root.get("PAPAIA_HOST", "")
-    specs = (
-        (
-            "QDRANT_PUBLIC_URL",
-            "QDRANT_EXT_PORT",
-            "6333",
-            args.qdrant_host,
-            derive_qdrant_url_default,
-            "Public URL of Qdrant (QDRANT_PUBLIC_URL)",
-        ),
-        (
-            "QDRANT_INGEST_PUBLIC_URL",
-            "QDRANT_INGEST_EXT_PORT",
-            "8300",
-            args.qdrant_ingest_host,
-            derive_qdrant_ingest_url_default,
-            "Public URL of qdrant-ingest (QDRANT_INGEST_PUBLIC_URL)",
-        ),
+    port = root.get("QDRANT_EXT_PORT", "6333")
+    derived = derive_qdrant_url_default(app_host, port)
+    sticky = (
+        ""
+        if args.fresh_init
+        else sticky_service_url(
+            root.get("QDRANT_PUBLIC_URL", ""), derive_qdrant_url_default, port
+        )
     )
-    for key, port_key, default_port, override, derive, label in specs:
-        port = root.get(port_key, default_port)
-        derived = derive(app_host, port)
-        sticky = "" if args.fresh_init else sticky_service_url(root.get(key, ""), derive, port)
-        url = override or sticky or derived
-        if not override and not args.non_interactive and args.prompt is not None:
-            url = args.prompt(label, sticky or derived)
-        root[key] = url
+    url = args.qdrant_host or sticky or derived
+    if not args.qdrant_host and not args.non_interactive and args.prompt is not None:
+        url = args.prompt("Public URL of Qdrant (QDRANT_PUBLIC_URL)", sticky or derived)
+    root["QDRANT_PUBLIC_URL"] = url
     return tree
 
 

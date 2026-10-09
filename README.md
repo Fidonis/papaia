@@ -51,9 +51,9 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups, and with the `rag` profile the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
-| RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester with a web interface. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
+| RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 
 `localai`, `manager`, `librechat-websearch` and `rag` are toggled by `papaia-ctl setup`
 (`--local-ai`, `--manager`, `--web-search`, `--rag`). When LocalAI is enabled, setup also asks
@@ -74,8 +74,7 @@ The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 | LiteLLM (UI) | Generic OIDC | API key for programmatic access; `litellm-admin` grants Admin UI access |
 | LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
 | papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only |
-| qdrant-ingest (web interface) | Native OIDC | Only users holding the `qdrant-ingest-operator` realm role can sign in |
-| qdrant-mcp, qdrant-ingest (MCP) | OIDC bearer token | Validate the user token LibreChat forwards; audiences `mcp-qdrant` and `mcp-qdrant-ingest` |
+| qdrant-mcp, qdrant-ingest (MCP) | OIDC bearer token | Validate the user token LibreChat forwards; audiences `mcp-qdrant` and `mcp-qdrant-ingest`; qdrant-ingest also requires the `qdrant-ingest-operator` realm role |
 | NPM admin UI | oauth2-proxy sidecar | Restricted to `npm-admin` via `--allowed-group` |
 | oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
 
@@ -235,7 +234,6 @@ tools/papaia-ctl setup [OPTIONS]
 | `--localai-host=URL` | _(derived)_ | Public LocalAI URL if it differs from `--app-host` |
 | `--manager-host=URL` | _(derived)_ | Public papaia-manager URL if it differs from `--app-host` |
 | `--qdrant-host=URL` | _(derived)_ | Public Qdrant URL if it differs from `--app-host`; derived as `<app-host>:6333` |
-| `--qdrant-ingest-host=URL` | _(derived)_ | Public qdrant-ingest URL if it differs from `--app-host`; derived as `<app-host>:8300` |
 | `--npm-admin-host=URL` | _(derived)_ | Public URL of the Nginx PM admin UI |
 | `--auth-provider=VALUE` | `internal_keycloak` | `internal_keycloak` or `external_oidc` |
 | `--oidc-issuer=URL` | _(required for `external_oidc`)_ | External OIDC issuer URL |
@@ -1146,27 +1144,23 @@ LibreChat's built-in file search; `librechat-ragapi` and `librechat-vectordb` be
 |---|---|---|
 | `qdrant` | 6333 (`QDRANT_EXT_PORT`) | Published on `HOST_IP`. REST and the dashboard under `/dashboard`; every request needs the api-key. |
 | `qdrant-mcp` | 8000 | `papaia-net` only. LibreChat calls it with the signed-in user's token. |
-| `qdrant-ingest` | 8300 (`QDRANT_INGEST_EXT_PORT`) | Published on `HOST_IP`. Web interface under `/ui`, REST under `/v1`, MCP under `/mcp`. |
+| `qdrant-ingest` | 8300 (`QDRANT_INGEST_EXT_PORT`) | Published on `HOST_IP`. REST under `/v1` (static token) and MCP under `/mcp`; it has no web interface. |
 | `qdrant-ingest-tika` | 9998 | `papaia-net` only. |
 
 **Enable it** with `papaia-ctl setup`: the wizard asks whether to install the RAG system and, on
-yes, for the public URL of Qdrant and of the ingest service, pre-filled with `<app-host>:6333` and
-`<app-host>:8300`. Non-interactively:
+yes, for the public URL of Qdrant, pre-filled with `<app-host>:6333`. Non-interactively:
 
 ```bash
-tools/papaia-ctl setup -y --rag \
-  --qdrant-host=https://qdrant.example.com \
-  --qdrant-ingest-host=https://ingest.example.com
+tools/papaia-ctl setup -y --rag --qdrant-host=https://qdrant.example.com
 tools/papaia-ctl start
 ```
 
-Both URL flags are optional, `--no-rag` switches the profile off again, and a run without either
-flag leaves the choice and the URLs as they are. The URLs are stored as `QDRANT_PUBLIC_URL` and
-`QDRANT_INGEST_PUBLIC_URL` in `$PAPAIA_CONFIG_DIR/.env` even while the profile is off, and the OIDC
-redirect of the web interface is built from the second one. With the bundled Nginx Proxy Manager,
-`start` also creates a proxy host for each URL that is a plain subdomain; the ingest host serves
-only `/ui` and `/health`, so its REST and MCP endpoints stay off the public name. The secrets are
-generated by `setup`; `ai/rag/.env` holds them.
+`--qdrant-host` is optional, `--no-rag` switches the profile off again, and a run without either
+flag leaves the choice and the URL as they are. The URL is stored as `QDRANT_PUBLIC_URL` in
+`$PAPAIA_CONFIG_DIR/.env` even while the profile is off. With the bundled Nginx Proxy Manager,
+`start` also creates a proxy host for it if it is a plain subdomain. The ingester gets no public
+name: it has no web interface, and papaia-manager and LibreChat reach it over `papaia-net`. The
+secrets are generated by `setup`; `ai/rag/.env` holds them.
 
 `setup` refuses to switch the profile on while the `qdrant`, `qdrant-connect` or `qdrant-ingest`
 add-on is active, because both start services of the same names on the same ports. Stop and
@@ -1174,33 +1168,32 @@ deactivate the add-on first (`papaia-ctl addon stop <name> --clean-up`, then `ad
 <name>`); its volumes are kept.
 
 With the bundled Keycloak, `start` also creates what the module needs in an existing realm: the
-clients `mcp-qdrant`, `mcp-qdrant-ingest` and `qdrant-ingest-ui`, the audience mappers on the
-`librechat` client, and the realm roles `qdrant-admin` and `qdrant-ingest-operator` (both are part
-of `papaia-admin`). A client that already exists, for example one left over from the older
-`qdrant-ingest` add-on, keeps everything except its secret: that is set to the value in
-`ai/rag/.env`, which is canonical. Without this the ingest web interface would be refused at
-sign-in with `401 login failed`. With an external OIDC provider, create the same objects there
-yourself, using the `QI_UI_CLIENT_SECRET` from `ai/rag/.env` for `qdrant-ingest-ui`.
+resource-server clients `mcp-qdrant` and `mcp-qdrant-ingest` (no login flows), the audience
+mappers on the `librechat` client, and the realm roles `qdrant-admin` and `qdrant-ingest-operator`
+(both are part of `papaia-admin`). A client that already exists is left as it is; the
+`qdrant-ingest-ui` client of an older install is no longer used and can be deleted. With an
+external OIDC provider, create the same objects there yourself.
 
 **First steps after the first start**
 
 1. Add an embedding model to LiteLLM. The core ships no models, so nothing can be embedded or
    searched before that.
-2. Give the people who run ingestion the `qdrant-ingest-operator` realm role. Without it the web
-   interface and the MCP tool reject them. `qdrant-admin` is a break-glass role for the MCP
-   server's access rules; both are included in `papaia-admin`.
-3. Sign in to the ingest web interface (`QDRANT_INGEST_PUBLIC_URL` + `/ui`), open *Connections*
-   and add `http://qdrant:6333` with the value of `QDRANT_JWT_SECRET` from
-   `$PAPAIA_CONFIG_DIR/ai/rag/.env` as the api-key. The ingester stores the key encrypted and
-   refuses a plain value in `connections.yaml`, which is why this step is not automated.
-4. Define ingest jobs in the same interface. The catalog (`jobs.yaml`, `connections.yaml`) lives in
-   `$PAPAIA_CONFIG_DIR/ai/rag/catalog`; sources of type `local` read
-   `$PAPAIA_CONFIG_DIR/ai/rag/documents` unless `QI_LOCAL_MOUNT` points elsewhere.
+2. Give the people who run ingestion through the MCP tools the `qdrant-ingest-operator` realm
+   role. Without it the ingester's MCP tools reject them. `qdrant-admin` is a break-glass role
+   for the MCP server's access rules; both are included in `papaia-admin`.
+3. Open [papaia-manager](#papaia-manager) and its *RAG* menu (administrators only). It creates the
+   connection `default` to the integrated Qdrant itself, and it is where collections and their
+   access roles, the embedding of files and the ingest jobs, their runs and the credentials of
+   remote sources are managed. The ingester has no web interface of its own.
+4. Without the `manager` profile (the manager runs on Linux hosts only) there is no interface:
+   edit the catalog files `jobs.yaml`, `connections.yaml` and `secrets.yaml` in
+   `$PAPAIA_CONFIG_DIR/ai/rag/catalog` yourself, as the qdrant-ingest documentation describes.
+   Sources of type `local` read `$PAPAIA_CONFIG_DIR/ai/rag/documents` unless `QI_LOCAL_MOUNT`
+   points elsewhere.
 
 **Exposure.** The Qdrant port gives whoever holds the api-key full access and bypasses the MCP
 server's role checks, so keep `HOST_IP` on a trusted interface. The ingest port is a control
-plane: `/v1` takes a static token, `/mcp` and `/ui` take OIDC. Publish only `/ui` through a
-reverse proxy.
+plane: `/v1` takes a static token and `/mcp` takes OIDC. Do not publish it through a reverse proxy.
 
 The three volumes (`qdrant-storage`, `qdrant-ingest-cache`, `qdrant-ingest-state`) belong to the
 module `rag`, so `papaia-ctl backup` includes them and `restore --only=module:rag` restores them.

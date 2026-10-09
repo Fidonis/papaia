@@ -10,7 +10,7 @@
 #
 #   qdrant              vector database, JWT RBAC enabled
 #   qdrant-mcp          OIDC + RBAC MCP server in front of Qdrant (for LibreChat)
-#   qdrant-ingest       scheduled document ingestion, REST + MCP + web interface
+#   qdrant-ingest       scheduled document ingestion, REST + MCP (managed in papaia-manager)
 #   qdrant-ingest-tika  Apache Tika text extraction for the ingester
 #
 # This is not LibreChat's built-in file search (`librechat-ragapi` and
@@ -128,22 +128,24 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
   #  INGESTER — scheduler, control plane and everything stateful
   #
-  #  Owns the job catalog, the scheduler, the embedded rclone, the Tika calls,
-  #  chunking, embedding, the Qdrant writes and the SQLite state. One port
-  #  carries REST (/v1, a mutation API guarded by a static token), MCP (/mcp,
-  #  OIDC) and the web interface (/ui, OIDC). It is a control plane, so the
-  #  published port falls back to loopback when HOST_IP is missing; keep it on a
-  #  trusted interface or put a reverse proxy in front of /ui only.
+  #  Owns the scheduler, the embedded rclone, the Tika calls, chunking,
+  #  embedding, the Qdrant writes and the SQLite state. One port carries REST
+  #  (/v1, a mutation API guarded by a static token) and MCP (/mcp, OIDC). There
+  #  is no web interface: jobs, runs, connections and source credentials are
+  #  managed in papaia-manager (profile `manager`). It is a control plane, so
+  #  the published port falls back to loopback when HOST_IP is missing; keep it
+  #  on a trusted interface and do not put it behind a public reverse proxy.
   #
   #  The ingester writes to Qdrant directly (not through qdrant-mcp), because
-  #  the MCP server refuses writes to its system collections. The connection to
-  #  http://qdrant:6333 is added once in the web interface (Connections): the
-  #  api-key is stored encrypted there, and a plain value in connections.yaml is
-  #  rejected.
+  #  the MCP server refuses writes to its system collections. papaia-manager
+  #  creates the connection `default` to http://qdrant:6333 with the api-key
+  #  stored encrypted; a plain value in connections.yaml is rejected.
   #
-  #  The container writes into a host bind mount (the catalog directory), so it
-  #  runs as the host user that owns $PAPAIA_CONFIG_DIR; UID and GID are stamped
-  #  into the root .env at setup, as for papaia-manager.
+  #  The ingester only reads the catalog directory (jobs.yaml, connections.yaml,
+  #  secrets.yaml); papaia-manager writes it as the host user that owns
+  #  $PAPAIA_CONFIG_DIR. The container runs as that user too, so it can read
+  #  what the manager wrote; UID and GID are stamped into the root .env at
+  #  setup, as for papaia-manager.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest:
     image: ghcr.io/fidonis/qdrant-ingest:1.0.0
@@ -155,8 +157,6 @@ services:
       - ./.env
     environment:
       OIDC_ISSUER:          ${OIDC_ISSUER}
-      # Browser-facing URL of the web interface; also builds the OIDC redirect.
-      QI_UI_PUBLIC_URL:     ${QDRANT_INGEST_PUBLIC_URL}
       QI_EMBEDDING_API_URL: http://litellm:4000/v1
       QI_TIKA_URL:          http://qdrant-ingest-tika:9998
       QI_HTTP_HOST:         0.0.0.0
@@ -173,10 +173,11 @@ services:
       - qdrant-ingest-cache:/data/cache
       # SQLite state (document fingerprints, run history) and rclone.conf.
       - qdrant-ingest-state:/data/state
-      # The job catalog the web interface edits (jobs.yaml, connections.yaml).
-      # Only this directory is mounted, not the whole ai/rag directory, so the
-      # container cannot reach its own .env.
-      - ${PAPAIA_CONFIG_DIR}/ai/rag/catalog:/config/catalog
+      # The job catalog papaia-manager edits (jobs.yaml, connections.yaml,
+      # secrets.yaml). Read-only: the ingester never writes it. Only this
+      # directory is mounted, not the whole ai/rag directory, so the container
+      # cannot reach its own .env.
+      - ${PAPAIA_CONFIG_DIR}/ai/rag/catalog:/config/catalog:ro
       - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
       # Documents for sources of type 'local'. Point QI_LOCAL_MOUNT at the real
       # document directory; the default is created by papaia-ctl setup.

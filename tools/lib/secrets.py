@@ -21,7 +21,6 @@ SECRET_ALIASES: dict[tuple[str, str], list[tuple[str, str]]] = {
     ("infra/keycloak", "KC_OAUTH2_PROXY_CLIENT_SECRET"): [("", "OAUTH2_PROXY_CLIENT_SECRET")],
     ("infra/keycloak", "KC_LOCALAI_CLIENT_SECRET"): [("ai/localai", "LOCALAI_OIDC_CLIENT_SECRET")],
     ("infra/keycloak", "KC_MANAGER_CLIENT_SECRET"): [("manager", "MANAGER_OIDC_CLIENT_SECRET")],
-    ("infra/keycloak", "KC_QDRANT_INGEST_UI_CLIENT_SECRET"): [("ai/rag", "QI_UI_CLIENT_SECRET")],
     ("ai/litellm", "LITELLM_MASTER_KEY"): [
         ("ai/librechat", "LITELLM_API_KEY"),
         ("ai/jinaai", "LITELLM_API_KEY"),
