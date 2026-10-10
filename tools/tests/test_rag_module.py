@@ -211,6 +211,53 @@ def test_compose_constants_match_the_realm_and_the_librechat_fragment():
     assert allowed == {f"http://qdrant-mcp:{mcp['MCP_PORT']}", f"http://qdrant-ingest:{ingest_port}"}
 
 
+def _interpolation(value: str) -> tuple[str, str]:
+    """('NAME', 'default') of a value written as `${NAME:-default}`."""
+    match = re.fullmatch(r"\$\{([A-Z][A-Z0-9_]*):-([^}]*)\}", value)
+    assert match, value
+    return match.group(1), match.group(2)
+
+
+def test_both_services_get_the_same_metadata_and_acl_collection_names():
+    """The two services name these settings differently but must agree on the
+    collections: one key feeds both, and the default is the one both services
+    run on without it."""
+    services = _compose()["services"]
+    mcp = services["qdrant-mcp"]["environment"]
+    ingest = services["qdrant-ingest"]["environment"]
+
+    # The key is also qdrant-mcp's own setting name; the ingester's differs.
+    for key, ingest_name, default in (
+        ("EMBEDDING_META_COLLECTION", "QI_EMBED_META_COLLECTION", "_collection_meta"),
+        ("RBAC_ACL_COLLECTION", "QI_RBAC_ACL_COLLECTION", "_rbac_acl"),
+    ):
+        assert _interpolation(mcp[key]) == (key, default)
+        assert _interpolation(ingest[ingest_name]) == (key, default)
+
+
+def test_the_ingester_operator_role_is_fixed_and_matches_the_realm():
+    """Changing the role in ai/rag/.env would demand a role Keycloak does not
+    have, so the compose pins it to the realm role instead of interpolating it."""
+    realm = _realm()
+    role = _compose()["services"]["qdrant-ingest"]["environment"]["QI_OIDC_OPERATOR_ROLE"]
+    assert "$" not in role
+    roles = {r["name"]: r for r in realm["roles"]["realm"]}
+    assert role in roles
+    assert role in roles["papaia-admin"]["composites"]["realm"]
+
+
+def test_the_collection_name_keys_are_documented_and_the_derived_names_are_not():
+    example = RAG_DIR / ".env.example"
+    shared = {"EMBEDDING_META_COLLECTION", "RBAC_ACL_COLLECTION"}
+    derived = {"QI_EMBED_META_COLLECTION", "QI_RBAC_ACL_COLLECTION", "QI_OIDC_OPERATOR_ROLE"}
+
+    assert shared <= _documented_keys(example)
+    # Commented out: the defaults apply until an operator renames the collections.
+    assert shared & set(common.parse_env_file(example)) == set()
+    # A `QI_...=` line would invite an edit that environment: silently overrides.
+    assert derived & _documented_keys(example) == set()
+
+
 def test_the_profile_fragment_registered_with_render_core_exists():
     path = REPO / render_core.PROFILE_FRAGMENTS["rag"]
     assert (path / "integration/ai/librechat/librechat.yaml").is_file()

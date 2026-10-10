@@ -117,6 +117,8 @@ must not be set in this file.
 | `QI_API_TOKEN` | Static bearer token of the ingester's REST API (generated); papaia-manager uses it to start and follow runs |
 | `QI_CONNECTIONS_SECRET` | Encrypts the Qdrant api-keys stored in `connections.yaml` and the source credentials stored in `secrets.yaml` (generated) |
 | `QDRANT_MCP_OIDC_JWKS_CACHE_TTL`, `QDRANT_MCP_QDRANT_JWT_TTL`, `QDRANT_MCP_RBAC_ACL_CACHE_TTL`, `QDRANT_MCP_RBAC_SERVICE_TOKEN_TTL`, `QDRANT_MCP_LOG_LEVEL` | Optional tuning of `qdrant-mcp`, commented out with their defaults |
+| `EMBEDDING_META_COLLECTION`, `RBAC_ACL_COLLECTION` | Names of the metadata and the ACL collection, commented out with their defaults `_collection_meta` and `_rbac_acl`. One key each reaches both `qdrant-mcp` and `qdrant-ingest` (as `QI_EMBED_META_COLLECTION` and `QI_RBAC_ACL_COLLECTION`, which are set by the compose file and therefore not to be set here). Renaming on an installation with data moves nothing, see [`src/ai/README.md`](../src/ai/README.md#renaming-the-system-collections). |
+| `QI_OIDC_OPERATOR_ROLE` | Not configurable: fixed to `qdrant-ingest-operator` in the compose file, because the realm template, `keycloak_role_sync` and the `papaia-admin` composite name that role |
 | `QI_LOCAL_MOUNT`, `QI_TIKA_HEAP` | Document directory for local sources and the Tika heap, interpolated in the compose file |
 | `QI_*` | Every other ingester setting (scheduling, extraction, embedding batches, metrics) is read straight from this file; the list is in the `qdrant-ingest` repository's `docs/operations.md` |
 
