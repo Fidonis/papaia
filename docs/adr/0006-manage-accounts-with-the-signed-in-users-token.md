@@ -1,6 +1,6 @@
 ---
 adr: 0006
-title: Manage accounts from papaia-manager with the signed-in user's token and give papaia-admin Keycloak's user-administration rights
+title: Manage accounts and roles from papaia-manager with the signed-in user's token and give papaia-admin Keycloak's user and role administration rights
 status: Accepted
 date: 2026-10-10
 deciders:
@@ -14,7 +14,7 @@ supersedes: null
 superseded_by: null
 ---
 
-# 0006. Manage accounts from papaia-manager with the signed-in user's token and give papaia-admin Keycloak's user-administration rights
+# 0006. Manage accounts and roles from papaia-manager with the signed-in user's token and give papaia-admin Keycloak's user and role administration rights
 
 ## Context
 
@@ -23,7 +23,8 @@ role under `papaia-admin`. Who may sign in, with which role and from where was
 still managed in the Keycloak Admin Console, a second system with a second
 sign-in and a technical interface, which is what `papaia-manager` exists to
 spare an operator. The manager's Users page covers it: list, create, enable and
-disable, roles, passwords and sessions of the realm's accounts.
+disable, roles, passwords and sessions of the realm's accounts, and the realm's
+roles themselves: create, change and delete.
 
 For that the manager has to reach Keycloak's Admin API, and it has no standing
 way to. The `papaia-manager` client has no service account in the realm
@@ -39,8 +40,10 @@ template, and the only code that calls the Admin API on a live realm,
   no new secret to generate on setup or upgrade. Keycloak applies the rights of
   whoever is signed in.
 - The rights come from the realm. `papaia-admin` carries `manage-users`,
-  `view-users`, `query-users` and `view-realm` of the built-in `realm-management`
-  client as client composites. `manager-admin` does not: the Users page is
+  `view-users`, `query-users`, `view-realm` and `manage-realm` of the built-in
+  `realm-management` client as client composites. The first four manage accounts and
+  read roles; `manage-realm` is what Keycloak asks for to create, change or delete a
+  realm role (checked against Keycloak 26.7: without it every one of them answers 403). `manager-admin` does not: the Users page is
   reserved for `papaia-admin` (the manager's `MANAGER_IDENTITY_ADMIN_ROLE`, default
   `papaia-admin`), so an administrator of the manager alone cannot manage accounts.
 - A fresh install gets the composites from the realm import. An existing realm gets
@@ -68,6 +71,10 @@ template, and the only code that calls the Admin API on a live realm,
   (the Docker socket is mounted), so this is no new class of power. A token that
   carries these rights is worth more, so the `papaia-manager` client's redirect URIs
   (`*` in the template) matter more than before.
+- **Negative**: `manage-realm` is not limited to roles. It also covers the realm's
+  settings (mail server, brute-force protection, token lifetimes, login flows). Keycloak
+  has no narrower right for realm roles short of its fine-grained admin permissions,
+  and the role is the highest in the stack, so it is accepted.
 - **Neutral**: a signed-in `papaia-admin` gets the new rights at the next token
   refresh or sign-in. The roles are Keycloak's own; taking them from `papaia-admin`
   turns the page off and changes nothing else. An installation whose core predates
@@ -85,9 +92,10 @@ template, and the only code that calls the Admin API on a live realm,
 - **The rights on `manager-admin`** — rejected: every administrator of the manager
   could then manage accounts and grant any role, including `papaia-admin`.
 - **Keycloak's fine-grained admin permissions to limit what `manage-users` may
-  grant** — rejected for now: a lot of realm configuration for a role that is the
-  highest in the stack anyway. It can be revisited if a lower tier should manage
-  accounts.
+  grant, or to manage roles without `manage-realm`** — rejected for now: a lot of
+  realm configuration for a role that is the highest in the stack anyway. It can be
+  revisited if a lower tier should manage accounts, or if `manage-realm` turns out
+  to be too much.
 
 ## References
 

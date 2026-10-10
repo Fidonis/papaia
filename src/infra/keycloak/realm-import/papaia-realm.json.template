@@ -17,7 +17,7 @@
     "realm": [
       {
         "name": "papaia-admin",
-        "description": "Full administrator access across every service — composite of every per-service admin role, and of Keycloak's user-administration rights",
+        "description": "Full administrator access across every service — composite of every per-service admin role, and of Keycloak's user and role administration rights",
         "composite": true,
         "composites": {
           "realm": [
@@ -34,7 +34,8 @@
               "manage-users",
               "view-users",
               "query-users",
-              "view-realm"
+              "view-realm",
+              "manage-realm"
             ]
           }
         }

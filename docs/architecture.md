@@ -852,15 +852,15 @@ reads from the same place.
 |---|---|---|
 | `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard, host, backup, settings and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
-| `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page and `/api/v1/users`: the accounts, roles and sessions of the realm. A tier above the admin role: `manager-admin` alone is not enough |
+| `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page and `/api/v1/users`, `/api/v1/roles`: the accounts, their roles and sessions, and the realm's roles themselves. A tier above the admin role: `manager-admin` alone is not enough |
 
 All three name **realm roles**; the backend reads them from the access token's `roles`
 claim.
 
 The Users page has no credential of its own: the manager calls Keycloak's Admin API with the
 access token of the signed-in account, so Keycloak applies that account's rights. That is why
-`papaia-admin` carries `manage-users`, `view-users`, `query-users` and `view-realm` of the
-`realm-management` client as composites (realm template for a new install, the role sync for an
+`papaia-admin` carries `manage-users`, `view-users`, `query-users`, `view-realm` and
+`manage-realm` of the `realm-management` client as composites (realm template for a new install, the role sync for an
 existing one). See [ADR 0006](adr/0006-manage-accounts-with-the-signed-in-users-token.md).
 
 ### Integration with the 4 seams

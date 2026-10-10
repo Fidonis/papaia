@@ -397,7 +397,7 @@ def test_sync_returns_false_when_an_api_call_fails_midway(tmp_path, monkeypatch,
     assert "HTTP 403" in capsys.readouterr().err
 
 
-_USER_RIGHTS = ["manage-users", "view-users", "query-users", "view-realm"]
+_USER_RIGHTS = ["manage-users", "view-users", "query-users", "view-realm", "manage-realm"]
 
 
 def _realm_def_with_user_rights() -> dict:
@@ -446,7 +446,7 @@ def test_sync_adds_the_client_role_composites_to_an_existing_realm(tmp_path, mon
     assert {m for m in members if isinstance(m, str)} == {"librechat-admin", "litellm-admin"}
     out = capsys.readouterr().out
     assert "realm-management/manage-users" in out
-    assert "7 composite edge(s) added" in out
+    assert "8 composite edge(s) added" in out
 
 
 def test_sync_adds_nothing_the_second_time(tmp_path, monkeypatch, capsys):

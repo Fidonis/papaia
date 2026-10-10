@@ -154,7 +154,7 @@ access.
 
 | Role | Description |
 |------|-------------|
-| `papaia-admin` | Composite: `librechat-admin`, `litellm-admin`, `manager-admin`, `npm-admin`, `localai-access`, `qdrant-admin`, `qdrant-ingest-operator`, and the `realm-management` client roles `manage-users`, `view-users`, `query-users`, `view-realm` (Keycloak's user-administration rights) |
+| `papaia-admin` | Composite: `librechat-admin`, `litellm-admin`, `manager-admin`, `npm-admin`, `localai-access`, `qdrant-admin`, `qdrant-ingest-operator`, and the `realm-management` client roles `manage-users`, `view-users`, `query-users`, `view-realm`, `manage-realm` (Keycloak's user and role administration rights) |
 | `librechat-admin` | LibreChat administrator (composite: `librechat-user`) — grants LibreChat's internal ADMIN role |
 | `librechat-user` | Required to sign in to LibreChat at all |
 | `litellm-admin` | LiteLLM proxy administrator (Admin UI: models, teams, keys) |
@@ -168,7 +168,8 @@ access.
 | `finance` | Finance department (demo role) |
 
 The `realm-management` roles are what lets papaia-manager's Users page manage the
-realm's accounts: the manager calls Keycloak's Admin API with the signed-in
+realm's accounts and roles (`manage-realm` is what Keycloak asks for to create, change
+or delete a role, and it covers the realm's settings too): the manager calls Keycloak's Admin API with the signed-in
 account's own token, so only a role that carries them can use the page, and
 `manager-admin` alone does not (see
 [ADR 0006](../../../docs/adr/0006-manage-accounts-with-the-signed-in-users-token.md)).
