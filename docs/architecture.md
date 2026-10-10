@@ -724,6 +724,17 @@ memory:
     model: "my-chat-model"
 ```
 
+**Web search against a SearXNG, Firecrawl or Jina on another private address**
+(`overlay/ai/librechat/librechat.yaml`, plus the URL in `ai/librechat/.env`). LibreChat
+blocks web-search connections to private addresses unless the exact `host:port` is
+exempted; the base config already exempts the bundled services and the overlay list is
+appended to it:
+```yaml
+webSearch:
+  allowedAddresses:
+    - "10.0.0.5:8080"
+```
+
 **SearXNG engine tuning** (`overlay/services/searxng/settings.yml`):
 ```yaml
 search:

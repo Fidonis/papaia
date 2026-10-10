@@ -28,11 +28,11 @@ their images there; the table below covers the Core only.
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.3 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
 | `ghcr.io/fidonis/papaia-manager` | 1.3.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
-| `ghcr.io/danny-avila/librechat` | v0.8.7 | MIT | `ai/librechat` | |
+| `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
 | `mongo` | 8.0.20 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |
 | `pgvector/pgvector` | 0.8.0-pg15-trixie | PostgreSQL License | `ai/librechat` | |
-| `ghcr.io/danny-avila/librechat-rag-api-dev-lite` | v0.8.0 | MIT | `ai/librechat` | |
+| `ghcr.io/librechat-ai/librechat-rag-api-dev-lite` | v0.8.0 | MIT | `ai/librechat` | |
 | `ghcr.io/berriai/litellm` | v1.100.0 | MIT | `ai/litellm` | |
 | `postgres` | 16 | PostgreSQL License | `ai/litellm` | LiteLLM database |
 | `prom/prometheus` | v3.13.1 | Apache-2.0 | `ai/litellm` | |

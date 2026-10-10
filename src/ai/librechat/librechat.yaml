@@ -1,4 +1,4 @@
-version: 1.3.9
+version: 1.3.17
 
 cache: true
 
@@ -59,6 +59,18 @@ webSearch:
   # General Settings
   scraperTimeout: 7500 # Timeout in milliseconds for scraper requests (default: 7500)
   safeSearch: 1 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
+
+  # LibreChat blocks search, scrape and rerank connections to private addresses
+  # at connect time. SearXNG, Firecrawl and the Jina reranker are reached by
+  # Docker service name on papaia-net, so each needs an exact host:port
+  # exemption (no URLs, CIDR ranges or wildcards). The entries match the
+  # defaults of SEARXNG_INSTANCE_URL, FIRECRAWL_API_URL and JINA_API_URL in
+  # .env.example; point those variables elsewhere and add the new host:port in
+  # overlay/ai/librechat/librechat.yaml (lists are appended to this one).
+  allowedAddresses:
+    - "searxng:8080"
+    - "firecrawl:3002"
+    - "jina-reranker-api:8000"
 
 memory:
   disabled: false  # Set to true to completely disable memory

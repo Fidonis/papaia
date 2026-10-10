@@ -62,7 +62,7 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
 ### LibreChat — multi-provider chat UI
 
 - Profile: `librechat`
-- Image: `ghcr.io/danny-avila/librechat`
+- Image: `ghcr.io/librechat-ai/librechat`
 - External port: `8000`
 - Auth: native Keycloak OIDC, PKCE enforced
 - Sidecars: MongoDB, Meilisearch, pgvector, RAG API
