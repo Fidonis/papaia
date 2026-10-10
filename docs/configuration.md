@@ -99,6 +99,7 @@ compile but never reach the container.
 | `MANAGER_SESSION_SECRET` | Signing key for the manager's session cookie (generated) |
 | `MANAGER_ADMIN_ROLE` | Realm role granting full access — add-ons, catalogs, jobs and the dashboard |
 | `MANAGER_USER_ROLE` | Realm role granting dashboard-only access; admins hold it implicitly |
+| `MANAGER_IDENTITY_ADMIN_ROLE` | Realm role that may manage the realm's users and roles (the Users page); `papaia-admin` by default, which carries Keycloak's user-administration rights ([ADR 0006](adr/0006-manage-accounts-with-the-signed-in-users-token.md)) |
 | `LOG_LEVEL` | Manager application log level |
 
 ## RAG variables

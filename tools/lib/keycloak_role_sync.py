@@ -7,7 +7,10 @@ new roles, composites, clients or protocol mappers shipped by a newer
 papaia-realm.json template on its own. This module reconciles the live realm
 against the rendered template instead: additive only, it never deletes
 anything and never overwrites a role, a composite edge, a protocol mapper or a
-user's existing role mapping.
+user's existing role mapping. A composite member is a realm role or a role of a
+client; `papaia-admin` carries the `realm-management` roles that let it
+administer the realm's accounts (the manager's Users page acts with the
+signed-in account's own token), and an existing realm gets them from here.
 
 Clients are handled only for the Compose profiles that need them
 (PROFILE_CLIENTS), so an installation that never enables such a profile keeps
@@ -167,22 +170,84 @@ def _sync_roles(base_url, ctx, token, realm_def: dict) -> tuple[dict[str, dict],
     return existing, created
 
 
+def _client_uuid(base_url, ctx, token, client_id: str) -> str | None:
+    path = f"/clients?clientId={urllib.parse.quote(client_id)}"
+    matches = _api(base_url, ctx, token, "GET", path)
+    return matches[0]["id"] if matches else None
+
+
+def _client_role(base_url, ctx, token, client_uuid: str, name: str) -> dict | None:
+    """One role of a client, or None when the client has no role of that name."""
+    path = f"/clients/{client_uuid}/roles/{urllib.parse.quote(name, safe='')}"
+    try:
+        return _api(base_url, ctx, token, "GET", path)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
 def _sync_composites(base_url, ctx, token, realm_def: dict) -> int:
+    """Add the composite members the template names and a role does not have yet.
+
+    A member is a realm role (`composites.realm`) or a role of a client
+    (`composites.client`, a map of client id -> role names), which is how
+    `papaia-admin` carries Keycloak's own user-administration rights. A client
+    or a client role that cannot be found is a warning: the rest of the sync
+    still has to run."""
     added = 0
+    client_uuids: dict[str, str | None] = {}
     for role in realm_def.get("roles", {}).get("realm", []):
-        wanted = role.get("composites", {}).get("realm", [])
-        if not wanted:
+        composites = role.get("composites", {})
+        wanted_realm = composites.get("realm", [])
+        wanted_client = composites.get("client", {})
+        if not wanted_realm and not wanted_client:
             continue
         name = role["name"]
         current_reps = _api(base_url, ctx, token, "GET", f"/roles/{name}/composites") or []
-        current = {c["name"] for c in current_reps}
-        missing = [n for n in wanted if n not in current]
-        if not missing:
+        # A client role may share its name with a realm role, so the two are kept apart.
+        current_realm = {c["name"] for c in current_reps if not c.get("clientRole")}
+        current_client = {
+            (c.get("containerId"), c["name"]) for c in current_reps if c.get("clientRole")
+        }
+
+        reps: list[dict] = []
+        labels: list[str] = []
+        for member in wanted_realm:
+            if member not in current_realm:
+                reps.append(_api(base_url, ctx, token, "GET", f"/roles/{member}"))
+                labels.append(member)
+
+        for client_id, members in wanted_client.items():
+            if client_id not in client_uuids:
+                client_uuids[client_id] = _client_uuid(base_url, ctx, token, client_id)
+            uuid = client_uuids[client_id]
+            if uuid is None:
+                print(
+                    f"  composites of {name} skipped: client {client_id} not found",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            for member in members:
+                if (uuid, member) in current_client:
+                    continue
+                rep = _client_role(base_url, ctx, token, uuid, member)
+                if rep is None:
+                    print(
+                        f"  composite of {name} skipped: client {client_id} has no role {member}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
+                reps.append(rep)
+                labels.append(f"{client_id}/{member}")
+
+        if not reps:
             continue
-        reps = [_api(base_url, ctx, token, "GET", f"/roles/{n}") for n in missing]
         _api(base_url, ctx, token, "POST", f"/roles/{name}/composites", reps)
         added += len(reps)
-        print(f"  composites added to {name}: {missing}", flush=True)
+        print(f"  composites added to {name}: {labels}", flush=True)
     return added
 
 

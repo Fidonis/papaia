@@ -17,7 +17,7 @@
     "realm": [
       {
         "name": "papaia-admin",
-        "description": "Full administrator access across every service — composite of every per-service admin role",
+        "description": "Full administrator access across every service — composite of every per-service admin role, and of Keycloak's user-administration rights",
         "composite": true,
         "composites": {
           "realm": [
@@ -28,7 +28,15 @@
             "localai-access",
             "qdrant-admin",
             "qdrant-ingest-operator"
-          ]
+          ],
+          "client": {
+            "realm-management": [
+              "manage-users",
+              "view-users",
+              "query-users",
+              "view-realm"
+            ]
+          }
         }
       },
       {
