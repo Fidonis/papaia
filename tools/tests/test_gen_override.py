@@ -129,6 +129,18 @@ def test_generate_ssl_cert_override_creates_file_for_external_oidc(config_dir, r
     assert services["localai"]["environment"]["SSL_CERT_FILE"] == ""
 
 
+def test_ssl_cert_override_covers_every_rag_service_that_mounts_the_ca(config_dir, repo_root):
+    """qdrant-mcp and qdrant-ingest set SSL_CERT_FILE to the local CA; with an
+    external IdP that file does not exist and TLS calls to the issuer would fail."""
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_ssl_cert_override(config_dir, "external_oidc")
+
+    out_path = config_dir / "overrides" / "docker-compose.ssl-cert.override.yml"
+    services = yaml.safe_load(out_path.read_text(encoding="utf-8"))["services"]
+    assert services["qdrant-mcp"]["environment"]["SSL_CERT_FILE"] == ""
+    assert services["qdrant-ingest"]["environment"]["SSL_CERT_FILE"] == ""
+
+
 def test_generate_ssl_cert_override_removes_file_for_internal_keycloak(config_dir, repo_root):
     envtree.init(config_dir, repo_root, env_name="papaia")
     # First create the file as if a prior external-OIDC run wrote it

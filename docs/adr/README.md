@@ -26,6 +26,8 @@ See [`0000-template.md`](./0000-template.md).
 | [0001](./0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | 2026-05-09 |
 | [0002](./0002-addon-core-compatibility-gating.md) | Gate addon compatibility on a contract generation, not the product version | Accepted | 2026-07-14 |
 | [0003](./0003-per-service-admin-roles.md) | Split the shared admin realm role into per-service roles under papaia-admin | Accepted | 2026-09-18 |
+| [0004](./0004-rag-system-as-optional-core-profile.md) | Offer the RAG system as an optional core profile instead of three add-ons | Accepted | 2026-10-04 |
+| [0005](./0005-manage-the-rag-ingester-from-papaia-manager.md) | Manage the RAG system's ingester from papaia-manager instead of its own web interface | Accepted | 2026-10-09 |
 
 ## References
 

@@ -25,7 +25,9 @@
             "litellm-admin",
             "manager-admin",
             "npm-admin",
-            "localai-access"
+            "localai-access",
+            "qdrant-admin",
+            "qdrant-ingest-operator"
           ]
         }
       },
@@ -70,6 +72,14 @@
       {
         "name": "localai-access",
         "description": "Access to LocalAI local inference engine"
+      },
+      {
+        "name": "qdrant-admin",
+        "description": "Break-glass admin for the Qdrant MCP server (profile rag) — holders receive a global Qdrant manage token and can edit the ACL collection"
+      },
+      {
+        "name": "qdrant-ingest-operator",
+        "description": "Operator for the qdrant-ingest service (profile rag) — may list jobs, inspect runs and trigger reindexing over MCP"
       }
     ]
   },
@@ -139,6 +149,30 @@
             "access.token.claim": "true",
             "claim.name": "preferred_username",
             "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "mcp-qdrant-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "mcp-qdrant",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "mcp-qdrant-ingest-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "mcp-qdrant-ingest",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
           }
         }
       ]
@@ -334,6 +368,32 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "mcp-qdrant",
+      "name": "MCP Qdrant",
+      "description": "OIDC resource server of qdrant-mcp (profile rag) — validates forwarded LibreChat user tokens; no login flows",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false
+    },
+    {
+      "clientId": "mcp-qdrant-ingest",
+      "name": "MCP Qdrant Ingest",
+      "description": "OIDC resource server of qdrant-ingest (profile rag) — validates forwarded LibreChat user tokens; no login flows",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false
     }
   ],
   "users": [

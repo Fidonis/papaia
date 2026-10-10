@@ -48,9 +48,9 @@ To override the profile set for a single run without touching any file:
 tools/papaia-ctl start --profiles=keycloak,librechat,litellm
 ```
 
-The `localai` and `librechat-websearch` profiles have dedicated setup flags
-(`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`), which also keep
-`deployment.yaml` in sync. Prefer those over hand-editing.
+The `localai`, `librechat-websearch` and `rag` profiles have dedicated setup flags
+(`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`, `--rag` / `--no-rag`),
+which also keep `deployment.yaml` in sync. Prefer those over hand-editing.
 
 With `localai` enabled, setup additionally asks which accelerator image to install and
 detects what the host supports. `--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|

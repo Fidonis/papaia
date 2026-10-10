@@ -30,7 +30,7 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
     for rel_dir, values in sorted(tree.items()):
         for key, value in sorted(values.items()):
             if value == placeholder:
-                env_file = f"{rel_dir}.env" if rel_dir else ".env"
+                env_file = f"{rel_dir}/.env" if rel_dir else ".env"
                 needs_edit.append((env_file, key))
 
     clients = [
@@ -38,6 +38,7 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
         ("litellm", litellm_redirect or f"{app_host}/sso/callback"),
         ("oauth2-proxy", f"{app_host}/oauth2/callback"),
     ]
+    rag_active = "rag" in _active_profiles(root)
 
     sep = "─" * 65
     print()
@@ -50,6 +51,13 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
     for client_id, redirect_uri in clients:
         print(f"   {client_id:<{id_w}} {redirect_uri}")
     print()
+    if rag_active:
+        print("   RAG system (profile rag), in the same provider:")
+        print("   - resource-server clients 'mcp-qdrant' and 'mcp-qdrant-ingest' (no login flows),")
+        print("     and an audience mapper for each on the 'librechat' client's access tokens")
+        print("   - the realm roles 'qdrant-ingest-operator' (required for the ingest MCP tools)")
+        print("     and 'qdrant-admin'")
+        print()
     if needs_edit:
         print("2. Replace REPLACE_WITH_VALID_SECRET in:")
         print()
@@ -65,6 +73,33 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
         "See src/infra/keycloak/README.md"
         " 'Switching to an External OIDC Provider' for details."
     )
+
+
+def _active_profiles(root: dict[str, str]) -> set[str]:
+    return {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
+
+
+def print_rag_next_steps(config_dir: Path, tree: envtree.EnvTree) -> None:
+    """Print the steps that remain by hand after the RAG system was switched on.
+
+    The ingester has no web interface. Connections, collections and ingest jobs are
+    managed in papaia-manager, which creates the connection `default` to the integrated
+    Qdrant itself, so setup seeds nothing and no secret is printed."""
+    root = tree.get("", {})
+    print()
+    print("RAG system enabled — after 'papaia-ctl start':")
+    print("  1. Add an embedding model to LiteLLM. The core ships no models, so nothing can")
+    print("     be embedded or searched before that.")
+    print("  2. Give the people who run ingestion through the MCP tools the realm role")
+    print("     'qdrant-ingest-operator'.")
+    if "manager" in _active_profiles(root):
+        print("  3. Manage connections, collections and ingest jobs in papaia-manager (menu RAG,")
+        print("     administrators only). It creates the connection 'default' to http://qdrant:6333.")
+    else:
+        print("  3. Connections, collections and ingest jobs are managed in papaia-manager,")
+        print("     which is not enabled. Switch it on with 'papaia-ctl setup --manager', or")
+        print(f"     edit the catalog files in {config_dir / 'ai' / 'rag' / 'catalog'} by hand.")
+    print("See README 'RAG system' for details.")
 
 
 def print_keycloak_checklist(

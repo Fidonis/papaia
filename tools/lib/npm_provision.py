@@ -32,11 +32,12 @@ _PROXY_HOSTS_PATH = "/api/nginx/proxy-hosts"
 # forward-scheme, ssl-verify, allow-websocket) tuples.  Only entries whose profile
 # is in COMPOSE_PROFILES and whose URL passes _is_subdomain_url() are provisioned.
 _PROXY_HOST_SPECS: list[tuple[str, str, str, str, int, str, bool, bool]] = [
-    ("keycloak",  "",             "AUTH_HOST",          "keycloak",       8443, "https", False, False),
-    ("librechat", "ai/librechat", "DOMAIN_SERVER",      "librechat",      3080, "http",  True,  True),
-    ("litellm",   "",             "LITELLM_PUBLIC_URL", "litellm",        4000, "http",  True,  False),
-    ("localai",   "",             "LOCALAI_PUBLIC_URL", "localai",        8080, "http",  True,  False),
-    ("manager",   "",             "MANAGER_PUBLIC_URL", "papaia-manager", 8000, "http",  True,  False),
+    ("keycloak", "", "AUTH_HOST", "keycloak", 8443, "https", False, False),
+    ("librechat", "ai/librechat", "DOMAIN_SERVER", "librechat", 3080, "http", True, True),
+    ("litellm", "", "LITELLM_PUBLIC_URL", "litellm", 4000, "http", True, False),
+    ("localai", "", "LOCALAI_PUBLIC_URL", "localai", 8080, "http", True, False),
+    ("manager", "", "MANAGER_PUBLIC_URL", "papaia-manager", 8000, "http", True, False),
+    ("rag", "", "QDRANT_PUBLIC_URL", "qdrant", 6333, "http", True, False),
 ]
 
 
@@ -200,7 +201,16 @@ def provision_npm_hosts(tree: EnvTree) -> bool:
         if domain in existing:
             skipped_existing += 1
             continue
-        _create_proxy_host(base_url, token, domain, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws)
+        _create_proxy_host(
+            base_url,
+            token,
+            domain,
+            fwd_host,
+            fwd_port,
+            fwd_scheme,
+            ssl_verify,
+            ws,
+        )
         existing.add(domain)
         print(f"  created proxy host: {domain} -> {fwd_scheme}://{fwd_host}:{fwd_port}", flush=True)
         created += 1

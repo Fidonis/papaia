@@ -79,6 +79,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     setup_args = resolve.SetupArgs(
         config_dir=config_dir,
         env_name=args.env,
@@ -89,6 +90,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         litellm_host=args.litellm_host,
         localai_host=args.localai_host,
         manager_host=args.manager_host,
+        qdrant_host=args.qdrant_host,
         npm_admin_host=args.npm_admin_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
@@ -98,6 +100,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         enable_local_ai=_tristate(args.enable_local_ai),
         localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
+        enable_rag=_tristate(args.enable_rag),
         reranker_model=args.reranker_model or None,
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
@@ -126,6 +129,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_local_ai(tree, setup_args)
         tree = resolve.resolve_localai_variant(tree, setup_args)
         tree = resolve.resolve_manager(tree, setup_args)
+        tree = resolve.resolve_rag_hosts(tree, setup_args)
+        tree = resolve.resolve_rag(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -154,6 +159,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "Setup complete. Run 'papaia-ctl start' to bring up the stack."
         f" PAPAIA_CONFIG_DIR={config_dir}"
     )
+    # Only for the switch-on: confirming an already enabled RAG system needs no reminder.
+    if setup_args.enable_rag and not rag_was_enabled:
+        reporting.print_rag_next_steps(config_dir, tree)
     if effective_auth_provider == "external_oidc":
         reporting.print_external_oidc_checklist(config_dir, tree)
     return 0
@@ -556,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--litellm-host")
     p_setup.add_argument("--localai-host")
     p_setup.add_argument("--manager-host")
+    p_setup.add_argument("--qdrant-host")
     p_setup.add_argument("--npm-admin-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
@@ -571,6 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
     p_setup.add_argument("--reranker-model", default=None)
     p_setup.add_argument("--backup-dir", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")

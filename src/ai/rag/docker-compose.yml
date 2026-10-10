@@ -1,0 +1,244 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — RAG system · Qdrant, qdrant-mcp-rbac and qdrant-ingest
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OPTIONAL — activate with profile `rag`:
+#   COMPOSE_PROFILES=...,rag   OR   papaia-ctl setup --rag
+#
+# Four services form one module (label `de.fidonis.module: papaia-rag`):
+#
+#   qdrant              vector database, JWT RBAC enabled
+#   qdrant-mcp          OIDC + RBAC MCP server in front of Qdrant (for LibreChat)
+#   qdrant-ingest       scheduled document ingestion, REST + MCP (managed in papaia-manager)
+#   qdrant-ingest-tika  Apache Tika text extraction for the ingester
+#
+# This is not LibreChat's built-in file search (`librechat-ragapi` and
+# `librechat-vectordb` in the librechat profile). Both can run side by side.
+#
+# All four join papaia-net, so LibreChat reaches qdrant-mcp:8000 and
+# qdrant-ingest:8300 by service name. Only the Qdrant REST port and the ingest
+# port are published (see the notes at each ports: block).
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env
+# merged with ai/rag/.env. qdrant and qdrant-mcp take their values only through
+# environment:, so they never see variables meant for the other services.
+# qdrant-ingest additionally reads ai/rag/.env through env_file:, because
+# operators may append QI_SECRET_<NAME> keys for their own sources and those
+# names are unknown here. Nothing listed under its environment: is also set in
+# ai/rag/.env, as environment: would win and blank it.
+services:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  VECTOR DATABASE — Qdrant
+  #
+  #  JWT RBAC is enabled, so the api-key doubles as the HS256 signing secret of
+  #  the per-request tokens qdrant-mcp derives. Both services therefore read
+  #  QDRANT_JWT_SECRET; a drift between them rejects every derived token.
+  #
+  #  The published port is the administration and ingestion path (dashboard at
+  #  /dashboard). It grants unrestricted access to whoever holds the api-key and
+  #  bypasses the RBAC layer, so keep it on a trusted interface via HOST_IP.
+  #  gRPC (6334) is not published.
+  # ═══════════════════════════════════════════════════════════════════════════
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_JWT_SECRET}
+      QDRANT__SERVICE__JWT_RBAC: "true"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    ports:
+      - "${HOST_IP:-127.0.0.1}:${QDRANT_EXT_PORT:-6333}:6333"
+    healthcheck:
+      # No curl or wget in the image; probe the port with bash's /dev/tcp.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-rag
+      de.fidonis.role:   vector-database
+    profiles: [rag]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  MCP SERVER — OIDC + RBAC proxy in front of Qdrant
+  #
+  #  Validates the caller's Keycloak bearer token, resolves the caller's roles
+  #  against the ACL collection inside Qdrant and derives a Qdrant JWT scoped to
+  #  exactly the collections those roles grant. LibreChat forwards the signed-in
+  #  user's token; no static Qdrant credential reaches the caller.
+  #
+  #  Token validation reaches Keycloak at OIDC_ISSUER (public URL) through
+  #  extra_hosts. Port, path, audience and role names are fixed here because the
+  #  realm template and the LibreChat MCP fragment depend on them.
+  #
+  #  The names of the metadata and ACL collections are the exception: one key
+  #  each in ai/rag/.env, passed to this service and to qdrant-ingest, which has
+  #  to read and write the same two collections.
+  # ═══════════════════════════════════════════════════════════════════════════
+  qdrant-mcp:
+    image: ghcr.io/fidonis/qdrant-mcp-rbac:0.3.0
+    restart: unless-stopped
+    environment:
+      OIDC_ISSUER_URL:        ${OIDC_ISSUER}
+      OIDC_AUDIENCE:          mcp-qdrant
+      OIDC_JWKS_CACHE_TTL:    ${QDRANT_MCP_OIDC_JWKS_CACHE_TTL:-3600}
+      QDRANT_URL:             http://qdrant:6333
+      # Doubles as Qdrant's api-key — see the note on the qdrant service.
+      QDRANT_JWT_SECRET:      ${QDRANT_JWT_SECRET}
+      QDRANT_JWT_TTL:         ${QDRANT_MCP_QDRANT_JWT_TTL:-3600}
+      EMBEDDING_API_URL:      http://litellm:4000/v1
+      EMBEDDING_API_KEY:      ${QDRANT_MCP_EMBEDDING_API_KEY}
+      RBAC_ADMIN_ROLE:        qdrant-admin
+      RBAC_ACL_CACHE_TTL:     ${QDRANT_MCP_RBAC_ACL_CACHE_TTL:-60}
+      RBAC_SERVICE_TOKEN_TTL: ${QDRANT_MCP_RBAC_SERVICE_TOKEN_TTL:-300}
+      MCP_HOST:               0.0.0.0
+      MCP_PORT:               "8000"
+      MCP_PATH:               /mcp
+      LOG_LEVEL:              ${QDRANT_MCP_LOG_LEVEL:-INFO}
+      # System collections, shared with qdrant-ingest (QI_EMBED_META_COLLECTION
+      # and QI_RBAC_ACL_COLLECTION there are taken from the same two keys).
+      EMBEDDING_META_COLLECTION: ${EMBEDDING_META_COLLECTION:-_collection_meta}
+      RBAC_ACL_COLLECTION:       ${RBAC_ACL_COLLECTION:-_rbac_acl}
+      # Trust the local CA cert generated by papaia-ctl setup. Cleared to ""
+      # via docker-compose.ssl-cert.override.yml when AUTH_PROVIDER=external_oidc.
+      SSL_CERT_FILE:          /certs/local-ca.crt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - papaia-net
+    security_opt: [no-new-privileges:true]
+    labels:
+      de.fidonis.module: papaia-rag
+      de.fidonis.role:   mcp-server
+    profiles: [rag]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  INGESTER — scheduler, control plane and everything stateful
+  #
+  #  Owns the scheduler, the embedded rclone, the Tika calls, chunking,
+  #  embedding, the Qdrant writes and the SQLite state. One port carries REST
+  #  (/v1, a mutation API guarded by a static token) and MCP (/mcp, OIDC). There
+  #  is no web interface: jobs, runs, connections and source credentials are
+  #  managed in papaia-manager (profile `manager`). It is a control plane, so
+  #  the published port falls back to loopback when HOST_IP is missing; keep it
+  #  on a trusted interface and do not put it behind a public reverse proxy.
+  #
+  #  The ingester writes to Qdrant directly (not through qdrant-mcp), because
+  #  the MCP server refuses writes to its system collections. papaia-manager
+  #  creates the connection `default` to http://qdrant:6333 with the api-key
+  #  stored encrypted; a plain value in connections.yaml is rejected.
+  #
+  #  The ingester only reads the catalog directory (jobs.yaml, connections.yaml,
+  #  secrets.yaml); papaia-manager writes it as the host user that owns
+  #  $PAPAIA_CONFIG_DIR. The container runs as that user too, so it can read
+  #  what the manager wrote; UID and GID are stamped into the root .env at
+  #  setup, as for papaia-manager.
+  #
+  #  The ingester has to agree with qdrant-mcp on the two system collections, so
+  #  QI_EMBED_META_COLLECTION and QI_RBAC_ACL_COLLECTION are derived from the
+  #  keys qdrant-mcp reads. Those are the ones to set in ai/rag/.env: a QI_ name
+  #  set there is ignored, as environment: wins over env_file:. The operator
+  #  role of its MCP tools is fixed like qdrant-mcp's role and audience: the
+  #  realm template, keycloak_role_sync and the papaia-admin composite name it,
+  #  and a different value would lock everybody out.
+  # ═══════════════════════════════════════════════════════════════════════════
+  qdrant-ingest:
+    image: ghcr.io/fidonis/qdrant-ingest:1.0.0
+    restart: unless-stopped
+    # Jobs stop cooperatively between documents; give them room to finish.
+    stop_grace_period: 60s
+    user: "${UID:-1000}:${GID:-1000}"
+    env_file:
+      - ./.env
+    environment:
+      OIDC_ISSUER:          ${OIDC_ISSUER}
+      QI_EMBEDDING_API_URL: http://litellm:4000/v1
+      QI_TIKA_URL:          http://qdrant-ingest-tika:9998
+      QI_HTTP_HOST:         0.0.0.0
+      QI_HTTP_PORT:         "8300"
+      QI_JOBS_FILE:         /config/catalog/jobs.yaml
+      QI_CONNECTIONS_FILE:  /config/catalog/connections.yaml
+      # The same two system collections as qdrant-mcp.
+      QI_EMBED_META_COLLECTION: ${EMBEDDING_META_COLLECTION:-_collection_meta}
+      QI_RBAC_ACL_COLLECTION:   ${RBAC_ACL_COLLECTION:-_rbac_acl}
+      QI_OIDC_OPERATOR_ROLE:    qdrant-ingest-operator
+      # Trust the local CA cert generated by papaia-ctl setup. Cleared to ""
+      # via docker-compose.ssl-cert.override.yml when AUTH_PROVIDER=external_oidc.
+      SSL_CERT_FILE:        /certs/local-ca.crt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # rclone landing zone, one subdirectory per source label.
+      - qdrant-ingest-cache:/data/cache
+      # SQLite state (document fingerprints, run history) and rclone.conf.
+      - qdrant-ingest-state:/data/state
+      # The job catalog papaia-manager edits (jobs.yaml, connections.yaml,
+      # secrets.yaml). Read-only: the ingester never writes it. Only this
+      # directory is mounted, not the whole ai/rag directory, so the container
+      # cannot reach its own .env.
+      - ${PAPAIA_CONFIG_DIR}/ai/rag/catalog:/config/catalog:ro
+      - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
+      # Documents for sources of type 'local'. Point QI_LOCAL_MOUNT at the real
+      # document directory; the default is created by papaia-ctl setup.
+      - ${QI_LOCAL_MOUNT:-${PAPAIA_CONFIG_DIR}/ai/rag/documents}:/data/local:ro
+    depends_on:
+      - qdrant-ingest-tika
+    ports:
+      - "${HOST_IP:-127.0.0.1}:${QDRANT_INGEST_EXT_PORT:-8300}:8300"
+    # No healthcheck here on purpose: the image ships one. /health answers 200
+    # whenever the process can serve; a degraded container reports its reason in
+    # the body instead of restart-looping.
+    networks:
+      - papaia-net
+    security_opt: [no-new-privileges:true]
+    labels:
+      de.fidonis.module: papaia-rag
+      de.fidonis.role:   ingester
+    profiles: [rag]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  TEXT EXTRACTOR — Apache Tika server
+  #
+  #  A JVM plus roughly 200 parsers, kept out of the ingester image so that
+  #  image stays small and a parser OOM has its own blast radius. OCR for
+  #  scanned PDFs needs the -full image variant, which also wants a larger heap.
+  # ═══════════════════════════════════════════════════════════════════════════
+  qdrant-ingest-tika:
+    image: docker.io/apache/tika:3.2.3.0
+    restart: unless-stopped
+    environment:
+      JAVA_OPTS: "-Xmx${QI_TIKA_HEAP:-2g}"
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-rag
+      de.fidonis.role:   text-extractor
+    profiles: [rag]
+
+# Volumes mounted on Windows: \\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes
+# Volumes mounted on Linux: /var/lib/docker/volumes
+volumes:
+  qdrant-storage:
+  qdrant-ingest-cache:
+  qdrant-ingest-state:

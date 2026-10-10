@@ -18,6 +18,7 @@ LibreChat  ──▶  LiteLLM  ──▶  LocalAI / hosted providers
    │ MCP tools       └── Jina reranker (rerank endpoint)
    ▼
 mcp-firecrawl  ──▶  Firecrawl        (../services/firecrawl)
+qdrant-mcp     ──▶  Qdrant           (optional rag profile)
 add-on MCP servers ──▶ their own apps (separate repos, own networks)
 ```
 
@@ -30,8 +31,11 @@ add-on MCP servers ──▶ their own apps (separate repos, own networks)
 - **mcp-firecrawl** exposes Firecrawl's crawl / scrape / search / map / extract
   capabilities as MCP tools.
 - **Jina reranker** is an optional reranking endpoint in front of LiteLLM.
+- **The RAG system** (optional, profile `rag`) is Qdrant with an OIDC and RBAC
+  MCP server in front of it, plus a scheduled ingester that fills Qdrant. It
+  registers its MCP servers with LibreChat while the profile is active.
 
-Everything beyond that — document management, RAG, workflow automation — is an
+Everything beyond that — document management, workflow automation — is an
 add-on. An add-on brings its own MCP server on its own network and contributes
 an `mcpServers` fragment to `librechat.yaml` at render time; nothing in this
 directory changes when one is installed. See
@@ -58,7 +62,7 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
 ### LibreChat — multi-provider chat UI
 
 - Profile: `librechat`
-- Image: `ghcr.io/danny-avila/librechat`
+- Image: `ghcr.io/librechat-ai/librechat`
 - External port: `8000`
 - Auth: native Keycloak OIDC, PKCE enforced
 - Sidecars: MongoDB, Meilisearch, pgvector, RAG API
@@ -102,6 +106,50 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
 - The model is chosen at setup time (`--reranker-model=NAME`) and reaches the
   container as `RERANKER_MODEL`.
 
+### RAG system — Qdrant, MCP server and ingester (optional)
+
+- Profile: `rag`, one module (`de.fidonis.module: papaia-rag`) of four services:
+  `qdrant` (`qdrant/qdrant`, JWT RBAC on), `qdrant-mcp`
+  (`ghcr.io/fidonis/qdrant-mcp-rbac`), `qdrant-ingest`
+  (`ghcr.io/fidonis/qdrant-ingest`) and `qdrant-ingest-tika` (`apache/tika`)
+- External ports: `6333` (Qdrant REST and dashboard) and `8300` (ingester REST and
+  MCP; it has no web interface); `qdrant-mcp` and Tika are reachable from
+  `papaia-net` only
+- Auth: `qdrant-mcp` and the ingester's MCP endpoint validate the bearer token
+  LibreChat forwards (audiences `mcp-qdrant` and `mcp-qdrant-ingest`); the ingester
+  also needs the `qdrant-ingest-operator` realm role in it
+- Not LibreChat's built-in file search (`librechat-ragapi`, `librechat-vectordb`),
+  which stays in the `librechat` profile
+- Configuration: `.env` (generated secrets, tuning); the ingest catalog
+  (`jobs.yaml`, `connections.yaml`, `secrets.yaml`) lives in
+  `$PAPAIA_CONFIG_DIR/ai/rag/catalog` and is edited in papaia-manager.
+  The LibreChat MCP entries are the fragment
+  `rag/integration/ai/librechat/librechat.yaml`, merged into `librechat.yaml`
+  only while the profile is active (`PROFILE_FRAGMENTS` in
+  `tools/lib/render_core.py`)
+- Details and the first steps after enabling it: [RAG system](../../README.md#rag-system)
+
+#### Renaming the system collections
+
+`qdrant-mcp` and `qdrant-ingest` must use the same two system collections in Qdrant:
+the metadata collection (default `_collection_meta`), one record per data collection
+with its embedding model and dimension, and the ACL collection (default `_rbac_acl`),
+the role grants. The defaults need no action.
+
+To rename them, uncomment `EMBEDDING_META_COLLECTION` and `RBAC_ACL_COLLECTION` in
+`$PAPAIA_CONFIG_DIR/ai/rag/.env`, set the new names and run `tools/papaia-ctl start`.
+Each key reaches both services, and papaia-manager reads the same two keys. The names
+the ingester knows them by (`QI_EMBED_META_COLLECTION`, `QI_RBAC_ACL_COLLECTION`) are
+derived from these keys by the compose file, so setting them in `.env` has no effect.
+The realm role that gates the ingester's MCP tools stays `qdrant-ingest-operator`: the
+realm template, `papaia-admin` and papaia-manager name it, so it is not configurable.
+
+On an installation that already holds data, renaming leaves the old collections where
+they are; neither the records nor the grants are moved. Recreate the grants under the new
+ACL collection on the *Collections* page of papaia-manager. The next run of an ingest job
+writes the metadata record of its collection again, so re-ingesting the data restores
+them; delete the old system collections in the Qdrant dashboard once nothing needs them.
+
 ---
 
 ## Adding a new AI service
@@ -131,3 +179,6 @@ Add a service to this directory only when it belongs to the Core itself:
 6. Document the image in [`THIRD_PARTY_LICENSES.md`](../../THIRD_PARTY_LICENSES.md)
    — CI fails otherwise — and add the service to this README and to the profile
    table in [`src/README.md`](../README.md).
+7. If the service brings MCP tools for LibreChat that must exist only while its
+   profile is active, ship them as `<module>/integration/ai/librechat/librechat.yaml`
+   and register the profile in `PROFILE_FRAGMENTS` (`tools/lib/render_core.py`).

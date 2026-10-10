@@ -66,6 +66,10 @@ ATTACHABLE_SERVICES = {
     "nginx-proxy-manager-auth": ["nginx"],
     "oauth2-proxy": ["oauth2-proxy"],
     "papaia-manager": ["manager"],
+    "qdrant": ["rag"],
+    "qdrant-ingest": ["rag"],
+    "qdrant-ingest-tika": ["rag"],
+    "qdrant-mcp": ["rag"],
     "searxng": ["librechat-websearch"],
 }
 
@@ -116,6 +120,8 @@ SECRET_ALIASES = {
     ("ai/litellm", "LITELLM_MASTER_KEY"): [
         ("ai/librechat", "LITELLM_API_KEY"),
         ("ai/jinaai", "LITELLM_API_KEY"),
+        ("ai/rag", "QDRANT_MCP_EMBEDDING_API_KEY"),
+        ("ai/rag", "QI_EMBEDDING_API_KEY"),
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
 }

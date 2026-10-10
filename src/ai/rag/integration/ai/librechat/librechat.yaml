@@ -1,0 +1,33 @@
+# LibreChat MCP registration of the rag profile. render_core merges this fragment
+# into ai/librechat/librechat.yaml only while the `rag` profile is active, so a
+# stack without the RAG system lists neither server.
+mcpServers:
+  Qdrant:
+    title: 'Qdrant'
+    description: 'OIDC-secured vector search over your Qdrant collections.'
+    type: streamable-http
+    url: http://qdrant-mcp:8000/mcp
+    headers:
+      Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
+    # Lazy init: qdrant-mcp validates a real user Bearer token. Without
+    # startup: false, LibreChat attempts to connect at process start with the
+    # unsubstituted placeholder, sees a 401, then falls back to MCP dynamic
+    # OAuth discovery (which qdrant-mcp does not speak) and burns 120 s in OAuth
+    # handling timeout per retry cycle.
+    startup: false
+
+  QdrantIngest:
+    title: 'Qdrant Ingest'
+    description: 'Inspect and trigger the document ingestion jobs feeding your Qdrant collections.'
+    type: streamable-http
+    url: http://qdrant-ingest:8300/mcp
+    headers:
+      Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
+    # Lazy init for the same reason as above. qdrant-ingest additionally requires
+    # the qdrant-ingest-operator realm role in the token.
+    startup: false
+
+mcpSettings:
+  allowedDomains:
+    - "http://qdrant-mcp:8000"
+    - "http://qdrant-ingest:8300"

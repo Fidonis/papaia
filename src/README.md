@@ -32,10 +32,11 @@ src/
     ├── librechat/          # multi-provider chat UI (OIDC)
     ├── litellm/            # LLM proxy + Postgres + Prometheus (OIDC)
     ├── localai/            # local chat-completions inference
-    └── mcp-firecrawl/      # Firecrawl MCP bridge for LibreChat
+    ├── mcp-firecrawl/      # Firecrawl MCP bridge for LibreChat
+    └── rag/                # Qdrant + MCP server + ingester (optional)
 ```
 
-Everything else — document management, RAG, workflow automation — ships as an
+Everything else — document management, workflow automation — ships as an
 add-on in its own repository, not as a directory here. See
 [Add-ons](../README.md#add-ons).
 
@@ -61,12 +62,13 @@ profile is active. The `include:` list is complete — modules are toggled throu
 | `litellm` | LiteLLM + PostgreSQL + Prometheus |
 | `localai` | LocalAI and its model-init container |
 | `manager` | papaia-manager |
+| `rag` | Qdrant, its OIDC + RBAC MCP server, the ingester and its Tika extractor |
 | `librechat-websearch` | SearXNG, Firecrawl, the Firecrawl MCP bridge, Jina reranker |
 
 The default set is `keycloak,nginx,oauth2-proxy,librechat,litellm`. To change it
 permanently, edit `COMPOSE_PROFILES` in `$PAPAIA_CONFIG_DIR/.env` and run
 `tools/papaia-ctl start`; for a single run, use `--profiles=LIST`. The `localai`,
-`manager` and `librechat-websearch` profiles have dedicated `setup` flags that also
+`manager`, `librechat-websearch` and `rag` profiles have dedicated `setup` flags that also
 keep `deployment.yaml` in sync — prefer those.
 
 > Do **not** edit `src/.env`. Every `start` overwrites the checkout's `.env` files

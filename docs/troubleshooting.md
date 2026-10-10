@@ -22,6 +22,65 @@ Cause: the `iss` claim in the access token does not match what LibreChat expects
 - Confirm `OPENID_ISSUER` in `$PAPAIA_CONFIG_DIR/ai/librechat/.env` holds the same URL.
 - On Linux, make sure `host.docker.internal` resolves — see below.
 
+### LibreChat logs "Index build failed" after the upgrade to 1.5.0
+
+```
+error: Index build failed for "User": An existing index has the same name as the requested index ...
+warn: This may be a legacy tenant-index conflict. See UPGRADING.md ...
+```
+
+Cause: LibreChat 0.8.8 builds tenant-scoped unique indexes. A database written by LibreChat
+0.8.7 or older can still hold the previous unique indexes (`email_1`, `name_1`, ...) under
+the same names, so the new ones cannot be created. LibreChat keeps running, but logs the
+error for User, Role, Preset, AccessRole, MCPServer, AgentCategory, Message and Conversation
+on every start.
+
+`tools/papaia-ctl upgrade` repairs this with the migration
+`tools/migrations/1.5.0__librechat-tenant-indexes.py`, so nothing needs to be done after a
+regular upgrade. If the database reached 1.5.0 another way (for example a dump taken with
+LibreChat 0.8.7 or older was restored afterwards), run the migration by hand. It needs the
+stack stopped, is safe to repeat, builds the new indexes before dropping the superseded ones
+and never touches documents:
+
+```sh
+tools/papaia-ctl stop --addons
+PAPAIA_CONFIG_DIR=/path/to/papaia-config PAPAIA_REPO_ROOT="$PWD" PYTHONPATH="$PWD/tools" \
+    python3 tools/migrations/1.5.0__librechat-tenant-indexes.py
+tools/papaia-ctl start --addons
+```
+
+### LibreChat web search fails with "SSRF protection: ... resolved to blocked address"
+
+Cause: since LibreChat 0.8.8, web search, scraping and reranking refuse connections to
+private addresses, including Docker service names, unless the exact `host:port` is listed
+under `webSearch.allowedAddresses`. The shipped `librechat.yaml` lists the bundled services
+(`searxng:8080`, `firecrawl:3002`, `jina-reranker-api:8000`).
+
+If you pointed `SEARXNG_INSTANCE_URL`, `FIRECRAWL_API_URL` or `JINA_API_URL` in
+`$PAPAIA_CONFIG_DIR/ai/librechat/.env` at another private host or port, add that pair in the
+overlay. Overlay lists are appended to the shipped list, so the defaults stay in place:
+
+```yaml
+# $PAPAIA_CONFIG_DIR/overlay/ai/librechat/librechat.yaml
+webSearch:
+  allowedAddresses:
+    - "10.0.0.5:8080"
+```
+
+Entries must be an exact `host:port` (or `[ipv6]:port`); URLs, paths, CIDR ranges and bare
+hosts are rejected when the configuration is loaded. Run `tools/papaia-ctl stop` and
+`tools/papaia-ctl start` afterwards so the configuration is rendered again and LibreChat
+reads it.
+
+### LibreChat logs "[credentials] Existing database has no credential fingerprint record"
+
+This warning is expected on every start of an upgraded installation. LibreChat 0.8.8 records
+a hash of its `CREDS_KEY`, `CREDS_IV`, `JWT_SECRET` and `JWT_REFRESH_SECRET` to detect key
+drift, but only does so for a database that has no users yet; an existing database is only
+warned about. No action is needed as long as those four values stay unchanged, which
+`papaia-ctl` guarantees unless it is run with `--force`. Do not rotate them: encrypted data
+stored by LibreChat, such as user-provided API keys, becomes unreadable.
+
 ### Cookies do not stick / login loops behind oauth2-proxy
 
 - Verify that `OAUTH2_PROXY_COOKIE_SECRET` is exactly **32 base64 bytes**

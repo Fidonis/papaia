@@ -20,6 +20,7 @@
 #                       [--local-ai|--no-local-ai] [--localai-host=URL]
 #                       [--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto]
 #                       [--manager|--no-manager] [--manager-host=URL]
+#                       [--rag|--no-rag] [--qdrant-host=URL]
 #                       [--backup-dir=PATH] [--env-only]
 #                       [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl start         [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
@@ -65,7 +66,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,58p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,59p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -159,8 +160,8 @@ case "$cmd" in
     backup-delete) cmd_backup_delete "$@" ;;
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
-    npm-provision) py_cli npm-provision "$@" ;;
-    keycloak-role-sync) py_cli keycloak-role-sync "$@" ;;
+    npm-provision) cmd_npm_provision "$@" ;;
+    keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;
     doctor)        cmd_doctor "$@" ;;
     addon)

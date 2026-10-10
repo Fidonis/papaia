@@ -1,12 +1,21 @@
-"""Idempotent Keycloak realm-role sync for the bundled internal Keycloak.
+"""Idempotent Keycloak realm sync for the bundled internal Keycloak.
 
 Called by `papaia-ctl start` (via `py_cli keycloak-role-sync`) when
 AUTH_PROVIDER=internal_keycloak. Keycloak's own `--import-realm` only fires
 on a realm that doesn't exist yet, so an existing installation never picks up
-new roles, composites or protocol mappers shipped by a newer papaia-realm.json
-template on its own. This module reconciles the live realm against the
-rendered template instead: additive only, it never deletes or overwrites a
-role, a composite edge, a protocol mapper or a user's existing role mapping.
+new roles, composites, clients or protocol mappers shipped by a newer
+papaia-realm.json template on its own. This module reconciles the live realm
+against the rendered template instead: additive only, it never deletes
+anything and never overwrites a role, a composite edge, a protocol mapper or a
+user's existing role mapping.
+
+Clients are handled only for the Compose profiles that need them
+(PROFILE_CLIENTS), so an installation that never enables such a profile keeps
+a realm without them. A missing client is created. For one that exists, the
+secret is aligned with the rendered template and nothing else about it is
+changed: the core `.env` is canonical for that secret, and a client left over
+from an earlier add-on install would otherwise refuse the service that signs in
+with the generated one.
 
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
@@ -27,12 +36,20 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from . import common
 from .envtree import EnvTree
 
 _KEYCLOAK_NODE = "infra/keycloak"
 _REALM = "papaia"
 _LEGACY_ADMIN_ROLE = "admin"
 _MIGRATION_TARGET_ROLE = "papaia-admin"
+
+# Clients the realm template ships for an optional Compose profile. A fresh
+# install gets them from the realm import; an existing realm gets them from
+# this sync, and only once the profile is enabled.
+PROFILE_CLIENTS: dict[str, tuple[str, ...]] = {
+    "rag": ("mcp-qdrant", "mcp-qdrant-ingest"),
+}
 
 
 def _compose_value(raw: str) -> str:
@@ -169,6 +186,77 @@ def _sync_composites(base_url, ctx, token, realm_def: dict) -> int:
     return added
 
 
+def _active_profile_clients(root: dict[str, str]) -> set[str]:
+    """Client IDs the root .env's COMPOSE_PROFILES asks for."""
+    profiles = {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
+    return {cid for profile, cids in PROFILE_CLIENTS.items() if profile in profiles for cid in cids}
+
+
+def _has_secret_to_enforce(client: dict) -> bool:
+    """Whether the rendered template carries a real secret for this client.
+
+    Resource-server clients have none, and a placeholder must never become one."""
+    return client.get("clientAuthenticatorType") == "client-secret" and not common.is_placeholder(
+        client.get("secret", "")
+    )
+
+
+def _align_secret(base_url, ctx, token, client_uuid: str, client: dict) -> bool:
+    """Set an existing client's secret to the one in the rendered template.
+
+    The core `.env` is canonical for these clients: setup generates the secret there, bakes
+    it into the realm and hands the same value to the service that signs in with it. A
+    client that already existed, from an earlier add-on install for instance, keeps the
+    secret it was created with, and the service is then refused at the token endpoint
+    (HTTP 401, "Invalid client credentials"). Only the secret is written; the rest of the
+    client is left as it is."""
+    secret = client["secret"]
+    current = _api(base_url, ctx, token, "GET", f"/clients/{client_uuid}/client-secret") or {}
+    if current.get("value") == secret:
+        return False
+    _api(base_url, ctx, token, "PUT", f"/clients/{client_uuid}", {"secret": secret})
+    print(f"  client secret updated: {client['clientId']}", flush=True)
+    return True
+
+
+def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tuple[int, int]:
+    """Create the wanted clients that the live realm lacks, from the rendered template
+    (client secrets are already baked in), and align the secret of those that exist.
+
+    Returns (clients created, secrets updated). Nothing else about an existing client
+    is changed."""
+    created = 0
+    updated = 0
+    for client in realm_def.get("clients", []):
+        client_id = client["clientId"]
+        if client_id not in wanted:
+            continue
+        matches = _api(
+            base_url, ctx, token, "GET", f"/clients?clientId={urllib.parse.quote(client_id)}"
+        )
+        if matches:
+            if _has_secret_to_enforce(client) and _align_secret(
+                base_url, ctx, token, matches[0]["id"], client
+            ):
+                updated += 1
+            continue
+        if client.get("clientAuthenticatorType") == "client-secret" and not _has_secret_to_enforce(
+            client
+        ):
+            # A placeholder would become the client's real secret. `setup` (or the
+            # sync-env step of `start`) fills it in; the next start creates the client.
+            print(
+                f"  client skipped, its secret is not generated yet: {client_id}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        _api(base_url, ctx, token, "POST", "/clients", client)
+        created += 1
+        print(f"  client created: {client_id}", flush=True)
+    return created, updated
+
+
 def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
     added = 0
     for client in realm_def.get("clients", []):
@@ -275,6 +363,10 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
     try:
         existing_roles, roles_created = _sync_roles(base_url, ctx, token, realm_def)
         composites_added = _sync_composites(base_url, ctx, token, realm_def)
+        # Clients before mappers: a mapper is only synced onto a client that exists.
+        clients_created, secrets_updated = _sync_clients(
+            base_url, ctx, token, realm_def, _active_profile_clients(root)
+        )
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
     except urllib.error.HTTPError as exc:
@@ -290,8 +382,10 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
 
     print(
         f"Keycloak role sync complete: {roles_created} role(s) created, "
-        f"{composites_added} composite edge(s) added, {mappers_added} protocol "
-        f"mapper(s) created, {migrated} user(s) migrated to {_MIGRATION_TARGET_ROLE}.",
+        f"{composites_added} composite edge(s) added, {clients_created} client(s) "
+        f"created, {secrets_updated} client secret(s) updated, {mappers_added} "
+        f"protocol mapper(s) created, {migrated} user(s) migrated to "
+        f"{_MIGRATION_TARGET_ROLE}.",
         flush=True,
     )
     return True

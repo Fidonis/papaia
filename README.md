@@ -5,7 +5,7 @@
 
 papAIa is a Docker Compose platform that bundles a chat UI, an LLM proxy, local model
 hosting, and a Keycloak-based SSO layer into a self-sufficient **Lean Core**. Additional
-services — document management, RAG, workflow automation — attach through a standardised
+services — document management, workflow automation — attach through a standardised
 **add-on contract** rather than being hard-wired into the stack.
 
 It is built by [Fidonis GmbH](https://www.fidonis.de) on one premise: AI is only useful to
@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.4.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.5.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -51,14 +51,16 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups, and with the `rag` profile the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
+| RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 
-`localai`, `manager` and `librechat-websearch` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`). When LocalAI is enabled, setup also asks
+`localai`, `manager`, `librechat-websearch` and `rag` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`, `--rag`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
+The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
-> Everything else — document management, RAG, workflow automation — ships as an
+> Everything else — document management, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
 
 > **Tip:** all `*_EXT_PORT` variables are listed in `src/.env.example`, grouped per service.
@@ -72,6 +74,7 @@ which accelerator image to install — see [GPU acceleration](#gpu-acceleration-
 | LiteLLM (UI) | Generic OIDC | API key for programmatic access; `litellm-admin` grants Admin UI access |
 | LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
 | papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only |
+| qdrant-mcp, qdrant-ingest (MCP) | OIDC bearer token | Validate the user token LibreChat forwards; audiences `mcp-qdrant` and `mcp-qdrant-ingest`; qdrant-ingest also requires the `qdrant-ingest-operator` realm role |
 | NPM admin UI | oauth2-proxy sidecar | Restricted to `npm-admin` via `--allowed-group` |
 | oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
 
@@ -114,8 +117,10 @@ tools/papaia-ctl setup
 
 With no flags, `setup` walks through the values it cannot derive on its own — the public URL
 of the server (`PAPAIA_HOST`), the public Keycloak URL (`AUTH_HOST`), whether to enable web
-search (and an optional reranker model), and whether to enable local AI (and its public URL).
-Each prompt is pre-filled with a sensible default. Everything else — secrets, OIDC endpoints,
+search (and an optional reranker model), whether to enable local AI (and its public URL), and
+whether to install the [RAG system](#rag-system) (and the public URL of Qdrant). Each prompt
+is pre-filled with a sensible default; the RAG question defaults to *yes* on a new
+installation. Everything else — secrets, OIDC endpoints,
 TLS certificates, rendered configs — is generated automatically.
 
 For unattended / CI use:
@@ -228,6 +233,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--litellm-host=URL` | _(derived)_ | Public LiteLLM URL if it differs from `--app-host` |
 | `--localai-host=URL` | _(derived)_ | Public LocalAI URL if it differs from `--app-host` |
 | `--manager-host=URL` | _(derived)_ | Public papaia-manager URL if it differs from `--app-host` |
+| `--qdrant-host=URL` | _(derived)_ | Public Qdrant URL if it differs from `--app-host`; derived as `<app-host>:6333` |
 | `--npm-admin-host=URL` | _(derived)_ | Public URL of the Nginx PM admin UI |
 | `--auth-provider=VALUE` | `internal_keycloak` | `internal_keycloak` or `external_oidc` |
 | `--oidc-issuer=URL` | _(required for `external_oidc`)_ | External OIDC issuer URL |
@@ -241,6 +247,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
 | `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
+| `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |
@@ -559,7 +566,7 @@ active Compose profile to the modules it brings up.
 {
   "schema_version": 1,
   "generated_at": "2026-09-27T10:15:00Z",
-  "platform_version": "1.4.0",
+  "platform_version": "1.5.0",
   "compose_project": "papaia",
   "docker": { "reachable": true, "reason": null },
   "modules": [
@@ -769,8 +776,9 @@ of both without discarding its secrets.
 `papaia-ctl` is a CLI: precise, scriptable, and shell access on the host is the price of
 admission. **papaia-manager** is the browser counterpart — an optional core service
 (profile `manager`, port 8120) that lets an operator discover, install, start, stop, update
-and remove add-ons, see what the stack is running and how the host is doing, and take,
-schedule or replay a backup, without ever opening a terminal on the host.
+and remove add-ons, see what the stack is running and how the host is doing, take,
+schedule or replay a backup and, with the optional [RAG system](#rag-system), manage its
+connections, collections and ingest jobs, without ever opening a terminal on the host.
 
 It does not reimplement any of it. Every mutating operation shells out to `papaia-ctl`, and
 status queries read the same modules under `tools/lib/`, so the UI and the CLI cannot drift
@@ -792,6 +800,7 @@ from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the pr
 | **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. |
 | **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. A status row in the sidebar of every page summarises the core, the add-ons and the host for every signed-in role, as counts only. |
 | **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. |
+| **RAG** (`/connections`, `/collections`, `/embedding`, `/ingest/jobs`) | The management side of the [RAG system](#rag-system), for administrators only and only while the `rag` profile is active; without it the pages answer 404 and nothing new appears. *Connections* are the vector databases the system works with (the integrated Qdrant is created as `default`). *Collections* creates and deletes Qdrant collections and keeps the realm roles that may read or write each of them, in the format `qdrant-mcp-rbac` enforces. *Embedding* puts uploaded files, or files already in the documents folder, into a collection through the ingester. *Ingest Jobs* edits the ingester's jobs, shows their runs file by file and stores the credentials of remote sources encrypted. The dashboard gains a *Qdrant* tile for administrators. The ingester has no web interface of its own; these pages replace it. They need a core that ships the `rag` profile (1.5.0 or newer). |
 | **Host** (`/host`) | The state of the machine under the deployment: memory, CPU load, GPU, clock synchronisation, free disk space and certificate expiry, plus what Docker's data takes. The manager measures nothing itself: it shows the verdicts of [`papaia-ctl doctor`](#doctor), so the page and a shell on the host cannot disagree about a threshold. It needs a core that ships `doctor` (1.4.0 or newer); on an older one the page says so. How often the host is re-measured is a setting. |
 | **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and a configurable retention period. Backups can run on a schedule (every day, on chosen days, every few hours or a cron expression, in a timezone of choice), run by a scheduler inside the manager, so the host needs no cron job or systemd timer. |
 | **Settings** | The manager's own configuration: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. |
@@ -814,7 +823,7 @@ guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, host, backup, settings, jobs |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, host, backup, settings, jobs and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 
 An account holding neither role is rejected at login. Both variables live in
@@ -866,6 +875,13 @@ captures it along with the rest of the installation:
 | `schedule.yaml` | The backup schedule |
 | `jobs/` | Records of long-running operations, with their streamed log output |
 | `audit.log` | Who triggered which operation |
+
+The RAG pages keep their data in the RAG module's own directory instead, because the ingester
+reads it from there: the catalog files `connections.yaml`, `jobs.yaml` and `secrets.yaml` in
+`$PAPAIA_CONFIG_DIR/ai/rag/catalog/` and uploads that are still waiting for a run in
+`$PAPAIA_CONFIG_DIR/ai/rag/documents/uploads/`. Comments in `jobs.yaml` are lost when the manager
+writes it, and it keeps the previous content of `connections.yaml` and `jobs.yaml` as `.bak`. All
+of it is part of the configuration directory and so of `papaia-ctl backup`.
 
 The application itself ships as the pinned image `ghcr.io/fidonis/papaia-manager`, built by
 [Fidonis](https://www.fidonis.de) in its own repository; `src/manager/` here carries only
@@ -1124,6 +1140,73 @@ server {
 - `--reverse-proxy-provider=no_proxy` together with `--allow-direct-port-access` runs the stack
   with no proxy and no TLS at all. `setup` asks for confirmation. Development only.
 
+### RAG system
+
+The `rag` profile adds a retrieval stack next to LibreChat: [Qdrant](https://qdrant.tech) as the
+vector database, `qdrant-mcp-rbac` as an OIDC- and role-aware MCP server in front of it, and
+`qdrant-ingest`, which pulls documents from S3, WebDAV, SFTP, SMB, FTP, Google Drive, Azure Blob,
+HTTP or a local directory into Qdrant on a schedule (Apache Tika extracts the text). It is not
+LibreChat's built-in file search; `librechat-ragapi` and `librechat-vectordb` belong to the
+`librechat` profile and both can run together.
+
+| Service | Port | Reachable from |
+|---|---|---|
+| `qdrant` | 6333 (`QDRANT_EXT_PORT`) | Published on `HOST_IP`. REST and the dashboard under `/dashboard`; every request needs the api-key. |
+| `qdrant-mcp` | 8000 | `papaia-net` only. LibreChat calls it with the signed-in user's token. |
+| `qdrant-ingest` | 8300 (`QDRANT_INGEST_EXT_PORT`) | Published on `HOST_IP`. REST under `/v1` (static token) and MCP under `/mcp`; it has no web interface. |
+| `qdrant-ingest-tika` | 9998 | `papaia-net` only. |
+
+**Enable it** with `papaia-ctl setup`: the wizard asks whether to install the RAG system and, on
+yes, for the public URL of Qdrant, pre-filled with `<app-host>:6333`. Non-interactively:
+
+```bash
+tools/papaia-ctl setup -y --rag --qdrant-host=https://qdrant.example.com
+tools/papaia-ctl start
+```
+
+`--qdrant-host` is optional, `--no-rag` switches the profile off again, and a run without either
+flag leaves the choice and the URL as they are. The URL is stored as `QDRANT_PUBLIC_URL` in
+`$PAPAIA_CONFIG_DIR/.env` even while the profile is off. With the bundled Nginx Proxy Manager,
+`start` also creates a proxy host for it if it is a plain subdomain. The ingester gets no public
+name: it has no web interface, and papaia-manager and LibreChat reach it over `papaia-net`. The
+secrets are generated by `setup`; `ai/rag/.env` holds them.
+
+`setup` refuses to switch the profile on while the `qdrant`, `qdrant-connect` or `qdrant-ingest`
+add-on is active, because both start services of the same names on the same ports. Stop and
+deactivate the add-on first (`papaia-ctl addon stop <name> --clean-up`, then `addon remove
+<name>`); its volumes are kept.
+
+With the bundled Keycloak, `start` also creates what the module needs in an existing realm: the
+resource-server clients `mcp-qdrant` and `mcp-qdrant-ingest` (no login flows), the audience
+mappers on the `librechat` client, and the realm roles `qdrant-admin` and `qdrant-ingest-operator`
+(both are part of `papaia-admin`). A client that already exists is left as it is; the
+`qdrant-ingest-ui` client of an older install is no longer used and can be deleted. With an
+external OIDC provider, create the same objects there yourself.
+
+**First steps after the first start**
+
+1. Add an embedding model to LiteLLM. The core ships no models, so nothing can be embedded or
+   searched before that.
+2. Give the people who run ingestion through the MCP tools the `qdrant-ingest-operator` realm
+   role. Without it the ingester's MCP tools reject them. `qdrant-admin` is a break-glass role
+   for the MCP server's access rules; both are included in `papaia-admin`.
+3. Open [papaia-manager](#papaia-manager) and its *RAG* menu (administrators only). It creates the
+   connection `default` to the integrated Qdrant itself, and it is where collections and their
+   access roles, the embedding of files and the ingest jobs, their runs and the credentials of
+   remote sources are managed. The ingester has no web interface of its own.
+4. Without the `manager` profile (the manager runs on Linux hosts only) there is no interface:
+   edit the catalog files `jobs.yaml`, `connections.yaml` and `secrets.yaml` in
+   `$PAPAIA_CONFIG_DIR/ai/rag/catalog` yourself, as the qdrant-ingest documentation describes.
+   Sources of type `local` read `$PAPAIA_CONFIG_DIR/ai/rag/documents` unless `QI_LOCAL_MOUNT`
+   points elsewhere.
+
+**Exposure.** The Qdrant port gives whoever holds the api-key full access and bypasses the MCP
+server's role checks, so keep `HOST_IP` on a trusted interface. The ingest port is a control
+plane: `/v1` takes a static token and `/mcp` takes OIDC. Do not publish it through a reverse proxy.
+
+The three volumes (`qdrant-storage`, `qdrant-ingest-cache`, `qdrant-ingest-state`) belong to the
+module `rag`, so `papaia-ctl backup` includes them and `restore --only=module:rag` restores them.
+
 ### GPU acceleration for LocalAI
 
 LocalAI is pinned to the CPU image by default. Upstream publishes one image per accelerator
@@ -1252,7 +1335,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── docker-compose.yml  # root compose — shared network + include list only
 │   │   ├── .env.example        # all stack-wide variables (source of truth)
 │   │   ├── infra/              # keycloak · nginx · oauth2-proxy
-│   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai
+│   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai · rag
 │   │   ├── manager/            # papaia-manager (optional, profile: manager)
 │   │   └── services/           # searxng · firecrawl
 │   └── docs/
