@@ -118,9 +118,9 @@ tools/papaia-ctl setup
 With no flags, `setup` walks through the values it cannot derive on its own — the public URL
 of the server (`PAPAIA_HOST`), the public Keycloak URL (`AUTH_HOST`), whether to enable web
 search (and an optional reranker model), whether to enable local AI (and its public URL), and
-whether to install the [RAG system](#rag-system) (and the public URLs of Qdrant and of the
-ingest service). Each prompt is pre-filled with a sensible default; the RAG question defaults
-to *no*. Everything else — secrets, OIDC endpoints,
+whether to install the [RAG system](#rag-system) (and the public URL of Qdrant). Each prompt
+is pre-filled with a sensible default; the RAG question defaults to *yes* on a new
+installation. Everything else — secrets, OIDC endpoints,
 TLS certificates, rendered configs — is generated automatically.
 
 For unattended / CI use:
@@ -247,7 +247,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
 | `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
-| `--rag` / `--no-rag` | _(prompted, default off)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
+| `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |

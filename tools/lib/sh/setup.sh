@@ -350,13 +350,13 @@ cmd_setup() {
                 "MANAGER_PUBLIC_URL" "$manager_default_url")"
         fi
         if [ -z "$rag" ]; then
-            # Off unless a previous run turned it on: the RAG system is four more
-            # containers and needs an embedding model, so it is opt-in.
-            local rag_default="2"
-            [ "${RAG_STICKY:-}" = "true" ] && rag_default="1"
+            # On for a fresh install, like the other profile questions; a previous
+            # opt-out stays the default so a re-run does not flip it.
+            local rag_default="1"
+            [ "${RAG_STICKY:-}" = "false" ] && rag_default="2"
             printf '\n%sInstall RAG System%s\n' "$CYAN" "$NC" >&2
-            printf '  1) Yes  — install Qdrant (vector database), its MCP server and the ingest service\n' >&2
-            printf '  2) No   — skip the RAG system (default)\n' >&2
+            printf '  1) Yes  — install Qdrant (vector database), its MCP server and the ingest service (default)\n' >&2
+            printf '  2) No   — skip the RAG system\n' >&2
             local rag_choice
             rag_choice="$(prompt_with_default "  Choose" "$rag_default")"
             case "$rag_choice" in
