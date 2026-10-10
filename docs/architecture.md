@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.4.0 |
-| **Date** | 2026-10-03 |
-| **Status** | Active — describes the 1.4.0 release as built |
+| **Version** | 1.5.0 |
+| **Date** | 2026-10-10 |
+| **Status** | Active — describes the 1.5.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -842,11 +842,15 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 `deployment.yaml` stays the single source of truth for the *installation*;
 `installed.yaml` only records catalogue provenance on top of it.
 
+The RAG pages keep their data elsewhere (see *RAG management* below): in the catalog files and
+the staged uploads of the `rag` module under `$PAPAIA_CONFIG_DIR/ai/rag/`, which the ingester
+reads from the same place.
+
 ### Roles
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard, host, backup, settings |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard, host, backup, settings and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 
 Both name **realm roles**; the backend reads them from the access token's `roles`
@@ -913,6 +917,30 @@ restore, an upgrade or another job is running it is held back and retried. After
 restart a missed run is made up, and the retention period is only passed on while the
 newest successful restore point is recent, so a series of failed backups cannot prune
 every usable one.
+
+### RAG management
+
+While the core's optional `rag` profile is active ([ADR 0004](adr/0004-rag-system-as-optional-core-profile.md)),
+the manager is the interface of the RAG system ([ADR 0005](adr/0005-manage-the-rag-ingester-from-papaia-manager.md)):
+`qdrant-ingest` has had no web interface of its own since 1.0.0. Administrators get a *RAG*
+category in the sidebar with four pages and a computed *Qdrant* tile on the dashboard. The
+pages are reached through the same admin dependency as every other surface and then answer
+404 on a deployment without the profile.
+
+| Page | What it manages |
+|---|---|
+| *Connections* | The vector databases the system works with. The connection `default`, the integrated Qdrant with the stack's api-key, is created by the manager itself. |
+| *Collections* | Qdrant collections and the realm roles that may read or write each of them, stored in the format `qdrant-mcp-rbac` reads, so the MCP server enforces them unchanged. |
+| *Embedding* | Files put into a collection through the ingester, from an upload or from the documents folder, as *add and update* or *replace the collection*. |
+| *Ingest Jobs* | The ingester's jobs, their runs file by file, the credentials of remote sources (stored encrypted) and the catalog file. |
+
+The manager does not run ingestion itself. It writes the ingester's own catalog in
+`$PAPAIA_CONFIG_DIR/ai/rag/catalog/` (`connections.yaml`, `jobs.yaml`, `secrets.yaml`) with a
+compare-and-swap write, asks it to reload, checks that it serves what was written and starts
+and follows runs through its REST API; the ingester mounts the directory read-only. Files for
+the Embedding page are staged in `$PAPAIA_CONFIG_DIR/ai/rag/documents/uploads/` and deleted
+after a run that succeeded without a failed document. Without the `manager` profile, which
+runs on Linux hosts only, there is no interface and the catalog files are edited by hand.
 
 ---
 
