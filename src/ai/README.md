@@ -129,6 +129,27 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
   `tools/lib/render_core.py`)
 - Details and the first steps after enabling it: [RAG system](../../README.md#rag-system)
 
+#### Renaming the system collections
+
+`qdrant-mcp` and `qdrant-ingest` must use the same two system collections in Qdrant:
+the metadata collection (default `_collection_meta`), one record per data collection
+with its embedding model and dimension, and the ACL collection (default `_rbac_acl`),
+the role grants. The defaults need no action.
+
+To rename them, uncomment `EMBEDDING_META_COLLECTION` and `RBAC_ACL_COLLECTION` in
+`$PAPAIA_CONFIG_DIR/ai/rag/.env`, set the new names and run `tools/papaia-ctl start`.
+Each key reaches both services, and papaia-manager reads the same two keys. The names
+the ingester knows them by (`QI_EMBED_META_COLLECTION`, `QI_RBAC_ACL_COLLECTION`) are
+derived from these keys by the compose file, so setting them in `.env` has no effect.
+The realm role that gates the ingester's MCP tools stays `qdrant-ingest-operator`: the
+realm template, `papaia-admin` and papaia-manager name it, so it is not configurable.
+
+On an installation that already holds data, renaming leaves the old collections where
+they are; neither the records nor the grants are moved. Recreate the grants under the new
+ACL collection on the *Collections* page of papaia-manager. The next run of an ingest job
+writes the metadata record of its collection again, so re-ingesting the data restores
+them; delete the old system collections in the Qdrant dashboard once nothing needs them.
+
 ---
 
 ## Adding a new AI service
