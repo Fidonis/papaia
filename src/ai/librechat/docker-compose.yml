@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   librechat:
-    image: ghcr.io/danny-avila/librechat:v0.8.7
+    image: ghcr.io/librechat-ai/librechat:v0.8.8
     restart: unless-stopped
     depends_on:
       librechat-mongodb:
@@ -155,7 +155,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ghcr.io/danny-avila/librechat-rag-api-dev-lite:v0.8.0
+    image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.8.0
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb
