@@ -12,6 +12,27 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.5.0] - 2026-10-10
+
+### 🚀 Features
+
+- feat(rag): pass the metadata and ACL collection names to both services (#227) @marko-boehm
+- feat(setup): install the rag system by default in the wizard (#224) @marko-boehm
+- feat(setup): ask for the rag system during setup (#216) @marko-boehm
+- feat(rag): add optional rag profile with qdrant, mcp and ingest (#215) @marko-boehm
+
+### 🐛 Bug Fixes
+
+- fix(ctl): parse --config-dir for npm-provision and keycloak-role-sync (#218) @marko-boehm
+
+### 🧹 Maintenance
+
+- chore(librechat): bump librechat to v0.8.8 (#226) @marko-boehm
+- refactor(rag): drop the ingester web interface integration (#222) @marko-boehm
+- chore: bump papaia-manager to 1.3.0 and qdrant-ingest to 1.0.0 (#220) @marko-boehm
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.4.0...v1.5.0
+
 ## [1.4.0] - 2026-10-03
 
 ### 🚀 Features
