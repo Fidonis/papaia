@@ -61,7 +61,7 @@ class FakeKeycloak:
     def __init__(self, *, roles=None, clients=None, users=None):
         # role name -> {"id", "name", "description", "composite", "composites": set()}
         self.roles: dict[str, dict] = roles or {}
-        # client uuid -> {"clientId", "mappers": {name: mapper}}
+        # client uuid -> {"clientId", "mappers": {name: mapper}, "roles": {role names}}
         self.clients: dict[str, dict] = clients or {}
         # user id -> {"username", "roles": set()}
         self.users: dict[str, dict] = users or {}
@@ -75,6 +75,26 @@ class FakeKeycloak:
             "description": r["description"],
             "composite": r["composite"],
         }
+
+    def _client_role_rep(self, uuid: str, name: str) -> dict:
+        return {
+            "id": f"{uuid}-{name}",
+            "name": name,
+            "clientRole": True,
+            "containerId": uuid,
+            "composite": False,
+        }
+
+    def _composite_reps(self, name: str) -> list[dict]:
+        """What GET /roles/<name>/composites answers: realm and client roles, told apart by
+        `clientRole` and `containerId`, as Keycloak does."""
+        reps = []
+        for member in self.roles[name].get("composites", set()):
+            if isinstance(member, tuple):
+                reps.append(self._client_role_rep(*member))
+            else:
+                reps.append(self._role_rep(member))
+        return reps
 
     def __call__(self, base_url, ctx, token, method, path, body=None):
         if path == "/roles" and method == "GET":
@@ -96,12 +116,12 @@ class FakeKeycloak:
 
         m = re.fullmatch(r"/roles/([^/]+)/composites", path)
         if m and method == "GET":
-            name = m.group(1)
-            return [self._role_rep(c) for c in self.roles[name].get("composites", set())]
+            return self._composite_reps(m.group(1))
         if m and method == "POST":
             name = m.group(1)
             for rep in body:
-                self.roles[name].setdefault("composites", set()).add(rep["name"])
+                member = (rep["containerId"], rep["name"]) if rep.get("clientRole") else rep["name"]
+                self.roles[name].setdefault("composites", set()).add(member)
             return None
 
         m = re.fullmatch(r"/roles/([^/]+)/users", path)
@@ -121,6 +141,19 @@ class FakeKeycloak:
                 "created_from": body,
             }
             return None
+
+        m = re.fullmatch(r"/clients/([^/]+)/roles/([^/]+)", path)
+        if m and method == "GET":
+            uuid, name = m.groups()
+            if name not in self.clients[uuid].get("roles", set()):
+                raise urllib.error.HTTPError(
+                    f"https://localhost:8110/clients/{uuid}/roles/{name}",
+                    404,
+                    "Not Found",
+                    {},
+                    io.BytesIO(b'{"error":"Could not find role"}'),
+                )
+            return self._client_role_rep(uuid, name)
 
         m = re.fullmatch(r"/clients/([^/]+)/client-secret", path)
         if m and method == "GET":
@@ -362,6 +395,169 @@ def test_sync_returns_false_when_an_api_call_fails_midway(tmp_path, monkeypatch,
 
     assert kcs.sync_roles(_tree(), config_dir=tmp_path) is False
     assert "HTTP 403" in capsys.readouterr().err
+
+
+_USER_RIGHTS = ["manage-users", "view-users", "query-users", "view-realm", "manage-realm"]
+
+
+def _realm_def_with_user_rights() -> dict:
+    """The realm definition with `papaia-admin` carrying the realm-management roles."""
+    realm_def = _realm_def()
+    realm_def["roles"]["realm"][0]["composites"]["client"] = {"realm-management": _USER_RIGHTS}
+    return realm_def
+
+
+def _realm_management(*roles: str) -> dict:
+    return {
+        "uuid-realm-management": {
+            "clientId": "realm-management",
+            "mappers": {},
+            "roles": set(roles),
+        },
+        "uuid-oauth2-proxy": {"clientId": "oauth2-proxy", "mappers": {}},
+    }
+
+
+def _existing_realm(**more) -> FakeKeycloak:
+    """A realm that predates the user rights: every role of the template is there."""
+    return FakeKeycloak(
+        roles={
+            "papaia-admin": _role("papaia-admin", composite=True),
+            "librechat-admin": _role("librechat-admin", composite=True),
+            "librechat-user": _role("librechat-user"),
+            "litellm-admin": _role("litellm-admin"),
+            "user": _role("user"),
+        },
+        **more,
+    )
+
+
+def test_sync_adds_the_client_role_composites_to_an_existing_realm(tmp_path, monkeypatch, capsys):
+    _write_realm_json(tmp_path, _realm_def_with_user_rights())
+    fake = _existing_realm(clients=_realm_management(*_USER_RIGHTS))
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    members = fake.roles["papaia-admin"]["composites"]
+    assert {m for m in members if isinstance(m, tuple)} == {
+        ("uuid-realm-management", right) for right in _USER_RIGHTS
+    }
+    assert {m for m in members if isinstance(m, str)} == {"librechat-admin", "litellm-admin"}
+    out = capsys.readouterr().out
+    assert "realm-management/manage-users" in out
+    assert "8 composite edge(s) added" in out
+
+
+def test_sync_adds_nothing_the_second_time(tmp_path, monkeypatch, capsys):
+    _write_realm_json(tmp_path, _realm_def_with_user_rights())
+    fake = _existing_realm(clients=_realm_management(*_USER_RIGHTS))
+    _patch_common(monkeypatch, fake)
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+    before = set(fake.roles["papaia-admin"]["composites"])
+    capsys.readouterr()
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert fake.roles["papaia-admin"]["composites"] == before
+    assert "0 composite edge(s) added" in capsys.readouterr().out
+
+
+def test_sync_adds_only_the_client_roles_a_role_lacks(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _realm_def_with_user_rights())
+    fake = _existing_realm(clients=_realm_management(*_USER_RIGHTS))
+    fake.roles["papaia-admin"]["composites"] = {
+        "librechat-admin",
+        "litellm-admin",
+        ("uuid-realm-management", "view-realm"),
+    }
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert fake.roles["papaia-admin"]["composites"] == {
+        "librechat-admin",
+        "litellm-admin",
+        *{("uuid-realm-management", right) for right in _USER_RIGHTS},
+    }
+
+
+def test_sync_keeps_a_member_the_template_does_not_name(tmp_path, monkeypatch):
+    # Additive only: an operator's own composite member is never removed.
+    _write_realm_json(tmp_path, _realm_def_with_user_rights())
+    fake = _existing_realm(clients=_realm_management(*_USER_RIGHTS))
+    fake.roles["papaia-admin"]["composites"] = {"user", ("uuid-realm-management", "manage-clients")}
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    members = fake.roles["papaia-admin"]["composites"]
+    assert "user" in members and ("uuid-realm-management", "manage-clients") in members
+
+
+def test_a_realm_role_of_the_same_name_does_not_stand_in_for_the_client_role(
+    tmp_path, monkeypatch
+):
+    _write_realm_json(tmp_path, _realm_def_with_user_rights())
+    fake = _existing_realm(clients=_realm_management(*_USER_RIGHTS))
+    fake.roles["view-users"] = _role("view-users")
+    fake.roles["papaia-admin"]["composites"] = {"view-users"}  # a realm role, not the client's
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert ("uuid-realm-management", "view-users") in fake.roles["papaia-admin"]["composites"]
+
+
+def test_sync_warns_and_carries_on_when_the_client_is_missing(tmp_path, monkeypatch, capsys):
+    _write_realm_json(tmp_path, _realm_def_with_user_rights())
+    only_oauth2_proxy = {"uuid-oauth2-proxy": {"clientId": "oauth2-proxy", "mappers": {}}}
+    fake = _existing_realm(clients=only_oauth2_proxy)
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    captured = capsys.readouterr()
+    assert "client realm-management not found" in captured.err
+    # The realm composites, the clients and the mappers after it still ran.
+    assert fake.roles["papaia-admin"]["composites"] == {"librechat-admin", "litellm-admin"}
+    assert "realm-roles-as-groups" in fake.clients["uuid-oauth2-proxy"]["mappers"]
+    assert "3 composite edge(s) added" in captured.out
+
+
+def test_sync_warns_and_carries_on_when_the_client_lacks_a_role(tmp_path, monkeypatch, capsys):
+    _write_realm_json(tmp_path, _realm_def_with_user_rights())
+    fake = _existing_realm(clients=_realm_management("manage-users", "view-users", "query-users"))
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert "has no role view-realm" in capsys.readouterr().err
+    members = fake.roles["papaia-admin"]["composites"]
+    assert ("uuid-realm-management", "manage-users") in members
+    assert ("uuid-realm-management", "view-realm") not in members
+
+
+# What the template ships, read from the real file: the sync can only apply what is there.
+def _template_realm() -> dict:
+    import re
+    from pathlib import Path
+
+    template = Path(__file__).resolve().parents[2] / "src/infra/keycloak/realm-import"
+    raw = (template / "papaia-realm.json.template").read_text(encoding="utf-8")
+    return json.loads(re.sub(r"\$\{env\.([^}]+)\}", r"secret-of-\1", raw))
+
+
+def test_the_template_gives_papaia_admin_the_user_rights_and_nobody_else():
+    roles = {r["name"]: r for r in _template_realm()["roles"]["realm"]}
+    assert roles["papaia-admin"]["composites"]["client"] == {"realm-management": _USER_RIGHTS}
+    others = {n: r for n, r in roles.items() if n != "papaia-admin"}
+    assert not [n for n, r in others.items() if r.get("composites", {}).get("client")], (
+        "only papaia-admin may carry Keycloak's user-administration rights"
+    )
+    assert "manager-admin" in roles["papaia-admin"]["composites"]["realm"]
+    assert "composites" not in roles["manager-admin"]
+
 
 
 @pytest.fixture(autouse=True)

@@ -28,6 +28,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0003](./0003-per-service-admin-roles.md) | Split the shared admin realm role into per-service roles under papaia-admin | Accepted | 2026-09-18 |
 | [0004](./0004-rag-system-as-optional-core-profile.md) | Offer the RAG system as an optional core profile instead of three add-ons | Accepted | 2026-10-04 |
 | [0005](./0005-manage-the-rag-ingester-from-papaia-manager.md) | Manage the RAG system's ingester from papaia-manager instead of its own web interface | Accepted | 2026-10-09 |
+| [0006](./0006-manage-accounts-with-the-signed-in-users-token.md) | Manage accounts and roles from papaia-manager with the signed-in user's token and give papaia-admin Keycloak's user and role administration rights | Accepted | 2026-10-10 |
 
 ## References
 

@@ -73,7 +73,7 @@ The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 | LibreChat | Native OIDC | `openid-client`, PKCE enforced; login requires `librechat-user`, `librechat-admin` grants LibreChat's ADMIN role |
 | LiteLLM (UI) | Generic OIDC | API key for programmatic access; `litellm-admin` grants Admin UI access |
 | LocalAI | Native OIDC | Only users holding the `localai-access` realm role can sign in |
-| papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only |
+| papaia-manager | Native OIDC | `MANAGER_ADMIN_ROLE` grants full access, `MANAGER_USER_ROLE` the dashboard only, `MANAGER_IDENTITY_ADMIN_ROLE` the Users page |
 | qdrant-mcp, qdrant-ingest (MCP) | OIDC bearer token | Validate the user token LibreChat forwards; audiences `mcp-qdrant` and `mcp-qdrant-ingest`; qdrant-ingest also requires the `qdrant-ingest-operator` realm role |
 | NPM admin UI | oauth2-proxy sidecar | Restricted to `npm-admin` via `--allowed-group` |
 | oauth2-proxy | Forward-auth gateway | Guards services without native OIDC |
@@ -818,15 +818,16 @@ bundle so new `CHANGE_ME` keys can be filled in first, then stop, re-materialise
 ### Access control
 
 Authentication is native OIDC against the realm client `papaia-manager` — there is no
-oauth2-proxy sidecar in front of it. Two realm roles gate the UI, and the same dependencies
+oauth2-proxy sidecar in front of it. Realm roles gate the UI, and the same dependencies
 guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
 | `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface — add-ons, catalogues, services, host, backup, settings, jobs and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
+| `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page: accounts, roles and sessions of the realm. `manager-admin` alone is not enough |
 
-An account holding neither role is rejected at login. Both variables live in
+An account holding neither the admin nor the user role is rejected at login. The variables live in
 `src/manager/.env`, not in the root `.env`: the compose file never interpolates them, so a
 root-level copy would resolve but never reach the container.
 
