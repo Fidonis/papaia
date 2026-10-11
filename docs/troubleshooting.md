@@ -160,6 +160,33 @@ The image alone is not enough — the host prerequisites have to be in place:
   models — set `mmap: false` in the model YAMLs under
   `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
 
+### Password-reset and other mails do not arrive
+
+Mail goes through the relay of the `smtp` profile, and a message that Keycloak or papaia-manager
+reports as sent has only reached the relay. Start with `papaia-ctl doctor`: its `smtp` check says
+whether the mail server answers and how many messages wait. Then read the relay's own log, with
+the container name of your project (`papaia-smtp-relay-1` for the default one):
+
+```bash
+docker logs papaia-smtp-relay-1 2>&1 | grep -E 'status=|reject|warning|error'
+docker exec papaia-smtp-relay-1 postqueue -p      # what waits, and why
+docker exec papaia-smtp-relay-1 postqueue -f      # try again now
+```
+
+| In the log | Meaning and fix |
+|---|---|
+| `status=deferred (SASL authentication failed ...)` | The mail server refused the login. Check the login and re-enter the password: `PAPAIA_SMTP_PASSWORD=... papaia-ctl setup -y --smtp`, then `papaia-ctl start` |
+| `status=deferred (Server certificate not verified)` or `certificate verification failed` | The mail server's certificate is not signed by a CA the system trusts, or does not match the host name given in `--smtp-host`. Use the name on the certificate. A private CA is not supported yet |
+| `status=deferred (... Connection refused / timed out)` | The mail server cannot be reached from the Docker network: host, port or a firewall. `--smtp-security=tls` belongs to port 465, `starttls` to 587 |
+| `Client host rejected: Access denied` | The sender is outside the networks the relay serves. Widen `SMTP_RELAY_ALLOWED_CLIENTS` in `infra/smtp-relay/.env` only if your Docker address pools are not private ranges |
+| `Recipient address rejected: Access denied` | The sender address is not in the domain the relay was set up for (`--smtp-from`). Mail from other domains is refused on purpose |
+| `Recipient address rejected: Domain not found` | The recipient's domain does not resolve. Seeded accounts with `.lan` addresses cannot receive mail; give the account a real address |
+| the provider refuses the sender address | Many providers only accept addresses they know: a verified identity, a mailbox, an alias. Set `--smtp-from` to one of those. The refusal comes back to the sender address |
+
+After a password change `setup` raises `SMTP_RELAY_PASSWORD_REV`, and the next `start` recreates the
+relay with the new password. The login page offers *Forgot password?* only while the realm has the
+relay as its mail server; `papaia-ctl keycloak-role-sync` shows what it did to the realm.
+
 ### A service does not start at all
 
 Most likely its Compose profile is not active. Check `COMPOSE_PROFILES` in

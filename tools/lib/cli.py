@@ -20,6 +20,7 @@ setup/render commands.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -80,6 +81,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
+    smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
+    # Taken out of the environment so nothing started later inherits it. An empty
+    # value means "keep the stored password" (--smtp-no-auth drops it).
+    smtp_password = os.environ.pop("PAPAIA_SMTP_PASSWORD", "") or None
     setup_args = resolve.SetupArgs(
         config_dir=config_dir,
         env_name=args.env,
@@ -101,6 +106,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_smtp=_tristate(args.enable_smtp),
+        smtp_host=args.smtp_host,
+        smtp_port=args.smtp_port,
+        smtp_security=args.smtp_security,
+        smtp_user=args.smtp_user,
+        smtp_no_auth=args.smtp_no_auth,
+        smtp_from=args.smtp_from,
+        smtp_from_name=args.smtp_from_name,
+        smtp_password=smtp_password,
         reranker_model=args.reranker_model or None,
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
@@ -131,6 +145,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
+        tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -162,6 +177,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Only for the switch-on: confirming an already enabled RAG system needs no reminder.
     if setup_args.enable_rag and not rag_was_enabled:
         reporting.print_rag_next_steps(config_dir, tree)
+    if setup_args.enable_smtp and not smtp_was_enabled:
+        reporting.print_smtp_next_steps(tree)
     if effective_auth_provider == "external_oidc":
         reporting.print_external_oidc_checklist(config_dir, tree)
     return 0
@@ -581,6 +598,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
+    p_setup.add_argument("--smtp-host", default=None)
+    p_setup.add_argument("--smtp-port", default=None)
+    p_setup.add_argument("--smtp-security", choices=["starttls", "tls", "none"], default=None)
+    p_setup.add_argument("--smtp-user", default=None)
+    p_setup.add_argument("--smtp-no-auth", action="store_true")
+    p_setup.add_argument("--smtp-from", default=None)
+    p_setup.add_argument("--smtp-from-name", default=None)
     p_setup.add_argument("--reranker-model", default=None)
     p_setup.add_argument("--backup-dir", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")

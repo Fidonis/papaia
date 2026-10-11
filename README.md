@@ -54,9 +54,10 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups, and with the `rag` profile the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
+| Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
 
-`localai`, `manager`, `librechat-websearch` and `rag` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`, `--rag`). When LocalAI is enabled, setup also asks
+`localai`, `manager`, `librechat-websearch`, `rag` and `smtp` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
 The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
@@ -118,9 +119,10 @@ tools/papaia-ctl setup
 With no flags, `setup` walks through the values it cannot derive on its own — the public URL
 of the server (`PAPAIA_HOST`), the public Keycloak URL (`AUTH_HOST`), whether to enable web
 search (and an optional reranker model), whether to enable local AI (and its public URL), and
-whether to install the [RAG system](#rag-system) (and the public URL of Qdrant). Each prompt
-is pre-filled with a sensible default; the RAG question defaults to *yes* on a new
-installation. Everything else — secrets, OIDC endpoints,
+whether to install the [RAG system](#rag-system) (and the public URL of Qdrant), and whether
+to send mail through the [mail relay](#outbound-mail) (and the mail server behind it). Each
+prompt is pre-filled with a sensible default; the RAG question defaults to *yes* on a new
+installation, the mail question to *no*. Everything else — secrets, OIDC endpoints,
 TLS certificates, rendered configs — is generated automatically.
 
 For unattended / CI use:
@@ -248,6 +250,13 @@ tools/papaia-ctl setup [OPTIONS]
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
 | `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
+| `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
+| `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
+| `--smtp-security=MODE` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (no encryption and no login) |
+| `--smtp-port=PORT` | by mode: 587, 465, 25 | Port of the mail server |
+| `--smtp-user=NAME` / `--smtp-no-auth` | _(prompted)_ | Login of the mail server, or none. The password is read from the environment variable `PAPAIA_SMTP_PASSWORD`, never from an argument |
+| `--smtp-from=ADDRESS` | _(prompted)_ | Address the mails are sent from |
+| `--smtp-from-name=NAME` | `papAIa` | Sender name shown next to the address |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |
@@ -618,6 +627,7 @@ raw values behind its summary in `details`.
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
 | `certs` | Days until expiry of `certs/*.crt` and of the Let's Encrypt certificates under `infra/nginx/nginx-letsencrypt/live/`. Needs `openssl`. | `warn` below 30 days, `fail` below 7 days or expired |
+| `smtp` | Only while the `smtp` profile is on: the [mail relay](#outbound-mail) container runs, the mail server behind it answers (greeting, EHLO, STARTTLS or TLS and the login; no mail is sent), and how many messages wait in the relay's queue. Reports `not configured` while the profile is off. | `warn` for an unreachable mail server, a stopped relay or a non-empty queue; never `fail`; inside a container the mail server is not contacted (see below) |
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
 
@@ -655,6 +665,12 @@ another way:
   capability, and calls the clock synchronized when its estimated maximum error is under 16
   seconds, which is how `timedatectl` decides. It reports `skip` where the call is not available
   (not 64-bit Linux, or a container runtime that refuses it).
+
+`smtp` does not contact the mail server from inside a container: `papaia-manager` runs `doctor`
+on a timer, and the check would reach your provider on every run. Inside a container it reports
+the relay's state and queue only, and says so; the handshake runs when you call `doctor` on the
+host. The host has to be able to reach the mail server itself for that, which a server that
+only the relay's Docker network can see (a test server, say) is not.
 
 AMD utilization is read from the JSON of `rocm-smi`, whose key names differ between ROCm releases;
 if they are not recognised the check passes and says that utilization was not measured.
@@ -1208,6 +1224,76 @@ plane: `/v1` takes a static token and `/mcp` takes OIDC. Do not publish it throu
 The three volumes (`qdrant-storage`, `qdrant-ingest-cache`, `qdrant-ingest-state`) belong to the
 module `rag`, so `papaia-ctl backup` includes them and `restore --only=module:rag` restores them.
 
+### Outbound mail
+
+The `smtp` profile adds one service, `smtp-relay`, a Postfix relay that every service of the stack
+sends its mail through. The relay holds the credentials of your real mail server (your provider's
+smarthost) and forwards to it, so Keycloak and the add-ons that attach it talk to `smtp-relay:587`
+without a login and without TLS inside the Docker network, and nothing else needs your provider's
+password. Without the profile the stack sends no mail.
+
+What you get once it is on: Keycloak's login page offers **Forgot password?**, and
+[papaia-manager](#papaia-manager) can email a link when it creates or resets an account. It does
+not change who can sign in or how.
+
+**Enable it** with `papaia-ctl setup`: the wizard asks whether to send mail and, on yes, for the
+mail server, how to connect (STARTTLS, TLS or none), its port, the login and password, the sender
+address and the sender name. Non-interactively:
+
+```bash
+PAPAIA_SMTP_PASSWORD='the-password' \
+  tools/papaia-ctl setup -y --smtp --smtp-host=smtp.example.org --smtp-user=mailer \
+  --smtp-from=noreply@example.org
+```
+
+`--smtp-security` defaults to `starttls` (port 587); `--smtp-security=tls` uses implicit TLS
+(port 465). A mail server that needs no login takes `--smtp-no-auth`. Everything but the password
+is stored in `infra/smtp-relay/.env` and kept on re-run; leave the password out and the stored one
+stays. The password is kept in `$PAPAIA_CONFIG_DIR/infra/smtp-relay/upstream-password` (mode 0600)
+and is never written to an `.env` file or passed as an argument, so it can contain any
+character except line breaks and cannot start or end with a space. `--no-smtp` switches the
+profile off and keeps the settings and the password for a later opt-in.
+
+Credentials never go out unencrypted: with `starttls` or `tls` the relay verifies the mail server's
+certificate against the system CAs, and `setup` refuses a login together with `--smtp-security=none`.
+A mail server with a certificate from a private CA is not supported yet.
+
+**Keycloak.** A new realm is imported with the relay as its mail server and the reset link
+switched on. An existing realm is updated by `papaia-ctl start` (or `keycloak-role-sync`) the same
+way, once; a mail server somebody configured by hand in the realm is never overwritten, and
+`start` says so. Switching the profile off clears the relay from the realm again.
+
+**Senders and recipients.** The relay accepts mail only for the domain of the sender address, and
+only from the private ranges Docker hands out. Your provider decides which sender addresses it
+accepts: a verified identity, a mailbox, an alias. A mail the provider refuses is returned to the
+sender address. The relay also refuses recipients whose domain does not resolve, so accounts with a
+made-up address (the seeded `*.lan` ones, say) cannot receive mail.
+
+**Delivery is asynchronous.** The relay accepts a message and delivers it from a queue. Keycloak or
+papaia-manager reporting that a mail was sent therefore means it reached the relay. If the mail
+server is down, the message waits and is retried every five minutes at first, with growing
+intervals up to about an hour, and returned to the sender after a day. The queue sits on the
+volume `smtp-relay-queue` and survives a restarted relay. To look at it, with the container name
+of your project (`papaia-smtp-relay-1` for the default one):
+
+```bash
+docker exec papaia-smtp-relay-1 postqueue -p   # list the queue
+docker exec papaia-smtp-relay-1 postqueue -f   # try again now
+docker logs papaia-smtp-relay-1                # what was delivered, refused, deferred
+```
+
+`papaia-ctl doctor` checks the connection to the mail server and reports a waiting queue.
+
+**Add-ons.** `smtp-relay` is attachable: an add-on that lists it under `networks.attach` and
+declares `requires.addon_api: 3` can send through it. Any container on a network the relay is
+attached to can send mail as the sender domain without a login, so attach it only to add-ons you
+trust.
+
+The relay's one volume (`smtp-relay-queue`) belongs to the module `smtp-relay`, so `papaia-ctl
+backup` includes it and `restore --only=module:smtp-relay` restores it. The password is in the
+configuration backup in plain text, like the other secrets. The design and its limits are in
+[ADR 0007](docs/adr/0007-outbound-mail-through-an-internal-relay.md).
+
 ### GPU acceleration for LocalAI
 
 LocalAI is pinned to the CPU image by default. Upstream publishes one image per accelerator
@@ -1335,7 +1421,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   ├── src/
 │   │   ├── docker-compose.yml  # root compose — shared network + include list only
 │   │   ├── .env.example        # all stack-wide variables (source of truth)
-│   │   ├── infra/              # keycloak · nginx · oauth2-proxy
+│   │   ├── infra/              # keycloak · nginx · oauth2-proxy · smtp-relay (optional, profile: smtp)
 │   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai · rag
 │   │   ├── manager/            # papaia-manager (optional, profile: manager)
 │   │   └── services/           # searxng · firecrawl

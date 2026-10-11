@@ -1,0 +1,111 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Outbound mail relay · smtp-relay
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OPTIONAL — activate with profile `smtp`:
+#   COMPOSE_PROFILES=...,smtp   OR   papaia-ctl setup --smtp
+#
+# One internal mail relay that every service of the stack sends through. It holds
+# the credentials of the real mail server (the "upstream", e.g. your provider's
+# smarthost) and forwards to it, so no other service needs them: Keycloak, and
+# add-ons that attach `smtp-relay`, talk to smtp-relay:587 without login and
+# without TLS inside papaia-net.
+#
+# The relay accepts and queues mail. A "sent" in the calling service therefore
+# means "handed to the relay"; if the upstream is down the message waits in the
+# queue and is retried (every 5 minutes at first, backing off up to about an hour,
+# for one day). `papaia-ctl doctor` reports an unreachable upstream and a
+# non-empty queue.
+#
+# Safety:
+#   - No port is published. The relay is reachable from papaia-net and from the
+#     networks of add-ons that list `smtp-relay` under `networks.attach` only.
+#   - Only clients in POSTFIX_mynetworks (the private IPv4 ranges Docker hands out)
+#     may send, and only from an address in the configured sender domain.
+#   - Credentials are never sent unencrypted: setup refuses a login together with
+#     security `none`, and `starttls` and `tls` verify the upstream's certificate.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env
+# merged with infra/smtp-relay/.env. The upstream password is not an environment
+# variable: setup writes it to $PAPAIA_CONFIG_DIR/infra/smtp-relay/upstream-password
+# (mode 0600, empty when the upstream needs no login) and it is mounted read-only.
+# Every default below keeps the relay inert, so a profile enabled by hand before
+# `setup` has run starts without sending anything.
+services:
+
+  smtp-relay:
+    # Postfix in a small Alpine image (MIT). Pinned to the Alpine variant: the
+    # default tags are the Debian image, about 20 MB larger. Everything specific
+    # to this image is in this file and in tools/lib/smtp.py, so swapping the
+    # relay later touches nothing else.
+    image: boky/postfix:5.1.0-alpine
+    restart: unless-stopped
+    environment:
+      # Fails closed: without a host the relay has nowhere to deliver and never
+      # attempts direct delivery to the recipient's mail exchanger.
+      RELAYHOST: "[${SMTP_RELAY_UPSTREAM_HOST:-smtp-not-configured.invalid}]:${SMTP_RELAY_UPSTREAM_PORT:-587}"
+      RELAYHOST_USERNAME: ${SMTP_RELAY_UPSTREAM_USER:-}
+      RELAYHOST_PASSWORD_FILE: /run/secrets/upstream-password
+      ALLOWED_SENDER_DOMAINS: ${SMTP_RELAY_SENDER_DOMAINS:-unconfigured.invalid}
+      POSTFIX_smtp_tls_security_level: ${SMTP_RELAY_TLS_LEVEL:-verify}
+      POSTFIX_smtp_tls_wrappermode: ${SMTP_RELAY_TLS_WRAPPER:-no}
+      POSTFIX_mynetworks: ${SMTP_RELAY_ALLOWED_CLIENTS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      # Mail the upstream keeps refusing is returned to the sender after a day.
+      POSTFIX_maximal_queue_lifetime: 1d
+      # Not read by the image. Setup raises it whenever the password changes: the
+      # password file is read once at start, and a changed file alone would not
+      # make Compose recreate the container.
+      SMTP_RELAY_PASSWORD_REV: ${SMTP_RELAY_PASSWORD_REV:-0}
+    volumes:
+      # The queue survives a recreated container and is part of backup and restore.
+      - smtp-relay-queue:/var/spool/postfix
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/infra/smtp-relay/upstream-password
+        target: /run/secrets/upstream-password
+        read_only: true
+        bind:
+          # A missing file fails the start instead of becoming a directory.
+          create_host_path: false
+    tmpfs:
+      # The image writes its generated configuration, including the password it
+      # reads from the file, to /etc/postfix and declares both paths as volumes.
+      # On a volume that survives a recreated container a changed password never
+      # wins: the image appends the new entry, Postfix keeps the first one, and
+      # mail queues under "SASL authentication failed". A tmpfs starts clean each
+      # time, which is also why the password is never written to disk.
+      - /etc/postfix:mode=0755
+      - /etc/opendkim/keys:mode=0755
+    healthcheck:
+      # The image ships a check that sends an EHLO to port 587 on every run, which
+      # fills the log with connect lines and is too strict on slow hosts. This one
+      # asks the kernel whether port 587 (0x024B) has a listener (state 0A), which
+      # is only true while the Postfix master runs. No connection is made, nothing
+      # is logged and the upstream is not involved: a provider outage must not turn
+      # the relay unhealthy, `doctor` reports that.
+      test: ["CMD-SHELL", "grep -qiE ':024B [0-9A-F:]+ 0A ' /proc/net/tcp /proc/net/tcp6"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - papaia-net
+    # The Postfix master needs root to bind its ports and drop privileges per
+    # process; everything else it does not need is taken away.
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+      - KILL
+      - NET_BIND_SERVICE
+    labels:
+      de.fidonis.module: papaia-smtp-relay
+      de.fidonis.role:   mail-relay
+    profiles: [smtp]
+
+volumes:
+  smtp-relay-queue:

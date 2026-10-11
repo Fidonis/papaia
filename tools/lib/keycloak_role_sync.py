@@ -20,6 +20,10 @@ changed: the core `.env` is canonical for that secret, and a client left over
 from an earlier add-on install would otherwise refuse the service that signs in
 with the generated one.
 
+The realm's mail server follows the optional `smtp` profile: while the mail relay is on
+and configured, an existing realm without a mail server gets the relay (and the
+reset-password link); a mail server the operator configured is never overwritten.
+
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
 
@@ -39,7 +43,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import common
+from . import common, smtp
 from .envtree import EnvTree
 
 _KEYCLOAK_NODE = "infra/keycloak"
@@ -352,6 +356,76 @@ def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
     return added
 
 
+# The keys of the realm's `smtpServer` that the relay block owns. Anything else an
+# operator put there (a reply-to address, UTF-8 support) is kept as it is.
+_SMTP_OWNED_KEYS = ("host", "port", "from", "fromDisplayName", "auth", "ssl", "starttls")
+# The relay needs no login, so a live block that still carries one is stale.
+_SMTP_LOGIN_KEYS = ("user", "password")
+
+
+def _sync_smtp(base_url, ctx, token, realm_def: dict) -> str:
+    """Make the live realm's mail server match the rendered one.
+
+    The rendered realm names the relay (smtp-relay) while the `smtp` profile is on and
+    configured, and has no mail server otherwise. Returns what happened:
+
+      set        the live realm had no mail server; the relay block and the reset-password
+                 link are switched on (once: an operator who turns the link off later is
+                 not overruled, because later runs find a relay host and leave it alone)
+      updated    the live relay block differed in a field this module owns
+      cleared    the profile was switched off while the live block still points at the
+                 relay; its host only resolves inside papaia-net, so leaving it would keep
+                 "email a link" and "Forgot password?" on and let every send fail
+      kept       the realm has a mail server of its own; never overwritten
+      unchanged  nothing to do
+    """
+    desired = realm_def.get("smtpServer") or {}
+    live = _api(base_url, ctx, token, "GET", "") or {}
+    current = dict(live.get("smtpServer") or {})
+    live_host = current.get("host", "")
+
+    if not desired:
+        if live_host != smtp.RELAY_HOST:
+            return "unchanged"
+        _api(base_url, ctx, token, "PUT", "", {"smtpServer": {}, "resetPasswordAllowed": False})
+        print("  mail server cleared: the smtp profile is off", flush=True)
+        return "cleared"
+
+    if not live_host:
+        _api(
+            base_url,
+            ctx,
+            token,
+            "PUT",
+            "",
+            {
+                "smtpServer": desired,
+                "resetPasswordAllowed": bool(realm_def.get("resetPasswordAllowed")),
+            },
+        )
+        print(f"  mail server set: {desired['host']}", flush=True)
+        return "set"
+    if live_host != desired["host"]:
+        print(
+            f"Keycloak realm already uses the mail server '{live_host}'; left unchanged. To send"
+            f" through the relay instead, set its host to {desired['host']} (port"
+            f" {desired['port']}, no authentication, no encryption) in the realm settings, or"
+            " clear the mail server and run 'papaia-ctl keycloak-role-sync' again.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return "kept"
+
+    stale = any(current.get(key) for key in _SMTP_LOGIN_KEYS)
+    if not stale and all(current.get(key) == desired[key] for key in _SMTP_OWNED_KEYS):
+        return "unchanged"
+    merged = {k: v for k, v in current.items() if k not in _SMTP_LOGIN_KEYS}
+    merged.update({key: desired[key] for key in _SMTP_OWNED_KEYS})
+    _api(base_url, ctx, token, "PUT", "", {"smtpServer": merged})
+    print(f"  mail server updated: {desired['host']}", flush=True)
+    return "updated"
+
+
 def _migrate_legacy_admins(base_url, ctx, token, existing_roles: dict[str, dict]) -> int:
     if _LEGACY_ADMIN_ROLE not in existing_roles or _MIGRATION_TARGET_ROLE not in existing_roles:
         return 0
@@ -433,6 +507,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
+        _sync_smtp(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
     except urllib.error.HTTPError as exc:
         print(

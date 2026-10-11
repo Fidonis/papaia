@@ -58,7 +58,14 @@ class FakeKeycloak:
     module touches, driven through the same (method, path, body) shape as
     the real `_api()` so the sync functions are exercised unmodified."""
 
-    def __init__(self, *, roles=None, clients=None, users=None):
+    def __init__(self, *, roles=None, clients=None, users=None, realm=None):
+        # The realm representation GET/PUT on the realm itself answer with: only the
+        # settings the sync touches. A PUT replaces whatever keys it carries, as Keycloak does.
+        self.realm: dict = realm if realm is not None else {
+            "smtpServer": {},
+            "resetPasswordAllowed": False,
+        }
+        self.realm_puts: list[dict] = []
         # role name -> {"id", "name", "description", "composite", "composites": set()}
         self.roles: dict[str, dict] = roles or {}
         # client uuid -> {"clientId", "mappers": {name: mapper}, "roles": {role names}}
@@ -97,6 +104,13 @@ class FakeKeycloak:
         return reps
 
     def __call__(self, base_url, ctx, token, method, path, body=None):
+        if path == "" and method == "GET":
+            return json.loads(json.dumps(self.realm))
+        if path == "" and method == "PUT":
+            self.realm_puts.append(json.loads(json.dumps(body)))
+            self.realm.update(json.loads(json.dumps(body)))
+            return None
+
         if path == "/roles" and method == "GET":
             return [self._role_rep(n) for n in self.roles]
         if path == "/roles" and method == "POST":
@@ -753,3 +767,132 @@ def test_sync_skips_a_client_whose_secret_is_still_a_placeholder(tmp_path, monke
     assert "rag-confidential-client" not in created, "a placeholder must never become a real secret"
     assert "mcp-qdrant" in created
     assert "rag-confidential-client" in capsys.readouterr().err
+
+
+# ── the realm's mail server (profile smtp) ────────────────────────────────────
+
+RELAY_BLOCK = {
+    "host": "smtp-relay",
+    "port": "587",
+    "from": "noreply@example.org",
+    "fromDisplayName": "papAIa",
+    "auth": "false",
+    "ssl": "false",
+    "starttls": "false",
+}
+
+
+def _smtp_realm_def(*, on: bool = True) -> dict:
+    """The rendered realm: with the relay block while the profile is on, without otherwise."""
+    realm = _realm_def()
+    if on:
+        realm["smtpServer"] = dict(RELAY_BLOCK)
+        realm["resetPasswordAllowed"] = True
+    return realm
+
+
+def _smtp_fake(*, smtp_server=None, reset_allowed=False) -> FakeKeycloak:
+    return FakeKeycloak(
+        roles={"user": _role("user")},
+        clients={"uuid-oauth2-proxy": {"clientId": "oauth2-proxy", "mappers": {}}},
+        realm={"smtpServer": smtp_server or {}, "resetPasswordAllowed": reset_allowed},
+    )
+
+
+def _run_smtp_sync(tmp_path, monkeypatch, realm_def: dict, fake: FakeKeycloak) -> None:
+    _write_realm_json(tmp_path, realm_def)
+    _patch_common(monkeypatch, fake)
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+
+def test_a_realm_without_a_mail_server_gets_the_relay_and_the_reset_link(tmp_path, monkeypatch):
+    fake = _smtp_fake()
+
+    _run_smtp_sync(tmp_path, monkeypatch, _smtp_realm_def(), fake)
+
+    assert fake.realm["smtpServer"] == RELAY_BLOCK
+    assert fake.realm["resetPasswordAllowed"] is True
+    assert len(fake.realm_puts) == 1
+    assert "password" not in fake.realm["smtpServer"], "the relay needs no login"
+
+
+def test_the_relay_block_is_written_once(tmp_path, monkeypatch):
+    fake = _smtp_fake()
+    _write_realm_json(tmp_path, _smtp_realm_def())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert len(fake.realm_puts) == 1
+
+
+def test_a_stale_relay_block_is_corrected_and_the_rest_of_it_is_kept(tmp_path, monkeypatch):
+    stale = {
+        **RELAY_BLOCK,
+        "port": "25",
+        "from": "old@example.org",
+        "auth": "true",
+        "user": "leftover",
+        "password": "**********",  # Keycloak masks a stored password on read
+        "replyTo": "reply@example.org",
+    }
+    fake = _smtp_fake(smtp_server=stale)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _smtp_realm_def(), fake)
+
+    assert fake.realm["smtpServer"] == {**RELAY_BLOCK, "replyTo": "reply@example.org"}
+    assert set(fake.realm_puts[-1]) == {"smtpServer"}, "the reset link is not part of this update"
+    assert fake.realm["resetPasswordAllowed"] is False
+
+
+def test_an_admin_who_turned_the_reset_link_off_is_not_overruled(tmp_path, monkeypatch):
+    fake = _smtp_fake(smtp_server=dict(RELAY_BLOCK), reset_allowed=False)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _smtp_realm_def(), fake)
+
+    assert fake.realm_puts == []
+
+
+def test_a_hand_configured_mail_server_is_left_alone(tmp_path, monkeypatch, capsys):
+    own = {
+        "host": "mail.example.com",
+        "port": "587",
+        "auth": "true",
+        "user": "keycloak",
+        "password": "**********",
+    }
+    fake = _smtp_fake(smtp_server=dict(own))
+
+    _run_smtp_sync(tmp_path, monkeypatch, _smtp_realm_def(), fake)
+
+    assert fake.realm_puts == []
+    assert fake.realm["smtpServer"] == own
+    assert "mail.example.com" in capsys.readouterr().err
+
+
+def test_switching_the_profile_off_clears_the_relay_block(tmp_path, monkeypatch):
+    fake = _smtp_fake(smtp_server=dict(RELAY_BLOCK), reset_allowed=True)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _smtp_realm_def(on=False), fake)
+
+    assert fake.realm["smtpServer"] == {}
+    assert fake.realm["resetPasswordAllowed"] is False
+
+
+def test_switching_the_profile_off_leaves_a_hand_configured_mail_server(tmp_path, monkeypatch):
+    fake = _smtp_fake(smtp_server={"host": "mail.example.com", "port": "587"}, reset_allowed=True)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _smtp_realm_def(on=False), fake)
+
+    assert fake.realm_puts == []
+
+
+def test_a_realm_without_smtp_and_without_the_profile_is_untouched(tmp_path, monkeypatch):
+    # The operator opened the reset link for their own reasons.
+    fake = _smtp_fake(reset_allowed=True)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _smtp_realm_def(on=False), fake)
+
+    assert fake.realm_puts == []
+    assert fake.realm["resetPasswordAllowed"] is True

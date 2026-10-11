@@ -27,6 +27,7 @@ their images there; the table below covers the Core only.
 | `postgres` | 18.3 | PostgreSQL License | `infra/keycloak` | Keycloak database |
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.3 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
+| `boky/postfix` | 5.1.0-alpine | MIT | `infra/smtp-relay` | optional mail relay (profile `smtp`); the image bundles Postfix (IPL-1.0 or EPL-2.0), OpenDKIM and rsyslog (GPL-3.0-or-later among others), used as network service |
 | `ghcr.io/fidonis/papaia-manager` | 1.3.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
 | `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
 | `mongo` | 8.0.20 | SSPL | `ai/librechat` | used as network service |

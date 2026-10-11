@@ -8,8 +8,8 @@
 tiers:
 
 - **Lean Core**: Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat and LiteLLM
-  always on; LocalAI, papaia-manager and the RAG system (Qdrant, its MCP server and
-  the ingester) opt-in via their Compose profiles. Self-sufficient — runs without any
+  always on; LocalAI, papaia-manager, the RAG system (Qdrant, its MCP server and
+  the ingester) and the mail relay opt-in via their Compose profiles. Self-sufficient — runs without any
   add-on.
 - **First-party add-ons** (Fidonis-maintained, version-pinned, installed by path):
   documents (Paperless-ngx + MCP bridge), workflow automation (n8n).
@@ -89,6 +89,7 @@ src/
     keycloak/                 # OIDC IdP (Java/PostgreSQL)
     nginx/                    # Nginx Proxy Manager (TLS termination) + admin-UI sidecar
     oauth2-proxy/             # Forward-auth gateway (Go)
+    smtp-relay/               # Optional internal mail relay (Postfix, profile: smtp)
   ai/
     README.md                 # Per-AI-service summary
     librechat/                # Multi-provider chat interface

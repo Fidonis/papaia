@@ -25,9 +25,10 @@ from stack_helpers import (
     localai_container,
     not_found,
     ps_line,
+    smtp_relay_container,
 )
 
-from lib import cli, doctor, status
+from lib import cli, doctor, smtp, status
 from lib.doctor import FAIL, PASS, SKIP, WARN, CertReadError, MemInfo, Probes
 from lib.status import CommandResult
 
@@ -54,6 +55,7 @@ def probes(**overrides) -> Probes:
         "cpu_count": lambda: 8,
         "in_container": lambda: False,
         "kernel_clock_synchronized": lambda: True,
+        "smtp_probe": lambda *args: smtp.ProbeResult(True, "ok", login="ok"),
         "dev_root": Path("/papaia-test-has-no-devices"),
     }
     values.update(overrides)
@@ -189,6 +191,7 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # dns: only local hostnames configured
         PASS,  # time_sync
         PASS,  # certs
+        SKIP,  # smtp: the mail relay is not enabled
         PASS,  # addon_compat
         PASS,  # container_health
     ]
@@ -209,6 +212,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "dns",
         "time_sync",
         "certs",
+        "smtp",
         "addon_compat",
         "container_health",
     )
@@ -1956,3 +1960,183 @@ def test_cli_unknown_skip_name_exits_2_with_the_valid_names_on_stderr(stack, mon
     assert code == 2
     assert captured.out == ""
     assert "nope" in captured.err and "docker_version" in captured.err
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# smtp
+# ─────────────────────────────────────────────────────────────────────────
+
+QUEUE_EMPTY = CommandResult(0, "Mail queue is empty\n", "")
+QUEUE_TWO = CommandResult(
+    0,
+    "-Queue ID-  --Size-- ----Arrival Time---- -Sender/Recipient-------\n"
+    "082E0140BBF*    349 Sun Oct 11 12:42:51  noreply@example.org\n"
+    "                                         a@example.com\n"
+    "\n"
+    "-- 1 Kbytes in 2 Requests.\n",
+    "",
+)
+UPSTREAM_PASSWORD = "s3cr3t-upstream-pw"
+
+
+def enable_smtp(stack, **values: str) -> None:
+    """The profile on, and the relay configured the way setup stores it."""
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},smtp")
+    module = stack["config"] / "infra" / "smtp-relay"
+    module.mkdir(parents=True, exist_ok=True)
+    settings = {
+        smtp.KEY_HOST: "smtp.example.org",
+        smtp.KEY_PORT: "587",
+        smtp.KEY_SECURITY: "starttls",
+        smtp.KEY_USER: "mailer",
+        smtp.KEY_FROM: "noreply@example.org",
+        **values,
+    }
+    (module / ".env").write_text(
+        "".join(f"{key}={value}\n" for key, value in settings.items()), encoding="utf-8"
+    )
+    smtp.write_password(stack["config"], UPSTREAM_PASSWORD)
+
+
+def smtp_docker(queue: CommandResult = QUEUE_EMPTY, *, relay_state: str | None = "running"):
+    containers = smtp_relay_container(relay_state) if relay_state else []
+    return FakeDocker(healthy_core() + healthy_addon() + containers, tools={"postqueue": queue})
+
+
+class ProbeSpy:
+    def __init__(self, outcome: smtp.ProbeResult):
+        self.outcome = outcome
+        self.calls: list[tuple] = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        return self.outcome
+
+
+def test_smtp_is_skipped_before_setup(tmp_path, stack):
+    report = doctor.run_checks(
+        tmp_path / "never-set-up", stack["repo"], run=healthy_docker(), probes=probes(), now=NOW
+    )
+
+    assert result(report, "smtp").status == SKIP
+    assert "not set up" in result(report, "smtp").summary
+
+
+def test_smtp_is_not_configured_while_the_profile_is_off(stack):
+    spy = ProbeSpy(smtp.ProbeResult(True, "ok"))
+    check = result(run_doctor(stack, smtp_probe=spy), "smtp")
+
+    assert check.status == SKIP
+    assert check.summary.startswith("not configured")
+    assert spy.calls == [], "nothing is contacted while the relay is off"
+
+
+def test_smtp_warns_when_the_profile_is_on_but_nothing_is_configured(stack):
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},smtp")
+    check = result(run_doctor(stack), "smtp")
+
+    assert check.status == WARN
+    assert check.summary.startswith("not configured")
+    assert "setup --smtp" in check.summary
+
+
+def test_smtp_reachable_with_a_running_relay_and_an_empty_queue(stack):
+    enable_smtp(stack)
+    spy = ProbeSpy(smtp.ProbeResult(True, "ok", login="ok"))
+
+    check = result(run_doctor(stack, docker=smtp_docker(), smtp_probe=spy), "smtp")
+
+    assert check.status == PASS
+    assert check.summary == "reachable (starttls, login ok); relay running; queue empty"
+    assert spy.calls == [
+        ("smtp.example.org", 587, "starttls", "mailer", UPSTREAM_PASSWORD, True)
+    ], "the probe logs in with the stored password"
+    assert check.details["queued"] == 0
+
+
+def test_smtp_unreachable_names_the_stage_and_the_reason(stack):
+    enable_smtp(stack)
+    spy = ProbeSpy(smtp.ProbeResult(False, "connect", "[Errno 111] Connection refused"))
+
+    check = result(run_doctor(stack, docker=smtp_docker(), smtp_probe=spy), "smtp")
+
+    assert check.status == WARN
+    assert check.summary.startswith("unreachable (connect: [Errno 111] Connection refused)")
+    assert "relay running" in check.summary
+
+
+def test_smtp_warns_about_a_login_the_server_refuses(stack):
+    enable_smtp(stack)
+    spy = ProbeSpy(smtp.ProbeResult(False, "auth", "login refused: (535, b'bad credentials')"))
+
+    check = result(run_doctor(stack, docker=smtp_docker(), smtp_probe=spy), "smtp")
+
+    assert check.status == WARN
+    assert check.summary.startswith("unreachable (auth:")
+
+
+def test_smtp_warns_about_messages_waiting_in_the_queue(stack):
+    enable_smtp(stack)
+
+    check = result(run_doctor(stack, docker=smtp_docker(QUEUE_TWO)), "smtp")
+
+    assert check.status == WARN
+    assert "2 message(s) waiting" in check.summary
+    assert check.summary.startswith("2 message(s) waiting"), "the problem comes before the notes"
+    assert check.details["queued"] == 2
+
+
+def test_smtp_warns_when_the_relay_was_never_created(stack):
+    enable_smtp(stack)
+
+    check = result(run_doctor(stack, docker=smtp_docker(relay_state=None)), "smtp")
+
+    assert check.status == WARN
+    assert "not created" in check.summary
+    assert "queue" not in check.summary, "no queue to read without a container"
+
+
+def test_smtp_warns_when_the_relay_is_not_running(stack):
+    enable_smtp(stack)
+    docker = smtp_docker(relay_state="exited")
+
+    check = result(run_doctor(stack, docker=docker), "smtp")
+
+    assert check.status == WARN
+    assert "the relay is exited" in check.summary
+    assert not any(c[:2] == ["docker", "exec"] for c in docker.calls)
+
+
+def test_smtp_does_not_contact_the_upstream_from_inside_a_container(stack):
+    # papaia-manager polls doctor from its own container: it must not reach the provider.
+    enable_smtp(stack)
+    spy = ProbeSpy(smtp.ProbeResult(False, "connect", "must not be called"))
+
+    check = result(
+        run_doctor(stack, docker=smtp_docker(), smtp_probe=spy, in_container=lambda: True), "smtp"
+    )
+
+    assert spy.calls == []
+    assert check.status == PASS
+    assert "only probed on the host" in check.summary
+    assert "relay running" in check.summary and "queue empty" in check.summary
+
+
+def test_smtp_never_fails_the_run(stack):
+    enable_smtp(stack)
+    spy = ProbeSpy(smtp.ProbeResult(False, "resolve", "cannot resolve smtp.example.org"))
+
+    report = run_doctor(stack, docker=smtp_docker(QUEUE_TWO), smtp_probe=spy)
+
+    assert result(report, "smtp").status == WARN
+    assert "unreachable" in result(report, "smtp").summary
+    assert report.exit_code == 0, "mail trouble does not stop the run"
+
+
+def test_smtp_report_validates_and_holds_no_secret(stack):
+    enable_smtp(stack)
+    report = run_doctor(stack, docker=smtp_docker(QUEUE_TWO))
+
+    document = doctor.to_json(report)
+    assert not list(VALIDATOR.iter_errors(json.loads(document)))
+    assert UPSTREAM_PASSWORD not in document
