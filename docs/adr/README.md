@@ -29,6 +29,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0004](./0004-rag-system-as-optional-core-profile.md) | Offer the RAG system as an optional core profile instead of three add-ons | Accepted | 2026-10-04 |
 | [0005](./0005-manage-the-rag-ingester-from-papaia-manager.md) | Manage the RAG system's ingester from papaia-manager instead of its own web interface | Accepted | 2026-10-09 |
 | [0006](./0006-manage-accounts-with-the-signed-in-users-token.md) | Manage accounts and roles from papaia-manager with the signed-in user's token and give papaia-admin Keycloak's user and role administration rights | Accepted | 2026-10-10 |
+| [0007](./0007-outbound-mail-through-an-internal-relay.md) | Offer outbound mail as an optional core profile with one internal SMTP relay | Accepted | 2026-10-11 |
 
 ## References
 

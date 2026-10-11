@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, deployment
+from . import common, deployment, smtp
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -171,7 +171,18 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
         return env[var]
 
     resolved = re.sub(r"\$\{env\.([^}]+)\}", replace, template)
-    json.loads(resolved)  # validate the substitution didn't break the JSON
+    realm = json.loads(resolved)  # validate the substitution didn't break the JSON
+
+    # The mail relay is optional, so its block cannot sit in the template: a
+    # placeholder substitution cannot leave an object out. The relay needs no
+    # login, which is also why no secret is baked in here. While the profile is off
+    # the file stays exactly as the template resolved.
+    relay = smtp.Settings.load(config_dir)
+    if relay.active:
+        realm["smtpServer"] = smtp.realm_smtp_server(relay)
+        # A reset link is only worth offering where it can be delivered.
+        realm["resetPasswordAllowed"] = True
+        resolved = json.dumps(realm, indent=2, ensure_ascii=False) + "\n"
 
     out_dir = config_dir / "infra/keycloak/realm-import"
     common.ensure_dir(out_dir)

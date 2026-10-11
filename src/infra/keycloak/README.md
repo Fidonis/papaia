@@ -194,6 +194,17 @@ no longer used and can be deleted). The sync also grants
 without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
 to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).
 
+**Mail server.** The template carries no `smtpServer`. While the `smtp` profile is on and
+configured, `render_core` adds the relay (`smtp-relay`, port 587, no authentication, no
+encryption) to the rendered realm together with `resetPasswordAllowed`, so a new realm is
+imported with it. The sync gives an existing realm the same: it sets the mail server when
+the realm has none, together with the reset link, and corrects a relay block whose port,
+sender or flags differ; any other field of it (a reply-to address, say) stays. A mail
+server somebody configured by hand is never overwritten — the sync prints a warning — and
+switching the profile off clears the block again only if it still points at the relay.
+The reset link is switched on once, together with the relay: an administrator who turns
+it off later stays in charge. `verifyEmail` is not touched.
+
 **Default Test Users** (local development only — do not use in production)
 
 | Username | Password | Roles |

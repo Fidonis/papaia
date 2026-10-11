@@ -98,6 +98,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | AI-Runtime | LibreChat (chat UI), LiteLLM (LLM gateway), LocalAI (opt-in local inference) |
 | Management | papaia-manager (opt-in; dashboard, add-on lifecycle, host health and backup scheduling UI) |
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
+| Mail | `smtp-relay`, a Postfix relay (opt-in, profile `smtp`) that holds the mail server's credentials once; Keycloak and the add-ons that attach it send through it without any — see [ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md) |
 | RAG | Qdrant, `qdrant-mcp-rbac` and `qdrant-ingest` (opt-in, profile `rag`) — retrieval is a capability of the chat layer that an installation either wants or does not; see [ADR 0004](adr/0004-rag-system-as-optional-core-profile.md) |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
@@ -367,6 +368,14 @@ An override whose network does not exist yet — the add-on has never been start
 is skipped rather than failing the Core start. `papaia-ctl start --addons` brings
 the add-ons up first, so the networks exist by the time the overrides are applied.
 
+The optional mail relay is attachable like any other core service. An add-on that lists
+`smtp-relay` under `attach:` can send mail to `smtp-relay:587` — plain SMTP, no login, no
+TLS, from an address in the configured sender domain — and needs no credentials of its own.
+The service exists from `ADDON_API` generation 3, so such an add-on declares
+`requires.addon_api: 3`; an older core reports it incompatible instead of failing on an
+unknown service. The profile `smtp` has to be on for the service to exist, and every
+container on an attached network can use the relay, so attach it only to add-ons you trust.
+
 ### Seam 2 — OIDC
 
 Client JSONs from `integration/keycloak/` are registered **additively and
@@ -413,7 +422,7 @@ No Core changes required.
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
-| `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
+| `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
@@ -470,7 +479,7 @@ git-pristine; the source of truth lives in the config directory.
 │   │   ├── docker-compose.yml           # Lean Core (mounts exclusively from $PAPAIA_CONFIG_DIR)
 │   │   ├── .env.example                 # Core env template
 │   │   ├── ai/                          # LibreChat, LiteLLM, LocalAI, MCP bridge, reranker
-│   │   ├── infra/                       # Keycloak realm template, NPM, oauth2-proxy
+│   │   ├── infra/                       # Keycloak realm template, NPM, oauth2-proxy, mail relay
 │   │   ├── manager/                     # papaia-manager (optional Core service)
 │   │   └── services/                    # SearXNG, Firecrawl base config
 │   └── tools/                           # Orchestrator

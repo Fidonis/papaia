@@ -134,7 +134,7 @@ class FakeDocker:
             return self.exec_failure
         if argv[:1] == ["timeout"]:
             argv = argv[2:]
-        if not argv or argv[0] not in HOST_TOOLS:
+        if not argv or argv[0] not in (*HOST_TOOLS, "postqueue"):
             raise AssertionError(f"unexpected exec: {argv}")
         return self.tools.get(argv[0]) or not_found(argv[0])
 
@@ -318,6 +318,20 @@ def localai_container(state: str = "running") -> list[str]:
             "papaia-localai",
             "model-init",
         ),
+    ]
+
+
+def smtp_relay_container(state: str = "running") -> list[str]:
+    """The `docker ps` line of the mail relay (profile smtp)."""
+    return [
+        ps_line(
+            "papaia-smtp-relay-1",
+            state,
+            "Up 2 hours (healthy)" if state == "running" else "Exited (1) 3 minutes ago",
+            "smtp-relay",
+            "papaia-smtp-relay",
+            "mail-relay",
+        )
     ]
 
 

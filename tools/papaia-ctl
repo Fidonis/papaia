@@ -21,6 +21,9 @@
 #                       [--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto]
 #                       [--manager|--no-manager] [--manager-host=URL]
 #                       [--rag|--no-rag] [--qdrant-host=URL]
+#                       [--smtp|--no-smtp] [--smtp-host=HOST] [--smtp-port=PORT]
+#                       [--smtp-security=starttls|tls|none] [--smtp-user=NAME|--smtp-no-auth]
+#                       [--smtp-from=ADDRESS] [--smtp-from-name=NAME]
 #                       [--backup-dir=PATH] [--env-only]
 #                       [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl start         [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
@@ -66,7 +69,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,59p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

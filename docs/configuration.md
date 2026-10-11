@@ -123,6 +123,32 @@ must not be set in this file.
 | `QI_LOCAL_MOUNT`, `QI_TIKA_HEAP` | Document directory for local sources and the Tika heap, interpolated in the compose file |
 | `QI_*` | Every other ingester setting (scheduling, extraction, embedding batches, metrics) is read straight from this file; the list is in the `qdrant-ingest` repository's `docs/operations.md` |
 
+## Mail relay variables
+
+`src/infra/smtp-relay/.env` (profile `smtp`), written by `papaia-ctl setup --smtp` and kept on
+every re-run. The compose file reads every key through `${VAR}` interpolation (path 1) and has a
+default for each, so a profile switched on by hand before `setup` has run starts a relay that
+cannot deliver anywhere and sends nothing. An empty `SMTP_RELAY_UPSTREAM_HOST` means "not
+configured".
+
+| Variable | Purpose |
+|---|---|
+| `SMTP_RELAY_UPSTREAM_HOST`, `SMTP_RELAY_UPSTREAM_PORT` | The mail server the relay forwards to: host name or IPv4 address, and its port (587 for `starttls`, 465 for `tls`, 25 for `none`) |
+| `SMTP_RELAY_UPSTREAM_SECURITY` | `starttls`, `tls` (implicit TLS) or `none`. The first two verify the server's certificate against the system CAs; `none` allows no login |
+| `SMTP_RELAY_UPSTREAM_USER` | Login at the mail server. Empty: the server needs none |
+| `SMTP_RELAY_FROM_ADDRESS`, `SMTP_RELAY_FROM_NAME` | The address the mails are sent from and the name shown next to it. Keycloak's `from` and `fromDisplayName` |
+| `SMTP_RELAY_SENDER_DOMAINS`, `SMTP_RELAY_TLS_LEVEL`, `SMTP_RELAY_TLS_WRAPPER` | Derived by setup from the sender address and the security mode — do not edit |
+| `SMTP_RELAY_PASSWORD_REV` | Raised by setup whenever the password changes, so that Compose recreates the relay (it reads the password file once, at start) |
+| `SMTP_RELAY_ALLOWED_CLIENTS` | Optional, commented out. The networks allowed to send, comma separated; the default is the private IPv4 ranges Docker hands out |
+
+The upstream password is not a variable. `setup` keeps it in
+`$PAPAIA_CONFIG_DIR/infra/smtp-relay/upstream-password` (mode 0600, empty when the mail server
+needs no login) and the relay mounts that file read-only. An `.env` file is written without
+quotes and Compose reads `$` and ` #` in it, so a password stored there would not survive; a file
+keeps it byte for byte. A non-interactive `setup` takes it from the environment variable
+`PAPAIA_SMTP_PASSWORD`, which is not a stack variable and is removed from the process environment
+as soon as it has been read.
+
 ## Where values come from
 
 `tools/papaia-ctl setup` derives or generates most variables; few are genuinely

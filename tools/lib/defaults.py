@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, envtree, resolve
+from . import common, envtree, resolve, smtp
 
 
 def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
@@ -51,6 +51,11 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
     reranker_model_sticky = jinaai.get("RERANKER_MODEL", "") if config_seeded else ""
     if common.is_placeholder(reranker_model_sticky):
         reranker_model_sticky = ""
+    # Only a configured relay offers sticky values: the shipped example holds a port and
+    # a security mode, which are defaults and nothing the operator chose. Never the
+    # password, only whether one is stored.
+    relay = smtp.Settings.from_env(root, tree.get(smtp.MODULE_DIR, {}))
+    relay_stored = config_seeded and relay.configured
     return {
         "APP_HOST_STICKY": app_host,
         "AUTH_HOST_STICKY": auth_host_sticky,
@@ -75,6 +80,18 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
             ("true" if "manager" in profiles else "false") if config_seeded else ""
         ),
         "RAG_STICKY": (("true" if "rag" in profiles else "false") if config_seeded else ""),
+        "SMTP_STICKY": (
+            ("true" if smtp.PROFILE in profiles else "false") if config_seeded else ""
+        ),
+        "SMTP_HOST_STICKY": relay.host if relay_stored else "",
+        "SMTP_PORT_STICKY": str(relay.port or "") if relay_stored else "",
+        "SMTP_SECURITY_STICKY": relay.security if relay_stored else "",
+        "SMTP_USER_STICKY": relay.user if relay_stored else "",
+        "SMTP_FROM_STICKY": relay.from_address if relay_stored else "",
+        "SMTP_FROM_NAME_STICKY": relay.from_name if relay_stored else "",
+        "SMTP_PASSWORD_STORED": (
+            "true" if relay_stored and smtp.read_password(config_dir) else "false"
+        ),
         "AUTH_PROVIDER_STICKY": root.get("AUTH_PROVIDER", ""),
         "REVERSE_PROXY_PROVIDER_STICKY": root.get("REVERSE_PROXY_PROVIDER", ""),
         "NPM_ADMIN_HOST_STICKY": root.get("NPM_ADMIN_HOST", "") if config_seeded else "",
