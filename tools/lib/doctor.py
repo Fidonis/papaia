@@ -264,7 +264,7 @@ def _in_container() -> bool:
     """Whether this process runs inside a container, where the host's driver
     tools, device nodes and `timedatectl` are not visible. `papaia-manager`
     runs `doctor` in its own container."""
-    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+    return common.in_container()
 
 
 class _Timeval(ctypes.Structure):

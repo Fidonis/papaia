@@ -275,6 +275,82 @@ def test_sync_returns_false_on_timeout(tmp_path, monkeypatch, capsys):
     assert "Keycloak" in capsys.readouterr().err
 
 
+# ---------------------------------------------------------------------------
+# Where the sync reaches Keycloak
+# ---------------------------------------------------------------------------
+
+_INTERNAL_TOKEN_URL = "https://keycloak:8443/realms/papaia/protocol/openid-connect/token"
+
+
+def test_the_host_reaches_keycloak_at_its_published_port(monkeypatch):
+    monkeypatch.setattr(kcs.common, "in_container", lambda: False)
+    root = {"KEYCLOAK_EXT_PORT": "18110", "OIDC_TOKEN_URL": _INTERNAL_TOKEN_URL}
+    # The internal name does not resolve on the host, so it is never used there.
+    assert kcs._admin_base_url(root) == "https://localhost:18110"
+
+
+def test_the_published_port_defaults_to_the_shipped_one(monkeypatch):
+    monkeypatch.setattr(kcs.common, "in_container", lambda: False)
+    assert kcs._admin_base_url({}) == "https://localhost:8110"
+
+
+def test_a_container_reaches_keycloak_at_the_address_the_stack_uses(monkeypatch):
+    monkeypatch.setattr(kcs.common, "in_container", lambda: True)
+    root = {"KEYCLOAK_EXT_PORT": "18110", "OIDC_TOKEN_URL": _INTERNAL_TOKEN_URL}
+    assert kcs._admin_base_url(root) == "https://keycloak:8443"
+
+
+@pytest.mark.parametrize(
+    "token_url", ["", "   ", "keycloak:8443/realms", "ftp://keycloak/x", "not a url"]
+)
+def test_a_container_without_a_usable_internal_address_keeps_the_published_port(
+    monkeypatch, token_url
+):
+    monkeypatch.setattr(kcs.common, "in_container", lambda: True)
+    root = {"KEYCLOAK_EXT_PORT": "18110", "OIDC_TOKEN_URL": token_url}
+    assert kcs._admin_base_url(root) == "https://localhost:18110"
+
+
+def test_sync_talks_to_the_internal_address_in_a_container(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _realm_def())
+    fake = FakeKeycloak()
+    _patch_common(monkeypatch, fake)
+    seen: dict[str, str] = {}
+
+    def _wait(base_url, ctx, timeout=90):
+        seen["wait"] = base_url
+
+    def _token(base_url, ctx, password):
+        seen["token"] = base_url
+        return "fake-token"
+
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", _wait)
+    monkeypatch.setattr(kcs, "_get_admin_token", _token)
+    monkeypatch.setattr(kcs.common, "in_container", lambda: True)
+    tree = _tree()
+    tree[""]["OIDC_TOKEN_URL"] = _INTERNAL_TOKEN_URL
+
+    assert kcs.sync_roles(tree, config_dir=tmp_path) is True
+    assert seen == {"wait": "https://keycloak:8443", "token": "https://keycloak:8443"}
+
+
+def test_sync_still_uses_the_published_port_on_the_host(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _realm_def())
+    _patch_common(monkeypatch, FakeKeycloak())
+    seen: dict[str, str] = {}
+
+    def _wait(base_url, ctx, timeout=90):
+        seen["wait"] = base_url
+
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", _wait)
+    monkeypatch.setattr(kcs.common, "in_container", lambda: False)
+    tree = _tree()
+    tree[""]["OIDC_TOKEN_URL"] = _INTERNAL_TOKEN_URL
+
+    assert kcs.sync_roles(tree, config_dir=tmp_path) is True
+    assert seen == {"wait": "https://localhost:8110"}
+
+
 def _write_realm_json(config_dir, realm_def: dict) -> None:
     path = config_dir / "infra" / "keycloak" / "realm-import" / "papaia-realm.json"
     path.parent.mkdir(parents=True, exist_ok=True)

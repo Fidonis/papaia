@@ -136,3 +136,28 @@ def test_ensure_dir_reraises_on_genuine_conflict(monkeypatch):
     monkeypatch.setattr(common.time, "sleep", lambda _: None)
     with pytest.raises(FileExistsError):
         common.ensure_dir(_AlwaysConflictingPath())
+
+
+@pytest.mark.parametrize(
+    ("present", "expected"),
+    [
+        (set(), False),
+        ({"/.dockerenv"}, True),
+        ({"/run/.containerenv"}, True),
+        ({"/.dockerenv", "/run/.containerenv"}, True),
+    ],
+)
+def test_in_container_looks_for_the_markers_docker_and_podman_leave(monkeypatch, present, expected):
+    from pathlib import Path
+
+    monkeypatch.setattr(Path, "exists", lambda self: self.as_posix() in present)
+    assert common.in_container() is expected
+
+
+def test_doctor_asks_the_shared_container_check(monkeypatch):
+    from lib import doctor
+
+    monkeypatch.setattr(common, "in_container", lambda: True)
+    assert doctor._in_container() is True
+    monkeypatch.setattr(common, "in_container", lambda: False)
+    assert doctor._in_container() is False

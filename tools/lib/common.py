@@ -168,6 +168,13 @@ def ensure_dir(path: Path) -> None:
     raise last_exc
 
 
+def in_container() -> bool:
+    """Whether this process runs inside a container. `papaia-manager` runs `papaia-ctl`
+    and `doctor` in its own: there `localhost` is the container and the host's driver
+    tools, device nodes and `timedatectl` are not visible."""
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
 def atomic_write_private(path: Path, content: str) -> None:
     """Like atomic_write, but the file is created with mode 0600 and the content is
     written byte for byte (no newline translation, no trailing newline added).
