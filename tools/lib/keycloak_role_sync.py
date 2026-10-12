@@ -77,6 +77,23 @@ def _error_detail(exc: urllib.error.HTTPError) -> str:
         return exc.reason if isinstance(exc.reason, str) else ""
 
 
+def _admin_base_url(root: dict[str, str]) -> str:
+    """Where this process reaches Keycloak.
+
+    On the host that is the published port. In a container (`papaia-manager` runs
+    `start`, and with it this sync, in its own) `localhost` is the container itself, so
+    the sync would wait and skip. There it takes the address the stack's own services
+    use: the origin of `OIDC_TOKEN_URL` (`https://keycloak:8443`), which the local CA
+    certificate covers. Without such a URL the published port is all there is."""
+    local = f"https://localhost:{root.get('KEYCLOAK_EXT_PORT', '8110')}"
+    if not common.in_container():
+        return local
+    parts = urllib.parse.urlsplit(root.get("OIDC_TOKEN_URL", "").strip())
+    if parts.scheme in ("http", "https") and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return local
+
+
 def _ssl_context(config_dir: Path) -> ssl.SSLContext:
     ca_file = config_dir / "certs" / "local-ca.crt"
     if ca_file.is_file():
@@ -475,8 +492,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         return False
     realm_def = json.loads(realm_json_path.read_text(encoding="utf-8"))
 
-    port = root.get("KEYCLOAK_EXT_PORT", "8110")
-    base_url = f"https://localhost:{port}"
+    base_url = _admin_base_url(root)
     ctx = _ssl_context(config_dir)
 
     print("Waiting for Keycloak to become ready...", flush=True)
