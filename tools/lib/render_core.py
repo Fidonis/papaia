@@ -51,7 +51,14 @@ PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag"}
 
 
 class RenderError(Exception):
-    """A user-facing rendering failure (e.g. an unresolved realm placeholder)."""
+    """A user-facing rendering failure (e.g. an unresolved realm placeholder).
+
+    `line` and `column` (1-based) are set when the failure is a position in a file."""
+
+    def __init__(self, message: str, *, line: int | None = None, column: int | None = None):
+        super().__init__(message)
+        self.line = line
+        self.column = column
 
 
 def _profile_layers(config_dir: Path) -> list[dict]:
@@ -64,10 +71,13 @@ def _profile_layers(config_dir: Path) -> list[dict]:
     return [{"path": path} for profile, path in PROFILE_FRAGMENTS.items() if profile in active]
 
 
+def _active_layers(config_dir: Path) -> list[dict]:
+    """The fragment layers between the repo base and the overlay, in merge order."""
+    return _profile_layers(config_dir) + deployment.active_addons(deployment.load(config_dir))
+
+
 def render(config_dir: Path, repo_root: Path) -> None:
-    active_addons = _profile_layers(config_dir) + deployment.active_addons(
-        deployment.load(config_dir)
-    )
+    active_addons = _active_layers(config_dir)
 
     for target in BASE_RENDER_TARGETS:
         base_path = repo_root / "src" / target
@@ -79,12 +89,41 @@ def render(config_dir: Path, repo_root: Path) -> None:
     bake_realm_secrets(repo_root, config_dir)
 
 
-def _load_structured(path: Path):
-    if path.suffix in (".yaml", ".yml"):
-        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if path.suffix == ".json":
-        return json.loads(path.read_text(encoding="utf-8"))
+def _parse_structured(suffix: str, text: str, label: str):
+    """Parse one layer. A layer that does not parse is a RenderError that names it (`label`)
+    and, when the parser says, the line -- not a traceback: `start` renders before it brings
+    anything up, so a typo in a hand-edited overlay would otherwise stop it with no hint."""
+    if suffix in (".yaml", ".yml"):
+        try:
+            return yaml.safe_load(text) or {}
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            reason = str(getattr(exc, "problem", None) or "invalid YAML")
+            if mark is None:
+                raise RenderError(f"{label}: invalid YAML: {reason}") from exc
+            line, column = mark.line + 1, mark.column + 1
+            raise RenderError(
+                f"{label}: invalid YAML at line {line}, column {column}: {reason}",
+                line=line,
+                column=column,
+            ) from exc
+    if suffix == ".json":
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            line = getattr(exc, "lineno", None)
+            column = getattr(exc, "colno", None)
+            where = f" at line {line}, column {column}" if line else ""
+            raise RenderError(
+                f"{label}: invalid JSON{where}: {getattr(exc, 'msg', exc)}",
+                line=line,
+                column=column,
+            ) from exc
     return None
+
+
+def _load_structured(path: Path, label: str | None = None):
+    return _parse_structured(path.suffix, path.read_text(encoding="utf-8"), label or str(path))
 
 
 def _dump_structured(suffix: str, data) -> str:
@@ -110,37 +149,103 @@ def _deep_merge(base, overlay):
     return overlay
 
 
+# Stands for "the overlay file on disk" where `_effective_text` is also given a draft.
+_ON_DISK = object()
+
+
+def _merge_layer(merged, layer, label: str):
+    """Merge one parsed layer onto what is below it. A mapping below takes only a mapping:
+    anything else would replace the whole configuration with it."""
+    if isinstance(merged, dict) and not isinstance(layer, dict):
+        raise RenderError(
+            f"{label}: the top level must be a mapping (key: value)", line=1, column=1
+        )
+    return _deep_merge(merged, layer)
+
+
+def _effective_text(
+    rel_path: str,
+    repo_root: Path,
+    config_dir: Path,
+    active_addons: list[dict],
+    overlay_text=_ON_DISK,
+) -> str | None:
+    """What `rel_path` renders to, or None when the repository has no such file.
+
+    `overlay_text` stands in for the overlay: the default reads it from disk, as `render`
+    does, a string is used as if the file held it, and None means there is no overlay.
+    Shared by `render` and `preview`, so a preview cannot drift from what a render writes."""
+    base_path = repo_root / "src" / rel_path
+    if not base_path.is_file():
+        return None  # missing-source: mirrors sync-config.sh's [missing-source] skip
+
+    overlay_path = config_dir / "overlay" / rel_path
+    overlay_label = f"overlay/{rel_path}"
+    if base_path.suffix in _STRUCTURED_SUFFIXES:
+        merged = _load_structured(base_path, f"src/{rel_path}")
+        for addon in active_addons:
+            frag_path = repo_root / addon["path"] / "integration" / rel_path
+            if frag_path.is_file():
+                label = f"{addon['path']}/integration/{rel_path}"
+                merged = _merge_layer(merged, _load_structured(frag_path, label), label)
+        if overlay_text is _ON_DISK:
+            if overlay_path.is_file():
+                layer = _load_structured(overlay_path, overlay_label)
+                merged = _merge_layer(merged, layer, overlay_label)
+        elif overlay_text is not None:
+            layer = _parse_structured(base_path.suffix, overlay_text, overlay_label)
+            merged = _merge_layer(merged, layer, overlay_label)
+        return _dump_structured(base_path.suffix, merged)
+
+    # Non-structured file: the highest layer present replaces the base
+    # wholesale (no line-level diffing).
+    content_path = base_path
+    for addon in active_addons:
+        frag_path = repo_root / addon["path"] / "integration" / rel_path
+        if frag_path.is_file():
+            content_path = frag_path
+    if overlay_text is _ON_DISK:
+        if overlay_path.is_file():
+            content_path = overlay_path
+    elif overlay_text is not None:
+        return overlay_text
+    return content_path.read_text(encoding="utf-8")
+
+
 def _render_file(
     rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> None:
-    base_path = repo_root / "src" / rel_path
-    if not base_path.is_file():
-        return  # missing-source: mirrors sync-config.sh's [missing-source] skip
-
-    if base_path.suffix in _STRUCTURED_SUFFIXES:
-        merged = _load_structured(base_path)
-        for addon in active_addons:
-            frag_path = repo_root / addon["path"] / "integration" / rel_path
-            if frag_path.is_file():
-                merged = _deep_merge(merged, _load_structured(frag_path))
-        overlay_path = config_dir / "overlay" / rel_path
-        if overlay_path.is_file():
-            merged = _deep_merge(merged, _load_structured(overlay_path))
-        content = _dump_structured(base_path.suffix, merged)
-    else:
-        # Non-structured file: the highest layer present replaces the base
-        # wholesale (no line-level diffing).
-        content_path = base_path
-        for addon in active_addons:
-            frag_path = repo_root / addon["path"] / "integration" / rel_path
-            if frag_path.is_file():
-                content_path = frag_path
-        overlay_path = config_dir / "overlay" / rel_path
-        if overlay_path.is_file():
-            content_path = overlay_path
-        content = content_path.read_text(encoding="utf-8")
-
+    content = _effective_text(rel_path, repo_root, config_dir, active_addons)
+    if content is None:
+        return
     common.atomic_write(config_dir / rel_path, content)
+
+
+def preview(config_dir: Path, repo_root: Path, rel_path: str, overlay_text: str | None) -> dict:
+    """The effective text of one target with `overlay_text` as its overlay, next to the text it
+    has with the overlay on disk. Writes nothing.
+
+    `overlay_text` None means "no overlay" and "" an empty one (nothing is merged). Only the
+    file targets of BASE_RENDER_TARGETS qualify; a layer that does not parse is a RenderError,
+    as it is in `render`."""
+    if rel_path not in BASE_RENDER_TARGETS:
+        raise RenderError(f"{rel_path}: not a render target")
+    base_path = repo_root / "src" / rel_path
+    if base_path.is_dir():
+        raise RenderError(f"{rel_path}: is a directory; preview one file of it at a time")
+    layers = _active_layers(config_dir)
+    current = _effective_text(rel_path, repo_root, config_dir, layers)
+    if current is None:
+        raise RenderError(f"{rel_path}: the repository has no such file")
+    draft = _effective_text(rel_path, repo_root, config_dir, layers, overlay_text)
+    assert draft is not None
+    return {
+        "target": rel_path,
+        "structured": base_path.suffix in _STRUCTURED_SUFFIXES,
+        "current": current,
+        "preview": draft,
+        "changed": current != draft,
+    }
 
 
 def _render_dir(

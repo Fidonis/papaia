@@ -138,7 +138,8 @@ docs/
       → $PAPAIA_CONFIG_DIR/<target>
   ```
   Rendering runs on `setup`, on every `start`, and on every `addon` operation. There is
-  no separate render command. `src/sync-config.sh` is the deprecated lower-level
+  no separate render command; `lib.cli render-preview` only shows what a draft overlay would
+  render to and writes nothing. `src/sync-config.sh` is the deprecated lower-level
   predecessor — still present as a manual fallback, but not part of the normal
   operating path.
 - `$PAPAIA_CONFIG_DIR/deployment.yaml` — the installation manifest: active addons,

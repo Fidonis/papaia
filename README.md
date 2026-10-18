@@ -296,7 +296,11 @@ Adds any variable the checkout's `.env.example` files ship and the config direct
 directory into the checkout, re-renders the configuration, then runs `docker compose up -d`.
 
 Because rendering happens on **every** `start`, new templates, new add-on fragments and
-edits under `overlay/` are picked up automatically. To move the installation to a newer
+edits under `overlay/` are rendered into the configuration directory automatically. A
+container that is already running keeps the file it was created with (most targets are
+bind-mounted single files, and a render replaces the file), so an edit takes effect once the
+service is recreated: `papaia-ctl stop --clean-up --profiles=<profile>` followed by `start`.
+To move the installation to a newer
 release, use [`upgrade`](#upgrade) rather than `git pull` — it also runs the migrations
 the release ships with.
 
@@ -721,7 +725,14 @@ Rendering merges three layers:
 
 Structured files (YAML / JSON) are deep-merged, with lists appended and de-duplicated. Any
 other file type is taken wholesale from the highest layer that provides it. The overlay always
-wins.
+wins. A layer that does not parse stops the render with one `ERROR:` line that names the file
+and the position (`overlay/ai/librechat/librechat.yaml: invalid YAML at line 7, column 3: ...`),
+and a structured layer must have a mapping at the top level.
+
+To see what a draft overlay would render to without writing anything, papaia-manager calls the
+core's `render-preview` command (`python3 -m lib.cli --repo-root R --config-dir C render-preview
+--target=<path> --overlay-file=<file>`). It prints one JSON document with the effective text of
+the target now and with the draft.
 
 Render targets: `ai/librechat/librechat.yaml` · `ai/litellm/config.yaml` +
 `prometheus.yml` · `ai/localai/models.txt` + `models/` · `services/searxng/settings.yml` ·

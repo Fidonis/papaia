@@ -20,6 +20,7 @@ setup/render commands.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -213,6 +214,32 @@ def cmd_render(args: argparse.Namespace) -> int:
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
     print("Rendered.")
+    return 0
+
+
+def cmd_render_preview(args: argparse.Namespace) -> int:
+    """Print the effective result of a draft overlay for one render target, as JSON.
+
+    Read-only: the draft is read from `--overlay-file`, merged onto the same layers `render`
+    uses, and nothing is written. Exit 0 whenever a document was printed -- a draft that does
+    not parse is an answer (`"ok": false`), not a failure of the command. Exit 2 is a usage
+    error: an unreadable draft file, or a target that is not a file of the render list."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    target = args.target
+    if target not in render_core.BASE_RENDER_TARGETS or (repo_root / "src" / target).is_dir():
+        print(f"ERROR: {target} is not a file target of the render", file=sys.stderr)
+        return 2
+    try:
+        draft = Path(args.overlay_file).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"ERROR: cannot read {args.overlay_file}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        result = {"ok": True, **render_core.preview(config_dir, repo_root, target, draft)}
+    except render_core.RenderError as exc:
+        result = {"ok": False, "error": str(exc), "line": exc.line, "column": exc.column}
+    print(json.dumps(result))
     return 0
 
 
@@ -615,6 +642,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_render = sub.add_parser("render")
     p_render.set_defaults(func=cmd_render)
 
+    p_preview = sub.add_parser("render-preview")
+    p_preview.add_argument("--target", required=True)
+    p_preview.add_argument("--overlay-file", required=True)
+    p_preview.set_defaults(func=cmd_render_preview)
+
     p_addon_install = sub.add_parser("addon-install")
     p_addon_install.add_argument("--name", required=True)
     p_addon_install.add_argument("--path", default=None)
@@ -740,7 +772,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except render_core.RenderError as exc:
+        # A layer that does not parse (a typo in a hand-edited overlay), or a realm
+        # placeholder without a value: say which file, not a traceback.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":
