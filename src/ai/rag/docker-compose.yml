@@ -82,7 +82,7 @@ services:
   #  to read and write the same two collections.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-mcp:
-    image: ghcr.io/fidonis/qdrant-mcp-rbac:0.3.0
+    image: ghcr.io/fidonis/qdrant-mcp-rbac:0.4.0
     restart: unless-stopped
     environment:
       OIDC_ISSUER_URL:        ${OIDC_ISSUER}
