@@ -357,6 +357,98 @@ def test_a_later_setup_does_not_bring_the_old_settings_back(real_repo, config_di
     assert "localai" not in _profiles(config_dir)
 
 
+# -- the questions `setup` asks when a module is switched on ------------------------------
+
+
+def test_only_the_modules_whose_setup_asks_something_have_questions(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir)
+    asked = {name: modules.questions(config_dir, name) for name in modules.MODULES}
+    assert {n for n, q in asked.items() if q} == {"localai", "rag"}
+    assert [q["option"] for q in asked["localai"]] == ["--localai-host"]
+    assert [q["option"] for q in asked["rag"]] == ["--qdrant-host"]
+
+
+def test_a_stack_that_was_set_up_has_nothing_left_to_ask(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir)
+    for name, key in (("localai", "LOCALAI_PUBLIC_URL"), ("rag", "QDRANT_PUBLIC_URL")):
+        [question] = modules.questions(config_dir, name)
+        assert question["ask"] is False
+        assert question["value"] == _env(config_dir)[key]
+        assert question["default"] == question["value"]
+
+
+def test_a_url_the_operator_chose_is_kept_and_not_asked_again(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir, "--qdrant-host=https://qdrant.example.org")
+    [question] = modules.questions(config_dir, "rag")
+    assert (question["ask"], question["value"]) == (False, "https://qdrant.example.org")
+    assert question["default"] == "https://papaia.test:6333"
+
+
+@pytest.mark.parametrize(
+    ("name", "key", "shipped"),
+    [
+        ("localai", "LOCALAI_PUBLIC_URL", "http://host.docker.internal:8080"),
+        ("rag", "QDRANT_PUBLIC_URL", "http://host.docker.internal:6333"),
+    ],
+)
+def test_a_url_that_is_empty_or_the_one_the_release_ships_is_asked(
+    real_repo, config_dir, name: str, key: str, shipped: str
+) -> None:
+    _setup(real_repo, config_dir)
+    for value in ("", shipped, "GENERATE_ME"):
+        text = [
+            line for line in (config_dir / ".env").read_text(encoding="utf-8").splitlines()
+            if not line.startswith(f"{key}=")
+        ]
+        (config_dir / ".env").write_text("\n".join([*text, f"{key}={value}"]) + "\n", "utf-8")
+        [question] = modules.questions(config_dir, name)
+        assert question["ask"] is True, value
+        assert question["value"] == ""
+        assert question["default"].startswith("https://papaia.test:")
+
+
+def test_resetting_the_settings_opens_the_question_again(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir, "--enable-rag=true", "--qdrant-host=https://qdrant.example.org")
+    _setup(real_repo, config_dir, "--enable-rag=false")
+    assert modules.questions(config_dir, "rag")[0]["ask"] is False
+
+    modules.reset_config(config_dir, real_repo, "rag")
+
+    [question] = modules.questions(config_dir, "rag")
+    assert question["ask"] is True
+    assert _env(config_dir)["QDRANT_PUBLIC_URL"] == "http://host.docker.internal:6333"
+    assert question["default"] == "https://papaia.test:6333"
+
+
+def test_resetting_localai_opens_its_question_and_leaves_the_other_modules_urls(
+    real_repo, config_dir
+) -> None:
+    _setup(real_repo, config_dir, "--enable-local-ai=true", "--localai-host=https://ai.example.org")
+    _setup(real_repo, config_dir, "--enable-local-ai=false")
+    qdrant = _env(config_dir)["QDRANT_PUBLIC_URL"]
+
+    modules.reset_config(config_dir, real_repo, "localai")
+
+    assert modules.questions(config_dir, "localai")[0]["ask"] is True
+    assert _env(config_dir)["QDRANT_PUBLIC_URL"] == qdrant
+
+
+def test_the_answers_are_what_setup_stores_through_its_options(real_repo, config_dir) -> None:
+    """The option each question names is the one `setup` takes."""
+    _setup(
+        real_repo,
+        config_dir,
+        "--localai-host=https://ai.example.org:9000",
+        "--qdrant-host=https://qdrant.example.org:9001",
+    )
+    assert _env(config_dir)["LOCALAI_PUBLIC_URL"] == "https://ai.example.org:9000"
+    assert _env(config_dir)["QDRANT_PUBLIC_URL"] == "https://qdrant.example.org:9001"
+    for name, key in (("localai", "LOCALAI_PUBLIC_URL"), ("rag", "QDRANT_PUBLIC_URL")):
+        [question] = modules.questions(config_dir, name)
+        assert question["key"] == key
+        assert question["ask"] is False
+
+
 # -- the commands ------------------------------------------------------------------------
 
 
@@ -378,6 +470,7 @@ def test_module_info_prints_one_json_document(real_repo, config_dir, capsys, mon
         "active",
         "module",
         "profile",
+        "questions",
         "settings",
         "settings_need_data",
         "volumes",

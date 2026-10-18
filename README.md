@@ -342,10 +342,17 @@ papaia-manager's Settings > Modules tab switches the optional modules on and off
 pieces and offers to delete a module's data and settings when it switches one off. It uses two
 internal commands of the core's Python entry point (`python3 -m lib.cli --repo-root R
 --config-dir C ...`): `module-info --module=NAME` prints the named volumes the module owns, whether
-they exist and what its settings consist of, as JSON, and writes nothing; `module-purge
+they exist, what its settings consist of and the questions `setup` asks when the module is
+switched on (the public URL of LocalAI and of Qdrant: the `setup` option that takes the answer,
+the default derived from the stack's host and whether the question is still open), as JSON, and
+writes nothing; `module-purge
 --module=NAME [--data] [--config]` removes the module's named volumes (by name, from the compose
 files' own table of who mounts what) and/or puts its settings back to what the release ships (its
-`.env` files, plus the files it keeps outside them: the mail relay's password, the RAG catalog).
+`.env` files and the public URL kept in the root `.env`, plus the files it keeps outside them:
+the mail relay's password, the RAG catalog). A question is open when its stored URL is empty, a
+placeholder or the one the release ships, which is what the reset leaves, so a front end can ask it
+again before it switches the module on. A later `setup` run derives the URL from the stack's host
+again and closes the question.
 Both refuse a module that is still switched on, and `--config` for the RAG system only together
 with `--data`: the ingester's stored credentials are encrypted with a secret that
 `--config` regenerates, so the settings cannot be reset with the data kept. The documents folder

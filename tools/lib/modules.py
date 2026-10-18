@@ -18,6 +18,13 @@ collections in the Qdrant volume; settings reset with the data kept would leave 
 read. `ModuleSpec.settings_need_data` marks such a module, and `purge` refuses its settings
 without its data.
 
+A module can also have **questions**: the ones `setup` asks when the module is switched on
+(the public URL of LocalAI, of Qdrant). `info` lists them with the value that would be
+stored and whether the question is still open, so a caller that switches the module on (the
+manager's Modules tab) can ask them in a dialog and hand the answers to `setup`. A question is
+open when the stored value is empty, a placeholder or what the release ships (`setup` does not
+keep such a value either); the settings reset puts the values back to that state.
+
 Nothing here touches another module, the stack's always-on services, Keycloak or the
 Nginx Proxy Manager. The documents folder of the RAG system holds the operator's own files and is
 never deleted.
@@ -31,11 +38,23 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, common, envtree, secrets
+from . import backup, common, envtree, resolve, secrets
 
 
 class ModuleError(Exception):
     """A request the module operations refuse or cannot finish. The message says why."""
+
+
+@dataclass(frozen=True)
+class Question:
+    """A question `setup` asks when a module is switched on: the public URL of a service."""
+
+    key: str  # the key of the root `.env` that holds the answer
+    option: str  # the `setup` option that sets it
+    label: str  # the question, as `setup` words it
+    derive: Callable[[str, str], str]  # (app host, port) -> the default
+    port_key: str
+    default_port: str
 
 
 @dataclass(frozen=True)
@@ -53,6 +72,8 @@ class ModuleSpec:
     regenerate_secrets: bool = False
     # Whether settings reset with the data kept would leave data that cannot be read.
     settings_need_data: bool = False
+    # What `setup` asks when the module is switched on.
+    questions: tuple[Question, ...] = ()
 
 
 MODULES: dict[str, ModuleSpec] = {
@@ -60,7 +81,17 @@ MODULES: dict[str, ModuleSpec] = {
         name="localai",
         profile="localai",
         env_dirs=("ai/localai",),
-        root_keys=("LOCALAI_IMAGE_VARIANT",),
+        root_keys=("LOCALAI_IMAGE_VARIANT", "LOCALAI_PUBLIC_URL"),
+        questions=(
+            Question(
+                key="LOCALAI_PUBLIC_URL",
+                option="--localai-host",
+                label="Public URL of LocalAI",
+                derive=resolve.derive_localai_url_default,
+                port_key="LOCALAI_EXT_PORT",
+                default_port="8080",
+            ),
+        ),
     ),
     "web-search": ModuleSpec(
         name="web-search",
@@ -71,9 +102,20 @@ MODULES: dict[str, ModuleSpec] = {
         name="rag",
         profile="rag",
         env_dirs=("ai/rag",),
+        root_keys=("QDRANT_PUBLIC_URL",),
         files=("ai/rag/catalog/*",),
         regenerate_secrets=True,
         settings_need_data=True,
+        questions=(
+            Question(
+                key="QDRANT_PUBLIC_URL",
+                option="--qdrant-host",
+                label="Public URL of Qdrant",
+                derive=resolve.derive_qdrant_url_default,
+                port_key="QDRANT_EXT_PORT",
+                default_port="6333",
+            ),
+        ),
     ),
     "mail": ModuleSpec(
         name="mail",
@@ -132,6 +174,32 @@ def _existing_volumes(runner: Runner) -> set[str] | None:
     return {line.strip() for line in done.stdout.splitlines() if line.strip()}
 
 
+def questions(config_dir: Path, name: str) -> list[dict]:
+    """What `setup` asks for the module, with the default and whether it is still open.
+
+    `value` is what is stored when that is worth keeping (`setup` keeps a stored URL unless it
+    is empty, a placeholder or the one the release ships); `default` is what `setup` would
+    derive from the stack's host. `ask` is true when there is no such stored value."""
+    module = spec(name)
+    root = common.parse_env_file(config_dir / ".env")
+    app_host = root.get("PAPAIA_HOST", "")
+    found = []
+    for question in module.questions:
+        port = root.get(question.port_key) or question.default_port
+        kept = resolve.sticky_service_url(root.get(question.key, ""), question.derive, port)
+        found.append(
+            {
+                "key": question.key,
+                "option": question.option,
+                "label": question.label,
+                "default": question.derive(app_host, port),
+                "value": kept,
+                "ask": not kept,
+            }
+        )
+    return found
+
+
 def info(config_dir: Path, repo_root: Path, name: str, *, runner: Runner | None = None) -> dict:
     """What switching the module off could delete, for the dialog that asks.
 
@@ -158,6 +226,7 @@ def info(config_dir: Path, repo_root: Path, name: str, *, runner: Runner | None 
             "regenerates_secrets": module.regenerate_secrets,
         },
         "settings_need_data": module.settings_need_data,
+        "questions": questions(config_dir, name),
     }
 
 
