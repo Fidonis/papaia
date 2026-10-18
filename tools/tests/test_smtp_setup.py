@@ -240,9 +240,51 @@ def test_an_unusable_value_is_refused_and_nothing_is_written(
     assert not smtp.password_path(config_dir).exists()
 
 
-def test_an_option_without_the_relay_is_refused(repo_root, config_dir):
-    with pytest.raises(resolve.SetupError, match="--smtp"):
-        resolve.resolve_smtp(_tree(repo_root), _args(config_dir, smtp_host="smtp.example.org"))
+def test_values_are_stored_while_the_relay_is_off_without_switching_it_on(repo_root, config_dir):
+    tree = _tree(repo_root)
+
+    tree = resolve.resolve_smtp(tree, _on(config_dir, enable_smtp=None))
+
+    assert "smtp" not in _profiles(tree)
+    module = tree[smtp.MODULE_DIR]
+    assert module[smtp.KEY_HOST] == "smtp.example.org"
+    assert module[smtp.KEY_FROM] == "noreply@example.org"
+    assert smtp.read_password(config_dir) == PASSWORD
+    assert module[smtp.KEY_PASSWORD_REV] == "1"
+
+
+def test_values_stored_while_off_are_what_a_later_switch_on_uses(repo_root, config_dir):
+    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir, enable_smtp=None))
+
+    tree = resolve.resolve_smtp(tree, _args(config_dir, enable_smtp=True))
+
+    assert "smtp" in _profiles(tree)
+    assert tree[smtp.MODULE_DIR][smtp.KEY_USER] == "mailer"
+    assert smtp.read_password(config_dir) == PASSWORD
+    assert tree[smtp.MODULE_DIR][smtp.KEY_PASSWORD_REV] == "1", "the same password: no new revision"
+
+
+def test_values_with_a_switch_off_are_stored_and_the_profile_stays_off(repo_root, config_dir):
+    tree = resolve.resolve_smtp(_tree(repo_root, "keycloak,librechat,smtp"), _on(config_dir))
+
+    tree = resolve.resolve_smtp(
+        tree, _args(config_dir, enable_smtp=False, smtp_from_name="Example Mail")
+    )
+
+    assert "smtp" not in _profiles(tree)
+    assert tree[smtp.MODULE_DIR][smtp.KEY_FROM_NAME] == "Example Mail"
+    assert smtp.read_password(config_dir) == PASSWORD
+
+
+def test_an_unusable_value_is_refused_while_the_relay_is_off_too(repo_root, config_dir):
+    tree = _tree(repo_root)
+    before = {k: dict(v) for k, v in tree.items()}
+
+    with pytest.raises(resolve.SetupError, match="--smtp-host is required"):
+        resolve.resolve_smtp(tree, _args(config_dir, smtp_from="noreply@example.org"))
+
+    assert tree == before
+    assert not smtp.password_path(config_dir).exists()
 
 
 def test_an_option_is_accepted_once_the_relay_is_on(repo_root, config_dir):

@@ -74,7 +74,7 @@ tools/
                               #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
                               #   compat.py · semver.py · render_core.py · gen_override.py
                               #   backup.py · upgrade.py · migrations.py · npm_provision.py
-                              #   status.py · doctor.py · common.py
+                              #   status.py · doctor.py · modules.py · common.py
     sh/                       # Bash command libraries sourced by papaia-ctl
   schemas/                    # JSON Schemas of `status --json` and `doctor --json`
   migrations/                 # Release migrations run by `papaia-ctl upgrade`

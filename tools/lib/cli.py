@@ -37,6 +37,7 @@ from . import (
     gpu_detect,
     keycloak_role_sync,
     migrations,
+    modules,
     npm_provision,
     render_core,
     reporting,
@@ -240,6 +241,47 @@ def cmd_render_preview(args: argparse.Namespace) -> int:
     except render_core.RenderError as exc:
         result = {"ok": False, "error": str(exc), "line": exc.line, "column": exc.column}
     print(json.dumps(result))
+    return 0
+
+
+def cmd_module_info(args: argparse.Namespace) -> int:
+    """Print what switching an optional module off could delete, as JSON. Read-only."""
+    try:
+        document = modules.info(Path(args.config_dir), Path(args.repo_root), args.module)
+    except modules.ModuleError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(document))
+    return 0
+
+
+def cmd_module_purge(args: argparse.Namespace) -> int:
+    """Delete the data (volumes) and/or reset the settings of a module that is switched off.
+
+    Both are separate options. The settings of a module whose data depends on them (the RAG
+    system) are only deleted together with the data. Exit 3 when the request is refused or
+    a step fails, with an `ERROR:` line."""
+    if not (args.data or args.config):
+        print("ERROR: name what to delete: --data, --config or both", file=sys.stderr)
+        return 2
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    try:
+        module = modules.spec(args.module)
+        if args.config and module.settings_need_data and not args.data:
+            raise modules.ModuleError(
+                f"the settings of {module.name} can only be deleted together with its data"
+                " (--data): its stored credentials and grants depend on them"
+            )
+        removed = modules.purge_data(config_dir, repo_root, args.module) if args.data else []
+        touched = modules.reset_config(config_dir, repo_root, args.module) if args.config else []
+    except modules.ModuleError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    for name in removed:
+        print(f"removed volume {name}")
+    for item in touched:
+        print(f"reset {item}")
     return 0
 
 
@@ -641,6 +683,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_render = sub.add_parser("render")
     p_render.set_defaults(func=cmd_render)
+
+    p_module_info = sub.add_parser("module-info")
+    p_module_info.add_argument("--module", required=True, choices=sorted(modules.MODULES))
+    p_module_info.set_defaults(func=cmd_module_info)
+
+    p_module_purge = sub.add_parser("module-purge")
+    p_module_purge.add_argument("--module", required=True, choices=sorted(modules.MODULES))
+    p_module_purge.add_argument("--data", action="store_true")
+    p_module_purge.add_argument("--config", action="store_true")
+    p_module_purge.set_defaults(func=cmd_module_purge)
 
     p_preview = sub.add_parser("render-preview")
     p_preview.add_argument("--target", required=True)

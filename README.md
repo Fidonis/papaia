@@ -191,7 +191,7 @@ values unchanged.
 ```
 papaia-ctl setup     [OPTIONS]
 papaia-ctl start     [--addons] [--profiles=LIST] [--config-dir=PATH]
-papaia-ctl stop      [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+papaia-ctl stop      [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
@@ -320,7 +320,7 @@ code 2 instead of being handed to Compose.
 ### `stop`
 
 ```bash
-tools/papaia-ctl stop [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+tools/papaia-ctl stop [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--config-dir=PATH]
 ```
 
 Without `--clean-up`: `docker compose stop` — containers are paused but not removed; volumes
@@ -330,6 +330,27 @@ volumes are kept. `--addons` applies the same operation to all active add-ons.
 `--profiles` restricts the operation to the services of those profiles and is validated the
 same way as on [`start`](#start) — without that gate an unresolvable profile list would make
 Compose fall back to stopping every container of the project.
+
+`--volumes` (only together with `--clean-up` and `--profiles`) also deletes the data of those
+profiles: `docker compose down --volumes` removes the named volumes of their services and the
+anonymous volumes of their containers (a Redis or Postgres image declares one). It is limited to
+the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`); the always-on services and
+the manager keep their data, and any other profile is refused before anything runs. A volume that
+a service of another profile still mounts is left in place by Compose.
+
+papaia-manager's Settings > Modules tab switches the optional modules on and off with these
+pieces and offers to delete a module's data and settings when it switches one off. It uses two
+internal commands of the core's Python entry point (`python3 -m lib.cli --repo-root R
+--config-dir C ...`): `module-info --module=NAME` prints the named volumes the module owns, whether
+they exist and what its settings consist of, as JSON, and writes nothing; `module-purge
+--module=NAME [--data] [--config]` removes the module's named volumes (by name, from the compose
+files' own table of who mounts what) and/or puts its settings back to what the release ships (its
+`.env` files, plus the files it keeps outside them: the mail relay's password, the RAG catalog).
+Both refuse a module that is still switched on, and `--config` for the RAG system only together
+with `--data`: the ingester's stored credentials are encrypted with a secret that
+`--config` regenerates, so the settings cannot be reset with the data kept. The documents folder
+of the RAG system is never deleted. Generated secrets are regenerated only where no other module
+holds a copy; for the others the module's generated values stay as they are.
 
 ### `upgrade`
 
@@ -1260,7 +1281,8 @@ PAPAIA_SMTP_PASSWORD='the-password' \
 `--smtp-security` defaults to `starttls` (port 587); `--smtp-security=tls` uses implicit TLS
 (port 465). A mail server that needs no login takes `--smtp-no-auth`. Everything but the password
 is stored in `infra/smtp-relay/.env` and kept on re-run; leave the password out and the stored one
-stays. The password is kept in `$PAPAIA_CONFIG_DIR/infra/smtp-relay/upstream-password` (mode 0600)
+stays. The `--smtp-*` options store the settings whether the relay is on or off (without `--smtp`
+the profile does not change), so the mail server can be prepared first and switched on later. The password is kept in `$PAPAIA_CONFIG_DIR/infra/smtp-relay/upstream-password` (mode 0600)
 and is never written to an `.env` file or passed as an argument, so it can contain any
 character except line breaks and cannot start or end with a space. `--no-smtp` switches the
 profile off and keeps the settings and the password for a later opt-in.

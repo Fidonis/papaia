@@ -814,9 +814,11 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Add or remove the `smtp` Compose profile and store the relay's configuration.
 
     Without a flag and without a value the call is a no-op -- whatever a prior run
-    stored is kept (sticky). `enable_smtp=False` only removes the profile: the settings
-    and the password stay, so a later opt-in finds them. Any other value needs the
-    profile on, already or by `enable_smtp=True`.
+    stored is kept (sticky). Values are stored whether the relay is on or off, so the
+    settings can be prepared first and switched on later; they change the profile only
+    together with a flag: `enable_smtp=True` adds it, `enable_smtp=False` removes it.
+    `enable_smtp=False` on its own only removes the profile: the settings and the
+    password stay, so a later opt-in finds them.
 
     The password is not an env value. It goes to a file the relay mounts, and every
     change of it raises SMTP_RELAY_PASSWORD_REV so that Compose recreates the relay
@@ -826,17 +828,11 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
         return tree
     root = tree.setdefault("", {})
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
-    was_on = smtp.PROFILE in profiles
     others = [p for p in profiles if p != smtp.PROFILE]
 
-    if args.enable_smtp is False:
+    if args.enable_smtp is False and not _smtp_fields_given(args):
         root["COMPOSE_PROFILES"] = ",".join(others)
         return tree
-    if args.enable_smtp is None and not was_on:
-        raise SetupError(
-            "The --smtp-* options need the mail relay: add --smtp to enable it"
-            " (it is off in this installation)."
-        )
 
     module = tree.setdefault(smtp.MODULE_DIR, {})
     try:
@@ -847,7 +843,10 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
     module.update(values)
     if smtp.write_password(args.config_dir, password):
         module[smtp.KEY_PASSWORD_REV] = _next_revision(module.get(smtp.KEY_PASSWORD_REV, ""))
-    root["COMPOSE_PROFILES"] = ",".join([*others, smtp.PROFILE])
+    if args.enable_smtp is True:
+        root["COMPOSE_PROFILES"] = ",".join([*others, smtp.PROFILE])
+    elif args.enable_smtp is False:
+        root["COMPOSE_PROFILES"] = ",".join(others)
     return tree
 
 

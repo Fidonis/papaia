@@ -27,7 +27,7 @@
 #                       [--backup-dir=PATH] [--env-only]
 #                       [--allow-direct-port-access] [--force] [-y]
 #   papaia-ctl start         [--addons] [--profiles=LIST] [--force] [--config-dir=PATH]
-#   papaia-ctl stop          [--clean-up] [--addons] [--profiles=LIST] [--config-dir=PATH]
+#   papaia-ctl stop          [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--config-dir=PATH]
 #   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
 #                            [--config-dir=PATH]
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
