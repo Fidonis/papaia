@@ -709,6 +709,24 @@ de-duplicated; any other file type is taken wholesale from the highest layer tha
 provides it. The overlay always wins. Rendering runs on `setup`, on every `start`,
 and on every `addon` operation — there is no separate render command.
 
+A layer that does not parse (a typo in a hand-edited overlay) stops the render with one
+`ERROR:` line that names the file and the position, and a structured layer must have a
+mapping at the top level, because anything else would replace the whole configuration. The
+render stops before `docker compose up`, so a running stack is not touched.
+
+**Applying an overlay means recreating the services that read it.** A render replaces each
+target with a new file, and most targets are bind-mounted single files, so a running
+container keeps the one it was created with. `papaia-ctl stop --clean-up --profiles=<profile>`
+followed by `start` recreates the group; a restart is not enough.
+
+**Previewing a draft.** `python3 -m lib.cli --repo-root R --config-dir C render-preview
+--target=<path> --overlay-file=<file>` merges a draft overlay onto the same layers `render`
+uses, in memory, and prints one JSON document: `{"ok": true, "target", "structured",
+"current", "preview", "changed"}`, where `current` is the effective text with the overlay on
+disk and `preview` the text with the draft, or `{"ok": false, "error", "line", "column"}`
+when the draft does not parse. Nothing is written. Only the file targets of the render list
+qualify. `papaia-manager` uses it for the effective-result view of its overlay editor.
+
 ### Typical overlay use cases
 
 **Additional LLM endpoint** (`overlay/ai/librechat/librechat.yaml`):
