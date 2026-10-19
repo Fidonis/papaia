@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.5.0 |
-| **Date** | 2026-10-10 |
-| **Status** | Active — describes the 1.5.0 release as built |
+| **Version** | 1.6.0 |
+| **Date** | 2026-10-19 |
+| **Status** | Active — describes the 1.6.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -863,6 +863,9 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 | `settings.yaml` | The manager's own settings, one section per topic: branding (name, second line) and the host-monitoring interval |
 | `branding/` | The uploaded logo |
 | `schedule.yaml` | The backup schedule |
+| `notifications.yaml` | The notification recipients and the events each receives (mode 0600: a webhook URL can carry a secret) |
+| `notifications-state.json` | What the notification checks already reported, so a restart repeats nothing |
+| `overlay-history/` | The previous versions of the overlay files edited in Settings > Overlay (the latest 20 per file, readable by the owner only) |
 | `jobs/` | Records of long-running operations (install, start, upgrade) |
 | `audit.log` | Who triggered which operation |
 
@@ -877,7 +880,7 @@ reads from the same place.
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard, host, backup, settings and, while the `rag` profile is active, the RAG pages |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, backup, mail, settings (modules and overlay) and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 | `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page and `/api/v1/users`, `/api/v1/roles`: the accounts, their roles and sessions, and the realm's roles themselves. A tier above the admin role: `manager-admin` alone is not enough |
 
@@ -951,6 +954,57 @@ restore, an upgrade or another job is running it is held back and retried. After
 restart a missed run is made up, and the retention period is only passed on while the
 newest successful restore point is recent, so a series of failed backups cannot prune
 every usable one.
+
+### Modules and overlay
+
+Settings has three tabs: *Manager* (the manager's own configuration), *Modules* and *Overlay*.
+The last two keep no second source of truth; both drive the core.
+
+**Modules.** The tab is the one place in the manager that switches the optional modules
+(LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off.
+It stores the choice with the core's own `setup`, so validation, sticky values and generated
+secrets stay in one implementation, and starts the module's profile. Which volumes a module owns,
+what its settings consist of and which questions `setup` still needs answered when the module is
+switched on (the public URL of LocalAI and of Qdrant, the relay's mail server) come from the core's
+read-only `module-info`; deleting a module's data (its volumes) and/or its settings is the core's
+`module-purge`, offered only for a module that is switched off, with the module's name typed back
+as confirmation. Both are internal commands of the core's Python entry point, not `papaia-ctl`
+verbs, and the manager passes them typed options only: one module, never `--force`, `--env` or any
+other part of the configuration. A core without them (before 1.6.0) still switches LocalAI and web
+search and switches modules off keeping everything.
+
+**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM
+and SearXNG ([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
+draft is the core's `render-preview`: the draft merged in memory, nothing written. *Apply* saves
+the file and recreates the services that read it as a queued job. Before every Apply, Discard and
+roll-back the previous file is copied to `$PAPAIA_CONFIG_DIR/manager/overlay-history/` (the latest
+20 per file), and if the services do not start with the new file the previous one is put back
+automatically. A file changed on the host after it was opened is detected by its revision and
+refused instead of overwritten.
+
+### Mail and notifications
+
+The Mail page (System) has two tabs. *Mail Server* edits the mail server behind the optional relay
+of the `smtp` profile ([ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md)). Saving is
+a queued job that runs the core's own `setup` with the values; the password reaches that child
+process in its environment only, never in an argument or the log. While the relay is on, it is
+recreated and the Keycloak realm gets it as its mail server (`papaia-ctl keycloak-role-sync`), which
+is what lets the Users page offer a mailed link. *Notifications* belongs to the manager: recipients
+(an email address or a webhook URL) choose which events they receive — a failed job, an overdue
+backup, a service that stopped or turned unhealthy, an available update, an expiring certificate.
+The checks run on an interval and after every job, each event is reported once per occurrence
+(`notifications-state.json` keeps what was reported), email goes through the relay and a webhook
+gets a JSON `POST`. A notification carries no job log and no error text.
+
+### Dashboard widgets
+
+Besides links, a dashboard group can hold widgets: cards that show one piece of live state and
+link to the page that explains it (the installed release, the age of the newest backup, free disk
+space, running services, open warnings, the nearest certificate expiry). They are `type: widget`
+tiles in `tiles.yaml`; a tile without a `type` is a link, so an existing file reads as before. A
+widget reads what the manager already holds (the backup catalogue, the host check, the container
+snapshot, the last upgrade check) instead of measuring again, refreshes on its own and honours the
+tile's `visibility` on the server, so a widget set to administrators is absent for the user role.
 
 ### RAG management
 

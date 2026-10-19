@@ -12,6 +12,25 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.6.0] - 2026-10-19
+
+### 🚀 Features
+
+- feat(modules): preview overlays and delete a module's data or settings (#239) @marko-boehm
+- feat(smtp): add an optional smtp-relay profile (#233) @marko-boehm
+- feat: give papaia-admin keycloak's user and role administration rights (#231) @marko-boehm
+
+### 🐛 Bug Fixes
+
+- fix(keycloak): reach keycloak from the role sync inside a container (#236) @marko-boehm
+
+### 🧹 Maintenance
+
+- chore: bump papaia-manager to 1.4.0 (#241) @marko-boehm
+- chore: bump qdrant-mcp-rbac to 0.4.0 (#240) @marko-boehm
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.5.0...v1.6.0
+
 ## [1.5.0] - 2026-10-10
 
 ### 🚀 Features
