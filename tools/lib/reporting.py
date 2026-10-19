@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, envtree, secrets
+from . import common, envtree, secrets, smtp
 
 
 def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:
@@ -100,6 +100,26 @@ def print_rag_next_steps(config_dir: Path, tree: envtree.EnvTree) -> None:
         print("     which is not enabled. Switch it on with 'papaia-ctl setup --manager', or")
         print(f"     edit the catalog files in {config_dir / 'ai' / 'rag' / 'catalog'} by hand.")
     print("See README 'RAG system' for details.")
+
+
+def print_smtp_next_steps(tree: envtree.EnvTree) -> None:
+    """Print what the mail relay does and checks after it was switched on.
+
+    Never prints the upstream password or the login."""
+    module = tree.get(smtp.MODULE_DIR, {})
+    sender = module.get(smtp.KEY_FROM, "")
+    print()
+    print("Mail relay enabled — after 'papaia-ctl start':")
+    print("  1. Keycloak sends through the relay. The login page offers 'Forgot password?',")
+    if tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak") == "internal_keycloak":
+        print("     and an existing realm is updated by 'start' itself.")
+    else:
+        print("     once you point your own identity provider at smtp-relay:587.")
+    print("  2. Run 'papaia-ctl doctor' to check the connection to your mail server.")
+    print(f"  3. Mails go out as {sender}; your provider may only accept addresses it knows.")
+    print("     The relay queues mail and retries for a day, so a send that reports success")
+    print("     has been handed to the relay, not yet delivered. Recipient domains must resolve.")
+    print("See README 'Outbound mail' for details.")
 
 
 def print_keycloak_checklist(

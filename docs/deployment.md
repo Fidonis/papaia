@@ -48,9 +48,12 @@ To override the profile set for a single run without touching any file:
 tools/papaia-ctl start --profiles=keycloak,librechat,litellm
 ```
 
-The `localai`, `librechat-websearch` and `rag` profiles have dedicated setup flags
-(`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`, `--rag` / `--no-rag`),
-which also keep `deployment.yaml` in sync. Prefer those over hand-editing.
+The `localai`, `librechat-websearch`, `rag` and `smtp` profiles have dedicated setup flags
+(`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`, `--rag` / `--no-rag`,
+`--smtp` / `--no-smtp`), which also keep `deployment.yaml` in sync. Prefer those over
+hand-editing. `--smtp` needs the mail server, the sender address and, for a server with a
+login, the password in `PAPAIA_SMTP_PASSWORD`; see
+[Outbound mail](../README.md#outbound-mail).
 
 With `localai` enabled, setup additionally asks which accelerator image to install and
 detects what the host supports. `--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|
@@ -68,7 +71,7 @@ The supported upgrade path is:
 
 ```bash
 tools/papaia-ctl upgrade                 # to the newest release
-tools/papaia-ctl upgrade --version=1.5.0 # to a specific one
+tools/papaia-ctl upgrade --version=1.6.0 # to a specific one
 ```
 
 `upgrade` checks the active add-ons against the target release, takes a restore point, stops
@@ -113,7 +116,8 @@ tools/papaia-ctl doctor --skip=dns,certs # on a host without internet access
 Both are read-only. `status` is cheap and also available as `--json`; `doctor` is the check
 to run before `setup` and `upgrade`, or whenever something seems wrong. Besides Docker, disk,
 ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant,
-clock synchronization and what Docker's data takes. The check list, the thresholds and the JSON formats are documented in the
+clock synchronization, what Docker's data takes and, with the mail relay on, whether the mail
+server answers and how many messages wait in the relay's queue. The check list, the thresholds and the JSON formats are documented in the
 README, under
 [`status`](../README.md#status) and [`doctor`](../README.md#doctor).
 

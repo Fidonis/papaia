@@ -40,7 +40,7 @@ the `papaia` realm or is routed through oauth2-proxy by an Nginx fragment.
 |---------|--------------|-------|
 | LibreChat | native OIDC | login gated by `librechat-user` (`OPENID_REQUIRED_ROLE`); `librechat-admin` grants LibreChat's internal ADMIN role (`OPENID_ADMIN_ROLE`) |
 | LocalAI | native OIDC | role-restricted via custom browser flow (`localai-access` required) |
-| papaia-manager | native OIDC | role-restricted via `MANAGER_ADMIN_ROLE` / `MANAGER_USER_ROLE` (default `manager-admin` / `user`) |
+| papaia-manager | native OIDC | role-restricted via `MANAGER_ADMIN_ROLE` / `MANAGER_USER_ROLE` (default `manager-admin` / `user`); the Users page via `MANAGER_IDENTITY_ADMIN_ROLE` (default `papaia-admin`) |
 | LiteLLM UI | generic OIDC | admin UI only (`litellm-admin` → `proxy_admin`); API key for programmatic access |
 | NPM admin UI | oauth2-proxy forward auth | sidecar in `src/infra/nginx/docker-compose.yml`; restricted to `npm-admin` via `--allowed-group` |
 
@@ -154,7 +154,7 @@ access.
 
 | Role | Description |
 |------|-------------|
-| `papaia-admin` | Composite: `librechat-admin`, `litellm-admin`, `manager-admin`, `npm-admin`, `localai-access`, `qdrant-admin`, `qdrant-ingest-operator` |
+| `papaia-admin` | Composite: `librechat-admin`, `litellm-admin`, `manager-admin`, `npm-admin`, `localai-access`, `qdrant-admin`, `qdrant-ingest-operator`, and the `realm-management` client roles `manage-users`, `view-users`, `query-users`, `view-realm`, `manage-realm` (Keycloak's user and role administration rights) |
 | `librechat-admin` | LibreChat administrator (composite: `librechat-user`) — grants LibreChat's internal ADMIN role |
 | `librechat-user` | Required to sign in to LibreChat at all |
 | `litellm-admin` | LiteLLM proxy administrator (Admin UI: models, teams, keys) |
@@ -167,6 +167,13 @@ access.
 | `qdrant-ingest-operator` | Operator of the RAG system's ingester (profile `rag`): required for its MCP tools |
 | `finance` | Finance department (demo role) |
 
+The `realm-management` roles are what lets papaia-manager's Users page manage the
+realm's accounts and roles (`manage-realm` is what Keycloak asks for to create, change
+or delete a role, and it covers the realm's settings too): the manager calls Keycloak's Admin API with the signed-in
+account's own token, so only a role that carries them can use the page, and
+`manager-admin` alone does not (see
+[ADR 0006](../../../docs/adr/0006-manage-accounts-with-the-signed-in-users-token.md)).
+
 LocalAI has no realm role of its own for admin *elevation* (only
 `localai-access` for login): its own admin promotion is a LocalAI-side
 concept (`LOCALAI_ADMIN_EMAIL` — a single email, or "first user becomes
@@ -174,7 +181,8 @@ admin"), independent of any OIDC role or group claim. Set
 `LOCALAI_ADMIN_EMAIL` to the seeded admin's address for parity with the
 other services.
 
-**Existing installations:** these roles, their composites, the
+**Existing installations:** these roles, their composites (realm roles and the
+`realm-management` client roles of `papaia-admin` alike), the
 `oauth2-proxy` client's `groups` mapper and the `librechat` audience mappers
 are synced into an already-imported realm automatically on every
 `papaia-ctl start` (only when `AUTH_PROVIDER=internal_keycloak`) — Keycloak's own
@@ -185,6 +193,17 @@ no longer used and can be deleted). The sync also grants
 `papaia-admin` to every account that already held the old flat `admin` role,
 without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
 to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).
+
+**Mail server.** The template carries no `smtpServer`. While the `smtp` profile is on and
+configured, `render_core` adds the relay (`smtp-relay`, port 587, no authentication, no
+encryption) to the rendered realm together with `resetPasswordAllowed`, so a new realm is
+imported with it. The sync gives an existing realm the same: it sets the mail server when
+the realm has none, together with the reset link, and corrects a relay block whose port,
+sender or flags differ; any other field of it (a reply-to address, say) stays. A mail
+server somebody configured by hand is never overwritten — the sync prints a warning — and
+switching the profile off clears the block again only if it still points at the relay.
+The reset link is switched on once, together with the relay: an administrator who turns
+it off later stays in charge. `verifyEmail` is not touched.
 
 **Default Test Users** (local development only — do not use in production)
 

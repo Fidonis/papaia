@@ -9,6 +9,16 @@ prompt_with_default() {
     printf '%s' "${answer:-$default}"
 }
 
+# Like prompt_with_default for a secret: nothing is echoed, and the prompt and the
+# line break go to stderr, so $( ) captures only the typed value. The hint is a
+# word ("Enter keeps the stored one"), never the value. An empty answer is empty.
+prompt_secret() {
+    local message="$1" hint="${2:-}" answer
+    read -rsp "$message${hint:+ [$hint]}: " answer
+    printf '\n' >&2
+    printf '%s' "$answer"
+}
+
 # Show a titled section (bold-ish title + optional indented help line) and then
 # read a value. Title/help go to stderr so this stays usable inside $( ) --
 # only the resolved value (from prompt_with_default) reaches stdout.

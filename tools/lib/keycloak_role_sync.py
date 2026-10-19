@@ -7,7 +7,10 @@ new roles, composites, clients or protocol mappers shipped by a newer
 papaia-realm.json template on its own. This module reconciles the live realm
 against the rendered template instead: additive only, it never deletes
 anything and never overwrites a role, a composite edge, a protocol mapper or a
-user's existing role mapping.
+user's existing role mapping. A composite member is a realm role or a role of a
+client; `papaia-admin` carries the `realm-management` roles that let it
+administer the realm's accounts (the manager's Users page acts with the
+signed-in account's own token), and an existing realm gets them from here.
 
 Clients are handled only for the Compose profiles that need them
 (PROFILE_CLIENTS), so an installation that never enables such a profile keeps
@@ -16,6 +19,10 @@ secret is aligned with the rendered template and nothing else about it is
 changed: the core `.env` is canonical for that secret, and a client left over
 from an earlier add-on install would otherwise refuse the service that signs in
 with the generated one.
+
+The realm's mail server follows the optional `smtp` profile: while the mail relay is on
+and configured, an existing realm without a mail server gets the relay (and the
+reset-password link); a mail server the operator configured is never overwritten.
 
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
@@ -36,7 +43,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import common
+from . import common, smtp
 from .envtree import EnvTree
 
 _KEYCLOAK_NODE = "infra/keycloak"
@@ -68,6 +75,23 @@ def _error_detail(exc: urllib.error.HTTPError) -> str:
         return exc.read().decode("utf-8", "replace").strip()[:300]
     except Exception:
         return exc.reason if isinstance(exc.reason, str) else ""
+
+
+def _admin_base_url(root: dict[str, str]) -> str:
+    """Where this process reaches Keycloak.
+
+    On the host that is the published port. In a container (`papaia-manager` runs
+    `start`, and with it this sync, in its own) `localhost` is the container itself, so
+    the sync would wait and skip. There it takes the address the stack's own services
+    use: the origin of `OIDC_TOKEN_URL` (`https://keycloak:8443`), which the local CA
+    certificate covers. Without such a URL the published port is all there is."""
+    local = f"https://localhost:{root.get('KEYCLOAK_EXT_PORT', '8110')}"
+    if not common.in_container():
+        return local
+    parts = urllib.parse.urlsplit(root.get("OIDC_TOKEN_URL", "").strip())
+    if parts.scheme in ("http", "https") and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return local
 
 
 def _ssl_context(config_dir: Path) -> ssl.SSLContext:
@@ -167,22 +191,84 @@ def _sync_roles(base_url, ctx, token, realm_def: dict) -> tuple[dict[str, dict],
     return existing, created
 
 
+def _client_uuid(base_url, ctx, token, client_id: str) -> str | None:
+    path = f"/clients?clientId={urllib.parse.quote(client_id)}"
+    matches = _api(base_url, ctx, token, "GET", path)
+    return matches[0]["id"] if matches else None
+
+
+def _client_role(base_url, ctx, token, client_uuid: str, name: str) -> dict | None:
+    """One role of a client, or None when the client has no role of that name."""
+    path = f"/clients/{client_uuid}/roles/{urllib.parse.quote(name, safe='')}"
+    try:
+        return _api(base_url, ctx, token, "GET", path)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
 def _sync_composites(base_url, ctx, token, realm_def: dict) -> int:
+    """Add the composite members the template names and a role does not have yet.
+
+    A member is a realm role (`composites.realm`) or a role of a client
+    (`composites.client`, a map of client id -> role names), which is how
+    `papaia-admin` carries Keycloak's own user-administration rights. A client
+    or a client role that cannot be found is a warning: the rest of the sync
+    still has to run."""
     added = 0
+    client_uuids: dict[str, str | None] = {}
     for role in realm_def.get("roles", {}).get("realm", []):
-        wanted = role.get("composites", {}).get("realm", [])
-        if not wanted:
+        composites = role.get("composites", {})
+        wanted_realm = composites.get("realm", [])
+        wanted_client = composites.get("client", {})
+        if not wanted_realm and not wanted_client:
             continue
         name = role["name"]
         current_reps = _api(base_url, ctx, token, "GET", f"/roles/{name}/composites") or []
-        current = {c["name"] for c in current_reps}
-        missing = [n for n in wanted if n not in current]
-        if not missing:
+        # A client role may share its name with a realm role, so the two are kept apart.
+        current_realm = {c["name"] for c in current_reps if not c.get("clientRole")}
+        current_client = {
+            (c.get("containerId"), c["name"]) for c in current_reps if c.get("clientRole")
+        }
+
+        reps: list[dict] = []
+        labels: list[str] = []
+        for member in wanted_realm:
+            if member not in current_realm:
+                reps.append(_api(base_url, ctx, token, "GET", f"/roles/{member}"))
+                labels.append(member)
+
+        for client_id, members in wanted_client.items():
+            if client_id not in client_uuids:
+                client_uuids[client_id] = _client_uuid(base_url, ctx, token, client_id)
+            uuid = client_uuids[client_id]
+            if uuid is None:
+                print(
+                    f"  composites of {name} skipped: client {client_id} not found",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            for member in members:
+                if (uuid, member) in current_client:
+                    continue
+                rep = _client_role(base_url, ctx, token, uuid, member)
+                if rep is None:
+                    print(
+                        f"  composite of {name} skipped: client {client_id} has no role {member}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
+                reps.append(rep)
+                labels.append(f"{client_id}/{member}")
+
+        if not reps:
             continue
-        reps = [_api(base_url, ctx, token, "GET", f"/roles/{n}") for n in missing]
         _api(base_url, ctx, token, "POST", f"/roles/{name}/composites", reps)
         added += len(reps)
-        print(f"  composites added to {name}: {missing}", flush=True)
+        print(f"  composites added to {name}: {labels}", flush=True)
     return added
 
 
@@ -287,6 +373,76 @@ def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
     return added
 
 
+# The keys of the realm's `smtpServer` that the relay block owns. Anything else an
+# operator put there (a reply-to address, UTF-8 support) is kept as it is.
+_SMTP_OWNED_KEYS = ("host", "port", "from", "fromDisplayName", "auth", "ssl", "starttls")
+# The relay needs no login, so a live block that still carries one is stale.
+_SMTP_LOGIN_KEYS = ("user", "password")
+
+
+def _sync_smtp(base_url, ctx, token, realm_def: dict) -> str:
+    """Make the live realm's mail server match the rendered one.
+
+    The rendered realm names the relay (smtp-relay) while the `smtp` profile is on and
+    configured, and has no mail server otherwise. Returns what happened:
+
+      set        the live realm had no mail server; the relay block and the reset-password
+                 link are switched on (once: an operator who turns the link off later is
+                 not overruled, because later runs find a relay host and leave it alone)
+      updated    the live relay block differed in a field this module owns
+      cleared    the profile was switched off while the live block still points at the
+                 relay; its host only resolves inside papaia-net, so leaving it would keep
+                 "email a link" and "Forgot password?" on and let every send fail
+      kept       the realm has a mail server of its own; never overwritten
+      unchanged  nothing to do
+    """
+    desired = realm_def.get("smtpServer") or {}
+    live = _api(base_url, ctx, token, "GET", "") or {}
+    current = dict(live.get("smtpServer") or {})
+    live_host = current.get("host", "")
+
+    if not desired:
+        if live_host != smtp.RELAY_HOST:
+            return "unchanged"
+        _api(base_url, ctx, token, "PUT", "", {"smtpServer": {}, "resetPasswordAllowed": False})
+        print("  mail server cleared: the smtp profile is off", flush=True)
+        return "cleared"
+
+    if not live_host:
+        _api(
+            base_url,
+            ctx,
+            token,
+            "PUT",
+            "",
+            {
+                "smtpServer": desired,
+                "resetPasswordAllowed": bool(realm_def.get("resetPasswordAllowed")),
+            },
+        )
+        print(f"  mail server set: {desired['host']}", flush=True)
+        return "set"
+    if live_host != desired["host"]:
+        print(
+            f"Keycloak realm already uses the mail server '{live_host}'; left unchanged. To send"
+            f" through the relay instead, set its host to {desired['host']} (port"
+            f" {desired['port']}, no authentication, no encryption) in the realm settings, or"
+            " clear the mail server and run 'papaia-ctl keycloak-role-sync' again.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return "kept"
+
+    stale = any(current.get(key) for key in _SMTP_LOGIN_KEYS)
+    if not stale and all(current.get(key) == desired[key] for key in _SMTP_OWNED_KEYS):
+        return "unchanged"
+    merged = {k: v for k, v in current.items() if k not in _SMTP_LOGIN_KEYS}
+    merged.update({key: desired[key] for key in _SMTP_OWNED_KEYS})
+    _api(base_url, ctx, token, "PUT", "", {"smtpServer": merged})
+    print(f"  mail server updated: {desired['host']}", flush=True)
+    return "updated"
+
+
 def _migrate_legacy_admins(base_url, ctx, token, existing_roles: dict[str, dict]) -> int:
     if _LEGACY_ADMIN_ROLE not in existing_roles or _MIGRATION_TARGET_ROLE not in existing_roles:
         return 0
@@ -336,8 +492,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         return False
     realm_def = json.loads(realm_json_path.read_text(encoding="utf-8"))
 
-    port = root.get("KEYCLOAK_EXT_PORT", "8110")
-    base_url = f"https://localhost:{port}"
+    base_url = _admin_base_url(root)
     ctx = _ssl_context(config_dir)
 
     print("Waiting for Keycloak to become ready...", flush=True)
@@ -368,6 +523,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
+        _sync_smtp(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
     except urllib.error.HTTPError as exc:
         print(

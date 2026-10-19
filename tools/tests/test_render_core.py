@@ -240,3 +240,94 @@ def test_render_rag_fragment_is_idempotent_and_loses_to_the_overlay(repo_root, c
     assert rendered["mcpServers"]["Qdrant"]["title"] == "Company search"
     assert rendered["mcpServers"]["Qdrant"]["url"] == "http://qdrant-mcp:8000/mcp"
     assert rendered["mcpSettings"]["allowedDomains"].count("http://qdrant-mcp:8000") == 1
+
+
+# ── the mail relay's block in the realm (profile smtp) ────────────────────────
+
+
+def _realm_file(config_dir) -> Path:
+    return config_dir / "infra/keycloak/realm-import/papaia-realm.json"
+
+
+def _enable_smtp(config_dir, *, host="smtp.example.org", sender="noreply@example.org"):
+    values = common.parse_env_file(config_dir / ".env")
+    values["COMPOSE_PROFILES"] = "keycloak,smtp"
+    common.atomic_write(
+        config_dir / ".env", "".join(f"{key}={value}\n" for key, value in values.items())
+    )
+    module = config_dir / "infra" / "smtp-relay"
+    module.mkdir(parents=True, exist_ok=True)
+    common.atomic_write(
+        module / ".env",
+        f"SMTP_RELAY_UPSTREAM_HOST={host}\nSMTP_RELAY_FROM_ADDRESS={sender}\n"
+        "SMTP_RELAY_FROM_NAME=Café Mail\n",
+    )
+
+
+def test_render_leaves_the_realm_without_a_mail_server_while_the_relay_is_off(
+    repo_root, config_dir
+):
+    _setup_minimal(repo_root, config_dir)
+
+    render_core.render(config_dir, repo_root)
+
+    realm = json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+    assert "smtpServer" not in realm
+    assert "resetPasswordAllowed" not in realm
+
+
+def test_render_adds_the_relay_block_and_the_reset_link_while_the_relay_is_on(
+    repo_root, config_dir
+):
+    _setup_minimal(repo_root, config_dir)
+    _enable_smtp(config_dir)
+
+    render_core.render(config_dir, repo_root)
+
+    text = _realm_file(config_dir).read_text(encoding="utf-8")
+    realm = json.loads(text)
+    assert realm["smtpServer"]["host"] == "smtp-relay"
+    assert realm["smtpServer"]["fromDisplayName"] == "Café Mail"
+    assert "Café" in text, "non-ASCII is written as it is, not escaped"
+    assert realm["resetPasswordAllowed"] is True
+    assert "verifyEmail" not in realm or realm["verifyEmail"] is False
+    assert "password" not in realm["smtpServer"]
+    assert "baked-secret" not in text and "${env." not in text
+
+
+def test_render_adds_nothing_while_the_relay_is_on_but_not_configured(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    _enable_smtp(config_dir, host="", sender="")
+
+    render_core.render(config_dir, repo_root)
+
+    assert "smtpServer" not in json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+
+
+def test_render_of_the_relay_block_is_idempotent(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    _enable_smtp(config_dir)
+
+    render_core.render(config_dir, repo_root)
+    first = _realm_file(config_dir).read_bytes()
+    render_core.render(config_dir, repo_root)
+
+    assert _realm_file(config_dir).read_bytes() == first
+
+
+def test_render_switching_the_relay_off_restores_the_plain_realm(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    plain = _realm_file(config_dir).read_bytes()
+    _enable_smtp(config_dir)
+    render_core.render(config_dir, repo_root)
+    assert _realm_file(config_dir).read_bytes() != plain
+
+    values = common.parse_env_file(config_dir / ".env")
+    values["COMPOSE_PROFILES"] = "keycloak"
+    common.atomic_write(
+        config_dir / ".env", "".join(f"{key}={value}\n" for key, value in values.items())
+    )
+    render_core.render(config_dir, repo_root)
+
+    assert _realm_file(config_dir).read_bytes() == plain

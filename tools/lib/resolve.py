@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import common
+from . import common, smtp
 from .envtree import EnvTree
 
 _HOSTLIKE_NO_FQDN = {"localhost", "127.0.0.1", "host.docker.internal"}
@@ -49,6 +49,16 @@ class SetupArgs:
     localai_variant: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
+    # Outbound mail relay (profile smtp). Every field None = sticky / no change.
+    enable_smtp: bool | None = None
+    smtp_host: str | None = None  # upstream mail server host
+    smtp_port: str | None = None
+    smtp_security: str | None = None  # "starttls" | "tls" | "none"
+    smtp_user: str | None = None
+    smtp_no_auth: bool = False  # drop the stored login and password
+    smtp_from: str | None = None  # sender address
+    smtp_from_name: str | None = None
+    smtp_password: str | None = field(default=None, repr=False)  # never printed or stored in env
     reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
@@ -703,6 +713,140 @@ def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_rag:
         profiles.append("rag")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def _smtp_fields_given(args: SetupArgs) -> bool:
+    return args.smtp_no_auth or any(
+        value is not None
+        for value in (
+            args.smtp_host,
+            args.smtp_port,
+            args.smtp_security,
+            args.smtp_user,
+            args.smtp_from,
+            args.smtp_from_name,
+            args.smtp_password,
+        )
+    )
+
+
+def _next_revision(value: str) -> str:
+    return str((int(value) if value.isdigit() else 0) + 1)
+
+
+def _resolve_smtp_settings(module: dict[str, str], args: SetupArgs) -> tuple[dict[str, str], str]:
+    """The module env values and the upstream password an enabled relay ends up with.
+
+    Precedence per value: flag > stored value > default. Raises SmtpConfigError (or
+    SetupError for a combination of values) before anything is written."""
+    if args.smtp_no_auth and (args.smtp_user or args.smtp_password):
+        raise SetupError("--smtp-no-auth cannot be combined with a login or a password.")
+
+    stored_security = module.get(smtp.KEY_SECURITY, "").strip().lower() or "starttls"
+    security = smtp.validate_security(args.smtp_security or stored_security)
+
+    host_value = args.smtp_host if args.smtp_host is not None else module.get(smtp.KEY_HOST, "")
+    if not host_value.strip():
+        raise SetupError("--smtp-host is required: no mail server is configured yet.")
+    host = smtp.validate_host(host_value)
+
+    if args.smtp_port is not None:
+        port = smtp.validate_port(args.smtp_port)
+    elif args.smtp_security and security != stored_security:
+        # The stored port belonged to the old security mode (587 vs 465 vs 25).
+        port = smtp.DEFAULT_PORTS[security]
+    else:
+        stored_port = module.get(smtp.KEY_PORT, "").strip()
+        port = smtp.validate_port(stored_port) if stored_port else smtp.DEFAULT_PORTS[security]
+
+    from_value = args.smtp_from if args.smtp_from is not None else module.get(smtp.KEY_FROM, "")
+    if not from_value.strip():
+        raise SetupError("--smtp-from is required: the sender address of the mails.")
+    from_address = smtp.validate_address(from_value)
+    from_name = smtp.validate_display_name(
+        args.smtp_from_name
+        if args.smtp_from_name is not None
+        else module.get(smtp.KEY_FROM_NAME, "") or smtp.DEFAULT_FROM_NAME
+    )
+
+    if args.smtp_no_auth:
+        user, password = "", ""
+    else:
+        user_value = args.smtp_user if args.smtp_user is not None else module.get(smtp.KEY_USER, "")
+        user = smtp.validate_user(user_value) if user_value.strip() else ""
+        if not user:
+            # No login any more: a stored password belongs to the old one and goes.
+            if args.smtp_password is not None:
+                raise SetupError("A password needs a login: pass --smtp-user.")
+            password = ""
+        else:
+            password = (
+                smtp.validate_password(args.smtp_password)
+                if args.smtp_password is not None
+                else smtp.read_password(args.config_dir)
+            )
+            if not password:
+                raise SetupError(
+                    "A login needs its password: pass it in the environment variable"
+                    " PAPAIA_SMTP_PASSWORD, or use --smtp-no-auth if the mail server needs no"
+                    " login."
+                )
+    if security == "none" and (user or password):
+        raise SetupError(
+            "The login would be sent unencrypted: use --smtp-security=starttls or tls, or"
+            " --smtp-no-auth for a mail server that needs no login."
+        )
+
+    values = {
+        smtp.KEY_HOST: host,
+        smtp.KEY_PORT: str(port),
+        smtp.KEY_SECURITY: security,
+        smtp.KEY_USER: user,
+        smtp.KEY_FROM: from_address,
+        smtp.KEY_FROM_NAME: from_name,
+        **smtp.derived_keys(security, from_address),
+    }
+    return values, password
+
+
+def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `smtp` Compose profile and store the relay's configuration.
+
+    Without a flag and without a value the call is a no-op -- whatever a prior run
+    stored is kept (sticky). Values are stored whether the relay is on or off, so the
+    settings can be prepared first and switched on later; they change the profile only
+    together with a flag: `enable_smtp=True` adds it, `enable_smtp=False` removes it.
+    `enable_smtp=False` on its own only removes the profile: the settings and the
+    password stay, so a later opt-in finds them.
+
+    The password is not an env value. It goes to a file the relay mounts, and every
+    change of it raises SMTP_RELAY_PASSWORD_REV so that Compose recreates the relay
+    (the file is read once, at start, and a changed file does not alter the config
+    hash). Everything is validated before the first write."""
+    if args.enable_smtp is None and not _smtp_fields_given(args):
+        return tree
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    others = [p for p in profiles if p != smtp.PROFILE]
+
+    if args.enable_smtp is False and not _smtp_fields_given(args):
+        root["COMPOSE_PROFILES"] = ",".join(others)
+        return tree
+
+    module = tree.setdefault(smtp.MODULE_DIR, {})
+    try:
+        values, password = _resolve_smtp_settings(module, args)
+    except smtp.SmtpConfigError as exc:
+        raise SetupError(str(exc)) from exc
+
+    module.update(values)
+    if smtp.write_password(args.config_dir, password):
+        module[smtp.KEY_PASSWORD_REV] = _next_revision(module.get(smtp.KEY_PASSWORD_REV, ""))
+    if args.enable_smtp is True:
+        root["COMPOSE_PROFILES"] = ",".join([*others, smtp.PROFILE])
+    elif args.enable_smtp is False:
+        root["COMPOSE_PROFILES"] = ",".join(others)
     return tree
 
 

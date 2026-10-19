@@ -39,7 +39,13 @@ _SURFACE_CHANGED = (
 # `py_cli addon-networks` resolve against the rendered core .env, so add-on
 # bridges are scoped per deployment. A plain literal still works, so `min`
 # stays 1; add-ons that adopt the template declare `requires.addon_api: 2`.
-ADDON_API_WINDOW = (1, 2)
+#
+# Gen 3 (additive): the mail relay `smtp-relay` (profile `smtp`) is a core service an
+# add-on may list under `networks.attach` to send mail without holding the mail
+# server's credentials. Nothing existing changed, so `min` stays 1; add-ons that
+# attach it declare `requires.addon_api: 3`, and an older core reports them
+# incompatible instead of failing on an unknown service.
+ADDON_API_WINDOW = (1, 3)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -71,6 +77,7 @@ ATTACHABLE_SERVICES = {
     "qdrant-ingest-tika": ["rag"],
     "qdrant-mcp": ["rag"],
     "searxng": ["librechat-websearch"],
+    "smtp-relay": ["smtp"],
 }
 
 # Seam 2: render targets addons may layer integration fragments onto.

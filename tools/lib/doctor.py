@@ -9,7 +9,9 @@ command exit non-zero.
 Nothing here changes anything. The probes are reads: `docker version/info` and
 `docker system df`, `shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
 `rocm-smi` / `timedatectl`, a TCP connect to localhost, a name lookup,
-`openssl x509` on a file, plus everything `status` reads. Inside a container,
+`openssl x509` on a file, a handshake with the configured mail server (greeting, EHLO,
+STARTTLS and a login -- no mail is sent) and `postqueue -p` in the mail relay's container,
+plus everything `status` reads. Inside a container,
 where the host's driver tools and `timedatectl` are out of reach, the NVIDIA GPU
 is read with a `docker exec` of `nvidia-smi` into the LocalAI container and the
 clock with `adjtimex(2)`, which only reads.
@@ -47,7 +49,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import backup, cli_addon, common, compat, deployment, envtree, gpu_detect, semver, status
+from . import (
+    backup,
+    cli_addon,
+    common,
+    compat,
+    deployment,
+    envtree,
+    gpu_detect,
+    semver,
+    smtp,
+    status,
+)
 from .status import Runner
 
 SCHEMA_VERSION = 1
@@ -98,6 +111,8 @@ GPU_PROBE_TIMEOUT_SECONDS = 10.0
 # inner one is the shorter, so a hang is `timeout`'s exit 124 and not a kill.
 GPU_EXEC_TIMEOUT_SECONDS = 8
 TIME_PROBE_TIMEOUT_SECONDS = 5.0
+# `postqueue -p` reads the queue directory; a large queue takes a moment.
+SMTP_QUEUE_TIMEOUT_SECONDS = 10.0
 
 # What systemd's `NTPSynchronized` means: the kernel's estimated maximum error is
 # under sixteen seconds. The kernel starts at exactly that figure and only lowers
@@ -249,7 +264,7 @@ def _in_container() -> bool:
     """Whether this process runs inside a container, where the host's driver
     tools, device nodes and `timedatectl` are not visible. `papaia-manager`
     runs `doctor` in its own container."""
-    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+    return common.in_container()
 
 
 class _Timeval(ctypes.Structure):
@@ -327,6 +342,8 @@ class Probes:
     cpu_count: Callable[[], int | None] = os.cpu_count
     in_container: Callable[[], bool] = _in_container
     kernel_clock_synchronized: Callable[[], bool | None] = _kernel_clock_synchronized
+    # (host, port, security, user, password, check_login) -> smtp.ProbeResult
+    smtp_probe: Callable[..., smtp.ProbeResult] = smtp.probe_upstream
     # Where device nodes live; the same seam `gpu_detect.compose_fragment` has.
     dev_root: Path = Path("/dev")
 
@@ -1347,6 +1364,100 @@ def check_certs(ctx: Context) -> CheckResult:
     return CheckResult(name, overall, summary, {"certificates": items})
 
 
+def _smtp_relay_container(ctx: Context) -> tuple[str | None, str | None]:
+    """(name, state) of the mail relay's container in the status report, or
+    (None, None) if there is none: not started, or declared and never created."""
+    for module in ctx.status_report().modules:
+        if module.kind != "core":
+            continue
+        for container in module.containers:
+            if container.service == smtp.SERVICE:
+                return container.name or None, container.state
+    return None, None
+
+
+def check_smtp(ctx: Context) -> CheckResult:
+    """The outbound mail relay and the mail server behind it.
+
+    Off by default (`not configured`). When it is on, three things are read: whether
+    the relay container runs, whether the upstream answers (greeting, EHLO, STARTTLS or
+    TLS and the login -- no mail is sent, so a run never delivers anything), and how
+    many messages wait in the relay's queue. The relay accepts mail even while the
+    upstream is down, so only this check tells that apart. All of it is a `warn` at
+    most: mail trouble does not keep the stack from running.
+
+    Inside a container (papaia-manager polls `doctor`) the upstream is not contacted:
+    the check would reach the provider on every poll, and the relay's own state and
+    queue already say whether mail is flowing."""
+    name = "smtp"
+    if not ctx.configured:
+        return _not_set_up(name)
+    relay = smtp.Settings.load(ctx.config_dir)
+    if not relay.profile_on:
+        return CheckResult(name, SKIP, "not configured (the smtp profile is off)")
+    details: dict[str, Any] = {
+        "host": relay.host,
+        "port": relay.port,
+        "security": relay.security,
+        "login": bool(relay.user),
+    }
+    if not relay.configured:
+        return CheckResult(
+            name,
+            WARN,
+            "not configured: the mail server or the sender address is empty"
+            " ('papaia-ctl setup --smtp' sets them)",
+            details,
+        )
+
+    issues: list[str] = []
+    notes: list[str] = []
+    container, state = _smtp_relay_container(ctx)
+    details["relay"] = state or "not created"
+
+    if ctx.probes.in_container():
+        details["upstream"] = "not probed from a container"
+        notes.append("the mail server is only probed on the host")
+    else:
+        probe = ctx.probes.smtp_probe(
+            relay.host,
+            relay.port or smtp.DEFAULT_PORTS[relay.security],
+            relay.security,
+            relay.user,
+            smtp.read_password(ctx.config_dir),
+            True,
+        )
+        details["upstream"] = {
+            "ok": probe.ok,
+            "stage": probe.stage,
+            "reason": probe.reason,
+            "login": probe.login,
+        }
+        if probe.ok:
+            notes.append(f"reachable ({relay.security}, login {probe.login})")
+        else:
+            issues.append(f"unreachable ({probe.stage}: {probe.reason})")
+
+    if state is None:
+        issues.append("the relay is not created ('papaia-ctl start' creates it)")
+    elif state != "running":
+        issues.append(f"the relay is {state}")
+    else:
+        notes.append("relay running")
+        listing = ctx.run(
+            ["docker", "exec", container or "", *smtp.QUEUE_COMMAND], SMTP_QUEUE_TIMEOUT_SECONDS
+        )
+        queued = smtp.parse_queue_count(listing.stdout) if listing.returncode == 0 else None
+        details["queued"] = queued
+        if queued:
+            issues.append(f"{queued} message(s) waiting in the relay's queue")
+        elif queued == 0:
+            notes.append("queue empty")
+
+    summary = "; ".join(issues + notes)
+    return CheckResult(name, WARN if issues else PASS, summary, details)
+
+
 def check_addon_compat(ctx: Context) -> CheckResult:
     name = "addon_compat"
     deployed = deployment.load(ctx.config_dir)
@@ -1454,6 +1565,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("dns", check_dns),
     ("time_sync", check_time_sync),
     ("certs", check_certs),
+    ("smtp", check_smtp),
     ("addon_compat", check_addon_compat),
     ("container_health", check_container_health),
 ]

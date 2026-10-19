@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.5.0 |
-| **Date** | 2026-10-10 |
-| **Status** | Active — describes the 1.5.0 release as built |
+| **Version** | 1.6.0 |
+| **Date** | 2026-10-19 |
+| **Status** | Active — describes the 1.6.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -98,6 +98,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | AI-Runtime | LibreChat (chat UI), LiteLLM (LLM gateway), LocalAI (opt-in local inference) |
 | Management | papaia-manager (opt-in; dashboard, add-on lifecycle, host health and backup scheduling UI) |
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
+| Mail | `smtp-relay`, a Postfix relay (opt-in, profile `smtp`) that holds the mail server's credentials once; Keycloak and the add-ons that attach it send through it without any — see [ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md) |
 | RAG | Qdrant, `qdrant-mcp-rbac` and `qdrant-ingest` (opt-in, profile `rag`) — retrieval is a capability of the chat layer that an installation either wants or does not; see [ADR 0004](adr/0004-rag-system-as-optional-core-profile.md) |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
@@ -367,6 +368,14 @@ An override whose network does not exist yet — the add-on has never been start
 is skipped rather than failing the Core start. `papaia-ctl start --addons` brings
 the add-ons up first, so the networks exist by the time the overrides are applied.
 
+The optional mail relay is attachable like any other core service. An add-on that lists
+`smtp-relay` under `attach:` can send mail to `smtp-relay:587` — plain SMTP, no login, no
+TLS, from an address in the configured sender domain — and needs no credentials of its own.
+The service exists from `ADDON_API` generation 3, so such an add-on declares
+`requires.addon_api: 3`; an older core reports it incompatible instead of failing on an
+unknown service. The profile `smtp` has to be on for the service to exist, and every
+container on an attached network can use the relay, so attach it only to add-ons you trust.
+
 ### Seam 2 — OIDC
 
 Client JSONs from `integration/keycloak/` are registered **additively and
@@ -413,7 +422,7 @@ No Core changes required.
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
-| `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
+| `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
@@ -470,7 +479,7 @@ git-pristine; the source of truth lives in the config directory.
 │   │   ├── docker-compose.yml           # Lean Core (mounts exclusively from $PAPAIA_CONFIG_DIR)
 │   │   ├── .env.example                 # Core env template
 │   │   ├── ai/                          # LibreChat, LiteLLM, LocalAI, MCP bridge, reranker
-│   │   ├── infra/                       # Keycloak realm template, NPM, oauth2-proxy
+│   │   ├── infra/                       # Keycloak realm template, NPM, oauth2-proxy, mail relay
 │   │   ├── manager/                     # papaia-manager (optional Core service)
 │   │   └── services/                    # SearXNG, Firecrawl base config
 │   └── tools/                           # Orchestrator
@@ -700,6 +709,24 @@ de-duplicated; any other file type is taken wholesale from the highest layer tha
 provides it. The overlay always wins. Rendering runs on `setup`, on every `start`,
 and on every `addon` operation — there is no separate render command.
 
+A layer that does not parse (a typo in a hand-edited overlay) stops the render with one
+`ERROR:` line that names the file and the position, and a structured layer must have a
+mapping at the top level, because anything else would replace the whole configuration. The
+render stops before `docker compose up`, so a running stack is not touched.
+
+**Applying an overlay means recreating the services that read it.** A render replaces each
+target with a new file, and most targets are bind-mounted single files, so a running
+container keeps the one it was created with. `papaia-ctl stop --clean-up --profiles=<profile>`
+followed by `start` recreates the group; a restart is not enough.
+
+**Previewing a draft.** `python3 -m lib.cli --repo-root R --config-dir C render-preview
+--target=<path> --overlay-file=<file>` merges a draft overlay onto the same layers `render`
+uses, in memory, and prints one JSON document: `{"ok": true, "target", "structured",
+"current", "preview", "changed"}`, where `current` is the effective text with the overlay on
+disk and `preview` the text with the draft, or `{"ok": false, "error", "line", "column"}`
+when the draft does not parse. Nothing is written. Only the file targets of the render list
+qualify. `papaia-manager` uses it for the effective-result view of its overlay editor.
+
 ### Typical overlay use cases
 
 **Additional LLM endpoint** (`overlay/ai/librechat/librechat.yaml`):
@@ -836,6 +863,9 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 | `settings.yaml` | The manager's own settings, one section per topic: branding (name, second line) and the host-monitoring interval |
 | `branding/` | The uploaded logo |
 | `schedule.yaml` | The backup schedule |
+| `notifications.yaml` | The notification recipients and the events each receives (mode 0600: a webhook URL can carry a secret) |
+| `notifications-state.json` | What the notification checks already reported, so a restart repeats nothing |
+| `overlay-history/` | The previous versions of the overlay files edited in Settings > Overlay (the latest 20 per file, readable by the owner only) |
 | `jobs/` | Records of long-running operations (install, start, upgrade) |
 | `audit.log` | Who triggered which operation |
 
@@ -850,11 +880,18 @@ reads from the same place.
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access — add-ons, catalogues, jobs, dashboard, host, backup, settings and, while the `rag` profile is active, the RAG pages |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, backup, mail, settings (modules and overlay) and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
+| `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page and `/api/v1/users`, `/api/v1/roles`: the accounts, their roles and sessions, and the realm's roles themselves. A tier above the admin role: `manager-admin` alone is not enough |
 
-Both name **realm roles**; the backend reads them from the access token's `roles`
+All three name **realm roles**; the backend reads them from the access token's `roles`
 claim.
+
+The Users page has no credential of its own: the manager calls Keycloak's Admin API with the
+access token of the signed-in account, so Keycloak applies that account's rights. That is why
+`papaia-admin` carries `manage-users`, `view-users`, `query-users`, `view-realm` and
+`manage-realm` of the `realm-management` client as composites (realm template for a new install, the role sync for an
+existing one). See [ADR 0006](adr/0006-manage-accounts-with-the-signed-in-users-token.md).
 
 ### Integration with the 4 seams
 
@@ -917,6 +954,57 @@ restore, an upgrade or another job is running it is held back and retried. After
 restart a missed run is made up, and the retention period is only passed on while the
 newest successful restore point is recent, so a series of failed backups cannot prune
 every usable one.
+
+### Modules and overlay
+
+Settings has three tabs: *Manager* (the manager's own configuration), *Modules* and *Overlay*.
+The last two keep no second source of truth; both drive the core.
+
+**Modules.** The tab is the one place in the manager that switches the optional modules
+(LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off.
+It stores the choice with the core's own `setup`, so validation, sticky values and generated
+secrets stay in one implementation, and starts the module's profile. Which volumes a module owns,
+what its settings consist of and which questions `setup` still needs answered when the module is
+switched on (the public URL of LocalAI and of Qdrant, the relay's mail server) come from the core's
+read-only `module-info`; deleting a module's data (its volumes) and/or its settings is the core's
+`module-purge`, offered only for a module that is switched off, with the module's name typed back
+as confirmation. Both are internal commands of the core's Python entry point, not `papaia-ctl`
+verbs, and the manager passes them typed options only: one module, never `--force`, `--env` or any
+other part of the configuration. A core without them (before 1.6.0) still switches LocalAI and web
+search and switches modules off keeping everything.
+
+**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM
+and SearXNG ([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
+draft is the core's `render-preview`: the draft merged in memory, nothing written. *Apply* saves
+the file and recreates the services that read it as a queued job. Before every Apply, Discard and
+roll-back the previous file is copied to `$PAPAIA_CONFIG_DIR/manager/overlay-history/` (the latest
+20 per file), and if the services do not start with the new file the previous one is put back
+automatically. A file changed on the host after it was opened is detected by its revision and
+refused instead of overwritten.
+
+### Mail and notifications
+
+The Mail page (System) has two tabs. *Mail Server* edits the mail server behind the optional relay
+of the `smtp` profile ([ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md)). Saving is
+a queued job that runs the core's own `setup` with the values; the password reaches that child
+process in its environment only, never in an argument or the log. While the relay is on, it is
+recreated and the Keycloak realm gets it as its mail server (`papaia-ctl keycloak-role-sync`), which
+is what lets the Users page offer a mailed link. *Notifications* belongs to the manager: recipients
+(an email address or a webhook URL) choose which events they receive — a failed job, an overdue
+backup, a service that stopped or turned unhealthy, an available update, an expiring certificate.
+The checks run on an interval and after every job, each event is reported once per occurrence
+(`notifications-state.json` keeps what was reported), email goes through the relay and a webhook
+gets a JSON `POST`. A notification carries no job log and no error text.
+
+### Dashboard widgets
+
+Besides links, a dashboard group can hold widgets: cards that show one piece of live state and
+link to the page that explains it (the installed release, the age of the newest backup, free disk
+space, running services, open warnings, the nearest certificate expiry). They are `type: widget`
+tiles in `tiles.yaml`; a tile without a `type` is a link, so an existing file reads as before. A
+widget reads what the manager already holds (the backup catalogue, the host check, the container
+snapshot, the last upgrade check) instead of measuring again, refreshes on its own and honours the
+tile's `visibility` on the server, so a widget set to administrators is absent for the user role.
 
 ### RAG management
 

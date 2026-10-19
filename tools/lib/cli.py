@@ -20,6 +20,8 @@ setup/render commands.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from . import (
     gpu_detect,
     keycloak_role_sync,
     migrations,
+    modules,
     npm_provision,
     render_core,
     reporting,
@@ -80,6 +83,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
+    smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
+    # Taken out of the environment so nothing started later inherits it. An empty
+    # value means "keep the stored password" (--smtp-no-auth drops it).
+    smtp_password = os.environ.pop("PAPAIA_SMTP_PASSWORD", "") or None
     setup_args = resolve.SetupArgs(
         config_dir=config_dir,
         env_name=args.env,
@@ -101,6 +108,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_smtp=_tristate(args.enable_smtp),
+        smtp_host=args.smtp_host,
+        smtp_port=args.smtp_port,
+        smtp_security=args.smtp_security,
+        smtp_user=args.smtp_user,
+        smtp_no_auth=args.smtp_no_auth,
+        smtp_from=args.smtp_from,
+        smtp_from_name=args.smtp_from_name,
+        smtp_password=smtp_password,
         reranker_model=args.reranker_model or None,
         allow_direct_port_access=args.allow_direct_port_access,
         non_interactive=True,
@@ -131,6 +147,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
+        tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -162,6 +179,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Only for the switch-on: confirming an already enabled RAG system needs no reminder.
     if setup_args.enable_rag and not rag_was_enabled:
         reporting.print_rag_next_steps(config_dir, tree)
+    if setup_args.enable_smtp and not smtp_was_enabled:
+        reporting.print_smtp_next_steps(tree)
     if effective_auth_provider == "external_oidc":
         reporting.print_external_oidc_checklist(config_dir, tree)
     return 0
@@ -196,6 +215,73 @@ def cmd_render(args: argparse.Namespace) -> int:
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
     print("Rendered.")
+    return 0
+
+
+def cmd_render_preview(args: argparse.Namespace) -> int:
+    """Print the effective result of a draft overlay for one render target, as JSON.
+
+    Read-only: the draft is read from `--overlay-file`, merged onto the same layers `render`
+    uses, and nothing is written. Exit 0 whenever a document was printed -- a draft that does
+    not parse is an answer (`"ok": false`), not a failure of the command. Exit 2 is a usage
+    error: an unreadable draft file, or a target that is not a file of the render list."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    target = args.target
+    if target not in render_core.BASE_RENDER_TARGETS or (repo_root / "src" / target).is_dir():
+        print(f"ERROR: {target} is not a file target of the render", file=sys.stderr)
+        return 2
+    try:
+        draft = Path(args.overlay_file).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"ERROR: cannot read {args.overlay_file}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        result = {"ok": True, **render_core.preview(config_dir, repo_root, target, draft)}
+    except render_core.RenderError as exc:
+        result = {"ok": False, "error": str(exc), "line": exc.line, "column": exc.column}
+    print(json.dumps(result))
+    return 0
+
+
+def cmd_module_info(args: argparse.Namespace) -> int:
+    """Print what switching an optional module off could delete, as JSON. Read-only."""
+    try:
+        document = modules.info(Path(args.config_dir), Path(args.repo_root), args.module)
+    except modules.ModuleError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(document))
+    return 0
+
+
+def cmd_module_purge(args: argparse.Namespace) -> int:
+    """Delete the data (volumes) and/or reset the settings of a module that is switched off.
+
+    Both are separate options. The settings of a module whose data depends on them (the RAG
+    system) are only deleted together with the data. Exit 3 when the request is refused or
+    a step fails, with an `ERROR:` line."""
+    if not (args.data or args.config):
+        print("ERROR: name what to delete: --data, --config or both", file=sys.stderr)
+        return 2
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    try:
+        module = modules.spec(args.module)
+        if args.config and module.settings_need_data and not args.data:
+            raise modules.ModuleError(
+                f"the settings of {module.name} can only be deleted together with its data"
+                " (--data): its stored credentials and grants depend on them"
+            )
+        removed = modules.purge_data(config_dir, repo_root, args.module) if args.data else []
+        touched = modules.reset_config(config_dir, repo_root, args.module) if args.config else []
+    except modules.ModuleError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    for name in removed:
+        print(f"removed volume {name}")
+    for item in touched:
+        print(f"reset {item}")
     return 0
 
 
@@ -581,6 +667,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
+    p_setup.add_argument("--smtp-host", default=None)
+    p_setup.add_argument("--smtp-port", default=None)
+    p_setup.add_argument("--smtp-security", choices=["starttls", "tls", "none"], default=None)
+    p_setup.add_argument("--smtp-user", default=None)
+    p_setup.add_argument("--smtp-no-auth", action="store_true")
+    p_setup.add_argument("--smtp-from", default=None)
+    p_setup.add_argument("--smtp-from-name", default=None)
     p_setup.add_argument("--reranker-model", default=None)
     p_setup.add_argument("--backup-dir", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
@@ -589,6 +683,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_render = sub.add_parser("render")
     p_render.set_defaults(func=cmd_render)
+
+    p_module_info = sub.add_parser("module-info")
+    p_module_info.add_argument("--module", required=True, choices=sorted(modules.MODULES))
+    p_module_info.set_defaults(func=cmd_module_info)
+
+    p_module_purge = sub.add_parser("module-purge")
+    p_module_purge.add_argument("--module", required=True, choices=sorted(modules.MODULES))
+    p_module_purge.add_argument("--data", action="store_true")
+    p_module_purge.add_argument("--config", action="store_true")
+    p_module_purge.set_defaults(func=cmd_module_purge)
+
+    p_preview = sub.add_parser("render-preview")
+    p_preview.add_argument("--target", required=True)
+    p_preview.add_argument("--overlay-file", required=True)
+    p_preview.set_defaults(func=cmd_render_preview)
 
     p_addon_install = sub.add_parser("addon-install")
     p_addon_install.add_argument("--name", required=True)
@@ -715,7 +824,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except render_core.RenderError as exc:
+        # A layer that does not parse (a typo in a hand-edited overlay), or a realm
+        # placeholder without a value: say which file, not a traceback.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

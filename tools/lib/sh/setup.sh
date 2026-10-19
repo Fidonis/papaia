@@ -36,7 +36,13 @@ cmd_setup() {
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" localai_variant="" manager="" rag="" reranker_model="" backup_dir=""
+    local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
+    local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
+    # Extra `setup` arguments for the mail relay and the password for the Python side
+    # (consumed by _run_setup_py). Reset on every run so a re-render never repeats them.
+    SETUP_SMTP_ARGS=()
+    SETUP_SMTP_PASSWORD=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -92,6 +98,24 @@ cmd_setup() {
             --rag) rag="true" ;;
             --no-rag) rag="false" ;;
             --qdrant-host=*) qdrant_host="${1#*=}" ;;
+            --smtp) smtp="true" ;;
+            --no-smtp) smtp="false" ;;
+            --smtp-host=*) smtp_host="${1#*=}" ;;
+            --smtp-port=*) smtp_port="${1#*=}" ;;
+            --smtp-security=*)
+                smtp_security="${1#*=}"
+                case "$smtp_security" in
+                    starttls|tls|none) : ;;
+                    *)
+                        error "Invalid --smtp-security value: '$smtp_security' (must be 'starttls', 'tls' or 'none')"
+                        exit 2
+                        ;;
+                esac
+                ;;
+            --smtp-user=*) smtp_user="${1#*=}" ;;
+            --smtp-no-auth) smtp_no_auth=1 ;;
+            --smtp-from=*) smtp_from="${1#*=}" ;;
+            --smtp-from-name=*) smtp_from_name="${1#*=}" ;;
             --reranker-model=*) reranker_model="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
@@ -181,6 +205,13 @@ cmd_setup() {
             info "  RAG System        = $_rag_label"
             [ "$RAG_STICKY" = "true" ] && [ -n "${QDRANT_HOST_STICKY:-}" ] && \
                 info "  Qdrant URL        = $QDRANT_HOST_STICKY"
+        fi
+        if [ -n "${SMTP_STICKY:-}" ]; then
+            local _smtp_label="disabled"
+            [ "$SMTP_STICKY" = "true" ] && _smtp_label="enabled"
+            info "  Mail relay        = $_smtp_label"
+            [ "$SMTP_STICKY" = "true" ] && [ -n "${SMTP_HOST_STICKY:-}" ] && \
+                info "  Mail server       = $SMTP_HOST_STICKY (sender ${SMTP_FROM_STICKY:-unset})"
         fi
         if ! confirm "Reconfigure?" "N"; then
             info "Reusing existing configuration; re-rendering only."
@@ -375,6 +406,28 @@ cmd_setup() {
                 "Where browsers reach Qdrant (REST API; the dashboard is under /dashboard)." \
                 "QDRANT_PUBLIC_URL" "$qdrant_default")"
         fi
+        if [ -z "$smtp" ]; then
+            # Off for a fresh install: the relay needs a mail server only the operator
+            # knows. A previous opt-in stays the default so a re-run does not flip it.
+            local smtp_default="2"
+            [ "${SMTP_STICKY:-}" = "true" ] && smtp_default="1"
+            printf '\n%sSend Mail%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — run an internal mail relay that forwards to your mail server (password reset mails)\n' >&2
+            printf '  2) No   — the stack sends no mail (default)\n' >&2
+            local smtp_choice
+            smtp_choice="$(prompt_with_default "  Choose" "$smtp_default")"
+            case "$smtp_choice" in
+                1|yes) smtp="true" ;;
+                2|no)  smtp="false" ;;
+                *)
+                    warn "Unrecognized choice '$smtp_choice'; defaulting to disabled."
+                    smtp="false"
+                    ;;
+            esac
+        fi
+        if [ "$smtp" = "true" ]; then
+            _prompt_smtp
+        fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
@@ -422,10 +475,21 @@ cmd_setup() {
         esac
     fi
 
+    [ -n "$smtp" ] && SETUP_SMTP_ARGS+=(--enable-smtp="$smtp")
+    [ -n "$smtp_host" ] && SETUP_SMTP_ARGS+=(--smtp-host="$smtp_host")
+    [ -n "$smtp_port" ] && SETUP_SMTP_ARGS+=(--smtp-port="$smtp_port")
+    [ -n "$smtp_security" ] && SETUP_SMTP_ARGS+=(--smtp-security="$smtp_security")
+    [ -n "$smtp_user" ] && SETUP_SMTP_ARGS+=(--smtp-user="$smtp_user")
+    [ "$smtp_no_auth" -eq 1 ] && SETUP_SMTP_ARGS+=(--smtp-no-auth)
+    [ -n "$smtp_from" ] && SETUP_SMTP_ARGS+=(--smtp-from="$smtp_from")
+    [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
+    SETUP_SMTP_PASSWORD="$smtp_password"
     if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host"; then
+        SETUP_SMTP_PASSWORD=""
         error "setup failed."
         return 3
     fi
+    SETUP_SMTP_PASSWORD=""
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
         _ensure_keycloak_certs
     fi
@@ -609,5 +673,85 @@ _run_setup_py() {
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")
     [ "$allow_direct" = "1" ] && extra+=(--allow-direct-port-access)
     [ "$force" = "1" ] && extra+=(--force)
-    py_cli setup --env="$env_name" "${extra[@]}"
+    # The mail relay flags are collected by cmd_setup; empty on the re-render paths.
+    if [ "${#SETUP_SMTP_ARGS[@]}" -gt 0 ]; then
+        extra+=("${SETUP_SMTP_ARGS[@]}")
+    fi
+    # The password travels in the environment of this one call, never in an argument
+    # (the process list shows arguments). Python takes it out of the environment.
+    PAPAIA_SMTP_PASSWORD="${SETUP_SMTP_PASSWORD:-}" py_cli setup --env="$env_name" "${extra[@]}"
+}
+
+# Asks for the mail server behind the relay. Fills the smtp_* variables of cmd_setup
+# (bash scoping: they are the caller's locals) and skips whatever a flag already gave.
+_prompt_smtp() {
+    if [ -z "$smtp_host" ]; then
+        smtp_host="$(prompt_field "Mail server" \
+            "The server the relay forwards your mail to, e.g. smtp.example.org (no scheme, no port)." \
+            "SMTP_RELAY_UPSTREAM_HOST" "${SMTP_HOST_STICKY:-}")"
+    fi
+    if [ -z "$smtp_security" ]; then
+        local security_default="1"
+        [ "${SMTP_SECURITY_STICKY:-}" = "tls" ] && security_default="2"
+        [ "${SMTP_SECURITY_STICKY:-}" = "none" ] && security_default="3"
+        printf '\n%sConnection to the mail server%s\n' "$CYAN" "$NC" >&2
+        printf '  1) STARTTLS  — encrypted, usually port 587 (default)\n' >&2
+        printf '  2) TLS       — encrypted from the first byte, usually port 465\n' >&2
+        printf '  3) None      — no encryption and no login; only for a trusted network or a test server\n' >&2
+        local security_choice
+        security_choice="$(prompt_with_default "  Choose" "$security_default")"
+        case "$security_choice" in
+            1|starttls) smtp_security="starttls" ;;
+            2|tls)      smtp_security="tls" ;;
+            3|none)     smtp_security="none" ;;
+            *)
+                warn "Unrecognized choice '$security_choice'; defaulting to STARTTLS."
+                smtp_security="starttls"
+                ;;
+        esac
+    fi
+    if [ -z "$smtp_port" ]; then
+        local port_default="587"
+        [ "$smtp_security" = "tls" ] && port_default="465"
+        [ "$smtp_security" = "none" ] && port_default="25"
+        # A stored port belongs to the stored mode; another mode gets its own default.
+        [ -n "${SMTP_PORT_STICKY:-}" ] && [ "$smtp_security" = "${SMTP_SECURITY_STICKY:-}" ] && \
+            port_default="$SMTP_PORT_STICKY"
+        smtp_port="$(prompt_field "Port" "" "SMTP_RELAY_UPSTREAM_PORT" "$port_default")"
+    fi
+    if [ "$smtp_security" = "none" ]; then
+        # A login would go out unencrypted; setup refuses that, so none is asked for.
+        [ -z "$smtp_user" ] && smtp_no_auth=1
+    elif [ "$smtp_no_auth" -eq 0 ] && [ -z "$smtp_user" ]; then
+        local login_default="1"
+        [ -n "${SMTP_HOST_STICKY:-}" ] && [ -z "${SMTP_USER_STICKY:-}" ] && login_default="2"
+        printf '\n%sLogin%s\n' "$CYAN" "$NC" >&2
+        printf '  1) Yes  — the mail server needs a login (default)\n' >&2
+        printf '  2) No   — the mail server accepts mail from this host without one\n' >&2
+        local login_choice
+        login_choice="$(prompt_with_default "  Choose" "$login_default")"
+        case "$login_choice" in
+            2|no) smtp_no_auth=1 ;;
+            *)
+                smtp_user="$(prompt_field "Login name" "" "SMTP_RELAY_UPSTREAM_USER" "${SMTP_USER_STICKY:-}")"
+                ;;
+        esac
+    fi
+    if [ -n "$smtp_user" ] && [ -z "$smtp_password" ]; then
+        local password_hint=""
+        [ "${SMTP_PASSWORD_STORED:-}" = "true" ] && [ "$smtp_user" = "${SMTP_USER_STICKY:-}" ] && \
+            password_hint="Enter keeps the stored one"
+        printf '\n%sPassword%s\n' "$CYAN" "$NC" >&2
+        smtp_password="$(prompt_secret "  Password of $smtp_user" "$password_hint")"
+    fi
+    if [ -z "$smtp_from" ]; then
+        smtp_from="$(prompt_field "Sender address" \
+            "Mails are sent from this address, e.g. noreply@example.org. Your provider may only accept addresses it knows." \
+            "SMTP_RELAY_FROM_ADDRESS" "${SMTP_FROM_STICKY:-}")"
+    fi
+    if [ -z "$smtp_from_name" ]; then
+        smtp_from_name="$(prompt_field "Sender name" \
+            "Shown next to the address in the recipient's mailbox." \
+            "SMTP_RELAY_FROM_NAME" "${SMTP_FROM_NAME_STICKY:-papAIa}")"
+    fi
 }

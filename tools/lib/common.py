@@ -168,6 +168,30 @@ def ensure_dir(path: Path) -> None:
     raise last_exc
 
 
+def in_container() -> bool:
+    """Whether this process runs inside a container. `papaia-manager` runs `papaia-ctl`
+    and `doctor` in its own: there `localhost` is the container and the host's driver
+    tools, device nodes and `timedatectl` are not visible."""
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
+def atomic_write_private(path: Path, content: str) -> None:
+    """Like atomic_write, but the file is created with mode 0600 and the content is
+    written byte for byte (no newline translation, no trailing newline added).
+
+    For a secret that is read from a file: the mode is set when the temp file is
+    created, so the content is never readable by others, not even briefly."""
+    ensure_dir(path.parent)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(content.encode("utf-8"))
+    os.chmod(tmp_path, 0o600)  # a pre-existing temp file keeps the mode it had
+    if path.is_dir():
+        shutil.rmtree(path)
+    os.replace(tmp_path, path)
+
+
 def atomic_write(path: Path, content: str) -> None:
     """Write `content` to `path` atomically (write to a sibling temp file,
     then os.replace) so a crash mid-write never leaves a half-written file.

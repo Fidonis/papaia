@@ -22,7 +22,8 @@ src/
 ├── infra/                  # core platform
 │   ├── keycloak/           # OIDC issuer (realm: papaia, imported on first start)
 │   ├── nginx/              # Nginx Proxy Manager + oauth2-proxy sidecar for its admin UI
-│   └── oauth2-proxy/       # forward-auth gateway for services without native OIDC
+│   ├── oauth2-proxy/       # forward-auth gateway for services without native OIDC
+│   └── smtp-relay/         # internal mail relay (optional, profile: smtp)
 ├── manager/                # papaia-manager — add-on lifecycle UI + dashboard
 ├── services/               # application services
 │   ├── firecrawl/          # web crawler (+ Playwright, Redis, RabbitMQ, Postgres)
@@ -63,12 +64,13 @@ profile is active. The `include:` list is complete — modules are toggled throu
 | `localai` | LocalAI and its model-init container |
 | `manager` | papaia-manager |
 | `rag` | Qdrant, its OIDC + RBAC MCP server, the ingester and its Tika extractor |
+| `smtp` | `smtp-relay`, the internal mail relay that forwards to your mail server |
 | `librechat-websearch` | SearXNG, Firecrawl, the Firecrawl MCP bridge, Jina reranker |
 
 The default set is `keycloak,nginx,oauth2-proxy,librechat,litellm`. To change it
 permanently, edit `COMPOSE_PROFILES` in `$PAPAIA_CONFIG_DIR/.env` and run
 `tools/papaia-ctl start`; for a single run, use `--profiles=LIST`. The `localai`,
-`manager`, `librechat-websearch` and `rag` profiles have dedicated `setup` flags that also
+`manager`, `librechat-websearch`, `rag` and `smtp` profiles have dedicated `setup` flags that also
 keep `deployment.yaml` in sync — prefer those.
 
 > Do **not** edit `src/.env`. Every `start` overwrites the checkout's `.env` files

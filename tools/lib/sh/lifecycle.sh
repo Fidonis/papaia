@@ -175,12 +175,34 @@ _provisioning_step() {
     py_cli "$step"
 }
 
+# The profiles of the optional modules. `stop --volumes` deletes data, so it is limited to
+# these: the always-on services (Keycloak, LibreChat, LiteLLM ...) and the manager keep theirs.
+_VOLUME_DELETE_PROFILES="localai librechat-websearch rag smtp"
+
+_require_deletable_profiles() {
+    local profiles="$1" profile allowed
+    local -a names
+    IFS=',' read -r -a names <<< "$profiles"
+    for profile in "${names[@]}"; do
+        allowed=0
+        for known in $_VOLUME_DELETE_PROFILES; do
+            [ "$profile" = "$known" ] && allowed=1
+        done
+        if [ "$allowed" -eq 0 ]; then
+            error "--volumes deletes data and is limited to the optional modules"
+            error "  ($_VOLUME_DELETE_PROFILES); '$profile' is not one of them."
+            exit 2
+        fi
+    done
+}
+
 cmd_stop() {
-    local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 profiles=""
+    local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 profiles="" volumes=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --clean-up) clean_up=1 ;;
+            --volumes) volumes=1 ;;
             --addons) addons=1 ;;
             --profiles=*) profiles="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
@@ -190,6 +212,17 @@ cmd_stop() {
     done
     CONFIG_DIR="$config_dir"
     local env_file="$REPO_ROOT/src/.env"
+
+    # Deleting volumes is only ever scoped: it needs the containers removed with them, and the
+    # profiles that say whose.
+    if [ "$volumes" -eq 1 ]; then
+        if [ "$clean_up" -ne 1 ] || [ -z "$profiles" ]; then
+            error "--volumes needs --clean-up and --profiles=LIST: it deletes the data of exactly"
+            error "the named profiles."
+            exit 2
+        fi
+        _require_deletable_profiles "$profiles"
+    fi
 
     # Before the addons, so an unresolvable profile set aborts the whole command
     # instead of leaving the addons stopped and the core untouched.
@@ -207,7 +240,13 @@ cmd_stop() {
     fi
 
     if [ "$clean_up" -eq 1 ]; then
-        if [ -n "$profiles" ]; then
+        if [ -n "$profiles" ] && [ "$volumes" -eq 1 ]; then
+            # `down -v` with the profiles applied removes the volumes of the services of those
+            # profiles only, anonymous ones included (a Redis or Postgres image declares one).
+            # The profile set was resolved above: an unresolvable one would make compose
+            # derive its targets from the project's running containers instead.
+            COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down --volumes
+        elif [ -n "$profiles" ]; then
             COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down
         else
             docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down
