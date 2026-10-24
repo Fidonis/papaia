@@ -59,10 +59,21 @@ cmd_addon_install() {
 # auto-discovery of the project .env, so the addon's own .env is passed second
 # (higher precedence).
 #
+# Without the addon's docker-compose.yml (a deleted or half-written addon
+# directory) compose cannot build the project, and `stop`/`down` fall back to
+# project-name-only mode. There the COMPOSE_PROJECT_NAME of the root .env passed
+# below wins over `-p`, so the call stops or removes the CORE stack instead of the
+# addon. Such an addon is therefore handled by name alone (see
+# _addon_compose_by_name), and anything that needs the file is refused.
+#
 # $1 verb, $2 addon_name, $3 addon_path, rest = extra `docker compose` args.
 _addon_compose() {
     local verb="$1" addon_name="$2" addon_path="$3"; shift 3
     local -a extra=("$@")
+    if [ ! -f "$addon_path/docker-compose.yml" ]; then
+        _addon_compose_by_name "$verb" "$addon_name" "$addon_path" "${extra[@]}"
+        return
+    fi
     local -a compose_files=(-f "$addon_path/docker-compose.yml")
     if [ -d "$CONFIG_DIR/overrides/addons" ]; then
         local f
@@ -87,6 +98,38 @@ _addon_compose() {
     local project
     project="$(basename "$addon_path")"
     docker compose -p "$project" "${compose_files[@]}" "${env_files[@]}" "$verb" "${extra[@]}"
+}
+
+# `docker compose -p <project> stop|down` for an addon whose docker-compose.yml
+# is missing. Neither -f nor --env-file is passed, so nothing but the project
+# name tells compose what to act on, and the COMPOSE_* variables of the caller
+# are dropped for the same reason. Compose then finds the containers (and, for
+# `down`, the networks and, with -v, the volumes) carrying that project's label.
+# Any other verb needs the file and is refused.
+#
+# $1 verb, $2 addon_name, $3 addon_path, rest = extra `docker compose` args.
+_addon_compose_by_name() {
+    local verb="$1" addon_name="$2" addon_path="$3"; shift 3
+    local project
+    project="$(basename "$addon_path")"
+    case "$verb" in
+        stop|down) ;;
+        *)
+            error "Cannot run 'docker compose $verb' for addon $addon_name: $addon_path/docker-compose.yml not found."
+            return 1
+            ;;
+    esac
+    case "$project" in
+        ""|.|..|/)
+            error "Cannot tell which containers belong to addon $addon_name: no usable directory name in '$addon_path'."
+            return 1
+            ;;
+    esac
+    warn "$addon_path/docker-compose.yml not found -- running 'docker compose $verb' for project '$project' by name only."
+    (
+        unset COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES COMPOSE_ENV_FILES COMPOSE_PATH_SEPARATOR
+        docker compose -p "$project" "$verb" "$@"
+    )
 }
 
 _addon_compose_up() {
