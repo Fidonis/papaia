@@ -432,6 +432,14 @@ No Core changes required.
 | `papaia-ctl addon uninstall <name>` | Remove override + deployment entry → delete config bundle → `docker compose down` |
 | `papaia-ctl addon uninstall <name> --clean-up` | Like `uninstall` + `docker compose down -v` (also delete volumes) |
 
+The Compose calls above run with `-p <addon directory name>`, the add-on's `docker-compose.yml` and the
+core `.env`. When that file is missing (a deleted or half-written add-on directory), Compose cannot build
+the project, and with the core `.env` in play it would act on the core project instead of the add-on.
+`stop` and `down` (so `addon stop`, `addon uninstall` and the add-on part of `stop --addons` and
+`restore`) therefore run as `docker compose -p <name> stop|down` alone, without `-f`, `--env-file` or the
+caller's `COMPOSE_*` variables, and address the containers, networks and (with `-v`) volumes labelled with
+that project. `addon start` and every other verb that needs the file are refused with an error.
+
 ### Config bundle seeding at `addon install`
 
 `addon install` reads the add-on's `.env.example` and **non-destructively inserts missing
