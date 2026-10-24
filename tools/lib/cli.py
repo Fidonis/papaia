@@ -720,6 +720,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_check.add_argument("--force", action="store_true")
     p_addon_check.set_defaults(func=cli_addon.cmd_addon_check)
 
+    p_addon_components = sub.add_parser("addon-components")
+    p_addon_components.add_argument("--name", default=None)
+    p_addon_components.add_argument("--json", action="store_true")
+    p_addon_components.set_defaults(func=cli_addon.cmd_addon_components)
+
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)
     p_addon_remove.set_defaults(func=cli_addon.cmd_addon_remove)

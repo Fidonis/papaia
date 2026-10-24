@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.6.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.7.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -368,7 +368,7 @@ tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [
 
 Moves the installation to a release. Without `--version` the newest release is used;
 when the installation already runs it, the command reports so and exits 0, which makes
-it safe to run unattended. `--version` accepts `1.6.0` and `v1.6.0` alike and is the
+it safe to run unattended. `--version` accepts `1.7.0` and `v1.7.0` alike and is the
 only way onto a pre-release. Downgrades are refused — restore a backup instead.
 
 The run, in order:
@@ -396,7 +396,7 @@ required.
 
 **Migrations.** A release may ship scripts in `tools/migrations/` that adapt an
 existing config bundle to a change the render pass cannot express on its own. Every
-release carries the complete set, so a jump from 1.0.0 to 1.6.0 runs the 1.1.0 … 1.6.0
+release carries the complete set, so a jump from 1.0.0 to 1.7.0 runs the 1.1.0 … 1.7.0
 steps in between, in order. Applied migrations are recorded in
 `$PAPAIA_CONFIG_DIR/migrations/applied.json` and never run twice. If one fails, the
 upgrade stops and prints the commands to return to the previous release; fixing the
@@ -542,6 +542,7 @@ tools/papaia-ctl addon remove    <name> [--config-dir=PATH]
 tools/papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
 tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
   [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 ```
 
 | Command | Effect |
@@ -551,6 +552,7 @@ tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. |
 | `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. |
+| `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). |
 
 **`addon check` flags**
@@ -607,7 +609,7 @@ active Compose profile to the modules it brings up.
 {
   "schema_version": 1,
   "generated_at": "2026-09-27T10:15:00Z",
-  "platform_version": "1.6.0",
+  "platform_version": "1.7.0",
   "compose_project": "papaia",
   "docker": { "reachable": true, "reason": null },
   "modules": [
@@ -854,15 +856,16 @@ from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the pr
 
 | Surface | Contents |
 |---|---|
-| **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. Administrators edit it in the browser (groups, tiles, drag and drop, a live preview). Besides links, a group can hold *widgets*, cards that show one piece of live state and link to the page that explains it: the installed papAIa release, the age of the newest backup, free disk space, how many services run, open warnings and the nearest certificate expiry. They refresh on their own and read what the manager already knows instead of measuring again. |
+| **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. Administrators edit it in the browser (groups, tiles, drag and drop, a live preview). Besides links, a group can hold *widgets*, cards that show one piece of live state and link to the page that explains it: the installed papAIa release, the age of the newest backup, free disk space, how many services run, open warnings and the nearest certificate expiry. They refresh on their own and read what the manager already knows instead of measuring again. The default tiles (LibreChat, LiteLLM, Keycloak, NGINX Proxy Manager and Qdrant) show an icon that ships inside the manager, so nothing is loaded from another site; the logos stay the property of their owners. |
 | **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. A status row in the sidebar of every page summarises the core, the add-ons and the host for every signed-in role, as counts only. |
-| **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. |
+| **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. When a catalogue's manifest lists the software an add-on bundles (`components`), the gallery card names the primary components and the detail page lists all of them with their role, the version an update brings and the tags an operator pinned in the add-on's `.env`; the manager reads those itself, and [`papaia-ctl addon components`](#addon) prints the same on the command line. *Remove* takes the add-on's containers down before it marks the add-on inactive (volumes and configuration stay) and is refused while the add-on's `docker-compose.yml` is missing. |
 | **RAG** (`/connections`, `/collections`, `/embedding`, `/ingest/jobs`) | The management side of the [RAG system](#rag-system), for administrators only and only while the `rag` profile is active; without it the pages answer 404 and nothing new appears. *Connections* are the vector databases the system works with (the integrated Qdrant is created as `default`). *Collections* creates and deletes Qdrant collections and keeps the realm roles that may read or write each of them, in the format `qdrant-mcp-rbac` enforces. *Embedding* puts uploaded files, or files already in the documents folder, into a collection through the ingester. *Ingest Jobs* edits the ingester's jobs, shows their runs file by file and stores the credentials of remote sources encrypted. The dashboard gains a *Qdrant* tile for administrators. The ingester has no web interface of its own; these pages replace it. They need a core that ships the `rag` profile (1.5.0 or newer). |
 | **Host** (`/host`) | The state of the machine under the deployment: memory, CPU load, GPU, clock synchronisation, free disk space and certificate expiry, plus what Docker's data takes. The manager measures nothing itself: it shows the verdicts of [`papaia-ctl doctor`](#doctor), so the page and a shell on the host cannot disagree about a threshold. It needs a core that ships `doctor` (1.4.0 or newer); on an older one the page says so. How often the host is re-measured is a setting. |
 | **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and a configurable retention period. Backups can run on a schedule (every day, on chosen days, every few hours or a cron expression, in a timezone of choice), run by a scheduler inside the manager, so the host needs no cron job or systemd timer. |
 | **Users** (`/users`) | The accounts and the realm roles of the bundled Keycloak, without the Admin Console, for the identity role `papaia-admin` only (see [Access control](#access-control)). Create an account with a temporary password or a mailed link, enable or disable it, change its roles, reset its password, and view and end its sessions. The *Roles* tab lists the realm roles, creates and changes them and deletes one after showing who holds it; the roles the stack ships stay as they are. The page acts with the signed-in account's own Keycloak rights, so it needs a core whose realm gives `papaia-admin` the user and role administration rights (1.6.0 or newer; [ADR 0006](docs/adr/0006-manage-accounts-with-the-signed-in-users-token.md)). It does not exist where the accounts live in an external identity provider. |
 | **Mail** (`/mail`) | Two tabs under *System*, for administrators. *Notifications* lets recipients (an email address or a webhook URL) choose which events they receive: a failed job, an overdue backup, a service that stopped or turned unhealthy, an available update and an expiring certificate; each event is reported once per occurrence and a webhook URL is never shown again after it is saved. *Mail Server* sets up the stack's outbound relay: the mail server behind it (host, connection security, port, login, write-only password, sender), a connection test that sends nothing, a test mail through the relay and the length of its queue. Saving is a queued job that runs the core's own `setup`; the relay itself needs the `smtp` profile ([Outbound mail](#outbound-mail), 1.6.0 or newer), and the page says so on an older core. |
 | **Settings** | The manager's own configuration in three tabs. *Manager*: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. *Modules*: the one place that switches the optional modules (LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off; it asks what `papaia-ctl setup` asks where an answer is missing, and switching one off asks whether to keep its data and settings, delete the data, or delete both (the module's name has to be typed to delete). *Overlay*: edits the customer [overlay](#configuration--render-lifecycle) files for LibreChat, LiteLLM and SearXNG with a syntax check while typing, the effective result as a diff and **Apply** as a queued job that recreates the services reading the file; the previous version of every file is kept (the latest 20) and restored from a *Versions* tab. Switching on the RAG system and the mail relay, deleting a module's data or settings and the effective-result diff need a core with the module operations and `render-preview` (1.6.0 or newer); an older core still switches LocalAI and web search and switches modules off, keeping everything. |
+| **Language** | The interface is in English and German. Every account chooses *Automatic*, *English* or *Deutsch* in the account menu at the bottom of the sidebar; the choice is stored on the server by the account's OIDC subject (`preferences.yaml`, part of a backup), so it is the same on every computer. *Automatic* follows the browser's language and falls back to `MANAGER_DEFAULT_LOCALE` in `src/manager/.env` (English unless set). Log lines, the audit log, job logs and the emails and webhooks of notifications stay in English. |
 
 ### Catalogues
 
@@ -932,6 +935,7 @@ captures it along with the rest of the installation:
 | `tiles.yaml` | Dashboard tiles, grouped, with per-tile visibility |
 | `settings.yaml` | The manager's own settings, one section per topic: branding and the host-monitoring interval |
 | `branding/` | The uploaded logo |
+| `preferences.yaml` | The interface language each account chose, keyed by its OIDC subject |
 | `schedule.yaml` | The backup schedule |
 | `notifications.yaml` | The notification recipients and what each receives (mode 0600: a webhook URL can carry a secret) |
 | `notifications-state.json` | What the notification checks already reported, so a restart repeats nothing |

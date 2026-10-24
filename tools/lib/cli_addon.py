@@ -17,6 +17,7 @@ from . import (
     addons,
     common,
     compat,
+    components,
     deployment,
     envtree,
     gen_override,
@@ -133,6 +134,10 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
 
     reporting.print_keycloak_checklist(name, manifest, addon_path, config_dir)
     print(f"Addon installed: {name}")
+    if components.parse(manifest):
+        bundle_env = common.parse_env_file(bundle_env_path)
+        described = components.describe(name, manifest, active=True, bundle_env=bundle_env)
+        print(components.format_text([described]))
     return 0
 
 
@@ -267,6 +272,32 @@ def cmd_addon_check(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
     return exit_code
+
+
+def cmd_addon_components(args: argparse.Namespace) -> int:
+    """List the software each registered addon bundles, with its version.
+
+    Read-only. An addon's own `version` counts changes to the bundle; the
+    `components` of its manifest say what runs inside it, and the addon's `.env`
+    in the config bundle can pin another tag than the catalog's, which is shown
+    as an override."""
+    config_dir = Path(args.config_dir)
+    deployed = deployment.load(config_dir)
+    if not deployed:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+    only = args.name
+    if only is not None and not any(a.get("name") == only for a in deployed.get("addons") or []):
+        print(f"ERROR: addon '{only}' is not registered.", file=sys.stderr)
+        return 2
+    found = components.collect(deployed, config_dir, Path(args.repo_root), only)
+    if args.json:
+        print(components.to_json(found))
+    elif found:
+        print(components.format_text(found))
+    else:
+        print("No addons registered.")
+    return 0
 
 
 def cmd_addon_remove(args: argparse.Namespace) -> int:

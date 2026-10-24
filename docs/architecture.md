@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.6.0 |
-| **Date** | 2026-10-19 |
-| **Status** | Active — describes the 1.6.0 release as built |
+| **Version** | 1.7.0 |
+| **Date** | 2026-10-24 |
+| **Status** | Active — describes the 1.7.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -169,7 +169,8 @@ papaia-addons/<name>/
 
 ```yaml
 name: <short-name>                 # Unique identifier (a-z, 0-9, -)
-version: <semver>                  # Add-on version
+version: <semver>                  # Add-on version: counts changes to the bundle,
+                                   # not to the software in it (see `components`)
 addon_repo: papaia-addon-<name>    # Canonical add-on name, for catalogue display
 requires:
   addon_api: 1                     # Contract generation the add-on is built against
@@ -177,6 +178,17 @@ requires:
                                    # checked against the Core's ADDON_API window
 papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core version
 description: "<description>"
+
+components:                        # optional: the software the add-on packages
+  - id: <id>                       # shown by `papaia-ctl addon components` and the manager
+    name: <display name>
+    role: primary                  # primary | sidecar
+    kind: upstream                 # upstream | fidonis
+    image_var: <COMPOSE_VAR>       # the compose variable whose default names the image;
+                                   # the add-on's .env can pin another tag through it
+    version: "<tag>"               # that default's tag (quoted)
+    source: https://<project>      # optional link
+    pinned: false                  # only for a floating tag such as postgres:18
 
 networks:
   app_network: ${PAPAIA_PROJECT:-papaia}-<name>-net
@@ -424,6 +436,7 @@ No Core changes required.
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
 | `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
+| `papaia-ctl addon components [<name>] [--json]` | Read-only. List the software each registered add-on bundles (the manifest's `components`: name, version, role, image variable), with the tag the add-on's `.env` pins instead of the catalog's marked as overridden. |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
 | `papaia-ctl addon stop <name>` | `docker compose stop` (stop containers, do not remove) |
@@ -431,6 +444,14 @@ No Core changes required.
 | `papaia-ctl addon remove <name>` | Remove override → re-render Core → `active: false` in manifest. **Containers untouched, config bundle kept.** |
 | `papaia-ctl addon uninstall <name>` | Remove override + deployment entry → delete config bundle → `docker compose down` |
 | `papaia-ctl addon uninstall <name> --clean-up` | Like `uninstall` + `docker compose down -v` (also delete volumes) |
+
+The Compose calls above run with `-p <addon directory name>`, the add-on's `docker-compose.yml` and the
+core `.env`. When that file is missing (a deleted or half-written add-on directory), Compose cannot build
+the project, and with the core `.env` in play it would act on the core project instead of the add-on.
+`stop` and `down` (so `addon stop`, `addon uninstall` and the add-on part of `stop --addons` and
+`restore`) therefore run as `docker compose -p <name> stop|down` alone, without `-f`, `--env-file` or the
+caller's `COMPOSE_*` variables, and address the containers, networks and (with `-v`) volumes labelled with
+that project. `addon start` and every other verb that needs the file are refused with an error.
 
 ### Config bundle seeding at `addon install`
 
@@ -862,6 +883,7 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 | `tiles.yaml` | Dashboard tiles, grouped, with per-tile `visibility: all \| admin` |
 | `settings.yaml` | The manager's own settings, one section per topic: branding (name, second line) and the host-monitoring interval |
 | `branding/` | The uploaded logo |
+| `preferences.yaml` | The interface language each account chose, keyed by its OIDC subject; kept apart from `settings.yaml` so an account changing its language never makes an administrator's save fail as stale. A damaged file reads as "no preference" and is never overwritten |
 | `schedule.yaml` | The backup schedule |
 | `notifications.yaml` | The notification recipients and the events each receives (mode 0600: a webhook URL can carry a secret) |
 | `notifications-state.json` | What the notification checks already reported, so a restart repeats nothing |
@@ -916,6 +938,21 @@ Each add-on resolves to one of five states, merged from the catalogue scan,
 `unmanaged` is what keeps the CLI and the UI from fighting over the same add-on: a
 checkout installed by hand with `papaia-ctl addon install --path=…` is surfaced and
 reported, but the manager does not claim ownership of its source tree.
+
+### Add-on components and removal
+
+An add-on's own version counts changes to its bundle, not to the software in it. When the
+catalogue's manifest lists the bundled `components` (see the add-on contract), the gallery card
+names the primary ones and the detail page lists all of them with their role, the version an
+update brings and the tags an operator pinned in the add-on's `.env`. The manager reads the
+manifest and that file itself, so the pages need no particular core; `papaia-ctl addon components`
+prints the same facts on the command line.
+
+*Remove* takes the add-on's containers down (`addon stop --clean-up`, the volumes stay) before
+`addon remove` marks it inactive, because the latter alone leaves them running; if the stop
+fails the add-on stays active. It is refused while the add-on's `docker-compose.yml` is missing:
+a core before 1.7.0 aims its Compose call at the core project then (see the add-on lifecycle table
+above), so a manager on such a core could take its own stack down.
 
 ### Long-running operations
 
@@ -996,7 +1033,23 @@ The checks run on an interval and after every job, each event is reported once p
 (`notifications-state.json` keeps what was reported), email goes through the relay and a webhook
 gets a JSON `POST`. A notification carries no job log and no error text.
 
+### Language
+
+The interface is available in English and German. Every account chooses *Automatic*, *English* or
+*Deutsch* in the account menu at the bottom of the sidebar, and the choice is stored on the server
+by the account's OIDC subject (`preferences.yaml`), not in the browser, so it is the same on every
+computer the account signs in from. *Automatic*, which is also what an account has before it
+chooses, follows the browser's language and falls back to `MANAGER_DEFAULT_LOCALE` (English unless
+set). A language is one catalogue file in the manager's image; the code does not change for a new
+one. Log lines, the audit log, job logs and the emails and webhooks of notifications stay in
+English.
+
 ### Dashboard widgets
+
+The default tiles (LibreChat, LiteLLM, Keycloak, NGINX Proxy Manager and Qdrant) show an icon that
+ships inside the manager image, so nothing is loaded from another site; a tile of an older
+`tiles.yaml` without an icon picks the bundled one up by its name, and an icon set on the tile
+always wins. The logos stay the property of their owners.
 
 Besides links, a dashboard group can hold widgets: cards that show one piece of live state and
 link to the page that explains it (the installed release, the age of the newest backup, free disk

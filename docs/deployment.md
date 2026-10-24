@@ -71,7 +71,7 @@ The supported upgrade path is:
 
 ```bash
 tools/papaia-ctl upgrade                 # to the newest release
-tools/papaia-ctl upgrade --version=1.6.0 # to a specific one
+tools/papaia-ctl upgrade --version=1.7.0 # to a specific one
 ```
 
 `upgrade` checks the active add-ons against the target release, takes a restore point, stops
