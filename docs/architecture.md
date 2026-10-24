@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.6.0 |
-| **Date** | 2026-10-19 |
-| **Status** | Active — describes the 1.6.0 release as built |
+| **Version** | 1.7.0 |
+| **Date** | 2026-10-24 |
+| **Status** | Active — describes the 1.7.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -883,6 +883,7 @@ The manager keeps its state in `$PAPAIA_CONFIG_DIR/manager/`, so it is covered b
 | `tiles.yaml` | Dashboard tiles, grouped, with per-tile `visibility: all \| admin` |
 | `settings.yaml` | The manager's own settings, one section per topic: branding (name, second line) and the host-monitoring interval |
 | `branding/` | The uploaded logo |
+| `preferences.yaml` | The interface language each account chose, keyed by its OIDC subject; kept apart from `settings.yaml` so an account changing its language never makes an administrator's save fail as stale. A damaged file reads as "no preference" and is never overwritten |
 | `schedule.yaml` | The backup schedule |
 | `notifications.yaml` | The notification recipients and the events each receives (mode 0600: a webhook URL can carry a secret) |
 | `notifications-state.json` | What the notification checks already reported, so a restart repeats nothing |
@@ -937,6 +938,21 @@ Each add-on resolves to one of five states, merged from the catalogue scan,
 `unmanaged` is what keeps the CLI and the UI from fighting over the same add-on: a
 checkout installed by hand with `papaia-ctl addon install --path=…` is surfaced and
 reported, but the manager does not claim ownership of its source tree.
+
+### Add-on components and removal
+
+An add-on's own version counts changes to its bundle, not to the software in it. When the
+catalogue's manifest lists the bundled `components` (see the add-on contract), the gallery card
+names the primary ones and the detail page lists all of them with their role, the version an
+update brings and the tags an operator pinned in the add-on's `.env`. The manager reads the
+manifest and that file itself, so the pages need no particular core; `papaia-ctl addon components`
+prints the same facts on the command line.
+
+*Remove* takes the add-on's containers down (`addon stop --clean-up`, the volumes stay) before
+`addon remove` marks it inactive, because the latter alone leaves them running; if the stop
+fails the add-on stays active. It is refused while the add-on's `docker-compose.yml` is missing:
+a core before 1.7.0 aims its Compose call at the core project then (see the add-on lifecycle table
+above), so a manager on such a core could take its own stack down.
 
 ### Long-running operations
 
@@ -1017,7 +1033,23 @@ The checks run on an interval and after every job, each event is reported once p
 (`notifications-state.json` keeps what was reported), email goes through the relay and a webhook
 gets a JSON `POST`. A notification carries no job log and no error text.
 
+### Language
+
+The interface is available in English and German. Every account chooses *Automatic*, *English* or
+*Deutsch* in the account menu at the bottom of the sidebar, and the choice is stored on the server
+by the account's OIDC subject (`preferences.yaml`), not in the browser, so it is the same on every
+computer the account signs in from. *Automatic*, which is also what an account has before it
+chooses, follows the browser's language and falls back to `MANAGER_DEFAULT_LOCALE` (English unless
+set). A language is one catalogue file in the manager's image; the code does not change for a new
+one. Log lines, the audit log, job logs and the emails and webhooks of notifications stay in
+English.
+
 ### Dashboard widgets
+
+The default tiles (LibreChat, LiteLLM, Keycloak, NGINX Proxy Manager and Qdrant) show an icon that
+ships inside the manager image, so nothing is loaded from another site; a tile of an older
+`tiles.yaml` without an icon picks the bundled one up by its name, and an icon set on the tile
+always wins. The logos stay the property of their owners.
 
 Besides links, a dashboard group can hold widgets: cards that show one piece of live state and
 link to the page that explains it (the installed release, the age of the newest backup, free disk
