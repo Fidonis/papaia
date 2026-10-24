@@ -169,7 +169,8 @@ papaia-addons/<name>/
 
 ```yaml
 name: <short-name>                 # Unique identifier (a-z, 0-9, -)
-version: <semver>                  # Add-on version
+version: <semver>                  # Add-on version: counts changes to the bundle,
+                                   # not to the software in it (see `components`)
 addon_repo: papaia-addon-<name>    # Canonical add-on name, for catalogue display
 requires:
   addon_api: 1                     # Contract generation the add-on is built against
@@ -177,6 +178,17 @@ requires:
                                    # checked against the Core's ADDON_API window
 papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core version
 description: "<description>"
+
+components:                        # optional: the software the add-on packages
+  - id: <id>                       # shown by `papaia-ctl addon components` and the manager
+    name: <display name>
+    role: primary                  # primary | sidecar
+    kind: upstream                 # upstream | fidonis
+    image_var: <COMPOSE_VAR>       # the compose variable whose default names the image;
+                                   # the add-on's .env can pin another tag through it
+    version: "<tag>"               # that default's tag (quoted)
+    source: https://<project>      # optional link
+    pinned: false                  # only for a floating tag such as postgres:18
 
 networks:
   app_network: ${PAPAIA_PROJECT:-papaia}-<name>-net
@@ -424,6 +436,7 @@ No Core changes required.
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
 | `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
+| `papaia-ctl addon components [<name>] [--json]` | Read-only. List the software each registered add-on bundles (the manifest's `components`: name, version, role, image variable), with the tag the add-on's `.env` pins instead of the catalog's marked as overridden. |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
 | `papaia-ctl addon stop <name>` | `docker compose stop` (stop containers, do not remove) |
