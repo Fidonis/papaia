@@ -12,6 +12,22 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.7.0] - 2026-10-24
+
+### 🚀 Features
+
+- feat: list the bundled component versions with papaia-ctl addon components (#247) @marko-boehm
+
+### 🐛 Bug Fixes
+
+- fix(addon): address an add-on without compose file by project name (#245) @marko-boehm
+
+### 🧹 Maintenance
+
+- chore: bump papaia-manager to 1.5.0 (#248) @marko-boehm
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.6.0...v1.7.0
+
 ## [1.6.0] - 2026-10-19
 
 ### 🚀 Features
