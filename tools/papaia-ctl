@@ -52,6 +52,7 @@
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
 #                              [--target-addon-api=N [--target-min-addon-api=M]]
 #                              [--json] [--force] [--config-dir=PATH]
+#   papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 #   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 #   papaia-ctl addon remove    <name> [--config-dir=PATH]
 #   papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
@@ -69,7 +70,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,63p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -173,10 +174,11 @@ case "$cmd" in
             install)   cmd_addon_install "$@" ;;
             start)     cmd_addon_start "$@" ;;
             check)     cmd_addon_check "$@" ;;
+            components) cmd_addon_components "$@" ;;
             stop)      cmd_addon_stop "$@" ;;
             remove)    cmd_addon_remove "$@" ;;
             uninstall) cmd_addon_uninstall "$@" ;;
-            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, check, stop, remove, uninstall."; exit 2 ;;
+            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, check, components, stop, remove, uninstall."; exit 2 ;;
         esac
         ;;
     help|-h|--help) usage ;;

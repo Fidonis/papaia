@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# papaia-ctl — `addon` command family: install / start / stop / check / remove / uninstall.
+# papaia-ctl — `addon` command family: install / start / stop / check / components / remove / uninstall.
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
@@ -238,6 +238,27 @@ cmd_addon_check() {
     CONFIG_DIR="$config_dir"
     _require_setup_done
     py_cli addon-check "${extra[@]}"
+}
+
+cmd_addon_components() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
+    local -a extra=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --json) extra+=(--json) ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option for addon components: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    if [ -n "$addon_name" ]; then
+        extra+=(--name="$addon_name")
+    fi
+    py_cli addon-components "${extra[@]}"
 }
 
 cmd_addon_uninstall() {
