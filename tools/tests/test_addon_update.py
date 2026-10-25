@@ -730,6 +730,34 @@ def test_a_rollback_goes_back_one_step_and_forgets_it(world):
     assert common.parse_env_file(world["v1"] / ".env") == bundle_after_update
 
 
+def _install(world, path) -> int:
+    return cli_addon.cmd_addon_install(
+        _args(world["config"], world["repo"], path=str(path), version=None, force=False)
+    )
+
+
+def test_installing_another_directory_starts_over_and_forgets_the_previous_version(world):
+    _updated(world)
+    assert "previous" in _entry(world["config"])
+    third = world["tmp"] / "v3" / "paperless"
+    shutil.copytree(world["v2"], third)
+
+    assert _install(world, third) == 0
+
+    entry = _entry(world["config"])
+    assert entry["path"] == str(third.resolve())
+    assert "previous" not in entry
+
+
+def test_installing_the_registered_directory_again_keeps_the_previous_version(world):
+    _updated(world)
+    before = _entry(world["config"])["previous"]
+
+    assert _install(world, world["v2"]) == 0
+
+    assert _entry(world["config"])["previous"] == before
+
+
 def test_a_second_rollback_has_nothing_to_go_back_to(world, capsys):
     _updated(world)
     assert cli_addon.cmd_addon_rollback_apply(_rollback_args(world)) == 0

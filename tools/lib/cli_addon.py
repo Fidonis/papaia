@@ -125,6 +125,10 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
 
     if existing:
         if args.path:
+            if deployment.resolve_addon_path(existing, repo_root).resolve() != addon_path:
+                # Registering another directory starts over: the version `previous` records
+                # was the one before an update that this install does not continue.
+                existing.pop("previous", None)
             existing["path"] = str(addon_path)
         if args.version:
             existing["version"] = args.version
@@ -365,6 +369,8 @@ def cmd_addon_update_plan(args: argparse.Namespace) -> int:
     plan["blocked"] = bool(exit_code)
     # Printed even when the gate refuses, so fleet tooling can read `reason`.
     print(json.dumps(plan, indent=2) if args.json else addon_update.format_plan(plan))
+    # A caller that merges stderr into stdout must get the document in one piece.
+    sys.stdout.flush()
     _report_compat_result(result, fatal=bool(exit_code), force=args.force)
     if exit_code:
         return 2

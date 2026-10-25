@@ -91,7 +91,9 @@ which is the first place the compatibility gate runs.
 - **Neutral**: an update in the registered directory itself (an operator who pulled a
   checkout in place) is accepted, but it records no `previous` and says so. The manifest keys
   `version` and `components` are read for display and for the delta; no gate decision depends
-  on them, and `ADDON_API` does not change.
+  on them, and `ADDON_API` does not change. `addon install --path=DIR` for a directory other
+  than the registered one starts over and forgets `previous`: that entry belongs to the update
+  it came from.
 
 ## Alternatives considered
 
