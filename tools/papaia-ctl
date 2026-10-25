@@ -32,7 +32,7 @@
 #                            [--config-dir=PATH]
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
-#                            [--config-dir=PATH]
+#                            [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
 #   papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...]
 #                            [--backup-dir=PATH] [-y] [--config-dir=PATH]
 #                            --restore-point is repeatable or comma-separated

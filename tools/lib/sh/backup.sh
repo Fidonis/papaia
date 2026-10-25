@@ -141,12 +141,13 @@ _resolve_backup_dir() {
 # backup
 # ─────────────────────────────────────────────────────────────────────────
 cmd_backup() {
-    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention=""
+    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention="" only="" only_given=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --retention-period-days=*) retention="${1#*=}" ;;
+            --only=*) only="${1#*=}"; only_given=1 ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for backup: $1"; exit 2 ;;
         esac
@@ -154,6 +155,12 @@ cmd_backup() {
     done
     if [ -n "$retention" ] && ! [[ "$retention" =~ ^[0-9]+$ ]]; then
         error "--retention-period-days must be a whole number of days (got: $retention)"
+        exit 2
+    fi
+    # An empty --only= is a mistake worth stopping on: quietly backing up the
+    # whole stack is the opposite of what the caller asked for.
+    if [ "$only_given" -eq 1 ] && [ -z "$only" ]; then
+        error "--only needs at least one selector (addon:NAME, module:NAME or volume:NAME)."
         exit 2
     fi
     CONFIG_DIR="$config_dir"
@@ -175,17 +182,25 @@ cmd_backup() {
 
     local plan_file
     plan_file="$(_new_tmpfile)"
+    local -a plan_extra=()
+    [ "$only_given" -eq 1 ] && plan_extra+=(--only="$only")
     # `tr -d '\r'`: on Windows the Python interpreter emits CRLF, and IFS=$'\t'
     # leaves the CR attached to the last field -- a snapshot path ending in CR
     # makes docker bind-mount (and auto-create) a second, wrong directory.
-    # pipefail is set, so a failing py_cli still fails the pipeline.
-    if ! py_cli backup-plan --backup-dir="$backup_dir" --existing-volumes="$volumes_file" \
-            | tr -d '\r' > "$plan_file"; then
+    # pipefail is set, so a failing py_cli still fails the pipeline, and its
+    # status is the pipeline's: 2 means the selection cannot be met (it said why
+    # on stderr and wrote nothing), anything else is a planning failure.
+    local plan_rc=0
+    py_cli backup-plan --backup-dir="$backup_dir" --existing-volumes="$volumes_file" \
+            "${plan_extra[@]}" | tr -d '\r' > "$plan_file" || plan_rc=$?
+    if [ "$plan_rc" -eq 2 ]; then
+        exit 2
+    elif [ "$plan_rc" -ne 0 ]; then
         error "Could not plan the backup."
         exit 3
     fi
 
-    local snapshot="" kind archive source owner
+    local snapshot="" scope="" kind archive source owner
     local total=0 failed=0
     local started=$SECONDS
 
@@ -193,6 +208,11 @@ cmd_backup() {
         [ -z "$kind" ] && continue
         if [ "$kind" = "SNAPSHOT" ]; then
             snapshot="$archive"
+            continue
+        fi
+        if [ "$kind" = "SCOPE" ]; then
+            scope="$archive"
+            info "Scope: $scope (the configuration directory and everything else is not included)"
             continue
         fi
         total=$((total + 1))
@@ -240,7 +260,7 @@ cmd_backup() {
     LAST_BACKUP_ID="$backup_id"
 
     _backup_log "$backup_dir" backup "$backup_id" "$result" \
-        "artifacts=$artifacts/$total size_mb=$size_mb duration=$((SECONDS - started))s"
+        "artifacts=$artifacts/$total size_mb=$size_mb duration=$((SECONDS - started))s${scope:+ scope=$scope}"
 
     if [ -n "$retention" ]; then
         info "Applying retention: keeping backups newer than $retention day(s)..."
@@ -439,8 +459,14 @@ cmd_restore() {
     trap _backup_cleanup EXIT INT TERM
     # tr -d '\r': see the note in cmd_backup -- a CR on the last TSV field would
     # otherwise end up inside a snapshot path or a docker volume name.
-    if ! py_cli restore-resolve --backup-dir="$backup_dir" "${extra[@]}" \
-            | tr -d '\r' > "$plan_file"; then
+    # Status 2 is a request that does not fit the restore point (a scoped backup
+    # asked for as a whole); the reason is already on stderr.
+    local resolve_rc=0
+    py_cli restore-resolve --backup-dir="$backup_dir" "${extra[@]}" \
+            | tr -d '\r' > "$plan_file" || resolve_rc=$?
+    if [ "$resolve_rc" -eq 2 ]; then
+        exit 2
+    elif [ "$resolve_rc" -ne 0 ]; then
         error "Could not resolve a restore point. Use 'papaia-ctl restore --list' to see what is available."
         exit 3
     fi
@@ -678,7 +704,11 @@ _restore_teardown_scoped() {
             continue
         fi
         info "  addon $addon_name: docker compose down"
-        docker compose -f "$addon_path/docker-compose.yml" down
+        # Through _addon_compose, as `addon stop --clean-up` does: the project
+        # name, the root and add-on env files and the override files must match
+        # what `up` used, or a network named after ${PAPAIA_PROJECT} resolves
+        # to its fallback here and the real one stays behind.
+        _addon_compose down "$addon_name" "$addon_path"
         _restore_step teardown "addon:$addon_name" ok
     done < <(_split_list "$addons")
 
