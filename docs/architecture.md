@@ -439,8 +439,8 @@ No Core changes required.
 | `papaia-ctl addon components [<name>] [--json]` | Read-only. List the software each registered add-on bundles (the manifest's `components`: name, version, role, image variable), with the tag the add-on's `.env` pins instead of the catalog's marked as overridden. |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
-| `papaia-ctl addon update <name> --path=DIR [--dry-run [--json]]` | Move the add-on to the version in `DIR`: preconditions → compatibility gate → plan (`--dry-run` stops here) → values for new `CHANGE_ME` keys → add-on scoped restore point → seed the new keys, repoint `path`/`version`, keep the old ones as `previous` → render → `docker compose up -d --remove-orphans` if it was running. Nothing changes before the restore point; a failed start is not rolled back. |
-| `papaia-ctl addon rollback <name> [--restore-data]` | Repoint to `previous` (the gate runs against the current core), forget it, recreate the add-on. With `--restore-data`: also restore the restore point the update took (`restore-scoped`). |
+| `papaia-ctl addon upgrade <name> --path=DIR [--dry-run [--json]]` | Move the add-on to the version in `DIR`: preconditions → compatibility gate → plan (`--dry-run` stops here) → values for new `CHANGE_ME` keys → add-on scoped restore point → seed the new keys, repoint `path`/`version`, keep the old ones as `previous` → render → `docker compose up -d --remove-orphans` if it was running. Nothing changes before the restore point; a failed start is not rolled back. |
+| `papaia-ctl addon rollback <name> [--restore-data]` | Repoint to `previous` (the gate runs against the current core), forget it, recreate the add-on. With `--restore-data`: also restore the restore point the upgrade took (`restore-scoped`). |
 | `papaia-ctl addon list [--json]` | Read-only. Every registered add-on with path, version, components, compatibility verdict and `previous`. |
 | `papaia-ctl addon stop <name>` | `docker compose stop` (stop containers, do not remove) |
 | `papaia-ctl addon stop <name> --clean-up` | `docker compose down` (remove containers, keep volumes) |
@@ -456,24 +456,24 @@ the project, and with the core `.env` in play it would act on the core project i
 caller's `COMPOSE_*` variables, and address the containers, networks and (with `-v`) volumes labelled with
 that project. `addon start` and every other verb that needs the file are refused with an error.
 
-### Updating an add-on
+### Upgrading an add-on
 
-An update does not write into the directory the add-on is registered at. The new version is a
+An upgrade does not write into the directory the add-on is registered at. The new version is a
 directory of its own (`--path`, same directory name as before, because Compose derives the project
-name from it), and `addon update` repoints `path` and `version` in `deployment.yaml` and keeps the
+name from it), and `addon upgrade` repoints `path` and `version` in `deployment.yaml` and keeps the
 entry it replaced as `previous` (`path`, `version`, and the id of the restore point taken for the
-update). `addon rollback` repoints back and clears `previous`, so one step back is possible and the
+upgrade). `addon rollback` repoints back and clears `previous`, so one step back is possible and the
 files it needs are still on disk. The decision and its trade-offs are in
-[ADR 0008](adr/0008-update-add-ons-by-repointing-to-immutable-snapshots.md).
+[ADR 0008](adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md).
 
-What an update does is decided by a pure function of the two manifests, the two `.env.example`
-files and the configuration bundle (`tools/lib/addon_update.py`), so `--dry-run --json` shows what
-the real run will do ([`tools/schemas/addon-update.schema.json`](../tools/schemas/addon-update.schema.json)):
+What an upgrade does is decided by a pure function of the two manifests, the two `.env.example`
+files and the configuration bundle (`tools/lib/addon_upgrade.py`), so `--dry-run --json` shows what
+the real run will do ([`tools/schemas/addon-upgrade.schema.json`](../tools/schemas/addon-upgrade.schema.json)):
 
 - **Keys.** A key the bundle lacks is new and is classified by its value in the candidate's
   `.env.example`: `GENERATE_*` becomes a fresh secret, `CHANGE_ME` is a value to supply (a
   default from `env_prompts` or from the core counts as supplied, everything else is in
-  `needs_input` and blocks the update until a prompt or `--answers-file` answers it),
+  `needs_input` and blocks the upgrade until a prompt or `--answers-file` answers it),
   `REPLACE_WITH_*` or a key under `env_replace_secrets` is a Keycloak client secret to copy in
   after the client is imported, and anything else is copied as shipped. Values already in the
   bundle are never changed; keys that disappeared stay.
@@ -676,9 +676,9 @@ sovereignty, so the architecture is built so that it does not.
 
 - **Image-based distribution**: first-party add-ons as pinned images published by
   [Fidonis](https://www.fidonis.de) under `ghcr.io/fidonis/...`, not as source.
-  Update = `papaia-ctl addon update` against the new version's directory; rollback =
+  Upgrade = `papaia-ctl addon upgrade` against the new version's directory; rollback =
   `papaia-ctl addon rollback`, one step back to the previous directory (see
-  [ADR 0008](adr/0008-update-add-ons-by-repointing-to-immutable-snapshots.md)).
+  [ADR 0008](adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)).
 - **Per-customer deployment manifest**: `deployment.yaml` in the config directory
   is the **single source of truth** per installation (Core profiles + active
   add-ons + versions + hosting type). Drives the orchestrator and update runs.
@@ -733,7 +733,7 @@ addons:
     path: ../papaia-addons/paperless   # Path as passed to `addon install --path=`
     version: 1.0.0                  # Pinned version
     active: true                    # false = installed but not integrated
-    previous:                       # written by `addon update`, cleared by `addon rollback`
+    previous:                       # written by `addon upgrade`, cleared by `addon rollback`
       path: ../snapshots/5d07e8c4/paperless
       version: 0.9.0
       restore_point: 2026-10-25_10-00-00   # absent when no restore point was taken
@@ -747,7 +747,7 @@ addons:
 
 The orchestrator derives the active set (which add-ons participate in render and
 `docker compose up`) from `active: true` entries. The manifest itself is never
-deleted by `install`/`remove` — only the `active` flag and `version` are updated. `update`
+deleted by `install`/`remove` — only the `active` flag and `version` are updated. `upgrade`
 and `rollback` change `path` and `version` and write or clear `previous`.
 
 ---
@@ -906,11 +906,11 @@ for top-level `papaia-app.yaml` manifests.
 
 Installing materialises a **pinned snapshot at a specific commit** rather than
 tracking a branch, so refreshing a catalogue never moves code out from under a
-running container. Updating is an explicit operation and the manager does not implement it
+running container. Upgrading is an explicit operation and the manager does not implement it
 itself: it stages the candidate commit as a snapshot of its own (a new directory, never an
-overwrite), shows what `papaia-ctl addon update --dry-run --json` reports — new settings,
+overwrite), shows what `papaia-ctl addon upgrade --dry-run --json` reports — new settings,
 component changes, compatibility — asks for the values the new version needs, and applies it
-with `papaia-ctl addon update`. Rolling back is `papaia-ctl addon rollback`. This is the
+with `papaia-ctl addon upgrade`. Rolling back is `papaia-ctl addon rollback`. This is the
 add-on-side counterpart to `papaia-ctl upgrade` for the Core — same principle, same
 guarantee that nothing changes underneath a running installation without a deliberate
 step. It needs a core that has these verbs (1.8.0 or newer); an older core shows the action

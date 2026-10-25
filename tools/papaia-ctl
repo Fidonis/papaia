@@ -53,7 +53,7 @@
 #                              [--target-addon-api=N [--target-min-addon-api=M]]
 #                              [--json] [--force] [--config-dir=PATH]
 #   papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
-#   papaia-ctl addon update    <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart]
+#   papaia-ctl addon upgrade   <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart]
 #                              [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
 #   papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force] [-y]
 #                              [--config-dir=PATH]
@@ -178,7 +178,8 @@ case "$cmd" in
         case "$sub" in
             install)   cmd_addon_install "$@" ;;
             start)     cmd_addon_start "$@" ;;
-            update)    cmd_addon_update "$@" ;;
+            upgrade)   cmd_addon_upgrade "$@" ;;
+            update)    error "No 'addon update' command. Did you mean 'papaia-ctl addon upgrade'?"; exit 2 ;;
             rollback)  cmd_addon_rollback "$@" ;;
             list)      cmd_addon_list "$@" ;;
             check)     cmd_addon_check "$@" ;;
@@ -186,7 +187,7 @@ case "$cmd" in
             stop)      cmd_addon_stop "$@" ;;
             remove)    cmd_addon_remove "$@" ;;
             uninstall) cmd_addon_uninstall "$@" ;;
-            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, update, rollback, list, check, components, stop, remove, uninstall."; exit 2 ;;
+            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, upgrade, rollback, list, check, components, stop, remove, uninstall."; exit 2 ;;
         esac
         ;;
     help|-h|--help) usage ;;

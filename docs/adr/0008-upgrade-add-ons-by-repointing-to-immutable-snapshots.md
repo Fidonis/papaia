@@ -1,6 +1,6 @@
 ---
 adr: 0008
-title: Update add-ons by repointing the registration to a new directory, not by replacing files
+title: Upgrade add-ons by repointing the registration to a new directory, not by replacing files
 status: Accepted
 date: 2026-10-25
 deciders:
@@ -8,18 +8,18 @@ deciders:
 tags:
   - addon-contract
   - papaia-ctl
-  - update
+  - upgrade
   - rollback
 supersedes: null
 superseded_by: null
 ---
 
-# 0008. Update add-ons by repointing the registration to a new directory, not by replacing files
+# 0008. Upgrade add-ons by repointing the registration to a new directory, not by replacing files
 
 ## Context
 
 `papaia-ctl addon` could install, start, stop and remove an add-on but not move it to a newer
-version. The documentation described an update as "refresh, diff `.env.example`, stop,
+version. The documentation described an add-on upgrade as "refresh, diff `.env.example`, stop,
 re-materialise, reinstall, start" and attributed it to `papaia-manager`. The manager did
 less: it replaced the add-on's directory first and ran `addon install --path=<dir>` after,
 which is the first place the compatibility gate runs.
@@ -29,7 +29,7 @@ which is the first place the compatibility gate runs.
 - A new `CHANGE_ME` key in the new `.env.example` was seeded as the literal `CHANGE_ME`.
   Without a terminal `prompt_change_me_vars` only prints a warning, so the add-on could start
   with a placeholder.
-- There was nothing to look at before the update (new keys, changed components, new Keycloak
+- There was nothing to look at before the upgrade (new keys, changed components, new Keycloak
   clients) and nothing to go back with afterwards. The old files were gone, and so was the
   data the new version had migrated.
 - An operator without the manager had none of it. The CLI is meant to be the single
@@ -37,7 +37,7 @@ which is the first place the compatibility gate runs.
 
 ## Decision
 
-- **A version is a directory, and an update changes which one is registered.** `addon update
+- **A version is a directory, and an upgrade changes which one is registered.** `addon upgrade
   <name> --path=DIR` never writes into the directory the add-on is registered at. It checks
   `DIR`, takes a restore point, adds the new keys to the configuration bundle, and repoints
   `path` and `version` in `deployment.yaml`. The entry it replaces is kept as `previous`
@@ -45,27 +45,31 @@ which is the first place the compatibility gate runs.
   repointing in the other direction and clears `previous`, so it is exactly one step back. The
   caller keeps each version in a directory of its own, for example
   `<snapshots>/<commit>/<name>`; the CLI does not know about catalogues or commits.
+- **The verb is `upgrade`, as for the core.** `papaia-ctl upgrade` already moves the installation
+  to a newer release, and `papaia-ctl update` is refused because `update` means "refresh the
+  package index" in the most widespread precedent (apt). `addon update` is refused the same way,
+  with a hint, so one word means one thing across the CLI.
 - **The directory name must stay the same.** Compose names the project after the directory
   (`-p <basename>`), so a differently named directory would leave the running project
-  orphaned. `update` refuses it before anything changes.
+  orphaned. `upgrade` refuses it before anything changes.
 - **Nothing changes until every check has passed.** The order is: preconditions (registered,
   active, same add-on, same directory name), compatibility gate against the current core, plan,
   values for the new keys, restore point, apply. A refusal up to and including the values
   exits 2 and leaves `deployment.yaml`, the bundle and the containers as they were. A restore
   point that cannot be taken exits 3 at the same point.
 - **The plan is a pure function** of the two manifests, the two `.env.example` files and the
-  bundle (`lib/addon_update.plan_update`). `--dry-run --json` prints it, described by
-  `tools/schemas/addon-update.schema.json`, so a caller can show exactly what the real run will
+  bundle (`lib/addon_upgrade.plan_upgrade`). `--dry-run --json` prints it, described by
+  `tools/schemas/addon-upgrade.schema.json`, so a caller can show exactly what the real run will
   do. A new key is `generated`, `change_me`, `replace_secret` (a Keycloak client secret, which
   exists only after the client is imported) or `literal`. A `change_me` key without a default
-  from the manifest's `env_prompts` is in `needs_input`: the update does not run until it has a
-  value. Values already in the bundle are sticky; an update only adds keys.
-- **Values reach the update through a prompt or `--answers-file`, never through the command
+  from the manifest's `env_prompts` is in `needs_input`: the upgrade does not run until it has a
+  value. Values already in the bundle are sticky; an upgrade only adds keys.
+- **Values reach the upgrade through a prompt or `--answers-file`, never through the command
   line.** The plan step collects them and hands them to the apply step in a private file. An
   answers file may only set keys the plan asks about, and its values are never printed.
 - **The restore point is add-on scoped** (`backup --only=addon:NAME`), taken by default, and
   skipped with `--no-backup`. An add-on without volumes or data directories gets none and the
-  update goes on. `rollback` leaves the data alone unless `--restore-data` is given, which
+  upgrade goes on. `rollback` leaves the data alone unless `--restore-data` is given, which
   restores that restore point with `restore-scoped`; the output says which of the two happens.
 - **A failed start does not roll back by itself.** If the containers cannot be recreated, the
   command exits 3 and names the rollback command, as `upgrade` leaves the decision to the
@@ -77,7 +81,7 @@ which is the first place the compatibility gate runs.
 
 ## Consequences
 
-- **Positive**: an update that is refused costs nothing. The previous version is on disk and
+- **Positive**: an upgrade that is refused costs nothing. The previous version is on disk and
   its configuration is in the bundle, so a rollback does not depend on the network or on a
   catalogue. Operators and the manager use the same verbs and the same plan. Existing secrets
   are never rewritten.
@@ -88,11 +92,11 @@ which is the first place the compatibility gate runs.
   catalogue's add-ons keep their data in named volumes and mount their own directory read-only.
   The `previous` restore point can be pruned by retention, which `rollback --restore-data`
   reports before it changes anything.
-- **Neutral**: an update in the registered directory itself (an operator who pulled a
+- **Neutral**: an upgrade in the registered directory itself (an operator who pulled a
   checkout in place) is accepted, but it records no `previous` and says so. The manifest keys
   `version` and `components` are read for display and for the delta; no gate decision depends
   on them, and `ADDON_API` does not change. `addon install --path=DIR` for a directory other
-  than the registered one starts over and forgets `previous`: that entry belongs to the update
+  than the registered one starts over and forgets `previous`: that entry belongs to the upgrade
   it came from.
 
 ## Alternatives considered

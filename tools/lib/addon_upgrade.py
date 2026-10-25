@@ -1,13 +1,13 @@
 """Moving an installed add-on to another version of itself, and one step back.
 
-An update never touches the directory the add-on is registered at. The new
+An upgrade never touches the directory the add-on is registered at. The new
 version is a directory of its own (`--path`), and applying it repoints the
 deployment entry; the entry it replaces is kept as `previous`, so a rollback is
 the same repointing the other way and the old files are still there.
 
-Everything that decides what an update does is a pure function of the two
+Everything that decides what an upgrade does is a pure function of the two
 manifests, the two `.env.example` files and the configuration bundle
-(`plan_update`), so `addon update --dry-run` shows what the real run will do.
+(`plan_upgrade`), so `addon upgrade --dry-run` shows what the real run will do.
 Nothing in this module calls docker; stopping, backing up and recreating
 containers is bash's half of the split.
 """
@@ -32,8 +32,8 @@ KEY_LITERAL = "literal"
 _SECRET_HINTS = ("PASS", "SECRET", "TOKEN", "KEY")
 
 
-class UpdateError(Exception):
-    """A precondition of update or rollback is not met. Nothing was changed."""
+class UpgradeError(Exception):
+    """A precondition of upgrade or rollback is not met. Nothing was changed."""
 
 
 @dataclass(frozen=True)
@@ -51,9 +51,9 @@ class Candidate:
 def registered_entry(deployed: dict, name: str) -> dict:
     entry = next((a for a in deployed.get("addons") or [] if a.get("name") == name), None)
     if entry is None:
-        raise UpdateError(f"addon '{name}' is not registered.")
+        raise UpgradeError(f"addon '{name}' is not registered.")
     if not entry.get("active"):
-        raise UpdateError(
+        raise UpgradeError(
             f"addon '{name}' is not active. Run 'papaia-ctl addon install {name}' first."
         )
     return entry
@@ -62,9 +62,9 @@ def registered_entry(deployed: dict, name: str) -> dict:
 def _load_manifest(path: Path, name: str, what: str) -> dict:
     manifest, error = deployment.load_addon_manifest(path)
     if manifest is None:
-        raise UpdateError(str(error))
+        raise UpgradeError(str(error))
     if manifest.get("name") != name:
-        raise UpdateError(
+        raise UpgradeError(
             f"{what} {path} is the manifest of '{manifest.get('name')}', not of '{name}'."
         )
     return manifest
@@ -74,7 +74,7 @@ def _check_same_directory_name(name: str, current_path: Path, new_path: Path) ->
     # Compose derives the project name from the directory name (see
     # _addon_compose); another name would leave the running project orphaned.
     if new_path.name != current_path.name:
-        raise UpdateError(
+        raise UpgradeError(
             f"the directory of the new version is called '{new_path.name}', but addon"
             f" '{name}' is registered in a directory called '{current_path.name}'. Compose"
             " names the project after the directory, so the two must match."
@@ -82,16 +82,16 @@ def _check_same_directory_name(name: str, current_path: Path, new_path: Path) ->
 
 
 def prepare(deployed: dict, repo_root: Path, name: str, new_path: Path) -> Candidate:
-    """Resolve and check everything an update needs before the gate runs."""
+    """Resolve and check everything an upgrade needs before the gate runs."""
     entry = registered_entry(deployed, name)
     if not new_path.is_dir():
-        raise UpdateError(f"--path is not a directory: {new_path}")
+        raise UpgradeError(f"--path is not a directory: {new_path}")
     new_path = new_path.resolve()
     current_path = deployment.resolve_addon_path(entry, repo_root)
     _check_same_directory_name(name, current_path, new_path)
     current_manifest, error = deployment.load_addon_manifest(current_path)
     if current_manifest is None:
-        raise UpdateError(f"cannot read the installed version: {error}")
+        raise UpgradeError(f"cannot read the installed version: {error}")
     new_manifest = _load_manifest(new_path, name, "the new version at")
     return Candidate(name, entry, current_path, current_manifest, new_path, new_manifest)
 
@@ -230,7 +230,7 @@ def _manifest_delta(old: dict, new: dict) -> dict:
     }
 
 
-def plan_update(
+def plan_upgrade(
     candidate: Candidate,
     *,
     current_example: dict[str, str],
@@ -240,7 +240,7 @@ def plan_update(
 ) -> dict:
     """What moving to the candidate changes. Pure: reads nothing, writes nothing.
 
-    Values in the configuration bundle are sticky -- an update only ever adds
+    Values in the configuration bundle are sticky -- an upgrade only ever adds
     keys -- so a key is "new" when the bundle lacks it, whichever example it
     came from."""
     env = _env_delta(candidate, current_example, new_example, bundle_env, core_env)
@@ -266,9 +266,9 @@ def plan_update(
 
 
 def build_plan(candidate: Candidate, config_dir: Path) -> dict:
-    """`plan_update` fed from the files on disk."""
+    """`plan_upgrade` fed from the files on disk."""
     name = candidate.name
-    return plan_update(
+    return plan_upgrade(
         candidate,
         current_example=common.parse_env_file(candidate.current_path / ".env.example"),
         new_example=common.parse_env_file(candidate.new_path / ".env.example"),
@@ -289,7 +289,7 @@ def answerable_keys(plan: dict) -> set[str]:
 def read_answers(path: Path) -> dict[str, str]:
     """KEY=VALUE lines. Warns when other users can read the file; never prints values."""
     if not path.is_file():
-        raise UpdateError(f"--answers-file not found: {path}")
+        raise UpgradeError(f"--answers-file not found: {path}")
     if os.name == "posix" and path.stat().st_mode & 0o077:
         print(
             f"WARNING: {path} is readable by other users; it holds values for the add-on.",
@@ -305,13 +305,13 @@ def _looks_secret(key: str) -> bool:
 def collect_answers(plan: dict, given: dict[str, str], *, interactive: bool) -> dict[str, str]:
     """The answers for a real run: the given ones, plus a prompt for each missing key.
 
-    Raises UpdateError, listing every problem, when a key the plan needs has no
+    Raises UpgradeError, listing every problem, when a key the plan needs has no
     value or a given key is not one the plan asks about."""
     allowed = answerable_keys(plan)
     unknown = sorted(k for k in given if k not in allowed)
     if unknown:
-        raise UpdateError(
-            "the answers file sets keys this update does not ask for: " + ", ".join(unknown)
+        raise UpgradeError(
+            "the answers file sets keys this upgrade does not ask for: " + ", ".join(unknown)
         )
     answers = {k: v for k, v in given.items() if v}
     labels = {item["key"]: item["label"] for item in plan["env"]["new"]}
@@ -331,7 +331,7 @@ def collect_answers(plan: dict, given: dict[str, str], *, interactive: bool) -> 
         print()
         missing = [k for k in plan["needs_input"] if k not in answers]
     if missing:
-        raise UpdateError(
+        raise UpgradeError(
             "no value for: "
             + ", ".join(missing)
             + ". Pass them with --answers-file=FILE (KEY=VALUE lines) or run on a terminal."
@@ -343,7 +343,7 @@ def write_answers(path: Path, answers: dict[str, str]) -> None:
     common.atomic_write_private(path, "".join(f"{k}={v}\n" for k, v in answers.items()))
 
 
-def apply_update(
+def apply_upgrade(
     candidate: Candidate,
     plan: dict,
     answers: dict[str, str],
@@ -390,10 +390,10 @@ def rollback_target(deployed: dict, repo_root: Path, name: str) -> tuple[dict, P
     entry = registered_entry(deployed, name)
     previous = entry.get("previous")
     if not isinstance(previous, dict) or not previous.get("path"):
-        raise UpdateError(f"addon '{name}' has no previous version to go back to.")
+        raise UpgradeError(f"addon '{name}' has no previous version to go back to.")
     target = deployment.resolve_addon_path(previous, repo_root)
     if not target.is_dir():
-        raise UpdateError(f"the previous version of '{name}' is gone: {target}")
+        raise UpgradeError(f"the previous version of '{name}' is gone: {target}")
     _check_same_directory_name(name, deployment.resolve_addon_path(entry, repo_root), target)
     return entry, target, _load_manifest(target, name, "the previous version at")
 
@@ -415,7 +415,7 @@ def format_plan(plan: dict) -> str:
     """The review a terminal operator reads before confirming."""
     cur, new = plan["current"], plan["candidate"]
     lines = [
-        f"Update {plan['name']}: {cur['version'] or 'unknown'} -> {new['version'] or 'unknown'}"
+        f"Upgrade {plan['name']}: {cur['version'] or 'unknown'} -> {new['version'] or 'unknown'}"
     ]
     if plan["direction"] == "downgrade":
         lines.append("  This is a DOWNGRADE.")

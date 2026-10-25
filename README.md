@@ -208,7 +208,7 @@ papaia-ctl status    [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
 papaia-ctl doctor    [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
-papaia-ctl addon     update <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart]
+papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart]
                      [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
@@ -554,7 +554,7 @@ rather than recreated.
 ```bash
 tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 tools/papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
-tools/papaia-ctl addon update    <name> --path=DIR [--dry-run [--json]] [--no-backup] \
+tools/papaia-ctl addon upgrade   <name> --path=DIR [--dry-run [--json]] [--no-backup] \
   [--no-restart] [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
 tools/papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force] [-y] \
   [--config-dir=PATH]
@@ -571,8 +571,8 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 |---|---|
 | `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. |
 | `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
-| `update` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-update-add-ons-by-repointing-to-immutable-snapshots.md)). See [Updating an add-on](#updating-an-add-on). |
-| `rollback` | One step back: repoints the add-on at the version it had before the last update and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the update took. |
+| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). See [Upgrading an add-on](#upgrading-an-add-on). |
+| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. |
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. |
@@ -591,20 +591,20 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `--json` | Print results as a JSON array (also on exit 2). |
 | `--force` | Treat INCOMPATIBLE as a warning instead of a hard failure (exit 0). |
 
-After `addon install`, `addon update`, `addon rollback` or `addon remove`, run
+After `addon install`, `addon upgrade`, `addon rollback` or `addon remove`, run
 `tools/papaia-ctl start` to apply the changed core configuration.
 
-#### Updating an add-on
+#### Upgrading an add-on
 
 The new version is a directory, as with `install`; resolving a catalogue and a commit to one stays
 with the caller. Keep each version in a directory of its own with the same name
 (`<snapshots>/<commit>/<name>`): Compose names the project after the directory, so a differently
-named one is refused, and an update never overwrites a directory, so the one a rollback goes back
+named one is refused, and an upgrade never overwrites a directory, so the one a rollback goes back
 to is still there.
 
 ```bash
-tools/papaia-ctl addon update paperless --path=/srv/snapshots/9f3c1a2b/paperless --dry-run
-tools/papaia-ctl addon update paperless --path=/srv/snapshots/9f3c1a2b/paperless \
+tools/papaia-ctl addon upgrade paperless --path=/srv/snapshots/9f3c1a2b/paperless --dry-run
+tools/papaia-ctl addon upgrade paperless --path=/srv/snapshots/9f3c1a2b/paperless \
   --answers-file=answers.env -y
 ```
 
@@ -619,7 +619,7 @@ The steps, in this order:
    secret, a value to ask for, a Keycloak client secret to copy in, or a literal), the component
    delta, and what changed in the manifest (version, `requires.addon_api`, attached core services,
    new Keycloak clients). `--dry-run` prints it and stops; `--dry-run --json` prints it for
-   machines ([`tools/schemas/addon-update.schema.json`](tools/schemas/addon-update.schema.json)),
+   machines ([`tools/schemas/addon-upgrade.schema.json`](tools/schemas/addon-upgrade.schema.json)),
    also when the gate refuses (`"blocked": true`).
 4. **Values.** A new `CHANGE_ME` key whose `env_prompts` entry has no `default` (or a
    `default_from_core` the core can fill) needs a value, from a prompt or without a terminal from
@@ -635,13 +635,13 @@ The steps, in this order:
    --remove-orphans` recreates it from the new directory. A failure does not roll back; the output
    names the rollback command.
 
-Without `-y` an update asks for confirmation on a terminal and refuses to run without one. A
+Without `-y` an upgrade asks for confirmation on a terminal and refuses to run without one. A
 Keycloak client or secret the new version brings is listed at the end as a manual step, as after
 `install`.
 
 `addon rollback` runs the same pipeline backwards: the gate against the current core, then the
 registration and the bundle's `.env` move back to `previous`, and the add-on is recreated. It says
-whether data is reset. With `--restore-data` the restore point recorded by the update is restored
+whether data is reset. With `--restore-data` the restore point recorded by the upgrade is restored
 with `restore-scoped` (the add-on is taken down, its volumes are replaced, and it comes back up);
 data written since is lost. It cannot be combined with `--no-restart`, and it refuses, before
 anything changes, when no restore point was recorded or the point is gone.
@@ -660,7 +660,7 @@ addons:
       restore_point: 2026-10-25_10-00-00   # absent when no restore point was taken
 ```
 
-An update in the directory the add-on is already registered at (a checkout pulled in place) is
+An upgrade in the directory the add-on is already registered at (a checkout pulled in place) is
 accepted, but it keeps no `previous`, since the old files are gone.
 
 ### `status`

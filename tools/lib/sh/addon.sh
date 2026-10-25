@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# papaia-ctl — `addon` command family: install / start / update / rollback / list / stop / check /
+# papaia-ctl — `addon` command family: install / start / upgrade / rollback / list / stop / check /
 # components / remove / uninstall.
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
@@ -292,7 +292,7 @@ _addon_running() {
 # on again inside it: a subshell that is part of a `||` or `if` list ignores
 # `set -e`, which would let a failed archive step go unnoticed. Status 2 is the
 # planner saying the selector matched nothing -- an add-on without volumes or
-# data directories -- which is not a reason to refuse the update.
+# data directories -- which is not a reason to refuse the upgrade.
 _addon_backup() {
     local addon_name="$1" id_file rc=0
     ADDON_RESTORE_POINT=""
@@ -323,10 +323,10 @@ _addon_recreate() {
 }
 
 # Move an installed add-on to another version of itself (a directory of its
-# own, see lib/addon_update.py). Everything that can refuse -- the gate, the
-# preconditions, a missing value -- happens in `addon-update-plan`, before a
+# own, see lib/addon_upgrade.py). Everything that can refuse -- the gate, the
+# preconditions, a missing value -- happens in `addon-upgrade-plan`, before a
 # restore point is taken or a file is written.
-cmd_addon_update() {
+cmd_addon_upgrade() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" new_path="" answers_file=""
     local dry_run=0 json=0 no_backup=0 no_restart=0 force=0 assume_yes=0
     while [ $# -gt 0 ]; do
@@ -347,7 +347,7 @@ cmd_addon_update() {
         shift
     done
     if [ -z "$addon_name" ] || [ -z "$new_path" ]; then
-        error "Usage: papaia-ctl addon update <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart] [--answers-file=FILE] [--force] [-y]"
+        error "Usage: papaia-ctl addon upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart] [--answers-file=FILE] [--force] [-y]"
         exit 2
     fi
     if [ "$json" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
@@ -363,7 +363,7 @@ cmd_addon_update() {
     if [ "$dry_run" -eq 1 ]; then
         local -a extra=()
         [ "$json" -eq 1 ] && extra+=(--json)
-        py_cli addon-update-plan "${target[@]}" "${extra[@]}"
+        py_cli addon-upgrade-plan "${target[@]}" "${extra[@]}"
         return 0
     fi
 
@@ -376,14 +376,14 @@ cmd_addon_update() {
 
     local -a plan_extra=(--answers-out="$answers_out")
     [ -n "$answers_file" ] && plan_extra+=(--answers-file="$answers_file")
-    py_cli addon-update-plan "${target[@]}" "${plan_extra[@]}"
+    py_cli addon-upgrade-plan "${target[@]}" "${plan_extra[@]}"
 
     if [ "$assume_yes" -eq 0 ]; then
         if ! is_tty; then
-            error "Refusing to update without confirmation. Re-run with -y in non-interactive contexts."
+            error "Refusing to upgrade without confirmation. Re-run with -y in non-interactive contexts."
             exit 2
         fi
-        if ! confirm "Proceed with the update of $addon_name?" "N"; then
+        if ! confirm "Proceed with the upgrade of $addon_name?" "N"; then
             error "Aborted."
             exit 3
         fi
@@ -407,7 +407,7 @@ cmd_addon_update() {
 
     local -a apply_extra=(--answers-file="$answers_out")
     [ -n "$ADDON_RESTORE_POINT" ] && apply_extra+=(--restore-point="$ADDON_RESTORE_POINT")
-    py_cli addon-update-apply "${target[@]}" "${apply_extra[@]}"
+    py_cli addon-upgrade-apply "${target[@]}" "${apply_extra[@]}"
 
     if [ "$was_running" -eq 1 ]; then
         if ! _addon_recreate "$addon_name"; then
@@ -421,12 +421,12 @@ cmd_addon_update() {
     if [ -n "$ADDON_RESTORE_POINT" ]; then
         info "Restore point: $ADDON_RESTORE_POINT. 'papaia-ctl addon rollback $addon_name --restore-data' goes back to it, data included."
     fi
-    success "addon update complete: $addon_name"
+    success "addon upgrade complete: $addon_name"
 }
 
 # One step back: repoint the add-on at the version it had before the last
-# update. The data is only touched with --restore-data, which restores the
-# restore point that update took (restore-scoped: it cannot replace the
+# upgrade. The data is only touched with --restore-data, which restores the
+# restore point that the upgrade took (restore-scoped: it cannot replace the
 # configuration directory).
 cmd_addon_rollback() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
@@ -471,7 +471,7 @@ cmd_addon_rollback() {
 
     if [ "$restore_data" -eq 1 ]; then
         if [ -z "$restore_point" ]; then
-            error "No restore point was recorded for the last update of $addon_name (it ran with --no-backup, or the add-on has no data)."
+            error "No restore point was recorded for the last upgrade of $addon_name (it ran with --no-backup, or the add-on has no data)."
             error "Run without --restore-data to go back to the old version only."
             exit 2
         fi

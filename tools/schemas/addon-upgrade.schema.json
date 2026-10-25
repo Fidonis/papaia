@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "papaia-ctl-addon-update.schema.json",
-  "title": "papaia-ctl addon update --dry-run --json",
+  "$id": "papaia-ctl-addon-upgrade.schema.json",
+  "title": "papaia-ctl addon upgrade --dry-run --json",
   "description": "What moving an installed add-on to a new version would change. Printed when the compatibility gate refuses as well (\"blocked\": true). Additive changes keep schema_version; a breaking change increments it.",
   "type": "object",
   "required": [
@@ -132,7 +132,7 @@
     },
     "needs_input": {
       "type": "array",
-      "description": "change_me keys without a default: the update does not run until each has a value (prompt or --answers-file).",
+      "description": "change_me keys without a default: the upgrade does not run until each has a value (prompt or --answers-file).",
       "items": { "type": "string" }
     },
     "compat": {
@@ -149,7 +149,7 @@
     },
     "blocked": {
       "type": "boolean",
-      "description": "The compatibility gate would refuse the update (exit status 2)."
+      "description": "The compatibility gate would refuse the upgrade (exit status 2)."
     }
   },
   "$defs": {

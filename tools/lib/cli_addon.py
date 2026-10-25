@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import (
-    addon_update,
+    addon_upgrade,
     addons,
     common,
     compat,
@@ -127,7 +127,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         if args.path:
             if deployment.resolve_addon_path(existing, repo_root).resolve() != addon_path:
                 # Registering another directory starts over: the version `previous` records
-                # was the one before an update that this install does not continue.
+                # was the one before an upgrade that this install does not continue.
                 existing.pop("previous", None)
             existing["path"] = str(addon_path)
         if args.version:
@@ -330,25 +330,27 @@ def _compat_json(result: compat.CompatResult) -> dict:
     }
 
 
-def _update_candidate(args: argparse.Namespace) -> tuple[dict, addon_update.Candidate] | None:
-    """The deployment and the candidate version for `addon update`, or None
+def _upgrade_candidate(args: argparse.Namespace) -> tuple[dict, addon_upgrade.Candidate] | None:
+    """The deployment and the candidate version for `addon upgrade`, or None
     after printing why the request cannot be met."""
     deployed = deployment.load(Path(args.config_dir))
     if not deployed:
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return None
     try:
-        candidate = addon_update.prepare(deployed, Path(args.repo_root), args.name, Path(args.path))
-    except addon_update.UpdateError as exc:
+        candidate = addon_upgrade.prepare(
+            deployed, Path(args.repo_root), args.name, Path(args.path)
+        )
+    except addon_upgrade.UpgradeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return None
     return deployed, candidate
 
 
-def cmd_addon_update_plan(args: argparse.Namespace) -> int:
-    """Check an update and print what it would change. Changes nothing.
+def cmd_addon_upgrade_plan(args: argparse.Namespace) -> int:
+    """Check an upgrade and print what it would change. Changes nothing.
 
-    With `--answers-out` this is also the first half of a real update: the
+    With `--answers-out` this is also the first half of a real upgrade: the
     values the plan needs come from `--answers-file` or, on a terminal, from a
     prompt, and are written (mode 0600) to that file for the apply step. Either
     way a request that cannot be met ends here with status 2, before anything
@@ -356,7 +358,7 @@ def cmd_addon_update_plan(args: argparse.Namespace) -> int:
     if args.json and args.answers_out:
         print("ERROR: --json only goes with --dry-run.", file=sys.stderr)
         return 2
-    found = _update_candidate(args)
+    found = _upgrade_candidate(args)
     if found is None:
         return 2
     deployed, candidate = found
@@ -364,11 +366,11 @@ def cmd_addon_update_plan(args: argparse.Namespace) -> int:
     result, exit_code = _evaluate_gate(
         args.name, candidate.new_manifest, deployed, Path(args.repo_root), force=args.force
     )
-    plan = addon_update.build_plan(candidate, Path(args.config_dir))
+    plan = addon_upgrade.build_plan(candidate, Path(args.config_dir))
     plan["compat"] = _compat_json(result)
     plan["blocked"] = bool(exit_code)
     # Printed even when the gate refuses, so fleet tooling can read `reason`.
-    print(json.dumps(plan, indent=2) if args.json else addon_update.format_plan(plan))
+    print(json.dumps(plan, indent=2) if args.json else addon_upgrade.format_plan(plan))
     # A caller that merges stderr into stdout must get the document in one piece.
     sys.stdout.flush()
     _report_compat_result(result, fatal=bool(exit_code), force=args.force)
@@ -377,16 +379,16 @@ def cmd_addon_update_plan(args: argparse.Namespace) -> int:
 
     if args.answers_out:
         try:
-            given = addon_update.read_answers(Path(args.answers_file)) if args.answers_file else {}
-            answers = addon_update.collect_answers(plan, given, interactive=sys.stdin.isatty())
-        except addon_update.UpdateError as exc:
+            given = addon_upgrade.read_answers(Path(args.answers_file)) if args.answers_file else {}
+            answers = addon_upgrade.collect_answers(plan, given, interactive=sys.stdin.isatty())
+        except addon_upgrade.UpgradeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
-        addon_update.write_answers(Path(args.answers_out), answers)
+        addon_upgrade.write_answers(Path(args.answers_out), answers)
     return 0
 
 
-def _print_update_followups(plan: dict, new_manifest: dict, bundle_env_path: Path) -> None:
+def _print_upgrade_followups(plan: dict, new_manifest: dict, bundle_env_path: Path) -> None:
     """What the operator still has to do by hand after the new version is in place."""
     steps: list[str] = []
     keycloak = plan["manifest"]["keycloak"]
@@ -396,7 +398,7 @@ def _print_update_followups(plan: dict, new_manifest: dict, bundle_env_path: Pat
         steps.append(f"Add the protocol mappers {', '.join(paths)} to the client '{client}'.")
     hints = new_manifest.get("env_replace_secrets") or {}
     for item in plan["env"]["new"]:
-        if item["class"] == addon_update.KEY_REPLACE_SECRET:
+        if item["class"] == addon_upgrade.KEY_REPLACE_SECRET:
             hint = (hints.get(item["key"]) or {}).get("hint")
             suffix = f" ({hint})." if hint else "."
             steps.append(f"Set {item['key']} in {bundle_env_path}{suffix}")
@@ -406,10 +408,10 @@ def _print_update_followups(plan: dict, new_manifest: dict, bundle_env_path: Pat
             print(f"  - {step}")
 
 
-def cmd_addon_update_apply(args: argparse.Namespace) -> int:
+def cmd_addon_upgrade_apply(args: argparse.Namespace) -> int:
     """Move the registration to the new version. Docker is bash's part: it has
     taken the restore point before this and recreates the containers after."""
-    found = _update_candidate(args)
+    found = _upgrade_candidate(args)
     if found is None:
         return 2
     deployed, candidate = found
@@ -419,23 +421,23 @@ def cmd_addon_update_apply(args: argparse.Namespace) -> int:
 
     if _compat_gate_addon(name, candidate.new_manifest, deployed, repo_root, force=args.force):
         return 2
-    plan = addon_update.build_plan(candidate, config_dir)
+    plan = addon_upgrade.build_plan(candidate, config_dir)
     try:
-        given = addon_update.read_answers(Path(args.answers_file)) if args.answers_file else {}
-        answers = addon_update.collect_answers(plan, given, interactive=False)
-    except addon_update.UpdateError as exc:
+        given = addon_upgrade.read_answers(Path(args.answers_file)) if args.answers_file else {}
+        answers = addon_upgrade.collect_answers(plan, given, interactive=False)
+    except addon_upgrade.UpgradeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    addon_update.apply_update(
+    addon_upgrade.apply_upgrade(
         candidate, plan, answers, config_dir=config_dir, restore_point=args.restore_point
     )
     deployment.save(config_dir, deployed)
     _render_integration(config_dir, repo_root)
 
-    _print_update_followups(plan, candidate.new_manifest, config_dir / "addons" / name / ".env")
+    _print_upgrade_followups(plan, candidate.new_manifest, config_dir / "addons" / name / ".env")
     print(
-        f"Addon updated: {name} {plan['current']['version'] or 'unknown'}"
+        f"Addon upgraded: {name} {plan['current']['version'] or 'unknown'}"
         f" -> {plan['candidate']['version'] or 'unknown'}"
     )
     return 0
@@ -450,8 +452,8 @@ def _rollback_target(args: argparse.Namespace) -> tuple[dict, dict, Path, dict] 
         print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
         return None
     try:
-        entry, target, manifest = addon_update.rollback_target(deployed, repo_root, args.name)
-    except addon_update.UpdateError as exc:
+        entry, target, manifest = addon_upgrade.rollback_target(deployed, repo_root, args.name)
+    except addon_upgrade.UpgradeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return None
     if _compat_gate_addon(args.name, manifest, deployed, repo_root, force=args.force):
@@ -469,8 +471,8 @@ def cmd_addon_rollback_plan(args: argparse.Namespace) -> int:
     current, _ = deployment.load_addon_manifest(
         deployment.resolve_addon_path(entry, Path(args.repo_root))
     )
-    print(f"FROM\t{addon_update.manifest_version(current or {}) or entry.get('version', '')}")
-    print(f"TO\t{addon_update.manifest_version(manifest) or ''}")
+    print(f"FROM\t{addon_upgrade.manifest_version(current or {}) or entry.get('version', '')}")
+    print(f"TO\t{addon_upgrade.manifest_version(manifest) or ''}")
     print(f"PATH\t{target}")
     print(f"RESTORE_POINT\t{entry['previous'].get('restore_point', '')}")
     return 0
@@ -484,7 +486,7 @@ def cmd_addon_rollback_apply(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     old_version = entry.get("version") or "unknown"
 
-    addon_update.apply_rollback(entry, target, manifest, config_dir=config_dir)
+    addon_upgrade.apply_rollback(entry, target, manifest, config_dir=config_dir)
     deployment.save(config_dir, deployed)
     _render_integration(config_dir, Path(args.repo_root))
     print(f"Addon rolled back: {args.name} {old_version} -> {entry.get('version') or 'unknown'}")
@@ -499,7 +501,7 @@ def _list_row(entry: dict, deployed: dict, config_dir: Path, repo_root: Path) ->
         "name": name,
         "active": bool(entry.get("active")),
         "path": str(path),
-        "version": addon_update.manifest_version(manifest or {}) or entry.get("version"),
+        "version": addon_upgrade.manifest_version(manifest or {}) or entry.get("version"),
         "error": error,
         "components": [],
         "compat": None,
@@ -567,7 +569,7 @@ def cmd_addon_list(args: argparse.Namespace) -> int:
     if args.json:
         core = compat.resolve_core_target(repo_root)
         document = {
-            "schema_version": addon_update.SCHEMA_VERSION,
+            "schema_version": addon_upgrade.SCHEMA_VERSION,
             "core": {
                 "version": core.platform_version,
                 "addon_api": list(core.addon_api) if core.addon_api else None,

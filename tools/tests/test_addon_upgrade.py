@@ -1,10 +1,10 @@
-"""`addon update | rollback | list`: the plan, the refusals, the apply step, the way back.
+"""`addon upgrade | rollback | list`: the plan, the refusals, the apply step, the way back.
 
 The handlers run in-process against a synthetic checkout and a throwaway config
 directory, with two versions of the paperless fixture in directories of the same
 name (`<tmp>/v1/paperless`, `<tmp>/v2/paperless`), the way a caller that keeps one
 directory per version lays them out. The bash half is covered by
-test_addon_update_cli.py.
+test_addon_upgrade_cli.py.
 """
 
 from __future__ import annotations
@@ -19,11 +19,11 @@ import pytest
 import yaml
 from jsonschema import Draft202012Validator
 
-from lib import addon_update, cli_addon, common, envtree
+from lib import addon_upgrade, cli_addon, common, envtree
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SCHEMAS = Path(__file__).resolve().parents[1] / "schemas"
-UPDATE_SCHEMA = json.loads((SCHEMAS / "addon-update.schema.json").read_text("utf-8"))
+UPGRADE_SCHEMA = json.loads((SCHEMAS / "addon-upgrade.schema.json").read_text("utf-8"))
 LIST_SCHEMA = json.loads((SCHEMAS / "addon-list.schema.json").read_text("utf-8"))
 
 
@@ -40,12 +40,12 @@ def _plan(config_dir, repo_root, path, **fields) -> int:
         "answers_out": None,
         **fields,
     }
-    return cli_addon.cmd_addon_update_plan(_args(config_dir, repo_root, path=str(path), **fields))
+    return cli_addon.cmd_addon_upgrade_plan(_args(config_dir, repo_root, path=str(path), **fields))
 
 
 def _apply(config_dir, repo_root, path, **fields) -> int:
     fields = {"force": False, "answers_file": None, "restore_point": None, **fields}
-    return cli_addon.cmd_addon_update_apply(_args(config_dir, repo_root, path=str(path), **fields))
+    return cli_addon.cmd_addon_upgrade_apply(_args(config_dir, repo_root, path=str(path), **fields))
 
 
 def _deployment(config_dir: Path) -> dict:
@@ -98,9 +98,9 @@ def world(tmp_path, repo_root, config_dir) -> dict:
 # ── the plan, as a pure function ─────────────────────────────────────────────
 
 
-def _candidate(old: dict, new: dict, *, same_path: bool = False) -> addon_update.Candidate:
+def _candidate(old: dict, new: dict, *, same_path: bool = False) -> addon_upgrade.Candidate:
     old_path = Path("/srv/v1/demo")
-    return addon_update.Candidate(
+    return addon_upgrade.Candidate(
         name="demo",
         entry={"name": "demo", "path": str(old_path), "active": True},
         current_path=old_path,
@@ -111,7 +111,7 @@ def _candidate(old: dict, new: dict, *, same_path: bool = False) -> addon_update
 
 
 def _plan_of(candidate, *, old_env=None, new_env=None, bundle=None, core=None) -> dict:
-    return addon_update.plan_update(
+    return addon_upgrade.plan_upgrade(
         candidate,
         current_example=old_env or {},
         new_example=new_env or {},
@@ -272,11 +272,11 @@ def test_a_manifest_without_a_version_gives_an_unknown_direction():
     assert _plan_of(_candidate({}, {"version": "1.0.0"}))["direction"] == "unknown"
 
 
-def test_the_same_directory_is_an_in_place_update():
+def test_the_same_directory_is_an_in_place_upgrade():
     plan = _plan_of(_candidate({}, {}, same_path=True))
 
     assert plan["in_place"] is True
-    assert "no way back" in addon_update.format_plan(plan)
+    assert "no way back" in addon_upgrade.format_plan(plan)
 
 
 # ── dry run ──────────────────────────────────────────────────────────────────
@@ -290,7 +290,7 @@ def test_a_dry_run_changes_nothing_and_its_json_matches_the_schema(world, capsys
 
     assert rc == 0
     plan = json.loads(capsys.readouterr().out)
-    assert list(Draft202012Validator(UPDATE_SCHEMA).iter_errors(plan)) == []
+    assert list(Draft202012Validator(UPGRADE_SCHEMA).iter_errors(plan)) == []
     assert plan["blocked"] is False
     assert plan["compat"]["status"] == "OK"
     assert plan["needs_input"] == ["PAPERLESS_ADMIN_MAIL"]
@@ -306,7 +306,7 @@ def test_the_text_plan_names_what_changes(world, capsys):
     assert _plan(world["config"], world["repo"], world["v2"]) == 0
 
     out = capsys.readouterr().out
-    assert "Update paperless: 1.0.0 -> 1.1.0" in out
+    assert "Upgrade paperless: 1.0.0 -> 1.1.0" in out
     assert "PAPERLESS_ADMIN_MAIL: needs a value" in out
     assert "PAPERLESS_API_TOKEN: a secret is generated" in out
     assert "PAPERLESS_EXT_PORT: 8010 -> 8011" in out
@@ -404,7 +404,7 @@ def test_an_add_on_that_is_not_registered_or_not_active_is_refused(world, capsys
     args = _args(world["config"], world["repo"], path=str(world["v2"]), force=False, json=False)
     args.answers_file = args.answers_out = None
     args.name = "ghost"
-    assert cli_addon.cmd_addon_update_plan(args) == 2
+    assert cli_addon.cmd_addon_upgrade_plan(args) == 2
     assert "not registered" in capsys.readouterr().err
 
     cli_addon.cmd_addon_remove(_args(world["config"], world["repo"]))
@@ -505,7 +505,7 @@ def test_a_terminal_is_prompted_for_each_missing_value(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda text: asked.append(text) or "ops@example.org")
     monkeypatch.setattr("getpass.getpass", lambda text: asked.append(text) or "s3cret")
 
-    answers = addon_update.collect_answers(
+    answers = addon_upgrade.collect_answers(
         _asks_for(["ADMIN_MAIL", "ADMIN_PASSWORD"]), {}, interactive=True
     )
 
@@ -516,7 +516,7 @@ def test_a_terminal_is_prompted_for_each_missing_value(monkeypatch):
 def test_a_prompt_is_only_for_what_the_answers_file_left_open(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda text: "second")
 
-    answers = addon_update.collect_answers(
+    answers = addon_upgrade.collect_answers(
         _asks_for(["FIRST", "SECOND"]), {"FIRST": "given"}, interactive=True
     )
 
@@ -529,15 +529,15 @@ def test_a_prompt_that_meets_the_end_of_input_ends_in_a_refusal_not_a_crash(monk
 
     monkeypatch.setattr("builtins.input", end_of_input)
 
-    with pytest.raises(addon_update.UpdateError, match="no value for: ADMIN_MAIL"):
-        addon_update.collect_answers(_asks_for(["ADMIN_MAIL"]), {}, interactive=True)
+    with pytest.raises(addon_upgrade.UpgradeError, match="no value for: ADMIN_MAIL"):
+        addon_upgrade.collect_answers(_asks_for(["ADMIN_MAIL"]), {}, interactive=True)
 
 
 def test_a_blank_reply_at_the_prompt_leaves_the_value_missing(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda text: "  ")
 
-    with pytest.raises(addon_update.UpdateError, match="no value for: ADMIN_MAIL"):
-        addon_update.collect_answers(_asks_for(["ADMIN_MAIL"]), {}, interactive=True)
+    with pytest.raises(addon_upgrade.UpgradeError, match="no value for: ADMIN_MAIL"):
+        addon_upgrade.collect_answers(_asks_for(["ADMIN_MAIL"]), {}, interactive=True)
 
 
 def test_the_collected_answers_are_written_privately(world):
@@ -560,7 +560,7 @@ def test_the_collected_answers_are_written_privately(world):
 # ── applying ─────────────────────────────────────────────────────────────────
 
 
-def test_an_update_repoints_the_add_on_keeps_secrets_and_seeds_only_the_new_keys(world):
+def test_an_upgrade_repoints_the_add_on_keeps_secrets_and_seeds_only_the_new_keys(world):
     before = _bundle(world["config"])
 
     rc = _apply(
@@ -616,12 +616,12 @@ def test_the_result_lists_what_is_left_to_do_by_hand(world, capsys):
     ) == 0
 
     out = capsys.readouterr().out
-    assert "Addon updated: paperless 1.0.0 -> 1.1.0" in out
+    assert "Addon upgraded: paperless 1.0.0 -> 1.1.0" in out
     assert "Import the Keycloak client integration/keycloak/paperless-mcp.json" in out
     assert "Set KC_PAPERLESS_MCP_CLIENT_SECRET" in out
 
 
-def test_an_update_without_a_restore_point_records_none(world):
+def test_an_upgrade_without_a_restore_point_records_none(world):
     assert _apply(
         world["config"], world["repo"], world["v2"], answers_file=str(world["answers"])
     ) == 0
@@ -639,7 +639,7 @@ def test_a_value_the_operator_gave_wins_over_a_manifest_default(world):
     assert _bundle(world["config"])["PAPERLESS_TIME_ZONE"] == "UTC"
 
 
-def test_an_update_in_the_same_directory_keeps_no_way_back(world):
+def test_an_upgrade_in_the_same_directory_keeps_no_way_back(world):
     assert _apply(
         world["config"], world["repo"], world["v1"], answers_file=None
     ) == 0
@@ -649,7 +649,7 @@ def test_an_update_in_the_same_directory_keeps_no_way_back(world):
     assert entry["path"] == str(world["v1"].resolve())
 
 
-def test_only_one_step_is_kept_when_updating_twice(world):
+def test_only_one_step_is_kept_when_upgrading_twice(world):
     v3 = world["tmp"] / "v3" / "paperless"
     shutil.copytree(world["v2"], v3)
     manifest = v3 / "papaia-app.yaml"
@@ -671,7 +671,7 @@ def test_only_one_step_is_kept_when_updating_twice(world):
     assert entry["previous"]["restore_point"] == "second"
 
 
-def test_an_update_renders_the_add_ons_integration_again(world):
+def test_an_upgrade_renders_the_add_ons_integration_again(world):
     rendered = world["config"] / "ai" / "librechat" / "librechat.yaml"
     assert "PaperlessMCP" in rendered.read_text(encoding="utf-8")
     (world["v2"] / "integration" / "ai" / "librechat" / "librechat.yaml").write_text(
@@ -693,7 +693,7 @@ def _rollback_args(world, **fields) -> argparse.Namespace:
     return _args(world["config"], world["repo"], force=False, **fields)
 
 
-def _updated(world) -> None:
+def _upgraded(world) -> None:
     assert _apply(
         world["config"], world["repo"], world["v2"], answers_file=str(world["answers"]),
         restore_point="2026-10-25_10-00-00",
@@ -701,7 +701,7 @@ def _updated(world) -> None:
 
 
 def test_a_rollback_plan_names_both_versions_the_directory_and_the_restore_point(world, capsys):
-    _updated(world)
+    _upgraded(world)
     capsys.readouterr()
 
     assert cli_addon.cmd_addon_rollback_plan(_rollback_args(world)) == 0
@@ -716,8 +716,8 @@ def test_a_rollback_plan_names_both_versions_the_directory_and_the_restore_point
 
 
 def test_a_rollback_goes_back_one_step_and_forgets_it(world):
-    _updated(world)
-    bundle_after_update = _bundle(world["config"])
+    _upgraded(world)
+    bundle_after_upgrade = _bundle(world["config"])
 
     assert cli_addon.cmd_addon_rollback_apply(_rollback_args(world)) == 0
 
@@ -726,8 +726,8 @@ def test_a_rollback_goes_back_one_step_and_forgets_it(world):
     assert entry["version"] == "1.0.0"
     assert "previous" not in entry
     # Nothing is taken out of the bundle: the keys of the newer version stay.
-    assert _bundle(world["config"]) == bundle_after_update
-    assert common.parse_env_file(world["v1"] / ".env") == bundle_after_update
+    assert _bundle(world["config"]) == bundle_after_upgrade
+    assert common.parse_env_file(world["v1"] / ".env") == bundle_after_upgrade
 
 
 def _install(world, path) -> int:
@@ -737,7 +737,7 @@ def _install(world, path) -> int:
 
 
 def test_installing_another_directory_starts_over_and_forgets_the_previous_version(world):
-    _updated(world)
+    _upgraded(world)
     assert "previous" in _entry(world["config"])
     third = world["tmp"] / "v3" / "paperless"
     shutil.copytree(world["v2"], third)
@@ -750,7 +750,7 @@ def test_installing_another_directory_starts_over_and_forgets_the_previous_versi
 
 
 def test_installing_the_registered_directory_again_keeps_the_previous_version(world):
-    _updated(world)
+    _upgraded(world)
     before = _entry(world["config"])["previous"]
 
     assert _install(world, world["v2"]) == 0
@@ -759,7 +759,7 @@ def test_installing_the_registered_directory_again_keeps_the_previous_version(wo
 
 
 def test_a_second_rollback_has_nothing_to_go_back_to(world, capsys):
-    _updated(world)
+    _upgraded(world)
     assert cli_addon.cmd_addon_rollback_apply(_rollback_args(world)) == 0
     capsys.readouterr()
 
@@ -769,7 +769,7 @@ def test_a_second_rollback_has_nothing_to_go_back_to(world, capsys):
 
 
 def test_a_rollback_to_a_directory_that_is_gone_is_refused(world, capsys):
-    _updated(world)
+    _upgraded(world)
     shutil.rmtree(world["v1"])
     before = _snapshot(world["config"])
 
@@ -780,7 +780,7 @@ def test_a_rollback_to_a_directory_that_is_gone_is_refused(world, capsys):
 
 
 def test_a_rollback_runs_the_gate_against_the_current_core(world, capsys):
-    _updated(world)
+    _upgraded(world)
     manifest = world["v1"] / "papaia-app.yaml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8").replace(">=0.8.0", ">=99.0.0"), encoding="utf-8"
@@ -798,7 +798,7 @@ def test_a_rollback_runs_the_gate_against_the_current_core(world, capsys):
 
 
 def test_the_json_list_matches_the_schema_and_shows_the_way_back(world, capsys):
-    _updated(world)
+    _upgraded(world)
     capsys.readouterr()
 
     assert cli_addon.cmd_addon_list(_args(world["config"], world["repo"], json=True)) == 0
@@ -821,7 +821,7 @@ def test_the_json_list_matches_the_schema_and_shows_the_way_back(world, capsys):
 
 
 def test_the_list_says_when_the_previous_directory_is_gone(world, capsys):
-    _updated(world)
+    _upgraded(world)
     shutil.rmtree(world["v1"])
     capsys.readouterr()
 
@@ -846,7 +846,7 @@ def test_the_list_reports_an_unreadable_manifest_instead_of_failing(world, capsy
 
 
 def test_the_text_list_is_a_table(world, capsys):
-    _updated(world)
+    _upgraded(world)
     capsys.readouterr()
 
     assert cli_addon.cmd_addon_list(_args(world["config"], world["repo"], json=False)) == 0

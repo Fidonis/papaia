@@ -62,7 +62,7 @@
               "version": { "type": ["string", "null"] },
               "restore_point": {
                 "type": ["string", "null"],
-                "description": "Id of the restore point taken before the update, if one was."
+                "description": "Id of the restore point taken before the upgrade, if one was."
               },
               "available": { "type": "boolean", "description": "The directory still exists." }
             }

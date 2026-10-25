@@ -30,7 +30,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0005](./0005-manage-the-rag-ingester-from-papaia-manager.md) | Manage the RAG system's ingester from papaia-manager instead of its own web interface | Accepted | 2026-10-09 |
 | [0006](./0006-manage-accounts-with-the-signed-in-users-token.md) | Manage accounts and roles from papaia-manager with the signed-in user's token and give papaia-admin Keycloak's user and role administration rights | Accepted | 2026-10-10 |
 | [0007](./0007-outbound-mail-through-an-internal-relay.md) | Offer outbound mail as an optional core profile with one internal SMTP relay | Accepted | 2026-10-11 |
-| [0008](./0008-update-add-ons-by-repointing-to-immutable-snapshots.md) | Update add-ons by repointing the registration to a new directory, not by replacing files | Accepted | 2026-10-25 |
+| [0008](./0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md) | Upgrade add-ons by repointing the registration to a new directory, not by replacing files | Accepted | 2026-10-25 |
 
 ## References
 
