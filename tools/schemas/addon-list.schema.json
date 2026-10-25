@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "papaia-ctl-addon-list.schema.json",
+  "title": "papaia-ctl addon list --json",
+  "description": "Every registered add-on with its version, bundled software, compatibility verdict and the version a rollback would go back to. Additive changes keep schema_version; a breaking change increments it.",
+  "type": "object",
+  "required": ["schema_version", "core", "addons"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "core": {
+      "type": "object",
+      "required": ["version", "addon_api"],
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "addon_api": {
+          "type": ["array", "null"],
+          "description": "[min, current] of the add-on API generations this core serves.",
+          "items": { "type": "integer" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "addons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "active", "path", "version", "error", "components", "compat", "previous"],
+        "properties": {
+          "name": { "type": "string" },
+          "active": { "type": "boolean" },
+          "path": { "type": "string" },
+          "version": {
+            "type": ["string", "null"],
+            "description": "From the manifest at path; the registered version when the manifest cannot be read."
+          },
+          "error": { "type": ["string", "null"], "description": "Why the manifest could not be read." },
+          "components": {
+            "type": "array",
+            "description": "As in `addon components --json`, including the tag an .env pin overrides.",
+            "items": { "type": "object" }
+          },
+          "compat": {
+            "type": ["object", "null"],
+            "description": "The verdict `addon check` would give; null when the manifest cannot be read.",
+            "required": ["status", "axis", "requirement", "core_value", "reason", "warnings"],
+            "properties": {
+              "status": { "enum": ["OK", "INCOMPATIBLE", "UNKNOWN", "ERROR"] },
+              "axis": { "type": ["string", "null"] },
+              "requirement": {},
+              "core_value": {},
+              "reason": { "type": ["string", "null"] },
+              "warnings": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "previous": {
+            "type": ["object", "null"],
+            "description": "What `addon rollback` would go back to; null when there is nothing to roll back to.",
+            "required": ["path", "version", "restore_point", "available"],
+            "properties": {
+              "path": { "type": "string" },
+              "version": { "type": ["string", "null"] },
+              "restore_point": {
+                "type": ["string", "null"],
+                "description": "Id of the restore point taken before the upgrade, if one was."
+              },
+              "available": { "type": "boolean", "description": "The directory still exists." }
+            }
+          }
+        }
+      }
+    }
+  }
+}

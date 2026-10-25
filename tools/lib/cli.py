@@ -742,6 +742,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_components.add_argument("--json", action="store_true")
     p_addon_components.set_defaults(func=cli_addon.cmd_addon_components)
 
+    p_addon_upgrade_plan = sub.add_parser("addon-upgrade-plan")
+    p_addon_upgrade_plan.add_argument("--name", required=True)
+    p_addon_upgrade_plan.add_argument("--path", required=True)
+    p_addon_upgrade_plan.add_argument("--force", action="store_true")
+    p_addon_upgrade_plan.add_argument("--json", action="store_true")
+    p_addon_upgrade_plan.add_argument("--answers-file", default=None)
+    p_addon_upgrade_plan.add_argument("--answers-out", default=None)
+    p_addon_upgrade_plan.set_defaults(func=cli_addon.cmd_addon_upgrade_plan)
+
+    p_addon_upgrade_apply = sub.add_parser("addon-upgrade-apply")
+    p_addon_upgrade_apply.add_argument("--name", required=True)
+    p_addon_upgrade_apply.add_argument("--path", required=True)
+    p_addon_upgrade_apply.add_argument("--force", action="store_true")
+    p_addon_upgrade_apply.add_argument("--answers-file", default=None)
+    p_addon_upgrade_apply.add_argument("--restore-point", default=None)
+    p_addon_upgrade_apply.set_defaults(func=cli_addon.cmd_addon_upgrade_apply)
+
+    p_addon_rollback_plan = sub.add_parser("addon-rollback-plan")
+    p_addon_rollback_plan.add_argument("--name", required=True)
+    p_addon_rollback_plan.add_argument("--force", action="store_true")
+    p_addon_rollback_plan.set_defaults(func=cli_addon.cmd_addon_rollback_plan)
+
+    p_addon_rollback_apply = sub.add_parser("addon-rollback-apply")
+    p_addon_rollback_apply.add_argument("--name", required=True)
+    p_addon_rollback_apply.add_argument("--force", action="store_true")
+    p_addon_rollback_apply.set_defaults(func=cli_addon.cmd_addon_rollback_apply)
+
+    p_addon_list = sub.add_parser("addon-list")
+    p_addon_list.add_argument("--json", action="store_true")
+    p_addon_list.set_defaults(func=cli_addon.cmd_addon_list)
+
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)
     p_addon_remove.set_defaults(func=cli_addon.cmd_addon_remove)

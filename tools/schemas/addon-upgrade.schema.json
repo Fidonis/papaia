@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "papaia-ctl-addon-upgrade.schema.json",
+  "title": "papaia-ctl addon upgrade --dry-run --json",
+  "description": "What moving an installed add-on to a new version would change. Printed when the compatibility gate refuses as well (\"blocked\": true). Additive changes keep schema_version; a breaking change increments it.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "current",
+    "candidate",
+    "direction",
+    "in_place",
+    "env",
+    "components",
+    "manifest",
+    "needs_input",
+    "compat",
+    "blocked"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "name": { "type": "string" },
+    "current": { "$ref": "#/$defs/version" },
+    "candidate": { "$ref": "#/$defs/version" },
+    "direction": {
+      "enum": ["upgrade", "downgrade", "same", "unknown"],
+      "description": "Order of the two manifest versions by SemVer precedence; unknown when either is missing or not SemVer."
+    },
+    "in_place": {
+      "type": "boolean",
+      "description": "The candidate is the directory the add-on is registered at, so there is nothing to roll back to."
+    },
+    "env": {
+      "type": "object",
+      "required": ["new", "removed", "default_changed"],
+      "properties": {
+        "new": {
+          "type": "array",
+          "description": "Keys of the candidate's .env.example the configuration bundle does not have yet. Only these are written; existing values never change.",
+          "items": {
+            "type": "object",
+            "required": ["key", "class", "value", "default", "label"],
+            "properties": {
+              "key": { "type": "string" },
+              "class": {
+                "enum": ["generated", "change_me", "replace_secret", "literal"],
+                "description": "generated: a fresh secret. change_me: a value the operator supplies (see default and needs_input). replace_secret: a Keycloak client secret that exists only after the client is imported. literal: copied as shipped."
+              },
+              "value": { "type": ["string", "null"], "description": "The shipped value of a literal key." },
+              "default": {
+                "type": ["string", "null"],
+                "description": "What a change_me key gets without an answer: the core value named by default_from_core, else the manifest's default."
+              },
+              "label": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "removed": {
+          "type": "array",
+          "description": "Keys the installed version's .env.example had and the candidate's lacks. The bundle keeps them.",
+          "items": { "type": "string" }
+        },
+        "default_changed": {
+          "type": "array",
+          "description": "Literal keys whose shipped value changed. Values already in the bundle stay.",
+          "items": {
+            "type": "object",
+            "required": ["key", "from", "to"],
+            "properties": {
+              "key": { "type": "string" },
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/component" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/component" } },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "from", "to"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "required": ["version", "addon_api", "attach", "replace_secrets_added", "keycloak"],
+      "properties": {
+        "version": { "$ref": "#/$defs/change" },
+        "addon_api": { "$ref": "#/$defs/change" },
+        "attach": {
+          "type": "object",
+          "required": ["added", "removed"],
+          "properties": {
+            "added": { "type": "array", "items": { "type": "string" } },
+            "removed": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "replace_secrets_added": { "type": "array", "items": { "type": "string" } },
+        "keycloak": {
+          "type": "object",
+          "required": ["clients_added", "mappers_added"],
+          "properties": {
+            "clients_added": {
+              "type": "array",
+              "description": "Client files (relative to the add-on directory) the operator has to import.",
+              "items": { "type": "string" }
+            },
+            "mappers_added": {
+              "type": "object",
+              "description": "Existing client name to the mapper files that are new for it.",
+              "additionalProperties": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "needs_input": {
+      "type": "array",
+      "description": "change_me keys without a default: the upgrade does not run until each has a value (prompt or --answers-file).",
+      "items": { "type": "string" }
+    },
+    "compat": {
+      "type": "object",
+      "required": ["status", "axis", "requirement", "core_value", "reason", "warnings"],
+      "properties": {
+        "status": { "enum": ["OK", "INCOMPATIBLE", "UNKNOWN", "ERROR"] },
+        "axis": { "type": ["string", "null"] },
+        "requirement": {},
+        "core_value": {},
+        "reason": { "type": ["string", "null"] },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "blocked": {
+      "type": "boolean",
+      "description": "The compatibility gate would refuse the upgrade (exit status 2)."
+    }
+  },
+  "$defs": {
+    "version": {
+      "type": "object",
+      "required": ["version", "path"],
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "path": { "type": "string" }
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "change": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": { "from": {}, "to": {} }
+    }
+  }
+}

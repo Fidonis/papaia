@@ -9,11 +9,13 @@ and the shared compatibility-gate helpers.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path
 
 from . import (
+    addon_upgrade,
     addons,
     common,
     compat,
@@ -53,19 +55,37 @@ def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bo
         print(f"WARNING: addon '{result.name}': {warning}", file=sys.stderr)
 
 
+def _evaluate_gate(
+    name: str, manifest: dict, deployed: dict, repo_root: Path, *, force: bool
+) -> tuple[compat.CompatResult, int]:
+    """The verdict on one addon against this checkout's core, and what the gate
+    policy makes of it: 0 (proceed) or 2 (abort)."""
+    core = compat.resolve_core_target(repo_root)
+    profiles = (deployed.get("core") or {}).get("profiles")
+    result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+    mode = compat.resolve_mode(deployed)
+    return result, compat.gate([result], mode=mode, force=force)
+
+
 def _compat_gate_addon(
     name: str, manifest: dict, deployed: dict, repo_root: Path, *, force: bool
 ) -> int:
     """Evaluate one addon against this checkout's core and apply the gate
     policy. Returns 0 (proceed) or 2 (abort). Must run before any mutation,
     so a refused install/start leaves no trace."""
-    core = compat.resolve_core_target(repo_root)
-    profiles = (deployed.get("core") or {}).get("profiles")
-    result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
-    mode = compat.resolve_mode(deployed)
-    exit_code = compat.gate([result], mode=mode, force=force)
+    result, exit_code = _evaluate_gate(name, manifest, deployed, repo_root, force=force)
     _report_compat_result(result, fatal=bool(exit_code), force=force)
     return exit_code
+
+
+def _render_integration(config_dir: Path, repo_root: Path) -> None:
+    """Re-render the core config and regenerate the addon overrides from
+    deployment.yaml, as every addon verb that changes the registration does."""
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
 
 
 def cmd_addon_install(args: argparse.Namespace) -> int:
@@ -105,6 +125,10 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
 
     if existing:
         if args.path:
+            if deployment.resolve_addon_path(existing, repo_root).resolve() != addon_path:
+                # Registering another directory starts over: the version `previous` records
+                # was the one before an upgrade that this install does not continue.
+                existing.pop("previous", None)
             existing["path"] = str(addon_path)
         if args.version:
             existing["version"] = args.version
@@ -125,12 +149,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         common.write_env_file(bundle_env_path, env_vals)
 
     deployment.save(config_dir, deployed)
-    render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir, repo_root)
-
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
-    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    _render_integration(config_dir, repo_root)
 
     reporting.print_keycloak_checklist(name, manifest, addon_path, config_dir)
     print(f"Addon installed: {name}")
@@ -300,6 +319,271 @@ def cmd_addon_components(args: argparse.Namespace) -> int:
     return 0
 
 
+def _compat_json(result: compat.CompatResult) -> dict:
+    return {
+        "status": result.status,
+        "axis": result.axis,
+        "requirement": result.requirement,
+        "core_value": result.core_value,
+        "reason": result.reason,
+        "warnings": list(result.warnings),
+    }
+
+
+def _upgrade_candidate(args: argparse.Namespace) -> tuple[dict, addon_upgrade.Candidate] | None:
+    """The deployment and the candidate version for `addon upgrade`, or None
+    after printing why the request cannot be met."""
+    deployed = deployment.load(Path(args.config_dir))
+    if not deployed:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return None
+    try:
+        candidate = addon_upgrade.prepare(
+            deployed, Path(args.repo_root), args.name, Path(args.path)
+        )
+    except addon_upgrade.UpgradeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return None
+    return deployed, candidate
+
+
+def cmd_addon_upgrade_plan(args: argparse.Namespace) -> int:
+    """Check an upgrade and print what it would change. Changes nothing.
+
+    With `--answers-out` this is also the first half of a real upgrade: the
+    values the plan needs come from `--answers-file` or, on a terminal, from a
+    prompt, and are written (mode 0600) to that file for the apply step. Either
+    way a request that cannot be met ends here with status 2, before anything
+    on disk is touched."""
+    if args.json and args.answers_out:
+        print("ERROR: --json only goes with --dry-run.", file=sys.stderr)
+        return 2
+    found = _upgrade_candidate(args)
+    if found is None:
+        return 2
+    deployed, candidate = found
+
+    result, exit_code = _evaluate_gate(
+        args.name, candidate.new_manifest, deployed, Path(args.repo_root), force=args.force
+    )
+    plan = addon_upgrade.build_plan(candidate, Path(args.config_dir))
+    plan["compat"] = _compat_json(result)
+    plan["blocked"] = bool(exit_code)
+    # Printed even when the gate refuses, so fleet tooling can read `reason`.
+    print(json.dumps(plan, indent=2) if args.json else addon_upgrade.format_plan(plan))
+    # A caller that merges stderr into stdout must get the document in one piece.
+    sys.stdout.flush()
+    _report_compat_result(result, fatal=bool(exit_code), force=args.force)
+    if exit_code:
+        return 2
+
+    if args.answers_out:
+        try:
+            given = addon_upgrade.read_answers(Path(args.answers_file)) if args.answers_file else {}
+            answers = addon_upgrade.collect_answers(plan, given, interactive=sys.stdin.isatty())
+        except addon_upgrade.UpgradeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        addon_upgrade.write_answers(Path(args.answers_out), answers)
+    return 0
+
+
+def _print_upgrade_followups(plan: dict, new_manifest: dict, bundle_env_path: Path) -> None:
+    """What the operator still has to do by hand after the new version is in place."""
+    steps: list[str] = []
+    keycloak = plan["manifest"]["keycloak"]
+    for client in keycloak["clients_added"]:
+        steps.append(f"Import the Keycloak client {client} (Keycloak Admin UI -> Clients).")
+    for client, paths in keycloak["mappers_added"].items():
+        steps.append(f"Add the protocol mappers {', '.join(paths)} to the client '{client}'.")
+    hints = new_manifest.get("env_replace_secrets") or {}
+    for item in plan["env"]["new"]:
+        if item["class"] == addon_upgrade.KEY_REPLACE_SECRET:
+            hint = (hints.get(item["key"]) or {}).get("hint")
+            suffix = f" ({hint})." if hint else "."
+            steps.append(f"Set {item['key']} in {bundle_env_path}{suffix}")
+    if steps:
+        print("\nStill to do by hand for this version:")
+        for step in steps:
+            print(f"  - {step}")
+
+
+def cmd_addon_upgrade_apply(args: argparse.Namespace) -> int:
+    """Move the registration to the new version. Docker is bash's part: it has
+    taken the restore point before this and recreates the containers after."""
+    found = _upgrade_candidate(args)
+    if found is None:
+        return 2
+    deployed, candidate = found
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    name = args.name
+
+    if _compat_gate_addon(name, candidate.new_manifest, deployed, repo_root, force=args.force):
+        return 2
+    plan = addon_upgrade.build_plan(candidate, config_dir)
+    try:
+        given = addon_upgrade.read_answers(Path(args.answers_file)) if args.answers_file else {}
+        answers = addon_upgrade.collect_answers(plan, given, interactive=False)
+    except addon_upgrade.UpgradeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    addon_upgrade.apply_upgrade(
+        candidate, plan, answers, config_dir=config_dir, restore_point=args.restore_point
+    )
+    deployment.save(config_dir, deployed)
+    _render_integration(config_dir, repo_root)
+
+    _print_upgrade_followups(plan, candidate.new_manifest, config_dir / "addons" / name / ".env")
+    print(
+        f"Addon upgraded: {name} {plan['current']['version'] or 'unknown'}"
+        f" -> {plan['candidate']['version'] or 'unknown'}"
+    )
+    return 0
+
+
+def _rollback_target(args: argparse.Namespace) -> tuple[dict, dict, Path, dict] | None:
+    """The deployment, the entry and what it would go back to, or None after
+    printing why it cannot."""
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(Path(args.config_dir))
+    if not deployed:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return None
+    try:
+        entry, target, manifest = addon_upgrade.rollback_target(deployed, repo_root, args.name)
+    except addon_upgrade.UpgradeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return None
+    if _compat_gate_addon(args.name, manifest, deployed, repo_root, force=args.force):
+        return None
+    return deployed, entry, target, manifest
+
+
+def cmd_addon_rollback_plan(args: argparse.Namespace) -> int:
+    """Check a rollback and print what bash needs to carry it out, one
+    `KEY<TAB>value` line each. Changes nothing."""
+    found = _rollback_target(args)
+    if found is None:
+        return 2
+    _, entry, target, manifest = found
+    current, _ = deployment.load_addon_manifest(
+        deployment.resolve_addon_path(entry, Path(args.repo_root))
+    )
+    print(f"FROM\t{addon_upgrade.manifest_version(current or {}) or entry.get('version', '')}")
+    print(f"TO\t{addon_upgrade.manifest_version(manifest) or ''}")
+    print(f"PATH\t{target}")
+    print(f"RESTORE_POINT\t{entry['previous'].get('restore_point', '')}")
+    return 0
+
+
+def cmd_addon_rollback_apply(args: argparse.Namespace) -> int:
+    found = _rollback_target(args)
+    if found is None:
+        return 2
+    deployed, entry, target, manifest = found
+    config_dir = Path(args.config_dir)
+    old_version = entry.get("version") or "unknown"
+
+    addon_upgrade.apply_rollback(entry, target, manifest, config_dir=config_dir)
+    deployment.save(config_dir, deployed)
+    _render_integration(config_dir, Path(args.repo_root))
+    print(f"Addon rolled back: {args.name} {old_version} -> {entry.get('version') or 'unknown'}")
+    return 0
+
+
+def _list_row(entry: dict, deployed: dict, config_dir: Path, repo_root: Path) -> dict:
+    name = entry["name"]
+    path = deployment.resolve_addon_path(entry, repo_root)
+    manifest, error = deployment.load_addon_manifest(path)
+    row: dict = {
+        "name": name,
+        "active": bool(entry.get("active")),
+        "path": str(path),
+        "version": addon_upgrade.manifest_version(manifest or {}) or entry.get("version"),
+        "error": error,
+        "components": [],
+        "compat": None,
+        "previous": None,
+    }
+    if manifest is not None:
+        bundle_env = common.parse_env_file(config_dir / "addons" / name / ".env")
+        row["components"] = components.describe(
+            name, manifest, active=row["active"], bundle_env=bundle_env
+        )["components"]
+        core = compat.resolve_core_target(repo_root)
+        profiles = (deployed.get("core") or {}).get("profiles")
+        row["compat"] = _compat_json(
+            compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+        )
+    previous = entry.get("previous")
+    if isinstance(previous, dict) and previous.get("path"):
+        previous_path = deployment.resolve_addon_path(previous, repo_root)
+        row["previous"] = {
+            "path": str(previous_path),
+            "version": previous.get("version"),
+            "restore_point": previous.get("restore_point"),
+            "available": previous_path.is_dir(),
+        }
+    return row
+
+
+def _format_addon_list(rows: list[dict]) -> str:
+    table = [("NAME", "VERSION", "ACTIVE", "COMPAT", "PREVIOUS")]
+    for row in rows:
+        previous = row["previous"]
+        table.append(
+            (
+                row["name"],
+                str(row["version"] or "unknown"),
+                "yes" if row["active"] else "no",
+                (row["compat"] or {}).get("status") or compat.STATUS_ERROR,
+                str(previous["version"] or previous["path"]) if previous else "-",
+            )
+        )
+    widths = [max(len(line[i]) for line in table) for i in range(len(table[0]))]
+    return "\n".join(
+        "  ".join(cell.ljust(width) for cell, width in zip(line, widths, strict=True)).rstrip()
+        for line in table
+    )
+
+
+def cmd_addon_list(args: argparse.Namespace) -> int:
+    """Every registered addon: where it lives, which version, what it bundles,
+    whether this core accepts it, and the version a rollback would go back to.
+
+    Read-only. The verdict is the one `addon check` would give, also for an
+    addon that is not active."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir)
+    if not deployed:
+        print("ERROR: deployment.yaml not found. Run 'papaia-ctl setup' first.", file=sys.stderr)
+        return 2
+    rows = [
+        _list_row(entry, deployed, config_dir, repo_root)
+        for entry in deployed.get("addons") or []
+        if entry.get("name")
+    ]
+    if args.json:
+        core = compat.resolve_core_target(repo_root)
+        document = {
+            "schema_version": addon_upgrade.SCHEMA_VERSION,
+            "core": {
+                "version": core.platform_version,
+                "addon_api": list(core.addon_api) if core.addon_api else None,
+            },
+            "addons": rows,
+        }
+        print(json.dumps(document, indent=2))
+    elif rows:
+        print(_format_addon_list(rows))
+    else:
+        print("No addons registered.")
+    return 0
+
+
 def cmd_addon_remove(args: argparse.Namespace) -> int:
     """Remove integration only: override gone, active=false, re-render. Bundle kept."""
     config_dir = Path(args.config_dir)
@@ -323,11 +607,7 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
     override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
     override_file.unlink(missing_ok=True)
 
-    render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir, repo_root)
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
-    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    _render_integration(config_dir, repo_root)
 
     print(f"Addon removed: {name}")
     return 0
@@ -368,11 +648,7 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     deployed["addons"] = [a for a in addon_entries if a.get("name") != name]
     deployment.save(config_dir, deployed)
 
-    render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir, repo_root)
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
-    gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    _render_integration(config_dir, repo_root)
 
     print(f"Addon uninstalled: {name}")
     return 0
