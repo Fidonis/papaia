@@ -99,11 +99,16 @@ BASE_RENDER_TARGETS = [
 
 # Manifest keys the tools actually read from papaia-app.yaml. Reading a new
 # key is additive; renaming or dropping one breaks shipped manifests.
+# `version` and `components` are read by `addon update`, `addon list` and
+# `addon components` for display and for the delta between two versions; no
+# gate decision depends on either.
 # `networks.app_network` may be a literal name or, since addon_api 2, a
 # `${PAPAIA_PROJECT:-papaia}-<name>-net` template resolved against the core .env
 # (gen_override.resolve_app_network).
 MANIFEST_KEYS = [
     "name",
+    "version",
+    "components",
     "networks.app_network",
     "networks.attach",
     "local_ca_env",
@@ -158,4 +163,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 11, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 13, _SURFACE_CHANGED

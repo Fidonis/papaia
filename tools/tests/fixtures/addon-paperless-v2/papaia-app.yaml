@@ -1,0 +1,52 @@
+name: paperless
+version: 1.1.0
+addon_repo: papaia-addon-paperless
+papaia_compat: ">=0.8.0"
+description: "Paperless-ngx document management"
+
+components:
+  - id: paperless-ngx
+    name: Paperless-ngx
+    role: primary
+    version: "3.0.6"
+    image_var: PAPERLESS_IMAGE
+  - id: redis
+    name: Redis
+    role: sidecar
+    version: "7.4"
+
+networks:
+  app_network: papaia-paperless-net
+  attach: [nginx-proxy-manager]
+
+local_ca_env:
+  paperless: [REQUESTS_CA_BUNDLE]
+  paperless-mcp: [SSL_CERT_FILE]
+
+env_prompts:
+  PAPAIA_CONFIG_DIR:
+    label: "papAIa config directory (PAPAIA_CONFIG_DIR from core setup)"
+    default_from_core: PAPAIA_CONFIG_DIR
+  OIDC_ISSUER:
+    label: "Keycloak issuer URL"
+    default_from_core: OIDC_ISSUER
+  PAPERLESS_PUBLIC_URL:
+    label: "Browser-facing URL of the Paperless web UI"
+    default: "http://host.docker.internal:8010"
+  PAPERLESS_ADMIN_MAIL:
+    label: "Mail address of the first administrator"
+  PAPERLESS_TIME_ZONE:
+    label: "Time zone"
+    default: "Europe/Berlin"
+
+env_replace_secrets:
+  KC_PAPERLESS_CLIENT_SECRET:
+    hint: "Keycloak → Clients → paperless → Credentials → Client Secret"
+  KC_PAPERLESS_MCP_CLIENT_SECRET:
+    hint: "Keycloak → Clients → paperless-mcp → Credentials → Client Secret"
+
+integration:
+  librechat: integration/ai/librechat/librechat.yaml
+  keycloak:
+    clients:
+      - integration/keycloak/paperless-mcp.json

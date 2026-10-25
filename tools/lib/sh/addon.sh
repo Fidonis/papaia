@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# papaia-ctl — `addon` command family: install / start / stop / check / components / remove / uninstall.
+# papaia-ctl — `addon` command family: install / start / update / rollback / list / stop / check /
+# components / remove / uninstall.
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
@@ -259,6 +260,281 @@ cmd_addon_components() {
         extra+=(--name="$addon_name")
     fi
     py_cli addon-components "${extra[@]}"
+}
+
+_ADDON_TMPFILES=()
+
+# Restore point taken by the last _addon_backup call; empty when there was none.
+ADDON_RESTORE_POINT=""
+
+_addon_cleanup() {
+    local f
+    if [ ${#_ADDON_TMPFILES[@]} -gt 0 ]; then
+        for f in "${_ADDON_TMPFILES[@]}"; do
+            [ -f "$f" ] && rm -f "$f"
+        done
+        _ADDON_TMPFILES=()
+    fi
+    return 0
+}
+
+# Whether the add-on has running containers. $1 add-on name, $2 add-on path.
+_addon_running() {
+    local ids
+    ids="$(_addon_compose ps "$1" "$2" -q 2>/dev/null || true)"
+    [ -n "${ids//[$'\r\n']/}" ]
+}
+
+# Take a restore point that holds only this add-on's data and leave its id in
+# ADDON_RESTORE_POINT. Returns 3 when taking it failed.
+#
+# cmd_backup ends in `exit`, so it runs in a subshell, and errexit is switched
+# on again inside it: a subshell that is part of a `||` or `if` list ignores
+# `set -e`, which would let a failed archive step go unnoticed. Status 2 is the
+# planner saying the selector matched nothing -- an add-on without volumes or
+# data directories -- which is not a reason to refuse the update.
+_addon_backup() {
+    local addon_name="$1" id_file rc=0
+    ADDON_RESTORE_POINT=""
+    id_file="$(mktemp)"
+    _ADDON_TMPFILES+=("$id_file")
+    set +e
+    (
+        set -e
+        cmd_backup --only="addon:$addon_name" --config-dir="$CONFIG_DIR"
+        printf '%s' "$LAST_BACKUP_ID" > "$id_file"
+    )
+    rc=$?
+    set -e
+    case "$rc" in
+        0) ADDON_RESTORE_POINT="$(cat "$id_file")" ;;
+        2) warn "Addon $addon_name has no volumes or data directories to back up; no restore point was taken." ;;
+        *) return 3 ;;
+    esac
+}
+
+# Recreate an add-on's containers from the directory it is now registered at.
+# --remove-orphans drops the services a newer version no longer has.
+_addon_recreate() {
+    local addon_name="$1" addon_path
+    addon_path="$(_addon_path "$addon_name")"
+    info "Recreating addon $addon_name from $addon_path..."
+    _addon_compose up "$addon_name" "$addon_path" -d --remove-orphans
+}
+
+# Move an installed add-on to another version of itself (a directory of its
+# own, see lib/addon_update.py). Everything that can refuse -- the gate, the
+# preconditions, a missing value -- happens in `addon-update-plan`, before a
+# restore point is taken or a file is written.
+cmd_addon_update() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" new_path="" answers_file=""
+    local dry_run=0 json=0 no_backup=0 no_restart=0 force=0 assume_yes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --path=*) new_path="${1#*=}" ;;
+            --answers-file=*) answers_file="${1#*=}" ;;
+            --dry-run) dry_run=1 ;;
+            --json) json=1 ;;
+            --no-backup) no_backup=1 ;;
+            --no-restart) no_restart=1 ;;
+            --force) force=1 ;;
+            -y) assume_yes=1 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$addon_name" ] || [ -z "$new_path" ]; then
+        error "Usage: papaia-ctl addon update <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart] [--answers-file=FILE] [--force] [-y]"
+        exit 2
+    fi
+    if [ "$json" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
+        error "--json only goes with --dry-run."
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+
+    local -a target=(--name="$addon_name" --path="$new_path")
+    [ "$force" -eq 1 ] && target+=(--force)
+
+    if [ "$dry_run" -eq 1 ]; then
+        local -a extra=()
+        [ "$json" -eq 1 ] && extra+=(--json)
+        py_cli addon-update-plan "${target[@]}" "${extra[@]}"
+        return 0
+    fi
+
+    # The values the new version asks for travel from the plan step to the apply
+    # step in a private file, never on a command line.
+    local answers_out
+    answers_out="$(mktemp)"
+    _ADDON_TMPFILES+=("$answers_out")
+    trap _addon_cleanup EXIT INT TERM
+
+    local -a plan_extra=(--answers-out="$answers_out")
+    [ -n "$answers_file" ] && plan_extra+=(--answers-file="$answers_file")
+    py_cli addon-update-plan "${target[@]}" "${plan_extra[@]}"
+
+    if [ "$assume_yes" -eq 0 ]; then
+        if ! is_tty; then
+            error "Refusing to update without confirmation. Re-run with -y in non-interactive contexts."
+            exit 2
+        fi
+        if ! confirm "Proceed with the update of $addon_name?" "N"; then
+            error "Aborted."
+            exit 3
+        fi
+    fi
+
+    local was_running=0 old_path
+    old_path="$(_addon_path "$addon_name")"
+    if [ "$no_restart" -eq 0 ] && _addon_running "$addon_name" "$old_path"; then
+        was_running=1
+    fi
+
+    if [ "$no_backup" -eq 0 ]; then
+        info "Creating a restore point of $addon_name..."
+        _addon_backup "$addon_name" || {
+            error "Could not take a restore point. Nothing was changed."
+            exit 3
+        }
+    else
+        warn "--no-backup: no restore point is created beforehand."
+    fi
+
+    local -a apply_extra=(--answers-file="$answers_out")
+    [ -n "$ADDON_RESTORE_POINT" ] && apply_extra+=(--restore-point="$ADDON_RESTORE_POINT")
+    py_cli addon-update-apply "${target[@]}" "${apply_extra[@]}"
+
+    if [ "$was_running" -eq 1 ]; then
+        if ! _addon_recreate "$addon_name"; then
+            error "The containers of $addon_name could not be recreated from the new version."
+            error "Nothing was rolled back. To go back to the old version: papaia-ctl addon rollback $addon_name"
+            exit 3
+        fi
+    elif [ "$no_restart" -eq 0 ]; then
+        info "Addon $addon_name was not running; start it with 'papaia-ctl addon start $addon_name'."
+    fi
+    if [ -n "$ADDON_RESTORE_POINT" ]; then
+        info "Restore point: $ADDON_RESTORE_POINT. 'papaia-ctl addon rollback $addon_name --restore-data' goes back to it, data included."
+    fi
+    success "addon update complete: $addon_name"
+}
+
+# One step back: repoint the add-on at the version it had before the last
+# update. The data is only touched with --restore-data, which restores the
+# restore point that update took (restore-scoped: it cannot replace the
+# configuration directory).
+cmd_addon_rollback() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
+    local restore_data=0 no_restart=0 force=0 assume_yes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --restore-data) restore_data=1 ;;
+            --no-restart) no_restart=1 ;;
+            --force) force=1 ;;
+            -y) assume_yes=1 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *) addon_name="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon rollback <name> [--restore-data] [--no-restart] [--force] [-y]"
+        exit 2
+    fi
+    if [ "$restore_data" -eq 1 ] && [ "$no_restart" -eq 1 ]; then
+        error "--restore-data replaces the add-on's volumes, which needs its containers down; it cannot be combined with --no-restart."
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+
+    local -a target=(--name="$addon_name")
+    [ "$force" -eq 1 ] && target+=(--force)
+
+    local plan from="" to="" to_path="" restore_point="" key value
+    plan="$(py_cli addon-rollback-plan "${target[@]}" | tr -d '\r')"
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            FROM) from="$value" ;;
+            TO) to="$value" ;;
+            PATH) to_path="$value" ;;
+            RESTORE_POINT) restore_point="$value" ;;
+        esac
+    done <<< "$plan"
+
+    if [ "$restore_data" -eq 1 ]; then
+        if [ -z "$restore_point" ]; then
+            error "No restore point was recorded for the last update of $addon_name (it ran with --no-backup, or the add-on has no data)."
+            error "Run without --restore-data to go back to the old version only."
+            exit 2
+        fi
+        # Fails here, not after the add-on has been repointed, when the restore
+        # point was pruned or deleted in the meantime.
+        py_cli restore-resolve --restore-point="$restore_point" --only="addon:$addon_name" >/dev/null
+    fi
+
+    info "Rolling $addon_name back from ${from:-unknown} to ${to:-unknown} ($to_path)."
+    if [ "$restore_data" -eq 1 ]; then
+        warn "Its data is reset to restore point $restore_point: whatever the add-on wrote since is lost."
+    else
+        info "Its data is not touched; the volumes keep what the newer version wrote."
+        [ -n "$restore_point" ] && info "Add --restore-data to reset them to restore point $restore_point."
+    fi
+    if [ "$assume_yes" -eq 0 ]; then
+        if ! is_tty; then
+            error "Refusing to roll back without confirmation. Re-run with -y in non-interactive contexts."
+            exit 2
+        fi
+        if ! confirm "Proceed with the rollback of $addon_name?" "N"; then
+            error "Aborted."
+            exit 3
+        fi
+    fi
+
+    local was_running=0 old_path
+    old_path="$(_addon_path "$addon_name")"
+    if [ "$no_restart" -eq 0 ] && _addon_running "$addon_name" "$old_path"; then
+        was_running=1
+    fi
+
+    py_cli addon-rollback-apply "${target[@]}"
+
+    if [ "$restore_data" -eq 1 ]; then
+        # Brings the add-on down, restores its volumes and starts it again from
+        # the directory it is registered at now.
+        cmd_restore_scoped --only="addon:$addon_name" --restore-point="$restore_point" \
+            --config-dir="$CONFIG_DIR" -y
+    elif [ "$was_running" -eq 1 ]; then
+        if ! _addon_recreate "$addon_name"; then
+            error "The containers of $addon_name could not be recreated from the old version."
+            exit 3
+        fi
+    fi
+    success "addon rollback complete: $addon_name"
+}
+
+cmd_addon_list() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    local -a extra=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --json) extra+=(--json) ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for addon list: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli addon-list "${extra[@]}"
 }
 
 cmd_addon_uninstall() {

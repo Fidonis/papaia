@@ -71,12 +71,13 @@ tools/
                               # describes active addons, core profiles, hosting type
   pyproject.toml              # ruff + pytest config for tools/lib
   lib/                        # Python: cli.py · cli_addon.py · deployment.py · envtree.py
-                              #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
+                              #   secrets.py · resolve.py · addons.py · addon_update.py · defaults.py · reporting.py
                               #   compat.py · semver.py · render_core.py · gen_override.py
                               #   backup.py · upgrade.py · migrations.py · npm_provision.py
                               #   status.py · doctor.py · modules.py · common.py
     sh/                       # Bash command libraries sourced by papaia-ctl
-  schemas/                    # JSON Schemas of `status --json` and `doctor --json`
+  schemas/                    # JSON Schemas of `status --json`, `doctor --json`, `addon list --json`
+                              #   and `addon update --dry-run --json`
   migrations/                 # Release migrations run by `papaia-ctl upgrade`
                               #   <x.y.z>__<slug>.sh|.py — contract in its README
   tests/                      # pytest suite (mirrors the lib/ modules)
