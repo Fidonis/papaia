@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import backup, envtree
+from lib import backup, cli, envtree
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -881,6 +881,292 @@ def test_resolve_restore_point_when_everything_failed(tmp_path: Path):
     )
     with pytest.raises(backup.BackupError, match="--restore-point"):
         backup.resolve_restore_point(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# scoped backup
+# ---------------------------------------------------------------------------
+
+
+def _scoped_stack(tmp_path: Path) -> tuple[Path, Path]:
+    """Core volumes, an add-on with a volume and a data directory, and a
+    connector add-on that owns nothing."""
+    repo = _core_repo(tmp_path)
+    data_addon = _addon(
+        tmp_path,
+        "paperless",
+        """
+        services:
+          app:
+            image: stub
+            volumes:
+              - ./data/media:/media
+        volumes:
+          pgdata:
+        """,
+    )
+    (data_addon / "data" / "media").mkdir(parents=True)
+    connector = _addon(tmp_path, "paperless-connect", "services:\n  mcp:\n    image: stub\n")
+    config_dir = _config_dir(
+        tmp_path,
+        addons=[
+            {"name": "paperless", "path": str(data_addon), "active": True},
+            {"name": "paperless-connect", "path": str(connector), "active": True},
+        ],
+    )
+    return repo, config_dir
+
+
+def _scoped_plan(tmp_path: Path, raw: str) -> backup.BackupPlan:
+    repo, config_dir = _scoped_stack(tmp_path)
+    plan = backup.build_plan(config_dir, repo, tmp_path / "backups", existing=[])
+    return backup.scope_plan(plan, raw)
+
+
+def test_scope_plan_keeps_only_what_an_addon_owns(tmp_path: Path):
+    plan = _scoped_plan(tmp_path, "addon:paperless")
+
+    assert sorted((a.kind, a.owner) for a in plan.artifacts) == [
+        ("binddir", "addon:paperless"),
+        ("volume", "addon:paperless"),
+    ]
+    assert plan.addons == ["paperless"]
+    assert plan.scope == ["addon:paperless"]
+
+
+@pytest.mark.parametrize("raw", ["addon:paperless", "volume:papaia_keycloak-postgresql"])
+def test_scope_plan_never_includes_the_config_directory(tmp_path: Path, raw: str):
+    plan = _scoped_plan(tmp_path, raw)
+
+    assert plan.artifacts
+    assert all(a.kind != "configdir" for a in plan.artifacts)
+
+
+def test_scope_plan_selects_a_core_module(tmp_path: Path):
+    plan = backup.build_plan(
+        _config_dir(tmp_path), _grouped_core_repo(tmp_path), tmp_path / "backups", existing=[]
+    )
+
+    backup.scope_plan(plan, "module:librechat")
+
+    assert [(a.kind, a.source) for a in plan.artifacts] == [
+        ("volume", "papaia_librechat-mongodb")
+    ]
+    assert plan.addons == []
+
+
+def test_scope_plan_accepts_core_selectors_and_unions_them(tmp_path: Path):
+    plan = _scoped_plan(tmp_path, "addon:paperless,volume:papaia_keycloak-postgresql")
+
+    assert {a.source for a in plan.artifacts if a.kind == "volume"} == {
+        "paperless_pgdata",
+        "papaia_keycloak-postgresql",
+    }
+    assert plan.addons == ["paperless"]
+    assert plan.scope == ["addon:paperless", "volume:papaia_keycloak-postgresql"]
+
+
+@pytest.mark.parametrize("raw", ["addon:paperless-connect", "addon:ghost", "volume:no_such_volume"])
+def test_scope_plan_refuses_a_selector_that_matches_nothing(tmp_path: Path, raw: str):
+    with pytest.raises(backup.SelectionError, match="nothing to back up"):
+        _scoped_plan(tmp_path, raw)
+
+
+def test_scope_plan_refuses_when_any_one_selector_matches_nothing(tmp_path: Path):
+    with pytest.raises(backup.SelectionError, match="addon:ghost"):
+        _scoped_plan(tmp_path, "addon:paperless,addon:ghost")
+
+
+@pytest.mark.parametrize("raw", ["", "paperless", "addon:", "profile:manager", "addon:../x"])
+def test_scope_plan_refuses_a_malformed_selection(tmp_path: Path, raw: str):
+    with pytest.raises(backup.SelectionError):
+        _scoped_plan(tmp_path, raw)
+
+
+def test_scope_plan_drops_warnings_about_other_projects(tmp_path: Path):
+    repo, config_dir = _scoped_stack(tmp_path)
+    existing = [("paperless", "paperless_media")]
+    plan = backup.build_plan(config_dir, repo, tmp_path / "backups", existing=existing)
+    assert len(plan.skipped) > 1  # core volumes and paperless_pgdata do not exist
+
+    backup.scope_plan(plan, "addon:paperless")
+
+    assert plan.skipped == ["paperless_pgdata"]
+
+
+def test_a_scoped_plan_survives_the_round_trip_and_marks_its_manifest(tmp_path: Path):
+    backup_dir = tmp_path / "backups"
+    plan = _scoped_plan(tmp_path, "addon:paperless")
+    plan.snapshot.mkdir(parents=True)
+    backup.write_plan(plan)
+    restored = backup.read_plan(plan.snapshot)
+    assert restored.scope == ["addon:paperless"]
+
+    manifest = backup.write_manifest(
+        plan.snapshot, restored, {a.archive: "ok" for a in restored.artifacts}, papaia_version="1"
+    )
+    entry = backup.record_backup(backup_dir, restored, manifest, "ok")
+
+    assert manifest["scope"] == ["addon:paperless"]
+    assert backup.read_manifest(plan.snapshot)["scope"] == ["addon:paperless"]
+    assert entry["scope"] == ["addon:paperless"]
+    assert [s["selector"] for s in backup.selectors(manifest)] == ["addon:paperless"]
+
+
+def test_a_backup_of_the_whole_stack_carries_no_scope(tmp_path: Path):
+    repo, config_dir = _scoped_stack(tmp_path)
+    plan = backup.build_plan(config_dir, repo, tmp_path / "backups", existing=[])
+    plan.snapshot.mkdir(parents=True)
+
+    manifest = backup.write_manifest(plan.snapshot, plan, {}, papaia_version="1")
+    entry = backup.record_backup(tmp_path / "backups", plan, manifest, "ok")
+
+    assert "scope" not in manifest
+    assert "scope" not in entry
+    assert backup.entry_scope(entry) == []
+    backup.require_whole_stack(manifest)
+
+
+def test_a_scoped_restore_point_is_not_restored_as_a_whole():
+    manifest = {"id": "2026-10-25_10-00-00", "scope": ["addon:paperless"]}
+
+    with pytest.raises(
+        backup.ScopedRestorePointError, match="restore-scoped --only=addon:paperless"
+    ):
+        backup.require_whole_stack(manifest)
+
+
+def test_a_plain_restore_skips_scoped_backups_when_choosing_the_newest(tmp_path: Path):
+    scoped = _entry("scoped", "2026-07-20T10:00:00Z", path=str(tmp_path / "scoped"))
+    scoped["scope"] = ["addon:paperless"]
+    _seed_index(
+        tmp_path,
+        [_entry("whole", "2026-07-01T10:00:00Z", path=str(tmp_path / "whole")), scoped],
+    )
+
+    assert backup.resolve_restore_point(tmp_path)[0]["id"] == "scoped"
+    assert backup.resolve_restore_point(tmp_path, whole_stack=True)[0]["id"] == "whole"
+    assert backup.resolve_restore_point(tmp_path, "scoped", whole_stack=True)[0]["id"] == "scoped"
+
+
+def test_a_plain_restore_with_only_scoped_backups_says_what_to_do(tmp_path: Path):
+    scoped = _entry("scoped", "2026-07-20T10:00:00Z", path=str(tmp_path / "scoped"))
+    scoped["scope"] = ["addon:paperless"]
+    _seed_index(tmp_path, [scoped])
+
+    with pytest.raises(backup.BackupError, match="restore-scoped"):
+        backup.resolve_restore_point(tmp_path, whole_stack=True)
+
+
+# The same paths through the CLI, for the exit codes bash acts on.
+
+
+def _run(repo: Path, config_dir: Path, *args: str) -> int:
+    return cli.main(["--repo-root", str(repo), "--config-dir", str(config_dir), *args])
+
+
+def test_backup_plan_with_a_selection_prints_scope_and_artifacts(tmp_path: Path, capsys):
+    repo, config_dir = _scoped_stack(tmp_path)
+
+    code = _run(
+        repo, config_dir, "backup-plan", f"--backup-dir={tmp_path / 'b'}", "--only=addon:paperless"
+    )
+
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert out[0].startswith("SNAPSHOT\t")
+    assert out[1] == "SCOPE\taddon:paperless"
+    assert sorted(line.split("\t")[0] for line in out[2:]) == ["binddir", "volume"]
+
+
+def test_backup_plan_exits_2_and_writes_nothing_for_an_unmatched_selector(tmp_path: Path, capsys):
+    repo, config_dir = _scoped_stack(tmp_path)
+    backup_dir = tmp_path / "b"
+
+    code = _run(
+        repo,
+        config_dir,
+        "backup-plan",
+        f"--backup-dir={backup_dir}",
+        "--only=addon:paperless-connect",
+    )
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "nothing to back up" in captured.err
+    assert captured.out == ""
+    assert not backup_dir.exists()
+
+
+def test_backup_plan_without_a_selection_still_covers_the_whole_stack(tmp_path: Path, capsys):
+    repo, config_dir = _scoped_stack(tmp_path)
+
+    code = _run(repo, config_dir, "backup-plan", f"--backup-dir={tmp_path / 'b'}")
+
+    lines = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert not any(line.startswith("SCOPE") for line in lines)
+    assert any(line.startswith("configdir\t") for line in lines)
+
+
+def _seed_scoped_restore_point(tmp_path: Path) -> Path:
+    backup_dir = tmp_path / "backups"
+    plan = _scoped_plan(tmp_path / "seed", "addon:paperless")
+    plan.snapshot.mkdir(parents=True)
+    manifest = backup.write_manifest(
+        plan.snapshot, plan, {a.archive: "ok" for a in plan.artifacts}, papaia_version="1"
+    )
+    backup.record_backup(backup_dir, plan, manifest, "ok")
+    return backup_dir
+
+
+def test_restore_resolve_refuses_a_scoped_point_as_a_whole_with_exit_2(tmp_path: Path, capsys):
+    repo, config_dir = _scoped_stack(tmp_path)
+    backup_dir = _seed_scoped_restore_point(tmp_path)
+    point = backup.load_index(backup_dir)["backups"][0]["id"]
+
+    code = _run(
+        repo,
+        config_dir,
+        "restore-resolve",
+        f"--backup-dir={backup_dir}",
+        f"--restore-point={point}",
+    )
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "restore-scoped --only=addon:paperless" in captured.err
+    assert captured.out == ""
+
+
+def test_restore_resolve_serves_a_scoped_point_to_a_scoped_restore(tmp_path: Path, capsys):
+    repo, config_dir = _scoped_stack(tmp_path)
+    backup_dir = _seed_scoped_restore_point(tmp_path)
+
+    code = _run(
+        repo, config_dir, "restore-resolve", f"--backup-dir={backup_dir}", "--only=addon:paperless"
+    )
+
+    lines = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert "ADDONS\tpaperless" in lines
+    assert {line.split("\t")[0] for line in lines[4:]} == {"binddir", "volume"}
+
+
+def test_restore_list_shows_the_scope(tmp_path: Path, capsys):
+    repo, config_dir = _scoped_stack(tmp_path)
+    backup_dir = _seed_scoped_restore_point(tmp_path)
+    index = backup.load_index(backup_dir)
+    index["backups"].append(_entry("whole", "2026-01-01T00:00:00Z", path=str(backup_dir / "whole")))
+    backup.save_index(backup_dir, index)
+
+    code = _run(repo, config_dir, "backup-list", f"--backup-dir={backup_dir}")
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "SCOPE" in out
+    assert "addon:paperless" in out
+    assert any(line.rstrip().endswith(" all") for line in out.splitlines())
 
 
 # ---------------------------------------------------------------------------

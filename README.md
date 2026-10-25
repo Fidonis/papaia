@@ -195,7 +195,8 @@ papaia-ctl stop      [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--co
 papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
-papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
+papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N]
+                     [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
 papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...] [--backup-dir=PATH]
                      [-y] [--config-dir=PATH]
 papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
@@ -416,7 +417,8 @@ Docker volumes. `--addons` stops and removes active add-on containers first.
 ### `backup`
 
 ```bash
-tools/papaia-ctl backup [--backup-dir=PATH] [--retention-period-days=N] [--config-dir=PATH]
+tools/papaia-ctl backup [--backup-dir=PATH] [--retention-period-days=N]
+                        [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
 ```
 
 Archives the complete installation into a timestamped subdirectory of the backup location:
@@ -433,6 +435,7 @@ Archives the complete installation into a timestamped subdirectory of the backup
 |---|---|---|
 | `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to write this backup |
 | `--retention-period-days=N` | _(no pruning)_ | Delete restore points older than N days and drop their catalogue entries |
+| `--only=SELECTOR[,SELECTOR]` | _(whole installation)_ | Archive only the selected units: the volumes and writable data directories owned by `addon:NAME`, the volumes of `module:NAME`, or one `volume:NAME`; the prefix is mandatory. The config directory is not part of it. A selector that matches nothing exits with code 2 and writes no archive |
 | `--config-dir=PATH` | `../papaia-config` | Config directory location |
 
 Backups run **hot** — nothing is stopped. Because copying a live database directory would
@@ -455,6 +458,15 @@ $PAPAIA_BACKUP_DIR/
 
 Restore-point ids use local time, so they line up with what an incident timeline says;
 `created_at` in the catalogue is UTC so sorting and retention stay unambiguous.
+
+A scoped backup (`--only`) is a restore point of its own: it holds the selected units and nothing
+else, records them as `scope` in its manifest and catalogue entry, and `restore --list` shows
+the scope next to the result (`all` for a backup of the whole installation). Restore it with
+`restore-scoped --only=...`; a plain `restore` of it is refused with exit code 2, because that
+would take the stack down and replace a configuration directory the snapshot does not hold. A
+plain `restore` without `--restore-point` skips scoped backups when it picks the newest one.
+The backup id is printed in the same line as for a full backup
+(`backup complete: <id> (...)`), so a caller can capture it.
 
 A run whose archives partly failed is recorded as `partial` and is never selected automatically
 by `restore`. Volumes that a compose file declares but that were never created (a disabled

@@ -357,14 +357,23 @@ def cmd_backup_plan(args: argparse.Namespace) -> int:
         plan = backup.build_plan(
             config_dir, Path(args.repo_root), backup_dir, existing=existing
         )
+        if args.only:
+            plan = backup.scope_plan(plan, args.only)
         common.ensure_dir(plan.snapshot / "volumes")
         common.ensure_dir(plan.snapshot / "binds")
         backup.write_plan(plan)
+    except backup.SelectionError as exc:
+        # Before anything is written: a selection that cannot be met leaves no
+        # snapshot directory behind, let alone an archive.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     except backup.BackupError as exc:
         return _fail(exc)
     for name in plan.skipped:
         print(f"WARNING: declared volume does not exist, skipping: {name}", file=sys.stderr)
     print(f"SNAPSHOT\t{plan.snapshot}")
+    if plan.scope:
+        print(f"SCOPE\t{','.join(plan.scope)}")
     for artifact in plan.artifacts:
         print(f"{artifact.kind}\t{artifact.archive}\t{artifact.source}\t{artifact.owner}")
     return 0
@@ -415,13 +424,14 @@ def cmd_backup_list(args: argparse.Namespace) -> int:
         print(f"No restore points recorded in {backup_dir}.")
         return 0
     print(f"Restore points in {backup_dir}:")
-    print(f"  {'ID':<21} {'CREATED (UTC)':<21} {'SIZE (MB)':>10}  RESULT")
+    print(f"  {'ID':<21} {'CREATED (UTC)':<21} {'SIZE (MB)':>10}  {'RESULT':<8} SCOPE")
     for entry in sorted(backups, key=lambda b: str(b.get("created_at", ""))):
         print(
             f"  {str(entry.get('id', '')):<21}"
             f" {str(entry.get('created_at', '')):<21}"
             f" {str(entry.get('size_mb', '')):>10}"
-            f"  {entry.get('result', '')}"
+            f"  {str(entry.get('result', '')):<8}"
+            f" {', '.join(backup.entry_scope(entry)) or 'all'}"
         )
     return 0
 
@@ -447,7 +457,9 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     try:
         backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
-        entry, warnings = backup.resolve_restore_point(backup_dir, args.restore_point)
+        entry, warnings = backup.resolve_restore_point(
+            backup_dir, args.restore_point, whole_stack=not args.only
+        )
         snapshot = backup.snapshot_path(backup_dir, entry)
         if not snapshot.is_dir():
             raise backup.BackupError(
@@ -455,7 +467,12 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
                 f" gone: {snapshot}"
             )
         manifest = backup.read_manifest(snapshot)
+        if not args.only:
+            backup.require_whole_stack(manifest)
         selection = backup.resolve_selection(manifest, args.only) if args.only else None
+    except backup.ScopedRestorePointError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     except backup.BackupError as exc:
         return _fail(exc)
     for warning in warnings:
@@ -764,6 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_backup_plan = sub.add_parser("backup-plan")
     p_backup_plan.add_argument("--backup-dir", default=None)
     p_backup_plan.add_argument("--existing-volumes", default=None)
+    p_backup_plan.add_argument("--only", default=None)
     p_backup_plan.set_defaults(func=cmd_backup_plan)
 
     p_backup_finish = sub.add_parser("backup-finish")

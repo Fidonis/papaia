@@ -55,6 +55,21 @@ class BackupError(Exception):
     """Raised for operator-facing failures; cli.py turns it into exit 3."""
 
 
+class SelectionError(BackupError):
+    """A `--only` value that is malformed or matches nothing.
+
+    The caller asked for something that cannot be done, so cli.py turns this
+    into exit 2 where the selection is part of a `backup`, like any other bad
+    argument."""
+
+
+class ScopedRestorePointError(BackupError):
+    """A restore of the whole stack was asked for from a scoped backup.
+
+    Exit 2 like a bad argument: nothing is wrong with the restore point, the
+    request does not fit it."""
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Plan model
 # ─────────────────────────────────────────────────────────────────────────
@@ -85,6 +100,9 @@ class BackupPlan:
     artifacts: list[Artifact] = field(default_factory=list)
     addons: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    # The `--only` selectors this plan was narrowed to, normalised to
+    # `kind:name`. Empty for a plan of the whole stack.
+    scope: list[str] = field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -491,6 +509,49 @@ def build_plan(
     return plan
 
 
+def scope_plan(plan: BackupPlan, raw: str) -> BackupPlan:
+    """Narrow a plan of the whole stack to the `--only` selectors.
+
+    Same grammar and matching as `restore --only`, so whatever a scoped backup
+    holds a scoped restore can name. The configuration directory is never part
+    of a scoped plan: `restore-scoped` does not touch it either, and an
+    add-on's configuration bundle is only ever extended, never replaced.
+
+    A selector that matches no artifact is a refusal. An empty archive would
+    look like a restore point and restore nothing."""
+    parsed = parse_selectors(raw)
+    candidates = [a for a in plan.artifacts if a.kind != "configdir"]
+    unmatched = [
+        f"{kind}:{name}"
+        for kind, name in parsed
+        if not any(_matches(a, kind, name) for a in candidates)
+    ]
+    if unmatched:
+        raise SelectionError(
+            f"No volume or data directory matches {', '.join(unmatched)}: nothing to back up."
+        )
+    chosen = [a for a in candidates if any(_matches(a, kind, name) for kind, name in parsed)]
+    profiles: list[str] = []
+    for artifact in chosen:
+        _extend_unique(profiles, artifact.profiles)
+    if SELF_PROFILE in profiles:
+        raise SelectionError(
+            f"Refusing a selection that resolves to the {SELF_PROFILE!r} profile."
+        )
+
+    plan.artifacts = chosen
+    plan.addons = sorted(
+        {a.owner.split(":", 1)[1] for a in chosen if a.owner.startswith("addon:")}
+    )
+    plan.scope = [f"{kind}:{name}" for kind, name in parsed]
+    # Warnings about volumes of other projects would only be noise here.
+    projects = {a.project for a in chosen if a.owner.startswith("addon:")}
+    plan.skipped = [
+        name for name in plan.skipped if any(name.startswith(f"{p}_") for p in projects)
+    ]
+    return plan
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Snapshot manifest
 # ─────────────────────────────────────────────────────────────────────────
@@ -510,6 +571,7 @@ def write_plan(plan: BackupPlan) -> None:
                 "config_dir": str(plan.config_dir),
                 "addons": plan.addons,
                 "skipped": plan.skipped,
+                "scope": plan.scope,
                 "artifacts": [
                     {
                         "kind": a.kind,
@@ -559,6 +621,7 @@ def read_plan(snapshot: Path) -> BackupPlan:
         ],
         addons=list(data.get("addons") or []),
         skipped=list(data.get("skipped") or []),
+        scope=[str(s) for s in (data.get("scope") or [])],
     )
 
 
@@ -610,6 +673,10 @@ def write_manifest(
         "addons": plan.addons,
         "artifacts": artifacts,
     }
+    if plan.scope:
+        # A partial snapshot says so, because a restore of the whole stack
+        # replaces the configuration directory from it and has none to use.
+        manifest["scope"] = plan.scope
     common.atomic_write(
         snapshot / MANIFEST_NAME,
         yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False, allow_unicode=True),
@@ -713,22 +780,22 @@ def parse_selectors(raw: str) -> list[tuple[str, str]]:
     parts = [part.strip() for part in (raw or "").split(",")]
     parts = [part for part in parts if part]
     if not parts:
-        raise BackupError("Empty selection: --only needs at least one selector.")
+        raise SelectionError("Empty selection: --only needs at least one selector.")
     if len(parts) > MAX_SELECTORS:
-        raise BackupError(f"Too many selectors ({len(parts)}); at most {MAX_SELECTORS}.")
+        raise SelectionError(f"Too many selectors ({len(parts)}); at most {MAX_SELECTORS}.")
     parsed: list[tuple[str, str]] = []
     for part in parts:
         kind, sep, name = part.partition(":")
         if not sep or kind not in SELECTOR_KINDS:
-            raise BackupError(
+            raise SelectionError(
                 f"Invalid selector {part!r}: expected one of "
                 f"{', '.join(k + ':NAME' for k in SELECTOR_KINDS)}."
             )
         pattern = _VOLUME_NAME_RE if kind == "volume" else _MODULE_NAME_RE
         if not pattern.match(name):
-            raise BackupError(f"Invalid selector name in {part!r}.")
+            raise SelectionError(f"Invalid selector name in {part!r}.")
         if kind == "module" and name == SELF_PROFILE:
-            raise BackupError(
+            raise SelectionError(
                 f"Refusing selector {part!r}: the manager cannot restore over itself."
             )
         if (kind, name) not in parsed:
@@ -933,6 +1000,8 @@ def record_backup(backup_dir: Path, plan: BackupPlan, manifest: dict, result: st
         "artifacts": len(manifest.get("artifacts") or []),
         "addons": plan.addons,
     }
+    if plan.scope:
+        entry["scope"] = plan.scope
     index = load_index(backup_dir)
     index["backups"] = [b for b in index["backups"] if b.get("id") != plan.backup_id]
     index["backups"].append(entry)
@@ -975,14 +1044,37 @@ def prune(backup_dir: Path, retention_days: int, *, now: datetime | None = None)
     return removed
 
 
+def entry_scope(entry: dict) -> list[str]:
+    """The selectors a catalogue entry or manifest was narrowed to; empty for a
+    backup of the whole stack, including every one made before scoping existed."""
+    return [str(s) for s in (entry.get("scope") or [])]
+
+
+def require_whole_stack(manifest: dict) -> None:
+    """Refuse to restore a scoped backup as a whole.
+
+    A restore of the whole stack takes the stack down and replaces the
+    configuration directory from the snapshot. A scoped one holds neither the
+    directory nor the other modules, so the restore would remove what it cannot
+    bring back."""
+    scope = entry_scope(manifest)
+    if scope:
+        raise ScopedRestorePointError(
+            f"Restore point {manifest.get('id')} only holds {', '.join(scope)}. "
+            f"Restore it with 'papaia-ctl restore-scoped --only={','.join(scope)}'."
+        )
+
+
 def resolve_restore_point(
-    backup_dir: Path, restore_point: str | None = None
+    backup_dir: Path, restore_point: str | None = None, *, whole_stack: bool = False
 ) -> tuple[dict, list[str]]:
     """Pick the restore point to restore from. Returns (entry, warnings).
 
     Without an explicit id the most recent usable backup wins; a `failed`
     entry is never selected implicitly, since restoring from one would replace
-    live data with a knowingly incomplete snapshot."""
+    live data with a knowingly incomplete snapshot. `whole_stack` skips scoped
+    backups in that choice, because the newest backup being one add-on's
+    restore point must not turn a plain `restore` into a refusal."""
     index = load_index(backup_dir)
     backups = index.get("backups") or []
     if not backups:
@@ -997,9 +1089,14 @@ def resolve_restore_point(
         raise BackupError(f"Unknown restore point '{restore_point}'. Available: {available}")
 
     usable = [b for b in backups if b.get("result") != "failed"]
+    if whole_stack:
+        usable = [b for b in usable if not entry_scope(b)]
     if not usable:
         raise BackupError(
             "Every recorded backup failed. Pass --restore-point=ID to force one anyway."
+            if not whole_stack
+            else "No backup of the whole stack is recorded. Pass --restore-point=ID,"
+            " or use 'restore-scoped --only=...' for a scoped one."
         )
     entry = sorted(usable, key=lambda b: str(b.get("created_at", "")))[-1]
     warnings: list[str] = []
