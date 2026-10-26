@@ -901,6 +901,11 @@ def validate_target(artifact: Artifact, config_dir: Path) -> None:
     it into an operator-visible index of selectable things. A volume name has
     to look like one; a directory target has to be absolute and must not be an
     ancestor of the config directory, since restoring wipes the target first."""
+    if artifact.kind == "configdir":
+        # Its target *is* the config directory, so the containment rule below
+        # refused every whole-stack restore. The recorded source is never used:
+        # restore-resolve redirects it to the config dir the stack reads now.
+        return
     if artifact.kind == "volume":
         if not _VOLUME_NAME_RE.match(artifact.source):
             raise BackupError(f"Refusing volume target {artifact.source!r} from the manifest.")
