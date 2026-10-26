@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import ssl
 import urllib.error
 
 import pytest
@@ -287,6 +288,70 @@ def test_the_host_reaches_keycloak_at_its_published_port(monkeypatch):
     root = {"KEYCLOAK_EXT_PORT": "18110", "OIDC_TOKEN_URL": _INTERNAL_TOKEN_URL}
     # The internal name does not resolve on the host, so it is never used there.
     assert kcs._admin_base_url(root) == "https://localhost:18110"
+
+
+@pytest.mark.parametrize(
+    ("host_ip", "expected"),
+    [
+        ("", "https://localhost:8110"),
+        ("0.0.0.0", "https://localhost:8110"),
+        ("::", "https://localhost:8110"),
+        ("10.42.0.1", "https://10.42.0.1:8110"),
+        ("fd00::1", "https://[fd00::1]:8110"),
+    ],
+)
+def test_the_host_dials_the_address_the_port_is_published_on(monkeypatch, host_ip, expected):
+    # --host-ip binds the published port to one address; localhost is refused there.
+    monkeypatch.setattr(kcs.common, "in_container", lambda: False)
+    assert kcs._admin_base_url({"HOST_IP": host_ip}) == expected
+
+
+def test_a_container_ignores_the_host_ip(monkeypatch):
+    monkeypatch.setattr(kcs.common, "in_container", lambda: True)
+    root = {"HOST_IP": "10.42.0.1", "OIDC_TOKEN_URL": _INTERNAL_TOKEN_URL}
+    assert kcs._admin_base_url(root) == "https://keycloak:8443"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://localhost:8110", None),
+        ("https://keycloak:8443", None),
+        ("https://10.42.0.1:8110", "localhost"),
+        ("https://[fd00::1]:8110", "localhost"),
+    ],
+)
+def test_an_address_is_verified_as_localhost(base_url, expected):
+    # The local CA certificate names localhost, never the --host-ip address.
+    assert kcs._tls_server_name(base_url) == expected
+
+
+def test_the_server_name_context_overrides_the_url_host(tmp_path):
+    ctx = kcs._ssl_context(tmp_path, "localhost")
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname
+
+    seen = {}
+
+    class _Probe(kcs._ServerNameContext):
+        pass
+
+    def _record(self, sock, *args, server_hostname=None, **kwargs):
+        seen["name"] = server_hostname
+
+    probe = _Probe(ssl.PROTOCOL_TLS_CLIENT)
+    probe.server_name = "localhost"
+    original = ssl.SSLContext.wrap_socket
+    ssl.SSLContext.wrap_socket = _record
+    try:
+        probe.wrap_socket(object(), server_hostname="10.42.0.1")
+    finally:
+        ssl.SSLContext.wrap_socket = original
+    assert seen["name"] == "localhost"
+
+
+def test_without_a_server_name_the_default_context_is_kept(tmp_path):
+    assert not isinstance(kcs._ssl_context(tmp_path), kcs._ServerNameContext)
 
 
 def test_the_published_port_defaults_to_the_shipped_one(monkeypatch):
