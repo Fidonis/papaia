@@ -205,6 +205,21 @@ switching the profile off clears the block again only if it still points at the 
 The reset link is switched on once, together with the relay: an administrator who turns
 it off later stays in charge. `verifyEmail` is not touched.
 
+**Login branding.** A login that one of the stack's services starts (LibreChat, LiteLLM,
+LocalAI, papaia-manager, oauth2-proxy) shows the papAIa login page; a direct Keycloak
+login, such as the account console at `/realms/papaia/account`, keeps the stock look. The
+theme `papaia` (`src/infra/keycloak/themes/papaia`, rendered to
+`$PAPAIA_CONFIG_DIR/infra/keycloak/themes/papaia` and mounted into the container) is
+assigned per client through the client attribute `login_theme`, never through the realm's
+login theme, which stays unset. The realm template sets the attribute on the core clients;
+on an existing installation the start-time sync adds it where it is missing and leaves a
+`login_theme` somebody set by hand alone. To rebrand, replace `resources/css/papaia.css`
+or `resources/img/papaia-logo.svg` through the overlay
+(`$PAPAIA_CONFIG_DIR/overlay/infra/keycloak/themes/papaia/login/…`); Keycloak caches themes,
+so restart the `keycloak` service afterwards. An add-on that registers its own client sets
+`login_theme: papaia` in that client's `attributes` to get the same page. With an external
+OIDC provider this does not apply.
+
 **Default Test Users** (local development only — do not use in production)
 
 | Username | Password | Roles |
