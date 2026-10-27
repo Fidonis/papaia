@@ -1,0 +1,96 @@
+/* papAIa brand on top of the stock keycloak.v2 login. Colors follow the manager's
+   brand layer (navy #0a2f4d, gold #C8972A). Only the variables and rules of
+   keycloak.v2's styles.css are overridden, so a Keycloak upgrade needs no change here.
+   Replace this file (and img/papaia-logo.svg) through the overlay to rebrand. */
+:root {
+    --keycloak-logo-url: url('../img/papaia-logo.svg');
+    --keycloak-bg-logo-url: none;
+    --keycloak-logo-height: 72px;
+    --keycloak-logo-width: 300px;
+    --keycloak-card-top-color: #C8972A;
+    --pf-v5-global--primary-color--100: #0a2f4d;
+    --pf-v5-global--primary-color--200: #123f63;
+    --pf-v5-global--link--Color: #0a2f4d;
+    --pf-v5-global--link--Color--hover: #123f63;
+}
+
+.login-pf body {
+    background: #f4f1ea;
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.pf-v5-c-login__main {
+    border-radius: 14px;
+    overflow: hidden;
+}
+
+.pf-v5-c-login__main-header .pf-v5-c-title,
+#kc-page-title {
+    color: #0a2f4d;
+    font-family: "Manrope", system-ui, sans-serif;
+}
+
+#kc-header-wrapper {
+    color: #0a2f4d !important;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: "Manrope", system-ui, sans-serif;
+    font-weight: 700;
+}
+
+/* The realm's display name is the header (a logo div only appears without one), so the
+   mark goes in front of it. */
+#kc-header-wrapper::before,
+div.kc-logo-text {
+    content: "";
+    display: block;
+    height: var(--keycloak-logo-height);
+    margin: 0 auto 12px;
+    background: var(--keycloak-logo-url) no-repeat center / contain;
+}
+
+div.kc-logo-text {
+    margin-bottom: 0;
+}
+
+.pf-v5-c-button.pf-m-primary {
+    --pf-v5-c-button--m-primary--BackgroundColor: #0a2f4d;
+    --pf-v5-c-button--m-primary--hover--BackgroundColor: #123f63;
+    --pf-v5-c-button--m-primary--focus--BackgroundColor: #123f63;
+    --pf-v5-c-button--m-primary--active--BackgroundColor: #123f63;
+    border-radius: 8px;
+}
+
+.pf-v5-c-form-control {
+    border-radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .login-pf body {
+        background: #0b1620;
+    }
+    .pf-v5-c-login__main-header .pf-v5-c-title,
+    #kc-page-title,
+    #kc-header-wrapper {
+        color: #c3d2de !important;
+    }
+    :root {
+        --pf-v5-global--link--Color: #c3d2de;
+    }
+    /* The navy squares of the mark would vanish on the dark ground. */
+    #kc-header-wrapper::before {
+        background-color: #f4f1ea;
+        border-radius: 14px;
+        padding: 6px;
+        background-origin: content-box;
+        width: 84px;
+    }
+    .pf-v5-c-button.pf-m-primary {
+        --pf-v5-c-button--m-primary--BackgroundColor: #C8972A;
+        --pf-v5-c-button--m-primary--hover--BackgroundColor: #d8a73a;
+        --pf-v5-c-button--m-primary--focus--BackgroundColor: #d8a73a;
+        --pf-v5-c-button--m-primary--active--BackgroundColor: #d8a73a;
+        --pf-v5-c-button--m-primary--Color: #0a2f4d;
+        color: #0a2f4d;
+    }
+}
