@@ -95,6 +95,7 @@ BASE_RENDER_TARGETS = [
     "ai/localai/models",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
+    "infra/keycloak/themes/papaia",
 ]
 
 # Manifest keys the tools actually read from papaia-app.yaml. Reading a new

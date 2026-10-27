@@ -38,6 +38,7 @@ BASE_RENDER_TARGETS: list[str] = [
     "ai/localai/models",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
+    "infra/keycloak/themes/papaia",
 ]
 
 _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
