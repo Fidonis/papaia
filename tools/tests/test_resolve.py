@@ -100,6 +100,65 @@ def test_resolve_hostnames_librechat_sticky_reused_when_not_fresh(repo_root):
     assert tree["ai/librechat"]["DOMAIN_SERVER"] == "http://prior-run.example.com:8000"
 
 
+def test_resolve_hostnames_auth_host_sticky_kept_without_flag(repo_root):
+    # An upgrade re-runs setup non-interactively without --auth-host: the stored
+    # value must survive, and the issuer with it.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "https://chat.example.org"
+    tree[""]["AUTH_HOST"] = "https://auth.example.org"
+    args = resolve.SetupArgs(config_dir=repo_root, non_interactive=True, fresh_init=False)
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.example.org"
+    assert tree["infra/keycloak"]["KC_HOSTNAME"] == "https://auth.example.org"
+    assert tree[""]["OIDC_ISSUER"] == "https://auth.example.org/realms/papaia"
+
+
+def test_resolve_hostnames_auth_host_flag_overrides_sticky(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["AUTH_HOST"] = "https://auth.example.org"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://chat.example.org",
+        auth_host="https://sso.example.org",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://sso.example.org"
+
+
+def test_resolve_hostnames_derived_auth_host_follows_new_app_host(repo_root):
+    # A stored value that is only the old app host's derivation was never chosen;
+    # it moves with --app-host.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["AUTH_HOST"] = "http://host.docker.internal:8110"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.papaia.example.com"
+
+
+def test_resolve_hostnames_auth_host_prompt_defaults_to_sticky(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "https://chat.example.org"
+    tree[""]["AUTH_HOST"] = "https://auth.example.org"
+    seen = {}
+
+    def fake_prompt(message, default):
+        if message.startswith("Public Keycloak URL"):
+            seen["default"] = default
+        return default
+
+    args = resolve.SetupArgs(config_dir=repo_root, prompt=fake_prompt, fresh_init=False)
+    resolve.resolve_hostnames(tree, args)
+    assert seen["default"] == "https://auth.example.org"
+
+
 def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     tree = envtree.load_seed_tree(repo_root)
     args = resolve.SetupArgs(
