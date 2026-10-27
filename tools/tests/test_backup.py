@@ -1153,6 +1153,34 @@ def test_restore_resolve_serves_a_scoped_point_to_a_scoped_restore(tmp_path: Pat
     assert {line.split("\t")[0] for line in lines[4:]} == {"binddir", "volume"}
 
 
+def test_restore_resolve_serves_a_whole_stack_point_with_its_config_dir(
+    tmp_path: Path, capsys
+):
+    repo, config_dir = _scoped_stack(tmp_path)
+    backup_dir = tmp_path / "backups"
+    plan = backup.build_plan(config_dir, repo, backup_dir, existing=[])
+    plan.snapshot.mkdir(parents=True)
+    manifest = backup.write_manifest(
+        plan.snapshot, plan, {a.archive: "ok" for a in plan.artifacts}, papaia_version="1"
+    )
+    backup.record_backup(backup_dir, plan, manifest, "ok")
+    point = backup.load_index(backup_dir)["backups"][0]["id"]
+
+    code = _run(
+        repo,
+        config_dir,
+        "restore-resolve",
+        f"--backup-dir={backup_dir}",
+        f"--restore-point={point}",
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    config_rows = [line for line in captured.out.splitlines() if line.startswith("configdir\t")]
+    assert len(config_rows) == 1
+    assert config_rows[0].split("\t")[2] == str(config_dir)
+
+
 def test_restore_list_shows_the_scope(tmp_path: Path, capsys):
     repo, config_dir = _scoped_stack(tmp_path)
     backup_dir = _seed_scoped_restore_point(tmp_path)
