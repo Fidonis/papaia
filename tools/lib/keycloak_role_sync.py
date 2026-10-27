@@ -15,8 +15,9 @@ signed-in account's own token), and an existing realm gets them from here.
 Clients are handled only for the Compose profiles that need them
 (PROFILE_CLIENTS), so an installation that never enables such a profile keeps
 a realm without them. A missing client is created. For one that exists, the
-secret is aligned with the rendered template and nothing else about it is
-changed: the core `.env` is canonical for that secret, and a client left over
+secret is aligned with the rendered template and, when the template names a
+login theme for it, a missing `login_theme` attribute is added; nothing else about it
+is changed: the core `.env` is canonical for that secret, and a client left over
 from an earlier add-on install would otherwise refuse the service that signs in
 with the generated one.
 
@@ -343,6 +344,40 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tu
     return created, updated
 
 
+def _sync_login_theme(base_url, ctx, token, realm_def: dict) -> int:
+    """Give the existing clients the login theme the rendered template names for them.
+
+    The theme is a per-client attribute (never the realm's), so a login that a papAIa
+    service starts is branded and a direct Keycloak login is not. An attribute that is
+    already set stays, whatever it holds: a theme chosen by hand is never overwritten.
+    Keycloak's client update replaces the whole attribute map, so the existing
+    attributes are sent along. Returns the number of clients changed."""
+    changed = 0
+    for client in realm_def.get("clients", []):
+        theme = (client.get("attributes") or {}).get("login_theme")
+        if not theme:
+            continue
+        matches = _api(
+            base_url,
+            ctx,
+            token,
+            "GET",
+            f"/clients?clientId={urllib.parse.quote(client['clientId'])}",
+        )
+        if not matches:
+            continue
+        uuid = matches[0]["id"]
+        current = _api(base_url, ctx, token, "GET", f"/clients/{uuid}") or {}
+        attributes = dict(current.get("attributes") or {})
+        if "login_theme" in attributes:
+            continue
+        attributes["login_theme"] = theme
+        _api(base_url, ctx, token, "PUT", f"/clients/{uuid}", {"attributes": attributes})
+        changed += 1
+        print(f"  login theme set: {client['clientId']}", flush=True)
+    return changed
+
+
 def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
     added = 0
     for client in realm_def.get("clients", []):
@@ -522,6 +557,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         clients_created, secrets_updated = _sync_clients(
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
+        themes_set = _sync_login_theme(base_url, ctx, token, realm_def)
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
         _sync_smtp(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
@@ -539,7 +575,8 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
     print(
         f"Keycloak role sync complete: {roles_created} role(s) created, "
         f"{composites_added} composite edge(s) added, {clients_created} client(s) "
-        f"created, {secrets_updated} client secret(s) updated, {mappers_added} "
+        f"created, {secrets_updated} client secret(s) updated, {themes_set} login "
+        f"theme(s) set, {mappers_added} "
         f"protocol mapper(s) created, {migrated} user(s) migrated to "
         f"{_MIGRATION_TARGET_ROLE}.",
         flush=True,

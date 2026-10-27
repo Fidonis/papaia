@@ -129,7 +129,8 @@
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
       "attributes": {
-        "pkce.code.challenge.method": "S256"
+        "pkce.code.challenge.method": "S256",
+        "login_theme": "papaia"
       },
       "protocolMappers": [
         {
@@ -206,7 +207,8 @@
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
       "attributes": {
-        "post.logout.redirect.uris": "*"
+        "post.logout.redirect.uris": "*",
+        "login_theme": "papaia"
       },
       "protocolMappers": [
         {
@@ -232,6 +234,9 @@
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "${env.KC_OAUTH2_PROXY_CLIENT_SECRET}",
+      "attributes": {
+        "login_theme": "papaia"
+      },
       "protocolMappers": [
         {
           "name": "realm-roles",
@@ -297,6 +302,9 @@
       "authenticationFlowBindingOverrides": {
         "browser": "f3a8b2c1-4d5e-4f6a-8b9c-1d2e3f4a5b6c"
       },
+      "attributes": {
+        "login_theme": "papaia"
+      },
       "protocolMappers": [
         {
           "name": "realm-roles",
@@ -347,6 +355,9 @@
       "publicClient": false,
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
+      "attributes": {
+        "login_theme": "papaia"
+      },
       "protocolMappers": [
         {
           "name": "realm-roles",

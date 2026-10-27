@@ -331,3 +331,35 @@ def test_render_switching_the_relay_off_restores_the_plain_realm(repo_root, conf
     render_core.render(config_dir, repo_root)
 
     assert _realm_file(config_dir).read_bytes() == plain
+
+
+def test_render_ships_the_login_theme_and_the_overlay_replaces_a_file(repo_root, config_dir):
+    shutil.copytree(
+        REAL_REPO / "src/infra/keycloak/themes", repo_root / "src/infra/keycloak/themes"
+    )
+    _setup_minimal(repo_root, config_dir)
+    overlay = config_dir / "overlay" / "infra/keycloak/themes/papaia/login/resources/css/papaia.css"
+    overlay.parent.mkdir(parents=True, exist_ok=True)
+    overlay.write_text("/* customer */", encoding="utf-8")
+
+    render_core.render(config_dir, repo_root)
+
+    theme = config_dir / "infra/keycloak/themes/papaia/login"
+    assert "parent=keycloak.v2" in (theme / "theme.properties").read_text(encoding="utf-8")
+    assert (theme / "resources/img/papaia-logo.svg").is_file()
+    assert (theme / "resources/css/papaia.css").read_text(encoding="utf-8") == "/* customer */"
+
+
+def test_the_realm_template_themes_the_login_clients_but_not_the_realm():
+    template = json.loads(
+        (REAL_REPO / "src/infra/keycloak/realm-import/papaia-realm.json.template").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "loginTheme" not in template, "a realm theme would brand the direct login as well"
+    for client in template["clients"]:
+        theme = (client.get("attributes") or {}).get("login_theme")
+        if client.get("standardFlowEnabled"):
+            assert theme == "papaia", client["clientId"]
+        else:
+            assert theme is None, client["clientId"]
