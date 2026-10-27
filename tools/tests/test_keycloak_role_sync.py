@@ -176,11 +176,21 @@ class FakeKeycloak:
             return {"type": "secret", "value": self.clients[m.group(1)].get("secret")}
 
         m = re.fullmatch(r"/clients/([^/]+)", path)
+        if m and method == "GET":
+            client = self.clients[m.group(1)]
+            return {
+                "id": m.group(1),
+                "clientId": client["clientId"],
+                "attributes": dict(client.get("attributes", {})),
+            }
         if m and method == "PUT":
             client = self.clients[m.group(1)]
             client.setdefault("put_bodies", []).append(body)
             if "secret" in body:
                 client["secret"] = body["secret"]
+            if "attributes" in body:
+                # Keycloak replaces the whole attribute map.
+                client["attributes"] = dict(body["attributes"])
             return None
 
         m = re.fullmatch(r"/clients\?clientId=([^&]+)", path)
@@ -1037,3 +1047,65 @@ def test_a_realm_without_smtp_and_without_the_profile_is_untouched(tmp_path, mon
 
     assert fake.realm_puts == []
     assert fake.realm["resetPasswordAllowed"] is True
+
+
+def _themed_realm_def() -> dict:
+    realm_def = _realm_def()
+    realm_def["clients"][0]["attributes"] = {"login_theme": "papaia"}
+    return realm_def
+
+
+def _existing_oauth2_proxy(attributes: dict | None = None) -> dict:
+    client = {"clientId": "oauth2-proxy", "mappers": {}}
+    if attributes is not None:
+        client["attributes"] = attributes
+    return {"uuid-oauth2-proxy": client}
+
+
+def test_an_existing_client_gets_the_login_theme_and_keeps_its_attributes(
+    tmp_path, monkeypatch, capsys
+):
+    _write_realm_json(tmp_path, _themed_realm_def())
+    fake = FakeKeycloak(
+        roles={"user": _role("user")},
+        clients=_existing_oauth2_proxy({"pkce.code.challenge.method": "S256"}),
+    )
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    client = fake.clients["uuid-oauth2-proxy"]
+    assert client["attributes"] == {
+        "pkce.code.challenge.method": "S256",
+        "login_theme": "papaia",
+    }
+    out = capsys.readouterr().out
+    assert "login theme set: oauth2-proxy" in out
+    assert "1 login theme(s) set" in out
+
+
+def test_a_login_theme_chosen_by_hand_is_never_overwritten(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _themed_realm_def())
+    fake = FakeKeycloak(
+        roles={"user": _role("user")},
+        clients=_existing_oauth2_proxy({"login_theme": "keycloak.v2"}),
+    )
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    client = fake.clients["uuid-oauth2-proxy"]
+    assert client["attributes"] == {"login_theme": "keycloak.v2"}
+    assert "put_bodies" not in client
+
+
+def test_the_login_theme_is_set_once(tmp_path, monkeypatch, capsys):
+    _write_realm_json(tmp_path, _themed_realm_def())
+    fake = FakeKeycloak(roles={"user": _role("user")}, clients=_existing_oauth2_proxy())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert len(fake.clients["uuid-oauth2-proxy"]["put_bodies"]) == 1
+    assert "0 login theme(s) set" in capsys.readouterr().out
