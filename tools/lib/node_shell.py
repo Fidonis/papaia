@@ -7,7 +7,8 @@ one command,
     restrict,from="<controller>",command="bash <root>/checkout/tools/papaia-ctl node-shell
         --node-root=<root>" ssh-ed25519 AAAA...
 
-and this module is that command. It is the security boundary, not the SSH login:
+and this module is that command. It narrows what the key is used for, keeps a record of
+every use, and refuses malformed requests:
 
 * The requested command arrives in `SSH_ORIGINAL_COMMAND` and is parsed here, without a
   shell: split on whitespace, every word restricted to a small character set, at most a
@@ -20,6 +21,13 @@ and this module is that command. It is the security boundary, not the SSH login:
   for this node.
 * Output streams as it is produced and the exit code is passed through. Every call leaves
   one line in the node's audit log.
+
+What it does not do is protect a node from whoever holds the controller's key. Installing
+a release (`checkout-put`) or a bundle (`bundle-put`) is part of the job, and either one can
+replace this shim or the Compose files it runs, so that key is as powerful as the controller
+itself and has to be kept like the CA keys next to it. The allowlist guards against mistakes
+and makes every action visible in the audit log; it is not a sandbox for a hostile
+controller.
 
 The controller runs its own node through the same code (`--controller-config`), so the
 local and the SSH executor cannot drift apart.

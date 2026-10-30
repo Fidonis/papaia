@@ -76,13 +76,14 @@ _require_profiles_resolve() {
 }
 
 cmd_start() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node=""
+    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --addons) addons=1 ;;
             --profiles=*) profiles="${1#*=}" ;;
             --node=*) node="${1#*=}" ;;
+            --unlock) unlock=1 ;;
             --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for start: $1"; exit 2 ;;
@@ -95,10 +96,21 @@ cmd_start() {
     local mode
     mode="$(_topology_mode)" || exit 3
     if [ "$mode" = "distributed" ]; then
+        if [ "$unlock" -eq 1 ]; then
+            # The operator's way out of an upgrade abandoned without a restore point: drop
+            # the lock and let start put the checkout's release back on every node.
+            warn "--unlock: releasing the upgrade lock; every node gets this checkout's release."
+            py_cli cluster-lock --clear
+            UPGRADE_IN_PROGRESS=1
+        fi
         _start_distributed "$node" "$profiles" "$addons" "$force"
         return
     fi
     _require_no_node "$node"
+    if [ "$unlock" -eq 1 ]; then
+        error "--unlock is for a distributed installation; this one runs on one host."
+        exit 2
+    fi
 
     # Compatibility gate for the upgrade case: the core may have moved since
     # the addons were installed. Refuse before anything is materialised or
@@ -254,7 +266,14 @@ _provisioning_step() {
         local service="nginx" owner
         [ "$step" = "keycloak-role-sync" ] && service="keycloak"
         owner="$(py_cli topology-node-of --service="$service")"
-        py_cli node-exec --name="${owner%$'\r'}" hook "$step"
+        owner="${owner%$'\r'}"
+        if [ -z "$owner" ]; then
+            # As on one host: nothing to provision for a service the installation does not
+            # run (an external proxy, an external identity provider).
+            info "$step skipped: this installation does not run $service."
+            return 0
+        fi
+        py_cli node-exec --name="$owner" hook "$step"
         return
     fi
     # The step's own exit status is the command's, so a retry that fails is visible.

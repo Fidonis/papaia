@@ -29,7 +29,8 @@
 #                       [--topology=single|distributed] [--node=NAME=ADDR[,ssh=USER@HOST[:PORT]]]
 #                       [--controller=NAME] [--preset=dmz-split|dmz-edge] [--place=SERVICE=NODE]
 #                       [--link-port=PORT] [--topology-file=PATH]
-#   papaia-ctl start         [--addons] [--profiles=LIST] [--node=NAME] [--force] [--config-dir=PATH]
+#   papaia-ctl start         [--addons] [--profiles=LIST] [--node=NAME] [--unlock] [--force]
+#                            [--config-dir=PATH]
 #   papaia-ctl stop          [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--node=NAME]
 #                            [--config-dir=PATH]
 #   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
@@ -95,7 +96,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,88p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,89p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

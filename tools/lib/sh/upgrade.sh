@@ -90,6 +90,9 @@ cmd_upgrade() {
     local distributed=0 mode
     mode="$(_topology_mode)" || exit 3
     [ "$mode" = "distributed" ] && distributed=1
+    # The upgrade's own backup, stop and start are not held up by the lock it takes (and
+    # a retry by the lock an earlier attempt left).
+    [ "$distributed" -eq 1 ] && UPGRADE_IN_PROGRESS=1
 
     if [ -n "$resume_from" ]; then
         if [ -z "$resume_target" ]; then
@@ -224,14 +227,6 @@ cmd_upgrade() {
         restore_point="$LAST_BACKUP_ID"
     fi
 
-    # --- lock ---------------------------------------------------------------
-    # Until the upgrade has finished, a distributed installation accepts nothing but the
-    # upgrade itself and the way back (restore).
-    if [ "$distributed" -eq 1 ]; then
-        py_cli cluster-lock --set --from="$current" --to="$target" \
-            ${restore_point:+--restore-point="$restore_point"}
-    fi
-
     # --- stop + move the checkout -----------------------------------------
     # --clean-up, i.e. `docker compose down`: the containers are REMOVED, not
     # merely stopped, for the same reason _restore_teardown gives in backup.sh.
@@ -245,10 +240,20 @@ cmd_upgrade() {
     info "Stopping and removing the containers (volumes are kept)..."
     cmd_stop --clean-up --addons --config-dir="$CONFIG_DIR"
 
+    # --- lock ---------------------------------------------------------------
+    # From the moment the releases can differ until the upgrade has finished, a distributed
+    # installation accepts nothing but the upgrade itself and the way back (restore).
+    if [ "$distributed" -eq 1 ]; then
+        py_cli cluster-lock --set --from="$current" --to="$target" \
+            ${restore_point:+--restore-point="$restore_point"}
+    fi
+
     _upgrade_cleanup  # the EXIT trap does not fire across the exec below
 
     info "Moving the checkout to $tag..."
     if ! git -C "$REPO_ROOT" checkout --detach --quiet "$tag"; then
+        # Nothing moved: no reason to keep the installation locked.
+        [ "$distributed" -eq 1 ] && py_cli cluster-lock --clear
         error "Could not check out $tag. The stack is stopped and the checkout is unchanged."
         error "Start it again with 'papaia-ctl start --addons'."
         _upgrade_log "$current" "$target" failed "stage=checkout"
@@ -374,6 +379,9 @@ _upgrade_apply_distributed() {
     [ "$force" = "1" ] && start_flags+=(--force)
     info "Starting every node..."
     if ! ( cmd_start "${start_flags[@]}" ); then
+        # Every node runs $target now; only the start is missing, so nothing to lock.
+        py_cli cluster-lock --clear
+        UPGRADE_IN_PROGRESS=0
         _upgrade_failed "$from" "$target" "$restore_point" "$previous_tag" \
             "the upgrade itself is complete — only the start failed, so 'papaia-ctl start --addons' may be all that is missing" \
             "stage=start"
@@ -404,6 +412,10 @@ _upgrade_failed() {
     error "    git -C $REPO_ROOT checkout $previous_tag"
     if [ -n "$restore_point" ]; then
         error "    papaia-ctl restore --restore-point=$restore_point --config-dir=$CONFIG_DIR"
+    elif [ "${UPGRADE_IN_PROGRESS:-0}" = "1" ]; then
+        error "    papaia-ctl start --addons --unlock --config-dir=$CONFIG_DIR"
+        error "  (no restore point was created — the upgrade ran with --no-backup; --unlock"
+        error "  releases the upgrade lock and puts $from back on every node)"
     else
         error "    papaia-ctl start --addons --config-dir=$CONFIG_DIR"
         error "  (no restore point was created — the upgrade ran with --no-backup)"

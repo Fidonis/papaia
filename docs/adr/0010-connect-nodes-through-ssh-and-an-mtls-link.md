@@ -33,7 +33,10 @@ ADR 0009 places services on several nodes. Two things are then missing:
 - On each node an unprivileged user `papaia` belongs to the Docker group. Its only
   `authorized_keys` entry is
   `restrict,from="<controller>",command="bash <root>/checkout/tools/papaia-ctl node-shell --node-root=<root>"`.
-  The forced command, not the login, is the security boundary.
+  The forced command narrows what the key is used for, but it is not a sandbox against
+  the key's holder: installing a release or a bundle, which is the channel's job, can
+  replace the shim itself. The controller's key is therefore as powerful as the controller
+  and is kept like the CA keys next to it.
 - `papaia-ctl node-shell` (`tools/lib/node_shell.py`) reads `SSH_ORIGINAL_COMMAND` and
   parses it itself, without a shell. Words are restricted to a small character set, and only
   an allowlist of verbs exists: `ping`, `version`, `status`, `doctor`,
@@ -88,8 +91,11 @@ ADR 0009 places services on several nodes. Two things are then missing:
 
 ## Consequences
 
-- **Positive**: A stolen controller key buys exactly the verbs of the shim, from the
-  controller's address only, on nodes that are still enrolled.
+- **Positive**: The node's login cannot be used for anything but the shim, only from the
+  controller's address, and every call is in the node's audit log.
+- **Negative**: Whoever holds the controller's key for a node controls that node: a release
+  or a bundle pushed with it can replace the shim. Protecting the controller's config tree
+  protects the nodes; nothing on the node can make up for a compromised controller.
 - **Positive**: No service, no configuration file and no add-on contract changes for the
   distributed case. Every service dials the name it always dialled.
 - **Positive**: The gateway configuration and the firewall matrix come from one table, so

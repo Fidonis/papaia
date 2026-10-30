@@ -409,11 +409,13 @@ def test_an_addon_placed_on_a_remote_node_travels_in_its_bundle(distributed, tmp
     assert install(distributed, "edgecache", path, "--node=edge") == 0
     run_cli(distributed.repo, distributed.config, "render")
     bundle = topology.bundle_dir(distributed.config, "edge")
-    assert (bundle / "addons/edgecache/src/docker-compose.yml").is_file()
+    assert (bundle / "addons/edgecache/edgecache/docker-compose.yml").is_file()
     assert (bundle / "addons/edgecache/.env").is_file()
     assert (bundle / "overrides/docker-compose.edgecache.override.yml").is_file()
     node_manifest = yaml.safe_load((bundle / "deployment.yaml").read_text())
-    assert node_manifest["addons"][0]["path"] == "/srv/papaia-node/config/addons/edgecache/src"
+    assert (
+        node_manifest["addons"][0]["path"] == "/srv/papaia-node/config/addons/edgecache/edgecache"
+    )
     internal = topology.bundle_dir(distributed.config, "internal")
     assert not (internal / "addons").exists()
     plan = cluster_data.build_plan(load(distributed), tmp_path / "b", only="addon:edgecache")
@@ -448,6 +450,54 @@ def test_addon_check_reports_the_placement(distributed, tmp_path, capsys):
     rows = json.loads(capsys.readouterr().out)
     assert code == 2
     assert rows[0]["axis"] == "placement" and "not placeable on 'edge'" in rows[0]["reason"]
+
+
+def test_force_does_not_let_an_unplaceable_addon_through_the_check(distributed, tmp_path, capsys):
+    path = make_addon(tmp_path, "docs", ["librechat"])
+    install(distributed, "docs", path)
+    manifest = deployment.load(distributed.config)
+    manifest["addons"][0]["node"] = "edge"
+    manifest["mode"] = "dev"
+    deployment.save(distributed.config, manifest)
+    code = cli.main(
+        [
+            "--repo-root",
+            str(distributed.repo),
+            "--config-dir",
+            str(distributed.config),
+            "addon-check",
+            "--force",
+        ]
+    )
+    assert code == 2
+
+
+def test_two_remote_addons_keep_their_own_projects_and_volumes(fake, tmp_path):
+    inst = fake["inst"]
+    for name in ("cache", "index"):
+        install(inst, name, make_addon(tmp_path, name, ["litellm"]), "--node=edge")
+    run_cli(inst.repo, inst.config, "render")
+    ctx = node_shell.context_from_args(
+        ["--repo-root", str(inst.repo), f"--controller-config={inst.config}", "--node=edge"]
+    )
+    # The node sees the add-ons under the paths its bundle names; make them exist here.
+    bundle = topology.bundle_dir(inst.config, "edge")
+    node_manifest = yaml.safe_load((bundle / "deployment.yaml").read_text())
+    for entry in node_manifest["addons"]:
+        entry["path"] = str(bundle / "addons" / entry["name"] / Path(entry["path"]).name)
+    (bundle / "deployment.yaml").write_text(yaml.safe_dump(node_manifest))
+    volumes = set(node_shell.node_volumes(ctx))
+    assert {"cache_cache-data", "index_index-data"} <= volumes
+    planned = {
+        a.source
+        for a in cluster_data.build_plan(load(inst), tmp_path / "b").artifacts
+        if a.owner.startswith("addon:")
+    }
+    assert planned == {"cache_cache-data", "index_index-data"}
+    argv = node_shell.addon_compose_argv(
+        ctx, "cache", *node_shell._addon(ctx, "addon:cache")[1:], "up"
+    )
+    assert argv[argv.index("-p") + 1] == "cache"
 
 
 def test_addons_start_on_their_node_before_the_core(fake, tmp_path):

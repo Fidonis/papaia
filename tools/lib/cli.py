@@ -79,6 +79,12 @@ def cmd_localai_variants(args: argparse.Namespace) -> int:
     return 0
 
 
+# A setup request that does not fit the installation (a topology for an existing one, a
+# placement that cannot work). Distinct from argparse's 2, so that bash can tell a refusal
+# (exit 2, nothing changed) from a failed run (exit 3) without changing the latter.
+SETUP_REFUSED = 4
+
+
 def _requested_topology(
     args: argparse.Namespace, config_dir: Path
 ) -> topology.Topology | int | None:
@@ -100,15 +106,23 @@ def _requested_topology(
         current = topology.load_config(config_dir)
     except topology.TopologyError as exc:
         print(f"ERROR: deployment.yaml: {exc}", file=sys.stderr)
-        return 2
-    if args.topology == topology.SINGLE and not (args.node or args.place or args.topology_file):
+        return SETUP_REFUSED
+    if args.topology == topology.SINGLE:
+        if args.node or args.place or args.preset or args.controller or args.link_port or (
+            args.topology_file
+        ):
+            print(
+                "ERROR: --topology=single takes no nodes, placement or topology file.",
+                file=sys.stderr,
+            )
+            return SETUP_REFUSED
         if current.distributed:
             print(
                 "ERROR: this installation is distributed; setup does not turn it back into"
                 " a single host.",
                 file=sys.stderr,
             )
-            return 2
+            return SETUP_REFUSED
         return None
     try:
         if args.topology_file:
@@ -123,7 +137,7 @@ def _requested_topology(
             )
     except topology.TopologyError as exc:
         print(f"ERROR: topology: {exc}", file=sys.stderr)
-        return 2
+        return SETUP_REFUSED
     if existing and not current.distributed:
         print(
             "ERROR: --topology=distributed is for new installations, and"
@@ -133,7 +147,7 @@ def _requested_topology(
             " changed.",
             file=sys.stderr,
         )
-        return 2
+        return SETUP_REFUSED
     if existing and current.distributed:
         if requested.to_dict() != current.to_dict():
             print(
@@ -143,7 +157,7 @@ def _requested_topology(
                 " changed.",
                 file=sys.stderr,
             )
-            return 2
+            return SETUP_REFUSED
         return None
     return requested
 
@@ -242,7 +256,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         )
         _print_findings(findings)
         if not findings.ok:
-            return 2
+            return SETUP_REFUSED
 
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
@@ -400,7 +414,18 @@ def cmd_topology_node_of(args: argparse.Namespace) -> int:
     topo = _load_topology(Path(args.config_dir))
     if topo is None:
         return 3
-    print(topo.node_of(args.service) if topo.distributed else "")
+    if not topo.distributed:
+        print("")
+        return 0
+    env = topology.validation_env(Path(args.config_dir), Path(args.repo_root))
+    profiles = [p for p in env.get("COMPOSE_PROFILES", "").split(",") if p]
+    active = topology.active_services(profiles)
+    if args.service == "nginx" and topology.PROXY_PROFILE not in profiles:
+        # oauth2-proxy also runs in front of an external proxy; there is no Nginx Proxy
+        # Manager to provision then.
+        active = [s for s in active if s != "nginx"]
+    # Empty for a service the installation does not run (external OIDC, an external proxy).
+    print(topo.node_of(args.service) if args.service in active else "")
     return 0
 
 

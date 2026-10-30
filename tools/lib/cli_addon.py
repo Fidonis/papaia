@@ -348,6 +348,9 @@ def cmd_addon_check(args: argparse.Namespace) -> int:
 
     mode = compat.resolve_mode(deployed)
     exit_code = compat.gate(results, mode=mode, force=args.force)
+    if any(r.axis == PLACEMENT_AXIS for r in results):
+        # Not a policy call: no --force or warn mode makes a network span two nodes.
+        exit_code = 2
     if args.json:
         # Emitted even on exit 2 so fleet tooling can read `reason`.
         print(compat.to_json(results))

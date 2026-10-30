@@ -513,9 +513,10 @@ cmd_setup() {
     local setup_rc=0
     _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
-    if [ "$setup_rc" -eq 2 ]; then
-        # A request that does not fit this installation (a topology for an existing one,
-        # a placement that cannot work): the reason is on stderr, nothing was changed.
+    if [ "$setup_rc" -eq 4 ]; then
+        # SETUP_REFUSED: a request that does not fit this installation (a topology for an
+        # existing one, a placement that cannot work). The reason is on stderr, nothing
+        # was changed.
         return 2
     elif [ "$setup_rc" -ne 0 ]; then
         error "setup failed."

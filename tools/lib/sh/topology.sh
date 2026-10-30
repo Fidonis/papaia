@@ -11,8 +11,12 @@ cmd_topology() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
-            --json) extra+=(--json) ;;
-            --format=*) extra+=(--format="${1#*=}") ;;
+            --json)
+                [ "$sub" = "show" ] || { error "--json is an option of 'topology show'."; exit 2; }
+                extra+=(--json) ;;
+            --format=*)
+                [ "$sub" = "firewall" ] || { error "--format is an option of 'topology firewall'."; exit 2; }
+                extra+=(--format="${1#*=}") ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for topology $sub: $1"; exit 2 ;;
         esac

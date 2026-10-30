@@ -457,8 +457,9 @@ point of the whole installation is taken, the installation is locked and stopped
 every node gets the release, each migration runs on the node whose data it reshapes, and the
 installation starts again in order. Until the upgrade has finished — and whenever a node runs
 another release than the controller — `start`, `backup`, `setup` and the add-on commands refuse
-with the reason. `upgrade` and the way back (`restore`) still work. A failure names the way back
-for the controller and for every node. See [docs/distributed.md](docs/distributed.md#upgrades).
+with the reason. `upgrade` and the way back (`restore`) still work, and `start --unlock` releases
+the lock after an upgrade abandoned without a restore point. A failure names the way back for
+the controller and for every node. See [docs/distributed.md](docs/distributed.md#upgrades).
 
 ### `uninstall`
 

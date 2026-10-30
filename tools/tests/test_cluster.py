@@ -105,7 +105,7 @@ def test_a_broken_placement_refuses_and_a_corrected_run_completes(tmp_path: Path
         *NODE_FLAGS[:3],
         "--place=manager=edge",
     ]
-    assert cli.main(argv) == 2
+    assert cli.main(argv) == cli.SETUP_REFUSED
     assert "'manager' must run on the controller" in capsys.readouterr().err
     assert "topology" not in deployment.load(inst.config)
     inst.setup(*FULL, *NODE_FLAGS)
@@ -127,7 +127,7 @@ def test_distributed_setup_of_an_existing_installation_exits_2_and_changes_nothi
         "--env=papaia",
         *NODE_FLAGS,
     ]
-    assert cli.main(argv) == 2
+    assert cli.main(argv) == cli.SETUP_REFUSED
     assert "is for new installations" in capsys.readouterr().err
     after = {p: p.read_bytes() for p in inst.config.rglob("*") if p.is_file()}
     assert after == before
@@ -146,12 +146,50 @@ def test_setup_does_not_change_the_topology_of_a_distributed_installation(tmp_pa
         *NODE_FLAGS[:3],
         "--preset=dmz-edge",
     ]
-    assert cli.main(argv) == 2
+    assert cli.main(argv) == cli.SETUP_REFUSED
     assert "does not change the topology" in capsys.readouterr().err
     # The same topology again is a plain re-render.
     inst.setup(*NODE_FLAGS)
     inst.setup()
     assert topology.load_config(inst.config).node_of("keycloak") == "edge"
+
+
+def test_single_with_nodes_is_a_contradiction(tmp_path: Path, capsys):
+    inst = Installation(tmp_path, FULL)
+    argv = [
+        "--repo-root",
+        str(inst.repo),
+        "--config-dir",
+        str(inst.config),
+        "setup",
+        "--env=papaia",
+        *FULL,
+        "--topology=single",
+        "--node=a=10.0.0.1",
+    ]
+    assert cli.main(argv) == cli.SETUP_REFUSED
+    assert "takes no nodes" in capsys.readouterr().err
+    assert not (inst.config / ".env").exists()
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not available")
+def test_a_single_host_argument_error_still_reads_setup_failed(tmp_path: Path):
+    """Exit 2 is reserved for refusals; a rejected argument stays 'setup failed.', 3."""
+    script = (
+        "set -euo pipefail\n"
+        'error() { echo "ERROR: $*" >&2; }\n'
+        "success() { :; }\ninfo() { :; }\nwarn() { :; }\n"
+        "load_defaults() { CONFIG_SEEDED=false; APP_HOST_STICKY=x; }\n"
+        "is_tty() { return 1; }\n"
+        "py_cli() { return 2; }\n"
+        f'source "{REPO / "tools/lib/sh/lifecycle.sh"}"\n'
+        f'source "{REPO / "tools/lib/sh/setup.sh"}"\n'
+        f'DEFAULT_CONFIG_DIR="{tmp_path}/c"\n'
+        "rc=0; cmd_setup -y --app-host=https://x.example.org || rc=$?; echo rc=$rc\n"
+    )
+    done = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True)
+    assert "rc=3" in done.stdout, done.stderr
+    assert "setup failed." in done.stderr
 
 
 def test_single_is_accepted_for_a_single_host(tmp_path: Path):
@@ -192,7 +230,7 @@ def test_malformed_topology_flags_are_named(tmp_path: Path, capsys, flags, fragm
         *FULL,
         *flags,
     ]
-    assert cli.main(argv) == 2
+    assert cli.main(argv) == cli.SETUP_REFUSED
     assert fragment in capsys.readouterr().err
     assert not (inst.config / ".env").exists()
 
@@ -529,6 +567,37 @@ def test_an_expiring_leaf_on_the_controller_is_named_with_the_fix(distributed, m
     )
     report = doctor_report(distributed, monkeypatch, node_doctor(version), node_doctor(version))
     assert "node renew-link" in check(report, "links").summary
+
+
+def test_an_unparsable_deployment_yaml_is_still_a_single_host_report(tmp_path: Path, capsys):
+    inst = Installation(tmp_path, FULL)
+    inst.setup(*FULL)
+    (inst.config / "deployment.yaml").write_text("customer: [unclosed\n", encoding="utf-8")
+    assert topology.is_distributed(inst.config) is False
+    capsys.readouterr()
+    argv = ["--repo-root", str(inst.repo), "--config-dir", str(inst.config)]
+    code = cli.main(
+        [
+            *argv,
+            "doctor",
+            "--json",
+            "--skip=dns,ports,container_health,docker_version,docker_usage,gpu,smtp,time_sync,cpu,memory",
+        ]
+    )
+    assert code in (0, 2)
+    assert json.loads(capsys.readouterr().out)["schema_version"] == 1
+
+
+def test_a_hook_is_skipped_for_a_service_the_installation_does_not_run(distributed, capsys):
+    env = distributed.config / ".env"
+    text = env.read_text().replace(",nginx", "").replace("nginx,", "")
+    env.write_text(text)
+    capsys.readouterr()
+    argv = ["--repo-root", str(distributed.repo), "--config-dir", str(distributed.config)]
+    assert cli.main([*argv, "topology-node-of", "--service=nginx"]) == 0
+    assert capsys.readouterr().out.strip() == ""
+    assert cli.main([*argv, "topology-node-of", "--service=keycloak"]) == 0
+    assert capsys.readouterr().out.strip() == "edge"
 
 
 def test_nodes_and_links_can_be_skipped_everywhere():

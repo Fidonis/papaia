@@ -395,6 +395,10 @@ def is_distributed(config_dir: Path) -> bool:
     except TopologyError:
         # A broken block is reported by `validate`; here it must not pass for single.
         return True
+    except (yaml.YAMLError, AttributeError, TypeError, OSError):
+        # A deployment.yaml that does not parse at all is what it was before topologies
+        # existed: the single-host commands report it their own way.
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1079,8 +1083,10 @@ def project_node(
         if controller:
             node_path = str(local_path)
         else:
-            node_path = f"{node.config_dir}/addons/{name}/src"
-            _copy_addon(local_path, staging / "addons" / name / "src")
+            # The add-on's directory name is its Compose project, on every node: its
+            # containers and volumes are named after it.
+            node_path = f"{node.config_dir}/addons/{name}/{local_path.name}"
+            _copy_addon(local_path, staging / "addons" / name / local_path.name)
         bundle_env = config_dir / "addons" / name / ".env"
         if bundle_env.is_file():
             _copy_path(bundle_env, staging / "addons" / name / ".env")

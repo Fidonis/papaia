@@ -672,3 +672,32 @@ def test_a_topology_block_is_handed_to_python(tmp_path: Path):
     mode, calls = _mode(tmp_path, {"customer": "x", "topology": {"mode": "distributed"}})
     assert mode == "distributed"
     assert "topology-mode" in calls
+
+
+@pytest.mark.parametrize(
+    "args, ok",
+    [
+        ("show --json", True),
+        ("firewall --format=csv", True),
+        ("show --format=json", False),
+        ("firewall --json", False),
+    ],
+)
+def test_topology_options_belong_to_their_subcommand(tmp_path: Path, args: str, ok: bool):
+    import shutil
+    import subprocess
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not available")
+    script = (
+        "set -euo pipefail\n"
+        'error() { echo "ERROR: $*" >&2; }\n'
+        "usage() { :; }\n_require_setup_done() { :; }\n"
+        'py_cli() { echo "py_cli $*"; }\n'
+        f'source "{REPO / "tools/lib/sh/topology.sh"}"\n'
+        f'DEFAULT_CONFIG_DIR="{tmp_path}"\n'
+        f"cmd_topology {args}\n"
+    )
+    done = subprocess.run([bash, "-c", script], capture_output=True, text=True)
+    assert (done.returncode == 0) is ok, done.stderr

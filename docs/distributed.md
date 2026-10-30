@@ -197,9 +197,15 @@ While the lock is set — and whenever a node runs another release than the cont
 reason. What still works: `upgrade` itself, the way back (`restore`), `stop`, `status`, `doctor`
 and the `node` commands.
 
+The lock is taken once every node is stopped and released as soon as the releases agree
+again: when the upgrade finishes, when its last step (the start) fails, or when moving the
+checkout fails. A retried `upgrade` is not held up by it.
+
 If the upgrade fails, it prints the way back for the controller and for each node:
 `git checkout` of the previous tag and `restore --restore-point=ID`. The restore puts the
-configuration back, and with it every node's previous release.
+configuration back, and with it every node's previous release. After an upgrade with
+`--no-backup` there is no restore point; `start --addons --unlock` releases the lock and puts
+the checkout's release back on every node.
 
 ## Add-ons
 
@@ -226,7 +232,10 @@ in that node's bundle, and `start --addons`, `addon start` and `addon stop` run 
 - **The control channel.** The `papaia` user is in the Docker group, which is root-equivalent.
   Its key can run only `papaia-ctl node-shell`, only from the controller's address. The shim
   accepts a short list of verbs, checks every name against the node's bundle, and logs every
-  call. Losing the controller's key for a node gives away exactly those verbs on that node.
+  call. It is not a sandbox against the key's holder, though: installing a release or a
+  bundle, which is what the channel is for, can replace the shim itself. **Whoever holds the
+  controller's configuration directory controls every node.** Protect it like the CA keys it
+  contains, and keep the backups that contain it just as tight.
 - **Between the nodes** every service connection is mutual TLS with a CA of its own, separate
   from Keycloak's. Its key never leaves the controller, and each node only reaches the services
   the edge table allows it. A peer that is down means a refused connection, never clear text.
