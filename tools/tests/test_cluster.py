@@ -308,6 +308,36 @@ def test_stop_with_clean_up_removes(distributed, monkeypatch):
     assert [c for _n, c in log] == [["compose-down", "librechat"]]
 
 
+def test_push_follows_the_release_the_node_reports(distributed, monkeypatch):
+    """After a restore the controller's record can be stale; the node's own answer counts."""
+    version = topology.envtree.resolve_platform_version(distributed.repo)
+    calls: list = []
+    monkeypatch.setattr(
+        cluster.nodes,
+        "node_version",
+        lambda c, r, name: {"reachable": True, "papaia_version": "0.0.1"},
+    )
+    monkeypatch.setattr(
+        cluster.nodes,
+        "push_checkout",
+        lambda c, r, name: calls.append(("checkout", name)) or Result(0),
+    )
+    monkeypatch.setattr(
+        cluster.nodes, "push_bundle", lambda c, r, name: calls.append(("bundle", name)) or Result(0)
+    )
+    cluster.nodes.record_state(distributed.config, "edge", release=version)
+    cluster.push(cluster.load(distributed.config, distributed.repo), ["internal", "edge"])
+    assert calls == [("checkout", "edge"), ("bundle", "edge")]
+
+
+def test_push_stops_at_a_node_that_does_not_answer(distributed, monkeypatch):
+    monkeypatch.setattr(
+        cluster.nodes, "node_version", lambda c, r, name: {"reachable": False, "reason": "x"}
+    )
+    with pytest.raises(cluster.ClusterError, match="does not answer"):
+        cluster.push(cluster.load(distributed.config, distributed.repo), ["edge"])
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # status
 # ─────────────────────────────────────────────────────────────────────────

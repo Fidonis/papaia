@@ -11,9 +11,11 @@ _addon_path() {
 
 cmd_addon_install() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" addon_path="" addon_version="" force=0
+    local node=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --node=*) node="${1#*=}" ;;
             --path=*) addon_path="${1#*=}" ;;
             --version=*) addon_version="${1#*=}" ;;
             --force) force=1 ;;
@@ -33,6 +35,7 @@ cmd_addon_install() {
     [ -n "$addon_path" ]    && extra+=(--path="$addon_path")
     [ -n "$addon_version" ] && extra+=(--version="$addon_version")
     [ "$force" -eq 1 ]      && extra+=(--force)
+    [ -n "$node" ]          && extra+=(--node="$node")
     py_cli addon-install --name="$addon_name" "${extra[@]}"
     success "addon install complete: $addon_name"
 }
@@ -71,6 +74,12 @@ cmd_addon_install() {
 _addon_compose() {
     local verb="$1" addon_name="$2" addon_path="$3"; shift 3
     local -a extra=("$@")
+    local mode
+    mode="$(_topology_mode)" || return 3
+    if [ "$mode" = "distributed" ]; then
+        _addon_compose_distributed "$verb" "$addon_name" "${extra[@]}"
+        return
+    fi
     if [ ! -f "$addon_path/docker-compose.yml" ]; then
         _addon_compose_by_name "$verb" "$addon_name" "$addon_path" "${extra[@]}"
         return
@@ -135,6 +144,31 @@ _addon_compose_by_name() {
 
 _addon_compose_up() {
     _addon_compose up "$1" "$2" -d
+}
+
+# An add-on of a distributed installation runs on its node; the node's shim starts and
+# stops it with the same project name, files and env files as here.
+# $1 verb, $2 addon name, rest = the extra `docker compose` args of the caller
+_addon_compose_distributed() {
+    local verb="$1" addon_name="$2"; shift 2
+    _cluster_require_unlocked
+    case "$verb" in
+        up|stop|down) : ;;
+        *)
+            error "'docker compose $verb' for add-on $addon_name runs on its node: use"
+            error "'papaia-ctl node' there, or 'papaia-ctl status --addons'."
+            return 2
+            ;;
+    esac
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            -v|--volumes)
+                warn "Add-on $addon_name: its volumes stay on its node; delete them there."
+                ;;
+        esac
+    done
+    py_cli cluster-addon --name="$addon_name" --verb="$verb"
 }
 
 cmd_addon_start() {

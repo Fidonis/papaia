@@ -629,6 +629,18 @@ provisioning steps (`npm-provision`, `keycloak-role-sync`) run on the node of th
 each node's own checks) and `links` (a TLS handshake per link, certificate expiry). The JSON
 schemas grow additively and `schema_version` stays 1.
 
+**Data** (`tools/lib/cluster_data.py`). A restore point of a distributed installation lives on
+the controller, in the one catalogue. It holds the controller's configuration directory and
+every node's volumes, remote state and add-on data, streamed through the node's executor; each
+artifact records its `node`, and `node:NAME` selects one node for `backup --only` and
+`restore --only`. An **upgrade** moves every node at once: all nodes answer, a restore point is
+taken, a lock (`upgrade.lock`, plus any node on another release) blocks everything but the
+upgrade and the way back, every node gets the release, and each migration runs on the node of
+the service it names (`# papaia-migration: runs-with=<service>`), recorded with its node in the
+ledger. An **add-on** runs on one node: `addon install --node`, and the compatibility gate
+refuses an add-on that attaches to core services on two nodes. The operator guide is
+[distributed.md](distributed.md).
+
 ---
 
 ## 10. Naming Conventions

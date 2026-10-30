@@ -168,8 +168,8 @@ cmd_backup() {
     local mode
     mode="$(_topology_mode)" || exit 3
     if [ "$mode" = "distributed" ]; then
-        error "'papaia-ctl backup' is not available for a distributed installation yet."
-        exit 2
+        _backup_distributed "$backup_dir" "$retention" "$only" "$only_given"
+        return
     fi
 
     trap _backup_cleanup EXIT INT TERM
@@ -283,6 +283,97 @@ cmd_backup() {
         ok)      success "backup complete: $backup_id ($artifacts artifacts, ${size_mb} MB)" ;;
         partial) warn "backup completed with errors: $backup_id ($failed of $total artifacts failed)" ;;
         failed)  error "backup failed: $backup_id (no artifact could be written)"; exit 3 ;;
+    esac
+}
+
+# backup of a distributed installation: one restore point on this controller, every node's
+# data streamed into it (lib/cluster_data.py). Sets LAST_BACKUP_ID like cmd_backup.
+# $1 backup dir (may be empty), $2 retention days, $3 selection, $4 1 if --only was given
+_backup_distributed() {
+    local backup_dir="$1" retention="$2" only="$3" only_given="$4"
+    _cluster_require_unlocked
+    local -a extra=()
+    [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
+    [ -n "$retention" ] && extra+=(--retention-period-days="$retention")
+    [ "$only_given" -eq 1 ] && extra+=(--only="$only")
+    local out rc=0
+    out="$(mktemp)"
+    py_cli cluster-backup "${extra[@]}" | tee "$out" || rc=$?
+    local key value backup_id="" result=""
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            ID) backup_id="${value%$'\r'}" ;;
+            RESULT) result="${value%$'\r'}" ;;
+        esac
+    done < "$out"
+    rm -f "$out"
+    [ "$rc" -eq 2 ] && exit 2
+    # shellcheck disable=SC2034  # read by cmd_upgrade in lib/sh/upgrade.sh
+    LAST_BACKUP_ID="$backup_id"
+    case "$result" in
+        ok)      success "backup complete: $backup_id" ;;
+        partial) warn "backup completed with errors: $backup_id" ;;
+        *)       error "backup failed${backup_id:+: $backup_id}"; exit 3 ;;
+    esac
+}
+
+# restore of a distributed installation. $1 backup dir, $2 restore point, $3 selection,
+# $4 1 for --no-restart, $5 1 for --restart-clean, $6 1 for -y
+_restore_distributed() {
+    local backup_dir="$1" restore_point="$2" only="$3" no_restart="$4" restart_clean="$5"
+    local assume_yes="$6"
+    if [ "$restart_clean" -eq 1 ]; then
+        error "--restart-clean is not available for a distributed installation."
+        exit 2
+    fi
+    local -a extra=()
+    [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
+    [ -n "$restore_point" ] && extra+=(--restore-point="$restore_point")
+    [ -n "$only" ] && extra+=(--only="$only")
+    local plan rc=0
+    plan="$(py_cli cluster-restore --plan "${extra[@]}")" || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    local key value restore_id=""
+    warn "This restore will overwrite:"
+    while IFS=$'\t' read -r key value; do
+        value="${value%$'\r'}"
+        case "$key" in
+            ID) restore_id="$value" ;;
+            WILL) warn "  $value" ;;
+        esac
+    done <<< "$plan"
+    if [ "$no_restart" -eq 1 ]; then
+        warn "  --no-restart: containers are neither stopped nor started again."
+    elif [ -n "$only" ]; then
+        warn "  the services whose data it replaces are stopped and started again; nothing"
+        warn "  else, and no other node, is touched"
+    else
+        warn "  every node is stopped, its data replaced and the installation started again"
+    fi
+    warn "  Nodes are restored one after another; their data comes from points a few"
+    warn "  minutes apart, as it was archived."
+    if [ "$assume_yes" -eq 0 ]; then
+        if ! is_tty; then
+            error "Refusing to restore without confirmation. Re-run with -y in non-interactive contexts."
+            exit 2
+        fi
+        confirm "Proceed with restore of $restore_id?" "N" || { error "Aborted."; exit 3; }
+    fi
+    [ "$no_restart" -eq 1 ] && extra+=(--no-restart)
+    local out
+    out="$(mktemp)"
+    rc=0
+    py_cli cluster-restore "${extra[@]}" | tee "$out" || rc=$?
+    local result=""
+    while IFS=$'\t' read -r key value; do
+        [ "$key" = "RESULT" ] && result="${value%$'\r'}"
+    done < "$out"
+    rm -f "$out"
+    [ "$rc" -eq 2 ] && exit 2
+    case "$result" in
+        ok)      success "restore complete: $restore_id" ;;
+        partial) warn "restore completed with errors: $restore_id" ;;
+        *)       error "restore failed: $restore_id"; exit 3 ;;
     esac
 }
 
@@ -432,9 +523,10 @@ cmd_restore() {
     _require_setup_done
     local mode
     mode="$(_topology_mode)" || exit 3
-    if [ "$mode" = "distributed" ]; then
-        error "'papaia-ctl restore' is not available for a distributed installation yet."
-        exit 2
+    if [ "$mode" = "distributed" ] && [ "$list_only" -eq 0 ]; then
+        _restore_distributed "$backup_dir" "$restore_point" "$only" "$no_restart" \
+            "$restart_clean" "$assume_yes"
+        return
     fi
 
     backup_dir="$(_resolve_backup_dir "$backup_dir")" || exit 3

@@ -61,6 +61,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from . import backup, common, compat, envtree, render_core
+from . import deployment as deployment_module
 
 SINGLE = "single"
 DISTRIBUTED = "distributed"
@@ -839,6 +840,61 @@ def referenced_variables(services: list[ComposeService]) -> set[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Add-ons
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def addon_node(topo: Topology, entry: dict) -> str:
+    """The node an add-on runs on: its `node` in deployment.yaml, else the controller."""
+    return str(entry.get("node") or "") or topo.controller
+
+
+def attached_services(repo_root: Path, manifest: dict) -> list[str]:
+    """The catalogue services whose containers an add-on's Seam-1 override attaches to its
+    network (`networks.attach`). Names the core does not have are left to the
+    compatibility check, which reports them."""
+    attach = ((manifest or {}).get("networks") or {}).get("attach") or []
+    by_name = {s.name: s for s in compose_services(repo_root)}
+    found: list[str] = []
+    for name in attach if isinstance(attach, list) else []:
+        service = by_name.get(str(name))
+        if service is None:
+            continue
+        for profile in service.profiles:
+            owner = service_of_profile(profile)
+            if owner and owner not in found:
+                found.append(owner)
+    return found
+
+
+def placement_problem(
+    topo: Topology, repo_root: Path, manifest: dict, node: str, active: list[str]
+) -> str | None:
+    """Why an add-on cannot run on `node`, or None. An add-on's network exists on one
+    Docker daemon only, so every core service it attaches to has to run on its node."""
+    if node not in topo.nodes:
+        return f"unknown node '{node}'"
+    elsewhere = [
+        f"{service} ({topo.node_of(service)})"
+        for service in attached_services(repo_root, manifest)
+        if service in active and topo.node_of(service) != node
+    ]
+    if elsewhere:
+        return (
+            f"not placeable on '{node}': it attaches to {', '.join(elsewhere)}, and its"
+            " network exists on one node only"
+        )
+    return None
+
+
+def default_addon_node(topo: Topology, repo_root: Path, manifest: dict, active: list[str]) -> str:
+    """Where an add-on goes when `--node` is not given: the node of the services it attaches
+    to when they share one, else the controller."""
+    nodes = {topo.node_of(s) for s in attached_services(repo_root, manifest) if s in active}
+    return nodes.pop() if len(nodes) == 1 else topo.controller
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Projection
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -885,6 +941,17 @@ def _bind_ip(node: Node, cluster_profiles: list[str]) -> str:
     # the proxy and the link gateway reach the services over the Docker network, and the
     # provisioning steps use localhost. Without it the external proxy needs the address.
     return "127.0.0.1" if PROXY_PROFILE in cluster_profiles else node.address
+
+
+# What an add-on's directory carries that a node does not need, or must not get.
+_ADDON_EXCLUDE = shutil.ignore_patterns(".git", ".env", "__pycache__", "node_modules", ".venv")
+
+
+def _copy_addon(source: Path, dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    if source.is_dir():
+        shutil.copytree(source, dest, ignore=_ADDON_EXCLUDE)
 
 
 def _copy_path(source: Path, dest: Path) -> None:
@@ -1002,6 +1069,30 @@ def project_node(
         if source.is_file():
             _copy_path(source, staging / "overrides" / name)
 
+    # --- add-ons placed on this node ------------------------------------
+    node_addons: list[dict] = []
+    for entry in deployment_module.active_addons(deployment_module.load(config_dir)):
+        name = str(entry.get("name") or "")
+        if not name or addon_node(topo, entry) != node.name:
+            continue
+        local_path = deployment_module.resolve_addon_path(entry, repo_root)
+        if controller:
+            node_path = str(local_path)
+        else:
+            node_path = f"{node.config_dir}/addons/{name}/src"
+            _copy_addon(local_path, staging / "addons" / name / "src")
+        bundle_env = config_dir / "addons" / name / ".env"
+        if bundle_env.is_file():
+            _copy_path(bundle_env, staging / "addons" / name / ".env")
+        override = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
+        if override.is_file():
+            _copy_path(override, staging / "overrides" / override.name)
+        addon_overrides = config_dir / "overrides" / "addons"
+        if addon_overrides.is_dir():
+            for path in sorted(addon_overrides.glob(f"docker-compose.{name}-*.override.yml")):
+                _copy_path(path, staging / "overrides" / "addons" / path.name)
+        node_addons.append({**entry, "path": node_path})
+
     # What the node's own `status` and `doctor` read: the profiles that run there. The
     # add-ons placed on the node are added with them (see `addon --node`).
     node_manifest = {
@@ -1009,7 +1100,7 @@ def project_node(
         "platform_version": envtree.resolve_platform_version(repo_root),
         "node": node.name,
         "core": {"profiles": profiles},
-        "addons": [],
+        "addons": node_addons,
     }
     common.atomic_write(
         staging / "deployment.yaml",

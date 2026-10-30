@@ -44,6 +44,7 @@
 #                            [--only=SELECTOR[,SELECTOR]] [--restart-clean]
 #                            [--no-restart] [-y] [--config-dir=PATH]
 #                            SELECTOR is module:NAME, addon:NAME or volume:NAME
+#                            (and node:NAME in a distributed installation)
 #   papaia-ctl restore-scoped --only=SELECTOR[,SELECTOR] [as restore, minus
 #                            --restart-clean] — restore that cannot replace the
 #                            configuration directory, for in-stack callers
@@ -65,7 +66,8 @@
 #   papaia-ctl node renew-link <name> [--config-dir=PATH]
 #   papaia-ctl node sync     <name>|--all [--checkout] [--config-dir=PATH]
 #   papaia-ctl node-shell    the forced command of a node's SSH key; never run by hand
-#   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
+#   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--node=NAME] [--force]
+#                              [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
 #                              [--target-addon-api=N [--target-min-addon-api=M]]
@@ -93,7 +95,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,86p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,88p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

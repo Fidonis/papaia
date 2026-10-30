@@ -1,8 +1,9 @@
 # Link gateway
 
-Only used by a distributed installation (see `docs/adr/0010-connect-nodes-through-ssh-and-an-mtls-link.md`). A single-host
-installation never loads `docker-compose.yml` in this directory: it is not part of the
-`include:` list of `src/docker-compose.yml`.
+Only used by a distributed installation (see `docs/distributed.md` and
+`docs/adr/0010-connect-nodes-through-ssh-and-an-mtls-link.md`). A single-host installation
+never loads `docker-compose.yml` in this directory: it is not part of the `include:` list of
+`src/docker-compose.yml`.
 
 Every node of a distributed installation runs one gateway container. It lets every
 service keep its usual address (`keycloak:8443`, `litellm:4000`, `librechat:3080`) on

@@ -30,6 +30,7 @@ from . import (
     cli_addon,
     cli_node,
     cluster,
+    cluster_data,
     common,
     defaults,
     deployment,
@@ -865,7 +866,9 @@ def cmd_cluster_start(args: argparse.Namespace) -> int:
     if found is None:
         return 2
     try:
-        return cluster.start(found, node=args.node, profiles=_csv(args.profiles) or None)
+        return cluster.start(
+            found, node=args.node, profiles=_csv(args.profiles) or None, addons=args.addons
+        )
     except (cluster.ClusterError, nodes.NodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
@@ -881,10 +884,120 @@ def cmd_cluster_stop(args: argparse.Namespace) -> int:
             node=args.node,
             profiles=_csv(args.profiles) or None,
             clean_up=args.clean_up,
+            addons=args.addons,
         )
     except cluster.ClusterError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+
+
+def cmd_cluster_addon(args: argparse.Namespace) -> int:
+    found = _cluster(args)
+    if found is None:
+        return 2
+    try:
+        if args.verb == "up" and _project_bundles(found.config_dir, found.repo_root) != 0:
+            return 3
+        return cluster.addon_action(found, args.name, args.verb)
+    except (cluster.ClusterError, nodes.NodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+def cmd_cluster_lock(args: argparse.Namespace) -> int:
+    """--check (the default): exit 2 with the reason while the installation is locked.
+    --set / --clear: taken and released by a distributed upgrade."""
+    found = _cluster(args)
+    if found is None:
+        return 2
+    if args.set:
+        cluster.set_lock(
+            found,
+            from_version=args.from_version or "?",
+            to_version=args.to_version or "?",
+            restore_point=args.restore_point or "",
+        )
+        return 0
+    if args.clear:
+        cluster.clear_lock(found)
+        return 0
+    reason = cluster.skew(found)
+    if reason:
+        print(f"ERROR: locked: {reason}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_cluster_backup(args: argparse.Namespace) -> int:
+    """Back up every node into one restore point on the controller. Prints ID and RESULT
+    lines (TSV) for bash; exit 2 for a selection that matches nothing, 3 on failure."""
+    found = _cluster(args)
+    if found is None:
+        return 2
+    try:
+        backup_dir = _resolve_backup_dir(found.config_dir, args.backup_dir)
+        backup_id, outcome = cluster_data.run_backup(
+            found, backup_dir, only=args.only, retention_days=args.retention_period_days
+        )
+    except backup.SelectionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except (backup.BackupError, cluster.ClusterError) as exc:
+        return _fail(exc)
+    print(f"ID\t{backup_id}")
+    print(f"RESULT\t{outcome}")
+    return 3 if outcome == "failed" else 0
+
+
+def cmd_cluster_restore(args: argparse.Namespace) -> int:
+    """Restore a point of a distributed installation. With --plan: print what it would
+    overwrite (ID and WILL lines) and change nothing."""
+    found = _cluster(args)
+    if found is None:
+        return 2
+    try:
+        backup_dir = _resolve_backup_dir(found.config_dir, args.backup_dir)
+        if args.plan:
+            entry, _snapshot, _manifest, artifacts = cluster_data.resolve(
+                found, backup_dir, args.restore_point, args.only
+            )
+            print(f"ID\t{entry.get('id')}")
+            for line in cluster_data.describe(artifacts, scoped=bool(args.only)):
+                print(f"WILL\t{line}")
+            return 0
+        restore_id, outcome = cluster_data.run_restore(
+            found,
+            backup_dir,
+            restore_point=args.restore_point,
+            only=args.only,
+            no_restart=args.no_restart,
+        )
+    except (backup.ScopedRestorePointError, backup.SelectionError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except (backup.BackupError, cluster.ClusterError, nodes.NodeError) as exc:
+        return _fail(exc)
+    print(f"ID\t{restore_id}")
+    print(f"RESULT\t{outcome}")
+    return 3 if outcome == "failed" else 0
+
+
+def cmd_cluster_upgrade_check(args: argparse.Namespace) -> int:
+    found = _cluster(args)
+    if found is None:
+        return 2
+    return cluster_data.check_ready_for_upgrade(found)
+
+
+def cmd_cluster_migrate(args: argparse.Namespace) -> int:
+    found = _cluster(args)
+    if found is None:
+        return 2
+    try:
+        cluster.push(found, list(found.topology.nodes))
+        return cluster_data.run_migrations(found, args.from_version, args.to_version)
+    except (cluster.ClusterError, ValueError) as exc:
+        return _fail(exc)
 
 
 def cmd_cluster_preflight(args: argparse.Namespace) -> int:
@@ -980,13 +1093,50 @@ def build_parser() -> argparse.ArgumentParser:
     p_cluster_start = sub.add_parser("cluster-start")
     p_cluster_start.add_argument("--node", default=None)
     p_cluster_start.add_argument("--profiles", action="append", default=None)
+    p_cluster_start.add_argument("--addons", action="store_true")
     p_cluster_start.set_defaults(func=cmd_cluster_start)
 
     p_cluster_stop = sub.add_parser("cluster-stop")
     p_cluster_stop.add_argument("--node", default=None)
     p_cluster_stop.add_argument("--profiles", action="append", default=None)
     p_cluster_stop.add_argument("--clean-up", action="store_true")
+    p_cluster_stop.add_argument("--addons", action="store_true")
     p_cluster_stop.set_defaults(func=cmd_cluster_stop)
+
+    p_cluster_addon = sub.add_parser("cluster-addon")
+    p_cluster_addon.add_argument("--name", required=True)
+    p_cluster_addon.add_argument("--verb", required=True, choices=["up", "stop", "down"])
+    p_cluster_addon.set_defaults(func=cmd_cluster_addon)
+
+    p_cluster_backup = sub.add_parser("cluster-backup")
+    p_cluster_backup.add_argument("--backup-dir", default=None)
+    p_cluster_backup.add_argument("--only", default=None)
+    p_cluster_backup.add_argument("--retention-period-days", type=int, default=None)
+    p_cluster_backup.set_defaults(func=cmd_cluster_backup)
+
+    p_cluster_restore = sub.add_parser("cluster-restore")
+    p_cluster_restore.add_argument("--backup-dir", default=None)
+    p_cluster_restore.add_argument("--restore-point", default=None)
+    p_cluster_restore.add_argument("--only", default=None)
+    p_cluster_restore.add_argument("--no-restart", action="store_true")
+    p_cluster_restore.add_argument("--plan", action="store_true")
+    p_cluster_restore.set_defaults(func=cmd_cluster_restore)
+
+    p_cluster_upgrade_check = sub.add_parser("cluster-upgrade-check")
+    p_cluster_upgrade_check.set_defaults(func=cmd_cluster_upgrade_check)
+
+    p_cluster_migrate = sub.add_parser("cluster-migrate")
+    p_cluster_migrate.add_argument("--from", dest="from_version", required=True)
+    p_cluster_migrate.add_argument("--to", dest="to_version", required=True)
+    p_cluster_migrate.set_defaults(func=cmd_cluster_migrate)
+
+    p_cluster_lock = sub.add_parser("cluster-lock")
+    p_cluster_lock.add_argument("--set", action="store_true")
+    p_cluster_lock.add_argument("--clear", action="store_true")
+    p_cluster_lock.add_argument("--from", dest="from_version", default=None)
+    p_cluster_lock.add_argument("--to", dest="to_version", default=None)
+    p_cluster_lock.add_argument("--restore-point", default=None)
+    p_cluster_lock.set_defaults(func=cmd_cluster_lock)
 
     p_topology_node_of = sub.add_parser("topology-node-of")
     p_topology_node_of.add_argument("--service", required=True, choices=sorted(topology.CATALOGUE))
@@ -1015,6 +1165,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_install.add_argument("--path", default=None)
     p_addon_install.add_argument("--version", default=None)
     p_addon_install.add_argument("--force", action="store_true")
+    p_addon_install.add_argument("--node", default=None)
     p_addon_install.set_defaults(func=cli_addon.cmd_addon_install)
 
     p_addon_start = sub.add_parser("addon-start")

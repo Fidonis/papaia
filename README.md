@@ -452,6 +452,14 @@ upgrade stops and prints the commands to return to the previous release; fixing 
 cause and re-running skips everything that already succeeded. The contract for writing
 one is documented in [`tools/migrations/README.md`](tools/migrations/README.md).
 
+**Distributed installations** are upgraded as a whole: every node has to answer, a restore
+point of the whole installation is taken, the installation is locked and stopped on every node,
+every node gets the release, each migration runs on the node whose data it reshapes, and the
+installation starts again in order. Until the upgrade has finished — and whenever a node runs
+another release than the controller — `start`, `backup`, `setup` and the add-on commands refuse
+with the reason. `upgrade` and the way back (`restore`) still work. A failure names the way back
+for the controller and for every node. See [docs/distributed.md](docs/distributed.md#upgrades).
+
 ### `uninstall`
 
 ```bash
@@ -483,8 +491,14 @@ Archives the complete installation into a timestamped subdirectory of the backup
 |---|---|---|
 | `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to write this backup |
 | `--retention-period-days=N` | _(no pruning)_ | Delete restore points older than N days and drop their catalogue entries |
-| `--only=SELECTOR[,SELECTOR]` | _(whole installation)_ | Archive only the selected units: the volumes and writable data directories owned by `addon:NAME`, the volumes of `module:NAME`, or one `volume:NAME`; the prefix is mandatory. The config directory is not part of it. A selector that matches nothing exits with code 2 and writes no archive |
+| `--only=SELECTOR[,SELECTOR]` | _(whole installation)_ | Archive only the selected units: the volumes and writable data directories owned by `addon:NAME`, the volumes of `module:NAME`, or one `volume:NAME`; the prefix is mandatory. In a distributed installation `node:NAME` selects everything of one node. The config directory is not part of it. A selector that matches nothing exits with code 2 and writes no archive |
 | `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+In a distributed installation the restore point is written on the controller as well: every
+node's volumes, the state a remote node keeps (the proxy's database and certificates) and the
+data of the add-ons placed on it are streamed into it, and each artifact records its `node`.
+The nodes are archived one after another, so the result is not one moment across nodes; see
+[docs/distributed.md](docs/distributed.md#backups).
 
 Backups run **hot** — nothing is stopped. Because copying a live database directory would
 otherwise capture it mid-transaction, the containers writing to a volume are paused for the
@@ -556,7 +570,7 @@ tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
 | `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to read restore points from |
 | `--restore-point=ID` | _(most recent usable)_ | Which restore point to restore, as listed by `--list` |
 | `--list` | — | Print the available restore points and exit |
-| `--only=SELECTOR[,SELECTOR]` | _(whole snapshot)_ | Restore only the selected units and scope the teardown and restart to them. Each `SELECTOR` is `module:NAME`, `addon:NAME` or `volume:NAME`; the prefix is mandatory. Cannot be combined with `--restart-clean`, and is refused for a selection that touches the config directory or resolves to the `manager` profile |
+| `--only=SELECTOR[,SELECTOR]` | _(whole snapshot)_ | Restore only the selected units and scope the teardown and restart to them. Each `SELECTOR` is `module:NAME`, `addon:NAME` or `volume:NAME` (in a distributed installation also `node:NAME`); the prefix is mandatory. Cannot be combined with `--restart-clean`, and is refused for a selection that touches the config directory or resolves to the `manager` profile |
 | `--restart-clean` | — | Delete the named volumes during the teardown as well, so nothing survives that is not in the restore point |
 | `--no-restart` | — | Do not touch the running stack at all |
 | `-y` / `--yes` | — | Skip the confirmation prompt (required in non-interactive contexts) |
@@ -592,10 +606,18 @@ recorded at backup time, so a snapshot can be replayed onto a host that keeps it
 elsewhere. A bind-mount directory whose add-on is no longer installed is skipped with a warning
 rather than recreated.
 
+In a distributed installation, `restore` stops only what it replaces. `--only=node:NAME` puts
+back the data of one node, stops and starts only the services there whose data it replaces,
+and touches no other node. A whole restore stops every node, puts the controller's
+configuration back, hands every node its bundle and release, writes back each node's data and
+starts the installation. A restore point taken of a single host is refused in a distributed
+installation, and the other way round. `--restart-clean` is not available there.
+
 ### `addon`
 
 ```bash
-tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--node=NAME] [--force] \
+  [--config-dir=PATH]
 tools/papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 tools/papaia-ctl addon upgrade   <name> --path=DIR [--dry-run [--json]] [--no-backup] \
   [--no-restart] [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
@@ -614,6 +636,7 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 |---|---|
 | `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. |
 | `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
+| `install --node=NAME` | Distributed installations only: the node the add-on runs on. Without it, the add-on goes to the node of the core services it attaches to. An add-on whose `networks.attach` names services on two nodes is **not placeable** and is refused whatever `--force` says: its network exists on one node only. On a remote node the add-on travels in the node's bundle, and `start`, `stop` and `start --addons` run it there. |
 | `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). See [Upgrading an add-on](#upgrading-an-add-on). |
 | `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. |
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
@@ -1632,6 +1655,21 @@ Two caveats worth knowing:
 - **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
 
+### Distributed installations
+
+papAIa can run on several machines: for example Nginx Proxy Manager, Keycloak, the mail relay
+and LiteLLM on an edge node in a DMZ, and LibreChat, the RAG system, LocalAI and papaia-manager
+behind it. Every service keeps its address on every node (`keycloak:8443`, `litellm:4000`). A
+link gateway on each node carries the connections between nodes over mutual TLS, and the
+controller (the machine `papaia-ctl` runs on) reaches the other nodes over SSH through a
+forced command that accepts a short list of verbs.
+
+A distributed installation is set up as a new installation (see [`setup`](#setup)), runs with
+the same commands (`start`, `stop`, `status`, `doctor`, `backup`, `restore`, `upgrade`,
+`addon`), and adds [`topology`](#topology) and [`node`](#node). The operator guide covers
+planning, the firewall, backups, upgrades, add-ons, the security notes and recovery:
+[docs/distributed.md](docs/distributed.md).
+
 ### Multi-environment setup
 
 Several papAIa stacks can run side by side on one host without forking the repo.
@@ -1711,6 +1749,8 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   │                       #   compat.py · semver.py · render_core.py · gen_override.py
 │   │   │                       #   backup.py · upgrade.py · migrations.py · common.py
 │   │   │                       #   status.py · doctor.py
+│   │   │                       #   distributed: topology.py · link.py · cluster.py · cluster_data.py
+│   │   │                       #   nodes.py · executor.py · node_shell.py · cli_node.py
 │   │   │   └── sh/             # Bash command libraries sourced by papaia-ctl
 │   │   ├── schemas/            # JSON Schemas of `status --json` and `doctor --json`
 │   │   ├── migrations/         # release migrations run by `papaia-ctl upgrade`
@@ -1719,6 +1759,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── docker-compose.yml  # root compose — shared network + include list only
 │   │   ├── .env.example        # all stack-wide variables (source of truth)
 │   │   ├── infra/              # keycloak · nginx · oauth2-proxy · smtp-relay (optional, profile: smtp)
+│   │   │                       # link-gateway (distributed installations only, not in the include list)
 │   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai · rag
 │   │   ├── manager/            # papaia-manager (optional, profile: manager)
 │   │   └── services/           # searxng · firecrawl
@@ -1727,6 +1768,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │       ├── configuration.md
 │       ├── deployment.md
 │       ├── troubleshooting.md
+│       ├── distributed.md      # running on several machines
 │       └── adr/                # Architecture Decision Records
 │
 ├── papaia-addons/             ← add-on repos cloned alongside (opt-in)

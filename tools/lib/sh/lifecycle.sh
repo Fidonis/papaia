@@ -19,6 +19,14 @@ _topology_mode() {
     printf '%s' "${mode%$'\r'}"
 }
 
+# A distributed installation is locked while an upgrade has not finished and while a node
+# runs another release than this checkout: everything that changes it waits for `upgrade`.
+# The upgrade itself sets UPGRADE_IN_PROGRESS for the commands it runs.
+_cluster_require_unlocked() {
+    [ "${UPGRADE_IN_PROGRESS:-0}" = "1" ] && return 0
+    py_cli cluster-lock || exit 2
+}
+
 # Run docker compose start/stop/up/down on every active addon. Goes through
 # _addon_compose (addon.sh) so teardown uses the same project name and env files
 # as bring-up -- a templated `networks.*.name` otherwise resolves to its bare
@@ -194,6 +202,7 @@ _require_no_node() {
 # nodes in order (lib/cluster.py). $1 node, $2 profiles, $3 1 for --addons, $4 1 for --force
 _start_distributed() {
     local node="$1" profiles="$2" addons="$3" force="$4"
+    _cluster_require_unlocked
     local -a check_flags=()
     [ "$force" -eq 1 ] && check_flags+=(--force)
     if ! py_cli addon-check "${check_flags[@]}"; then
@@ -206,31 +215,23 @@ _start_distributed() {
     local -a extra=()
     [ -n "$node" ] && extra+=(--node="$node")
     [ -n "$profiles" ] && extra+=(--profiles="$profiles")
+    [ "$addons" -eq 1 ] && extra+=(--addons)
     py_cli cluster-start "${extra[@]}" || exit $?
-    if [ "$addons" -eq 1 ]; then
-        _addons_distributed start "$node"
-    fi
     success "start complete."
 }
 
 # $1 node, $2 profiles, $3 1 for --addons, $4 1 for --clean-up
 _stop_distributed() {
     local node="$1" profiles="$2" addons="$3" clean_up="$4"
-    if [ "$addons" -eq 1 ]; then
-        _addons_distributed "$([ "$clean_up" -eq 1 ] && echo down || echo stop)" "$node"
-    fi
     local -a extra=()
     [ -n "$node" ] && extra+=(--node="$node")
     [ -n "$profiles" ] && extra+=(--profiles="$profiles")
     [ "$clean_up" -eq 1 ] && extra+=(--clean-up)
+    [ "$addons" -eq 1 ] && extra+=(--addons)
     py_cli cluster-stop "${extra[@]}" || exit $?
     success "stop complete."
 }
 
-_addons_distributed() {
-    error "--addons is not available for a distributed installation yet."
-    exit 2
-}
 
 _provisioning_step() {
     local step="$1"

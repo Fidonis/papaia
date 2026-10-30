@@ -62,6 +62,17 @@ Every script:
   first failure stops the upgrade, and the operator is shown how to return to the
   previous release.
 
+In a distributed installation a migration runs on the controller unless it names the service
+whose data it reshapes, with a line among its first 40:
+
+```
+# papaia-migration: runs-with=librechat
+```
+
+It then runs on that service's node, from the node's checkout of the target release, with
+`PAPAIA_CONFIG_DIR` pointing at the node's configuration. The ledger records the node it ran on.
+A single host ignores the line.
+
 Shell migrations use `set -euo pipefail` and must pass
 `shellcheck --severity=warning`. A migration that has to touch the contents of a named
 volume starts a throwaway container for it, the way `tools/lib/sh/backup.sh` does — it

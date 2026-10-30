@@ -119,12 +119,22 @@ def _groups(cluster: Cluster, names: list[str], profiles: list[str] | None, *, r
 
 
 def push(cluster: Cluster, names: list[str]) -> None:
-    """Hand each remote node its release (when it differs) and its bundle."""
+    """Hand each remote node its release (when it differs) and its bundle.
+
+    The node is asked which release it runs rather than trusting what the controller
+    recorded: after a restore of an earlier point the record and the node can disagree, and
+    the node has to follow the configuration that was put back."""
     version = envtree.resolve_platform_version(cluster.repo_root)
     for name in names:
         if cluster.topology.nodes[name].is_local:
             continue
-        if nodes.read_state(cluster.config_dir, name).get("release") != version:
+        running = nodes.node_version(cluster.config_dir, cluster.repo_root, name)
+        if not running.get("reachable"):
+            raise ClusterError(
+                f"node '{name}' does not answer ({running.get('reason')}). Check it with"
+                f" 'papaia-ctl node check {name}'."
+            )
+        if running.get("papaia_version") != version:
             _say(f"node {name}: installing release {version}")
             result = nodes.push_checkout(cluster.config_dir, cluster.repo_root, name)
             if not result.ok:
@@ -160,7 +170,26 @@ def _run(cluster: Cluster, name: str, command: list[str]) -> int:
         return 3
 
 
-def start(cluster: Cluster, *, node: str | None = None, profiles: list[str] | None = None) -> int:
+def addons_by_node(cluster: Cluster) -> dict[str, list[str]]:
+    """Active add-ons per node, in the order deployment.yaml lists them."""
+    from . import deployment
+
+    found: dict[str, list[str]] = {name: [] for name in cluster.topology.nodes}
+    for entry in deployment.active_addons(deployment.load(cluster.config_dir)):
+        name = str(entry.get("name") or "")
+        node = topology.addon_node(cluster.topology, entry)
+        if name and node in found:
+            found[node].append(name)
+    return found
+
+
+def start(
+    cluster: Cluster,
+    *,
+    node: str | None = None,
+    profiles: list[str] | None = None,
+    addons: bool = False,
+) -> int:
     names = _nodes(cluster, node)
     push(cluster, names)
     for name in names:
@@ -168,6 +197,16 @@ def start(cluster: Cluster, *, node: str | None = None, profiles: list[str] | No
         code = _run(cluster, name, ["compose-up", link.GATEWAY_SERVICE])
         if code != 0:
             return _stopped("start", name, [link.GATEWAY_SERVICE], code)
+    if addons:
+        # Before the core, as on one host: an add-on's network has to exist before the
+        # core services of its node can be attached to it.
+        by_node = addons_by_node(cluster)
+        for name in names:
+            for addon in by_node[name]:
+                _say(f"node {name}: add-on {addon}")
+                code = _run(cluster, name, ["compose-up", f"addon:{addon}"])
+                if code != 0:
+                    return _stopped("start", name, [f"add-on {addon}"], code)
     for _group, name, services in _groups(cluster, names, profiles, reverse=False):
         _say(f"node {name}: starting {', '.join(services)}")
         code = _run(cluster, name, ["compose-up", *services])
@@ -196,9 +235,18 @@ def stop(
     node: str | None = None,
     profiles: list[str] | None = None,
     clean_up: bool = False,
+    addons: bool = False,
 ) -> int:
     names = _nodes(cluster, node)
     verb = "compose-down" if clean_up else "compose-stop"
+    if addons:
+        by_node = addons_by_node(cluster)
+        for name in names:
+            for addon in reversed(by_node[name]):
+                _say(f"node {name}: add-on {addon}")
+                code = _run(cluster, name, [verb, f"addon:{addon}"])
+                if code != 0:
+                    return _stopped("stop", name, [f"add-on {addon}"], code)
     for _group, name, services in _groups(cluster, names, profiles, reverse=True):
         _say(f"node {name}: {'removing' if clean_up else 'stopping'} {', '.join(services)}")
         code = _run(cluster, name, [verb, *services])
@@ -211,6 +259,90 @@ def stop(
             if code != 0:
                 return _stopped("stop", name, [link.GATEWAY_SERVICE], code)
     return 0
+
+
+def addon_action(cluster: Cluster, name: str, verb: str) -> int:
+    """One add-on's containers, on its node: `up` (after its node got the current bundle,
+    which carries the add-on), `stop` or `down`."""
+    from . import deployment
+
+    entries = deployment.load(cluster.config_dir).get("addons") or []
+    entry = next((a for a in entries if a.get("name") == name), None)
+    if entry is None:
+        raise ClusterError(f"add-on '{name}' is not registered")
+    node = topology.addon_node(cluster.topology, entry)
+    command = {"up": "compose-up", "stop": "compose-stop", "down": "compose-down"}.get(verb)
+    if command is None:
+        raise ClusterError(f"unknown add-on action '{verb}'")
+    if verb == "up":
+        push(cluster, [node])
+    _say(f"node {node}: add-on {name}: {verb}")
+    return _run(cluster, node, [command, f"addon:{name}"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# version-skew lock
+# ─────────────────────────────────────────────────────────────────────────
+
+LOCK_NAME = "upgrade.lock"
+
+
+def lock_path(config_dir: Path) -> Path:
+    return config_dir / LOCK_NAME
+
+
+def set_lock(cluster: Cluster, *, from_version: str, to_version: str, restore_point: str) -> None:
+    from . import common
+
+    common.atomic_write(
+        lock_path(cluster.config_dir),
+        json.dumps(
+            {
+                "from": from_version,
+                "to": to_version,
+                "restore_point": restore_point or None,
+                "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+            indent=2,
+        )
+        + "\n",
+    )
+
+
+def clear_lock(cluster: Cluster) -> None:
+    lock_path(cluster.config_dir).unlink(missing_ok=True)
+
+
+def skew(cluster: Cluster) -> str | None:
+    """Why the installation is locked, or None. Locked while an upgrade has not finished,
+    and while a node runs another release than the controller's checkout."""
+    path = lock_path(cluster.config_dir)
+    if path.is_file():
+        try:
+            lock = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            lock = {}
+        back = "'papaia-ctl restore'"
+        if lock.get("restore_point"):
+            back = f"'papaia-ctl restore --restore-point={lock['restore_point']}'"
+        return (
+            f"an upgrade from {lock.get('from', '?')} to {lock.get('to', '?')} has not"
+            f" finished. Run 'papaia-ctl upgrade' again, or go back with {back}."
+        )
+    version = envtree.resolve_platform_version(cluster.repo_root)
+    behind = []
+    for name, node in cluster.topology.nodes.items():
+        if node.is_local:
+            continue
+        release = nodes.read_state(cluster.config_dir, name).get("release")
+        if release and release != version:
+            behind.append(f"{name} runs {release}")
+    if behind:
+        return (
+            f"the controller's checkout is {version}, but {', '.join(behind)}. Move all nodes"
+            " together with 'papaia-ctl upgrade'."
+        )
+    return None
 
 
 def _stopped(action: str, node: str, services: list[str], code: int) -> int:

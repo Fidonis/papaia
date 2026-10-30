@@ -25,6 +25,7 @@ from . import (
     gen_override,
     render_core,
     reporting,
+    topology,
 )
 
 
@@ -55,25 +56,75 @@ def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bo
         print(f"WARNING: addon '{result.name}': {warning}", file=sys.stderr)
 
 
+PLACEMENT_AXIS = "placement"
+
+
+def placement_result(
+    name: str, manifest: dict, deployed: dict, repo_root: Path, node: str | None = None
+) -> compat.CompatResult | None:
+    """In a distributed installation: whether the add-on can run on its node (see
+    topology.placement_problem). None on a single host and when it can."""
+    try:
+        topo = topology.load(deployed)
+    except topology.TopologyError:
+        return None
+    if not topo.distributed:
+        return None
+    entry = next((a for a in deployed.get("addons") or [] if a.get("name") == name), {})
+    where = node or topology.addon_node(topo, entry)
+    profiles = (deployed.get("core") or {}).get("profiles") or []
+    problem = topology.placement_problem(
+        topo, repo_root, manifest, where, topology.active_services(profiles)
+    )
+    if problem is None:
+        return None
+    return compat.CompatResult(
+        name, compat.STATUS_INCOMPATIBLE, axis=PLACEMENT_AXIS, requirement=where, reason=problem
+    )
+
+
 def _evaluate_gate(
-    name: str, manifest: dict, deployed: dict, repo_root: Path, *, force: bool
+    name: str,
+    manifest: dict,
+    deployed: dict,
+    repo_root: Path,
+    *,
+    force: bool,
+    node: str | None = None,
 ) -> tuple[compat.CompatResult, int]:
     """The verdict on one addon against this checkout's core, and what the gate
-    policy makes of it: 0 (proceed) or 2 (abort)."""
+    policy makes of it: 0 (proceed) or 2 (abort).
+
+    In a distributed installation the add-on must also be placeable on its node. That is
+    no policy call: a network cannot span two Docker daemons, so neither --force nor warn
+    mode lets an unplaceable add-on through."""
     core = compat.resolve_core_target(repo_root)
     profiles = (deployed.get("core") or {}).get("profiles")
     result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
     mode = compat.resolve_mode(deployed)
-    return result, compat.gate([result], mode=mode, force=force)
+    exit_code = compat.gate([result], mode=mode, force=force)
+    if exit_code == 0 or result.status != compat.STATUS_ERROR:
+        placement = placement_result(name, manifest, deployed, repo_root, node)
+        if placement is not None:
+            return placement, 2
+    return result, exit_code
 
 
 def _compat_gate_addon(
-    name: str, manifest: dict, deployed: dict, repo_root: Path, *, force: bool
+    name: str,
+    manifest: dict,
+    deployed: dict,
+    repo_root: Path,
+    *,
+    force: bool,
+    node: str | None = None,
 ) -> int:
     """Evaluate one addon against this checkout's core and apply the gate
     policy. Returns 0 (proceed) or 2 (abort). Must run before any mutation,
     so a refused install/start leaves no trace."""
-    result, exit_code = _evaluate_gate(name, manifest, deployed, repo_root, force=force)
+    result, exit_code = _evaluate_gate(
+        name, manifest, deployed, repo_root, force=force, node=node
+    )
     _report_compat_result(result, fatal=bool(exit_code), force=force)
     return exit_code
 
@@ -120,7 +171,21 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     if manifest is None:
         print(f"ERROR: {manifest_error}", file=sys.stderr)
         return 2
-    if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
+
+    node = getattr(args, "node", None)
+    topo = topology.load(deployed)
+    if node and not topo.distributed:
+        print("ERROR: --node is for a distributed installation; this one runs on one host.",
+              file=sys.stderr)
+        return 2
+    if topo.distributed and not node:
+        node = (existing or {}).get("node") or topology.default_addon_node(
+            topo,
+            repo_root,
+            manifest,
+            topology.active_services((deployed.get("core") or {}).get("profiles") or []),
+        )
+    if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force, node=node):
         return 2
 
     if existing:
@@ -133,10 +198,14 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         if args.version:
             existing["version"] = args.version
         existing["active"] = True
+        if node:
+            existing["node"] = node
     else:
         entry: dict = {"name": name, "path": str(addon_path), "active": True}
         if args.version:
             entry["version"] = args.version
+        if node:
+            entry["node"] = node
         addon_entries.append(entry)
 
     addons.seed_addon_env(addon_path, config_dir)
@@ -214,7 +283,11 @@ def evaluate_active_addons(
         if manifest is None:
             results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
             continue
-        results.append(compat.evaluate_addon(name, manifest, core, active_profiles=profiles))
+        result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+        if result.status != compat.STATUS_ERROR:
+            # A placement problem outranks a compatible verdict: it cannot be forced.
+            result = placement_result(name, manifest, deployed, repo_root) or result
+        results.append(result)
     return results
 
 

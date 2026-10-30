@@ -143,6 +143,13 @@ cmd_setup() {
     done
     CONFIG_DIR="$config_dir"
 
+    # A distributed installation that is being upgraded, or whose nodes run another release
+    # than this checkout, is re-rendered by `upgrade` only.
+    if [ -f "$CONFIG_DIR/deployment.yaml" ] && grep -q '^topology:' "$CONFIG_DIR/deployment.yaml" \
+        && [ "$(_topology_mode)" = "distributed" ]; then
+        _cluster_require_unlocked
+    fi
+
     load_defaults
 
     # Resolved here rather than in Python so the CLI contract downstream only

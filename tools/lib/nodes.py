@@ -4,7 +4,7 @@ A node is set up once, in one of two ways that end in the same state:
 
 * **admin session**: the controller copies the join archive to the node with the operator's
   own admin login and runs its install script there with `sudo`. The admin credentials are
-  the operator's (their SSH agent, their password prompt); nothing of them is stored.
+  the operator's own login and password prompt; nothing of them is stored.
 * **join archive**: `papaia-ctl node join-bundle` writes the same archive to a file, and the
   operator installs it on the node by hand (`sudo ./install.sh`).
 

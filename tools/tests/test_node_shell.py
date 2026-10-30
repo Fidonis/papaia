@@ -101,6 +101,9 @@ def test_the_allowlist_is_exactly_the_documented_verbs():
         "checkout-put",
         "image-load",
         "hook",
+        "backup-stream",
+        "restore-put",
+        "upgrade-step",
     }
 
 

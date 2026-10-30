@@ -48,7 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-from . import common, envtree, link, topology
+from . import backup, common, deployment, envtree, link, migrations, topology
 
 # One word of a command. No path separators, no shell metacharacters, no leading dash
 # except for the few `--name=value` options a verb declares.
@@ -70,6 +70,14 @@ KEEP_RELEASES = 2
 BUNDLE_FILES = ".bundle-files"
 NODE_NAME_FILE = "node-name"
 RUNTIME_OVERRIDE = "docker-compose.link-gateway-user.override.yml"
+
+# The image the volume archives are written and read with, the one `backup` uses on a
+# single host.
+BACKUP_IMAGE = "alpine:3"
+# A restore streams a volume through; it is bounded, not held in memory.
+RESTORE_LIMIT = 1024 * 1024 * MiB
+# `backup-stream` of a volume that does not exist: nothing to archive, not a failure.
+EXIT_MISSING = 4
 
 # Hook name -> the catalogue service that has to run on the node for it.
 HOOKS = {
@@ -469,6 +477,49 @@ def compose_argv(ctx: Context, *args: str) -> list[str]:
     ]
 
 
+def node_addons(ctx: Context) -> dict[str, Path]:
+    """The add-ons placed on this node: name -> its directory here."""
+    found: dict[str, Path] = {}
+    for entry in deployment.active_addons(deployment.load(ctx.bundle)):
+        name = str(entry.get("name") or "")
+        if name and entry.get("path"):
+            found[name] = deployment.resolve_addon_path(entry, ctx.checkout)
+    return found
+
+
+def _addon(ctx: Context, target: str) -> tuple[str, Path]:
+    name = target.removeprefix("addon:")
+    path = node_addons(ctx).get(name)
+    if path is None:
+        raise Refused(f"add-on '{name}' does not run on node '{ctx.node}'")
+    if not (path / "docker-compose.yml").is_file():
+        raise Failed(f"add-on '{name}' has no docker-compose.yml at {path}")
+    return name, path
+
+
+def addon_compose_argv(ctx: Context, name: str, path: Path, *args: str) -> list[str]:
+    """`docker compose` for one add-on, as `papaia-ctl addon` runs it on a single host:
+    its own project (the directory name), its override files, the root and its own .env."""
+    files = ["-f", str(path / "docker-compose.yml")]
+    overrides = ctx.bundle / "overrides" / "addons"
+    if overrides.is_dir():
+        for override in sorted(overrides.glob(f"docker-compose.{name}-*.override.yml")):
+            files += ["-f", str(override)]
+    env_files = ["--env-file", str(ctx.checkout / "src" / ".env")]
+    if (path / ".env").is_file():
+        env_files += ["--env-file", str(path / ".env")]
+    return ["docker", "compose", "-p", path.name, *files, *env_files, *args]
+
+
+def _addon_compose(ctx: Context, target: str, *args: str) -> int:
+    name, path = _addon(ctx, target)
+    materialize(ctx)
+    source = ctx.bundle / "addons" / name / ".env"
+    if source.is_file():
+        shutil.copyfile(source, path / ".env")
+    return ctx.run(addon_compose_argv(ctx, name, path, *args))
+
+
 def compose_targets(ctx: Context, names: list[str]) -> list[str]:
     """Compose services for the requested targets: catalogue services placed on this
     node, or the gateway. Anything else is refused."""
@@ -503,13 +554,29 @@ def _compose(ctx: Context, *args: str) -> int:
     return ctx.run(compose_argv(ctx, *args))
 
 
+def _addon_target(names: list[str]) -> str | None:
+    """An `addon:<name>` target, which stands alone: an add-on is its own project."""
+    addons = [n for n in names if n.startswith("addon:")]
+    if not addons:
+        return None
+    if len(names) != 1:
+        raise Refused("an add-on is started and stopped on its own")
+    return addons[0]
+
+
 def verb_compose_up(ctx: Context, args: list[str]) -> int:
     names, _ = _split_options(args, set())
+    addon = _addon_target(names)
+    if addon:
+        return _addon_compose(ctx, addon, "up", "-d")
     return _compose(ctx, "up", "-d", *compose_targets(ctx, names))
 
 
 def verb_compose_down(ctx: Context, args: list[str]) -> int:
     names, _ = _split_options(args, set())
+    addon = _addon_target(names)
+    if addon:
+        return _addon_compose(ctx, addon, "down")
     if names:
         # Only the named services: stop and remove their containers, keep the rest.
         return _compose(ctx, "rm", "--stop", "--force", *compose_targets(ctx, names))
@@ -518,6 +585,9 @@ def verb_compose_down(ctx: Context, args: list[str]) -> int:
 
 def verb_compose_stop(ctx: Context, args: list[str]) -> int:
     names, _ = _split_options(args, set())
+    addon = _addon_target(names)
+    if addon:
+        return _addon_compose(ctx, addon, "stop")
     return _compose(ctx, "stop", *compose_targets(ctx, names))
 
 
@@ -691,6 +761,226 @@ def verb_hook(ctx: Context, args: list[str]) -> int:
     )
 
 
+# --- backup and restore -------------------------------------------------
+
+
+def _project(ctx: Context) -> str:
+    return common.parse_env_file(ctx.bundle / ".env").get("COMPOSE_PROJECT_NAME") or "papaia"
+
+
+def node_volumes(ctx: Context) -> dict[str, list[str]]:
+    """Volume name -> the Compose services that mount it, for every volume of this node:
+    the core volumes of the profiles that run here and the add-ons placed here."""
+    project = _project(ctx)
+    profiles = set(ctx.profiles)
+    found: dict[str, list[str]] = {}
+    for key, owner in backup.resolve_core_volume_owners(ctx.checkout).items():
+        if profiles.intersection(owner.profiles):
+            found[f"{project}_{key}"] = list(owner.services)
+    for _name, path in node_addons(ctx).items():
+        for key in backup._top_level_volumes(path / "docker-compose.yml"):
+            found[f"{path.name}_{key}"] = []
+    return found
+
+
+def _state_dir(ctx: Context, index: str) -> Path:
+    states = list(ctx.manifest.get("state_dirs") or [])
+    if not index.isdigit() or int(index) >= len(states):
+        raise Refused(f"no state directory {index} on node '{ctx.node}'")
+    return ctx.config_dir / states[int(index)]
+
+
+def _addon_dir(ctx: Context, addon: str, index: str) -> tuple[Path, str]:
+    name, path = _addon(ctx, f"addon:{addon}")
+    env = common.parse_env_file(ctx.bundle / ".env")
+    env.update(common.parse_env_file(ctx.bundle / "addons" / name / ".env"))
+    env.update(common.parse_env_file(path / ".env"))
+    dirs = backup.addon_bind_dirs(path, env, ctx.config_dir)
+    if not index.isdigit() or int(index) >= len(dirs):
+        raise Refused(f"add-on '{name}' has no data directory {index} on node '{ctx.node}'")
+    return dirs[int(index)], path.name
+
+
+def _source(ctx: Context, args: list[str]) -> tuple[str, str, list[str]]:
+    """(kind, docker mount source, containers to pause) for a backup or restore target."""
+    if len(args) == 2 and args[0] == "volume":
+        name = args[1]
+        if name not in node_volumes(ctx):
+            raise Refused(f"volume '{name}' does not belong to node '{ctx.node}'")
+        return "volume", name, _ids(["docker", "ps", "-q", "--filter", f"volume={name}"])
+    if len(args) == 2 and args[0] == "state":
+        directory = _state_dir(ctx, args[1])
+        rel = directory.relative_to(ctx.config_dir).as_posix()
+        mounting = [
+            s.name
+            for s in topology.services_of(ctx.checkout, ctx.services)
+            if rel in s.config_mounts()
+        ]
+        ids: list[str] = []
+        for service in mounting:
+            ids += _ids(
+                [
+                    "docker",
+                    "ps",
+                    "-q",
+                    "--filter",
+                    f"label=com.docker.compose.project={_project(ctx)}",
+                    "--filter",
+                    f"label=com.docker.compose.service={service}",
+                ]
+            )
+        return "dir", str(directory), ids
+    if len(args) == 3 and args[0] == "binddir":
+        directory, project = _addon_dir(ctx, args[1], args[2])
+        ids = _ids(
+            ["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={project}"]
+        )
+        return "dir", str(directory), ids
+    raise Refused("expected: volume NAME | state INDEX | binddir ADDON INDEX")
+
+
+def _ids(argv: list[str]) -> list[str]:
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def _pause(ids: list[str]) -> list[str]:
+    """Freeze the writers for the length of an archive, as `backup` does on one host."""
+    paused: list[str] = []
+    for cid in ids:
+        state = _ids(["docker", "inspect", "-f", "{{.State.Status}}", cid])
+        if (
+            state == ["running"]
+            and subprocess.run(
+                ["docker", "pause", cid], capture_output=True, timeout=30, check=False
+            ).returncode
+            == 0
+        ):
+            paused.append(cid)
+    return paused
+
+
+def _unpause(ids: list[str]) -> None:
+    for cid in ids:
+        subprocess.run(["docker", "unpause", cid], capture_output=True, timeout=30, check=False)
+
+
+def verb_backup_stream(ctx: Context, args: list[str]) -> int:
+    """An archive of one volume or directory of this node, gzipped tar on stdout."""
+    kind, source, writers = _source(ctx, args)
+    if (
+        kind == "volume"
+        and subprocess.run(
+            ["docker", "volume", "inspect", source], capture_output=True, timeout=30, check=False
+        ).returncode
+        != 0
+    ):
+        print(f"no volume {source} on {ctx.node}", file=sys.stderr, flush=True)
+        return EXIT_MISSING
+    if kind == "dir" and not Path(source).is_dir():
+        print(f"no directory {source} on {ctx.node}", file=sys.stderr, flush=True)
+        return EXIT_MISSING
+    mount = f"{source}:/source:ro"
+    paused = _pause(writers)
+    try:
+        return ctx.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                mount,
+                BACKUP_IMAGE,
+                "tar",
+                "czf",
+                "-",
+                "-C",
+                "/source",
+                ".",
+            ]
+        )
+    finally:
+        _unpause(paused)
+
+
+def verb_restore_put(ctx: Context, args: list[str]) -> int:
+    """Replace one volume or directory of this node with the archive on stdin. The caller
+    has stopped what uses it."""
+    kind, source, _writers = _source(ctx, args)
+    if kind == "volume":
+        subprocess.run(
+            ["docker", "volume", "create", source], capture_output=True, timeout=30, check=False
+        )
+    else:
+        Path(source).mkdir(parents=True, exist_ok=True)
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        f"{source}:/target",
+        BACKUP_IMAGE,
+        "sh",
+        "-c",
+        "rm -rf /target/..?* /target/.[!.]* /target/* 2>/dev/null; tar xzf - -C /target",
+    ]
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE)  # noqa: S603
+    except FileNotFoundError as exc:
+        raise Failed("docker not found on this node") from exc
+    assert proc.stdin is not None
+    total = 0
+    try:
+        while True:
+            chunk = ctx.stdin.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > RESTORE_LIMIT:
+                proc.kill()
+                raise Refused("restore archive larger than its limit")
+            proc.stdin.write(chunk)
+    finally:
+        if not proc.stdin.closed:
+            proc.stdin.close()
+    return proc.wait()
+
+
+def verb_upgrade_step(ctx: Context, args: list[str]) -> int:
+    """`migrate ID FROM TO`: one release migration whose data lives on this node, run from
+    the node's checkout (the target release) with the stack stopped."""
+    if len(args) != 4 or args[0] != "migrate":
+        raise Refused("expected: migrate ID FROM TO")
+    _step, migration_id, from_version, to_version = args
+    if not (_VERSION_RE.match(from_version) and _VERSION_RE.match(to_version)):
+        raise Refused("FROM and TO must be versions")
+    found = {m.id: m for m in migrations.discover(ctx.checkout)}
+    migration = found.get(migration_id)
+    if migration is None:
+        raise Refused(f"no migration {migration_id} in this node's release")
+    if migration.runs_with not in ctx.services:
+        raise Refused(
+            f"migration {migration_id} belongs to '{migration.runs_with or 'the controller'}',"
+            f" which does not run on '{ctx.node}'"
+        )
+    materialize(ctx)
+    env = dict(os.environ)
+    env.update(
+        PAPAIA_CONFIG_DIR=str(ctx.config_dir),
+        PAPAIA_REPO_ROOT=str(ctx.checkout),
+        PAPAIA_FROM_VERSION=from_version,
+        PAPAIA_TO_VERSION=to_version,
+        PAPAIA_MIGRATION_VERSION=migration.version,
+        PYTHONPATH=str(ctx.checkout / "tools"),
+    )
+    interpreter = ["bash"] if migration.kind == "sh" else [sys.executable]
+    return ctx.run([*interpreter, str(migration.path)], env=env, cwd=str(ctx.checkout))
+
+
 def _no_args(args: list[str]) -> None:
     if args:
         raise Refused("this verb takes no arguments")
@@ -714,6 +1004,9 @@ VERBS: dict[str, Verb] = {
     "checkout-put": verb_checkout_put,
     "image-load": verb_image_load,
     "hook": verb_hook,
+    "backup-stream": verb_backup_stream,
+    "restore-put": verb_restore_put,
+    "upgrade-step": verb_upgrade_step,
 }
 
 

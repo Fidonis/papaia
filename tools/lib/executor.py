@@ -160,8 +160,6 @@ def ssh_argv(node: Node, key: Path, known_hosts: Path, command: list[str]) -> li
         "-o",
         "IdentitiesOnly=yes",
         "-o",
-        "IdentityAgent=none",
-        "-o",
         "BatchMode=yes",
         "-o",
         "StrictHostKeyChecking=yes",
