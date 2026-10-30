@@ -579,6 +579,68 @@ Add-ons are registered explicitly by path — there is no auto-discovery — so 
 directory name above is a convention, not a requirement. What matters is the
 `path:` recorded in `deployment.yaml`.
 
+### Distributed installations
+
+By default an installation is one host. A distributed installation spreads the core services
+over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,
+ADR 0009). One node is the **controller**: it runs `papaia-ctl`, holds the configuration
+tree, the CA keys and the SSH keys, and runs papaia-manager and the RAG system. Every other
+node holds only its **bundle**, which every render writes to
+`$PAPAIA_CONFIG_DIR/nodes/<name>/bundle/`: the env files, rendered configuration and
+certificates of the services placed there.
+
+```
+controller (internal)                         edge node
+papaia-config/                                /srv/papaia-node/
+├── link-ca/ca.key, ca.crt     (never leaves) ├── checkout -> releases/<version>
+├── nodes/edge/ssh/id_ed25519  (never leaves) ├── releases/<version>/   (git archive)
+├── nodes/edge/link/node.key   ── bundle ──>  ├── config/               (the bundle)
+└── nodes/edge/bundle/         ── bundle ──>  │   └── link/haproxy.cfg, node.pem, ca.crt
+                                              ├── audit.log
+                                              └── .ssh/authorized_keys (forced command)
+```
+
+**Control channel** (ADR 0010). The controller reaches a node over SSH as the unprivileged
+user `papaia`. The node's `authorized_keys` entry forces `papaia-ctl node-shell`, which
+accepts only an allowlist of verbs and checks every name against the node's bundle:
+`ping`, `version`, `status`, `doctor`, `compose-up|down|stop|restart|ps|pull|logs`,
+`bundle-put`, `checkout-put`, `image-load`, `hook`. Bundles and releases travel as archives
+over the same channel, and the node needs neither Git nor access to GitHub. The controller
+runs its own node through the same shim (the `local` executor).
+
+**Link gateway** (ADR 0010). Each node runs one HAProxy container (`src/infra/link-gateway/`,
+profile `link-gateway`, never loaded on a single host). For a service that runs on another
+node, it carries the service's name as a network alias and listens on its usual port, so
+`litellm:4000`, `keycloak:8443` and `librechat:3080` keep working everywhere. It wraps the
+connection in mutual TLS with a certificate of the link CA (separate from the Keycloak CA)
+and hands it to the target node's link port. That port routes by SNI and lets each client
+node reach only the services the edge table in `tools/lib/link.py` allows. The inner
+protocol is passed through untouched, and a peer that is down means a refused connection.
+`papaia-ctl topology firewall` lists the connections between nodes that this opens.
+
+**Operations** (`tools/lib/cluster.py`). A distributed installation is set up once, as a new
+installation (`setup --topology=distributed`); `setup` never changes the shape of an existing
+one. `start` renders the bundles, hands each node its release and bundle, and starts the link
+gateways first and then the services in groups: Keycloak and the mail relay, LiteLLM, the
+application services, and the Nginx Proxy Manager last. `stop` runs backwards. The
+provisioning steps (`npm-provision`, `keycloak-role-sync`) run on the node of their service.
+`status` merges every node's report and adds `node` per module and container, plus `nodes`.
+`doctor` checks the controller's own node and adds `nodes` (version skew, clock deviation,
+each node's own checks) and `links` (a TLS handshake per link, certificate expiry). The JSON
+schemas grow additively and `schema_version` stays 1.
+
+**Data** (`tools/lib/cluster_data.py`). A restore point of a distributed installation lives on
+the controller, in the one catalogue. It holds the controller's configuration directory and
+every node's volumes, remote state and add-on data, streamed through the node's executor; each
+artifact records its `node`, and `node:NAME` selects one node for `backup --only` and
+`restore --only`. An **upgrade** moves every node at once: all nodes answer, a restore point is
+taken, a lock (`upgrade.lock`, plus any node on another release) blocks everything but the
+upgrade and the way back, every node gets the release, and each migration runs on the node of
+the service it names (`# papaia-migration: runs-with=<service>`), recorded with its node in the
+ledger. An **add-on** runs on one node: `addon install --node`, and the compatibility gate
+refuses an add-on that attaches to core services on two nodes. The operator guide is
+[distributed.md](distributed.md).
+
 ---
 
 ## 10. Naming Conventions
@@ -742,6 +804,38 @@ addons:
     version: 0.1.0
     active: false                   # deactivated
 ```
+
+### Topology (distributed installations)
+
+An optional `topology` block describes an installation that runs on more than one machine.
+Without it — the default, and every installation that existed before it — the installation
+is a single host.
+
+```yaml
+topology:
+  mode: single | distributed
+  controller: <node>                # runs papaia-ctl; config tree, CA keys, SSH keys
+  link:
+    port: 7443                      # the port each node's link gateway listens on
+  nodes:
+    <name>:
+      address: <ip or host>
+      executor: local | ssh         # local only for the controller
+      ssh: {user: papaia, port: 22, host: <optional>}
+      root: /srv/papaia-node        # node directory; config dir <root>/config
+      bind_ip: <optional>           # HOST_IP on that node (default 127.0.0.1 behind the proxy)
+      gpu: none | nvidia | amd | intel | vulkan   # optional hint for LocalAI
+  placement:                        # catalogue service -> node; default: the controller
+    <service>: <node>
+```
+
+The unit of placement is a service of the catalogue in `tools/lib/topology.py`: a service is
+one or two Compose profiles and everything they always bring along. On each node
+`COMPOSE_PROFILES` names what starts there, while `PAPAIA_ACTIVE_MODULES` keeps the profiles
+of the whole installation for what is decided cluster-wide (realm clients, proxy hosts, the
+mail relay). In distributed mode the render projects one bundle per node into
+`$PAPAIA_CONFIG_DIR/nodes/<name>/bundle/` with only that node's env files, configuration,
+certificates and overrides. The decision is recorded in ADR 0009.
 
 ### Active set
 

@@ -75,6 +75,9 @@ tools/
                               #   compat.py · semver.py · render_core.py · gen_override.py
                               #   backup.py · upgrade.py · migrations.py · npm_provision.py
                               #   status.py · doctor.py · modules.py · common.py
+                              # distributed installations (docs/distributed.md):
+                              #   topology.py · link.py · cluster.py · cluster_data.py
+                              #   nodes.py · executor.py · node_shell.py · cli_node.py
     sh/                       # Bash command libraries sourced by papaia-ctl
   schemas/                    # JSON Schemas of `status --json`, `doctor --json`, `addon list --json`
                               #   and `addon upgrade --dry-run --json`
@@ -91,6 +94,7 @@ src/
     nginx/                    # Nginx Proxy Manager (TLS termination) + admin-UI sidecar
     oauth2-proxy/             # Forward-auth gateway (Go)
     smtp-relay/               # Optional internal mail relay (Postfix, profile: smtp)
+    link-gateway/             # mTLS link between nodes (distributed only; not in the include list)
   ai/
     README.md                 # Per-AI-service summary
     librechat/                # Multi-provider chat interface
@@ -109,6 +113,8 @@ docs/
   configuration.md              # Environment variable reference
   deployment.md                 # Deployment guide
   troubleshooting.md            # Common issues and fixes
+  distributed.md                # Running on several machines (operator guide)
+  distributed-validation.md     # Hand-run check of a two-node installation
   adr/                          # Architecture Decision Records
 .github/
   workflows/ci.yml            # Lint (shellcheck, yamllint, hadolint) + PR-title check

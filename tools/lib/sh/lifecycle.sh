@@ -3,6 +3,30 @@
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
+# "single" or "distributed", without Python: a single-node installation has no
+# `topology:` block in deployment.yaml, and every lifecycle command asks this first.
+# A block that says anything but single is handed to Python, which validates it.
+_topology_mode() {
+    local manifest="$CONFIG_DIR/deployment.yaml"
+    if [ ! -f "$manifest" ] || ! grep -q '^topology:' "$manifest"; then
+        printf 'single'
+        return 0
+    fi
+    local mode
+    if ! mode="$(py_cli topology-mode)"; then
+        return 3
+    fi
+    printf '%s' "${mode%$'\r'}"
+}
+
+# A distributed installation is locked while an upgrade has not finished and while a node
+# runs another release than this checkout: everything that changes it waits for `upgrade`.
+# The upgrade itself sets UPGRADE_IN_PROGRESS for the commands it runs.
+_cluster_require_unlocked() {
+    [ "${UPGRADE_IN_PROGRESS:-0}" = "1" ] && return 0
+    py_cli cluster-lock || exit 2
+}
+
 # Run docker compose start/stop/up/down on every active addon. Goes through
 # _addon_compose (addon.sh) so teardown uses the same project name and env files
 # as bring-up -- a templated `networks.*.name` otherwise resolves to its bare
@@ -52,12 +76,14 @@ _require_profiles_resolve() {
 }
 
 cmd_start() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0
+    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --addons) addons=1 ;;
             --profiles=*) profiles="${1#*=}" ;;
+            --node=*) node="${1#*=}" ;;
+            --unlock) unlock=1 ;;
             --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for start: $1"; exit 2 ;;
@@ -66,6 +92,25 @@ cmd_start() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        if [ "$unlock" -eq 1 ]; then
+            # The operator's way out of an upgrade abandoned without a restore point: drop
+            # the lock and let start put the checkout's release back on every node.
+            warn "--unlock: releasing the upgrade lock; every node gets this checkout's release."
+            py_cli cluster-lock --clear
+            UPGRADE_IN_PROGRESS=1
+        fi
+        _start_distributed "$node" "$profiles" "$addons" "$force"
+        return
+    fi
+    _require_no_node "$node"
+    if [ "$unlock" -eq 1 ]; then
+        error "--unlock is for a distributed installation; this one runs on one host."
+        exit 2
+    fi
 
     # Compatibility gate for the upgrade case: the core may have moved since
     # the addons were installed. Refuse before anything is materialised or
@@ -157,6 +202,49 @@ cmd_npm_provision() { _provisioning_step npm-provision "$@"; }
 
 cmd_keycloak_role_sync() { _provisioning_step keycloak-role-sync "$@"; }
 
+# --node belongs to a distributed installation; on one host it is a mistake worth naming.
+_require_no_node() {
+    if [ -n "$1" ]; then
+        error "--node is for a distributed installation; this one runs on one host."
+        exit 2
+    fi
+}
+
+# start in a distributed installation: the same gate and render as on one host, then the
+# nodes in order (lib/cluster.py). $1 node, $2 profiles, $3 1 for --addons, $4 1 for --force
+_start_distributed() {
+    local node="$1" profiles="$2" addons="$3" force="$4"
+    _cluster_require_unlocked
+    local -a check_flags=()
+    [ "$force" -eq 1 ] && check_flags+=(--force)
+    if ! py_cli addon-check "${check_flags[@]}"; then
+        error "Addon compatibility check failed. See 'papaia-ctl addon check', or re-run with --force to override."
+        exit 2
+    fi
+    py_cli sync-env
+    info "Rendering the configuration and the node bundles..."
+    py_cli render
+    local -a extra=()
+    [ -n "$node" ] && extra+=(--node="$node")
+    [ -n "$profiles" ] && extra+=(--profiles="$profiles")
+    [ "$addons" -eq 1 ] && extra+=(--addons)
+    py_cli cluster-start "${extra[@]}" || exit $?
+    success "start complete."
+}
+
+# $1 node, $2 profiles, $3 1 for --addons, $4 1 for --clean-up
+_stop_distributed() {
+    local node="$1" profiles="$2" addons="$3" clean_up="$4"
+    local -a extra=()
+    [ -n "$node" ] && extra+=(--node="$node")
+    [ -n "$profiles" ] && extra+=(--profiles="$profiles")
+    [ "$clean_up" -eq 1 ] && extra+=(--clean-up)
+    [ "$addons" -eq 1 ] && extra+=(--addons)
+    py_cli cluster-stop "${extra[@]}" || exit $?
+    success "stop complete."
+}
+
+
 _provisioning_step() {
     local step="$1"
     shift
@@ -171,6 +259,23 @@ _provisioning_step() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        # The step runs where its service runs: the proxy's node, Keycloak's node.
+        local service="nginx" owner
+        [ "$step" = "keycloak-role-sync" ] && service="keycloak"
+        owner="$(py_cli topology-node-of --service="$service")"
+        owner="${owner%$'\r'}"
+        if [ -z "$owner" ]; then
+            # As on one host: nothing to provision for a service the installation does not
+            # run (an external proxy, an external identity provider).
+            info "$step skipped: this installation does not run $service."
+            return 0
+        fi
+        py_cli node-exec --name="$owner" hook "$step"
+        return
+    fi
     # The step's own exit status is the command's, so a retry that fails is visible.
     py_cli "$step"
 }
@@ -197,7 +302,7 @@ _require_deletable_profiles() {
 }
 
 cmd_stop() {
-    local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 profiles="" volumes=0
+    local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 profiles="" volumes=0 node=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
@@ -205,6 +310,7 @@ cmd_stop() {
             --volumes) volumes=1 ;;
             --addons) addons=1 ;;
             --profiles=*) profiles="${1#*=}" ;;
+            --node=*) node="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for stop: $1"; exit 2 ;;
         esac
@@ -212,6 +318,19 @@ cmd_stop() {
     done
     CONFIG_DIR="$config_dir"
     local env_file="$REPO_ROOT/src/.env"
+
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        if [ "$volumes" -eq 1 ]; then
+            error "--volumes is not available for a distributed installation: run"
+            error "'papaia-ctl stop --clean-up --profiles=LIST' and delete the volumes on the node."
+            exit 2
+        fi
+        _stop_distributed "$node" "$profiles" "$addons" "$clean_up"
+        return
+    fi
+    _require_no_node "$node"
 
     # Deleting volumes is only ever scoped: it needs the containers removed with them, and the
     # profiles that say whose.
@@ -261,6 +380,21 @@ cmd_stop() {
     success "stop complete."
 }
 
+# Commands a distributed installation does not offer: they would act on the controller
+# alone and leave the other nodes behind. $1 = the command, rest = what to do instead.
+_refuse_distributed() {
+    local command="$1"; shift
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    [ "$mode" = "distributed" ] || return 0
+    error "'papaia-ctl $command' is not available for a distributed installation."
+    local line
+    for line in "$@"; do
+        error "$line"
+    done
+    exit 2
+}
+
 cmd_uninstall() {
     local config_dir="$DEFAULT_CONFIG_DIR" clean_up=0 addons=0 non_interactive=0
     while [ $# -gt 0 ]; do
@@ -275,6 +409,9 @@ cmd_uninstall() {
         shift
     done
     CONFIG_DIR="$config_dir"
+    _refuse_distributed uninstall \
+        "Stop it with 'papaia-ctl stop --clean-up', remove the user and the directory on every" \
+        "node, and delete $CONFIG_DIR by hand once nothing in it is needed any more."
 
     warn "This will stop and remove all core containers and permanently delete $CONFIG_DIR."
     if [ "$clean_up" -eq 1 ]; then

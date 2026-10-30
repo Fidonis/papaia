@@ -3,6 +3,10 @@
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
+# The topology flags of the setup run in progress (see cmd_setup). Declared here so that
+# _run_setup_py can be called on its own.
+SETUP_TOPOLOGY_ARGS=()
+
 # Reads a py_cli subcommand's KEY=VALUE output into the current shell's
 # variables.
 _load_kv() {
@@ -43,6 +47,8 @@ cmd_setup() {
     # (consumed by _run_setup_py). Reset on every run so a re-render never repeats them.
     SETUP_SMTP_ARGS=()
     SETUP_SMTP_PASSWORD=""
+    # The topology of a distributed installation, same lifetime as the mail arguments.
+    SETUP_TOPOLOGY_ARGS=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -122,12 +128,27 @@ cmd_setup() {
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
             --env-only) env_only=1 ;;
+            --topology=*)
+                case "${1#*=}" in
+                    single|distributed) SETUP_TOPOLOGY_ARGS+=("$1") ;;
+                    *) error "Invalid --topology value: '${1#*=}' (must be 'single' or 'distributed')"; exit 2 ;;
+                esac
+                ;;
+            --node=*|--place=*|--preset=*|--controller=*|--link-port=*|--topology-file=*)
+                SETUP_TOPOLOGY_ARGS+=("$1") ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for setup: $1"; exit 2 ;;
         esac
         shift
     done
     CONFIG_DIR="$config_dir"
+
+    # A distributed installation that is being upgraded, or whose nodes run another release
+    # than this checkout, is re-rendered by `upgrade` only.
+    if [ -f "$CONFIG_DIR/deployment.yaml" ] && grep -q '^topology:' "$CONFIG_DIR/deployment.yaml" \
+        && [ "$(_topology_mode)" = "distributed" ]; then
+        _cluster_require_unlocked
+    fi
 
     load_defaults
 
@@ -229,6 +250,11 @@ cmd_setup() {
 
     if [ "$non_interactive" -eq 0 ] && is_tty; then
         info "papAIa setup — press Enter to keep each [default]."
+        # One machine or several: asked of a new installation only. An installation that
+        # completed a setup keeps its shape, so a re-run asks nothing new.
+        if [ "${#SETUP_TOPOLOGY_ARGS[@]}" -eq 0 ] && ! _installation_exists; then
+            _prompt_topology
+        fi
         if [ -z "$app_host" ]; then
             app_host="$(prompt_field "Public URL of this server" \
                 "Where browsers reach papAIa (scheme + host, no path)." \
@@ -484,16 +510,118 @@ cmd_setup() {
     [ -n "$smtp_from" ] && SETUP_SMTP_ARGS+=(--smtp-from="$smtp_from")
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
-    if ! _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host"; then
-        SETUP_SMTP_PASSWORD=""
+    local setup_rc=0
+    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" || setup_rc=$?
+    SETUP_SMTP_PASSWORD=""
+    if [ "$setup_rc" -eq 4 ]; then
+        # SETUP_REFUSED: a request that does not fit this installation (a topology for an
+        # existing one, a placement that cannot work). The reason is on stderr, nothing
+        # was changed.
+        return 2
+    elif [ "$setup_rc" -ne 0 ]; then
         error "setup failed."
         return 3
     fi
-    SETUP_SMTP_PASSWORD=""
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
         _ensure_keycloak_certs
     fi
+    local mode
+    mode="$(_topology_mode)" || return 3
+    if [ "$mode" = "distributed" ]; then
+        _setup_distributed "$non_interactive"
+        return
+    fi
     success "setup complete. Run 'papaia-ctl start' to bring up the stack."
+}
+
+# Whether this config dir holds an installation that completed a setup: PAPAIA_VERSION is
+# stamped by the first setup that got as far as writing its configuration.
+_installation_exists() {
+    [ -f "$CONFIG_DIR/.env" ] && grep -q '^PAPAIA_VERSION=..*' "$CONFIG_DIR/.env"
+}
+
+# Asks whether papAIa runs on one machine or several, and for a distributed installation
+# its nodes and the placement. Fills SETUP_TOPOLOGY_ARGS.
+_prompt_topology() {
+    printf '\n%sWhere does papAIa run?%s\n' "$CYAN" "$NC" >&2
+    printf '  1) On this machine (default)\n' >&2
+    printf '  2) On several machines — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
+    local choice
+    choice="$(prompt_with_default "  Choose" "1")"
+    case "$choice" in
+        2|distributed|several) : ;;
+        *) return 0 ;;
+    esac
+    local controller controller_address edge edge_address edge_ssh link_port
+    controller="$(prompt_field "This machine" \
+        "The controller: it runs papaia-ctl and keeps the configuration and the keys." \
+        "Node name" "internal")"
+    controller_address="$(prompt_field "Address of $controller" \
+        "Where the other nodes reach this machine (an IP address)." "Address" "")"
+    edge="$(prompt_field "Second machine" "The node at the network edge." "Node name" "edge")"
+    edge_address="$(prompt_field "Address of $edge" \
+        "Where this machine reaches it (an IP address)." "Address" "")"
+    edge_ssh="$(prompt_field "SSH login on $edge" \
+        "The unprivileged user papaia-ctl uses there, and the SSH host and port." \
+        "USER@HOST[:PORT]" "papaia@$edge_address")"
+    printf '\n%sWhat runs on %s%s\n' "$CYAN" "$edge" "$NC" >&2
+    printf '  1) Nginx Proxy Manager, Keycloak, the mail relay and LiteLLM (dmz-split, default)\n' >&2
+    printf '  2) Nginx Proxy Manager and LiteLLM; Keycloak stays here (dmz-edge)\n' >&2
+    printf '  3) Choose per service\n' >&2
+    choice="$(prompt_with_default "  Choose" "1")"
+    SETUP_TOPOLOGY_ARGS=(--topology=distributed --controller="$controller"
+        --node="$controller=$controller_address" --node="$edge=$edge_address,ssh=$edge_ssh")
+    case "$choice" in
+        2|dmz-edge) SETUP_TOPOLOGY_ARGS+=(--preset=dmz-edge) ;;
+        3)
+            local service node
+            for service in nginx keycloak smtp litellm librechat localai; do
+                node="$(prompt_with_default "  Node for $service ($controller or $edge)" "$controller")"
+                SETUP_TOPOLOGY_ARGS+=(--place="$service=$node")
+            done
+            ;;
+        *) SETUP_TOPOLOGY_ARGS+=(--preset=dmz-split) ;;
+    esac
+    link_port="$(prompt_field "Link port" \
+        "The one port the nodes connect to each other on (mutual TLS)." "Port" "7443")"
+    SETUP_TOPOLOGY_ARGS+=(--link-port="$link_port")
+}
+
+# After the setup of a distributed installation: the bundles once more (now with the
+# Keycloak certificates), what was decided, what the firewalls must allow, and the nodes
+# that still need enrolling. $1 = 1 for a non-interactive run.
+_setup_distributed() {
+    local non_interactive="$1"
+    py_cli topology-project >/dev/null
+    info "Topology:"
+    py_cli topology-show
+    info "Connections between the nodes (open these in the firewalls; papaia-ctl does not):"
+    py_cli topology-firewall
+    local name pending=0
+    while IFS= read -r name; do
+        name="${name%$'\r'}"
+        [ -z "$name" ] && continue
+        pending=1
+        local archive="$CONFIG_DIR/nodes/$name/papaia-join-$name.tar.gz"
+        py_cli node-join-bundle --name="$name" --output="$archive" >/dev/null
+        warn "Node $name is not enrolled yet. Copy $archive to it and run there, as root:"
+        warn "    tar -xzf papaia-join-$name.tar.gz && sudo ./papaia-join-$name/install.sh"
+        warn "  then confirm its host key with 'papaia-ctl node check $name'."
+    done < <(py_cli node-pending)
+    if [ "$pending" -eq 1 ]; then
+        success "setup complete. Enrol the nodes above, then run 'papaia-ctl start'."
+        return 0
+    fi
+    info "Preflight:"
+    if ! py_cli cluster-preflight; then
+        error "A node is not ready (see above). Fix it, then run 'papaia-ctl start'."
+        return 3
+    fi
+    if [ "$non_interactive" -eq 0 ] && is_tty && confirm "Start the installation now?" "Y"; then
+        cmd_start --config-dir="$CONFIG_DIR"
+        return
+    fi
+    success "setup complete. Run 'papaia-ctl start' to bring up the installation."
 }
 
 _derive_auth_default() {
@@ -676,6 +804,9 @@ _run_setup_py() {
     # The mail relay flags are collected by cmd_setup; empty on the re-render paths.
     if [ "${#SETUP_SMTP_ARGS[@]}" -gt 0 ]; then
         extra+=("${SETUP_SMTP_ARGS[@]}")
+    fi
+    if [ "${#SETUP_TOPOLOGY_ARGS[@]}" -gt 0 ]; then
+        extra+=("${SETUP_TOPOLOGY_ARGS[@]}")
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.

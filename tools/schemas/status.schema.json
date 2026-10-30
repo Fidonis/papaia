@@ -49,6 +49,22 @@
         "core": { "oneOf": [{ "$ref": "#/$defs/health" }, { "type": "null" }] },
         "addons": { "oneOf": [{ "$ref": "#/$defs/health" }, { "type": "null" }] }
       }
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Distributed installations only: every node, whether it answered and the papAIa release it runs. Absent on a single host.",
+      "items": {
+        "type": "object",
+        "required": ["name", "address", "controller", "reachable", "reason", "papaia_version"],
+        "properties": {
+          "name": { "type": "string" },
+          "address": { "type": "string" },
+          "controller": { "type": "boolean" },
+          "reachable": { "type": "boolean" },
+          "reason": { "type": ["string", "null"] },
+          "papaia_version": { "type": ["string", "null"] }
+        }
+      }
     }
   },
   "$defs": {
@@ -69,7 +85,11 @@
           "description": "False for a module Docker reports that no Compose file of this deployment declares."
         },
         "status": { "$ref": "#/$defs/health" },
-        "containers": { "type": "array", "items": { "$ref": "#/$defs/container" } }
+        "containers": { "type": "array", "items": { "$ref": "#/$defs/container" } },
+        "node": {
+          "type": "string",
+          "description": "Distributed installations only: the node the module runs on."
+        }
       }
     },
     "container": {
@@ -88,6 +108,10 @@
         "host_ports": {
           "type": "array",
           "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        },
+        "node": {
+          "type": "string",
+          "description": "Distributed installations only: the node the container runs on."
         }
       }
     },

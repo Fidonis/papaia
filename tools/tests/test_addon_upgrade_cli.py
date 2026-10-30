@@ -35,6 +35,7 @@ success() { echo "OK: $*"; }
 usage() { echo USAGE; }
 is_tty() { return 1; }
 _require_setup_done() { :; }
+_topology_mode() { echo single; }
 py_cli() {
     echo "py_cli $*" >> "@LOG@"
     case "$1" in
