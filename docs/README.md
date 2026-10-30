@@ -8,6 +8,8 @@ Welcome to the papAIa documentation.
 - [Configuration](./configuration.md) — environment variables and configuration files
 - [Deployment](./deployment.md) — local and remote deployment paths
 - [Troubleshooting](./troubleshooting.md) — common issues and fixes
+- [Validating a two-node installation](./distributed-validation.md) — the hand-run check of
+  the distributed mode on two machines
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions
 
 ## Conventions

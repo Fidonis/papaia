@@ -52,6 +52,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -795,6 +796,7 @@ def project_node(
     seed: envtree.EnvTree,
     cluster_profiles: list[str],
     extra_profiles: list[str] | None = None,
+    writer: Callable[[Path], None] | None = None,
 ) -> NodeBundle:
     """Write one node's bundle. Replaces whatever bundle the node had."""
     active = active_services(cluster_profiles)
@@ -874,6 +876,23 @@ def project_node(
         if source.is_file():
             _copy_path(source, staging / "overrides" / name)
 
+    # What the node's own `status` and `doctor` read: the profiles that run there. The
+    # add-ons placed on the node are added with them (see `addon --node`).
+    node_manifest = {
+        "customer": root.get("COMPOSE_PROJECT_NAME", "papaia"),
+        "platform_version": envtree.resolve_platform_version(repo_root),
+        "node": node.name,
+        "core": {"profiles": profiles},
+        "addons": [],
+    }
+    common.atomic_write(
+        staging / "deployment.yaml",
+        yaml.safe_dump(node_manifest, sort_keys=False, default_flow_style=False),
+    )
+
+    if writer is not None:
+        writer(staging)
+
     manifest = {
         "node": node.name,
         "controller": topo.controller,
@@ -906,12 +925,27 @@ def project_node(
 
 
 def project(config_dir: Path, repo_root: Path, topo: Topology) -> list[NodeBundle]:
-    """Write every node's bundle and remove the bundles of nodes that are gone."""
+    """Write every node's bundle and remove the bundles of nodes that are gone.
+
+    Each bundle also carries the node's link gateway: its configuration, its leaf
+    certificate and the CA certificate (see lib/link.py)."""
     if not topo.distributed:
         return []
+    # Local import: link builds on this module's model.
+    from . import link
+
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     seed = envtree.load_seed_tree(repo_root)
     cluster = [p for p in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",") if p]
+    env = validation_env(config_dir, repo_root)
+    link_plan = link.plan(topo, cluster, env)
+
+    def writer_for(node: Node) -> Callable[[Path], None]:
+        bundle_root = node_bundle_root(topo, node, config_dir)
+        return lambda staging: link.write_node_files(
+            staging, config_dir, link_plan, node, bundle_root
+        )
+
     bundles = [
         project_node(
             config_dir,
@@ -921,6 +955,8 @@ def project(config_dir: Path, repo_root: Path, topo: Topology) -> list[NodeBundl
             tree=tree,
             seed=seed,
             cluster_profiles=cluster,
+            extra_profiles=[link.GATEWAY_PROFILE],
+            writer=writer_for(node),
         )
         for node in topo.nodes.values()
     ]

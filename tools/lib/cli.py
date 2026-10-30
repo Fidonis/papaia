@@ -28,6 +28,7 @@ from pathlib import Path
 from . import (
     backup,
     cli_addon,
+    cli_node,
     common,
     defaults,
     deployment,
@@ -801,6 +802,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_topology_project = sub.add_parser("topology-project")
     p_topology_project.set_defaults(func=cmd_topology_project)
+
+    cli_node.add_parsers(sub)
 
     p_module_info = sub.add_parser("module-info")
     p_module_info.add_argument("--module", required=True, choices=sorted(modules.MODULES))

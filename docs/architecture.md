@@ -579,6 +579,45 @@ Add-ons are registered explicitly by path — there is no auto-discovery — so 
 directory name above is a convention, not a requirement. What matters is the
 `path:` recorded in `deployment.yaml`.
 
+### Distributed installations
+
+By default an installation is one host. A distributed installation spreads the core services
+over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,
+ADR 0009). One node is the **controller**: it runs `papaia-ctl`, holds the configuration
+tree, the CA keys and the SSH keys, and runs papaia-manager and the RAG system. Every other
+node holds only its **bundle**, which every render writes to
+`$PAPAIA_CONFIG_DIR/nodes/<name>/bundle/`: the env files, rendered configuration and
+certificates of the services placed there.
+
+```
+controller (internal)                         edge node
+papaia-config/                                /srv/papaia-node/
+├── link-ca/ca.key, ca.crt     (never leaves) ├── checkout -> releases/<version>
+├── nodes/edge/ssh/id_ed25519  (never leaves) ├── releases/<version>/   (git archive)
+├── nodes/edge/link/node.key   ── bundle ──>  ├── config/               (the bundle)
+└── nodes/edge/bundle/         ── bundle ──>  │   └── link/haproxy.cfg, node.pem, ca.crt
+                                              ├── audit.log
+                                              └── .ssh/authorized_keys (forced command)
+```
+
+**Control channel** (ADR 0010). The controller reaches a node over SSH as the unprivileged
+user `papaia`. The node's `authorized_keys` entry forces `papaia-ctl node-shell`, which
+accepts only an allowlist of verbs and checks every name against the node's bundle:
+`ping`, `version`, `status`, `doctor`, `compose-up|down|stop|restart|ps|pull|logs`,
+`bundle-put`, `checkout-put`, `image-load`, `hook`. Bundles and releases travel as archives
+over the same channel, and the node needs neither Git nor access to GitHub. The controller
+runs its own node through the same shim (the `local` executor).
+
+**Link gateway** (ADR 0010). Each node runs one HAProxy container (`src/infra/link-gateway/`,
+profile `link-gateway`, never loaded on a single host). For a service that runs on another
+node, it carries the service's name as a network alias and listens on its usual port, so
+`litellm:4000`, `keycloak:8443` and `librechat:3080` keep working everywhere. It wraps the
+connection in mutual TLS with a certificate of the link CA (separate from the Keycloak CA)
+and hands it to the target node's link port. That port routes by SNI and lets each client
+node reach only the services the edge table in `tools/lib/link.py` allows. The inner
+protocol is passed through untouched, and a peer that is down means a refused connection.
+`papaia-ctl topology firewall` lists the connections between nodes that this opens.
+
 ---
 
 ## 10. Naming Conventions

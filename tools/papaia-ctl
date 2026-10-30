@@ -49,6 +49,18 @@
 #   papaia-ctl doctor        [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 #   papaia-ctl topology show [--json] [--config-dir=PATH]
 #   papaia-ctl topology validate [--config-dir=PATH]
+#   papaia-ctl topology firewall [--format=table|json|csv] [--config-dir=PATH]
+#   papaia-ctl node add      <name> --address=ADDR [--ssh=USER@HOST[:PORT]] [--root=DIR]
+#                            [--gpu=none|nvidia|amd|intel|vulkan] [--bind-ip=IP]
+#                            [--bootstrap=join|admin] [--admin=USER@HOST[:PORT]]
+#                            [--output=FILE] [--host-key-fingerprint=SHA256:...] [-y]
+#   papaia-ctl node list     [--json] [--check] [--config-dir=PATH]
+#   papaia-ctl node check    <name> [--host-key-fingerprint=SHA256:...] [--json] [-y]
+#   papaia-ctl node remove   <name> [-y] [--config-dir=PATH]
+#   papaia-ctl node join-bundle <name> [--output=FILE] [--config-dir=PATH]
+#   papaia-ctl node renew-link <name> [--config-dir=PATH]
+#   papaia-ctl node sync     <name>|--all [--checkout] [--config-dir=PATH]
+#   papaia-ctl node-shell    the forced command of a node's SSH key; never run by hand
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
@@ -77,7 +89,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,70p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,82p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -106,6 +118,8 @@ source "$SH_LIB/upgrade.sh"
 source "$SH_LIB/diag.sh"
 # shellcheck source=lib/sh/topology.sh
 source "$SH_LIB/topology.sh"
+# shellcheck source=lib/sh/node.sh
+source "$SH_LIB/node.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -178,6 +192,8 @@ case "$cmd" in
     status)        cmd_status "$@" ;;
     doctor)        cmd_doctor "$@" ;;
     topology)      cmd_topology "$@" ;;
+    node)          cmd_node "$@" ;;
+    node-shell)    cmd_node_shell "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

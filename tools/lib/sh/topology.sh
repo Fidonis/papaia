@@ -39,6 +39,9 @@ cmd_topology() {
     case "$sub" in
         show)     py_cli topology-show "${extra[@]}" ;;
         validate) py_cli topology-validate ;;
-        *) error "Unknown 'topology' subcommand: '$sub'. Valid: show, validate."; exit 2 ;;
+        # The connections the installation opens between its nodes. papaia never applies
+        # them; they are for whoever runs the firewalls.
+        firewall) py_cli topology-firewall "${extra[@]}" ;;
+        *) error "Unknown 'topology' subcommand: '$sub'. Valid: show, validate, firewall."; exit 2 ;;
     esac
 }

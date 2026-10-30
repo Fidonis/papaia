@@ -213,7 +213,9 @@ papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
-papaia-ctl topology  <show [--json]|validate> [--config-dir=PATH]
+papaia-ctl topology  <show [--json]|validate|firewall [--format=table|json|csv]>
+                     [--config-dir=PATH]
+papaia-ctl node      <add|list|check|remove|join-bundle|renew-link|sync> [OPTIONS]
 papaia-ctl help
 ```
 
@@ -968,6 +970,51 @@ tools/papaia-ctl topology validate        # exit 2 when the placement cannot wor
 `manager` or `rag` away from the controller, web search away from LibreChat, a LocalAI GPU
 image on a node without that GPU, a link port that collides with a published port, or a public
 URL with a port (in distributed mode the bundled proxy serves every URL by host name).
+
+```sh
+tools/papaia-ctl topology firewall [--format=table|json|csv]
+```
+
+`firewall` lists the connections the installation opens between its nodes: SSH from the
+controller to every other node, and the link port wherever a service on one node calls a
+service on another. For the `dmz-split` example that is SSH and 7443 from internal to edge,
+and 7443 from edge to internal. papaia never changes a firewall itself.
+
+### `node`
+
+```sh
+tools/papaia-ctl node add <name> --address=ADDR [--ssh=USER@HOST[:PORT]] [--root=DIR]
+                          [--gpu=HINT] [--bootstrap=join|admin] [--admin=USER@HOST[:PORT]]
+                          [--host-key-fingerprint=SHA256:...] [-y]
+tools/papaia-ctl node list [--json] [--check]
+tools/papaia-ctl node check <name> [--host-key-fingerprint=SHA256:...]
+tools/papaia-ctl node remove <name> [-y]
+tools/papaia-ctl node join-bundle <name> [--output=FILE]
+tools/papaia-ctl node renew-link <name>
+tools/papaia-ctl node sync <name>|--all [--checkout]
+```
+
+Nodes belong to a distributed installation. The controller talks to a node over SSH as the
+unprivileged user `papaia`, with a key of its own per node (in `nodes/<name>/ssh/` of the
+config directory, never copied anywhere). The node's `authorized_keys` entry allows exactly
+one command, `papaia-ctl node-shell`. That command accepts a short list of verbs (start, stop
+and inspect the node's services, install a bundle or a release, run a provisioning hook),
+refuses everything else, and writes one audit line per call to `<root>/audit.log` on the node.
+
+`node add` enrols a node in one of two ways:
+
+- `--bootstrap=join` (the default) writes a join archive: the checkout, an install script,
+  the `authorized_keys` line and the fingerprint of the controller's key. Copy it to the node
+  and run `sudo ./papaia-join-<name>/install.sh` there. Then confirm the node's host key with
+  `node check <name>`.
+- `--bootstrap=admin --admin=USER@HOST` does the same over your own admin login on the node.
+  `sudo` asks for your password if it needs one. Nothing of that login is stored.
+
+The node needs Docker with the compose plugin, Python 3.10 or newer with PyYAML, and an SSH
+server. Its host key is pinned when the controller first connects: the fingerprint is shown
+and has to be confirmed, or given with `--host-key-fingerprint` in scripts. `node sync` hands
+a node its release and its bundle. `node renew-link` issues a new link certificate for the
+node and restarts its gateway.
 
 ---
 
