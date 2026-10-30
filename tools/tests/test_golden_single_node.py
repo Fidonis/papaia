@@ -23,16 +23,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 import yaml
+from install_helpers import Installation, run_cli
 from stack_helpers import FakeDocker, ps_line
 
-from lib import backup, cli, common, defaults, deployment, doctor, envtree, smtp, status
+from lib import backup, common, defaults, deployment, doctor, envtree, smtp, status
 from lib.doctor import MemInfo, Probes
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,13 +41,6 @@ UPDATE = os.environ.get("PAPAIA_UPDATE_GOLDEN") == "1"
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
 GIB = 1024**3
-
-# What `setup` reads from the checkout. Copied from the working tree, not from git, so
-# an uncommitted change to a compose fragment or a template is what gets tested.
-_CHECKOUT_FILES = ("tools/deployment.template.yaml", "VERSION", "ADDON_API", "CHANGELOG.md")
-_IGNORED = shutil.ignore_patterns(
-    ".env", "papaia-realm.json", "__pycache__", ".pytest_cache", "*.pyc", "*.tmp"
-)
 
 # One deployment per shape an operator commonly picks. The flags are the ones the bash
 # wizard hands to `lib.cli setup` after it has asked its questions.
@@ -86,74 +79,9 @@ FIXTURES: dict[str, list[str]] = {
     ],
 }
 
-# Keys of the root .env that describe the machine and the user running the test.
-_HOST_KEYS = ("UID", "GID", "DOCKER_GID")
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # building an installation
 # ─────────────────────────────────────────────────────────────────────────
-
-
-def _checkout(tmp_path: Path) -> Path:
-    """A copy of what `setup` reads, under `<tmp>/workspace/papaia` so the workspace
-    and backup paths it derives from the checkout's name are the real ones."""
-    dest = tmp_path / "workspace" / "papaia"
-    shutil.copytree(REPO / "src", dest / "src", ignore=_IGNORED)
-    for rel in _CHECKOUT_FILES:
-        source = REPO / rel
-        if source.is_file():
-            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, dest / rel)
-    return dest
-
-
-def _cli(repo: Path, config: Path, *args: str) -> None:
-    code = cli.main(["--repo-root", str(repo), "--config-dir", str(config), *args])
-    assert code == 0, f"lib.cli {' '.join(args)} exited {code}"
-
-
-class Installation:
-    def __init__(self, tmp_path: Path, flags: list[str]):
-        self.repo = _checkout(tmp_path)
-        self.workspace = self.repo.parent
-        self.config = self.workspace / "papaia-config"
-        self.flags = flags
-
-    def setup(self, *flags: str) -> None:
-        _cli(self.repo, self.config, "setup", "--env=papaia", *flags)
-
-    def secrets(self) -> list[str]:
-        """Every generated secret of this installation, longest first so that no
-        secret is replaced inside a longer one."""
-        seed = envtree.load_seed_tree(self.repo)
-        tree = envtree.load_config_dir_tree(self.config, self.repo)
-        found: set[str] = set()
-        for rel_dir, values in seed.items():
-            for key, seed_value in values.items():
-                if common.marks_generated_secret(seed_value):
-                    value = tree.get(rel_dir, {}).get(key, "")
-                    if value and not common.is_placeholder(value):
-                        found.add(value)
-        return sorted(found, key=len, reverse=True)
-
-    def normalise(self, text: str) -> str:
-        for secret in self.secrets():
-            text = text.replace(secret, "<SECRET>")
-        # Longest path first: the config dir and the checkout sit inside the workspace.
-        for path, label in (
-            (self.config, "<CONFIG>"),
-            (self.repo, "<REPO>"),
-            (self.workspace, "<WORKSPACE>"),
-        ):
-            text = text.replace(str(path), label)
-        lines = []
-        for line in text.split("\n"):
-            key = line.partition("=")[0]
-            if key in _HOST_KEYS and "=" in line:
-                line = f"{key}=<HOST>"
-            lines.append(line)
-        return "\n".join(lines)
 
 
 def _digest(text: str) -> str:
@@ -326,9 +254,9 @@ def _snapshot(tmp_path: Path, name: str) -> dict:
 
     # The Python half of `upgrade` on an unchanged release: new keys, a re-render
     # without flags, and the render `start` does before it brings the stack up.
-    _cli(inst.repo, inst.config, "sync-env")
+    run_cli(inst.repo, inst.config, "sync-env")
     inst.setup()
-    _cli(inst.repo, inst.config, "render")
+    run_cli(inst.repo, inst.config, "render")
     upgraded_manifest = (inst.config / "deployment.yaml").read_text(encoding="utf-8")
 
     return {

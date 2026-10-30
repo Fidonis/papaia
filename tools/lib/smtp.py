@@ -209,7 +209,9 @@ def write_password(config_dir: Path, password: str) -> bool:
 
 
 def _profiles(root_env: dict[str, str]) -> set[str]:
-    return {p.strip() for p in root_env.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
+    # Cluster-wide: on Keycloak's node the relay can be part of the installation without
+    # running there.
+    return common.cluster_profiles(root_env)
 
 
 @dataclass(frozen=True)

@@ -44,6 +44,7 @@ from . import (
     resolve,
     secrets,
     status,
+    topology,
     upgrade,
 )
 
@@ -172,6 +173,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     )
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
+    if _project_bundles(config_dir, repo_root) != 0:
+        return 3
     print(
         "Setup complete. Run 'papaia-ctl start' to bring up the stack."
         f" PAPAIA_CONFIG_DIR={config_dir}"
@@ -214,8 +217,93 @@ def cmd_render(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    if _project_bundles(config_dir, repo_root) != 0:
+        return 3
     print("Rendered.")
     return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# topology
+#
+# A single-node installation has no topology block and none of this prints or writes
+# anything for it.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _print_findings(findings: topology.Findings) -> None:
+    for warning in findings.warnings:
+        print(f"WARNING: topology: {warning}", file=sys.stderr)
+    for error in findings.errors:
+        print(f"ERROR: topology: {error}", file=sys.stderr)
+
+
+def _load_topology(config_dir: Path) -> topology.Topology | None:
+    try:
+        return topology.load_config(config_dir)
+    except topology.TopologyError as exc:
+        print(f"ERROR: deployment.yaml: {exc}", file=sys.stderr)
+        return None
+
+
+def _project_bundles(config_dir: Path, repo_root: Path) -> int:
+    """In distributed mode, validate the topology and write the node bundles. 0 when there
+    is nothing to do or it worked, 3 when the topology is broken."""
+    topo = _load_topology(config_dir)
+    if topo is None:
+        return 3
+    if not topo.distributed:
+        return 0
+    findings = topology.validate_config(config_dir, repo_root, topo)
+    _print_findings(findings)
+    if not findings.ok:
+        return 3
+    for bundle in topology.project(config_dir, repo_root, topo):
+        services = ", ".join(bundle.services) or "no services"
+        print(f"Node bundle for '{bundle.node}' ({services}): {bundle.path}")
+    return 0
+
+
+def cmd_topology_mode(args: argparse.Namespace) -> int:
+    topo = _load_topology(Path(args.config_dir))
+    if topo is None:
+        return 3
+    print(topo.mode)
+    return 0
+
+
+def cmd_topology_show(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    topo = _load_topology(config_dir)
+    if topo is None:
+        return 3
+    env = topology.validation_env(config_dir, Path(args.repo_root))
+    profiles = [p for p in env.get("COMPOSE_PROFILES", "").split(",") if p]
+    if args.json:
+        active = topology.active_services(profiles)
+        document = topo.to_dict()
+        document["services"] = {service: topo.node_of(service) for service in active}
+        print(json.dumps(document, indent=2))
+    else:
+        print(topology.format_table(topo, profiles))
+    return 0
+
+
+def cmd_topology_validate(args: argparse.Namespace) -> int:
+    """Exit 0 when the topology is usable (warnings allowed), 2 when it is not."""
+    config_dir = Path(args.config_dir)
+    topo = _load_topology(config_dir)
+    if topo is None:
+        return 2
+    findings = topology.validate_config(config_dir, Path(args.repo_root), topo)
+    _print_findings(findings)
+    if findings.ok:
+        print("Topology is valid." if topo.distributed else "Topology: single (one host).")
+    return 0 if findings.ok else 2
+
+
+def cmd_topology_project(args: argparse.Namespace) -> int:
+    return _project_bundles(Path(args.config_dir), Path(args.repo_root))
 
 
 def cmd_render_preview(args: argparse.Namespace) -> int:
@@ -700,6 +788,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_render = sub.add_parser("render")
     p_render.set_defaults(func=cmd_render)
+
+    p_topology_mode = sub.add_parser("topology-mode")
+    p_topology_mode.set_defaults(func=cmd_topology_mode)
+
+    p_topology_show = sub.add_parser("topology-show")
+    p_topology_show.add_argument("--json", action="store_true")
+    p_topology_show.set_defaults(func=cmd_topology_show)
+
+    p_topology_validate = sub.add_parser("topology-validate")
+    p_topology_validate.set_defaults(func=cmd_topology_validate)
+
+    p_topology_project = sub.add_parser("topology-project")
+    p_topology_project.set_defaults(func=cmd_topology_project)
 
     p_module_info = sub.add_parser("module-info")
     p_module_info.add_argument("--module", required=True, choices=sorted(modules.MODULES))

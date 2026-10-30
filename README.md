@@ -213,6 +213,7 @@ papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
+papaia-ctl topology  <show [--json]|validate> [--config-dir=PATH]
 papaia-ctl help
 ```
 
@@ -919,6 +920,54 @@ addons:                     # managed by `papaia-ctl addon ...`
 Each `active` add-on contributes its integration fragments to the render and gets a generated
 network-attachment override. Setting `active: false` — what `addon remove` does — takes it out
 of both without discarding its secrets.
+
+A distributed installation adds a `topology` block: which machines (nodes) there are, which one
+is the controller that runs `papaia-ctl`, and which service runs where. Without the block the
+installation is a single host, and nothing about it changes. See
+[docs/adr/0009](docs/adr/0009-place-services-on-nodes-with-a-topology-block.md).
+
+```yaml
+topology:
+  mode: distributed
+  controller: internal        # runs papaia-ctl, holds the config tree and the CA keys
+  link:
+    port: 7443
+  nodes:
+    internal:
+      address: 10.0.2.10
+      executor: local
+    edge:
+      address: 10.0.1.10
+      executor: ssh
+      ssh: {user: papaia, port: 22}
+      root: /srv/papaia-node  # the node's directory; its config dir is <root>/config
+      gpu: none               # optional hardware hint for LocalAI
+  placement:                  # service -> node; unlisted services stay on the controller
+    nginx: edge
+    keycloak: edge
+    smtp: edge
+    litellm: edge
+```
+
+The services that can be placed are `nginx` (Nginx Proxy Manager with its auth sidecar and
+oauth2-proxy), `keycloak`, `litellm`, `librechat`, `websearch`, `localai`, `rag`, `smtp` and
+`manager`. `manager` and `rag` always run on the controller, and `websearch` runs with
+`librechat`. In distributed mode every render also writes one bundle per node to
+`nodes/<name>/bundle/` in the config directory. A bundle holds only what that node's services
+need: their `.env` files, rendered configuration and certificates, never the secrets of a
+service on another node and never a CA key.
+
+### `topology`
+
+```sh
+tools/papaia-ctl topology show [--json]   # nodes and where each service runs
+tools/papaia-ctl topology validate        # exit 2 when the placement cannot work
+```
+
+`validate` names every problem before anything changes: a service on an unknown node,
+`manager` or `rag` away from the controller, web search away from LibreChat, a LocalAI GPU
+image on a node without that GPU, a link port that collides with a published port, or a public
+URL with a port (in distributed mode the bundled proxy serves every URL by host name).
 
 ---
 

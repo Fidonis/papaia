@@ -743,6 +743,38 @@ addons:
     active: false                   # deactivated
 ```
 
+### Topology (distributed installations)
+
+An optional `topology` block describes an installation that runs on more than one machine.
+Without it — the default, and every installation that existed before it — the installation
+is a single host.
+
+```yaml
+topology:
+  mode: single | distributed
+  controller: <node>                # runs papaia-ctl; config tree, CA keys, SSH keys
+  link:
+    port: 7443                      # the port each node's link gateway listens on
+  nodes:
+    <name>:
+      address: <ip or host>
+      executor: local | ssh         # local only for the controller
+      ssh: {user: papaia, port: 22, host: <optional>}
+      root: /srv/papaia-node        # node directory; config dir <root>/config
+      bind_ip: <optional>           # HOST_IP on that node (default 127.0.0.1 behind the proxy)
+      gpu: none | nvidia | amd | intel | vulkan   # optional hint for LocalAI
+  placement:                        # catalogue service -> node; default: the controller
+    <service>: <node>
+```
+
+The unit of placement is a service of the catalogue in `tools/lib/topology.py`: a service is
+one or two Compose profiles and everything they always bring along. On each node
+`COMPOSE_PROFILES` names what starts there, while `PAPAIA_ACTIVE_MODULES` keeps the profiles
+of the whole installation for what is decided cluster-wide (realm clients, proxy hosts, the
+mail relay). In distributed mode the render projects one bundle per node into
+`$PAPAIA_CONFIG_DIR/nodes/<name>/bundle/` with only that node's env files, configuration,
+certificates and overrides. The decision is recorded in ADR 0009.
+
 ### Active set
 
 The orchestrator derives the active set (which add-ons participate in render and

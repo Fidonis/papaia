@@ -47,6 +47,8 @@
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
 #   papaia-ctl doctor        [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+#   papaia-ctl topology show [--json] [--config-dir=PATH]
+#   papaia-ctl topology validate [--config-dir=PATH]
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--force] [--config-dir=PATH]
 #   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
@@ -75,7 +77,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,68p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,70p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -102,6 +104,8 @@ source "$SH_LIB/backup.sh"
 source "$SH_LIB/upgrade.sh"
 # shellcheck source=lib/sh/diag.sh
 source "$SH_LIB/diag.sh"
+# shellcheck source=lib/sh/topology.sh
+source "$SH_LIB/topology.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -173,6 +177,7 @@ case "$cmd" in
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;
     doctor)        cmd_doctor "$@" ;;
+    topology)      cmd_topology "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in
