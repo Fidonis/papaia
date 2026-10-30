@@ -126,6 +126,19 @@ def _check_line(data: dict) -> str:
     )
 
 
+def cmd_node_pending(args: argparse.Namespace) -> int:
+    """The remote nodes whose host key is not pinned yet: not enrolled, or not checked."""
+    config_dir = Path(args.config_dir)
+    try:
+        _manifest, topo = nodes.require_distributed(config_dir)
+    except nodes.NodeError as exc:
+        return _fail(exc, 2)
+    for node in topo.nodes.values():
+        if not node.is_local and not nodes.host_key_pinned(config_dir, node.name):
+            print(node.name)
+    return 0
+
+
 def cmd_node_check(args: argparse.Namespace) -> int:
     config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
     try:
@@ -294,6 +307,9 @@ def add_parsers(sub) -> None:
     p.add_argument("--name", required=True)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_node_check)
+
+    p = sub.add_parser("node-pending")
+    p.set_defaults(func=cmd_node_pending)
 
     p = sub.add_parser("node-keyscan")
     p.add_argument("--name", required=True)

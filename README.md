@@ -269,6 +269,13 @@ tools/papaia-ctl setup [OPTIONS]
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |
+| `--topology=single\|distributed` | `single` (prompted for a new installation) | One machine, or several machines (see [Distributed installations](#distributed-installations)) |
+| `--node=NAME=ADDR[,ssh=USER@HOST[:PORT]][,root=DIR][,gpu=HINT]` | — | A machine of a distributed installation, repeatable. A node without `ssh=` is the controller: the machine `setup` runs on |
+| `--controller=NAME` | _(the node without `ssh=`)_ | Which node is the controller |
+| `--preset=dmz-split\|dmz-edge` | — | Placement for two nodes: `dmz-split` puts Nginx Proxy Manager, Keycloak, the mail relay and LiteLLM on the other node, `dmz-edge` only Nginx Proxy Manager and LiteLLM |
+| `--place=SERVICE=NODE` | — | Place one service, repeatable (overrides the preset). Services: `nginx`, `keycloak`, `litellm`, `librechat`, `websearch`, `localai`, `rag`, `smtp`, `manager` |
+| `--link-port=PORT` | `7443` | The port the nodes connect to each other on |
+| `--topology-file=PATH` | — | The `topology` block from a file instead of the flags above; keeps the choice reviewable |
 
 Omitting a toggle flag in non-interactive mode is **sticky**: the current profile set is left
 untouched rather than reset to a default.
@@ -293,6 +300,28 @@ untouched rather than reset to a default.
   file reaches Keycloak, rather than relying on Keycloak's `${env.*}` substitution at import.
 - **Configuration render** — see [Configuration & render lifecycle](#configuration--render-lifecycle).
 - **`deployment.yaml`** — writes the resolved profiles, platform version, and add-on list.
+
+**Distributed setup.** A distributed installation is set up once, as a new installation.
+`setup` asks for it interactively ("on this machine" or "on several machines": names and
+addresses of the two machines, a preset or a node per service, the link port), or takes
+`--topology=distributed` with `--node` and `--preset`/`--place`, or a `--topology-file`. It
+validates the placement before anything is written, renders one bundle per node, prints the
+topology and the firewall rules to open, and writes a join archive for every node that is not
+enrolled yet (see [`node`](#node)). Once every node is enrolled it runs a preflight (SSH,
+Docker, Compose, clock) and offers to start the installation.
+
+`setup --topology=distributed` on a config directory that already holds an installation exits
+with 2 and changes nothing: an existing installation keeps its shape, and a repeated `setup`
+asks nothing new. To move an installation onto several machines, set the distributed one up
+in a new config directory and bring the data over with `backup` and `restore`.
+
+```bash
+tools/papaia-ctl setup -y --app-host=https://papaia.example.org \
+  --auth-host=https://auth.example.org --librechat-host=https://chat.example.org \
+  --litellm-host=https://llm.example.org \
+  --topology=distributed --node=internal=10.0.2.10 \
+  --node=edge=10.0.1.10,ssh=papaia@10.0.1.10 --preset=dmz-split
+```
 
 ### `start`
 
@@ -326,6 +355,14 @@ for this invocation only. The selection is validated up front: a profile list th
 service, or that cuts off a service from a dependency it hard-requires, is rejected with exit
 code 2 instead of being handed to Compose.
 
+In a distributed installation `start` renders the node bundles, hands every node its release
+and its bundle, and starts in order: the link gateways, then Keycloak and the mail relay, then
+LiteLLM, then LibreChat, web search, the RAG system, LocalAI and papaia-manager, and the Nginx
+Proxy Manager last, so nothing is reachable half-started. Every service starts on the node it
+is placed on. The provisioning steps run on the node of their service. `--node=NAME` starts
+one node only. A node that fails stops the sequence with a message that names it; whatever
+already runs keeps running, and running `start` again is safe.
+
 ### `stop`
 
 ```bash
@@ -339,6 +376,9 @@ volumes are kept. `--addons` applies the same operation to all active add-ons.
 `--profiles` restricts the operation to the services of those profiles and is validated the
 same way as on [`start`](#start) — without that gate an unresolvable profile list would make
 Compose fall back to stopping every container of the project.
+
+In a distributed installation `stop` runs the start order backwards (the proxy first, the
+link gateways last). `--node=NAME` stops one node; `--volumes` is not available there.
 
 `--volumes` (only together with `--clean-up` and `--profiles`) also deletes the data of those
 profiles: `docker compose down --volumes` removes the named volumes of their services and the
@@ -730,6 +770,12 @@ are no modules and the aggregate is `unknown`) instead of listing every service 
 not knowing is not the same as knowing it is gone. The exit code is 0 whenever a report was
 produced, and 2 when `setup` has not run yet or a flag is invalid.
 
+In a distributed installation `status` asks every node and prints one report, a section per
+node. The JSON keeps its shape and `schema_version` 1. It adds `node` to every module and
+container, and `nodes`: every node with its address, whether it answered (and why not), and
+the release it runs. A node that does not answer contributes no modules, and
+`docker.reachable` is then `false` for the whole report.
+
 ### `doctor`
 
 ```bash
@@ -810,6 +856,16 @@ Utilization is never measured for Intel and Vulkan GPUs.
 Not covered: Python and PyYAML (`papaia-ctl` verifies both before any command runs), the ports
 of add-ons, and certificates that were uploaded to Nginx Proxy Manager instead of requested
 through it.
+
+In a distributed installation the checks above describe the controller's own node, and two
+checks are added (on one host they never appear):
+
+| Check | Verifies | Result |
+|---|---|---|
+| `nodes` | Every node answers and runs the controller's release. Each node's own `doctor` result is listed (worst status, failing checks). The node's clock is compared with the controller's: JWTs carry `exp` and `nbf`, so a deviation breaks sign-ins. | `fail` for an unreachable node, a version skew (run [`upgrade`](#upgrade)), a failing check on a node or a clock 60 s or more off; `warn` from 5 s |
+| `links` | From the calling side of every link: a TLS handshake with the peer's link port, with the node's certificate, the link CA and the peer's name. Also the expiry of every node's link certificate. | `fail` for a peer that cannot be reached (the message names the firewall rule `<from> -> <to> tcp/<port>`) or a certificate that does not verify or has expired; `warn` 30 days before expiry (run `node renew-link`) |
+
+`--skip=nodes,links` is accepted on every installation.
 
 ### Configuration & render lifecycle
 

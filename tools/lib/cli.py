@@ -29,6 +29,7 @@ from . import (
     backup,
     cli_addon,
     cli_node,
+    cluster,
     common,
     defaults,
     deployment,
@@ -39,6 +40,7 @@ from . import (
     keycloak_role_sync,
     migrations,
     modules,
+    nodes,
     npm_provision,
     render_core,
     reporting,
@@ -76,9 +78,82 @@ def cmd_localai_variants(args: argparse.Namespace) -> int:
     return 0
 
 
+def _requested_topology(
+    args: argparse.Namespace, config_dir: Path
+) -> topology.Topology | int | None:
+    """The topology a distributed `setup` writes, None when there is nothing to write, or
+    an exit code. Decided before anything is written: a refused request changes nothing.
+
+    Only a new installation becomes distributed. One that has completed a setup before
+    keeps its shape, whatever the flags say: moving a running installation's services to
+    other machines is not something setup does."""
+    asked = any(
+        (args.topology, args.node, args.place, args.preset, args.controller, args.link_port,
+         args.topology_file)
+    )
+    if not asked:
+        return None
+    root = common.parse_env_file(config_dir / ".env")
+    existing = bool(root.get("PAPAIA_VERSION"))
+    try:
+        current = topology.load_config(config_dir)
+    except topology.TopologyError as exc:
+        print(f"ERROR: deployment.yaml: {exc}", file=sys.stderr)
+        return 2
+    if args.topology == topology.SINGLE and not (args.node or args.place or args.topology_file):
+        if current.distributed:
+            print(
+                "ERROR: this installation is distributed; setup does not turn it back into"
+                " a single host.",
+                file=sys.stderr,
+            )
+            return 2
+        return None
+    try:
+        if args.topology_file:
+            requested = topology.from_file(Path(args.topology_file))
+        else:
+            requested = topology.from_flags(
+                node_specs=args.node or [],
+                places=args.place or [],
+                preset=args.preset,
+                controller=args.controller,
+                link_port=args.link_port,
+            )
+    except topology.TopologyError as exc:
+        print(f"ERROR: topology: {exc}", file=sys.stderr)
+        return 2
+    if existing and not current.distributed:
+        print(
+            "ERROR: --topology=distributed is for new installations, and"
+            f" {config_dir} already holds one that runs on one host. Set the distributed"
+            " installation up in a new config directory (--config-dir=PATH) and move the"
+            " data over with 'papaia-ctl backup' and 'restore --only=...'. Nothing was"
+            " changed.",
+            file=sys.stderr,
+        )
+        return 2
+    if existing and current.distributed:
+        if requested.to_dict() != current.to_dict():
+            print(
+                "ERROR: setup does not change the topology of an existing installation."
+                " Add or remove machines with 'papaia-ctl node add|remove'; moving a"
+                " service with its data to another node is not supported. Nothing was"
+                " changed.",
+                file=sys.stderr,
+            )
+            return 2
+        return None
+    return requested
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     config_dir = Path(args.config_dir)
+
+    requested_topology = _requested_topology(args, config_dir)
+    if isinstance(requested_topology, int):
+        return requested_topology
 
     fresh_init = not (config_dir / ".env").is_file()
     envtree.init(config_dir, repo_root, env_name=args.env, force=False)
@@ -155,6 +230,19 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
 
+    if requested_topology is not None:
+        # Checked against the resolved values before any of them is written, so a rejected
+        # topology leaves a configuration that a corrected setup run can still complete.
+        env = dict(tree.get("", {}))
+        env.setdefault("DOMAIN_SERVER", tree.get("ai/librechat", {}).get("DOMAIN_SERVER", ""))
+        profiles = [p for p in env.get("COMPOSE_PROFILES", "").split(",") if p]
+        findings = topology.validate(
+            requested_topology, active_profiles=profiles, env=env, repo_root=repo_root
+        )
+        _print_findings(findings)
+        if not findings.ok:
+            return 2
+
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
@@ -164,6 +252,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_host_uid_gid(tree)
     envtree.persist_tree(tree, config_dir, repo_root)
     deployment.sync_manifest(config_dir, tree, repo_root)
+    if requested_topology is not None:
+        manifest = deployment.load(config_dir)
+        manifest["topology"] = requested_topology.to_dict()
+        deployment.save(config_dir, manifest)
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
@@ -301,6 +393,14 @@ def cmd_topology_validate(args: argparse.Namespace) -> int:
     if findings.ok:
         print("Topology is valid." if topo.distributed else "Topology: single (one host).")
     return 0 if findings.ok else 2
+
+
+def cmd_topology_node_of(args: argparse.Namespace) -> int:
+    topo = _load_topology(Path(args.config_dir))
+    if topo is None:
+        return 3
+    print(topo.node_of(args.service) if topo.distributed else "")
+    return 0
 
 
 def cmd_topology_project(args: argparse.Namespace) -> int:
@@ -701,10 +801,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     """Declared state next to live state. Exit 0 whenever a report was
     produced -- an unreachable Docker socket is part of the report
     (`docker.reachable`), not a failure of this command."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    if topology.is_distributed(config_dir):
+        try:
+            report = cluster.collect_status(
+                cluster.load(config_dir, repo_root),
+                profiles=_csv(args.profiles) or None,
+                include_addons=args.addons,
+            )
+        except cluster.ClusterError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2) if args.json else cluster.format_status(report))
+        return 0
     try:
         report = status.collect(
-            Path(args.config_dir),
-            Path(args.repo_root),
+            config_dir,
+            repo_root,
             profiles=_csv(args.profiles) or None,
             include_addons=args.addons,
         )
@@ -718,15 +831,67 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
     try:
-        report = doctor.run_checks(
-            Path(args.config_dir), Path(args.repo_root), skip=_csv(args.skip)
-        )
+        if topology.is_distributed(config_dir):
+            report = cluster.run_doctor(cluster.load(config_dir, repo_root), skip=_csv(args.skip))
+        else:
+            report = doctor.run_checks(config_dir, repo_root, skip=_csv(args.skip))
+    except cluster.ClusterError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     except doctor.DoctorError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(doctor.to_json(report) if args.json else doctor.format_table(report))
     return report.exit_code
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# distributed lifecycle
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _cluster(args: argparse.Namespace) -> cluster.Cluster | None:
+    try:
+        return cluster.load(Path(args.config_dir), Path(args.repo_root))
+    except cluster.ClusterError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return None
+
+
+def cmd_cluster_start(args: argparse.Namespace) -> int:
+    found = _cluster(args)
+    if found is None:
+        return 2
+    try:
+        return cluster.start(found, node=args.node, profiles=_csv(args.profiles) or None)
+    except (cluster.ClusterError, nodes.NodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+
+
+def cmd_cluster_stop(args: argparse.Namespace) -> int:
+    found = _cluster(args)
+    if found is None:
+        return 2
+    try:
+        return cluster.stop(
+            found,
+            node=args.node,
+            profiles=_csv(args.profiles) or None,
+            clean_up=args.clean_up,
+        )
+    except cluster.ClusterError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+def cmd_cluster_preflight(args: argparse.Namespace) -> int:
+    found = _cluster(args)
+    if found is None:
+        return 2
+    return cluster.preflight(found)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -785,6 +950,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--backup-dir", default=None)
     p_setup.add_argument("--allow-direct-port-access", action="store_true")
     p_setup.add_argument("--force", action="store_true")
+    p_setup.add_argument("--topology", choices=list(topology.MODES), default=None)
+    p_setup.add_argument("--node", action="append", default=None)
+    p_setup.add_argument("--place", action="append", default=None)
+    p_setup.add_argument("--preset", choices=sorted(topology.PRESETS), default=None)
+    p_setup.add_argument("--controller", default=None)
+    p_setup.add_argument("--link-port", type=int, default=None)
+    p_setup.add_argument("--topology-file", default=None)
     p_setup.set_defaults(func=cmd_setup)
 
     p_render = sub.add_parser("render")
@@ -804,6 +976,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_topology_project.set_defaults(func=cmd_topology_project)
 
     cli_node.add_parsers(sub)
+
+    p_cluster_start = sub.add_parser("cluster-start")
+    p_cluster_start.add_argument("--node", default=None)
+    p_cluster_start.add_argument("--profiles", action="append", default=None)
+    p_cluster_start.set_defaults(func=cmd_cluster_start)
+
+    p_cluster_stop = sub.add_parser("cluster-stop")
+    p_cluster_stop.add_argument("--node", default=None)
+    p_cluster_stop.add_argument("--profiles", action="append", default=None)
+    p_cluster_stop.add_argument("--clean-up", action="store_true")
+    p_cluster_stop.set_defaults(func=cmd_cluster_stop)
+
+    p_topology_node_of = sub.add_parser("topology-node-of")
+    p_topology_node_of.add_argument("--service", required=True, choices=sorted(topology.CATALOGUE))
+    p_topology_node_of.set_defaults(func=cmd_topology_node_of)
+
+    p_cluster_preflight = sub.add_parser("cluster-preflight")
+    p_cluster_preflight.set_defaults(func=cmd_cluster_preflight)
 
     p_module_info = sub.add_parser("module-info")
     p_module_info.add_argument("--module", required=True, choices=sorted(modules.MODULES))

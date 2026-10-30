@@ -1572,6 +1572,10 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)
 
+# Added by lib/cluster.py in a distributed installation only; a single host never reports
+# them. Accepted by --skip everywhere, so a script can pass them unconditionally.
+DISTRIBUTED_CHECK_NAMES = ("nodes", "links")
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # report
@@ -1618,7 +1622,7 @@ class DoctorReport:
 def parse_skip(values: Sequence[str] | None) -> list[str]:
     """Validate `--skip` names against the registry."""
     names = [v.strip() for v in values or [] if v.strip()]
-    unknown = [n for n in names if n not in CHECK_NAMES]
+    unknown = [n for n in names if n not in CHECK_NAMES + DISTRIBUTED_CHECK_NAMES]
     if unknown:
         raise DoctorError(
             f"Unknown check(s): {', '.join(unknown)}. Valid: {', '.join(CHECK_NAMES)}."

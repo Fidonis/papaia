@@ -165,6 +165,12 @@ cmd_backup() {
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "'papaia-ctl backup' is not available for a distributed installation yet."
+        exit 2
+    fi
 
     trap _backup_cleanup EXIT INT TERM
 
@@ -424,6 +430,12 @@ cmd_restore() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "'papaia-ctl restore' is not available for a distributed installation yet."
+        exit 2
+    fi
 
     backup_dir="$(_resolve_backup_dir "$backup_dir")" || exit 3
 

@@ -655,7 +655,7 @@ def _mode(tmp_path: Path, manifest: dict | None) -> tuple[str, str]:
     script = (
         _MODE_HARNESS.replace("@CONFIG@", config.as_posix())
         .replace("@LOG@", log.as_posix())
-        .replace("@TOPOLOGY@", (REPO / "tools/lib/sh/topology.sh").as_posix())
+        .replace("@TOPOLOGY@", (REPO / "tools/lib/sh/lifecycle.sh").as_posix())
     )
     done = subprocess.run([bash, "-c", script], capture_output=True, text=True, check=True)
     return done.stdout, log.read_text(encoding="utf-8")

@@ -3,22 +3,6 @@
 # installation run. Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
-# "single" or "distributed", without Python: a single-node installation has no
-# `topology:` block in deployment.yaml, and every lifecycle command asks this first.
-# A block that says anything but single is handed to Python, which validates it.
-_topology_mode() {
-    local manifest="$CONFIG_DIR/deployment.yaml"
-    if [ ! -f "$manifest" ] || ! grep -q '^topology:' "$manifest"; then
-        printf 'single'
-        return 0
-    fi
-    local mode
-    if ! mode="$(py_cli topology-mode)"; then
-        return 3
-    fi
-    printf '%s' "${mode%$'\r'}"
-}
-
 cmd_topology() {
     local sub="${1:-show}"
     [ $# -gt 0 ] && shift
@@ -34,6 +18,7 @@ cmd_topology() {
         esac
         shift
     done
+    # shellcheck disable=SC2034  # read by py_cli and _require_setup_done
     CONFIG_DIR="$config_dir"
     _require_setup_done
     case "$sub" in

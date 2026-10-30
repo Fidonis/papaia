@@ -87,6 +87,7 @@ cmd_upgrade() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    _refuse_distributed upgrade "Upgrading every node together is not available yet."
 
     if [ -n "$resume_from" ]; then
         if [ -z "$resume_target" ]; then

@@ -618,6 +618,17 @@ node reach only the services the edge table in `tools/lib/link.py` allows. The i
 protocol is passed through untouched, and a peer that is down means a refused connection.
 `papaia-ctl topology firewall` lists the connections between nodes that this opens.
 
+**Operations** (`tools/lib/cluster.py`). A distributed installation is set up once, as a new
+installation (`setup --topology=distributed`); `setup` never changes the shape of an existing
+one. `start` renders the bundles, hands each node its release and bundle, and starts the link
+gateways first and then the services in groups: Keycloak and the mail relay, LiteLLM, the
+application services, and the Nginx Proxy Manager last. `stop` runs backwards. The
+provisioning steps (`npm-provision`, `keycloak-role-sync`) run on the node of their service.
+`status` merges every node's report and adds `node` per module and container, plus `nodes`.
+`doctor` checks the controller's own node and adds `nodes` (version skew, clock deviation,
+each node's own checks) and `links` (a TLS handshake per link, certificate expiry). The JSON
+schemas grow additively and `schema_version` stays 1.
+
 ---
 
 ## 10. Naming Conventions

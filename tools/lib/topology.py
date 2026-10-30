@@ -397,6 +397,132 @@ def is_distributed(config_dir: Path) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Building a topology from setup's flags
+# ─────────────────────────────────────────────────────────────────────────
+
+_NODE_OPTIONS = ("ssh", "root", "gpu", "bind_ip")
+
+
+def parse_node_spec(spec: str) -> tuple[str, dict[str, str]]:
+    """`NAME=ADDR[,ssh=USER@HOST[:PORT]][,root=DIR][,gpu=HINT][,bind_ip=IP]`."""
+    name, sep, rest = spec.partition("=")
+    if not sep or not name or not rest:
+        raise TopologyError(f"--node needs NAME=ADDRESS[,ssh=USER@HOST[:PORT]], got {spec!r}")
+    address, *options = rest.split(",")
+    values: dict[str, str] = {"address": address.strip()}
+    for option in options:
+        key, sep, value = option.partition("=")
+        key = key.strip().replace("-", "_")
+        if not sep or key not in _NODE_OPTIONS:
+            raise TopologyError(
+                f"unknown node option {option!r} in {spec!r} (one of {', '.join(_NODE_OPTIONS)})"
+            )
+        values[key] = value.strip()
+    return name.strip(), values
+
+
+def _node_from_spec(name: str, values: dict[str, str], *, local: bool) -> Node:
+    if local:
+        return Node(
+            name,
+            address=values["address"],
+            executor=EXECUTOR_LOCAL,
+            bind_ip=values.get("bind_ip", ""),
+            gpu=values.get("gpu", ""),
+        )
+    user, host, port = DEFAULT_SSH_USER, "", DEFAULT_SSH_PORT
+    ssh = values.get("ssh", "")
+    if ssh:
+        user_part, at, host_part = ssh.rpartition("@")
+        if at:
+            user = user_part or DEFAULT_SSH_USER
+        else:
+            host_part = ssh
+        host_part, colon, port_part = host_part.partition(":")
+        host = host_part
+        if colon:
+            if not port_part.isdigit():
+                raise TopologyError(f"node '{name}': ssh port {port_part!r} is not a number")
+            port = int(port_part)
+    return Node(
+        name,
+        address=values["address"],
+        executor=EXECUTOR_SSH,
+        ssh_user=user,
+        ssh_port=port,
+        ssh_host="" if host == values["address"] else host,
+        root=values.get("root") or DEFAULT_NODE_ROOT,
+        bind_ip=values.get("bind_ip", ""),
+        gpu=values.get("gpu", ""),
+    )
+
+
+def from_flags(
+    *,
+    node_specs: list[str],
+    places: list[str],
+    preset: str | None,
+    controller: str | None,
+    link_port: int | None,
+) -> Topology:
+    """The topology a distributed `setup` asks for. A node without `ssh=` is local, which
+    only the controller may be; `--controller` names it when that is ambiguous."""
+    parsed = [parse_node_spec(spec) for spec in node_specs]
+    names = [name for name, _ in parsed]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise TopologyError(f"node named twice: {', '.join(duplicates)}")
+    if not controller:
+        local = [name for name, values in parsed if "ssh" not in values]
+        if len(local) != 1:
+            raise TopologyError(
+                "name the controller with --controller=NAME (the node papaia-ctl runs on;"
+                " it is the one --node without ssh=)"
+            )
+        controller = local[0]
+    nodes = {
+        name: _node_from_spec(name, values, local=name == controller) for name, values in parsed
+    }
+    placement: dict[str, str] = {}
+    if preset:
+        others = [n for n in nodes if n != controller]
+        if len(others) != 1:
+            raise TopologyError(
+                f"preset {preset!r} places services on one edge node; this topology has"
+                f" {len(others)} nodes besides the controller (use --place instead)"
+            )
+        placement.update(preset_placement(preset, others[0]))
+    for place in places:
+        service, sep, node = place.partition("=")
+        if not sep or not service or not node:
+            raise TopologyError(f"--place needs SERVICE=NODE, got {place!r}")
+        placement[service.strip()] = node.strip()
+    # A service placed on the controller is the default; keep the block short.
+    placement = {s: n for s, n in placement.items() if n != controller}
+    return Topology(
+        mode=DISTRIBUTED,
+        controller=controller,
+        nodes=nodes,
+        placement=placement,
+        link_port=link_port or DEFAULT_LINK_PORT,
+    )
+
+
+def from_file(path: Path) -> Topology:
+    """A topology file: a YAML document holding the `topology` block (or the block alone)."""
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise TopologyError(f"cannot read {path}: {exc}") from exc
+    if isinstance(document, dict) and "topology" in document:
+        document = document["topology"]
+    topo = parse(document)
+    if not topo.distributed:
+        raise TopologyError(f"{path}: topology.mode is not 'distributed'")
+    return topo
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Presets
 # ─────────────────────────────────────────────────────────────────────────
 

@@ -32,6 +32,7 @@ warn() { echo "WARN: $*" >&2; }
 error() { echo "ERROR: $*" >&2; }
 success() { echo "OK: $*"; }
 _require_setup_done() { :; }
+_topology_mode() { echo single; }
 py_cli() {
     echo "py_cli $*" >> "@LOG@"
     case "$1" in
