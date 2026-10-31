@@ -89,6 +89,9 @@ ACTIVE_MODULES_KEY = common.ACTIVE_MODULES_KEY
 _NODE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 _ADDRESS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
 _SSH_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+# A node's root ends up quoted in a root-run install script and in the forced command of
+# its authorized_keys line, so it is held to characters that need no quoting at all.
+_ROOT_RE = re.compile(r"^/[A-Za-z0-9._/-]{1,200}$")
 
 
 class TopologyError(Exception):
@@ -307,6 +310,33 @@ class Topology:
             "nodes": {name: node.to_dict() for name, node in self.nodes.items()},
             "placement": dict(self.placement),
         }
+
+
+def root_problem(root: str) -> str:
+    """Why a node root is refused, or "" when it is fine."""
+    if not _ROOT_RE.match(root) or ".." in root.split("/"):
+        return (
+            f"root must be an absolute path of letters, digits and '._/-' without '..',"
+            f" got {root!r}"
+        )
+    return ""
+
+
+def unsafe_node_field(node: Node) -> str:
+    """The first field of `node` that must not reach a script, a key line or a command
+    line, or "" when there is none. `validate` reports these too; the code that writes
+    those lines checks again, since not every path to it runs `validate` first."""
+    if not _NODE_NAME_RE.match(node.name):
+        return f"node name {node.name!r}"
+    if node.address and not _ADDRESS_RE.match(node.address):
+        return f"address {node.address!r}"
+    if node.ssh_host and not _ADDRESS_RE.match(node.ssh_host):
+        return f"ssh host {node.ssh_host!r}"
+    if not _SSH_USER_RE.match(node.ssh_user):
+        return f"ssh user {node.ssh_user!r}"
+    if root_problem(node.root):
+        return f"root {node.root!r}"
+    return ""
 
 
 def _int(value: Any, what: str) -> int:
@@ -657,8 +687,12 @@ def validate(
                 found.errors.append(f"{where}: {node.ssh_user!r} is not a valid user name")
             if not 1 <= node.ssh_port <= 65535:
                 found.errors.append(f"{where}: ssh port {node.ssh_port} is out of range")
-            if not node.root.startswith("/") or ".." in node.root.split("/"):
-                found.errors.append(f"{where}: root must be an absolute path, got {node.root!r}")
+            if node.ssh_host and not _ADDRESS_RE.match(node.ssh_host):
+                found.errors.append(
+                    f"{where}: ssh host {node.ssh_host!r} is not a host name or IP address"
+                )
+            if root_problem(node.root):
+                found.errors.append(f"{where}: {root_problem(node.root)}")
 
     if not topo.controller:
         found.errors.append("topology.controller is not set")

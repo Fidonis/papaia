@@ -161,11 +161,20 @@ _node_add() {
     local archive
     archive="$(mktemp)"
     py_cli node-join-bundle --name="$name" --output="$archive"
-    local remote="/tmp/papaia-join-$name-$$.tar.gz"
     local -a ssh_opts=(-o StrictHostKeyChecking=yes
         -o UserKnownHostsFile="$CONFIG_DIR/nodes/$name/ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null)
+    # The archive goes into a directory mktemp made on the node, owned by the admin login and
+    # closed to everyone else, so no other user there can put a file in its place.
+    local remote_dir
+    remote_dir="$(ssh -p "$admin_port" "${ssh_opts[@]}" -- "$admin_target" 'mktemp -d' 2>/dev/null | tr -d '\r')"
+    if ! [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+        rm -f "$archive"
+        error "Could not create a temporary directory on $admin_target."
+        exit 3
+    fi
+    local remote="$remote_dir/papaia-join-$name.tar.gz"
     info "Copying the join archive to $admin_target..."
-    if ! scp -q -P "$admin_port" "${ssh_opts[@]}" "$archive" "$admin_target:$remote"; then
+    if ! scp -q -P "$admin_port" "${ssh_opts[@]}" -- "$archive" "$admin_target:$remote"; then
         rm -f "$archive"
         error "Could not copy the join archive to $admin_target."
         exit 3
@@ -173,9 +182,9 @@ _node_add() {
     rm -f "$archive"
     info "Running the install script on $name (sudo asks for the admin password if it needs one)..."
     # The remote command line is fixed text plus values papaia-ctl validated ($name is a node
-    # name, $remote a path under /tmp it made up).
-    if ! ssh -t -p "$admin_port" "${ssh_opts[@]}" "$admin_target" \
-        "set -e; d=\$(mktemp -d); tar -xzf '$remote' -C \"\$d\"; rm -f '$remote'; sudo bash \"\$d/papaia-join-$name/install.sh\"; rm -rf \"\$d\""; then
+    # name, $remote_dir a path mktemp printed and the pattern above checked).
+    if ! ssh -t -p "$admin_port" "${ssh_opts[@]}" -- "$admin_target" \
+        "set -e; d='$remote_dir'; tar -xzf \"\$d/papaia-join-$name.tar.gz\" -C \"\$d\"; sudo bash \"\$d/papaia-join-$name/install.sh\"; rm -rf \"\$d\""; then
         error "The install script did not finish on $name. Nothing was stored of the admin login."
         exit 3
     fi

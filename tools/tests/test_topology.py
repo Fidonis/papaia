@@ -290,6 +290,12 @@ def test_one_node_is_not_distributed():
         (Node("edge", address="10.0.1.10", ssh_user="Root!"), "not a valid user name"),
         (Node("edge", address="10.0.1.10", ssh_port=70000), "out of range"),
         (Node("edge", address="10.0.1.10", root="relative/dir"), "absolute path"),
+        (Node("edge", address="10.0.1.10", root="/srv/../etc"), "without '..'"),
+        (Node("edge", address="10.0.1.10", root="/srv/x';touch /p;'"), "absolute path"),
+        (Node("edge", address="10.0.1.10", root='/srv/x" evil'), "absolute path"),
+        (Node("edge", address="10.0.1.10", root="/srv/my node"), "absolute path"),
+        (Node("edge", address="10.0.1.10", ssh_host="-oProxyCommand=x"), "ssh host"),
+        (Node("edge", address="10.0.1.10", ssh_host="a b"), "ssh host"),
         (Node("edge", address="10.0.1.10", gpu="tpu"), "gpu must be one of"),
     ],
 )

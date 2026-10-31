@@ -168,12 +168,21 @@ def key_fingerprint(public_key: str) -> str:
 def authorized_keys_line(topo: Topology, node: Node, public_key: str) -> str:
     """The node's entry for the controller: one forced command, from the controller only,
     no terminal, no forwarding."""
+    _require_safe(node)
     controller = topo.nodes[topo.controller]
+    _require_safe(controller)
     command = f"bash {node.root}/checkout/tools/papaia-ctl node-shell --node-root={node.root}"
     return f'restrict,from="{controller.address}",command="{command}" {public_key}'
 
 
+def _require_safe(node: Node) -> None:
+    problem = topology.unsafe_node_field(node)
+    if problem:
+        raise NodeError(f"node '{node.name}': refusing the {problem}; run `topology validate`")
+
+
 def scan_host_keys(node: Node) -> list[str]:
+    _require_safe(node)
     out = _run(
         [
             "ssh-keyscan",
@@ -318,6 +327,7 @@ def join_archive(config_dir: Path, repo_root: Path, name: str) -> bytes:
     node = topo.nodes[name]
     if node.is_local:
         raise NodeError(f"'{name}' is the controller; it needs no join archive")
+    _require_safe(node)
     _key, public = ensure_keypair(config_dir, name)
     version = envtree.resolve_platform_version(repo_root)
     script = (

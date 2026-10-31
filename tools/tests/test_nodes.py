@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -123,6 +124,23 @@ def test_the_authorized_keys_line_forces_the_shim():
         'restrict,from="10.0.2.10",command="bash /srv/papaia-node/checkout/tools/papaia-ctl'
         ' node-shell --node-root=/srv/papaia-node" ssh-ed25519 AAAA test'
     )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"root": "/srv/x';touch /pwned;'"},
+        {"root": '/srv/x" evil'},
+        {"ssh_host": "-oProxyCommand=touch /pwned"},
+    ],
+)
+def test_unsafe_node_fields_never_reach_a_key_line_or_a_scan(field: dict):
+    topo = dmz_split()
+    edge = replace(topo.nodes["edge"], **field)
+    with pytest.raises(nodes.NodeError, match="refusing the"):
+        nodes.authorized_keys_line(topo, edge, "ssh-ed25519 AAAA test")
+    with pytest.raises(nodes.NodeError, match="refusing the"):
+        nodes.scan_host_keys(edge)
 
 
 def test_the_controller_key_stays_private(distributed: Installation):
