@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+from . import common
 from .envtree import EnvTree
 
 # Env-tree node holding the bundled proxy's own configuration. The NPM admin
@@ -152,6 +153,22 @@ def _create_proxy_host(
         pass
 
 
+# The NPM admin API on the stack's network, for a papaia-ctl that runs in a container.
+NPM_API_IN_STACK = "http://nginx-proxy-manager:81"
+
+
+def _api_base_url(nginx: dict[str, str]) -> str:
+    """Where this process reaches the NPM admin API.
+
+    On the host that is the port published on localhost (`NPM_API_LOCAL_PORT`). In a
+    container (papaia-manager and its runners run `start`, and with it this step, in
+    their own) `localhost` is the container itself; there it is the service on the
+    stack's network, which `start` has joined."""
+    if common.in_container():
+        return NPM_API_IN_STACK
+    return f"http://localhost:{nginx.get('NPM_API_LOCAL_PORT', '8181')}"
+
+
 def provision_npm_hosts(tree: EnvTree) -> bool:
     """Create NPM proxy hosts for all active services, skipping existing ones.
 
@@ -164,8 +181,7 @@ def provision_npm_hosts(tree: EnvTree) -> bool:
         return True
 
     nginx = tree.get(_NGINX_NODE, {})
-    npm_api_port = nginx.get("NPM_API_LOCAL_PORT", "8181")
-    base_url = f"http://localhost:{npm_api_port}"
+    base_url = _api_base_url(nginx)
     email = nginx.get("NPM_ADMIN_EMAIL", "admin@papaia.local")
     password = nginx.get("NPM_ADMIN_PASSWORD", "")
     if not password or password.startswith("GENERATE_"):

@@ -138,6 +138,10 @@ cmd_start() {
         docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
     fi
 
+    # In a container (papaia-manager and its runners) the provisioning steps reach the stack
+    # over its network, which `up` has just created; on the host this does nothing.
+    py_cli join-stack-network || true
+
     if ! py_cli npm-provision; then
         warn "NPM proxy-host provisioning failed. Once the stack is healthy, run 'papaia-ctl npm-provision' to retry."
     fi
@@ -171,6 +175,7 @@ _provisioning_step() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    py_cli join-stack-network || true
     # The step's own exit status is the command's, so a retry that fails is visible.
     py_cli "$step"
 }

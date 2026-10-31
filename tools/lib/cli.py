@@ -43,6 +43,7 @@ from . import (
     reporting,
     resolve,
     secrets,
+    stack_network,
     status,
     upgrade,
 )
@@ -301,6 +302,19 @@ def cmd_npm_provision(args: argparse.Namespace) -> int:
     if not npm_provision.provision_npm_hosts(tree):
         return 1
     return 0
+
+
+def cmd_join_stack_network(args: argparse.Namespace) -> int:
+    """Attach the container papaia-ctl runs in to the stack's network (a no-op on the
+    host). A failure is a warning: the provisioning steps then report what they skip."""
+    tree = envtree.load_config_dir_tree(Path(args.config_dir), Path(args.repo_root))
+    network = tree.get("", {}).get("DOCKER_NETWORK") or stack_network.DEFAULT_NETWORK
+    done, message = stack_network.join(network)
+    if not done:
+        print(f"WARNING: cannot join {network}: {message}", file=sys.stderr, flush=True)
+    elif message:
+        print(message, flush=True)
+    return 0 if done else 1
 
 
 def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
@@ -789,6 +803,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_npm = sub.add_parser("npm-provision")
     p_npm.set_defaults(func=cmd_npm_provision)
+
+    p_join_net = sub.add_parser("join-stack-network")
+    p_join_net.set_defaults(func=cmd_join_stack_network)
 
     p_kc_role_sync = sub.add_parser("keycloak-role-sync")
     p_kc_role_sync.set_defaults(func=cmd_keycloak_role_sync)
