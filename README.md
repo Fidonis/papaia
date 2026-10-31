@@ -1658,6 +1658,10 @@ Two caveats worth knowing:
 
 ### Distributed installations
 
+> **Experimental.** The distributed mode has not yet been checked on real machines. Until
+> the [two-node validation](docs/distributed-validation.md) is recorded, use it to evaluate,
+> not in production. A single-host installation is not affected.
+
 papAIa can run on several machines: for example Nginx Proxy Manager, Keycloak, the mail relay
 and LiteLLM on an edge node in a DMZ, and LibreChat, the RAG system, LocalAI and papaia-manager
 behind it. Every service keeps its address on every node (`keycloak:8443`, `litellm:4000`). A

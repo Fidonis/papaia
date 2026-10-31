@@ -581,6 +581,10 @@ directory name above is a convention, not a requirement. What matters is the
 
 ### Distributed installations
 
+> **Experimental.** The distributed mode has not yet been checked on real machines. Until
+> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
+> not in production. A single-host installation is not affected.
+
 By default an installation is one host. A distributed installation spreads the core services
 over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,
 ADR 0009). One node is the **controller**: it runs `papaia-ctl`, holds the configuration

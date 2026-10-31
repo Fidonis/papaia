@@ -1,5 +1,9 @@
 # Running papAIa on several machines
 
+> **Experimental.** The distributed mode has not yet been checked on real machines. Until
+> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
+> not in production. A single-host installation is not affected.
+
 papAIa normally runs on one host. A **distributed installation** spreads the core services
 over several machines (nodes). Use it when ingress, identity and the LLM gateway have to sit on
 a machine at the network edge (a DMZ) and the application and its data behind it. This guide
@@ -287,6 +291,22 @@ Keep the backup directory off the controller (a mount from elsewhere), or it is 
   the gateway has one address there. Validation refuses such a placement.
 - Rolling upgrades are not supported. All nodes move together, and the installation is down for
   the duration.
+
+## Names
+
+A few names differ from the ones the planning issues used:
+
+| In the issues | In papAIa |
+|---|---|
+| the services "Nginx Proxy Manager", "LibreChat websearch" | the placement keys `nginx`, `websearch` |
+| a node's config directory | the node's `root`; its configuration is `<root>/config` |
+| the link gateway's "own profile" | the Compose profile `link-gateway` |
+| the verbs `compose-up\|down\|restart\|ps\|pull\|logs` | also `compose-stop`, so `stop` keeps the containers, as on one host |
+
+## What is not covered here
+
+papaia-manager knows nothing of nodes yet: it runs on the controller and shows that machine.
+Managing a distributed installation from the manager is its own work.
 
 ## Checking it on real machines
 
