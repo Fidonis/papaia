@@ -259,7 +259,7 @@ _node_remove() {
             error "Refusing to remove a node without confirmation. Re-run with -y."
             exit 2
         fi
-        warn "Node $name leaves the topology, and its SSH key and link certificate are deleted."
+        warn "Node $name leaves the topology: its link gateway is stopped, its SSH key and link certificate are deleted."
         confirm "Remove node $name?" "N" || { error "Aborted."; exit 3; }
     fi
     py_cli node-unregister --name="$name"

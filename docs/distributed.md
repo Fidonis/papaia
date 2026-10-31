@@ -142,6 +142,7 @@ exactly these. `doctor` names a missing rule when a link cannot be reached.
 | `doctor [--json]` | The controller's checks plus `nodes` (each node's own checks, version skew, clock) and `links` (a TLS handshake per link, certificate expiry). |
 | `node list --check` | Every node, its address, its services, whether it answers. |
 | `node renew-link NAME` | A new link certificate for the node; `doctor` warns 30 days before one expires. |
+| `node remove NAME` | Stops the node's link gateway and deletes its SSH key and link certificate. Follow it with `node sync --all` (see the security notes). |
 
 Each node writes one line per command it receives, refused ones included, to
 `<root>/audit.log`.
@@ -239,6 +240,14 @@ in that node's bundle, and `start --addons`, `addon start` and `addon stop` run 
 - **Between the nodes** every service connection is mutual TLS with a CA of its own, separate
   from Keycloak's. Its key never leaves the controller, and each node only reaches the services
   the edge table allows it. A peer that is down means a refused connection, never clear text.
+- **No revocation.** The link CA keeps no revocation list. A replaced or removed node's
+  certificate stays valid until it expires (up to 397 days). What shuts a removed node out
+  is the per-client ACL: the other nodes drop it once they get their new bundles, so run
+  `papaia-ctl node sync --all` right after `node remove` (or `renew-link`). The ACL is
+  matched on the node's name, so it does not help against a node that is compromised while
+  it is still part of the installation: rebuild the link CA then (delete
+  `link-ca/` in the controller's configuration directory, then `node sync --all`; every
+  node gets a new leaf).
 - **What a node holds:** its own services' env files, configuration and certificates, its link
   certificate and key. No secret of a service on another node, no CA key, no SSH key.
 

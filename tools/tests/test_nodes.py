@@ -275,12 +275,49 @@ def test_a_node_with_services_cannot_be_removed(distributed: Installation, capsy
     assert "still runs" in capsys.readouterr().err
 
 
-def test_an_empty_node_is_removed_with_its_keys(distributed: Installation):
+def test_an_empty_node_is_removed_with_its_keys(
+    distributed: Installation, monkeypatch, capsys
+):
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_stop(config_dir, repo_root, topo, name):
+        # Still enrolled while its gateway is stopped: the key has to work for that.
+        assert (executor.ssh_dir(config_dir, name) / executor.KEY_NAME).is_file()
+        calls.append((name, ["compose-down", link.GATEWAY_SERVICE]))
+        return executor.Result(0)
+
+    monkeypatch.setattr(nodes, "stop_gateway", fake_stop)
     main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
     assert (distributed.config / "nodes" / "spare").is_dir()
     assert main(distributed, "node-unregister", "--name=spare") == 0
+    assert calls == [("spare", ["compose-down", link.GATEWAY_SERVICE])]
     assert "spare" not in topology.load_config(distributed.config).nodes
     assert not (distributed.config / "nodes" / "spare").exists()
+    out = capsys.readouterr().out
+    assert "link gateway is stopped" in out and "node sync --all" in out
+
+
+def test_a_node_that_does_not_answer_is_removed_with_a_warning(
+    distributed: Installation, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        nodes,
+        "stop_gateway",
+        lambda *a: executor.Result(255, "", "ssh: connect to host 10.0.4.10: timed out"),
+    )
+    main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
+    assert main(distributed, "node-unregister", "--name=spare") == 0
+    assert "spare" not in topology.load_config(distributed.config).nodes
+    err = capsys.readouterr().err
+    assert "could not stop the link gateway on 'spare'" in err and "timed out" in err
+
+
+def test_a_node_that_cannot_be_removed_is_not_touched(distributed: Installation, monkeypatch):
+    def never(*a):
+        raise AssertionError("the gateway of a node that stays must keep running")
+
+    monkeypatch.setattr(nodes, "stop_gateway", never)
+    assert main(distributed, "node-unregister", "--name=edge") == 2
 
 
 def test_node_list_reports_each_node(distributed: Installation, capsys):

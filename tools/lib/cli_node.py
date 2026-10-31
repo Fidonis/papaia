@@ -65,15 +65,34 @@ def cmd_node_register(args: argparse.Namespace) -> int:
 def cmd_node_unregister(args: argparse.Namespace) -> int:
     config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
     try:
+        before = nodes.check_removable(config_dir, repo_root, args.name)
+    except nodes.NodeError as exc:
+        return _fail(exc, 2)
+    # Its link gateway is stopped while the controller's key for it still works.
+    stopped = nodes.stop_gateway(config_dir, repo_root, before, args.name)
+    try:
         topo = nodes.unregister(config_dir, repo_root, args.name)
     except nodes.NodeError as exc:
         return _fail(exc, 2)
     if _project(config_dir, repo_root) != 0:
         return 3
     print(f"Node '{args.name}' removed. {len(topo.nodes)} node(s) left.")
+    if stopped.ok:
+        print("Its link gateway is stopped.")
+    else:
+        detail = (stopped.stderr or stopped.stdout).strip().splitlines()
+        print(
+            f"WARNING: could not stop the link gateway on '{args.name}'"
+            f"{': ' + detail[-1] if detail else ''}. Stop its containers on the node.",
+            file=sys.stderr,
+        )
     print(
         "The controller's key for it is deleted, so the node can no longer be reached. On the"
         " node, remove the user and its directory to finish."
+    )
+    print(
+        "The other nodes accept its link certificate until they get their new bundles (there"
+        " is no revocation list). Push them now with: papaia-ctl node sync --all"
     )
     return 0
 

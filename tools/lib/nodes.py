@@ -33,7 +33,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from . import common, deployment, envtree, topology
+from . import common, deployment, envtree, link, topology
 from .executor import KEY_NAME, KNOWN_HOSTS, Executor, Result, for_node, ssh_dir
 from .topology import NODES_DIR, Node, Topology
 
@@ -90,8 +90,9 @@ def register(config_dir: Path, node: Node) -> Topology:
     return updated
 
 
-def unregister(config_dir: Path, repo_root: Path, name: str) -> Topology:
-    manifest, topo = require_distributed(config_dir)
+def check_removable(config_dir: Path, repo_root: Path, name: str) -> Topology:
+    """The topology, once `name` is known to be a node that can leave it."""
+    _manifest, topo = require_distributed(config_dir)
     if name not in topo.nodes:
         raise NodeError(f"no node named '{name}'")
     if name == topo.controller:
@@ -103,6 +104,18 @@ def unregister(config_dir: Path, repo_root: Path, name: str) -> Topology:
         raise NodeError(
             f"node '{name}' still runs {', '.join(placed)}; place them on another node first"
         )
+    return topo
+
+
+def stop_gateway(config_dir: Path, repo_root: Path, topo: Topology, name: str) -> Result:
+    """Take down the link gateway of a node that leaves, while its key still works."""
+    run = for_node(topo, name, config_dir=config_dir, repo_root=repo_root)
+    return run.run(["compose-down", link.GATEWAY_SERVICE], capture=True, timeout=120)
+
+
+def unregister(config_dir: Path, repo_root: Path, name: str) -> Topology:
+    check_removable(config_dir, repo_root, name)
+    manifest, topo = require_distributed(config_dir)
     nodes = {k: v for k, v in topo.nodes.items() if k != name}
     placement = {s: n for s, n in topo.placement.items() if n != name}
     updated = replace(topo, nodes=nodes, placement=placement)

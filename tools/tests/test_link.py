@@ -153,6 +153,13 @@ def test_long_answers_are_not_cut_by_the_gateway():
     assert "option clitcpka" in config and "option srvtcpka" in config
 
 
+def test_an_idle_handshake_holds_no_slot_for_long():
+    config = link.haproxy_config(link.plan(split(), ALL_PROFILES, ENV), "edge")
+    assert "timeout client-hs 10s" in config
+    assert "timeout client 30s" in config and "timeout server 30s" in config
+    assert "timeout client 1h" not in config
+
+
 def _write_material(tmp_path: Path, topo: Topology) -> Path:
     config = tmp_path / "config"
     for node in topo.nodes.values():
@@ -219,6 +226,40 @@ def test_a_leaf_is_kept_until_renewed_or_its_names_change(tmp_path: Path):
     assert moved != renewed
     link.issue_leaf(tmp_path, Node("edge", address="10.0.1.11"), serves=["keycloak", "litellm"])
     assert cert.read_text() != moved
+
+
+def test_a_failed_reissue_keeps_the_previous_pair(tmp_path: Path, monkeypatch):
+    node = Node("edge", address="10.0.1.10")
+    key, cert = link.issue_leaf(tmp_path, node)
+    before = (key.read_bytes(), cert.read_bytes())
+    real = link._openssl
+
+    def failing(args, **kwargs):
+        if args[0] == "x509":
+            raise link.LinkError("openssl x509 failed")
+        return real(args, **kwargs)
+
+    monkeypatch.setattr(link, "_openssl", failing)
+    with pytest.raises(link.LinkError):
+        link.issue_leaf(tmp_path, node, force=True)
+    assert (key.read_bytes(), cert.read_bytes()) == before
+    assert sorted(p.name for p in key.parent.iterdir()) == [
+        "issuer",
+        "names",
+        "node.crt",
+        "node.key",
+    ]
+
+
+def test_a_new_link_ca_reissues_the_leaf(tmp_path: Path):
+    node = Node("edge", address="10.0.1.10")
+    _key, cert = link.issue_leaf(tmp_path, node)
+    first = cert.read_text()
+    shutil.rmtree(link.ca_dir(tmp_path))
+    link.issue_leaf(tmp_path, node)
+    assert cert.read_text() != first
+    _ca_key, ca = link.ensure_ca(tmp_path)
+    assert openssl("verify", "-CAfile", str(ca), str(cert)).strip().endswith("OK")
 
 
 def test_a_leaf_names_the_services_its_node_serves(tmp_path: Path):

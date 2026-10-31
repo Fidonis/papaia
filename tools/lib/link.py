@@ -30,6 +30,7 @@ What this module decides, all of it from the topology and the static `EDGES` tab
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -58,8 +59,12 @@ CA_DAYS = 3650
 RENEW_WARN_DAYS = 30
 
 # Long enough for a streamed answer that pauses between tokens; the services' own
-# timeouts still apply inside the tunnel.
+# timeouts still apply inside the tunnel. It only applies once both sides are connected:
+# before that the short timeouts do, so a peer that opens connections and then idles in
+# the TLS handshake or before its first bytes holds no slot for long.
 TUNNEL_TIMEOUT = "1h"
+IDLE_TIMEOUT = "30s"
+HANDSHAKE_TIMEOUT = "10s"
 CONNECT_TIMEOUT = "5s"
 CHECK_INTERVAL = "5s"
 
@@ -296,8 +301,9 @@ def haproxy_config(plan_: LinkPlan, node: str) -> str:
         "    option clitcpka",
         "    option srvtcpka",
         f"    timeout connect {CONNECT_TIMEOUT}",
-        f"    timeout client {TUNNEL_TIMEOUT}",
-        f"    timeout server {TUNNEL_TIMEOUT}",
+        f"    timeout client-hs {HANDSHAKE_TIMEOUT}",
+        f"    timeout client {IDLE_TIMEOUT}",
+        f"    timeout server {IDLE_TIMEOUT}",
         f"    timeout tunnel {TUNNEL_TIMEOUT}",
         "    timeout client-fin 30s",
         "    timeout server-fin 30s",
@@ -492,11 +498,24 @@ def issue_leaf(
     names = leaf_names(node, serves)
     stamp = directory / "names"
     current = stamp.read_text(encoding="utf-8").split() if stamp.is_file() else []
-    if not force and key.is_file() and cert.is_file() and current == names:
+    # A new link CA (the old one deleted to shut out a compromised node) reissues every leaf.
+    issuer_stamp = directory / "issuer"
+    issuer = hashlib.sha256(ca_cert.read_bytes()).hexdigest()
+    signed_by = issuer_stamp.read_text(encoding="utf-8").strip() if issuer_stamp.is_file() else ""
+    if (
+        not force
+        and key.is_file()
+        and cert.is_file()
+        and current == names
+        and signed_by == issuer
+    ):
         return key, cert
     common.ensure_dir(directory)
     os.chmod(directory, 0o700)
-    _new_key(key)
+    # The new pair is made next to the old one and replaces it only once both exist, so a
+    # failing openssl leaves the previous key and certificate as they were.
+    new_key, new_cert = directory / "node.key.new", directory / "node.crt.new"
+    _new_key(new_key)
     csr = directory / "node.csr"
     ext = directory / "node.ext"
     ext.write_text(
@@ -512,7 +531,7 @@ def issue_leaf(
                 "req",
                 "-new",
                 "-key",
-                str(key),
+                str(new_key),
                 "-out",
                 str(csr),
                 "-subj",
@@ -531,18 +550,23 @@ def issue_leaf(
                 str(ca_key),
                 "-CAcreateserial",
                 "-out",
-                str(cert),
+                str(new_cert),
                 "-days",
                 str(LEAF_DAYS),
                 "-extfile",
                 str(ext),
             ]
         )
+        os.replace(new_key, key)
+        os.replace(new_cert, cert)
     finally:
+        new_key.unlink(missing_ok=True)
+        new_cert.unlink(missing_ok=True)
         csr.unlink(missing_ok=True)
         ext.unlink(missing_ok=True)
         (ca_dir(config_dir) / "ca.srl").unlink(missing_ok=True)
     common.atomic_write(stamp, "\n".join(names) + "\n")
+    common.atomic_write(issuer_stamp, issuer + "\n")
     (directory / "address").unlink(missing_ok=True)
     return key, cert
 
