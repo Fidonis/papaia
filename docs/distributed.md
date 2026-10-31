@@ -147,6 +147,13 @@ exactly these. `doctor` names a missing rule when a link cannot be reached.
 Each node writes one line per command it receives, refused ones included, to
 `<root>/audit.log`.
 
+**Which release a node gets.** In a Git checkout, the nodes get the release tag of the
+controller's `VERSION` (`v1.8.0`), and only when the checkout is at that tag with no tracked
+file changed. Otherwise `start`, `node sync` and the join archive refuse, since a node would
+record a version its files do not match. A release tarball ships as it is. For development on a
+branch, `PAPAIA_ALLOW_UNTAGGED_CHECKOUT=1` ships the working tree, uncommitted changes
+included.
+
 ## Backups
 
 ```sh

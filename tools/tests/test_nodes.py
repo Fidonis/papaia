@@ -211,6 +211,62 @@ def test_a_checkout_without_git_leaves_out_what_setup_wrote(tmp_path: Path):
         assert tar.getnames() == ["src/docker-compose.yml"]
 
 
+def _git_repo(tmp_path: Path, version: str = "1.8.0") -> Path:
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "docker-compose.yml").write_text("# release\n")
+    (repo / "VERSION").write_text(f"{version}\n")
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.org"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "release"], check=True)
+    subprocess.run([*git, "tag", f"v{version}"], check=True)
+    return repo
+
+
+def _names(data: bytes) -> dict[str, bytes]:
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        return {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
+
+
+def test_a_checkout_at_its_tag_ships_the_tag(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv(nodes.ALLOW_UNTAGGED_ENV, raising=False)
+    repo = _git_repo(tmp_path)
+    (repo / "untracked.txt").write_text("not part of the release")
+    files = _names(nodes.checkout_archive(repo))
+    assert files["src/docker-compose.yml"] == b"# release\n"
+    assert "untracked.txt" not in files
+
+
+@pytest.mark.parametrize("change", ["commit", "edit", "no-tag"])
+def test_a_checkout_off_its_tag_is_refused(tmp_path: Path, monkeypatch, change: str):
+    monkeypatch.delenv(nodes.ALLOW_UNTAGGED_ENV, raising=False)
+    repo = _git_repo(tmp_path)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.org"]
+    (repo / "src" / "docker-compose.yml").write_text("# changed\n")
+    if change == "commit":
+        subprocess.run([*git, "commit", "-qam", "after the release"], check=True)
+        match = "not at its release tag v1.8.0"
+    elif change == "edit":
+        match = "uncommitted changes"
+    else:
+        subprocess.run([*git, "checkout", "-q", "."], check=True)
+        (repo / "VERSION").write_text("1.9.0\n")
+        subprocess.run([*git, "commit", "-qam", "bump"], check=True)
+        match = "no tag v1.9.0"
+    with pytest.raises(nodes.NodeError, match=match):
+        nodes.checkout_archive(repo)
+
+
+def test_the_working_tree_ships_when_allowed(tmp_path: Path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    (repo / "src" / "docker-compose.yml").write_text("# work in progress\n")
+    monkeypatch.setenv(nodes.ALLOW_UNTAGGED_ENV, "1")
+    files = _names(nodes.checkout_archive(repo))
+    assert files["src/docker-compose.yml"] == b"# work in progress\n"
+    assert not any(name.startswith(".git/") for name in files)
+
+
 def test_pinning_requires_a_real_fingerprint(distributed: Installation):
     with pytest.raises(nodes.NodeError, match="not a SHA256"):
         nodes.pin_host_key(distributed.config, dmz_split().nodes["edge"], "MD5:aa:bb")

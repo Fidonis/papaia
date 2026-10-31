@@ -603,7 +603,11 @@ _setup_distributed() {
         [ -z "$name" ] && continue
         pending=1
         local archive="$CONFIG_DIR/nodes/$name/papaia-join-$name.tar.gz"
-        py_cli node-join-bundle --name="$name" --output="$archive" >/dev/null
+        if ! py_cli node-join-bundle --name="$name" --output="$archive" >/dev/null; then
+            warn "Node $name is not enrolled yet, and its join archive could not be written (see above)."
+            warn "  Write it once that is fixed: 'papaia-ctl node join-bundle $name'."
+            continue
+        fi
         warn "Node $name is not enrolled yet. Copy $archive to it and run there, as root:"
         warn "    tar -xzf papaia-join-$name.tar.gz && sudo ./papaia-join-$name/install.sh"
         warn "  then confirm its host key with 'papaia-ctl node check $name'."

@@ -136,7 +136,10 @@ def push(cluster: Cluster, names: list[str]) -> None:
             )
         if running.get("papaia_version") != version:
             _say(f"node {name}: installing release {version}")
-            result = nodes.push_checkout(cluster.config_dir, cluster.repo_root, name)
+            try:
+                result = nodes.push_checkout(cluster.config_dir, cluster.repo_root, name)
+            except nodes.NodeError as exc:
+                raise ClusterError(f"node '{name}': {exc}") from exc
             if not result.ok:
                 raise ClusterError(
                     f"node '{name}': the release could not be installed (exit"

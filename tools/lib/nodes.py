@@ -260,21 +260,52 @@ def host_key_pinned(config_dir: Path, name: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def checkout_archive(repo_root: Path, ref: str = "HEAD") -> bytes:
-    """The checkout as a tar archive: `git archive` of `ref` when this is a git checkout,
-    else the files on disk minus everything setup writes into it."""
-    if (repo_root / ".git").exists():
-        try:
-            done = subprocess.run(
-                ["git", "-C", str(repo_root), "archive", "--format=tar", ref],
-                capture_output=True,
-                timeout=300,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            done = None
-        if done is not None and done.returncode == 0:
-            return done.stdout
+# Ships the controller's working tree to the nodes as it is, for development on a checkout
+# that is not at a release tag.
+ALLOW_UNTAGGED_ENV = "PAPAIA_ALLOW_UNTAGGED_CHECKOUT"
+
+
+def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo_root), *args], capture_output=True, timeout=300, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def release_ref(repo_root: Path, version: str) -> str:
+    """The tag of `version`, once it is sure the checkout is that tag: HEAD at it and no
+    tracked file changed. Otherwise the nodes would get a commit that does not match the
+    version they record, without the changes on disk."""
+    tag = f"v{version}"
+    tagged = _git(repo_root, "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}")
+    head = _git(repo_root, "rev-parse", "--verify", "--quiet", "HEAD")
+    hint = (
+        f"Check out the release ('git checkout {tag}'), or set {ALLOW_UNTAGGED_ENV}=1 to ship"
+        " the working tree as it is (development only)."
+    )
+    if tagged is None or tagged.returncode != 0:
+        raise NodeError(f"the checkout's VERSION is {version}, but there is no tag {tag}. {hint}")
+    if head is None or head.stdout.strip() != tagged.stdout.strip():
+        raise NodeError(f"the checkout is not at its release tag {tag}. {hint}")
+    dirty = _git(repo_root, "status", "--porcelain", "--untracked-files=no")
+    if dirty is None or dirty.returncode != 0 or dirty.stdout.strip():
+        raise NodeError(f"the checkout at {tag} has uncommitted changes. {hint}")
+    return tag
+
+
+def checkout_archive(repo_root: Path) -> bytes:
+    """The checkout as a tar archive: `git archive` of the release tag when this is a git
+    checkout, else (a release tarball, or with PAPAIA_ALLOW_UNTAGGED_CHECKOUT=1) the files
+    on disk minus everything setup writes into it."""
+    if (repo_root / ".git").exists() and os.environ.get(ALLOW_UNTAGGED_ENV) != "1":
+        ref = release_ref(repo_root, envtree.resolve_platform_version(repo_root))
+        done = _git(repo_root, "archive", "--format=tar", ref)
+        if done is None or done.returncode != 0:
+            detail = done.stderr.decode("utf-8", "replace").strip() if done else ""
+            raise NodeError(f"git archive {ref} failed{': ' + detail if detail else ''}")
+        return done.stdout
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as tar:
         for path in sorted(repo_root.rglob("*")):
