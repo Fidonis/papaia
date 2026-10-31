@@ -50,18 +50,35 @@ class Migration:
     runs_with: str = ""
 
 
+_MARKER_RE = re.compile(r"^#\s*papaia-migration:")
 _RUNS_WITH_RE = re.compile(r"^#\s*papaia-migration:\s*runs-with=([a-z][a-z0-9-]*)\s*$")
 
 
 def _runs_with(path: Path) -> str:
+    """The marker's service. A marker that does not parse, or names no catalogue service,
+    is refused: a typo would otherwise run the migration on the controller unnoticed."""
+    from .topology import CATALOGUE  # Local import: topology imports half of lib.
+
     try:
         head = path.read_text(encoding="utf-8").splitlines()[:40]
     except (OSError, UnicodeDecodeError):
         return ""
     for line in head:
-        match = _RUNS_WITH_RE.match(line.strip())
-        if match:
-            return match.group(1)
+        line = line.strip()
+        if not _MARKER_RE.match(line):
+            continue
+        match = _RUNS_WITH_RE.match(line)
+        if match is None:
+            raise ValueError(
+                f"Malformed migration marker in {path.name}: {line!r}"
+                " (expected '# papaia-migration: runs-with=<service>')"
+            )
+        if match.group(1) not in CATALOGUE:
+            raise ValueError(
+                f"Migration {path.name} runs with unknown service '{match.group(1)}'"
+                f" (one of {', '.join(CATALOGUE)})"
+            )
+        return match.group(1)
     return ""
 
 

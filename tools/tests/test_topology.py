@@ -4,6 +4,8 @@ the per-node bundles a render projects out of the config tree."""
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -707,3 +709,46 @@ def test_topology_options_belong_to_their_subcommand(tmp_path: Path, args: str, 
     )
     done = subprocess.run([bash, "-c", script], capture_output=True, text=True)
     assert (done.returncode == 0) is ok, done.stderr
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# the setup wizard
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _wizard(answers: list[str]) -> list[str]:
+    """Run setup's topology questions with `answers` and return SETUP_TOPOLOGY_ARGS."""
+    script = (
+        'CYAN="" NC=""\n'
+        f'source "{REPO}/tools/lib/sh/prompt.sh"\n'
+        f'source "{REPO}/tools/lib/sh/setup.sh"\n'
+        "_prompt_topology\n"
+        'printf "%s\\n" "${SETUP_TOPOLOGY_ARGS[@]}"\n'
+    )
+    done = subprocess.run(
+        [shutil.which("bash"), "-c", script],
+        input="\n".join(answers) + "\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.splitlines()
+
+
+def test_the_wizard_places_web_search_with_librechat():
+    # several machines; controller internal at 10.0.2.10; edge at 10.0.1.10, default ssh;
+    # per service: nginx edge, keycloak internal, smtp internal, litellm edge,
+    # librechat edge, localai internal; default link port.
+    args = _wizard(
+        ["2", "", "10.0.2.10", "", "10.0.1.10", "", "3"]
+        + ["edge", "internal", "internal", "edge", "edge", "internal", ""]
+    )
+    assert "--place=librechat=edge" in args and "--place=websearch=edge" in args
+    topo = topology.from_flags(
+        node_specs=[a.split("=", 1)[1] for a in args if a.startswith("--node=")],
+        places=[a.split("=", 1)[1] for a in args if a.startswith("--place=")],
+        preset=None,
+        controller="internal",
+        link_port=7443,
+    )
+    assert errors(topo) == []

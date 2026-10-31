@@ -545,7 +545,8 @@ _installation_exists() {
 _prompt_topology() {
     printf '\n%sWhere does papAIa run?%s\n' "$CYAN" "$NC" >&2
     printf '  1) On this machine (default)\n' >&2
-    printf '  2) On several machines — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
+    printf '  2) On two machines — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
+    printf '     (for more machines, pass --node per machine or --topology-file to setup)\n' >&2
     local choice
     choice="$(prompt_with_default "  Choose" "1")"
     case "$choice" in
@@ -578,6 +579,8 @@ _prompt_topology() {
             for service in nginx keycloak smtp litellm librechat localai; do
                 node="$(prompt_with_default "  Node for $service ($controller or $edge)" "$controller")"
                 SETUP_TOPOLOGY_ARGS+=(--place="$service=$node")
+                # Web search runs with LibreChat, wherever that goes.
+                [ "$service" = "librechat" ] && SETUP_TOPOLOGY_ARGS+=(--place="websearch=$node")
             done
             ;;
         *) SETUP_TOPOLOGY_ARGS+=(--preset=dmz-split) ;;

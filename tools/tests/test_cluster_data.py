@@ -278,6 +278,21 @@ def test_a_migration_names_the_service_whose_data_it_reshapes(tmp_path):
     assert found["1.5.0__librechat-tenant-indexes"].runs_with == "librechat"
 
 
+@pytest.mark.parametrize(
+    "marker, fragment",
+    [
+        ("# papaia-migration: runs-with=libre-chat", "unknown service 'libre-chat'"),
+        ("# papaia-migration: runs_with=keycloak", "Malformed migration marker"),
+        ("# papaia-migration: runs-with = keycloak", "Malformed migration marker"),
+    ],
+)
+def test_a_migration_marker_with_a_typo_is_refused(tmp_path, marker: str, fragment: str):
+    path = tmp_path / "1.9.0__x.sh"
+    path.write_text(f"#!/usr/bin/env bash\n{marker}\n")
+    with pytest.raises(ValueError, match=fragment):
+        migrations._parse_name(path)
+
+
 def test_migrations_run_where_their_data_lives_and_the_ledger_says_where(fake, monkeypatch):
     inst = fake["inst"]
     write_migration(
