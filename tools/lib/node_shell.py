@@ -654,16 +654,7 @@ def verb_bundle_put(ctx: Context, args: list[str]) -> int:
         else set()
     )
     common.ensure_dir(ctx.config_dir)
-    for rel in files:
-        dest = ctx.config_dir / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.is_dir():
-            shutil.rmtree(dest)
-        os.replace(incoming / rel, dest)
-    for rel in sorted(previous - set(files)):
-        stale = ctx.config_dir / rel
-        if stale.is_file() and not rel.startswith(".."):
-            stale.unlink()
+    _swap_bundle(ctx, incoming, files, previous)
     common.atomic_write(previous_list, "\n".join(sorted(files)) + "\n")
     shutil.rmtree(incoming, ignore_errors=True)
     ctx._manifest = manifest
@@ -671,6 +662,46 @@ def verb_bundle_put(ctx: Context, args: list[str]) -> int:
         common.ensure_dir(ctx.config_dir / rel)
     print(f"bundle installed on {ctx.node}: {len(files)} files", flush=True)
     return 0
+
+
+def _swap_bundle(ctx: Context, incoming: Path, files: list[str], previous: set[str]) -> None:
+    """Move the unpacked bundle into the config dir. Every file it replaces or retires is
+    set aside first, so a failure halfway puts the previous bundle back."""
+    saved = ctx.staging / "bundle-previous"
+    shutil.rmtree(saved, ignore_errors=True)
+    stale = [rel for rel in sorted(previous - set(files)) if not rel.startswith("..")]
+    moved: list[tuple[Path, Path | None]] = []  # (installed path, its saved original)
+    try:
+        for rel in files:
+            dest = ctx.config_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            original = None
+            if dest.exists() or dest.is_symlink():
+                original = saved / rel
+                original.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(dest, original)
+            moved.append((dest, original))
+            os.replace(incoming / rel, dest)
+        for rel in stale:
+            path = ctx.config_dir / rel
+            if path.is_file():
+                original = saved / rel
+                original.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(path, original)
+                moved.append((path, original))
+    except OSError as exc:
+        for dest, original in reversed(moved):
+            try:
+                if dest.is_dir() and not dest.is_symlink():
+                    shutil.rmtree(dest)
+                elif dest.exists() or dest.is_symlink():
+                    dest.unlink()
+                if original is not None:
+                    os.replace(original, dest)
+            except OSError:
+                pass
+        raise Failed(f"could not install the bundle, the previous one is kept: {exc}") from exc
+    shutil.rmtree(saved, ignore_errors=True)
 
 
 def verb_checkout_put(ctx: Context, args: list[str]) -> int:
@@ -706,6 +737,16 @@ def verb_checkout_put(ctx: Context, args: list[str]) -> int:
     return 0
 
 
+def _release_order(path: Path) -> tuple:
+    """Newer releases sort higher: by version number, a pre-release below its release.
+    A name that is no version sorts below every version, by modification time."""
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(.*)$", path.name)
+    if match is None:
+        return (0, path.stat().st_mtime)
+    major, minor, patch, suffix = match.groups()
+    return (1, int(major), int(minor), int(patch), suffix == "", suffix)
+
+
 def _prune_releases(releases: Path, keep: str) -> None:
     others = sorted(
         (
@@ -713,7 +754,7 @@ def _prune_releases(releases: Path, keep: str) -> None:
             for p in releases.iterdir()
             if p.is_dir() and not p.name.startswith(".") and p.name != keep
         ),
-        key=lambda p: p.stat().st_mtime,
+        key=_release_order,
         reverse=True,
     )
     for old in others[KEEP_RELEASES - 1 :]:
@@ -1043,6 +1084,7 @@ def audit(ctx: Context, words: list[str], code: int, started: float) -> None:
 def execute(ctx: Context, raw: str | None) -> int:
     started = time.monotonic()
     words: list[str] = []
+    code = 130  # what the audit line says when an interrupt ends the call
     try:
         words = parse_command(raw)
         verb = VERBS.get(words[0])
@@ -1055,7 +1097,11 @@ def execute(ctx: Context, raw: str | None) -> int:
     except Failed as exc:
         print(f"failed: {exc}", file=sys.stderr, flush=True)
         code = 3
-    audit(ctx, words, code, started)
+    except Exception as exc:  # noqa: BLE001 - every call ends with an exit code and an audit line
+        print(f"failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        code = 3
+    finally:
+        audit(ctx, words, code, started)
     return code
 
 

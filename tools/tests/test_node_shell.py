@@ -195,6 +195,31 @@ def test_every_call_leaves_one_audit_line(tmp_path: Path):
     assert all(line.split()[1] == "node=edge" for line in lines)
 
 
+def test_an_unexpected_error_is_audited_and_exits_3(tmp_path: Path, monkeypatch, capsys):
+    ctx = remote_node(tmp_path)
+
+    def broken(ctx, args):
+        raise PermissionError("[Errno 13] Permission denied: 'config'")
+
+    monkeypatch.setitem(node_shell.VERBS, "ping", broken)
+    assert run(ctx, "ping") == 3
+    assert "failed: PermissionError" in capsys.readouterr().err
+    line = ctx.audit_log.read_text(encoding="utf-8")
+    assert "verb=ping" in line and "rc=3" in line
+
+
+def test_an_interrupt_still_leaves_an_audit_line(tmp_path: Path, monkeypatch):
+    ctx = remote_node(tmp_path)
+
+    def interrupted(ctx, args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setitem(node_shell.VERBS, "ping", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run(ctx, "ping")
+    assert "rc=130" in ctx.audit_log.read_text(encoding="utf-8")
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # compose verbs
 # ─────────────────────────────────────────────────────────────────────────
@@ -339,6 +364,34 @@ def test_a_new_bundle_removes_what_the_old_one_had(tmp_path: Path):
     assert (ctx.config_dir / "infra/nginx/nginx-data/database.sqlite").read_text() == "state"
 
 
+def test_a_failed_bundle_install_keeps_the_previous_bundle(tmp_path: Path, monkeypatch, capsys):
+    ctx = remote_node(tmp_path)
+    old_extra = [("ai/litellm/config.yaml", b"old\n", 0o644)]
+    assert run(ctx, "bundle-put", bundle_tar(extra=old_extra)) == 0
+    config = ctx.config_dir
+    before = {
+        str(p.relative_to(config)): p.read_bytes() for p in config.rglob("*") if p.is_file()
+    }
+    real_replace = os.replace
+    moves = {"n": 0}
+
+    def failing_replace(src, dst):
+        # Fail on the third file moved into the config dir, after two are in place.
+        if str(src).startswith(str(ctx.staging / "bundle")) and "previous" not in str(src):
+            moves["n"] += 1
+            if moves["n"] == 3:
+                raise PermissionError(13, "Permission denied", str(dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(node_shell.os, "replace", failing_replace)
+    new_extra = [("infra/smtp/relay.conf", b"new\n", 0o644)]
+    assert run(ctx, "bundle-put", bundle_tar(extra=new_extra)) == 3
+    assert "previous one is kept" in capsys.readouterr().err
+    after = {str(p.relative_to(config)): p.read_bytes() for p in config.rglob("*") if p.is_file()}
+    assert after == before
+    assert "rc=3" in ctx.audit_log.read_text(encoding="utf-8").splitlines()[-1]
+
+
 def test_a_bundle_for_another_node_is_refused(tmp_path: Path, capsys):
     ctx = remote_node(tmp_path)
     assert run(ctx, "bundle-put", bundle_tar(node="internal")) == 2
@@ -421,6 +474,16 @@ def test_old_releases_are_pruned(tmp_path: Path):
         run(ctx, f"checkout-put {version}", checkout_tar(version))
     left = sorted(p.name for p in ctx.releases.iterdir() if not p.name.startswith("."))
     assert left == ["1.8.0", "1.9.0"]
+
+
+def test_releases_are_pruned_by_version_not_by_time(tmp_path: Path):
+    ctx = remote_node(tmp_path)
+    for version in ("1.10.0", "1.9.0", "1.8.0-rc.1", "1.8.0"):
+        run(ctx, f"checkout-put {version}", checkout_tar(version))
+        os.utime(ctx.releases / version, (1_000_000, 1_000_000))  # every mtime the same
+    run(ctx, "checkout-put 1.11.0", checkout_tar("1.11.0"))
+    left = sorted(p.name for p in ctx.releases.iterdir() if not p.name.startswith("."))
+    assert left == ["1.10.0", "1.11.0"]
 
 
 @pytest.mark.parametrize("command", ["checkout-put", "checkout-put ../x", "checkout-put a b"])
