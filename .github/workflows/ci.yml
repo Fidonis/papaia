@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "releases/**"]
   pull_request:
 
 permissions:
@@ -46,6 +46,34 @@ jobs:
           recursive: true
           dockerfile: "Dockerfile"
           ignore: DL3008,DL3013
+
+  test-python:
+    name: Ruff and pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+      # The live link tests need the HAProxy the gateway ships: the distribution's is too old
+      # for `timeout client-hs`. Its Alpine binary runs here only inside the image.
+      - name: Provide the pinned HAProxy
+        run: |
+          image=$(sed -n 's/^ *image: \(haproxy:.*\)$/\1/p' src/infra/link-gateway/docker-compose.yml)
+          docker pull "$image"
+          mkdir -p "$HOME/.local/bin"
+          cat > "$HOME/.local/bin/haproxy" <<EOF
+          #!/bin/sh
+          exec docker run --rm --init --network host --user $(id -u):$(id -g) -v /tmp:/tmp $image haproxy "\$@"
+          EOF
+          chmod +x "$HOME/.local/bin/haproxy"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run ruff
+        working-directory: tools
+        run: uv run --frozen --extra dev python -m ruff check lib tests
+      - name: Run pytest
+        working-directory: tools
+        run: uv run --frozen --extra dev python -m pytest tests/ -rs
 
   pr-title:
     name: Conventional Commit PR title
