@@ -259,12 +259,19 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         # A prior run's AUTH_HOST wins over the derived default, like LITELLM_PUBLIC_URL:
         # an upgrade re-runs setup non-interactively without --auth-host, and
         # re-deriving here moved KC_HOSTNAME and the issuer of every client.
-        sticky_auth_host = "" if args.fresh_init else root.get("AUTH_HOST", "")
+        # Only Keycloak's own setup writes it: after external_oidc the stored value is
+        # still the shipped seed, which says nothing about this installation.
+        sticky_auth_host = ""
+        if not args.fresh_init and prior_auth_provider == "internal_keycloak":
+            sticky_auth_host = root.get("AUTH_HOST", "")
         if sticky_auth_host and common.is_placeholder(sticky_auth_host):
             sticky_auth_host = ""
         # A value that is just the old app host's derivation was never chosen by
         # the operator: it follows a changed --app-host instead of pinning the old one.
+        # That covers a --auth-host equal to the derivation as well: the two look the same.
         # Compared without the scheme -- older releases derived local hosts as http.
+        # The old KEYCLOAK_EXT_PORT is gone by now, so a local value with another port
+        # counts as chosen and stays until --auth-host replaces it.
         if sticky_app_host and sticky_auth_host:
             old_derived = derive_auth_host_default(sticky_app_host, keycloak_port)
             if urlsplit(sticky_auth_host).netloc == urlsplit(old_derived).netloc:
