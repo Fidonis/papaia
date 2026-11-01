@@ -35,7 +35,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import common, deployment, envtree, link, topology
-from .executor import KEY_NAME, KNOWN_HOSTS, Executor, Result, for_node, ssh_dir
+from .executor import KEY_NAME, KNOWN_HOSTS, Executor, ExecutorError, Result, for_node, ssh_dir
 from .topology import NODES_DIR, Node, Topology
 
 _FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}=?$")
@@ -464,11 +464,27 @@ def record_gateway_restart(config_dir: Path, name: str) -> None:
     record_state(config_dir, name, gateway_link=_link_digest(config_dir, name))
 
 
+def forget_gateway_restarts(config_dir: Path) -> None:
+    """Drop what a restored tree says the gateways loaded, so the next start reloads them."""
+    for path in (config_dir / NODES_DIR).glob("*/state.json"):
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(state, dict) and state.pop("gateway_link", None) is not None:
+            common.atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
 def node_version(config_dir: Path, repo_root: Path, name: str) -> dict:
     """What the node reports about itself, plus how far its clock is off ours."""
-    ex = executor(config_dir, repo_root, name)
     asked = time.time()
-    result = ex.run(["version"], capture=True, timeout=60)
+    try:
+        result = executor(config_dir, repo_root, name).run(
+            ["version"], capture=True, timeout=60
+        )
+    except ExecutorError as exc:
+        # Not enrolled, or its host key not pinned yet: a state of the node, not a failure.
+        return {"node": name, "reachable": False, "reason": str(exc)}
     answered = time.time()
     if not result.ok:
         reason = (result.stderr or result.stdout).strip().splitlines()

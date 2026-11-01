@@ -43,20 +43,29 @@ def cmd_node_register(args: argparse.Namespace) -> int:
     )
     try:
         _manifest, before = nodes.require_distributed(config_dir)
+    except nodes.NodeError as exc:
+        return _fail(exc, 2)
+
+    def put_back() -> None:
+        # A node that could not be added leaves no trace in the topology.
+        manifest, _ = nodes.load(config_dir)
+        nodes.save(config_dir, manifest, before)
+
+    try:
         topo = nodes.register(config_dir, node)
         findings = topology.validate_config(config_dir, repo_root, topo)
         if not findings.ok:
-            # Put the topology back the way it was: a node that breaks it is not added.
-            manifest, _ = nodes.load(config_dir)
-            nodes.save(config_dir, manifest, before)
+            put_back()
             for error in findings.errors:
                 print(f"ERROR: topology: {error}", file=sys.stderr)
             return 2
         nodes.ensure_keypair(config_dir, node.name)
         link.issue_leaf(config_dir, topo.nodes[node.name])
-    except (nodes.NodeError, link.LinkError) as exc:
+    except (nodes.NodeError, link.LinkError, OSError) as exc:
+        put_back()
         return _fail(exc, 2 if isinstance(exc, nodes.NodeError) else 3)
     if _project(config_dir, repo_root) != 0:
+        put_back()
         return 3
     print(f"Node '{node.name}' registered ({node.ssh_user}@{node.ssh_target}:{node.ssh_port}).")
     return 0
@@ -68,12 +77,14 @@ def cmd_node_unregister(args: argparse.Namespace) -> int:
         before = nodes.check_removable(config_dir, repo_root, args.name)
     except nodes.NodeError as exc:
         return _fail(exc, 2)
-    # Its link gateway is stopped while the controller's key for it still works.
-    try:
-        stopped = nodes.stop_gateway(config_dir, repo_root, before, args.name)
-    except executor.ExecutorError as exc:
-        # Never enrolled, or no host key pinned: as good as a node that does not answer.
-        stopped = executor.Result(3, "", str(exc))
+    # Its link gateway is stopped while the controller's key for it still works. A node
+    # that never got a bundle has none running.
+    stopped: executor.Result | None = None
+    if nodes.read_state(config_dir, args.name).get("bundle_pushed_at"):
+        try:
+            stopped = nodes.stop_gateway(config_dir, repo_root, before, args.name)
+        except executor.ExecutorError as exc:
+            stopped = executor.Result(3, "", str(exc))
     try:
         topo = nodes.unregister(config_dir, repo_root, args.name)
     except nodes.NodeError as exc:
@@ -81,9 +92,9 @@ def cmd_node_unregister(args: argparse.Namespace) -> int:
     if _project(config_dir, repo_root) != 0:
         return 3
     print(f"Node '{args.name}' removed. {len(topo.nodes)} node(s) left.")
-    if stopped.ok:
+    if stopped is not None and stopped.ok:
         print("Its link gateway is stopped.")
-    else:
+    elif stopped is not None:
         detail = (stopped.stderr or stopped.stdout).strip().splitlines()
         print(
             f"WARNING: could not stop the link gateway on '{args.name}'"
@@ -250,10 +261,10 @@ def cmd_node_push(args: argparse.Namespace) -> int:
         # CA only works when both ends of a link have it.
         for name in names:
             if nodes.gateway_outdated(config_dir, name):
-                print(f"node {name}: restarting its link gateway", flush=True)
+                print(f"node {name}: reloading its link gateway", flush=True)
                 run = nodes.executor(config_dir, repo_root, name)
-                if not run.run(["compose-restart", link.GATEWAY_SERVICE]).ok:
-                    raise nodes.NodeError(f"node '{name}': could not restart its link gateway")
+                if not run.run(["gateway-reload"]).ok:
+                    raise nodes.NodeError(f"node '{name}': could not reload its link gateway")
                 nodes.record_gateway_restart(config_dir, name)
     except (nodes.NodeError, executor.ExecutorError) as exc:
         return _fail(exc)

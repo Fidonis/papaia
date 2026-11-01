@@ -257,6 +257,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
         _print_findings(findings)
         if not findings.ok:
             return SETUP_REFUSED
+    else:
+        # A repeated setup of a distributed installation: the new values against the
+        # placement it has, before anything is written.
+        existing = _load_topology(config_dir)
+        if existing is None:
+            return 3
+        if existing.distributed:
+            env = dict(tree.get("", {}))
+            env.setdefault("DOMAIN_SERVER", tree.get("ai/librechat", {}).get("DOMAIN_SERVER", ""))
+            profiles = [p for p in env.get("COMPOSE_PROFILES", "").split(",") if p]
+            findings = topology.validate(
+                existing, active_profiles=profiles, env=env, repo_root=repo_root
+            )
+            _print_findings(findings)
+            if not findings.ok:
+                return SETUP_REFUSED
 
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
@@ -783,6 +799,12 @@ def cmd_upgrade_plan(args: argparse.Namespace) -> int:
         due = migrations.pending(found, args.from_version, args.to_version, applied)
     except ValueError as exc:
         return _fail(exc)
+    if args.check_markers:
+        problems = [m.marker_problem for m in due if m.marker_problem]
+        for problem in problems:
+            print(f"ERROR: {problem}", file=sys.stderr)
+        if problems:
+            return 3
     for migration in due:
         # as_posix(): the consumer is bash, which under Git Bash cannot resolve
         # the backslash form a WindowsPath would render.
@@ -1313,6 +1335,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_upgrade_plan = sub.add_parser("upgrade-plan")
     p_upgrade_plan.add_argument("--from", dest="from_version", required=True)
     p_upgrade_plan.add_argument("--to", dest="to_version", required=True)
+    p_upgrade_plan.add_argument("--check-markers", action="store_true")
     p_upgrade_plan.set_defaults(func=cmd_upgrade_plan)
 
     p_upgrade_record = sub.add_parser("upgrade-record")

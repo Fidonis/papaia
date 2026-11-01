@@ -345,6 +345,7 @@ def test_an_empty_node_is_removed_with_its_keys(
     monkeypatch.setattr(nodes, "stop_gateway", fake_stop)
     main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
     assert (distributed.config / "nodes" / "spare").is_dir()
+    nodes.record_state(distributed.config, "spare", bundle_pushed_at="2026-11-01T00:00:00Z")
     assert main(distributed, "node-unregister", "--name=spare") == 0
     assert calls == [("spare", ["compose-down", link.GATEWAY_SERVICE])]
     assert "spare" not in topology.load_config(distributed.config).nodes
@@ -362,20 +363,59 @@ def test_a_node_that_does_not_answer_is_removed_with_a_warning(
         lambda *a: executor.Result(255, "", "ssh: connect to host 10.0.4.10: timed out"),
     )
     main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
+    nodes.record_state(distributed.config, "spare", bundle_pushed_at="2026-11-01T00:00:00Z")
     assert main(distributed, "node-unregister", "--name=spare") == 0
     assert "spare" not in topology.load_config(distributed.config).nodes
     err = capsys.readouterr().err
     assert "could not stop the link gateway on 'spare'" in err and "timed out" in err
 
 
-def test_a_node_without_a_pinned_host_key_is_removed_with_a_warning(
+def test_a_node_that_never_got_a_bundle_is_removed_without_a_warning(
     distributed: Installation, capsys
 ):
     main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
     assert main(distributed, "node-unregister", "--name=spare") == 0
     assert "spare" not in topology.load_config(distributed.config).nodes
     assert not (distributed.config / "nodes" / "spare").exists()
+    assert "could not stop the link gateway" not in capsys.readouterr().err
+
+
+def test_a_node_with_a_bundle_but_no_pinned_key_is_removed_with_a_warning(
+    distributed: Installation, capsys
+):
+    main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
+    nodes.record_state(distributed.config, "spare", bundle_pushed_at="2026-11-01T00:00:00Z")
+    assert main(distributed, "node-unregister", "--name=spare") == 0
     assert "could not stop the link gateway on 'spare'" in capsys.readouterr().err
+
+
+def test_a_node_without_a_pinned_key_is_a_row_of_the_list(distributed: Installation, capsys):
+    main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
+    capsys.readouterr()
+    assert main(distributed, "node-list", "--json", "--check") == 0
+    rows = {r["name"]: r for r in json.loads(capsys.readouterr().out)}
+    assert rows["spare"]["check"]["reachable"] is False
+    assert rows["spare"]["host_key_pinned"] is False
+
+
+def test_a_node_that_cannot_be_set_up_leaves_no_trace(
+    distributed: Installation, monkeypatch, capsys
+):
+    before = (distributed.config / "deployment.yaml").read_text()
+
+    def broken(*a, **k):
+        raise nodes.NodeError("ssh-keygen: No user exists for uid 1000")
+
+    monkeypatch.setattr(nodes, "ensure_keypair", broken)
+    assert main(distributed, "node-register", "--name=spare", "--address=10.0.4.10") == 2
+    assert (distributed.config / "deployment.yaml").read_text() == before
+
+
+def test_a_restored_tree_forgets_what_the_gateways_loaded(distributed: Installation):
+    nodes.record_gateway_restart(distributed.config, "edge")
+    assert not nodes.gateway_outdated(distributed.config, "edge")
+    nodes.forget_gateway_restarts(distributed.config)
+    assert nodes.gateway_outdated(distributed.config, "edge")
 
 
 def test_a_node_that_cannot_be_removed_is_not_touched(distributed: Installation, monkeypatch):
@@ -442,7 +482,7 @@ def pushes(distributed: Installation, monkeypatch) -> tuple[list, set]:
 
 
 def restarts(log: list) -> list[str]:
-    return [name for name, verb in log if verb == "compose-restart"]
+    return [name for name, verb in log if verb == "gateway-reload"]
 
 
 def test_a_push_restarts_the_gateways_only_when_their_link_files_changed(
@@ -452,7 +492,7 @@ def test_a_push_restarts_the_gateways_only_when_their_link_files_changed(
     assert main(distributed, "node-push", "--all") == 0
     # The controller too, and every bundle is in place before the first restart.
     assert restarts(log) == ["internal", "edge"]
-    assert log.index(("edge", "bundle-put")) < log.index(("internal", "compose-restart"))
+    assert log.index(("edge", "bundle-put")) < log.index(("internal", "gateway-reload"))
     log.clear()
     assert main(distributed, "node-push", "--all") == 0
     assert restarts(log) == []
@@ -472,9 +512,9 @@ def test_a_failed_gateway_restart_is_reported_and_tried_again(
     distributed: Installation, pushes, capsys
 ):
     log, failing = pushes
-    failing.add(("edge", "compose-restart"))
+    failing.add(("edge", "gateway-reload"))
     assert main(distributed, "node-push", "--all") == 3
-    assert "could not restart its link gateway" in capsys.readouterr().err
+    assert "could not reload its link gateway" in capsys.readouterr().err
     failing.clear()
     log.clear()
     assert main(distributed, "node-push", "--all") == 0

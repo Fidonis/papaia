@@ -286,11 +286,33 @@ def test_a_migration_names_the_service_whose_data_it_reshapes(tmp_path):
         ("# papaia-migration: runs-with = keycloak", "Malformed migration marker"),
     ],
 )
-def test_a_migration_marker_with_a_typo_is_refused(tmp_path, marker: str, fragment: str):
+def test_a_migration_marker_with_a_typo_is_named_and_a_single_host_ignores_it(
+    tmp_path, marker: str, fragment: str
+):
     path = tmp_path / "1.9.0__x.sh"
     path.write_text(f"#!/usr/bin/env bash\n{marker}\n")
-    with pytest.raises(ValueError, match=fragment):
-        migrations._parse_name(path)
+    parsed = migrations._parse_name(path)
+    assert parsed.runs_with == "" and fragment in parsed.marker_problem
+
+
+def test_the_shipped_migrations_have_usable_markers():
+    shipped = Path(__file__).resolve().parents[1] / "migrations"
+    assert [m.id for m in migrations.discover(shipped.parents[1]) if m.marker_problem] == []
+
+
+def test_a_distributed_upgrade_refuses_a_bad_marker_in_its_preview(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    (repo / "tools" / "migrations").mkdir(parents=True)
+    (repo / "tools" / "migrations" / "9.9.0__x.sh").write_text(
+        "#!/usr/bin/env bash\n# papaia-migration: runs-with=libre-chat\n"
+    )
+    config = tmp_path / "config"
+    config.mkdir()
+    base = ["--repo-root", str(repo), "--config-dir", str(config), "upgrade-plan"]
+    flags = ["--from=1.0.0", "--to=9.9.0"]
+    assert cli.main([*base, *flags]) == 0
+    assert cli.main([*base, *flags, "--check-markers"]) == 3
+    assert "unknown service 'libre-chat'" in capsys.readouterr().err
 
 
 def test_migrations_run_where_their_data_lives_and_the_ledger_says_where(fake, monkeypatch):

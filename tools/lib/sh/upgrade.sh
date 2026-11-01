@@ -195,6 +195,10 @@ cmd_upgrade() {
         # has to answer before anything is touched.
         info "Checking that every node answers..."
         py_cli cluster-upgrade-check || exit 3
+        # Here, not when the migrations run: by then the stack is down and the checkout moved.
+        info "Checking where the migrations run..."
+        _py_cli_at "$worktree" upgrade-plan --from="$current" --to="$target" --check-markers \
+            >/dev/null || exit 3
     fi
 
     if [ "$dry_run" -eq 1 ]; then

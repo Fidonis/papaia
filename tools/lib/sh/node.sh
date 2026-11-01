@@ -165,9 +165,9 @@ _node_add() {
         -o UserKnownHostsFile="$CONFIG_DIR/nodes/$name/ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null)
     # The archive goes into a directory mktemp made on the node, owned by the admin login and
     # closed to everyone else, so no other user there can put a file in its place.
-    local remote_dir
-    remote_dir="$(ssh -p "$admin_port" "${ssh_opts[@]}" -- "$admin_target" 'mktemp -d' 2>/dev/null | tr -d '\r')"
-    if ! [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+    local remote_dir=""
+    if ! remote_dir="$(ssh -p "$admin_port" "${ssh_opts[@]}" -- "$admin_target" 'mktemp -d' | tr -d '\r')" \
+        || ! [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
         rm -f "$archive"
         error "Could not create a temporary directory on $admin_target."
         exit 3

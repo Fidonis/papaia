@@ -48,38 +48,42 @@ class Migration:
     # `# papaia-migration: runs-with=<service>` line. In a distributed installation it
     # runs on that service's node; without one it runs on the controller.
     runs_with: str = ""
+    # Why the marker is unusable, or "". A single host ignores the marker, so this stops
+    # only a distributed installation, and there in the upgrade's preview.
+    marker_problem: str = ""
 
 
 _MARKER_RE = re.compile(r"^#\s*papaia-migration:")
 _RUNS_WITH_RE = re.compile(r"^#\s*papaia-migration:\s*runs-with=([a-z][a-z0-9-]*)\s*$")
 
 
-def _runs_with(path: Path) -> str:
-    """The marker's service. A marker that does not parse, or names no catalogue service,
-    is refused: a typo would otherwise run the migration on the controller unnoticed."""
+def _runs_with(path: Path) -> tuple[str, str]:
+    """(the marker's service, why it is unusable). A distributed upgrade refuses a marker
+    that does not parse or names no catalogue service: a typo would otherwise run the
+    migration on the controller unnoticed."""
     from .topology import CATALOGUE  # Local import: topology imports half of lib.
 
     try:
         head = path.read_text(encoding="utf-8").splitlines()[:40]
     except (OSError, UnicodeDecodeError):
-        return ""
+        return "", ""
     for line in head:
         line = line.strip()
         if not _MARKER_RE.match(line):
             continue
         match = _RUNS_WITH_RE.match(line)
         if match is None:
-            raise ValueError(
+            return "", (
                 f"Malformed migration marker in {path.name}: {line!r}"
                 " (expected '# papaia-migration: runs-with=<service>')"
             )
         if match.group(1) not in CATALOGUE:
-            raise ValueError(
+            return "", (
                 f"Migration {path.name} runs with unknown service '{match.group(1)}'"
                 f" (one of {', '.join(CATALOGUE)})"
             )
-        return match.group(1)
-    return ""
+        return match.group(1), ""
+    return "", ""
 
 
 def migrations_dir(repo_root: Path) -> Path:
@@ -101,8 +105,15 @@ def _parse_name(path: Path) -> Migration:
             f"Malformed migration file name: {path.name}"
             f" ({exc}; expected {_FILENAME_PATTERN})"
         ) from exc
+    runs_with, marker_problem = _runs_with(path)
     return Migration(
-        id=stem, version=version, slug=slug, kind=suffix, path=path, runs_with=_runs_with(path)
+        id=stem,
+        version=version,
+        slug=slug,
+        kind=suffix,
+        path=path,
+        runs_with=runs_with,
+        marker_problem=marker_problem,
     )
 
 

@@ -39,6 +39,11 @@ Two presets cover the common split into an edge node and an internal node:
 **Public URLs.** The bundled proxy serves every public URL by host name from its node, so each
 URL is a host name without a port (`https://chat.example.org`, `https://auth.example.org`).
 
+papaia-manager, Qdrant and LocalAI are **published only on request**. Without a public URL of
+their own (`--manager-host`, `--qdrant-host`, `--localai-host`), the proxy has no route to them,
+and they stay reachable from the internal network only. See the security notes before you
+publish the manager through a proxy at the edge.
+
 **Prerequisites on every node:** Docker with the compose plugin (2.20 or newer), Python 3.10
 or newer with PyYAML, an SSH server. The nodes' clocks have to be synchronized: tokens carry
 `exp` and `nbf`, and a node minutes off refuses every sign-in.
@@ -131,7 +136,7 @@ This lists every connection between the nodes. For `dmz-split`:
 |---|---|---|---|
 | internal | edge | 22/tcp | control channel (SSH, forced command) |
 | internal | edge | 7443/tcp | link: keycloak, litellm, the public auth host |
-| edge | internal | 7443/tcp | link: librechat, localai, papaia-manager, qdrant |
+| edge | internal | 7443/tcp | link: librechat, and whatever is published (localai, papaia-manager, qdrant) |
 
 Plus 80 and 443 from the users to the proxy's node. papaia never changes a firewall; open
 exactly these. `doctor` names a missing rule when a link cannot be reached.
@@ -240,6 +245,11 @@ in that node's bundle, and `start --addons`, `addon start` and `addon stop` run 
 - **The edge is the trust anchor of whatever runs there.** With Keycloak at the edge, a
   compromised edge node can issue tokens for every service. Choose `dmz-edge` when identity has
   to stay internal.
+- **The manager stays internal unless you publish it.** It holds the Docker socket of the
+  controller. Publishing it through a proxy at the edge opens a route from the edge to it, and
+  with `dmz-split` the same edge node can issue tokens. A compromised edge node could then act
+  as an administrator of the manager. Keep the manager on the internal network, or choose
+  `dmz-edge` if you publish it.
 - **The LLM gateway sees everything sent to a model.** With LiteLLM at the edge, prompts and
   the document text that RAG and the add-ons hand to a model pass through the edge node.
 - **The control channel.** The `papaia` user is in the Docker group, which is root-equivalent.

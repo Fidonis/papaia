@@ -94,6 +94,8 @@ def test_the_allowlist_is_exactly_the_documented_verbs():
         "compose-down",
         "compose-stop",
         "compose-restart",
+        "gateway-reload",
+        "links",
         "compose-ps",
         "compose-pull",
         "compose-logs",
@@ -206,6 +208,36 @@ def test_an_unexpected_error_is_audited_and_exits_3(tmp_path: Path, monkeypatch,
     assert "failed: PermissionError" in capsys.readouterr().err
     line = ctx.audit_log.read_text(encoding="utf-8")
     assert "verb=ping" in line and "rc=3" in line
+
+
+def test_a_terminated_call_leaves_an_audit_line(tmp_path: Path, monkeypatch):
+    ctx = remote_node(tmp_path)
+
+    def terminated(ctx, args):
+        raise node_shell.Terminated(15)
+
+    monkeypatch.setitem(node_shell.VERBS, "ping", terminated)
+    assert run(ctx, "ping") == 143
+    assert "rc=143" in ctx.audit_log.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "running, expected", [("abc\n", ["up", "-d", "--force-recreate"]), ("", None)]
+)
+def test_only_a_running_gateway_is_reloaded(
+    projected: Installation, monkeypatch, running: str, expected
+):
+    ctx = controller_ctx(projected, "edge")
+    monkeypatch.setattr(
+        node_shell.subprocess,
+        "run",
+        lambda *a, **k: node_shell.subprocess.CompletedProcess(a, 0, running, ""),
+    )
+    assert run(ctx, "gateway-reload") == 0
+    if expected is None:
+        assert ctx.run.calls == []
+    else:
+        assert " ".join(expected) in " ".join(ctx.run.calls[0])
 
 
 def test_an_interrupt_still_leaves_an_audit_line(tmp_path: Path, monkeypatch):

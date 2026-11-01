@@ -72,8 +72,8 @@ whose data it reshapes, with a line among its first 40:
 It then runs on that service's node, from the node's checkout of the target release, with
 `PAPAIA_CONFIG_DIR` pointing at the node's configuration. The ledger records the node it ran on. The
 service must be one of the topology catalogue's (`keycloak`, `litellm`, `librechat`, ...): a
-marker that does not parse or names an unknown service stops the upgrade before any
-migration runs.
+marker that does not parse or names an unknown service stops a distributed upgrade in its
+preview (`--dry-run` too), before anything is stopped.
 A single host ignores the line.
 
 Shell migrations use `set -euo pipefail` and must pass

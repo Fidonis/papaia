@@ -342,9 +342,34 @@ def test_the_link_port_must_not_collide_with_a_published_port():
     )
 
 
+PUBLISHED_MANAGER = {"MANAGER_PUBLIC_URL": "https://manager.example.org"}
+
+
 def test_a_placement_the_link_cannot_carry_is_an_error():
     topo = two_nodes(nginx="edge", librechat="edge", websearch="edge")
-    assert any("on port 8000" in e for e in errors(topo))
+    found = errors(topo, env=PUBLISHED_MANAGER)
+    message = next(e for e in found if "on port 8000" in e)
+    # It names who calls them, and does not suggest moving what stays on the controller.
+    assert "called by" in message and "librechat" in message and "nginx" in message
+    assert "'papaia-manager' on 'edge'" not in message
+
+
+def test_the_proxy_and_librechat_fit_on_the_edge_while_the_manager_is_internal():
+    topo = two_nodes(nginx="edge", librechat="edge", websearch="edge")
+    assert not any("on port 8000" in e for e in errors(topo, env={}))
+
+
+def test_an_unpublished_manager_needs_no_public_url():
+    topo = two_nodes(**topology.preset_placement("dmz-split", "edge"))
+    assert errors(topo, env={"MANAGER_PUBLIC_URL": "http://localhost:8120"}) == []
+    published = {"MANAGER_PUBLIC_URL": "http://localhost:8120", "DOMAIN_SERVER": "http://x:1"}
+    assert any("LibreChat" in e for e in errors(topo, env=published))
+
+
+def test_the_controllers_root_is_not_held_against_it():
+    topo = two_nodes()
+    topo.nodes["internal"] = Node("internal", address="10.0.2.10", executor="local", root="x y")
+    assert topology.unsafe_node_field(topo.nodes["internal"]) == ""
 
 
 def test_the_link_port_must_be_unprivileged():
@@ -742,11 +767,11 @@ def _wizard(answers: list[str]) -> list[str]:
 
 def test_the_wizard_places_web_search_with_librechat():
     # several machines; controller internal at 10.0.2.10; edge at 10.0.1.10, default ssh;
-    # per service: nginx internal, keycloak internal, smtp internal, litellm edge,
+    # per service: nginx edge, keycloak internal, smtp internal, litellm edge,
     # librechat edge, localai internal; default link port.
     args = _wizard(
         ["2", "", "10.0.2.10", "", "10.0.1.10", "", "3"]
-        + ["internal", "internal", "internal", "edge", "edge", "internal", ""]
+        + ["edge", "internal", "internal", "edge", "edge", "internal", ""]
     )
     assert "--place=librechat=edge" in args and "--place=websearch=edge" in args
     topo = topology.from_flags(

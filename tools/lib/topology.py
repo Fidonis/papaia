@@ -86,6 +86,11 @@ NODE_MANIFEST = "node.json"
 # The key of a node's root .env naming the profiles of the whole installation.
 ACTIVE_MODULES_KEY = common.ACTIVE_MODULES_KEY
 
+# Services the proxy publishes only when asked to: they stay on the internal network unless
+# their public URL is a host name of its own. The manager holds the Docker socket and Qdrant
+# the documents, so a proxy at the edge reaches them only by decision, not by default.
+PUBLISHED_ON_REQUEST = ("localai", "rag", "manager")
+
 _NODE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 _ADDRESS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
 _SSH_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
@@ -334,7 +339,8 @@ def unsafe_node_field(node: Node) -> str:
         return f"ssh host {node.ssh_host!r}"
     if not _SSH_USER_RE.match(node.ssh_user):
         return f"ssh user {node.ssh_user!r}"
-    if root_problem(node.root):
+    # The controller's root is never used: it runs from its own checkout and config dir.
+    if not node.is_local and root_problem(node.root):
         return f"root {node.root!r}"
     return ""
 
@@ -601,6 +607,10 @@ _VARIANT_HARDWARE = {
 }
 
 
+def is_public_url(url: str) -> bool:
+    return _is_subdomain_url(url)
+
+
 def _is_subdomain_url(url: str) -> bool:
     try:
         parts = urlsplit(url)
@@ -793,7 +803,7 @@ def validate(
     if PROXY_PROFILE in active_profiles:
         for service in active:
             spec = CATALOGUE[service]
-            if spec.public_url is None:
+            if spec.public_url is None or service in PUBLISHED_ON_REQUEST:
                 continue
             url = env.get(spec.public_url[1], "")
             if url and not _is_subdomain_url(url):

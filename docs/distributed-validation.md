@@ -18,9 +18,13 @@ throwaway config directory. Record the result with the report template at the en
 2. On B, in a fresh checkout and with a throwaway config directory:
 
    ```sh
+   # Only until the release is tagged: nodes get a release tag, and this ships the checkout.
+   export PAPAIA_ALLOW_UNTAGGED_CHECKOUT=1
    tools/papaia-ctl setup --config-dir=/tmp/papaia-validate --topology=distributed \
-       --node internal=<B address> --node edge=<A address>,ssh=papaia@<A address> \
-       --preset=dmz-split --app-host=https://papaia.<test domain> -y
+       --node=internal=<B address> --node=edge=<A address>,ssh=papaia@<A address> \
+       --preset=dmz-split --app-host=https://papaia.<test domain> \
+       --auth-host=https://auth.<test domain> --librechat-host=https://chat.<test domain> \
+       --litellm-host=https://llm.<test domain> -y
    tools/papaia-ctl topology firewall --config-dir=/tmp/papaia-validate
    ```
 

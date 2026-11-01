@@ -515,6 +515,9 @@ def run_restore(
             _say(f"  config dir {cluster.config_dir}")
             if not _restore_config_dir(cluster, snapshot, configdir.archive):
                 raise ClusterError("the configuration directory could not be restored")
+            # What a gateway loaded is on the node, not in a restored record: a link file
+            # that changed since the backup must still get a restart.
+            nodes.forget_gateway_restarts(cluster.config_dir)
         # The restored tree decides from here on: its topology, its bundles.
         restored = cluster_module.load(cluster.config_dir, cluster.repo_root)
         from . import cli
@@ -554,6 +557,9 @@ def run_migrations(cluster: Cluster, from_version: str, to_version: str) -> int:
     if not due:
         _say("No migrations to run.")
         return 0
+    problem = next((m.marker_problem for m in due if m.marker_problem), "")
+    if problem:
+        raise ClusterError(problem)
     _say(f"Running {len(due)} migration(s)...")
     for migration in due:
         service = migration.runs_with

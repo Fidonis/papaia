@@ -44,6 +44,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
@@ -383,22 +384,26 @@ def probe_link(peer: str, address: str, port: int, link_dir: Path, *, timeout: f
     return result
 
 
+def _probe_links(ctx: Context) -> list[dict]:
+    edges_file = ctx.bundle / link.LINK_DIR / "edges.json"
+    if not edges_file.is_file():
+        return []
+    summary = json.loads(edges_file.read_text(encoding="utf-8"))
+    peers: dict[str, str] = {}
+    for out in summary.get("outgoing") or []:
+        peers.setdefault(out["peer"], out["peer_address"])
+    return [
+        probe_link(peer, address, int(summary["link_port"]), ctx.bundle / link.LINK_DIR)
+        for peer, address in sorted(peers.items())
+    ]
+
+
 def verb_doctor(ctx: Context, args: list[str]) -> int:
     _no_args(args)
     from . import doctor
 
     report = doctor.run_checks(ctx.bundle, ctx.checkout, skip=["addon_compat"])
-    edges_file = ctx.bundle / link.LINK_DIR / "edges.json"
-    links: list[dict] = []
-    if edges_file.is_file():
-        summary = json.loads(edges_file.read_text(encoding="utf-8"))
-        peers = {}
-        for out in summary.get("outgoing") or []:
-            peers.setdefault(out["peer"], out["peer_address"])
-        for peer, address in sorted(peers.items()):
-            links.append(
-                probe_link(peer, address, int(summary["link_port"]), ctx.bundle / link.LINK_DIR)
-            )
+    links = _probe_links(ctx)
     own = link.cert_not_after(ctx.bundle / link.LINK_DIR / "node.crt")
     print(
         json.dumps(
@@ -413,6 +418,13 @@ def verb_doctor(ctx: Context, args: list[str]) -> int:
         ),
         flush=True,
     )
+    return 0
+
+
+def verb_links(ctx: Context, args: list[str]) -> int:
+    """The link probes alone, for a caller that polls: `doctor` also measures Docker."""
+    _no_args(args)
+    print(json.dumps({"node": ctx.node, "links": _probe_links(ctx)}), flush=True)
     return 0
 
 
@@ -607,6 +619,25 @@ def verb_compose_restart(ctx: Context, args: list[str]) -> int:
 def verb_compose_pull(ctx: Context, args: list[str]) -> int:
     names, _ = _split_options(args, set())
     return _compose(ctx, "pull", *compose_targets(ctx, names))
+
+
+def verb_gateway_reload(ctx: Context, args: list[str]) -> int:
+    """Make a running link gateway load its files and its Compose settings. `restart` would
+    do neither for a changed override, and it would start a gateway someone stopped."""
+    _no_args(args)
+    materialize(ctx)
+    listing = subprocess.run(
+        compose_argv(ctx, "ps", "--quiet", "--status", "running", link.GATEWAY_SERVICE),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        raise Failed((listing.stderr or "compose ps failed").strip())
+    if not listing.stdout.strip():
+        print("the link gateway is not running; it loads its files when it starts", flush=True)
+        return 0
+    return ctx.run(compose_argv(ctx, "up", "-d", "--force-recreate", link.GATEWAY_SERVICE))
 
 
 def verb_compose_ps(ctx: Context, args: list[str]) -> int:
@@ -1042,10 +1073,12 @@ VERBS: dict[str, Verb] = {
     "version": verb_version,
     "status": verb_status,
     "doctor": verb_doctor,
+    "links": verb_links,
     "compose-up": verb_compose_up,
     "compose-down": verb_compose_down,
     "compose-stop": verb_compose_stop,
     "compose-restart": verb_compose_restart,
+    "gateway-reload": verb_gateway_reload,
     "compose-ps": verb_compose_ps,
     "compose-pull": verb_compose_pull,
     "compose-logs": verb_compose_logs,
@@ -1100,9 +1133,24 @@ def execute(ctx: Context, raw: str | None) -> int:
     except Exception as exc:  # noqa: BLE001 - every call ends with an exit code and an audit line
         print(f"failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         code = 3
+    except Terminated as exc:
+        code = exc.code
     finally:
         audit(ctx, words, code, started)
     return code
+
+
+class Terminated(BaseException):
+    """SIGTERM or SIGHUP, for instance a dropped SSH session: the call still gets its audit
+    line. A BaseException, so that no verb's error handling takes it for a failure."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.code = 128 + signum
+
+
+def _on_signal(signum: int, _frame: object) -> None:
+    raise Terminated(signum)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1111,6 +1159,8 @@ def main(argv: list[str] | None = None) -> int:
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGHUP, _on_signal)
     return execute(ctx, os.environ.get("SSH_ORIGINAL_COMMAND"))
 
 

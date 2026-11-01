@@ -21,6 +21,16 @@ from lib.topology import Node, Topology
 ENV = {
     "AUTH_PROVIDER": "internal_keycloak",
     "AUTH_HOST": "https://auth.example.org",
+    "MANAGER_PUBLIC_URL": "https://manager.example.org",
+    "QDRANT_PUBLIC_URL": "https://qdrant.example.org",
+    "LOCALAI_PUBLIC_URL": "https://localai.example.org",
+}
+# What an installation has until someone publishes those three.
+INTERNAL_ENV = {
+    "AUTH_PROVIDER": "internal_keycloak",
+    "AUTH_HOST": "https://auth.example.org",
+    "MANAGER_PUBLIC_URL": "http://localhost:8120",
+    "QDRANT_PUBLIC_URL": "https://papaia.example.org:6333",
 }
 
 
@@ -66,6 +76,23 @@ def test_no_public_auth_alias_for_an_external_provider():
     env = {"AUTH_PROVIDER": "external_oidc", "AUTH_HOST": "https://auth.example.org"}
     plan = link.plan(split(), [p for p in ALL_PROFILES if p != "keycloak"], env)
     assert "auth.example.org" not in plan.for_node("internal").aliases
+
+
+def test_the_manager_stays_internal_until_it_is_published():
+    plan = link.plan(split(), ALL_PROFILES, INTERNAL_ENV)
+    # LocalAI stays: LiteLLM at the edge calls it. The proxy does not.
+    assert plan.for_node("edge").aliases == ["librechat", "localai"]
+    assert "papaia-manager" not in plan.for_node("internal").inbound
+    assert "qdrant" not in plan.for_node("internal").inbound
+
+
+def test_publishing_one_service_opens_only_that_route():
+    env = {**INTERNAL_ENV, "MANAGER_PUBLIC_URL": "https://manager.example.org"}
+    assert link.plan(split(), ALL_PROFILES, env).for_node("edge").aliases == [
+        "librechat",
+        "localai",
+        "papaia-manager",
+    ]
 
 
 def test_a_target_only_admits_the_nodes_whose_services_call_it():

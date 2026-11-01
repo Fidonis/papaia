@@ -42,7 +42,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import common
+from . import common, topology
 from .topology import Node, Topology, active_services
 
 GATEWAY_PROFILE = "link-gateway"
@@ -176,6 +176,15 @@ def _auth_host(env: dict[str, str]) -> str | None:
     return host
 
 
+def _published(edge: Edge, env: dict[str, str]) -> bool:
+    """Whether the proxy publishes the edge's target. A service in PUBLISHED_ON_REQUEST has
+    no route from the proxy until its public URL is a host name of its own."""
+    if edge.caller != "nginx" or edge.target not in topology.PUBLISHED_ON_REQUEST:
+        return True
+    public_url = topology.CATALOGUE[edge.target].public_url
+    return public_url is not None and topology.is_public_url(env.get(public_url[1], ""))
+
+
 def edges(topo: Topology, active: list[str], env: dict[str, str] | None = None) -> list[Edge]:
     """The edges that cross a node boundary in this topology."""
     found = [
@@ -184,6 +193,7 @@ def edges(topo: Topology, active: list[str], env: dict[str, str] | None = None) 
         if edge.caller in active
         and edge.target in active
         and topo.node_of(edge.caller) != topo.node_of(edge.target)
+        and _published(edge, env or {})
     ]
     auth_host = _auth_host(env or {})
     if auth_host and "keycloak" in active and "nginx" in active:
@@ -200,6 +210,23 @@ def _target_host(edge: Edge) -> tuple[str, int]:
     if edge.target == "nginx" and edge.port == 443:
         return "nginx-proxy-manager", 443
     return edge.host, edge.port
+
+
+def _callers(host: str) -> str:
+    """Who dials an address, for a message that says what to move."""
+    found = sorted({edge.caller for edge in EDGES if edge.host == host})
+    return "called by " + ", ".join(found) if found else "called from this node"
+
+
+def _or_move(topo: Topology, node: str, *hosts: str) -> str:
+    """The second way out, for the targets that may run on this node at all."""
+    movable = [
+        host
+        for host in hosts
+        for edge in EDGES
+        if edge.host == host and edge.target not in topology.CONTROLLER_ONLY
+    ]
+    return f", or '{movable[0]}' on '{node}'" if movable else ""
 
 
 def plan(topo: Topology, active_profiles: list[str], env: dict[str, str]) -> LinkPlan:
@@ -246,10 +273,10 @@ def plan(topo: Topology, active_profiles: list[str], env: dict[str, str]) -> Lin
             other = by_port.setdefault(route.port, route.host)
             if other != route.host:
                 raise LinkError(
-                    f"node '{link.node}' reaches both '{other}' and '{route.host}' on port"
-                    f" {route.port} on other nodes; the gateway can carry only one of them"
-                    " per port. Place what calls them elsewhere, or one of them on"
-                    f" '{link.node}'."
+                    f"node '{link.node}' reaches both '{other}' ({_callers(other)}) and"
+                    f" '{route.host}' ({_callers(route.host)}) on port {route.port} on other"
+                    " nodes; the gateway can carry only one of them per port. Place the"
+                    f" callers elsewhere{_or_move(topo, link.node, other, route.host)}."
                 )
         if link.inbound and topo.link_port in {r.port for r in link.routes}:
             raise LinkError(

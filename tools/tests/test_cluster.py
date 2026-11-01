@@ -342,7 +342,7 @@ def test_a_failing_node_stops_the_sequence_with_a_clear_message(distributed, mon
 
 def test_start_restarts_a_gateway_only_when_its_link_files_changed(distributed, monkeypatch):
     def gateway_restarts(log) -> list[str]:
-        return [n for n, c in log if n != "push" and c[0] == "compose-restart"]
+        return [n for n, c in log if n != "push" and c[0] == "gateway-reload"]
 
     c, log = fake_cluster(distributed, monkeypatch)
     assert cluster.start(c) == 0

@@ -100,6 +100,10 @@ ADR 0009 places services on several nodes. Two things are then missing:
   distributed case. Every service dials the name it always dialled.
 - **Positive**: The gateway configuration and the firewall matrix come from one table, so
   the rules an operator opens are the connections the gateways make.
+- **Positive**: The proxy reaches papaia-manager, Qdrant and LocalAI only when their public URL
+  is a host name of its own. By default a proxy at the edge has no route to the manager, which
+  holds the controller's Docker socket. An installation that publishes it accepts that a
+  compromised edge node reaches it, and with Keycloak at the edge can also sign in to it.
 - **Negative**: Two remote services on the same port cannot be reached from one node, since
   the gateway has one address there. Validation refuses such a placement and names both
   services.
