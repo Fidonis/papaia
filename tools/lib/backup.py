@@ -89,6 +89,23 @@ class Artifact:
     module: str = ""
     services: list[str] = field(default_factory=list)
     profiles: list[str] = field(default_factory=list)
+    # The node the source lives on, in a distributed installation only. Written into the
+    # plan and the manifest only when set, so a single-host manifest reads as before.
+    node: str = ""
+
+
+def _artifact_fields(artifact: Artifact) -> dict:
+    """The grouping fields a plan and a manifest record, `node` only where it is set."""
+    fields: dict = {
+        "owner": artifact.owner,
+        "project": artifact.project,
+        "module": artifact.module,
+        "services": artifact.services,
+        "profiles": artifact.profiles,
+    }
+    if artifact.node:
+        fields["node"] = artifact.node
+    return fields
 
 
 @dataclass
@@ -577,11 +594,7 @@ def write_plan(plan: BackupPlan) -> None:
                         "kind": a.kind,
                         "archive": a.archive,
                         "source": a.source,
-                        "owner": a.owner,
-                        "project": a.project,
-                        "module": a.module,
-                        "services": a.services,
-                        "profiles": a.profiles,
+                        **_artifact_fields(a),
                     }
                     for a in plan.artifacts
                 ],
@@ -616,6 +629,7 @@ def read_plan(snapshot: Path) -> BackupPlan:
                 module=str(a.get("module", "")),
                 services=[str(s) for s in (a.get("services") or [])],
                 profiles=[str(p) for p in (a.get("profiles") or [])],
+                node=str(a.get("node", "")),
             )
             for a in (data.get("artifacts") or [])
         ],
@@ -654,11 +668,7 @@ def write_manifest(
             "kind": a.kind,
             "archive": a.archive,
             "target": a.source,
-            "owner": a.owner,
-            "project": a.project,
-            "module": a.module,
-            "services": a.services,
-            "profiles": a.profiles,
+            **_artifact_fields(a),
         }
         for a in plan.artifacts
         if results.get(a.archive, "failed") == "ok"
@@ -725,6 +735,7 @@ def _artifact_of(entry: dict) -> Artifact:
         module=str(entry.get("module", "")),
         services=[str(s) for s in (entry.get("services") or [])],
         profiles=[str(p) for p in (entry.get("profiles") or [])],
+        node=str(entry.get("node", "")),
     )
 
 
@@ -771,7 +782,9 @@ def selectors(manifest: dict) -> list[dict]:
     return list(grouped.values())
 
 
-def parse_selectors(raw: str) -> list[tuple[str, str]]:
+def parse_selectors(
+    raw: str, kinds: tuple[str, ...] = SELECTOR_KINDS
+) -> list[tuple[str, str]]:
     """Split and validate a `--only` value into (kind, name) pairs.
 
     Validation is a refusal, never a repair: every name reaches an argv and a
@@ -786,10 +799,10 @@ def parse_selectors(raw: str) -> list[tuple[str, str]]:
     parsed: list[tuple[str, str]] = []
     for part in parts:
         kind, sep, name = part.partition(":")
-        if not sep or kind not in SELECTOR_KINDS:
+        if not sep or kind not in kinds:
             raise SelectionError(
                 f"Invalid selector {part!r}: expected one of "
-                f"{', '.join(k + ':NAME' for k in SELECTOR_KINDS)}."
+                f"{', '.join(k + ':NAME' for k in kinds)}."
             )
         pattern = _VOLUME_NAME_RE if kind == "volume" else _MODULE_NAME_RE
         if not pattern.match(name):
@@ -804,6 +817,8 @@ def parse_selectors(raw: str) -> list[tuple[str, str]]:
 
 
 def _matches(artifact: Artifact, kind: str, name: str) -> bool:
+    if kind == "node":
+        return artifact.node == name
     if kind == "volume":
         return artifact.kind == "volume" and artifact.source == name
     if kind == "addon":

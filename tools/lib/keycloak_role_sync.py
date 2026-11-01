@@ -274,8 +274,9 @@ def _sync_composites(base_url, ctx, token, realm_def: dict) -> int:
 
 
 def _active_profile_clients(root: dict[str, str]) -> set[str]:
-    """Client IDs the root .env's COMPOSE_PROFILES asks for."""
-    profiles = {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
+    """Client IDs the installation's profiles ask for. Cluster-wide: in a distributed
+    installation Keycloak's node does not run the services the clients belong to."""
+    profiles = common.cluster_profiles(root)
     return {cid for profile, cids in PROFILE_CLIENTS.items() if profile in profiles for cid in cids}
 
 
