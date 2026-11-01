@@ -77,6 +77,23 @@ def generate_secret(key: str) -> str:
     return secrets.token_hex(24)
 
 
+# On a node of a distributed installation, COMPOSE_PROFILES names what runs on that node
+# and this key names the profiles of the whole installation (see lib/topology.py). A
+# single-node .env never carries it.
+ACTIVE_MODULES_KEY = "PAPAIA_ACTIVE_MODULES"
+
+
+def cluster_profiles(root_env: dict[str, str]) -> set[str]:
+    """The Compose profiles switched on for the whole installation.
+
+    For what is decided once for all nodes (realm clients, proxy hosts, whether the mail
+    relay exists), not for what starts on this host: that is COMPOSE_PROFILES."""
+    raw = root_env.get(ACTIVE_MODULES_KEY)
+    if raw is None:
+        raw = root_env.get("COMPOSE_PROFILES", "")
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
 def parse_env_file(path: Path) -> dict[str, str]:
     """Parse a .env-style file into a flat dict. Blank lines, comments, and
     malformed lines are silently skipped."""

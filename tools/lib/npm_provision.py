@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+from . import common
 from .envtree import EnvTree
 
 # Env-tree node holding the bundled proxy's own configuration. The NPM admin
@@ -63,6 +64,21 @@ def _is_subdomain_url(url: str) -> bool:
         return "." in hostname
     except Exception:
         return False
+
+
+# On a node of a distributed installation the proxy's node does not have LibreChat's
+# .env; the node bundle carries the URL in the root .env under this key instead.
+_ROOT_FALLBACK = {("ai/librechat", "DOMAIN_SERVER"): "LIBRECHAT_PUBLIC_URL"}
+
+
+def _public_url(tree: EnvTree, node: str, key: str) -> str:
+    root = tree.get("", {})
+    if not node:
+        return root.get(key, "")
+    fallback = _ROOT_FALLBACK.get((node, key))
+    if fallback and root.get(fallback):
+        return root[fallback]
+    return tree.get(node, {}).get(key, "")
 
 
 def _wait_for_npm(base_url: str, timeout: int = 60) -> None:
@@ -152,6 +168,22 @@ def _create_proxy_host(
         pass
 
 
+# The NPM admin API on the stack's network, for a papaia-ctl that runs in a container.
+NPM_API_IN_STACK = "http://nginx-proxy-manager:81"
+
+
+def _api_base_url(nginx: dict[str, str]) -> str:
+    """Where this process reaches the NPM admin API.
+
+    On the host that is the port published on localhost (`NPM_API_LOCAL_PORT`). In a
+    container (papaia-manager and its runners run `start`, and with it this step, in
+    their own) `localhost` is the container itself; there it is the service on the
+    stack's network, which `start` has joined."""
+    if common.in_container():
+        return NPM_API_IN_STACK
+    return f"http://localhost:{nginx.get('NPM_API_LOCAL_PORT', '8181')}"
+
+
 def provision_npm_hosts(tree: EnvTree) -> bool:
     """Create NPM proxy hosts for all active services, skipping existing ones.
 
@@ -164,8 +196,7 @@ def provision_npm_hosts(tree: EnvTree) -> bool:
         return True
 
     nginx = tree.get(_NGINX_NODE, {})
-    npm_api_port = nginx.get("NPM_API_LOCAL_PORT", "8181")
-    base_url = f"http://localhost:{npm_api_port}"
+    base_url = _api_base_url(nginx)
     email = nginx.get("NPM_ADMIN_EMAIL", "admin@papaia.local")
     password = nginx.get("NPM_ADMIN_PASSWORD", "")
     if not password or password.startswith("GENERATE_"):
@@ -174,7 +205,8 @@ def provision_npm_hosts(tree: EnvTree) -> bool:
             "Run 'papaia-ctl setup' first."
         )
 
-    active_profiles = set(root.get("COMPOSE_PROFILES", "").split(","))
+    # Cluster-wide: the proxy serves the services of every node, not only its own.
+    active_profiles = common.cluster_profiles(root)
 
     print("Waiting for NPM API to become ready...", flush=True)
     try:
@@ -193,7 +225,7 @@ def provision_npm_hosts(tree: EnvTree) -> bool:
     for profile, node, key, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws in _PROXY_HOST_SPECS:
         if profile not in active_profiles:
             continue
-        url = tree.get(node, {}).get(key, "") if node else root.get(key, "")
+        url = _public_url(tree, node, key)
         if not _is_subdomain_url(url):
             skipped_port_based += 1
             continue
