@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import doctor, envtree, executor, link, nodes, status, topology
+from . import doctor, envtree, executor, link, nodes, stack_network, status, topology
 from .topology import CATALOGUE, Topology
 
 # A JWT carries `exp` and `nbf`; services accept a few seconds of skew at most.
@@ -221,6 +221,13 @@ def start(
         if code != 0:
             return _stopped("start", name, services, code)
     warnings = 0
+    # In a container (papaia-manager and its runners) a hook on the controller reaches the
+    # stack over its network; on the host this does nothing.
+    root = envtree.load_config_dir_tree(cluster.config_dir, cluster.repo_root).get("", {})
+    network = root.get("DOCKER_NETWORK") or stack_network.DEFAULT_NETWORK
+    joined, reason = stack_network.join(network)
+    if not joined:
+        print(f"WARNING: cannot join {network}: {reason}", file=sys.stderr, flush=True)
     for hook, service in (("npm-provision", "nginx"), ("keycloak-role-sync", "keycloak")):
         owner = cluster.topology.node_of(service)
         if service not in cluster.active or owner not in names:

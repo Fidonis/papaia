@@ -183,6 +183,10 @@ cmd_start() {
         docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
     fi
 
+    # In a container (papaia-manager and its runners) the provisioning steps reach the stack
+    # over its network, which `up` has just created; on the host this does nothing.
+    py_cli join-stack-network || true
+
     if ! py_cli npm-provision; then
         warn "NPM proxy-host provisioning failed. Once the stack is healthy, run 'papaia-ctl npm-provision' to retry."
     fi
@@ -259,6 +263,7 @@ _provisioning_step() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    py_cli join-stack-network || true
     local mode
     mode="$(_topology_mode)" || exit 3
     if [ "$mode" = "distributed" ]; then

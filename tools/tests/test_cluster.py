@@ -624,6 +624,24 @@ def test_an_unparsable_deployment_yaml_is_still_a_single_host_report(tmp_path: P
     assert json.loads(capsys.readouterr().out)["schema_version"] == 1
 
 
+def test_a_distributed_start_joins_the_network_before_its_hooks(distributed, monkeypatch):
+    order: list[str] = []
+    c, log = fake_cluster(distributed, monkeypatch)
+    real_run = cluster._run
+
+    def run(cluster_, name, command):
+        if command[0] == "hook":
+            order.append("hook")
+        return real_run(cluster_, name, command)
+
+    monkeypatch.setattr(cluster, "_run", run)
+    monkeypatch.setattr(
+        cluster.stack_network, "join", lambda net: (order.append("join") or True, "")
+    )
+    assert cluster.start(c) == 0
+    assert order[:2] == ["join", "hook"]
+
+
 def test_a_hook_is_skipped_for_a_service_the_installation_does_not_run(distributed, capsys):
     env = distributed.config / ".env"
     text = env.read_text().replace(",nginx", "").replace("nginx,", "")
