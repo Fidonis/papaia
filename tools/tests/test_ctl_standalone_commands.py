@@ -87,7 +87,11 @@ def test_the_config_dir_flag_reaches_py_cli(tmp_path, step):
     result = _call(FUNCTIONS[step], f"--config-dir={config.as_posix()}")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == f"py_cli {step} CONFIG_DIR={config.as_posix()}"
+    # In a container the step first joins the stack's network; on the host that is a no-op.
+    assert result.stdout.splitlines() == [
+        f"py_cli join-stack-network CONFIG_DIR={config.as_posix()}",
+        f"py_cli {step} CONFIG_DIR={config.as_posix()}",
+    ]
 
 
 @needs_bash
@@ -98,7 +102,11 @@ def test_without_the_flag_the_default_config_dir_is_used(tmp_path, step):
     result = _call(FUNCTIONS[step], default=default)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == f"py_cli {step} CONFIG_DIR={default.as_posix()}"
+    # In a container the step first joins the stack's network; on the host that is a no-op.
+    assert result.stdout.splitlines() == [
+        f"py_cli join-stack-network CONFIG_DIR={default.as_posix()}",
+        f"py_cli {step} CONFIG_DIR={default.as_posix()}",
+    ]
 
 
 @needs_bash
