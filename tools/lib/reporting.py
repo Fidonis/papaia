@@ -135,7 +135,9 @@ def print_keycloak_checklist(
     bundle_vals = common.parse_env_file(bundle_env)
     replace_keys = [k for k, v in bundle_vals.items() if v.startswith("REPLACE_WITH_")]
 
-    if not clients and not mappers and not replace_keys:
+    notes = manifest.get("install_notes") or []
+
+    if not clients and not mappers and not replace_keys and not notes:
         return
 
     sep = "─" * 65
@@ -173,3 +175,8 @@ def print_keycloak_checklist(
             suffix = f"  {hint}" if hint else ""
             print(f"   {key:<{key_w}}{suffix}")
         print()
+        step += 1
+    for note in notes:
+        print(f"{step}. {note}")
+        print()
+        step += 1
