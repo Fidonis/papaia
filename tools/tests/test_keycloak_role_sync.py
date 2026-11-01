@@ -307,6 +307,8 @@ def test_the_host_reaches_keycloak_at_its_published_port(monkeypatch):
         ("0.0.0.0", "https://localhost:8110"),
         ("::", "https://localhost:8110"),
         ("10.42.0.1", "https://10.42.0.1:8110"),
+        ("[::]", "https://localhost:8110"),
+        ("[fd00::1]", "https://[fd00::1]:8110"),
         ("fd00::1", "https://[fd00::1]:8110"),
     ],
 )
@@ -336,27 +338,18 @@ def test_an_address_is_verified_as_localhost(base_url, expected):
     assert kcs._tls_server_name(base_url) == expected
 
 
-def test_the_server_name_context_overrides_the_url_host(tmp_path):
+def test_the_server_name_context_overrides_the_url_host(tmp_path, monkeypatch):
     ctx = kcs._ssl_context(tmp_path, "localhost")
     assert ctx.verify_mode == ssl.CERT_REQUIRED
     assert ctx.check_hostname
 
     seen = {}
 
-    class _Probe(kcs._ServerNameContext):
-        pass
-
     def _record(self, sock, *args, server_hostname=None, **kwargs):
         seen["name"] = server_hostname
 
-    probe = _Probe(ssl.PROTOCOL_TLS_CLIENT)
-    probe.server_name = "localhost"
-    original = ssl.SSLContext.wrap_socket
-    ssl.SSLContext.wrap_socket = _record
-    try:
-        probe.wrap_socket(object(), server_hostname="10.42.0.1")
-    finally:
-        ssl.SSLContext.wrap_socket = original
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", _record)
+    ctx.wrap_socket(object(), server_hostname="10.42.0.1")
     assert seen["name"] == "localhost"
 
 

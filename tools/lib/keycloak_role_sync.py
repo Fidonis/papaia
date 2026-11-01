@@ -87,11 +87,14 @@ def _published_host(root: dict[str, str]) -> str:
     """The address Keycloak's port is published on, as a URL host.
 
     `--host-ip` binds the published ports to one address; `localhost` then refuses
-    the connection, so the sync has to dial that address instead."""
+    the connection, so the sync has to dial that address instead. Compose needs an
+    IPv6 address in brackets already, and a URL does too."""
     host_ip = root.get("HOST_IP", "").strip()
     if host_ip in _ANY_ADDRESS:
         return "localhost"
-    return f"[{host_ip}]" if ":" in host_ip else host_ip
+    if ":" in host_ip and not host_ip.startswith("["):
+        return f"[{host_ip}]"
+    return host_ip
 
 
 def _admin_base_url(root: dict[str, str]) -> str:
@@ -128,7 +131,10 @@ def _tls_server_name(base_url: str) -> str | None:
 class _ServerNameContext(ssl.SSLContext):
     """An SSLContext that verifies every connection against one fixed server name."""
 
-    server_name: str = ""
+    def __new__(cls, server_name: str):
+        self = super().__new__(cls, ssl.PROTOCOL_TLS_CLIENT)
+        self.server_name = server_name
+        return self
 
     def wrap_socket(self, sock, *args, server_hostname=None, **kwargs):
         return super().wrap_socket(sock, *args, server_hostname=self.server_name, **kwargs)
@@ -140,8 +146,7 @@ def _ssl_context(config_dir: Path, server_name: str | None = None) -> ssl.SSLCon
         if ca_file.is_file():
             return ssl.create_default_context(cafile=str(ca_file))
         return ssl.create_default_context()
-    ctx = _ServerNameContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.server_name = server_name
+    ctx = _ServerNameContext(server_name)
     if ca_file.is_file():
         ctx.load_verify_locations(cafile=str(ca_file))
     else:
