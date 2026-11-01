@@ -1,0 +1,64 @@
+name: Image scan
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["src/**", ".github/workflows/image-scan.yml"]
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  list-images:
+    name: List images
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the images from the compose files
+        id: list
+        run: |
+          images=$(grep -rhE '^\s*image:' src --include='docker-compose*.yml' \
+            | sed -E 's/^\s*image:\s*//' | sort -u | jq -Rcs 'split("\n") | map(select(length > 0))')
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
+  scan:
+    name: Scan ${{ matrix.image }}
+    needs: list-images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.list-images.outputs.images) }}
+    steps:
+      - name: Name the report
+        id: report
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: echo "name=$(printf '%s' "$IMAGE" | tr '/:@' '---')" >> "$GITHUB_OUTPUT"
+      - name: Write the full report
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: json
+          output: trivy-${{ steps.report.outputs.name }}.json
+          exit-code: "0"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: trivy-${{ steps.report.outputs.name }}
+          path: trivy-${{ steps.report.outputs.name }}.json
+          retention-days: 90
+      # A critical finding without a fix cannot be acted on here, so only a fixable one fails.
+      - name: Fail on a fixable critical finding
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
