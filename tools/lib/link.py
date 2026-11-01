@@ -248,7 +248,8 @@ def plan(topo: Topology, active_profiles: list[str], env: dict[str, str]) -> Lin
                 raise LinkError(
                     f"node '{link.node}' reaches both '{other}' and '{route.host}' on port"
                     f" {route.port} on other nodes; the gateway can carry only one of them"
-                    " per port. Place the two services on the same node."
+                    " per port. Place what calls them elsewhere, or one of them on"
+                    f" '{link.node}'."
                 )
         if link.inbound and topo.link_port in {r.port for r in link.routes}:
             raise LinkError(

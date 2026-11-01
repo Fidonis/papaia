@@ -368,6 +368,16 @@ def test_a_node_that_does_not_answer_is_removed_with_a_warning(
     assert "could not stop the link gateway on 'spare'" in err and "timed out" in err
 
 
+def test_a_node_without_a_pinned_host_key_is_removed_with_a_warning(
+    distributed: Installation, capsys
+):
+    main(distributed, "node-register", "--name=spare", "--address=10.0.4.10")
+    assert main(distributed, "node-unregister", "--name=spare") == 0
+    assert "spare" not in topology.load_config(distributed.config).nodes
+    assert not (distributed.config / "nodes" / "spare").exists()
+    assert "could not stop the link gateway on 'spare'" in capsys.readouterr().err
+
+
 def test_a_node_that_cannot_be_removed_is_not_touched(distributed: Installation, monkeypatch):
     def never(*a):
         raise AssertionError("the gateway of a node that stays must keep running")
@@ -403,6 +413,72 @@ def test_topology_firewall_prints_the_matrix(distributed: Installation, capsys, 
             ("internal", "edge", 7443),
             ("edge", "internal", 7443),
         }
+
+
+class FakeGatewayHost:
+    """Stands in for every node's executor; records what the push asks of it."""
+
+    def __init__(self, node: Node, log: list, failing: set[str]):
+        self.node, self.log, self.failing = node, log, failing
+
+    def run(self, command, **_kw):
+        self.log.append((self.node.name, command[0]))
+        code = 1 if (self.node.name, command[0]) in self.failing else 0
+        return executor.Result(code)
+
+
+@pytest.fixture
+def pushes(distributed: Installation, monkeypatch) -> tuple[list, set]:
+    log: list = []
+    failing: set = set()
+
+    def for_node(topo, name, **_kw):
+        return FakeGatewayHost(topo.nodes[name], log, failing)
+
+    monkeypatch.setattr(nodes, "for_node", for_node)
+    monkeypatch.setattr(nodes, "bundle_archive", lambda *a: b"")
+    monkeypatch.setattr(nodes, "push_checkout", lambda *a: executor.Result(0))
+    return log, failing
+
+
+def restarts(log: list) -> list[str]:
+    return [name for name, verb in log if verb == "compose-restart"]
+
+
+def test_a_push_restarts_the_gateways_only_when_their_link_files_changed(
+    distributed: Installation, pushes
+):
+    log, _failing = pushes
+    assert main(distributed, "node-push", "--all") == 0
+    # The controller too, and every bundle is in place before the first restart.
+    assert restarts(log) == ["internal", "edge"]
+    assert log.index(("edge", "bundle-put")) < log.index(("internal", "compose-restart"))
+    log.clear()
+    assert main(distributed, "node-push", "--all") == 0
+    assert restarts(log) == []
+
+
+def test_a_new_link_ca_restarts_every_gateway(distributed: Installation, pushes):
+    log, _failing = pushes
+    assert main(distributed, "node-push", "--all") == 0
+    log.clear()
+    shutil.rmtree(link.ca_dir(distributed.config))
+    run_cli(distributed.repo, distributed.config, "render")
+    assert main(distributed, "node-push", "--all") == 0
+    assert restarts(log) == ["internal", "edge"]
+
+
+def test_a_failed_gateway_restart_is_reported_and_tried_again(
+    distributed: Installation, pushes, capsys
+):
+    log, failing = pushes
+    failing.add(("edge", "compose-restart"))
+    assert main(distributed, "node-push", "--all") == 3
+    assert "could not restart its link gateway" in capsys.readouterr().err
+    failing.clear()
+    log.clear()
+    assert main(distributed, "node-push", "--all") == 0
+    assert restarts(log) == ["edge"]
 
 
 def test_renewing_a_link_certificate_keeps_its_names(distributed: Installation):

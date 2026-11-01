@@ -112,6 +112,30 @@ def test_a_broken_placement_refuses_and_a_corrected_run_completes(tmp_path: Path
     assert topology.load_config(inst.config).distributed
 
 
+def test_a_placement_the_link_cannot_carry_refuses_before_anything_is_written(
+    tmp_path: Path, capsys
+):
+    inst = Installation(tmp_path, FULL)
+    argv = [
+        "--repo-root",
+        str(inst.repo),
+        "--config-dir",
+        str(inst.config),
+        "setup",
+        "--env=papaia",
+        *FULL,
+        *NODE_FLAGS[:3],
+        "--place=nginx=edge",
+        "--place=librechat=edge",
+        "--place=websearch=edge",
+    ]
+    assert cli.main(argv) == cli.SETUP_REFUSED
+    assert "on port 8000" in capsys.readouterr().err
+    assert "topology" not in deployment.load(inst.config)
+    inst.setup(*FULL, *NODE_FLAGS)
+    assert topology.load_config(inst.config).distributed
+
+
 def test_distributed_setup_of_an_existing_installation_exits_2_and_changes_nothing(
     tmp_path: Path, capsys
 ):
@@ -314,6 +338,18 @@ def test_a_failing_node_stops_the_sequence_with_a_clear_message(distributed, mon
     assert "start stopped at node 'edge' (litellm, exit 5)" in err
     started = [s for _n, services in ups(log) for s in services]
     assert "librechat" not in started and "nginx" not in started
+
+
+def test_start_restarts_a_gateway_only_when_its_link_files_changed(distributed, monkeypatch):
+    def gateway_restarts(log) -> list[str]:
+        return [n for n, c in log if n != "push" and c[0] == "compose-restart"]
+
+    c, log = fake_cluster(distributed, monkeypatch)
+    assert cluster.start(c) == 0
+    assert gateway_restarts(log) == ["internal", "edge"]
+    log.clear()
+    assert cluster.start(c) == 0
+    assert gateway_restarts(log) == []
 
 
 def test_start_honours_node(distributed, monkeypatch):

@@ -807,6 +807,17 @@ def validate(
             "no bundled Nginx Proxy Manager: the external proxy has to reach every service"
             " on the node it runs on"
         )
+
+    # --- link plan -------------------------------------------------------
+    # Only once the nodes and the placement hold: the plan takes them for granted.
+    if found.ok:
+        # Local import: link builds on this module's model.
+        from . import link
+
+        try:
+            link.plan(topo, active_profiles, env)
+        except link.LinkError as exc:
+            found.errors.append(str(exc))
     return found
 
 

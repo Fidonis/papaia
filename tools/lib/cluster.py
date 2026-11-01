@@ -198,6 +198,11 @@ def start(
     for name in names:
         _say(f"node {name}: link gateway")
         code = _run(cluster, name, ["compose-up", link.GATEWAY_SERVICE])
+        if code == 0 and nodes.gateway_outdated(cluster.config_dir, name):
+            _say(f"node {name}: restarting its link gateway for its new link files")
+            code = _run(cluster, name, ["compose-restart", link.GATEWAY_SERVICE])
+            if code == 0:
+                nodes.record_gateway_restart(cluster.config_dir, name)
         if code != 0:
             return _stopped("start", name, [link.GATEWAY_SERVICE], code)
     if addons:

@@ -300,8 +300,6 @@ _node_renew_link() {
     _node_require_distributed
     py_cli node-renew-link --name="$name"
     py_cli node-push --name="$name"
-    info "Restarting the link gateway on $name..."
-    py_cli node-exec --name="$name" compose-restart link-gateway
     success "link certificate of $name renewed."
 }
 

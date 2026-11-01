@@ -69,7 +69,11 @@ def cmd_node_unregister(args: argparse.Namespace) -> int:
     except nodes.NodeError as exc:
         return _fail(exc, 2)
     # Its link gateway is stopped while the controller's key for it still works.
-    stopped = nodes.stop_gateway(config_dir, repo_root, before, args.name)
+    try:
+        stopped = nodes.stop_gateway(config_dir, repo_root, before, args.name)
+    except executor.ExecutorError as exc:
+        # Never enrolled, or no host key pinned: as good as a node that does not answer.
+        stopped = executor.Result(3, "", str(exc))
     try:
         topo = nodes.unregister(config_dir, repo_root, args.name)
     except nodes.NodeError as exc:
@@ -91,8 +95,9 @@ def cmd_node_unregister(args: argparse.Namespace) -> int:
         " node, remove the user and its directory to finish."
     )
     print(
-        "The other nodes accept its link certificate until they get their new bundles (there"
-        " is no revocation list). Push them now with: papaia-ctl node sync --all"
+        "The other nodes accept its link certificate until their gateways restart with the"
+        " new bundles (there is no revocation list). Do that now, which cuts open streams"
+        " for a moment: papaia-ctl node sync --all"
     )
     return 0
 
@@ -241,6 +246,15 @@ def cmd_node_push(args: argparse.Namespace) -> int:
                     f"node '{name}': bundle-put failed (exit {result.returncode})"
                 )
             nodes.record_state(config_dir, name, bundle_pushed_at=_now())
+        # Once every bundle is in place, the controller's own gateway included: a new link
+        # CA only works when both ends of a link have it.
+        for name in names:
+            if nodes.gateway_outdated(config_dir, name):
+                print(f"node {name}: restarting its link gateway", flush=True)
+                run = nodes.executor(config_dir, repo_root, name)
+                if not run.run(["compose-restart", link.GATEWAY_SERVICE]).ok:
+                    raise nodes.NodeError(f"node '{name}': could not restart its link gateway")
+                nodes.record_gateway_restart(config_dir, name)
     except (nodes.NodeError, executor.ExecutorError) as exc:
         return _fail(exc)
     return 0

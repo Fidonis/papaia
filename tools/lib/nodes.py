@@ -22,6 +22,7 @@ bundle, and the compose verbs. The node needs no Git and no access to GitHub.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -43,6 +44,14 @@ _FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}=?$")
 # into the checkout and nothing a node needs.
 _CHECKOUT_EXCLUDE = {".git", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "node_modules"}
 _CHECKOUT_EXCLUDE_FILES = {".env", "papaia-realm.json"}
+
+# The files of a node's bundle its link gateway loads when it starts.
+_GATEWAY_INPUTS = (
+    f"{link.LINK_DIR}/haproxy.cfg",
+    f"{link.LINK_DIR}/ca.crt",
+    f"{link.LINK_DIR}/node.pem",
+    f"overrides/{link.GATEWAY_OVERRIDE}",
+)
 
 
 class NodeError(Exception):
@@ -432,6 +441,27 @@ def push_bundle(config_dir: Path, repo_root: Path, name: str) -> Result:
     if ex.node.is_local:
         return Result(0)
     return ex.run(["bundle-put"], stdin=bundle_archive(config_dir, name))
+
+
+def _link_digest(config_dir: Path, name: str) -> str:
+    bundle = topology.bundle_dir(config_dir, name)
+    digest = hashlib.sha256()
+    for rel in _GATEWAY_INPUTS:
+        path = bundle / rel
+        digest.update(rel.encode())
+        digest.update(path.read_bytes() if path.is_file() else b"")
+    return digest.hexdigest()
+
+
+def gateway_outdated(config_dir: Path, name: str) -> bool:
+    """Whether the node's bundle holds link files its gateway has not loaded. HAProxy reads
+    them once, at start, and `compose up -d` sees no change in the service, so until a
+    restart the gateway keeps the old CA, certificate and client ACL."""
+    return read_state(config_dir, name).get("gateway_link") != _link_digest(config_dir, name)
+
+
+def record_gateway_restart(config_dir: Path, name: str) -> None:
+    record_state(config_dir, name, gateway_link=_link_digest(config_dir, name))
 
 
 def node_version(config_dir: Path, repo_root: Path, name: str) -> dict:

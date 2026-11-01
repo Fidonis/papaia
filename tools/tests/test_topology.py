@@ -342,6 +342,11 @@ def test_the_link_port_must_not_collide_with_a_published_port():
     )
 
 
+def test_a_placement_the_link_cannot_carry_is_an_error():
+    topo = two_nodes(nginx="edge", librechat="edge", websearch="edge")
+    assert any("on port 8000" in e for e in errors(topo))
+
+
 def test_the_link_port_must_be_unprivileged():
     topo = Topology(**{**dmz_split().__dict__, "link_port": 443})
     assert any("between 1024 and 65535" in e for e in errors(topo))
@@ -737,11 +742,11 @@ def _wizard(answers: list[str]) -> list[str]:
 
 def test_the_wizard_places_web_search_with_librechat():
     # several machines; controller internal at 10.0.2.10; edge at 10.0.1.10, default ssh;
-    # per service: nginx edge, keycloak internal, smtp internal, litellm edge,
+    # per service: nginx internal, keycloak internal, smtp internal, litellm edge,
     # librechat edge, localai internal; default link port.
     args = _wizard(
         ["2", "", "10.0.2.10", "", "10.0.1.10", "", "3"]
-        + ["edge", "internal", "internal", "edge", "edge", "internal", ""]
+        + ["internal", "internal", "internal", "edge", "edge", "internal", ""]
     )
     assert "--place=librechat=edge" in args and "--place=websearch=edge" in args
     topo = topology.from_flags(
