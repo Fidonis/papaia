@@ -1020,7 +1020,7 @@ def _copy_path(source: Path, dest: Path) -> None:
         shutil.copytree(source, dest)
     elif source.is_file():
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, dest)
+        shutil.copy(source, dest)
 
 
 @dataclass
