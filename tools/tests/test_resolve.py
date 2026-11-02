@@ -221,6 +221,85 @@ def test_resolve_hostnames_reuses_sticky_value_when_not_fresh(repo_root):
     assert tree[""]["PAPAIA_HOST"] == "https://prior-run.example.com"
 
 
+def test_resolve_hostnames_auth_host_sticky_reused_when_not_fresh(repo_root):
+    # Regression test for #254: a non-interactive re-run without --auth-host
+    # (as `upgrade` does) re-derived AUTH_HOST from the app host and with it
+    # the issuer every OIDC client is registered against.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["AUTH_HOST"] = "https://login.example.org"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://login.example.org"
+    assert tree["infra/keycloak"]["KC_HOSTNAME"] == "https://login.example.org"
+    assert tree[""]["OIDC_ISSUER"] == "https://login.example.org/realms/papaia"
+    assert tree[""]["OIDC_AUTH_URL"].startswith("https://login.example.org/")
+
+
+def test_resolve_hostnames_auth_host_arg_wins_over_sticky(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["AUTH_HOST"] = "https://login.example.org"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_host="https://sso.example.org",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://sso.example.org"
+
+
+def test_resolve_hostnames_auth_host_derived_on_fresh_init(repo_root):
+    # The seed AUTH_HOST is an illustrative value, not a prior run's choice.
+    tree = envtree.load_seed_tree(repo_root)
+    args = resolve.SetupArgs(
+        config_dir=repo_root, app_host="https://papaia.example.com", non_interactive=True
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.papaia.example.com"
+
+
+def test_resolve_hostnames_auth_host_derived_when_leaving_external_oidc(repo_root):
+    # external_oidc leaves AUTH_HOST at the seed value; switching back to the
+    # bundled Keycloak must not keep it as if an operator had chosen it.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        auth_provider="internal_keycloak",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.papaia.example.com"
+
+
+def test_resolve_hostnames_auth_host_prompt_defaults_to_sticky(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["AUTH_HOST"] = "https://login.example.org"
+    defaults = {}
+
+    def fake_prompt(message, default):
+        defaults[message] = default
+        return default
+
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        fresh_init=False,
+        prompt=fake_prompt,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert defaults["Public Keycloak URL (AUTH_HOST)"] == "https://login.example.org"
+    assert tree[""]["AUTH_HOST"] == "https://login.example.org"
+
+
 def test_resolve_hostnames_skips_external_oidc(repo_root):
     tree = envtree.load_seed_tree(repo_root)
     tree[""]["AUTH_PROVIDER"] = "external_oidc"

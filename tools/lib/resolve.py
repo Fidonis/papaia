@@ -256,9 +256,22 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         # --- AUTH_HOST + KC_HOSTNAME ---
         keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")
         derived_auth_host = derive_auth_host_default(app_host, keycloak_port)
-        auth_host = args.auth_host or derived_auth_host
+        # Same arg/sticky/derived order as the other public URLs. A prior
+        # external_oidc run leaves AUTH_HOST at the seed value, so it only
+        # counts as sticky when the bundled Keycloak was already in use.
+        sticky_auth_host = (
+            ""
+            if args.fresh_init or prior_auth_provider != "internal_keycloak"
+            else root.get("AUTH_HOST", "")
+        )
+        if sticky_auth_host and common.is_placeholder(sticky_auth_host):
+            sticky_auth_host = ""
+        auth_host = args.auth_host or sticky_auth_host or derived_auth_host
         if not args.auth_host and not args.non_interactive and args.prompt is not None:
-            auth_host = args.prompt("Public Keycloak URL (AUTH_HOST)", derived_auth_host)
+            auth_host = args.prompt(
+                "Public Keycloak URL (AUTH_HOST)",
+                sticky_auth_host or derived_auth_host,
+            )
         root["AUTH_HOST"] = auth_host
         keycloak["KC_HOSTNAME"] = auth_host
 
