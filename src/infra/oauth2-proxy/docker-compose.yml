@@ -30,6 +30,9 @@ services:
       - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET}
       - --cookie-secure=${OAUTH2_PROXY_COOKIE_SECURE:-false}
       - --cookie-name=_oauth2_proxy
+      # Embed the CSRF nonce in the state parameter, as the admin sidecar does: a shared
+      # cookie is overwritten when a second service starts a login in the same browser.
+      - --cookie-csrf-per-request=true
       # Forward-auth mode: returns 202 for authenticated, 401 for not authenticated
       - --upstream=static://202
       - --http-address=0.0.0.0:4180
