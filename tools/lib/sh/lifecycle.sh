@@ -75,6 +75,12 @@ _require_profiles_resolve() {
     fi
 }
 
+# Docker Desktop drops the bind-mount proxy paths of a stopped container, and `up` would
+# start that container with its old mount source. Only a new container gets a valid one.
+_stopped_containers_go_stale() {
+    [ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)" = "Docker Desktop" ]
+}
+
 cmd_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
     while [ $# -gt 0 ]; do
@@ -176,11 +182,16 @@ cmd_start() {
         done
     fi
 
+    local up_flags=(-d)
+    if _stopped_containers_go_stale; then
+        up_flags+=(--force-recreate)
+    fi
+
     if [ -n "$profiles" ]; then
         info "Starting core with profiles: $profiles"
-        COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
+        COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up "${up_flags[@]}"
     else
-        docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
+        docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up "${up_flags[@]}"
     fi
 
     # In a container (papaia-manager and its runners) the provisioning steps reach the stack

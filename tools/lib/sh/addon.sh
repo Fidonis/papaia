@@ -143,7 +143,11 @@ _addon_compose_by_name() {
 }
 
 _addon_compose_up() {
-    _addon_compose up "$1" "$2" -d
+    local up_flags=(-d)
+    if _stopped_containers_go_stale; then
+        up_flags+=(--force-recreate)
+    fi
+    _addon_compose up "$1" "$2" "${up_flags[@]}"
 }
 
 # An add-on of a distributed installation runs on its node; the node's shim starts and
