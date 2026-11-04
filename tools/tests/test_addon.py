@@ -829,3 +829,38 @@ def test_check_reports_an_unmet_requirement(repo_root, config_dir, tmp_path, cap
 
     assert cmd_addon_check(_check_args(config_dir, repo_root)) == 2
     assert "'paperless' is not installed and active" in capsys.readouterr().out
+
+
+def _dependents_args(config_dir: Path, repo_root: Path, *, force: bool = False):
+    return argparse.Namespace(
+        config_dir=str(config_dir), repo_root=str(repo_root), name="paperless", force=force
+    )
+
+
+def test_dependents_refuses_while_another_addon_requires_it(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_dependents
+
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+    assert (
+        cmd_addon_install(
+            _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root)) == 2
+    assert "required by 'dependent'" in capsys.readouterr().err
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root, force=True)) == 0
+
+
+def test_dependents_passes_without_dependents(repo_root, config_dir):
+    from lib.cli_addon import cmd_addon_dependents
+
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root)) == 0

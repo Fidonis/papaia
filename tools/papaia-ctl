@@ -80,8 +80,8 @@
 #                              [--config-dir=PATH]
 #   papaia-ctl addon list      [--json] [--config-dir=PATH]
 #   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
-#   papaia-ctl addon remove    <name> [--config-dir=PATH]
-#   papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
+#   papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
+#   papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
 #   papaia-ctl help
 #
 # Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
