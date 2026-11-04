@@ -6,7 +6,18 @@
 // upsert is keyed by the YAML `id` field so re-running on every container
 // start is idempotent.
 //
-// Silent if the directory is empty or missing (default behaviour for
+// LibreChat treats every agent id without the `agent_` prefix as an ephemeral
+// agent and never loads the stored document, so the prefix is added when the
+// YAML omits it (`id: paperless-assistant` is stored as `agent_paperless-assistant`).
+//
+// Agents of active add-ons are rendered by papaia-ctl into
+// /app/api/data/addon-agents/ as <addon>__<file>. They are stored with
+// `papaia_managed_by: <addon>`, and an add-on agent whose file is gone is
+// deleted together with its access entries and project links (tombstone),
+// so removing an add-on removes its agents. Agents from the operator
+// directory or the UI are never deleted.
+//
+// Silent if the directories are empty or missing (default behaviour for
 // deployments that don't opt in via LIBRECHAT_AGENTS_DIR). Non-fatal:
 // any failure here is logged and swallowed so a broken agent file does
 // not prevent LibreChat itself from starting.
@@ -19,6 +30,8 @@ const yaml = require('js-yaml');
 const { MongoClient } = require('mongodb');
 
 const AGENTS_DIR = '/app/api/data/agents';
+// Agents of active add-ons, rendered by papaia-ctl (absent without any).
+const ADDON_AGENTS_DIR = '/app/api/data/addon-agents';
 const MONGO_URI = process.env.MONGO_URI;
 
 const log = (msg) => console.log(`[agents-init] ${msg}`);
@@ -40,29 +53,113 @@ async function resolveAuthorId(users, doc) {
   return anyUser ? anyUser._id : null;
 }
 
+// Reads the agent YAML files of one directory. Returns null when the directory
+// cannot be read for another reason than being absent, so a transient error
+// never counts as "no agents" (which would tombstone every add-on agent).
+function listYaml(dir) {
+  try {
+    return fs.readdirSync(dir).filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    warn(`cannot read ${dir}: ${err.message}`);
+    return null;
+  }
+}
+
+// Upserts one agent file. Returns the stored agent id, or null when skipped.
+async function upsertAgent(agents, users, aclentries, dir, file, managedBy) {
+  const raw = fs.readFileSync(path.join(dir, file), 'utf8');
+  const doc = yaml.load(raw);
+  if (!doc || typeof doc !== 'object') {
+    warn(`${file}: not a YAML object — skip`);
+    return null;
+  }
+  if (!doc.id || !doc.name || !doc.provider || !doc.model) {
+    warn(`${file}: missing required field (id / name / provider / model) — skip`);
+    return null;
+  }
+
+  const agentId = String(doc.id).startsWith('agent_') ? String(doc.id) : `agent_${doc.id}`;
+
+  const authorId = await resolveAuthorId(users, doc);
+  if (!authorId) {
+    warn(`${file}: no LibreChat user available to own the agent — skip`);
+    return null;
+  }
+
+  const update = {
+    id: agentId,
+    name: doc.name,
+    description: doc.description ?? '',
+    provider: doc.provider,
+    model: doc.model,
+    instructions: doc.instructions ?? '',
+    mcpServers: Array.isArray(doc.mcpServers) ? doc.mcpServers : [],
+    model_parameters: doc.model_parameters ?? {},
+    tools: Array.isArray(doc.tools) ? doc.tools : [],
+    // Shared with everyone in the instance by default; YAML can opt out.
+    is_collaborative: doc.is_collaborative !== false,
+    // Re-stamp the author on every run so a re-imported agent stays
+    // owned by the right user even if the user document was rebuilt.
+    author: authorId,
+    updatedAt: new Date(),
+  };
+  // Add-on agents carry their owner, so they can be removed with the add-on.
+  if (managedBy) update.papaia_managed_by = managedBy;
+
+  await agents.updateOne(
+    { id: agentId },
+    {
+      $set: update,
+      $setOnInsert: {
+        createdAt: new Date(),
+        versions: [],
+      },
+    },
+    { upsert: true },
+  );
+  // A document stored by an earlier run under the bare id cannot be used.
+  if (agentId !== doc.id) {
+    const stale = await agents.findOne({ id: String(doc.id) }, { projection: { _id: 1 } });
+    if (stale) {
+      await agents.deleteOne({ _id: stale._id });
+      await aclentries.deleteMany({ resourceType: 'agent', resourceId: stale._id });
+    }
+  }
+  log(`upserted ${agentId} (${file}) author=${authorId}`);
+  return agentId;
+}
+
+// Deletes the add-on agents whose file is gone (the add-on was removed or no
+// longer ships it), with their access entries and project links. Agents
+// created in the UI or from the operator directory carry no owner and stay.
+async function removeTombstones(db, keep) {
+  const agents = db.collection('agents');
+  const gone = await agents
+    .find({ papaia_managed_by: { $exists: true }, id: { $nin: keep } })
+    .project({ _id: 1, id: 1 })
+    .toArray();
+  if (gone.length === 0) return;
+  const objectIds = gone.map((a) => a._id);
+  const ids = gone.map((a) => a.id);
+  await agents.deleteMany({ _id: { $in: objectIds } });
+  await db.collection('aclentries').deleteMany({
+    resourceType: 'agent',
+    resourceId: { $in: objectIds },
+  });
+  await db.collection('projects').updateMany({}, { $pull: { agentIds: { $in: ids } } });
+  log(`removed ${ids.join(', ')} (add-on no longer provides them)`);
+}
+
 async function main() {
   if (!MONGO_URI) {
     warn('MONGO_URI not set — skipping');
     return;
   }
 
-  let entries;
-  try {
-    entries = fs.readdirSync(AGENTS_DIR);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      log(`directory ${AGENTS_DIR} missing — skipping`);
-      return;
-    }
-    warn(`cannot read ${AGENTS_DIR}: ${err.message}`);
-    return;
-  }
-
-  const files = entries.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
-  if (files.length === 0) {
-    log(`no agent YAML in ${AGENTS_DIR} — nothing to do`);
-    return;
-  }
+  // Connects even without any file: the agents of a removed add-on must go.
+  const operatorFiles = listYaml(AGENTS_DIR);
+  const addonFiles = listYaml(ADDON_AGENTS_DIR);
 
   const client = new MongoClient(MONGO_URI);
   try {
@@ -70,69 +167,55 @@ async function main() {
     const db = client.db();
     const agents = db.collection('agents');
     const users = db.collection('users');
+    const aclentries = db.collection('aclentries');
 
     let upserted = 0;
     let failed = 0;
-    for (const file of files) {
-      const full = path.join(AGENTS_DIR, file);
+    for (const file of operatorFiles || []) {
       try {
-        const raw = fs.readFileSync(full, 'utf8');
-        const doc = yaml.load(raw);
-        if (!doc || typeof doc !== 'object') {
-          warn(`${file}: not a YAML object — skip`);
-          failed += 1;
-          continue;
-        }
-        if (!doc.id || !doc.name || !doc.provider || !doc.model) {
-          warn(`${file}: missing required field (id / name / provider / model) — skip`);
-          failed += 1;
-          continue;
-        }
-
-        const authorId = await resolveAuthorId(users, doc);
-        if (!authorId) {
-          warn(`${file}: no LibreChat user available to own the agent — skip`);
-          failed += 1;
-          continue;
-        }
-
-        const update = {
-          id: doc.id,
-          name: doc.name,
-          description: doc.description ?? '',
-          provider: doc.provider,
-          model: doc.model,
-          instructions: doc.instructions ?? '',
-          mcpServers: Array.isArray(doc.mcpServers) ? doc.mcpServers : [],
-          model_parameters: doc.model_parameters ?? {},
-          tools: Array.isArray(doc.tools) ? doc.tools : [],
-          // Shared with everyone in the instance by default; YAML can opt out.
-          is_collaborative: doc.is_collaborative !== false,
-          // Re-stamp the author on every run so a re-imported agent stays
-          // owned by the right user even if the user document was rebuilt.
-          author: authorId,
-          updatedAt: new Date(),
-        };
-
-        await agents.updateOne(
-          { id: doc.id },
-          {
-            $set: update,
-            $setOnInsert: {
-              createdAt: new Date(),
-              versions: [],
-            },
-          },
-          { upsert: true },
-        );
-        upserted += 1;
-        log(`upserted ${doc.id} (${file}) author=${authorId}`);
+        if (await upsertAgent(agents, users, aclentries, AGENTS_DIR, file, null)) upserted += 1;
+        else failed += 1;
       } catch (err) {
         warn(`${file}: ${err.message}`);
         failed += 1;
       }
     }
-    log(`done — upserted=${upserted} failed=${failed} total=${files.length}`);
+
+    // Files are rendered as <addon>__<file>; the prefix names the owning add-on.
+    const keep = [];
+    let addonFailed = addonFiles === null;
+    for (const file of addonFiles || []) {
+      const managedBy = file.includes('__') ? file.split('__')[0] : null;
+      try {
+        const agentId = await upsertAgent(
+          agents,
+          users,
+          aclentries,
+          ADDON_AGENTS_DIR,
+          file,
+          managedBy,
+        );
+        if (agentId) {
+          keep.push(agentId);
+          upserted += 1;
+        } else {
+          addonFailed = true;
+          failed += 1;
+        }
+      } catch (err) {
+        warn(`${file}: ${err.message}`);
+        addonFailed = true;
+        failed += 1;
+      }
+    }
+    // A file that failed may still own a stored agent: remove nothing then.
+    if (addonFailed) {
+      warn('an add-on agent failed — skipping the removal of stale add-on agents');
+    } else {
+      await removeTombstones(db, keep);
+    }
+    const total = (operatorFiles || []).length + (addonFiles || []).length;
+    log(`done — upserted=${upserted} failed=${failed} total=${total}`);
   } catch (err) {
     warn(`mongo error: ${err.message}`);
   } finally {
