@@ -120,6 +120,9 @@ MANIFEST_KEYS = [
     "integration.<service> (fragment paths)",
     "requires.addon_api",
     "papaia_compat",
+    # Display only: printed after the core's own steps in the install checklist. An older
+    # core ignores the key and an add-on has nothing to gate on, so no ADDON_API bump.
+    "install_notes",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -164,4 +167,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 13, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 14, _SURFACE_CHANGED
