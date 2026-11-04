@@ -32,6 +32,16 @@ load_defaults() { _load_kv defaults; }
 # so it must not run on every setup invocation the way load_defaults does.
 load_localai_variants() { _load_kv localai-variants; }
 
+# Docker Model Runner detection (MODEL_RUNNER_AVAILABLE, _LABEL, _WARN, _ENGINES).
+# Loaded lazily for the same reason: it forks docker.
+load_model_runner() { _load_kv model-runner-detect; }
+
+# Whether this is an Apple Silicon Mac, the only host the model-runner module is
+# offered on (ADR 0011). Checked in bash first so other hosts never pay for the probe.
+_on_apple_silicon() {
+    [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]
+}
+
 cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
@@ -40,6 +50,7 @@ cmd_setup() {
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" localai_variant="" manager="" rag="" reranker_model="" backup_dir=""
+    local model_runner=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
@@ -85,6 +96,8 @@ cmd_setup() {
             --web-search) web_search="true" ;;
             --no-web-search) web_search="false" ;;
             --local-ai) local_ai="true" ;;
+            --model-runner) model_runner="true" ;;
+            --no-model-runner) model_runner="false" ;;
             --no-local-ai) local_ai="false" ;;
             --localai-host=*) localai_host="${1#*=}" ;;
             --localai-variant=*)
@@ -212,6 +225,11 @@ cmd_setup() {
                 info "  LocalAI URL       = $LOCALAI_HOST_STICKY"
             [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_VARIANT_STICKY:-}" ] && \
                 info "  LocalAI Image     = $LOCALAI_VARIANT_STICKY"
+        fi
+        if [ -n "${MODEL_RUNNER_STICKY:-}" ]; then
+            local _mr_label="disabled"
+            [ "$MODEL_RUNNER_STICKY" = "true" ] && _mr_label="enabled"
+            info "  Model Runner      = $_mr_label"
         fi
         if [ -n "${MANAGER_STICKY:-}" ]; then
             local _mgr_label="disabled"
@@ -355,6 +373,9 @@ cmd_setup() {
                 "LiteLLM model name for reranking (e.g. rerank/jina-reranker-v2-base-multilingual). Press Enter to skip — set RERANKER_MODEL manually later." \
                 "RERANKER_MODEL" "${RERANKER_MODEL_STICKY:-}")"
         fi
+        if _on_apple_silicon && [ -z "$model_runner" ]; then
+            _prompt_local_inference
+        fi
         if [ -z "$local_ai" ]; then
             local local_ai_default="1"
             [ "${LOCAL_AI_STICKY:-}" = "false" ] && local_ai_default="2"
@@ -487,6 +508,10 @@ cmd_setup() {
         esac
     fi
 
+    if [ "$model_runner" = "true" ] && ! _on_apple_silicon; then
+        warn "Docker Model Runner is supported on Apple Silicon Macs with Docker Desktop only; the module's init job will not reach it on this host."
+    fi
+
     [ -n "$smtp" ] && SETUP_SMTP_ARGS+=(--enable-smtp="$smtp")
     [ -n "$smtp_host" ] && SETUP_SMTP_ARGS+=(--smtp-host="$smtp_host")
     [ -n "$smtp_port" ] && SETUP_SMTP_ARGS+=(--smtp-port="$smtp_port")
@@ -497,7 +522,7 @@ cmd_setup() {
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
     local setup_rc=0
-    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" || setup_rc=$?
+    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$model_runner" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
     if [ "$setup_rc" -eq 4 ]; then
         # SETUP_REFUSED: a request that does not fit this installation (a topology for an
@@ -703,6 +728,61 @@ _prompt_manager() {
     esac
 }
 
+# Asks which local inference engines to run, on an Apple Silicon Mac. Sets the caller's
+# model_runner and, when it was not given, local_ai (bash scoping: they are cmd_setup's
+# locals). Docker Model Runner serves models from the Apple GPU; LocalAI runs in a
+# container there and therefore on the CPU, so the runner is the recommendation and
+# LocalAI is off unless a previous run or a flag said otherwise. Without a runner the
+# question stays the LocalAI one, with a note on what was found.
+_prompt_local_inference() {
+    printf '\n%sLocal inference%s\n' "$CYAN" "$NC" >&2
+    printf '  Checking for Docker Model Runner ...\n' >&2
+    load_model_runner
+    if [ "${MODEL_RUNNER_AVAILABLE:-false}" != "true" ]; then
+        printf '  Docker Model Runner not offered: %s\n' "${MODEL_RUNNER_LABEL:-not detected}" >&2
+        return 0
+    fi
+    if [ -n "$local_ai" ]; then
+        # LocalAI was decided by a flag; only the runner is open.
+        local mr_default="1"
+        [ "${MODEL_RUNNER_STICKY:-}" = "false" ] && mr_default="2"
+        printf '  1) Yes  — run models on the Apple GPU through Docker Model Runner (%s)\n' "$MODEL_RUNNER_LABEL" >&2
+        printf '  2) No   — skip Docker Model Runner\n' >&2
+        [ -n "${MODEL_RUNNER_WARN:-}" ] && printf '     %s%s%s\n' "$YELLOW" "$MODEL_RUNNER_WARN" "$NC" >&2
+        case "$(prompt_with_default "  Choose" "$mr_default")" in
+            1|yes) model_runner="true" ;;
+            *)     model_runner="false" ;;
+        esac
+        return 0
+    fi
+    local default="1"
+    if [ "${MODEL_RUNNER_STICKY:-}" = "true" ] && [ "${LOCAL_AI_STICKY:-}" = "true" ]; then
+        default="3"
+    elif [ "${LOCAL_AI_STICKY:-}" = "true" ]; then
+        default="2"
+    elif [ "${MODEL_RUNNER_STICKY:-}" = "false" ] && [ "${LOCAL_AI_STICKY:-}" = "false" ]; then
+        default="4"
+    fi
+    printf '  1) Docker Model Runner — models on the Apple GPU, through Docker Desktop (recommended)\n' >&2
+    printf '     %s\n' "$MODEL_RUNNER_LABEL" >&2
+    [ -n "${MODEL_RUNNER_WARN:-}" ] && printf '     %s%s%s\n' "$YELLOW" "$MODEL_RUNNER_WARN" "$NC" >&2
+    printf '  2) LocalAI             — in a container, on the CPU on macOS\n' >&2
+    printf '  3) Both\n' >&2
+    printf '  4) None\n' >&2
+    local choice
+    choice="$(prompt_with_default "  Choose" "$default")"
+    case "$choice" in
+        1) model_runner="true";  local_ai="false" ;;
+        2) model_runner="false"; local_ai="true" ;;
+        3) model_runner="true";  local_ai="true" ;;
+        4) model_runner="false"; local_ai="false" ;;
+        *)
+            warn "Unrecognized choice '$choice'; defaulting to Docker Model Runner."
+            model_runner="true"; local_ai="false"
+            ;;
+    esac
+}
+
 # Asks which LocalAI accelerator image to install. Everything the operator sees
 # goes to stderr; only the chosen variant id reaches stdout.
 _prompt_localai_variant() {
@@ -802,7 +882,7 @@ _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
     local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}" localai_variant="${21:-}"
-    local rag="${22:-}" qdrant_host="${23:-}"
+    local rag="${22:-}" qdrant_host="${23:-}" model_runner="${24:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -821,6 +901,7 @@ _run_setup_py() {
     [ -n "$localai_variant" ] && extra+=(--localai-variant="$localai_variant")
     [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$rag" ] && extra+=(--enable-rag="$rag")
+    [ -n "$model_runner" ] && extra+=(--enable-model-runner="$model_runner")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
     [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")

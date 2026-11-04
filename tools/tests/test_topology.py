@@ -333,6 +333,44 @@ def test_localai_on_the_cpu_needs_no_hardware():
     assert errors(topo, env=env) == []
 
 
+MODEL_RUNNER = [*ALL_PROFILES, "model-runner"]
+
+
+def test_model_runner_away_from_litellm_is_refused_naming_both():
+    found = errors(two_nodes(**{"model-runner": "edge"}), profiles=MODEL_RUNNER)
+    assert any(
+        "'model-runner' must run on the node of 'litellm' ('internal'), not on 'edge'" in e
+        for e in found
+    )
+
+
+def test_model_runner_with_litellm_on_an_apple_node_is_accepted():
+    topo = two_nodes(**{"model-runner": "edge", "litellm": "edge"})
+    topo.nodes["edge"] = Node("edge", address="10.0.1.10", gpu="apple")
+    found = topology.validate(topo, active_profiles=MODEL_RUNNER)
+    assert found.errors == []
+    assert not any("Model Runner" in w for w in found.warnings)
+
+
+def test_model_runner_on_a_node_that_is_not_a_mac_is_refused():
+    topo = two_nodes()
+    topo.nodes["internal"] = Node("internal", address="10.0.2.10", executor="local", gpu="nvidia")
+    assert any(
+        "needs an Apple Silicon Mac" in e and "gpu: nvidia" in e
+        for e in errors(topo, profiles=MODEL_RUNNER)
+    )
+
+
+def test_model_runner_on_a_node_with_unknown_hardware_is_a_warning():
+    found = warnings(two_nodes(), profiles=MODEL_RUNNER)
+    assert any("Docker Model Runner" in w and "gpu: apple" in w for w in found)
+
+
+def test_model_runner_off_is_not_checked():
+    topo = two_nodes(**{"model-runner": "edge"})
+    assert not any("model-runner" in e for e in errors(topo))
+
+
 def test_the_link_port_must_not_collide_with_a_published_port():
     env = {"LIBRECHAT_EXT_PORT": "7443", "HOST_IP": "0.0.0.0"}
     topo = two_nodes(**topology.preset_placement("dmz-split", "edge"))

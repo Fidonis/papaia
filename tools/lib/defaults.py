@@ -80,6 +80,9 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
             ("true" if "manager" in profiles else "false") if config_seeded else ""
         ),
         "RAG_STICKY": (("true" if "rag" in profiles else "false") if config_seeded else ""),
+        "MODEL_RUNNER_STICKY": (
+            ("true" if "model-runner" in profiles else "false") if config_seeded else ""
+        ),
         "SMTP_STICKY": (
             ("true" if smtp.PROFILE in profiles else "false") if config_seeded else ""
         ),

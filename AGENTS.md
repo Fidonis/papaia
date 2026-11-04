@@ -8,8 +8,9 @@
 tiers:
 
 - **Lean Core**: Keycloak, oauth2-proxy, Nginx Proxy Manager, LibreChat and LiteLLM
-  always on; LocalAI, papaia-manager, the RAG system (Qdrant, its MCP server and
-  the ingester) and the mail relay opt-in via their Compose profiles. Self-sufficient — runs without any
+  always on; LocalAI, Docker Model Runner models (Apple Silicon), papaia-manager, the RAG
+  system (Qdrant, its MCP server and the ingester) and the mail relay opt-in via their
+  Compose profiles. Self-sufficient — runs without any
   add-on.
 - **First-party add-ons** (Fidonis-maintained, version-pinned, installed by path):
   documents (Paperless-ngx + MCP bridge), workflow automation (n8n).
@@ -75,6 +76,7 @@ tools/
                               #   compat.py · semver.py · render_core.py · gen_override.py
                               #   backup.py · upgrade.py · migrations.py · npm_provision.py
                               #   status.py · doctor.py · modules.py · common.py
+                              #   gpu_detect.py · model_runner.py
                               # distributed installations (docs/distributed.md):
                               #   topology.py · link.py · cluster.py · cluster_data.py
                               #   nodes.py · executor.py · node_shell.py · cli_node.py
@@ -100,6 +102,7 @@ src/
     librechat/                # Multi-provider chat interface
     litellm/                  # LLM proxy gateway
     localai/                  # Local inference (CPU / NVIDIA GPU)
+    model-runner/             # Docker Model Runner models on Apple Silicon (profile: model-runner)
     mcp-firecrawl/            # Firecrawl MCP server
     jinaai/                   # Optional Jina reranker
     rag/                      # Optional RAG system: Qdrant + MCP server + ingester (profile: rag)

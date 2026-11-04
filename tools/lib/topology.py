@@ -76,8 +76,9 @@ DEFAULT_SSH_USER = "papaia"
 DEFAULT_SSH_PORT = 22
 DEFAULT_NODE_ROOT = "/srv/papaia-node"
 
-# Hardware hints a node may carry for the LocalAI check: what accelerator it has.
-GPU_HINTS = ("none", "nvidia", "amd", "intel", "vulkan")
+# Hardware hints a node may carry for the LocalAI and Docker Model Runner checks: what
+# accelerator it has. `apple` is an Apple Silicon Mac under Docker Desktop.
+GPU_HINTS = ("none", "nvidia", "amd", "intel", "vulkan", "apple")
 
 NODES_DIR = "nodes"
 BUNDLE_DIR = "bundle"
@@ -179,6 +180,13 @@ CATALOGUE: dict[str, ServiceSpec] = {
             public_url=("", "LOCALAI_PUBLIC_URL"),
         ),
         ServiceSpec(
+            "model-runner",
+            "Docker Model Runner models",
+            ("model-runner",),
+            (),
+            start_group=2,
+        ),
+        ServiceSpec(
             "rag",
             "RAG system",
             ("rag",),
@@ -212,8 +220,10 @@ CONTROLLER_ONLY = ("manager", "rag")
 # The bundled reverse proxy. Its profile, not the `nginx` service, says whether it runs.
 PROXY_PROFILE = "nginx"
 
-# Placed together: web search is a LibreChat feature and talks to nothing else.
-COLOCATED = (("websearch", "librechat"),)
+# Placed together: web search is a LibreChat feature and talks to nothing else. The
+# model-runner init job and LiteLLM both reach Docker Desktop's runner at
+# model-runner.docker.internal, which resolves only on the Mac that runs it.
+COLOCATED = (("websearch", "librechat"), ("model-runner", "litellm"))
 
 # The core overrides `setup` writes into $PAPAIA_CONFIG_DIR/overrides. Everything else in
 # that directory belongs to an add-on.
@@ -779,6 +789,20 @@ def validate(
                     f"LocalAI runs the '{variant}' image, but node '{node.name}' has"
                     f" gpu: {node.gpu}"
                 )
+
+    # --- Docker Model Runner hardware -------------------------------------
+    if "model-runner" in active and topo.node_of("model-runner") in topo.nodes:
+        node = topo.nodes[topo.node_of("model-runner")]
+        if not node.gpu:
+            found.warnings.append(
+                f"Docker Model Runner models run on '{node.name}', whose hardware is not"
+                " recorded (nodes.<name>.gpu: apple for an Apple Silicon Mac)"
+            )
+        elif node.gpu != "apple":
+            found.errors.append(
+                f"Docker Model Runner needs an Apple Silicon Mac with Docker Desktop, but node"
+                f" '{node.name}' has gpu: {node.gpu}"
+            )
 
     # --- link and ports --------------------------------------------------
     if not 1024 <= topo.link_port <= 65535:

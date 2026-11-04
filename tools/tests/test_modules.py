@@ -15,8 +15,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
-from lib import backup, cli, common, modules
+from lib import backup, cli, common, compat, modules
 
 REAL_REPO = Path(__file__).resolve().parents[2]
 PROJECT = "papaia"
@@ -121,9 +122,12 @@ def test_no_two_modules_share_a_volume_and_none_owns_one_of_the_always_on_servic
 
 
 def test_the_profiles_are_the_ones_the_compose_files_use() -> None:
-    declared = {
-        p for owner in backup.resolve_core_volume_owners(REAL_REPO).values() for p in owner.profiles
-    }
+    # From the services, not the volume owners: the model-runner module owns no volume.
+    declared: set[str] = set()
+    for path in compat.compose_files(REAL_REPO / "src" / "docker-compose.yml"):
+        services = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("services") or {}
+        for body in services.values():
+            declared.update((body or {}).get("profiles") or [])
     assert {m.profile for m in modules.MODULES.values()} <= declared
 
 
@@ -468,6 +472,7 @@ def test_module_info_prints_one_json_document(real_repo, config_dir, capsys, mon
     document = json.loads(out)
     assert sorted(document) == [
         "active",
+        "models",
         "module",
         "profile",
         "questions",
@@ -544,3 +549,119 @@ def test_the_commands_only_know_the_optional_modules(real_repo, config_dir, name
 
 def test_this_machines_environment_is_not_what_the_tests_ran_against() -> None:
     assert not os.environ.get("PAPAIA_CONFIG_DIR", "").startswith(str(REAL_REPO))
+
+
+# -- Docker Model Runner: models instead of volumes ----------------------------------------
+
+
+class _Removed:
+    """Stands in for model_runner.remove_model and records what it was asked."""
+
+    def __init__(self, missing: set[str] | None = None, fail: set[str] | None = None) -> None:
+        self.missing = missing or set()
+        self.fail = fail or set()
+        self.calls: list[tuple[str, bool]] = []
+
+    def __call__(self, reference: str, *, in_container: bool) -> bool:
+        self.calls.append((reference, in_container))
+        if reference in self.fail:
+            raise modules.model_runner.RunnerError(f"{reference}: busy")
+        return reference not in self.missing
+
+
+def _write_overlay_models(config: Path, text: str) -> Path:
+    overlay = config / "overlay" / "ai" / "model-runner" / "models.txt"
+    overlay.parent.mkdir(parents=True, exist_ok=True)
+    overlay.write_text(text, encoding="utf-8")
+    return overlay
+
+
+def test_model_runner_owns_no_volume_and_lists_its_models(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir, "--enable-model-runner=true")
+    document = modules.info(config_dir, real_repo, "model-runner", runner=_Docker(set()))
+    assert document["active"] is True
+    assert document["volumes"] == []
+    assert document["models"] == [
+        "ai/qwen3:4b-instruct-2507-q4_K_M",
+        "ai/nomic-embed-text-v1.5:137M-F16",
+    ]
+    assert document["settings"]["files"] == ["overlay/ai/model-runner/models.txt"]
+
+
+def test_switching_model_runner_on_and_off_leaves_localai_alone(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir, "--enable-local-ai=true", "--enable-model-runner=true")
+    assert {"localai", "model-runner"} <= _profiles(config_dir)
+    _setup(real_repo, config_dir, "--enable-model-runner=false")
+    assert "model-runner" not in _profiles(config_dir)
+    assert "localai" in _profiles(config_dir)
+    # Sticky: a run without the flag keeps the choice.
+    _setup(real_repo, config_dir)
+    assert "model-runner" not in _profiles(config_dir)
+
+
+def test_deleting_model_runner_data_removes_only_the_listed_models(
+    real_repo, config_dir, monkeypatch
+) -> None:
+    _setup(real_repo, config_dir, "--enable-model-runner=true")
+    _write_overlay_models(config_dir, "ai/a:1 one\nhf.co/org/b two\nai/gone:1\n")
+    _setup(real_repo, config_dir, "--enable-model-runner=false")
+    removed = _Removed(missing={"ai/gone:1"})
+    monkeypatch.setattr(modules.model_runner, "remove_model", removed)
+    monkeypatch.setattr(modules.common, "in_container", lambda: False)
+
+    assert modules.purge_data(config_dir, real_repo, "model-runner") == ["ai/a:1", "hf.co/org/b"]
+    assert removed.calls == [("ai/a:1", False), ("hf.co/org/b", False), ("ai/gone:1", False)]
+
+
+def test_deleting_model_runner_data_goes_through_the_api_inside_a_container(
+    real_repo, config_dir, monkeypatch
+) -> None:
+    _setup(real_repo, config_dir)
+    removed = _Removed()
+    monkeypatch.setattr(modules.model_runner, "remove_model", removed)
+    monkeypatch.setattr(modules.common, "in_container", lambda: True)
+    modules.purge_data(config_dir, real_repo, "model-runner")
+    assert removed.calls and all(inside for _, inside in removed.calls)
+
+
+def test_deleting_model_runner_data_is_refused_while_it_is_on(
+    real_repo, config_dir, monkeypatch
+) -> None:
+    _setup(real_repo, config_dir, "--enable-model-runner=true")
+    removed = _Removed()
+    monkeypatch.setattr(modules.model_runner, "remove_model", removed)
+    with pytest.raises(modules.ModuleError, match="still switched on"):
+        modules.purge_data(config_dir, real_repo, "model-runner")
+    assert removed.calls == []
+
+
+def test_a_model_the_runner_refuses_to_remove_is_reported(
+    real_repo, config_dir, monkeypatch
+) -> None:
+    _setup(real_repo, config_dir)
+    monkeypatch.setattr(
+        modules.model_runner, "remove_model", _Removed(fail={"ai/qwen3:4b-instruct-2507-q4_K_M"})
+    )
+    monkeypatch.setattr(modules.common, "in_container", lambda: False)
+    with pytest.raises(modules.ModuleError, match="could not remove ai/qwen3"):
+        modules.purge_data(config_dir, real_repo, "model-runner")
+
+
+def test_resetting_model_runner_removes_the_overlay_list(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir)
+    overlay = _write_overlay_models(config_dir, "ai/mine:1\n")
+    touched = modules.reset_config(config_dir, real_repo, "model-runner")
+    assert touched == ["overlay/ai/model-runner/models.txt"]
+    assert not overlay.exists()
+
+
+def test_module_purge_prints_the_removed_models(
+    real_repo, config_dir, monkeypatch, capsys
+) -> None:
+    _setup(real_repo, config_dir)
+    monkeypatch.setattr(modules.model_runner, "remove_model", _Removed())
+    monkeypatch.setattr(modules.common, "in_container", lambda: False)
+    capsys.readouterr()
+    code = _cli(real_repo, config_dir, "module-purge", "--module=model-runner", "--data")
+    assert code == 0
+    assert "removed model ai/nomic-embed-text-v1.5:137M-F16" in capsys.readouterr().out

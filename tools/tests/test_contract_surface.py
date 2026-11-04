@@ -45,6 +45,10 @@ _SURFACE_CHANGED = (
 # server's credentials. Nothing existing changed, so `min` stays 1; add-ons that
 # attach it declare `requires.addon_api: 3`, and an older core reports them
 # incompatible instead of failing on an unknown service.
+#
+# 1.9.0 added the `model-runner` profile (its one-shot init job and the render target
+# `ai/model-runner/models.txt`) without a bump: nothing an add-on would opt in to, and an
+# older core ignores a fragment for a target it does not render.
 ADDON_API_WINDOW = (1, 3)
 
 # Seam 1: core services an addon may attach to (and their profiles).
@@ -67,6 +71,7 @@ ATTACHABLE_SERVICES = {
     "litellm-prometheus": ["litellm"],
     "localai": ["localai"],
     "localai-model-init": ["localai"],
+    "model-runner-model-init": ["model-runner"],
     "mcp-firecrawl": ["librechat-websearch"],
     "nginx-proxy-manager": ["nginx"],
     "nginx-proxy-manager-auth": ["nginx"],
@@ -93,6 +98,7 @@ BASE_RENDER_TARGETS = [
     "ai/litellm/prometheus.yml",
     "ai/localai/models.txt",
     "ai/localai/models",
+    "ai/model-runner/models.txt",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
     "infra/keycloak/themes/papaia",

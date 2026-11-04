@@ -40,6 +40,7 @@ from . import (
     gpu_detect,
     keycloak_role_sync,
     migrations,
+    model_runner,
     modules,
     nodes,
     npm_provision,
@@ -76,6 +77,16 @@ def cmd_localai_variants(args: argparse.Namespace) -> int:
     while `defaults` runs on every single papaia-ctl setup invocation. The
     wizard calls it only when it is about to ask the question."""
     for key, value in gpu_detect.detection_vars(gpu_detect.detect()).items():
+        print(f"{key}={value}")
+    return 0
+
+
+def cmd_model_runner_detect(args: argparse.Namespace) -> int:
+    """Print whether this host can run Docker Model Runner, as KEY=VALUE lines.
+
+    Separate from `defaults` for the same reason as `localai-variants`: it forks docker,
+    and the wizard calls it only on a Mac, right before it asks."""
+    for key, value in model_runner.detection_vars(model_runner.detect()).items():
         print(f"{key}={value}")
     return 0
 
@@ -201,6 +212,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_model_runner=_tristate(args.enable_model_runner),
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
         smtp_port=args.smtp_port,
@@ -237,6 +249,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_web_search(tree, setup_args)
         tree = resolve.resolve_local_ai(tree, setup_args)
         tree = resolve.resolve_localai_variant(tree, setup_args)
+        tree = resolve.resolve_model_runner(tree, setup_args)
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
@@ -488,7 +501,8 @@ def cmd_module_info(args: argparse.Namespace) -> int:
 
 
 def cmd_module_purge(args: argparse.Namespace) -> int:
-    """Delete the data (volumes) and/or reset the settings of a module that is switched off.
+    """Delete the data (volumes, or the listed models of Docker Model Runner) and/or reset
+    the settings of a module that is switched off.
 
     Both are separate options. The settings of a module whose data depends on them (the RAG
     system) are only deleted together with the data. Exit 3 when the request is refused or
@@ -510,8 +524,9 @@ def cmd_module_purge(args: argparse.Namespace) -> int:
     except modules.ModuleError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
+    kind = "model" if module.models_file else "volume"
     for name in removed:
-        print(f"removed volume {name}")
+        print(f"removed {kind} {name}")
     for item in touched:
         print(f"reset {item}")
     return 0
@@ -1085,6 +1100,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_localai_variants = sub.add_parser("localai-variants")
     p_localai_variants.set_defaults(func=cmd_localai_variants)
+    p_model_runner_detect = sub.add_parser("model-runner-detect")
+    p_model_runner_detect.set_defaults(func=cmd_model_runner_detect)
 
     p_setup = sub.add_parser("setup")
     p_setup.add_argument("--env", default="papaia")
@@ -1112,6 +1129,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-model-runner", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)

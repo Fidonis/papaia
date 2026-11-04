@@ -1,4 +1,5 @@
-"""The optional modules (LocalAI, web search, the RAG system, the mail relay): what each owns.
+"""The optional modules (LocalAI, Docker Model Runner, web search, the RAG system, the mail
+relay): what each owns.
 
 Switching a module off removes its containers and keeps everything else (`stop --clean-up`,
 then `setup --no-<module>`). Two things can follow, and they are separate on purpose:
@@ -8,6 +9,10 @@ then `setup --no-<module>`). Two things can follow, and they are separate on pur
   `purge_data` removes the named ones by name, from the compose files' own table of who mounts
   what (`backup.resolve_core_volume_owners`), so a volume of a module that is already off is
   found as well.
+  Docker Model Runner keeps no volumes: its models live in Docker Desktop's model store on
+  the host. Its data are the models its `models.txt` lists, removed one by one through the
+  runner (`docker model rm` on the host, the runner's API from inside a container); the
+  store as a whole and models pulled by hand stay.
 * **Delete the module's settings**: `reset_config` puts the module's `.env` files back to what
   the release ships, removes the files it keeps outside them (the mail password, the RAG
   catalog) and regenerates its secrets where that is safe.
@@ -38,7 +43,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, common, envtree, resolve, secrets
+from . import backup, common, envtree, model_runner, resolve, secrets
 
 
 class ModuleError(Exception):
@@ -74,6 +79,9 @@ class ModuleSpec:
     settings_need_data: bool = False
     # What `setup` asks when the module is switched on.
     questions: tuple[Question, ...] = ()
+    # The rendered model list (relative to the configuration directory) whose models are
+    # the module's data, for a module whose engine keeps them outside Docker volumes.
+    models_file: str = ""
 
 
 MODULES: dict[str, ModuleSpec] = {
@@ -92,6 +100,13 @@ MODULES: dict[str, ModuleSpec] = {
                 default_port="8080",
             ),
         ),
+    ),
+    "model-runner": ModuleSpec(
+        name="model-runner",
+        profile=model_runner.PROFILE,
+        env_dirs=(),
+        files=(f"overlay/{model_runner.MODELS_FILE}",),
+        models_file=model_runner.MODELS_FILE,
     ),
     "web-search": ModuleSpec(
         name="web-search",
@@ -174,6 +189,18 @@ def _existing_volumes(runner: Runner) -> set[str] | None:
     return {line.strip() for line in done.stdout.splitlines() if line.strip()}
 
 
+def listed_models(config_dir: Path, module: ModuleSpec) -> list[str]:
+    """The references the module's rendered model list holds; empty without one."""
+    if not module.models_file:
+        return []
+    path = config_dir / module.models_file
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [model.reference for model in model_runner.parse_models(text).models]
+
+
 def questions(config_dir: Path, name: str) -> list[dict]:
     """What `setup` asks for the module, with the default and whether it is still open.
 
@@ -219,6 +246,7 @@ def info(config_dir: Path, repo_root: Path, name: str, *, runner: Runner | None 
         "profile": module.profile,
         "active": module.profile in _active_profiles(config_dir),
         "volumes": volumes,
+        "models": listed_models(config_dir, module),
         "settings": {
             "dirs": list(module.env_dirs),
             "root_keys": list(module.root_keys),
@@ -233,7 +261,8 @@ def info(config_dir: Path, repo_root: Path, name: str, *, runner: Runner | None 
 def purge_data(
     config_dir: Path, repo_root: Path, name: str, *, runner: Runner | None = None
 ) -> list[str]:
-    """Remove the module's named volumes. Returns the names that were removed.
+    """Remove the module's named volumes, or the models its list names. Returns the names
+    that were removed.
 
     Refused while the module's profile is still on: its containers hold the volumes, and the
     caller switches the module off first. A volume that is still in use is reported, never
@@ -243,6 +272,8 @@ def purge_data(
         raise ModuleError(
             f"{module.name} is still switched on; switch it off before deleting its data"
         )
+    if module.models_file:
+        return _purge_models(config_dir, module)
     run = runner or _docker
     project = _project(config_dir)
     existing = _existing_volumes(run)
@@ -262,6 +293,24 @@ def purge_data(
         else:
             lines = (done.stderr or done.stdout).strip().splitlines()
             failed.append(f"{real}: {lines[-1] if lines else 'failed'}"[:200])
+    if failed:
+        raise ModuleError("could not remove " + "; ".join(failed))
+    return removed
+
+
+def _purge_models(
+    config_dir: Path, module: ModuleSpec, *, in_container: bool | None = None
+) -> list[str]:
+    """Remove the listed models from the runner. A model that is not there is skipped."""
+    inside = common.in_container() if in_container is None else in_container
+    removed: list[str] = []
+    failed: list[str] = []
+    for reference in listed_models(config_dir, module):
+        try:
+            if model_runner.remove_model(reference, in_container=inside):
+                removed.append(reference)
+        except model_runner.RunnerError as exc:
+            failed.append(str(exc)[:200])
     if failed:
         raise ModuleError("could not remove " + "; ".join(failed))
     return removed

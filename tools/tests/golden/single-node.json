@@ -5,7 +5,7 @@
       "config": "3480cb76af5237423bc560fffd070d96387fdc423b0f719d24619c78cb1969d2",
       "version": "5.6.0"
     },
-    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=https://auth.papaia.example.org\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,nginx\nPLATFORM_VERSION=1.7.0\nCONFIG_SEEDED=true\n",
+    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=https://auth.papaia.example.org\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nMODEL_RUNNER_STICKY=false\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,nginx\nPLATFORM_VERSION=1.7.0\nCONFIG_SEEDED=true\n",
     "deployment_yaml": "customer: papaia\nplatform_version: 1.7.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - nginx\n  inference: local-first\n  addon_api: 3\naddons: []\n",
     "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.7.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - nginx\n  inference: local-first\n  addon_api: 3\naddons: []\n",
     "doctor_json": "9419b5644276b2ef98d73c4d2b931b10d8eae9052715d49d2ce693a6cb93e40d",
@@ -14,7 +14,7 @@
     ],
     "status_json": "35c23268f48ab5b5ad66993ec657f6032ad4de9909c9485f9ec3326f64324b56",
     "tree": {
-      ".env": "d029e1146e7d85fc415b583ea5f58b0b39d1dedc51b621891197fc51f64065e0",
+      ".env": "7f86fdc5d536c281f2f048abbef1f2f88865894a31fbb2f383e202fd877cf5da",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/librechat/.env": "49a538a2e47ac7b287a460e540f1287a5d951c2f9d6da5ecf0371e201306ce90",
       "ai/librechat/librechat.yaml": "c2afe87b726b91333e9852af8188bb25f1200a18d930f91659d5384a52eb665b",
@@ -25,6 +25,7 @@
       "ai/localai/models.txt": "799437a66c576e5af12ed0cd0a5a8d0f3b05df5c45c62ca29923538e8bf5180a",
       "ai/localai/models/nomic-embed-text.yaml": "dae884a2c97c1a61462386477969df0356867e08aaf7eb691530712202321bfd",
       "ai/localai/models/qwen2.5-1.5b-instruct.yaml": "166ebb152e923aa8a6b3b84c5b4746b5de64c4c0ed41980051b01335354e7f54",
+      "ai/model-runner/models.txt": "137155329c42208611ad07596d8c9d45dd893ed52be5f9d640a0787a5252501f",
       "ai/rag/.env": "f02a88bded56baef34f67fb190a8324348dfc95f988e86d869b7ea90216a8c3a",
       "deployed.lock": "5a395e2a35af51dcd19600abd65b2441c59f56883c3f2c9f2e64490d4f240f15",
       "deployment.yaml": "10bdce8e9aa3810d201591a4f27fe5257e8dc68fc842e6cb61f91a4e795acc6f",
@@ -51,7 +52,7 @@
       "config": "29d6ded5d1792f3198861c96009b3e723450437b4f05e05cd249565705c33d00",
       "version": "5.6.0"
     },
-    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=https://host.docker.internal:8110\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=external_oidc\nREVERSE_PROXY_PROVIDER_STICKY=external_proxy\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=true\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=oauth2-proxy,librechat,litellm\nPLATFORM_VERSION=1.7.0\nCONFIG_SEEDED=true\n",
+    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=https://host.docker.internal:8110\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nMODEL_RUNNER_STICKY=false\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=external_oidc\nREVERSE_PROXY_PROVIDER_STICKY=external_proxy\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=true\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=oauth2-proxy,librechat,litellm\nPLATFORM_VERSION=1.7.0\nCONFIG_SEEDED=true\n",
     "deployment_yaml": "customer: papaia\nplatform_version: 1.7.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  inference: local-first\n  addon_api: 3\naddons: []\n",
     "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.7.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  inference: local-first\n  addon_api: 3\naddons: []\n",
     "doctor_json": "c1865e3b40618f9ac6e3c4da4e00675b53a50d12e6ff64d88a23aac0f14e94b2",
@@ -60,7 +61,7 @@
     ],
     "status_json": "d811993fb73c1c290dd63ba060c69528f426d55ca4e6097b8ac754852d18ab4a",
     "tree": {
-      ".env": "fac57b5adabc48e9f2c1e1b1057b3cf1b7904bc9453939bf64bd32b08f12b55b",
+      ".env": "2730958935cbb454a87e4d57045e2acdb2cebf4ca4a83b8a34de962dd2cc8428",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/librechat/.env": "4ea092dcf6bb0493af434ab28acff431ba10fcf8aee89cb0b68a69b3f45d9adc",
       "ai/librechat/librechat.yaml": "c2afe87b726b91333e9852af8188bb25f1200a18d930f91659d5384a52eb665b",
@@ -71,6 +72,7 @@
       "ai/localai/models.txt": "799437a66c576e5af12ed0cd0a5a8d0f3b05df5c45c62ca29923538e8bf5180a",
       "ai/localai/models/nomic-embed-text.yaml": "dae884a2c97c1a61462386477969df0356867e08aaf7eb691530712202321bfd",
       "ai/localai/models/qwen2.5-1.5b-instruct.yaml": "166ebb152e923aa8a6b3b84c5b4746b5de64c4c0ed41980051b01335354e7f54",
+      "ai/model-runner/models.txt": "137155329c42208611ad07596d8c9d45dd893ed52be5f9d640a0787a5252501f",
       "ai/rag/.env": "f02a88bded56baef34f67fb190a8324348dfc95f988e86d869b7ea90216a8c3a",
       "deployed.lock": "9d98080259d8414e2c8a189135d29bf0aaf5b3dd24abbd820d71ea81c8b43404",
       "deployment.yaml": "7d3c44127fbaec2bbc92b04e99c92dbe6fa5c30221cc1e1170763756a9b8500e",
@@ -98,7 +100,7 @@
       "config": "2e2fb251453f2a7c745460759e65a278e44998eb2b6783dc7047d33fb6eb4955",
       "version": "5.6.0"
     },
-    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=https://auth.papaia.example.org\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nLIBRECHAT_HOST_STICKY=https://chat.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLITELLM_HOST_STICKY=https://llm.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=true\nMANAGER_STICKY=true\nRAG_STICKY=true\nSMTP_STICKY=true\nSMTP_HOST_STICKY=smtp.example.org\nSMTP_PORT_STICKY=587\nSMTP_SECURITY_STICKY=starttls\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=noreply@example.org\nSMTP_FROM_NAME_STICKY=papAIa\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=true\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,librechat-websearch,localai,manager,rag,smtp,nginx\nPLATFORM_VERSION=1.7.0\nCONFIG_SEEDED=true\n",
+    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=https://auth.papaia.example.org\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nLIBRECHAT_HOST_STICKY=https://chat.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLITELLM_HOST_STICKY=https://llm.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=true\nMANAGER_STICKY=true\nRAG_STICKY=true\nMODEL_RUNNER_STICKY=false\nSMTP_STICKY=true\nSMTP_HOST_STICKY=smtp.example.org\nSMTP_PORT_STICKY=587\nSMTP_SECURITY_STICKY=starttls\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=noreply@example.org\nSMTP_FROM_NAME_STICKY=papAIa\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=true\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,librechat-websearch,localai,manager,rag,smtp,nginx\nPLATFORM_VERSION=1.7.0\nCONFIG_SEEDED=true\n",
     "deployment_yaml": "customer: papaia\nplatform_version: 1.7.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - nginx\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - smtp\n  inference: local-first\n  addon_api: 3\naddons: []\n",
     "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.7.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - smtp\n  - nginx\n  inference: local-first\n  addon_api: 3\naddons: []\n",
     "doctor_json": "74a3c0fa1212f89b4f84e990f81d2c3f01db8b3ba12ef00409a4acd1fdc0d0e9",
@@ -109,7 +111,7 @@
     ],
     "status_json": "8eadcee57d1b37489a4c64688eae00a123b714203a6b26b7e4aa3ce53d4bb826",
     "tree": {
-      ".env": "a86e38206f126df224f1b77f3f2022ed1b0b2e5bc7031e74d38dd32636cb2ae7",
+      ".env": "7a40b9ecfe9695e28b98fa624cfeda73540bd2a7305eacd7cd784645295872d9",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/librechat/.env": "f73aeb7ac7d4c388ad92e5b6d00c5442a79d14b43bd6b4f202314d03136b3650",
       "ai/librechat/librechat.yaml": "5370fe4259dd51c2c4be947360c2c22e7ef80fc6d81b82bc764da43104c7d53d",
@@ -120,6 +122,7 @@
       "ai/localai/models.txt": "799437a66c576e5af12ed0cd0a5a8d0f3b05df5c45c62ca29923538e8bf5180a",
       "ai/localai/models/nomic-embed-text.yaml": "dae884a2c97c1a61462386477969df0356867e08aaf7eb691530712202321bfd",
       "ai/localai/models/qwen2.5-1.5b-instruct.yaml": "166ebb152e923aa8a6b3b84c5b4746b5de64c4c0ed41980051b01335354e7f54",
+      "ai/model-runner/models.txt": "137155329c42208611ad07596d8c9d45dd893ed52be5f9d640a0787a5252501f",
       "ai/rag/.env": "f02a88bded56baef34f67fb190a8324348dfc95f988e86d869b7ea90216a8c3a",
       "deployed.lock": "5a395e2a35af51dcd19600abd65b2441c59f56883c3f2c9f2e64490d4f240f15",
       "deployment.yaml": "577c07a6ee6d9a757a902297a96c07786dbfc3b00a3328cc6ac94e3ed93118b4",
