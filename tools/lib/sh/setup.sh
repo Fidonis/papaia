@@ -383,21 +383,7 @@ cmd_setup() {
             localai_variant="$(_prompt_localai_variant)"
         fi
         if [ -z "$manager" ]; then
-            local manager_default="1"
-            [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
-            printf '\n%sEnable Extension Manager%s\n' "$CYAN" "$NC" >&2
-            printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons (default)\n' >&2
-            printf '  2) No   — skip papaia-manager (the core runs without it)\n' >&2
-            local manager_choice
-            manager_choice="$(prompt_with_default "  Choose" "$manager_default")"
-            case "$manager_choice" in
-                1|yes) manager="true" ;;
-                2|no)  manager="false" ;;
-                *)
-                    warn "Unrecognized choice '$manager_choice'; defaulting to disabled."
-                    manager="false"
-                    ;;
-            esac
+            manager="$(_prompt_manager)"
         fi
         if [ "$manager" = "true" ] && [ -z "$manager_host" ]; then
             local manager_default_url="${MANAGER_HOST_STICKY:-}"
@@ -685,6 +671,36 @@ _localai_variant_option() {
 # but it must not pass silently.
 _localai_variant_unverified() {
     warn "$1 was not detected on this host. Install the driver and container runtime before starting the stack, or re-run setup and choose CPU."
+}
+
+# Asks whether to run papaia-manager; prints "true" or "false". The manager profile needs
+# a Linux host (README, papaia-manager), which Docker Desktop on macOS is not, so there
+# the default is no, unless a previous run said yes.
+_prompt_manager() {
+    local manager_default="1" on_mac=0
+    [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
+    if [ "$(uname -s)" = "Darwin" ] && [ "${MANAGER_STICKY:-}" != "true" ]; then
+        on_mac=1
+        manager_default="2"
+    fi
+    local yes_default="" no_default=""
+    if [ "$manager_default" = "1" ]; then yes_default=" (default)"; else no_default=" (default)"; fi
+    printf '\n%sEnable Extension Manager%s\n' "$CYAN" "$NC" >&2
+    printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons%s\n' "$yes_default" >&2
+    printf '  2) No   — skip papaia-manager (the core runs without it)%s\n' "$no_default" >&2
+    if [ "$on_mac" -eq 1 ]; then
+        printf '  papaia-manager needs a Linux host; see "papaia-manager" in README.md.\n' >&2
+    fi
+    local manager_choice
+    manager_choice="$(prompt_with_default "  Choose" "$manager_default")"
+    case "$manager_choice" in
+        1|yes) echo "true" ;;
+        2|no)  echo "false" ;;
+        *)
+            warn "Unrecognized choice '$manager_choice'; defaulting to disabled."
+            echo "false"
+            ;;
+    esac
 }
 
 # Asks which LocalAI accelerator image to install. Everything the operator sees
