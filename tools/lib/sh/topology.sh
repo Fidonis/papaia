@@ -26,11 +26,11 @@ cmd_topology() {
     CONFIG_DIR="$config_dir"
     _require_setup_done
     case "$sub" in
-        show)     py_cli topology-show "${extra[@]}" ;;
+        show)     py_cli topology-show ${extra[@]+"${extra[@]}"} ;;
         validate) py_cli topology-validate ;;
         # The connections the installation opens between its nodes. papaia never applies
         # them; they are for whoever runs the firewalls.
-        firewall) py_cli topology-firewall "${extra[@]}" ;;
+        firewall) py_cli topology-firewall ${extra[@]+"${extra[@]}"} ;;
         *) error "Unknown 'topology' subcommand: '$sub'. Valid: show, validate, firewall."; exit 2 ;;
     esac
 }

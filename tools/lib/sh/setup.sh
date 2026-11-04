@@ -828,14 +828,14 @@ _run_setup_py() {
     [ "$force" = "1" ] && extra+=(--force)
     # The mail relay flags are collected by cmd_setup; empty on the re-render paths.
     if [ "${#SETUP_SMTP_ARGS[@]}" -gt 0 ]; then
-        extra+=("${SETUP_SMTP_ARGS[@]}")
+        extra+=(${SETUP_SMTP_ARGS[@]+"${SETUP_SMTP_ARGS[@]}"})
     fi
     if [ "${#SETUP_TOPOLOGY_ARGS[@]}" -gt 0 ]; then
-        extra+=("${SETUP_TOPOLOGY_ARGS[@]}")
+        extra+=(${SETUP_TOPOLOGY_ARGS[@]+"${SETUP_TOPOLOGY_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.
-    PAPAIA_SMTP_PASSWORD="${SETUP_SMTP_PASSWORD:-}" py_cli setup --env="$env_name" "${extra[@]}"
+    PAPAIA_SMTP_PASSWORD="${SETUP_SMTP_PASSWORD:-}" py_cli setup --env="$env_name" ${extra[@]+"${extra[@]}"}
 }
 
 # Asks for the mail server behind the relay. Fills the smtp_* variables of cmd_setup
