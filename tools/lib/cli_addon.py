@@ -83,6 +83,23 @@ def placement_result(
     )
 
 
+def _active_manifests(
+    deployed: dict, repo_root: Path, *, exclude: str | None = None
+) -> dict[str, dict]:
+    """Name -> manifest of every active addon whose manifest loads."""
+    manifests: dict[str, dict] = {}
+    for addon in deployment.active_addons(deployed):
+        name = addon.get("name")
+        if not name or name == exclude:
+            continue
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        if manifest is not None:
+            manifests[name] = manifest
+    return manifests
+
+
 def active_addon_versions(
     deployed: dict, repo_root: Path, *, exclude: str | None = None
 ) -> dict[str, str | None]:
@@ -238,6 +255,16 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         )
     if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force, node=node):
         return 2
+    try:
+        addon_defaults = addons.resolve_addon_defaults(
+            manifest, _active_manifests(deployed, repo_root, exclude=name), config_dir
+        )
+    except ValueError as exc:
+        if not args.force:
+            print(f"ERROR: addon '{name}': {exc}", file=sys.stderr)
+            return 2
+        print(f"WARNING: addon '{name}': {exc} -- continuing due to --force", file=sys.stderr)
+        addon_defaults = {}
 
     if existing:
         if args.path:
@@ -262,7 +289,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     addons.seed_addon_env(addon_path, config_dir)
 
     bundle_env_path = config_dir / "addons" / name / ".env"
-    updates = addons.prompt_change_me_vars(bundle_env_path, manifest, config_dir)
+    updates = addons.prompt_change_me_vars(bundle_env_path, manifest, config_dir, addon_defaults)
     if updates:
         env_vals = common.parse_env_file(bundle_env_path)
         env_vals.update(updates)
