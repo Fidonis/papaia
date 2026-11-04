@@ -97,6 +97,7 @@ in `include:`d files against each file's own directory.
 | `${PAPAIA_CONFIG_DIR}/ai/localai/models.txt` | `/models-config/models.txt` | localai-model-init |
 | `${PAPAIA_CONFIG_DIR}/ai/localai/models` | `/models-config/configs` | localai-model-init |
 | `${PAPAIA_CONFIG_DIR}/infra/keycloak/keycloak.conf` | `/opt/keycloak/conf/keycloak.conf` | keycloak |
+| `${PAPAIA_CONFIG_DIR}/infra/keycloak/themes/papaia` | `/opt/keycloak/themes/papaia` | keycloak |
 | `${PAPAIA_CONFIG_DIR}/infra/keycloak/realm-import` | `/opt/keycloak/data/import` | keycloak |
 | `${PAPAIA_CONFIG_DIR}/infra/nginx/nginx-data` | `/data` | nginx-proxy-manager |
 | `${PAPAIA_CONFIG_DIR}/infra/nginx/nginx-letsencrypt` | `/etc/letsencrypt` | nginx-proxy-manager |

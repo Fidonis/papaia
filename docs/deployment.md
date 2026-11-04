@@ -126,6 +126,7 @@ README, under
 ```bash
 tools/papaia-ctl backup                             # config dir + all core and add-on volumes
 tools/papaia-ctl backup --retention-period-days=14  # additionally prune anything older
+tools/papaia-ctl backup --only=addon:paperless      # only one add-on's volumes and data directories
 tools/papaia-ctl restore --list                     # show the available restore points
 tools/papaia-ctl restore                            # restore the most recent one
 tools/papaia-ctl backup-delete --restore-point=ID   # delete one restore point (repeatable)
@@ -139,8 +140,10 @@ configurable retention, so the host needs no cron job.
 Every run writes a timestamped subdirectory of `$PAPAIA_BACKUP_DIR` and records it in
 `backup.yaml` next to it; `backup.log` in the same directory keeps the result of every backup and
 restore. `backup-delete --restore-point=ID` removes a specific restore point (the snapshot
-directory and its catalogue entry) when the age-based retention of `backup` is too blunt. See
-the [README](../README.md#backup) for the full flag reference.
+directory and its catalogue entry) when the age-based retention of `backup` is too blunt. A
+backup narrowed with `--only` is a restore point for that part alone (`restore --list` shows
+its scope); bring it back with `restore-scoped --only=...`. See the
+[README](../README.md#backup) for the full flag reference.
 
 `$PAPAIA_CONFIG_DIR` is the single source of truth for all generated state — secrets, rendered
 configs, the Keycloak realm, and `deployment.yaml`. Backing up that directory plus the named

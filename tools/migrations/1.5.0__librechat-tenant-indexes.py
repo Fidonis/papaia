@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# papaia-migration: runs-with=librechat
 """1.5.0 -- build LibreChat's tenant-scoped MongoDB indexes.
 
 LibreChat 0.8.8 replaced the unique indexes of several collections (User, Role, Preset,

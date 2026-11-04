@@ -71,12 +71,16 @@ tools/
                               # describes active addons, core profiles, hosting type
   pyproject.toml              # ruff + pytest config for tools/lib
   lib/                        # Python: cli.py · cli_addon.py · deployment.py · envtree.py
-                              #   secrets.py · resolve.py · addons.py · defaults.py · reporting.py
+                              #   secrets.py · resolve.py · addons.py · addon_upgrade.py · defaults.py · reporting.py
                               #   compat.py · semver.py · render_core.py · gen_override.py
                               #   backup.py · upgrade.py · migrations.py · npm_provision.py
                               #   status.py · doctor.py · modules.py · common.py
+                              # distributed installations (docs/distributed.md):
+                              #   topology.py · link.py · cluster.py · cluster_data.py
+                              #   nodes.py · executor.py · node_shell.py · cli_node.py
     sh/                       # Bash command libraries sourced by papaia-ctl
-  schemas/                    # JSON Schemas of `status --json` and `doctor --json`
+  schemas/                    # JSON Schemas of `status --json`, `doctor --json`, `addon list --json`
+                              #   and `addon upgrade --dry-run --json`
   migrations/                 # Release migrations run by `papaia-ctl upgrade`
                               #   <x.y.z>__<slug>.sh|.py — contract in its README
   tests/                      # pytest suite (mirrors the lib/ modules)
@@ -90,6 +94,7 @@ src/
     nginx/                    # Nginx Proxy Manager (TLS termination) + admin-UI sidecar
     oauth2-proxy/             # Forward-auth gateway (Go)
     smtp-relay/               # Optional internal mail relay (Postfix, profile: smtp)
+    link-gateway/             # mTLS link between nodes (distributed only; not in the include list)
   ai/
     README.md                 # Per-AI-service summary
     librechat/                # Multi-provider chat interface
@@ -108,9 +113,11 @@ docs/
   configuration.md              # Environment variable reference
   deployment.md                 # Deployment guide
   troubleshooting.md            # Common issues and fixes
+  distributed.md                # Running on several machines (operator guide)
+  distributed-validation.md     # Hand-run check of a two-node installation
   adr/                          # Architecture Decision Records
 .github/
-  workflows/ci.yml            # Lint (shellcheck, yamllint, hadolint) + PR-title check
+  workflows/ci.yml            # Lint (shellcheck, yamllint, hadolint), ruff + pytest, PR-title check
   ISSUE_TEMPLATE/             # Bug / Feature / Docs issue forms
   PULL_REQUEST_TEMPLATE.md    # PR body template
 ```
@@ -199,7 +206,7 @@ checks on every push and pull request.
 | Shell (`*.sh`, `tools/papaia-ctl`) | shellcheck | `--severity=warning` must pass |
 | YAML (`*.yml`, `*.yaml`) | yamllint | Project `.yamllint` config must pass |
 | Dockerfiles | hadolint | Project ignore list in CI must pass |
-| Python (`tools/lib/*.py`) | ruff + pytest (`tools/pyproject.toml`) | Run locally — not yet wired into CI |
+| Python (`tools/lib/*.py`) | ruff + pytest (`tools/pyproject.toml`) | `ruff check` and the full suite must pass |
 
 ```sh
 shellcheck --severity=warning tools/papaia-ctl tools/lib/sh/*.sh src/*.sh

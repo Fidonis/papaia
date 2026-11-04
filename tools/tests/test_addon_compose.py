@@ -33,6 +33,7 @@ docker() {
     echo "docker $* | project=${COMPOSE_PROJECT_NAME:-} file=${COMPOSE_FILE:-}" \\
         "profiles=${COMPOSE_PROFILES:-}" >> "@LOG@"
 }
+_topology_mode() { echo single; }
 source "@ADDON@"
 # What a caller could have exported: the core stack's own settings.
 export COMPOSE_PROJECT_NAME=papaia COMPOSE_FILE=/core/docker-compose.yml COMPOSE_PROFILES=rag
