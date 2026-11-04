@@ -371,3 +371,121 @@ def test_addon_ssl_cert_override_generated_per_addon(config_dir, repo_root, tmp_
         (addons_dir / "docker-compose.other-ssl-cert.override.yml").read_text(encoding="utf-8")
     )
     assert other["services"]["other-svc"]["environment"]["SSL_CERT_FILE"] == ""
+
+
+# ── networks.join_addons ──────────────────────────────────────────────────────
+
+
+def _write_addon(root: Path, name: str, manifest: dict, compose: dict | None = None) -> Path:
+    path = root / name
+    path.mkdir(parents=True)
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump({"name": name, **manifest}), "utf-8")
+    if compose is not None:
+        (path / "docker-compose.yml").write_text(yaml.safe_dump(compose), "utf-8")
+    return path
+
+
+def _register(config_dir: Path, *paths: Path, active: bool = True) -> None:
+    deployment_path = config_dir / "deployment.yaml"
+    deployed = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    deployed["addons"] = [{"name": p.name, "path": str(p), "active": active} for p in paths]
+    deployment_path.write_text(yaml.safe_dump(deployed), encoding="utf-8")
+
+
+def _join_override(config_dir: Path, name: str) -> Path:
+    return config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
+
+
+def _joining_pair(tmp_path: Path, *, target_network: str = "papaia-wiki-net") -> tuple[Path, Path]:
+    wiki = _write_addon(tmp_path / "addons", "wiki", {"networks": {"app_network": target_network}})
+    joiner = _write_addon(
+        tmp_path / "addons",
+        "joiner",
+        {
+            "requires": {"addons": ["wiki"]},
+            "networks": {"join_addons": [{"addon": "wiki", "services": ["job"]}]},
+        },
+        compose={
+            "services": {
+                "job": {"image": "busybox", "networks": ["own"]},
+                "web": {"image": "nginx"},
+            },
+            "networks": {"own": {}},
+        },
+    )
+    return wiki, joiner
+
+
+def test_join_override_attaches_only_the_listed_services(config_dir, repo_root, tmp_path):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    wiki, joiner = _joining_pair(tmp_path)
+    _register(config_dir, wiki, joiner)
+
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
+
+    override = yaml.safe_load(_join_override(config_dir, "joiner").read_text(encoding="utf-8"))
+    # The service keeps its own network: a compose `networks:` override replaces the list.
+    assert override["services"] == {"job": {"networks": ["own", "papaia-wiki-net"]}}
+    assert override["networks"] == {"papaia-wiki-net": {"external": True}}
+    assert not _join_override(config_dir, "wiki").exists()
+
+
+def test_join_override_keeps_the_default_network(config_dir, repo_root, tmp_path):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    wiki = _write_addon(tmp_path / "addons", "wiki", {"networks": {"app_network": "wiki-net"}})
+    joiner = _write_addon(
+        tmp_path / "addons",
+        "joiner",
+        {
+            "requires": {"addons": ["wiki"]},
+            "networks": {"join_addons": [{"addon": "wiki", "services": ["job"]}]},
+        },
+        compose={"services": {"job": {"image": "busybox"}}},
+    )
+    _register(config_dir, wiki, joiner)
+
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
+
+    override = yaml.safe_load(_join_override(config_dir, "joiner").read_text(encoding="utf-8"))
+    assert override["services"]["job"]["networks"] == ["default", "wiki-net"]
+
+
+def test_join_override_resolves_a_deployment_scoped_network(config_dir, repo_root, tmp_path):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    env_path = config_dir / ".env"
+    env_path.write_text(
+        env_path.read_text(encoding="utf-8") + "PAPAIA_PROJECT=acme\n", encoding="utf-8"
+    )
+    wiki, joiner = _joining_pair(tmp_path, target_network="${PAPAIA_PROJECT:-papaia}-wiki-net")
+    _register(config_dir, wiki, joiner)
+
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
+
+    override = yaml.safe_load(_join_override(config_dir, "joiner").read_text(encoding="utf-8"))
+    assert "acme-wiki-net" in override["networks"]
+
+
+def test_join_override_is_removed_for_an_inactive_addon(config_dir, repo_root, tmp_path):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    wiki, joiner = _joining_pair(tmp_path)
+    _register(config_dir, wiki, joiner)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
+    assert _join_override(config_dir, "joiner").is_file()
+
+    _register(config_dir, wiki, joiner, active=False)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
+    assert not _join_override(config_dir, "joiner").exists()
+
+
+def test_join_override_skips_a_target_without_app_network(
+    config_dir, repo_root, tmp_path, capsys
+):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    wiki = _write_addon(tmp_path / "addons", "wiki", {})
+    _, joiner = _joining_pair(tmp_path / "other")
+    _register(config_dir, wiki, joiner)
+
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
+
+    assert not _join_override(config_dir, "joiner").exists()
+    assert "declares no networks.app_network" in capsys.readouterr().err

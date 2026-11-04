@@ -209,6 +209,12 @@ networks:
   attach: [nginx-proxy-manager, librechat]
                                    # Core containers to attach to the app network;
                                    # validated against the Core Compose service names
+  join_addons:                     # optional (addon_api 4): services of this add-on
+    - addon: <required add-on>     # that join the app network of an add-on listed
+      services: [<service>]        # in requires.addons; the others stay isolated.
+                                   # Written to overrides/addons/docker-compose.
+                                   # <name>-join.override.yml. Single host only: a
+                                   # network cannot span two nodes.
 
 local_ca_env:                      # optional: env vars pointing at the local
   <service>: [SSL_CERT_FILE]       # Keycloak CA certificate — cleared via override

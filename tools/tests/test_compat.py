@@ -381,3 +381,30 @@ def test_required_addon_without_version_passes_with_warning():
     result = compat.evaluate_required_addons("demo", manifest, {"crm": None})
     assert result is not None and result.status == compat.STATUS_OK
     assert result.warnings
+
+
+# ── networks.join_addons ──────────────────────────────────────────────────────
+
+
+def test_joined_addons_parses_entries():
+    manifest = {
+        "requires": {"addons": ["wiki"]},
+        "networks": {"join_addons": [{"addon": "wiki", "services": ["job"]}]},
+    }
+    assert compat.joined_addons(manifest) == [("wiki", ["job"])]
+
+
+@pytest.mark.parametrize(
+    "join",
+    [
+        [{"addon": "crm", "services": ["job"]}],  # not in requires.addons
+        [{"addon": "wiki", "services": []}],
+        [{"addon": "wiki"}],
+        [{"services": ["job"]}],
+        {"addon": "wiki"},
+    ],
+)
+def test_malformed_join_addons_is_a_manifest_error(join):
+    manifest = {"requires": {"addons": ["wiki"]}, "networks": {"join_addons": join}}
+    result = compat.evaluate_required_addons("demo", manifest, {"wiki": "1.0.0"})
+    assert result is not None and result.status == compat.STATUS_ERROR

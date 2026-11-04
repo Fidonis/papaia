@@ -293,6 +293,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
@@ -336,6 +337,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
     # Also regenerated here, not just in cmd_setup: `papaia-ctl start` renders
     # before bringing the stack up, so a stale override would otherwise survive
     # both an upgrade and a variant change.
