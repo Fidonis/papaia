@@ -864,3 +864,80 @@ def test_dependents_passes_without_dependents(repo_root, config_dir):
     _setup(repo_root, config_dir)
     assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
     assert cmd_addon_dependents(_dependents_args(config_dir, repo_root)) == 0
+
+
+# ── env_prompts.*.default_from_addon / exports ───────────────────────────────
+
+
+def _provider_and_consumer(tmp_path: Path, *, exports: list | None = None) -> tuple[Path, Path]:
+    provider = tmp_path / "addon-provider"
+    provider.mkdir()
+    provider_manifest = {"name": "provider", "version": "1.0.0", "papaia_compat": ">=0.8.0"}
+    if exports is not None:
+        provider_manifest["exports"] = exports
+    (provider / "papaia-app.yaml").write_text(yaml.safe_dump(provider_manifest), "utf-8")
+    (provider / ".env.example").write_text(
+        "PROVIDER_API_KEY=GENERATE_SECRET\nPROVIDER_DB_PASSWORD=GENERATE_SECRET\n", "utf-8"
+    )
+    consumer = tmp_path / "addon-consumer"
+    consumer.mkdir()
+    consumer_manifest = {
+        "name": "consumer",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "requires": {"addons": ["provider"]},
+        "env_prompts": {
+            "PROVIDER_API_KEY": {
+                "label": "API key of the provider",
+                "default_from_addon": "provider:PROVIDER_API_KEY",
+                "secret": True,
+            }
+        },
+    }
+    (consumer / "papaia-app.yaml").write_text(yaml.safe_dump(consumer_manifest), "utf-8")
+    (consumer / ".env.example").write_text("PROVIDER_API_KEY=CHANGE_ME\n", "utf-8")
+    return provider, consumer
+
+
+def test_install_fills_a_prompt_from_an_exported_value(repo_root, config_dir, tmp_path):
+    _setup(repo_root, config_dir)
+    provider, consumer = _provider_and_consumer(tmp_path, exports=["PROVIDER_API_KEY"])
+    args = _install_args(config_dir, repo_root, name="provider", path=str(provider))
+    assert cmd_addon_install(args) == 0
+    provider_env = common.parse_env_file(config_dir / "addons" / "provider" / ".env")
+
+    args = _install_args(config_dir, repo_root, name="consumer", path=str(consumer))
+    assert cmd_addon_install(args) == 0
+
+    consumer_env = common.parse_env_file(config_dir / "addons" / "consumer" / ".env")
+    assert consumer_env["PROVIDER_API_KEY"] == provider_env["PROVIDER_API_KEY"]
+    assert not (consumer / ".env").exists()
+
+
+def test_install_refuses_a_key_the_provider_does_not_export(
+    repo_root, config_dir, tmp_path, capsys
+):
+    _setup(repo_root, config_dir)
+    provider, consumer = _provider_and_consumer(tmp_path, exports=["SOMETHING_ELSE"])
+    args = _install_args(config_dir, repo_root, name="provider", path=str(provider))
+    assert cmd_addon_install(args) == 0
+    deployment_before = (config_dir / "deployment.yaml").read_text(encoding="utf-8")
+
+    args = _install_args(config_dir, repo_root, name="consumer", path=str(consumer))
+    assert cmd_addon_install(args) == 2
+    assert "does not export 'PROVIDER_API_KEY'" in capsys.readouterr().err
+    assert (config_dir / "deployment.yaml").read_text(encoding="utf-8") == deployment_before
+    assert not (config_dir / "addons" / "consumer").exists()
+
+
+def test_install_force_leaves_an_unresolvable_prompt_unset(
+    repo_root, config_dir, tmp_path, capsys
+):
+    _setup(repo_root, config_dir)
+    _, consumer = _provider_and_consumer(tmp_path, exports=["PROVIDER_API_KEY"])
+
+    args = _install_args(config_dir, repo_root, name="consumer", path=str(consumer), force=True)
+    assert cmd_addon_install(args) == 0
+    assert "WARNING" in capsys.readouterr().err
+    consumer_env = common.parse_env_file(config_dir / "addons" / "consumer" / ".env")
+    assert consumer_env["PROVIDER_API_KEY"] == "CHANGE_ME"

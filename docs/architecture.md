@@ -239,9 +239,21 @@ env_prompts:                       # optional: metadata per .env.example key
     pattern: "^[a-z]+$"           # regex for type: text (HTML + server)
     default: "http://localhost"    # static fallback value
     default_from_core: ENV_KEY     # value from the Core .env (overrides default)
+  OTHER_API_KEY:
+    secret: true
+    default_from_addon: "other-addon:OTHER_API_KEY"
+                                   # addon_api 4: value from the config bundle of an
+                                   # add-on in requires.addons that lists the key under
+                                   # `exports`; filled at install, never echoed. Sticky
+                                   # like every bundle value: after the other add-on
+                                   # rotates it, reinstall this add-on to pick it up.
   AUTO_SECRET:
     secret: true                   # required for GENERATE_* values without _KEY suffix
     label:  "Database password"
+
+exports: [OTHER_API_KEY]           # optional (addon_api 4): bundle .env keys other
+                                   # add-ons may read via default_from_addon; no other
+                                   # key of this add-on is ever read by another add-on
 
 env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
