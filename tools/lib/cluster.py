@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import doctor, envtree, executor, link, nodes, stack_network, status, topology
+from . import common, doctor, envtree, executor, link, nodes, stack_network, status, topology
 from .topology import CATALOGUE, Topology
 
 # A JWT carries `exp` and `nbf`; services accept a few seconds of skew at most.
@@ -658,7 +658,8 @@ def check_links(
 def run_doctor(
     cluster: Cluster, *, skip: list[str] | None = None, now: datetime | None = None
 ) -> doctor.DoctorReport:
-    """The controller's own node checked as on one host, plus `nodes` and `links`."""
+    """The controller's own node checked as on one host, plus `nodes`, `links` and
+    `file_modes`."""
     skipped = set(doctor.parse_skip(skip))
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     controller = cluster.topology.controller
@@ -686,7 +687,30 @@ def run_doctor(
             report.checks.append(check(cluster, answers, reasons, moment))
         else:
             report.checks.append(check(cluster, answers, moment))
+    if "file_modes" in skipped:
+        report.checks.append(doctor.CheckResult("file_modes", doctor.SKIP, "skipped (--skip)"))
+    else:
+        report.checks.append(check_file_modes(cluster))
     return report
+
+
+def check_file_modes(cluster: Cluster) -> doctor.CheckResult:
+    """The controller's config dir keeps file modes, which the link keys rely on."""
+    problem = common.file_mode_problem(cluster.config_dir)
+    if problem:
+        return doctor.CheckResult(
+            "file_modes",
+            doctor.FAIL,
+            f"the config dir does not keep file modes ({problem}); move it to a Linux "
+            "filesystem",
+            {"config_dir": str(cluster.config_dir), "problem": problem},
+        )
+    return doctor.CheckResult(
+        "file_modes",
+        doctor.PASS,
+        "the config dir keeps file modes",
+        {"config_dir": str(cluster.config_dir)},
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────

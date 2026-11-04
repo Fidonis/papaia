@@ -545,9 +545,27 @@ def test_doctor_adds_nodes_and_links_in_distributed_mode(distributed, monkeypatc
         node_doctor(version, probes=[ok_probe("edge")]),
         node_doctor(version, probes=[ok_probe("internal")]),
     )
-    assert [c.name for c in report.checks] == ["nodes", "links"]
+    assert [c.name for c in report.checks] == ["nodes", "links", "file_modes"]
     assert check(report, "nodes").status == "pass"
     assert check(report, "links").status == "pass"
+    assert check(report, "file_modes").status == "pass"
+    assert not list(DOCTOR_SCHEMA.iter_errors(report.to_dict()))
+
+
+def test_doctor_fails_on_a_config_dir_that_does_not_keep_file_modes(distributed, monkeypatch):
+    version = topology.envtree.resolve_platform_version(distributed.repo)
+    monkeypatch.setattr(
+        cluster.common, "file_mode_problem", lambda d: "chmod 600 left mode 777"
+    )
+    report = doctor_report(
+        distributed,
+        monkeypatch,
+        node_doctor(version, probes=[ok_probe("edge")]),
+        node_doctor(version, probes=[ok_probe("internal")]),
+    )
+    result = check(report, "file_modes")
+    assert result.status == "fail"
+    assert "chmod 600 left mode 777" in result.summary
     assert not list(DOCTOR_SCHEMA.iter_errors(report.to_dict()))
 
 

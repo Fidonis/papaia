@@ -613,6 +613,27 @@ def test_a_removed_node_loses_its_bundle(full: Installation):
     assert topology.bundle_dir(full.config, "dmz").is_dir()
 
 
+def test_projection_refuses_a_config_dir_that_does_not_keep_file_modes(
+    full: Installation, monkeypatch
+):
+    # The link keys are written with mode 600; on DrvFs without `metadata` that fails or
+    # does nothing, so the projection stops before it writes anything (#274).
+    monkeypatch.setattr(
+        topology.common, "file_mode_problem", lambda d: "chmod failed: Operation not permitted"
+    )
+    with pytest.raises(topology.TopologyError, match="does not keep file modes"):
+        project(full, dmz_split())
+    assert not topology.bundle_dir(full.config, "edge").exists()
+
+
+def test_a_single_host_never_probes_file_modes(full: Installation, monkeypatch):
+    def _fail(directory):
+        raise AssertionError("probed on a single host")
+
+    monkeypatch.setattr(topology.common, "file_mode_problem", _fail)
+    assert topology.project(full.config, full.repo, Topology()) == []
+
+
 def test_projection_is_repeatable(full: Installation):
     project(full, dmz_split())
     first = {p: p.read_bytes() for p in bundle_files(full, "edge")}

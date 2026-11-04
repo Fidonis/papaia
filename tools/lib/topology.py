@@ -1020,7 +1020,7 @@ def _copy_path(source: Path, dest: Path) -> None:
         shutil.copytree(source, dest)
     elif source.is_file():
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(source, dest)
+        shutil.copy2(source, dest)
 
 
 @dataclass
@@ -1202,6 +1202,21 @@ def project_node(
     )
 
 
+def require_file_modes(config_dir: Path) -> None:
+    """A distributed installation writes the link CA and every node's link key with mode
+    600 (lib/link.py). A config dir that cannot keep modes, such as a Windows drive under
+    /mnt in WSL2 mounted without `metadata`, would fail halfway through the projection or
+    leave the keys readable, so it is refused up front."""
+    problem = common.file_mode_problem(config_dir)
+    if problem:
+        raise TopologyError(
+            f"The config dir {config_dir} does not keep file modes ({problem}). A "
+            "distributed installation protects its link keys with them. Keep the config "
+            "dir on a Linux filesystem, e.g. inside the WSL distribution rather than under "
+            "/mnt/c, or mount the drive with the 'metadata' option."
+        )
+
+
 def project(config_dir: Path, repo_root: Path, topo: Topology) -> list[NodeBundle]:
     """Write every node's bundle and remove the bundles of nodes that are gone.
 
@@ -1209,6 +1224,7 @@ def project(config_dir: Path, repo_root: Path, topo: Topology) -> list[NodeBundl
     certificate and the CA certificate (see lib/link.py)."""
     if not topo.distributed:
         return []
+    require_file_modes(config_dir)
     # Local import: link builds on this module's model.
     from . import link
 
