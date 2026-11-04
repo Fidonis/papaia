@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -217,11 +218,16 @@ def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> Env
     value by hand keeps it. The placeholder shipped in .env.example, or an empty
     value, is replaced by the detected socket GID. If the socket cannot be
     stat'd (setup run on a host without a local Docker socket, e.g. a remote
-    daemon), the current value is left untouched."""
+    daemon), or on macOS, where the host path is not the socket the containers
+    see, the current value is left untouched."""
     root = tree.setdefault("", {})
     current = root.get("DOCKER_GID", "")
     if current and current != _DOCKER_GID_PLACEHOLDER:
         return tree  # operator-customised -- leave it sticky
+    if sys.platform == "darwin":
+        # Docker Desktop: the host path is a symlink to ~/.docker/run/docker.sock, owned
+        # by the user's group, not the socket the containers see inside Docker's VM.
+        return tree
     try:
         gid = os.stat(socket_path).st_gid
     except OSError:
