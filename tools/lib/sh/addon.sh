@@ -241,7 +241,7 @@ cmd_addon_stop() {
 _addon_refuse_while_required() {
     local -a dependents_args=(--name="$1")
     [ "$2" -eq 1 ] && dependents_args+=(--force)
-    py_cli addon-dependents "${dependents_args[@]}" || exit 2
+    py_cli addon-dependents ${dependents_args[@]+"${dependents_args[@]}"} || exit 2
 }
 
 cmd_addon_remove() {
