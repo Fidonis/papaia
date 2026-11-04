@@ -117,7 +117,7 @@ docs/
   distributed-validation.md     # Hand-run check of a two-node installation
   adr/                          # Architecture Decision Records
 .github/
-  workflows/ci.yml            # Lint (shellcheck, yamllint, hadolint) + PR-title check
+  workflows/ci.yml            # Lint (shellcheck, yamllint, hadolint), ruff + pytest, PR-title check
   ISSUE_TEMPLATE/             # Bug / Feature / Docs issue forms
   PULL_REQUEST_TEMPLATE.md    # PR body template
 ```
@@ -206,7 +206,7 @@ checks on every push and pull request.
 | Shell (`*.sh`, `tools/papaia-ctl`) | shellcheck | `--severity=warning` must pass |
 | YAML (`*.yml`, `*.yaml`) | yamllint | Project `.yamllint` config must pass |
 | Dockerfiles | hadolint | Project ignore list in CI must pass |
-| Python (`tools/lib/*.py`) | ruff + pytest (`tools/pyproject.toml`) | Run locally — not yet wired into CI |
+| Python (`tools/lib/*.py`) | ruff + pytest (`tools/pyproject.toml`) | `ruff check` and the full suite must pass |
 
 ```sh
 shellcheck --severity=warning tools/papaia-ctl tools/lib/sh/*.sh src/*.sh
