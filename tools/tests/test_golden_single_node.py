@@ -41,6 +41,10 @@ UPDATE = os.environ.get("PAPAIA_UPDATE_GOLDEN") == "1"
 # Set in CI: there the compose comparison must not be skipped for a missing Docker or
 # another Compose release.
 REQUIRE_COMPOSE = os.environ.get("PAPAIA_REQUIRE_GOLDEN_COMPOSE") == "1"
+# The IDs `setup` stamps from the host end up in `user:` and `group_add:` of the manager
+# and the RAG ingester, where the .env normalisation does not reach. Compose takes the
+# shell environment over --env-file, so the render pins them to the shipped placeholders.
+_PINNED_HOST_IDS = {"UID": "1000", "GID": "1000", "DOCKER_GID": "999"}
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
 GIB = 1024**3
@@ -230,6 +234,7 @@ def _compose_config(inst: Installation) -> str | None:
             text=True,
             timeout=120,
             check=False,
+            env={**os.environ, **_PINNED_HOST_IDS},
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -333,7 +338,8 @@ def test_single_node_output_matches_the_golden_snapshot(tmp_path: Path, name: st
         )
     if rendered["config"] is not None and rendered["version"] == recorded["version"]:
         assert rendered["config"] == recorded["config"], (
-            f"{name}: docker compose config differs from the golden snapshot"
+            f"{name}: docker compose config differs from the golden snapshot "
+            f"(rendered {rendered['config']}, recorded {recorded['config']})"
         )
 
 
