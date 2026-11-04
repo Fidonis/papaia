@@ -702,8 +702,10 @@ posture:
 
 - **State on customer infrastructure**: all data in named volumes on the customer host;
   also in Fidonis-managed operation it is single-tenant — Fidonis holds no customer data.
-- **Local-first inference**: LocalAI as the default backend via LiteLLM; external
-  LLM APIs are **opt-in** and centrally disableable at exactly one point (LiteLLM)
+- **Local-first inference**: LocalAI as the default backend via LiteLLM; on Apple
+  Silicon, Docker Desktop's Model Runner on the host as the GPU-backed alternative
+  (module `model-runner`, [ADR 0011](adr/0011-local-inference-on-apple-silicon-through-docker-model-runner.md));
+  external LLM APIs are **opt-in** and centrally disableable at exactly one point (LiteLLM)
   → "nothing leaves the building" is enforceable and auditable (one egress point).
 - **Authorization at the data edge, not only in the UI**: MCP servers validate the
   Keycloak bearer token + audience and scope **every** request:
