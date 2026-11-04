@@ -628,6 +628,7 @@ tools/papaia-ctl addon list      [--json] [--config-dir=PATH]
 tools/papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 tools/papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
 tools/papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
 tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
   [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
 tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
@@ -643,6 +644,7 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
+| `run` | Runs a maintenance action the add-on declares under `actions:` — `docker compose run --rm <service> <args>` in the add-on's project, with the files and env of `addon start` — and exits with the action's code. Only declared actions with their fixed arguments run; without an action, lists the declared ones (`--json` for tools). Single host only. |
 | `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. |
 | `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). |

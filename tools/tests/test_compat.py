@@ -408,3 +408,31 @@ def test_malformed_join_addons_is_a_manifest_error(join):
     manifest = {"requires": {"addons": ["wiki"]}, "networks": {"join_addons": join}}
     result = compat.evaluate_required_addons("demo", manifest, {"wiki": "1.0.0"})
     assert result is not None and result.status == compat.STATUS_ERROR
+
+
+# ── actions ───────────────────────────────────────────────────────────────────
+
+
+def test_addon_actions_parses_and_defaults():
+    actions = {"reset": {"service": "job", "args": ["--all"]}, "check": {"service": "job"}}
+    manifest = {"actions": actions}
+    assert compat.addon_actions(manifest) == {
+        "reset": {"service": "job", "args": ["--all"], "description": ""},
+        "check": {"service": "job", "args": [], "description": ""},
+    }
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        ["reset"],
+        {"Reset": {"service": "job"}},
+        {"reset": {"args": ["x"]}},
+        {"reset": {"service": "job", "args": "x"}},
+        {"reset": {"service": "job", "args": [1]}},
+    ],
+)
+def test_malformed_actions_are_a_manifest_error(actions):
+    result = compat.evaluate_addon("a", {"actions": actions}, _core())
+    assert result.status == compat.STATUS_ERROR
+    assert result.axis == "actions"

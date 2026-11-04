@@ -759,6 +759,83 @@ def dependent_addons(name: str, deployed: dict, repo_root: Path) -> list[str]:
     return dependents
 
 
+def cmd_addon_action(args: argparse.Namespace) -> int:
+    """Resolve `papaia-ctl addon run <addon> <action>` for bash: materialize the
+    addon's .env and print the service and its fixed arguments, NUL-separated.
+    Exit 2 for an addon that is not active or an undeclared action."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir) or {}
+    entry = next(
+        (a for a in deployed.get("addons") or [] if a.get("name") == args.name), None
+    )
+    if entry is None or not entry.get("active"):
+        print(f"ERROR: addon '{args.name}' is not installed and active.", file=sys.stderr)
+        return 2
+    addon_path = deployment.resolve_addon_path(entry, repo_root)
+    manifest, manifest_error = deployment.load_addon_manifest(addon_path)
+    if manifest is None:
+        print(f"ERROR: {manifest_error}", file=sys.stderr)
+        return 2
+    try:
+        actions = compat.addon_actions(manifest)
+    except ValueError as exc:
+        print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
+        return 2
+    action = actions.get(args.action)
+    if action is None:
+        declared = ", ".join(sorted(actions)) or "none"
+        print(
+            f"ERROR: addon '{args.name}' declares no action '{args.action}'."
+            f" Declared: {declared}.",
+            file=sys.stderr,
+        )
+        return 2
+    addons.materialize_addon_env(config_dir, addon_path, args.name)
+    sys.stdout.write("".join(f"{part}\0" for part in [action["service"], *action["args"]]))
+    return 0
+
+
+def cmd_addon_actions(args: argparse.Namespace) -> int:
+    """List an addon's declared actions (`addon run <addon>` without an action),
+    as text or, with --json, as [{name, service, description}]."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir) or {}
+    entry = next(
+        (a for a in deployed.get("addons") or [] if a.get("name") == args.name), None
+    )
+    if entry is None:
+        print(f"ERROR: addon '{args.name}' is not registered.", file=sys.stderr)
+        return 2
+    manifest, manifest_error = deployment.load_addon_manifest(
+        deployment.resolve_addon_path(entry, repo_root)
+    )
+    if manifest is None:
+        print(f"ERROR: {manifest_error}", file=sys.stderr)
+        return 2
+    try:
+        actions = compat.addon_actions(manifest)
+    except ValueError as exc:
+        print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {"name": n, "service": a["service"], "description": a["description"]}
+                    for n, a in sorted(actions.items())
+                ]
+            )
+        )
+    elif not actions:
+        print(f"Addon '{args.name}' declares no actions.")
+    else:
+        for name, action in sorted(actions.items()):
+            print(f"{name:<20} {action['description']}".rstrip())
+    return 0
+
+
 def cmd_addon_dependents(args: argparse.Namespace) -> int:
     """Refuse (exit 2) to take an addon away while another active addon requires it.
     Runs before `addon remove` and `addon uninstall` touch anything; --force

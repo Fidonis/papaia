@@ -941,3 +941,73 @@ def test_install_force_leaves_an_unresolvable_prompt_unset(
     assert "WARNING" in capsys.readouterr().err
     consumer_env = common.parse_env_file(config_dir / "addons" / "consumer" / ".env")
     assert consumer_env["PROVIDER_API_KEY"] == "CHANGE_ME"
+
+
+# ── actions ───────────────────────────────────────────────────────────────────
+
+
+def _action_addon(tmp_path: Path) -> Path:
+    path = tmp_path / "addon-actions"
+    path.mkdir()
+    manifest = {
+        "name": "acting",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "actions": {
+            "reset": {"service": "job", "args": ["--reset-existing"], "description": "Reset"},
+        },
+    }
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return path
+
+
+def _action_args(config_dir: Path, repo_root: Path, action: str) -> argparse.Namespace:
+    return argparse.Namespace(
+        config_dir=str(config_dir), repo_root=str(repo_root), name="acting", action=action
+    )
+
+
+def test_addon_action_prints_service_and_arguments(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path)
+    install = _install_args(config_dir, repo_root, name="acting", path=str(addon))
+    assert cmd_addon_install(install) == 0
+    capsys.readouterr()
+
+    assert cmd_addon_action(_action_args(config_dir, repo_root, "reset")) == 0
+    assert capsys.readouterr().out == "job\0--reset-existing\0"
+
+
+def test_addon_action_refuses_an_undeclared_action(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path)
+    install = _install_args(config_dir, repo_root, name="acting", path=str(addon))
+    assert cmd_addon_install(install) == 0
+    capsys.readouterr()
+
+    assert cmd_addon_action(_action_args(config_dir, repo_root, "purge")) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Declared: reset." in captured.err
+
+
+def test_addon_actions_lists_as_json(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_actions
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path)
+    install = _install_args(config_dir, repo_root, name="acting", path=str(addon))
+    assert cmd_addon_install(install) == 0
+    capsys.readouterr()
+
+    args = argparse.Namespace(
+        config_dir=str(config_dir), repo_root=str(repo_root), name="acting", json=True
+    )
+    assert cmd_addon_actions(args) == 0
+    assert yaml.safe_load(capsys.readouterr().out) == [
+        {"name": "reset", "service": "job", "description": "Reset"}
+    ]
