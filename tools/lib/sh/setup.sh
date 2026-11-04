@@ -172,6 +172,7 @@ cmd_setup() {
         fi
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
             _ensure_keycloak_certs
+            _macos_local_tls_steps "$non_interactive"
         fi
         success "setup complete (re-render only)."
         return 0
@@ -242,6 +243,7 @@ cmd_setup() {
             fi
             if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "internal_keycloak" ]; then
                 _ensure_keycloak_certs
+                _macos_local_tls_steps "$non_interactive"
             fi
             success "setup complete (re-render only)."
             return 0
@@ -510,6 +512,7 @@ cmd_setup() {
     fi
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
         _ensure_keycloak_certs
+        _macos_local_tls_steps "$non_interactive"
     fi
     local mode
     mode="$(_topology_mode)" || return 3
@@ -673,9 +676,9 @@ _localai_variant_unverified() {
     warn "$1 was not detected on this host. Install the driver and container runtime before starting the stack, or re-run setup and choose CPU."
 }
 
-# Asks whether to run papaia-manager; prints "true" or "false". The manager profile needs
-# a Linux host (README, papaia-manager), which Docker Desktop on macOS is not, so there
-# the default is no, unless a previous run said yes.
+# Asks whether to run papaia-manager; prints "true" or "false". On macOS the manager runs
+# on Docker Desktop only (README, papaia-manager), so there the default is no, unless a
+# previous run said yes.
 _prompt_manager() {
     local manager_default="1" on_mac=0
     [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
@@ -689,7 +692,7 @@ _prompt_manager() {
     printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons%s\n' "$yes_default" >&2
     printf '  2) No   — skip papaia-manager (the core runs without it)%s\n' "$no_default" >&2
     if [ "$on_mac" -eq 1 ]; then
-        printf '  papaia-manager needs a Linux host; see "papaia-manager" in README.md.\n' >&2
+        printf '  On macOS papaia-manager needs Docker Desktop; see "papaia-manager" in README.md.\n' >&2
     fi
     local manager_choice
     manager_choice="$(prompt_with_default "  Choose" "$manager_default")"

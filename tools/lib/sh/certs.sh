@@ -132,3 +132,40 @@ _ensure_keycloak_certs() {
 
     success "Keycloak TLS certificates generated in $certs_dir."
 }
+
+# macOS only, for a local auth host: browsers there check Keycloak's certificate against
+# the user's keychain, and they reach Keycloak under the auth host's name from the Mac
+# itself, where host.docker.internal resolves only with an /etc/hosts entry. Offers to
+# trust the local CA (no admin rights needed) and names what is still missing. Reads
+# AUTH_HOST from the rendered $CONFIG_DIR/.env, so a derived default counts too.
+_macos_local_tls_steps() {
+    local non_interactive="$1"
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    local auth_host=""
+    [ -f "$CONFIG_DIR/.env" ] && auth_host="$(sed -n 's/^AUTH_HOST=//p' "$CONFIG_DIR/.env" | tail -n 1)"
+    [ -n "$auth_host" ] || return 0
+    _is_local_auth_host "$auth_host" || return 0
+    local ca_crt="$CONFIG_DIR/certs/local-ca.crt"
+    local keychain="$HOME/Library/Keychains/login.keychain-db"
+    [ -f "$ca_crt" ] || return 0
+
+    if ! security verify-cert -c "$ca_crt" >/dev/null 2>&1; then
+        if [ "$non_interactive" -eq 0 ] && is_tty \
+            && confirm "Trust the local CA in your login keychain, so browsers on this Mac accept Keycloak?" "Y" \
+            && security add-trusted-cert -r trustRoot -k "$keychain" "$ca_crt"; then
+            success "Local CA trusted in $keychain."
+        else
+            warn "Browsers on this Mac reject Keycloak until the local CA is trusted. Run:"
+            printf '  security add-trusted-cert -r trustRoot -k %s %s\n' "$keychain" "$ca_crt" >&2
+        fi
+    fi
+
+    local host="${auth_host#*://}"
+    host="${host%%:*}"
+    host="${host%%/*}"
+    if [ "$host" = "host.docker.internal" ] \
+        && ! dscacheutil -q host -a name "$host" 2>/dev/null | grep -q '^ip_address:'; then
+        warn "$host does not resolve on this Mac, so browsers cannot reach Keycloak. Run:"
+        printf '  echo "127.0.0.1 %s" | sudo tee -a /etc/hosts\n' "$host" >&2
+    fi
+}
