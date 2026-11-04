@@ -1801,6 +1801,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 - [`docs/deployment.md`](docs/deployment.md) — Deployment guide and operations.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — Common failure modes.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — How to contribute.
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — Expected behavior and how to report a violation.
 - [`CHANGELOG.md`](CHANGELOG.md) — Release history.
 
 ---
