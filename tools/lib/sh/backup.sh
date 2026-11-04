@@ -27,7 +27,7 @@ LAST_BACKUP_ID=""
 _unpause_all() {
     local cid
     if [ ${#_PAUSED_CONTAINERS[@]} -gt 0 ]; then
-        for cid in "${_PAUSED_CONTAINERS[@]}"; do
+        for cid in ${_PAUSED_CONTAINERS[@]+"${_PAUSED_CONTAINERS[@]}"}; do
             docker unpause "$cid" >/dev/null 2>&1 || true
         done
         _PAUSED_CONTAINERS=()
@@ -39,7 +39,7 @@ _backup_cleanup() {
     _unpause_all
     local f
     if [ ${#_BACKUP_TMPFILES[@]} -gt 0 ]; then
-        for f in "${_BACKUP_TMPFILES[@]}"; do
+        for f in ${_BACKUP_TMPFILES[@]+"${_BACKUP_TMPFILES[@]}"}; do
             [ -f "$f" ] && rm -f "$f"
         done
         _BACKUP_TMPFILES=()
@@ -131,7 +131,7 @@ _resolve_backup_dir() {
     local override="$1" resolved
     local -a extra=()
     [ -n "$override" ] && extra+=(--backup-dir="$override")
-    if ! resolved="$(py_cli backup-dir "${extra[@]}")"; then
+    if ! resolved="$(py_cli backup-dir ${extra[@]+"${extra[@]}"})"; then
         return 3
     fi
     printf '%s' "${resolved%$'\r'}"
@@ -198,7 +198,7 @@ cmd_backup() {
     # on stderr and wrote nothing), anything else is a planning failure.
     local plan_rc=0
     py_cli backup-plan --backup-dir="$backup_dir" --existing-volumes="$volumes_file" \
-            "${plan_extra[@]}" | tr -d '\r' > "$plan_file" || plan_rc=$?
+            ${plan_extra[@]+"${plan_extra[@]}"} | tr -d '\r' > "$plan_file" || plan_rc=$?
     if [ "$plan_rc" -eq 2 ]; then
         exit 2
     elif [ "$plan_rc" -ne 0 ]; then
@@ -298,7 +298,7 @@ _backup_distributed() {
     [ "$only_given" -eq 1 ] && extra+=(--only="$only")
     local out rc=0
     out="$(mktemp)"
-    py_cli cluster-backup "${extra[@]}" | tee "$out" || rc=$?
+    py_cli cluster-backup ${extra[@]+"${extra[@]}"} | tee "$out" || rc=$?
     local key value backup_id="" result=""
     while IFS=$'\t' read -r key value; do
         case "$key" in
@@ -331,7 +331,7 @@ _restore_distributed() {
     [ -n "$restore_point" ] && extra+=(--restore-point="$restore_point")
     [ -n "$only" ] && extra+=(--only="$only")
     local plan rc=0
-    plan="$(py_cli cluster-restore --plan "${extra[@]}")" || rc=$?
+    plan="$(py_cli cluster-restore --plan ${extra[@]+"${extra[@]}"})" || rc=$?
     [ "$rc" -ne 0 ] && exit "$rc"
     local key value restore_id=""
     warn "This restore will overwrite:"
@@ -363,7 +363,7 @@ _restore_distributed() {
     local out
     out="$(mktemp)"
     rc=0
-    py_cli cluster-restore "${extra[@]}" | tee "$out" || rc=$?
+    py_cli cluster-restore ${extra[@]+"${extra[@]}"} | tee "$out" || rc=$?
     local result=""
     while IFS=$'\t' read -r key value; do
         [ "$key" = "RESULT" ] && result="${value%$'\r'}"
@@ -466,7 +466,7 @@ cmd_backup_delete() {
             exit 2
         fi
         warn "About to permanently delete ${#points[@]} restore point(s):"
-        printf '  %s\n' "${points[@]}" >&2
+        printf '  %s\n' ${points[@]+"${points[@]}"} >&2
         if ! confirm "Delete permanently?" "N"; then
             error "Aborted."
             exit 3
@@ -475,14 +475,14 @@ cmd_backup_delete() {
 
     local -a args=()
     local p
-    for p in "${points[@]}"; do
+    for p in ${points[@]+"${points[@]}"}; do
         args+=(--restore-point="$p")
     done
 
     # tr -d '\r': see the note in cmd_backup -- a CR on the id would otherwise
     # travel into the backup.log line and the info output.
     local removed
-    if ! removed="$(py_cli backup-delete --backup-dir="$backup_dir" "${args[@]}" | tr -d '\r')"; then
+    if ! removed="$(py_cli backup-delete --backup-dir="$backup_dir" ${args[@]+"${args[@]}"} | tr -d '\r')"; then
         error "Could not delete the requested restore point(s)."
         exit 3
     fi
@@ -566,7 +566,7 @@ cmd_restore() {
     # Status 2 is a request that does not fit the restore point (a scoped backup
     # asked for as a whole); the reason is already on stderr.
     local resolve_rc=0
-    py_cli restore-resolve --backup-dir="$backup_dir" "${extra[@]}" \
+    py_cli restore-resolve --backup-dir="$backup_dir" ${extra[@]+"${extra[@]}"} \
             | tr -d '\r' > "$plan_file" || resolve_rc=$?
     if [ "$resolve_rc" -eq 2 ]; then
         exit 2
@@ -877,9 +877,9 @@ _restore_teardown() {
         info "Stopping and removing containers (core + addons)..."
     fi
     if [ -f "$CONFIG_DIR/deployment.yaml" ]; then
-        _addon_compose_all down "${extra[@]}"
+        _addon_compose_all down ${extra[@]+"${extra[@]}"}
     fi
-    docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down "${extra[@]}"
+    docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down ${extra[@]+"${extra[@]}"}
 }
 
 # $1 snapshot, $2 kind, $3 archive, $4 target, $5 owner

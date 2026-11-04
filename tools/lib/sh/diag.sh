@@ -23,7 +23,7 @@ cmd_status() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
-    py_cli status "${extra[@]}"
+    py_cli status ${extra[@]+"${extra[@]}"}
 }
 
 cmd_doctor() {
@@ -44,5 +44,5 @@ cmd_doctor() {
     # Deliberately no _require_setup_done: doctor is also the preflight to run
     # before 'setup' and 'upgrade'. Checks that need the installation's
     # configuration report 'skip' instead.
-    py_cli doctor "${extra[@]}"
+    py_cli doctor ${extra[@]+"${extra[@]}"}
 }
