@@ -143,7 +143,7 @@ cmd_upgrade() {
     # tr -d '\r': on Windows the interpreter emits CRLF and IFS=$'\t' leaves the
     # CR on the last field — a tag name ending in CR matches no ref.
     if ! resolved="$(py_cli upgrade-resolve --tags-file="$tags_file" \
-            "${resolve_flags[@]}" | tr -d '\r')"; then
+            ${resolve_flags[@]+"${resolve_flags[@]}"} | tr -d '\r')"; then
         exit 3
     fi
 
@@ -179,7 +179,7 @@ cmd_upgrade() {
     local -a check_flags=()
     [ "$force" -eq 1 ] && check_flags+=(--force)
     info "Checking active add-ons against $target..."
-    if ! _py_cli_at "$worktree" addon-check "${check_flags[@]}"; then
+    if ! _py_cli_at "$worktree" addon-check ${check_flags[@]+"${check_flags[@]}"}; then
         error "Add-on compatibility check failed against $target. Nothing has been changed."
         error "Update the add-ons first, or re-run with --force to upgrade anyway."
         exit 2
@@ -278,7 +278,7 @@ cmd_upgrade() {
     # is not guaranteed to carry the execute bit (nor is the checkout guaranteed
     # to sit on an exec-permitting mount). This mirrors how the manager and every
     # migration invoke the script.
-    exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" upgrade "${resume_flags[@]}"
+    exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" upgrade ${resume_flags[@]+"${resume_flags[@]}"}
 }
 
 # Phase 2 — runs from the target release's checkout.
@@ -346,7 +346,7 @@ _upgrade_apply() {
     local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
     [ "$force" = "1" ] && start_flags+=(--force)
     info "Starting the stack..."
-    if ! cmd_start "${start_flags[@]}"; then
+    if ! cmd_start ${start_flags[@]+"${start_flags[@]}"}; then
         error "The stack did not come up on $target."
         _upgrade_failed "$from" "$target" "$restore_point" "$previous_tag" \
             "the upgrade itself is complete — only the start failed, so 'papaia-ctl start --addons' may be all that is missing" \
@@ -382,7 +382,7 @@ _upgrade_apply_distributed() {
     local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
     [ "$force" = "1" ] && start_flags+=(--force)
     info "Starting every node..."
-    if ! ( cmd_start "${start_flags[@]}" ); then
+    if ! ( cmd_start ${start_flags[@]+"${start_flags[@]}"} ); then
         # Every node runs $target now; only the start is missing, so nothing to lock.
         py_cli cluster-lock --clear
         UPGRADE_IN_PROGRESS=0
