@@ -187,6 +187,7 @@ def _render_integration(config_dir: Path, repo_root: Path) -> None:
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
 
 
 def cmd_addon_install(args: argparse.Namespace) -> int:
@@ -814,6 +815,10 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
         config_dir / "overrides" / "addons" / f"docker-compose.{name}-ssl-cert.override.yml"
     )
     ssl_override_file.unlink(missing_ok=True)
+    join_override_file = (
+        config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
+    )
+    join_override_file.unlink(missing_ok=True)
 
     bundle_dir = config_dir / "addons" / name
     if bundle_dir.is_dir():

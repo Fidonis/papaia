@@ -334,6 +334,42 @@ def required_addons(manifest: dict) -> list[tuple[str, str | None]]:
     return result
 
 
+def joined_addons(manifest: dict) -> list[tuple[str, list[str]]]:
+    """The `networks.join_addons` entries as (addon, [service, ...]).
+
+    Each entry names an addon from `requires.addons` and the services of this
+    addon that join that addon's network. Raises ValueError for a malformed
+    entry or an addon that is not required."""
+    networks = manifest.get("networks") or {}
+    if not isinstance(networks, dict):
+        raise ValueError("networks: must be a mapping")
+    entries = networks.get("join_addons")
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("networks.join_addons must be a list")
+    required = {name for name, _ in required_addons(manifest)}
+    result: list[tuple[str, list[str]]] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("addon"), str):
+            raise ValueError("networks.join_addons entries must be mappings with 'addon'")
+        services = entry.get("services")
+        if (
+            not isinstance(services, list)
+            or not services
+            or not all(isinstance(s, str) and s for s in services)
+        ):
+            raise ValueError(
+                f"networks.join_addons '{entry['addon']}': services must be a non-empty list"
+            )
+        if entry["addon"] not in required:
+            raise ValueError(
+                f"networks.join_addons '{entry['addon']}' is not listed in requires.addons"
+            )
+        result.append((entry["addon"], list(services)))
+    return result
+
+
 def evaluate_required_addons(
     name: str, manifest: dict, active: dict[str, str | None]
 ) -> CompatResult | None:
@@ -346,6 +382,7 @@ def evaluate_required_addons(
     passes with a warning."""
     try:
         requirements = required_addons(manifest)
+        joined_addons(manifest)
     except ValueError as exc:
         return CompatResult(name, STATUS_ERROR, axis=REQUIRES_AXIS, reason=str(exc))
     if not requirements:
