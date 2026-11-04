@@ -36,7 +36,7 @@ cmd_addon_install() {
     [ -n "$addon_version" ] && extra+=(--version="$addon_version")
     [ "$force" -eq 1 ]      && extra+=(--force)
     [ -n "$node" ]          && extra+=(--node="$node")
-    py_cli addon-install --name="$addon_name" "${extra[@]}"
+    py_cli addon-install --name="$addon_name" ${extra[@]+"${extra[@]}"}
     success "addon install complete: $addon_name"
 }
 
@@ -77,11 +77,11 @@ _addon_compose() {
     local mode
     mode="$(_topology_mode)" || return 3
     if [ "$mode" = "distributed" ]; then
-        _addon_compose_distributed "$verb" "$addon_name" "${extra[@]}"
+        _addon_compose_distributed "$verb" "$addon_name" ${extra[@]+"${extra[@]}"}
         return
     fi
     if [ ! -f "$addon_path/docker-compose.yml" ]; then
-        _addon_compose_by_name "$verb" "$addon_name" "$addon_path" "${extra[@]}"
+        _addon_compose_by_name "$verb" "$addon_name" "$addon_path" ${extra[@]+"${extra[@]}"}
         return
     fi
     local -a compose_files=(-f "$addon_path/docker-compose.yml")
@@ -107,7 +107,7 @@ _addon_compose() {
     # file's directory), so `up` and the later `down` operate on the same project.
     local project
     project="$(basename "$addon_path")"
-    docker compose -p "$project" "${compose_files[@]}" "${env_files[@]}" "$verb" "${extra[@]}"
+    docker compose -p "$project" ${compose_files[@]+"${compose_files[@]}"} ${env_files[@]+"${env_files[@]}"} "$verb" ${extra[@]+"${extra[@]}"}
 }
 
 # `docker compose -p <project> stop|down` for an addon whose docker-compose.yml
@@ -143,7 +143,11 @@ _addon_compose_by_name() {
 }
 
 _addon_compose_up() {
-    _addon_compose up "$1" "$2" -d
+    local up_flags=(-d)
+    if _stopped_containers_go_stale; then
+        up_flags+=(--force-recreate)
+    fi
+    _addon_compose up "$1" "$2" ${up_flags[@]+"${up_flags[@]}"}
 }
 
 # An add-on of a distributed installation runs on its node; the node's shim starts and
@@ -194,7 +198,7 @@ cmd_addon_start() {
     # Materialize .env from the config bundle into the checkout, then
     # render. Gates on compatibility -- a non-zero exit (set -e) must
     # abort here, before _addon_compose_up brings containers up.
-    py_cli addon-start --name="$addon_name" "${extra[@]}"
+    py_cli addon-start --name="$addon_name" ${extra[@]+"${extra[@]}"}
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
     info "Starting addon $addon_name from $addon_path"
@@ -272,7 +276,7 @@ cmd_addon_check() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
-    py_cli addon-check "${extra[@]}"
+    py_cli addon-check ${extra[@]+"${extra[@]}"}
 }
 
 cmd_addon_components() {
@@ -293,7 +297,7 @@ cmd_addon_components() {
     if [ -n "$addon_name" ]; then
         extra+=(--name="$addon_name")
     fi
-    py_cli addon-components "${extra[@]}"
+    py_cli addon-components ${extra[@]+"${extra[@]}"}
 }
 
 _ADDON_TMPFILES=()
@@ -304,7 +308,7 @@ ADDON_RESTORE_POINT=""
 _addon_cleanup() {
     local f
     if [ ${#_ADDON_TMPFILES[@]} -gt 0 ]; then
-        for f in "${_ADDON_TMPFILES[@]}"; do
+        for f in ${_ADDON_TMPFILES[@]+"${_ADDON_TMPFILES[@]}"}; do
             [ -f "$f" ] && rm -f "$f"
         done
         _ADDON_TMPFILES=()
@@ -397,7 +401,7 @@ cmd_addon_upgrade() {
     if [ "$dry_run" -eq 1 ]; then
         local -a extra=()
         [ "$json" -eq 1 ] && extra+=(--json)
-        py_cli addon-upgrade-plan "${target[@]}" "${extra[@]}"
+        py_cli addon-upgrade-plan ${target[@]+"${target[@]}"} ${extra[@]+"${extra[@]}"}
         return 0
     fi
 
@@ -410,7 +414,7 @@ cmd_addon_upgrade() {
 
     local -a plan_extra=(--answers-out="$answers_out")
     [ -n "$answers_file" ] && plan_extra+=(--answers-file="$answers_file")
-    py_cli addon-upgrade-plan "${target[@]}" "${plan_extra[@]}"
+    py_cli addon-upgrade-plan ${target[@]+"${target[@]}"} ${plan_extra[@]+"${plan_extra[@]}"}
 
     if [ "$assume_yes" -eq 0 ]; then
         if ! is_tty; then
@@ -441,7 +445,7 @@ cmd_addon_upgrade() {
 
     local -a apply_extra=(--answers-file="$answers_out")
     [ -n "$ADDON_RESTORE_POINT" ] && apply_extra+=(--restore-point="$ADDON_RESTORE_POINT")
-    py_cli addon-upgrade-apply "${target[@]}" "${apply_extra[@]}"
+    py_cli addon-upgrade-apply ${target[@]+"${target[@]}"} ${apply_extra[@]+"${apply_extra[@]}"}
 
     if [ "$was_running" -eq 1 ]; then
         if ! _addon_recreate "$addon_name"; then
@@ -493,7 +497,7 @@ cmd_addon_rollback() {
     [ "$force" -eq 1 ] && target+=(--force)
 
     local plan from="" to="" to_path="" restore_point="" key value
-    plan="$(py_cli addon-rollback-plan "${target[@]}" | tr -d '\r')"
+    plan="$(py_cli addon-rollback-plan ${target[@]+"${target[@]}"} | tr -d '\r')"
     while IFS=$'\t' read -r key value; do
         case "$key" in
             FROM) from="$value" ;;
@@ -538,7 +542,7 @@ cmd_addon_rollback() {
         was_running=1
     fi
 
-    py_cli addon-rollback-apply "${target[@]}"
+    py_cli addon-rollback-apply ${target[@]+"${target[@]}"}
 
     if [ "$restore_data" -eq 1 ]; then
         # Brings the add-on down, restores its volumes and starts it again from
@@ -568,7 +572,7 @@ cmd_addon_list() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
-    py_cli addon-list "${extra[@]}"
+    py_cli addon-list ${extra[@]+"${extra[@]}"}
 }
 
 cmd_addon_uninstall() {
