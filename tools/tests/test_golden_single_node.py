@@ -195,6 +195,9 @@ def _defaults(inst: Installation) -> str:
     return inst.normalise("".join(f"{key}={value}\n" for key, value in values.items()))
 
 
+_SHIPPED_HOST_IDS = {"UID": "1000", "GID": "1000", "DOCKER_GID": "999"}
+
+
 def _compose_version() -> str | None:
     try:
         done = subprocess.run(
@@ -211,7 +214,11 @@ def _compose_version() -> str | None:
 
 def _compose_config(inst: Installation) -> str | None:
     """`docker compose config` of the core project as `start` assembles it, or None
-    without a Docker CLI. The overrides are the ones `start` passes with `-f`."""
+    without a Docker CLI. The overrides are the ones `start` passes with `-f`.
+
+    `setup` stamps the IDs of the host into `.env`, and `DOCKER_GID` only with a running
+    daemon. Their shipped values go in through the environment, which wins over
+    `--env-file`, so the digest does not depend on the machine."""
     envtree.materialize_core_env(inst.config, inst.repo)
     files = ["-f", str(inst.repo / "src" / "docker-compose.yml")]
     for override in sorted((inst.config / "overrides").glob("docker-compose.*.override.yml")):
@@ -230,6 +237,7 @@ def _compose_config(inst: Installation) -> str | None:
             text=True,
             timeout=120,
             check=False,
+            env={**os.environ, **_SHIPPED_HOST_IDS},
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -333,7 +341,8 @@ def test_single_node_output_matches_the_golden_snapshot(tmp_path: Path, name: st
         )
     if rendered["config"] is not None and rendered["version"] == recorded["version"]:
         assert rendered["config"] == recorded["config"], (
-            f"{name}: docker compose config differs from the golden snapshot"
+            f"{name}: docker compose config differs from the golden snapshot "
+            f"(rendered {rendered['config']}, recorded {recorded['config']})"
         )
 
 
