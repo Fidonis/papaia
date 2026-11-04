@@ -38,6 +38,9 @@ from lib.doctor import MemInfo, Probes
 REPO = Path(__file__).resolve().parents[2]
 GOLDEN = Path(__file__).parent / "golden" / "single-node.json"
 UPDATE = os.environ.get("PAPAIA_UPDATE_GOLDEN") == "1"
+# Set in CI: there the compose comparison must not be skipped for a missing Docker or
+# another Compose release.
+REQUIRE_COMPOSE = os.environ.get("PAPAIA_REQUIRE_GOLDEN_COMPOSE") == "1"
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
 GIB = 1024**3
@@ -322,6 +325,12 @@ def test_single_node_output_matches_the_golden_snapshot(tmp_path: Path, name: st
     # The compose output depends on the Compose release that renders it, so it is only
     # compared on the release the snapshot was taken with.
     recorded, rendered = expected["compose"], actual["compose"]
+    if REQUIRE_COMPOSE:
+        assert rendered["config"] is not None, f"{name}: no docker compose to render with"
+        assert rendered["version"] == recorded["version"], (
+            f"{name}: docker compose {rendered['version']} cannot be compared with the snapshot "
+            f"recorded with {recorded['version']}"
+        )
     if rendered["config"] is not None and rendered["version"] == recorded["version"]:
         assert rendered["config"] == recorded["config"], (
             f"{name}: docker compose config differs from the golden snapshot"

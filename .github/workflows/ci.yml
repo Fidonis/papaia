@@ -50,11 +50,34 @@ jobs:
   test-python:
     name: Ruff and pytest
     runs-on: ubuntu-latest
+    # A hanging gateway container must not hold the runner for the default six hours.
+    timeout-minutes: 20
+    env:
+      # The golden snapshot compares `docker compose config` only on the Compose release it
+      # was recorded with; in CI a missing or different Compose fails instead of skipping.
+      PAPAIA_REQUIRE_GOLDEN_COMPOSE: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.6"
           python-version: "3.12"
+      # The runner image ships another Compose release than the one the golden snapshot
+      # records; install that one, verified against its published checksum.
+      - name: Provide the Compose release of the golden snapshot
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("tools/tests/golden/single-node.json"))["default"]["compose"]["version"])')
+          asset="docker-compose-linux-x86_64"
+          base="https://github.com/docker/compose/releases/download/v$version"
+          mkdir -p "$HOME/.docker/cli-plugins"
+          cd "$HOME/.docker/cli-plugins"
+          curl -fsSL -o "$asset" "$base/$asset"
+          curl -fsSL -o "$asset.sha256" "$base/$asset.sha256"
+          sha256sum -c "$asset.sha256"
+          mv "$asset" docker-compose
+          rm "$asset.sha256"
+          chmod +x docker-compose
+          docker compose version
       # The live link tests need the HAProxy the gateway ships: the distribution's is too old
       # for `timeout client-hs`. Its Alpine binary runs here only inside the image.
       - name: Provide the pinned HAProxy
@@ -70,10 +93,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Run ruff
         working-directory: tools
-        run: uv run --frozen --extra dev python -m ruff check lib tests
+        run: uv run --locked --extra dev python -m ruff check lib tests
       - name: Run pytest
         working-directory: tools
-        run: uv run --frozen --extra dev python -m pytest tests/ -rs
+        run: uv run --locked --extra dev python -m pytest tests/ -rs
 
   pr-title:
     name: Conventional Commit PR title

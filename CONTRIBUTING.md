@@ -77,14 +77,17 @@ Linters run on every push and pull request:
 - **Shell scripts** - [shellcheck](https://www.shellcheck.net/)
 - **YAML** - [yamllint](https://yamllint.readthedocs.io/)
 - **Dockerfiles** - [hadolint](https://github.com/hadolint/hadolint)
+- **Python** - `ruff check` and `pytest` in `tools/`
 
 Please run them locally before pushing if you can. Configuration lives in `.github/workflows/ci.yml`.
 
-**Python** (`tools/lib/*.py`) - [ruff](https://docs.astral.sh/ruff/) (config in `tools/pyproject.toml`) and `pytest` (`tools/tests/`). Not yet wired into CI; run locally before pushing changes under `tools/`:
+**Python** (`tools/lib/*.py`) - [ruff](https://docs.astral.sh/ruff/) (config in `tools/pyproject.toml`) and `pytest` (`tools/tests/`). CI runs `ruff check` and the full suite; run them locally before pushing changes under `tools/`:
 
-    cd tools && pip install -e ".[dev]"
-    ruff check lib tests && ruff format --check lib tests
-    pytest tests/
+    cd tools
+    uv run --locked --extra dev python -m ruff check lib tests
+    uv run --locked --extra dev python -m pytest tests/
+
+The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker compose config` only with the Compose release it records; CI installs that release. `ruff format` is not enforced.
 
 ## Local development
 
