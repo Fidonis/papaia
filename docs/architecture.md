@@ -236,6 +236,10 @@ env_prompts:                       # optional: metadata per .env.example key
 env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
     hint: "Copy from Keycloak"     # hint is shown in the configuration overview
+
+install_notes:                     # optional: further numbered steps in the checklist,
+                                   # a list or a single string; display only
+  - "Set MW_SERVER in the add-on .env when the wiki is not on the default URL."
 ```
 
 #### `.env.example` value markers
