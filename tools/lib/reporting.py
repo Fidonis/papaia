@@ -136,6 +136,10 @@ def print_keycloak_checklist(
     replace_keys = [k for k, v in bundle_vals.items() if v.startswith("REPLACE_WITH_")]
 
     notes = manifest.get("install_notes") or []
+    # Written by hand in the manifest: a single step as a plain string is a list of one,
+    # not one step per character.
+    if isinstance(notes, str):
+        notes = [notes]
 
     if not clients and not mappers and not replace_keys and not notes:
         return
@@ -177,6 +181,7 @@ def print_keycloak_checklist(
         print()
         step += 1
     for note in notes:
-        print(f"{step}. {note}")
+        # A multi-line note (a YAML `|` block) keeps the indent of the other steps.
+        print(f"{step}. " + str(note).rstrip().replace("\n", "\n   "))
         print()
         step += 1
