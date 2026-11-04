@@ -312,10 +312,12 @@ _ACTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
 def addon_actions(manifest: dict) -> dict[str, dict]:
-    """The `actions` block (addon_api 4) as {name: {service, args, description}}.
+    """The `actions` block (addon_api 4) as {name: {service, args, description,
+    destructive}}.
 
     Each action names a service of the addon's own compose file and optional fixed
-    string arguments. Raises ValueError for a malformed block."""
+    string arguments; `destructive: true` asks callers such as papaia-manager to
+    confirm before running it. Raises ValueError for a malformed block."""
     actions = manifest.get("actions")
     if actions is None:
         return {}
@@ -333,7 +335,15 @@ def addon_actions(manifest: dict) -> dict[str, dict]:
         description = spec.get("description") or ""
         if not isinstance(description, str):
             raise ValueError(f"actions.{name}.description must be a string")
-        result[name] = {"service": spec["service"], "args": list(args), "description": description}
+        destructive = spec.get("destructive", False)
+        if not isinstance(destructive, bool):
+            raise ValueError(f"actions.{name}.destructive must be true or false")
+        result[name] = {
+            "service": spec["service"],
+            "args": list(args),
+            "description": description,
+            "destructive": destructive,
+        }
     return result
 
 

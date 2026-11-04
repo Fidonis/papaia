@@ -265,6 +265,7 @@ actions:                           # optional (addon_api 4): maintenance actions
     args: ["--reset-existing"]     # add-on's project; fixed arguments only. Give the
     description: "Restore the initial data"  # service a compose profile (e.g.
                                    # `profiles: [actions]`) so `addon start` skips it.
+    destructive: true              # optional: callers (papaia-manager) confirm first
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
