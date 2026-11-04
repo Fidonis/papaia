@@ -96,10 +96,48 @@ access. See `src/infra/keycloak/README.md` for the full role table.
 - PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
   library. On a minimal host install it with `sudo apt-get install -y
   python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
-  (Fedora/RHEL), or `pip install 'PyYAML>=6.0'`
+  (Fedora/RHEL), `brew install pyyaml` (macOS), or `pip install 'PyYAML>=6.0'` in a
+  virtual environment
 - `openssl`, only when Keycloak TLS is enabled
 - At least 8 GB RAM recommended ([`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
+
+#### macOS
+
+papAIa runs on Docker Desktop for Mac, on Apple Silicon and Intel. What differs from a
+Linux host:
+
+- **Docker Desktop memory.** The containers run in Docker Desktop's VM, so the 8 GB
+  recommendation applies to the memory assigned to it (Settings > Resources). `doctor`
+  measures what Docker reports.
+- **Python.** The `python3` of the Xcode Command Line Tools is 3.9, too old for
+  `papaia-ctl`. Install a current one with PyYAML: `brew install python pyyaml`.
+  `papaia-ctl` also finds Homebrew's `python3.X` when the old `python3` comes first on
+  `PATH`, and names the version it found when there is none.
+- **Bash and OpenSSL.** The system Bash 3.2 and the system LibreSSL work; Homebrew's
+  versions are not needed.
+- **Paths.** Docker Desktop bind-mounts only the host paths it shares with its VM
+  (Settings > Resources > File sharing; `/Users`, `/Volumes`, `/private`, `/tmp` and
+  `/var/folders` by default). Keep `--config-dir` and `--backup-dir` there. The default
+  config directory next to the checkout under `/Users` works; `/srv` and `/opt` do not, and
+  `/srv` cannot be created on the read-only system volume.
+- **papaia-manager.** It needs a Linux host. `setup` defaults to *no* on macOS; leave it
+  off (`--no-manager`).
+- **Keycloak certificate.** With the default local URLs, trust the generated local CA
+  once so browsers accept Keycloak's certificate:
+
+  ```bash
+  sudo security add-trusted-cert -d -r trustRoot \
+    -k /Library/Keychains/System.keychain "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
+  ```
+
+  The server certificate is issued for 825 days with `serverAuth`, as macOS requires.
+  `setup` renews an older or expiring one with the same CA, so the trust stays; restart
+  the stack afterwards (`papaia-ctl stop`, `papaia-ctl start`).
+- **Web search on Apple Silicon.** The Firecrawl MCP image exists for `linux/amd64` only and
+  runs emulated; Docker Desktop provides the emulation (Rosetta or QEMU).
+- **LocalAI.** Docker on macOS has no GPU access, so LocalAI runs on the CPU. `setup`
+  detects this and picks the `cpu` variant.
 
 ### Single-host setup
 
@@ -257,7 +295,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
-| `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
+| `--manager` / `--no-manager` | _(prompted, default on; off on macOS)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
