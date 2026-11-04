@@ -51,6 +51,7 @@ _SURFACE_CHANGED = (
 # active or too old. `networks.join_addons` lets listed services of an add-on
 # join a required add-on's network. `exports` lists bundle keys an add-on lets
 # others read, and `env_prompts.<key>.default_from_addon` fills a prompt from one.
+# `actions` declares maintenance actions that `papaia-ctl addon run` executes.
 # Manifests without these keys are unchanged, so `min` stays 1; add-ons that
 # use them declare `requires.addon_api: 4`, and an older core reports
 # them incompatible instead of ignoring the requirement.
@@ -126,6 +127,7 @@ MANIFEST_KEYS = [
     "env_prompts",
     "env_prompts.<key>.default_from_addon",
     "exports",
+    "actions",
     "env_replace_secrets",
     "integration.keycloak.clients",
     "integration.keycloak.client_mappers",
@@ -180,4 +182,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 18, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 19, _SURFACE_CHANGED
