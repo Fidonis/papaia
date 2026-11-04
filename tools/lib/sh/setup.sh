@@ -677,12 +677,13 @@ _localai_variant_unverified() {
 }
 
 # Asks whether to run papaia-manager; prints "true" or "false". On macOS the manager runs
-# on Docker Desktop only (README, papaia-manager), so there the default is no, unless a
-# previous run said yes.
+# on Docker Desktop only (README, papaia-manager), so with another engine the default is
+# no, unless a previous run said yes.
 _prompt_manager() {
     local manager_default="1" on_mac=0
     [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
-    if [ "$(uname -s)" = "Darwin" ] && [ "${MANAGER_STICKY:-}" != "true" ]; then
+    if [ "$(uname -s)" = "Darwin" ] && [ "${MANAGER_STICKY:-}" != "true" ] \
+        && [ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" != "Docker Desktop" ]; then
         on_mac=1
         manager_default="2"
     fi

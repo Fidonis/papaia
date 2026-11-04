@@ -14,13 +14,16 @@ BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash is not available")
 
 
-def _ask(system: str, answer: str = "", sticky: str = "") -> subprocess.CompletedProcess:
+def _ask(
+    system: str, answer: str = "", sticky: str = "", engine: str = "Ubuntu 24.04 LTS"
+) -> subprocess.CompletedProcess:
     assert BASH is not None
     script = (
         "set -euo pipefail\n"
         f'source "{SH_LIB / "log.sh"}"; source "{SH_LIB / "prompt.sh"}"\n'
         f'source "{SH_LIB / "setup.sh"}"\n'
         f'uname() {{ echo "{system}"; }}\n'
+        f'docker() {{ echo "{engine}"; }}\n'
         f'MANAGER_STICKY="{sticky}"\n'
         'printf "MANAGER=%s\\n" "$(_prompt_manager)"\n'
     )
@@ -37,7 +40,19 @@ def test_linux_defaults_to_the_manager():
     assert "needs Docker Desktop" not in done.stderr
 
 
-def test_macos_defaults_to_no_manager_and_says_why():
+def test_macos_with_docker_desktop_defaults_to_the_manager():
+    done = _ask("Darwin", engine="Docker Desktop")
+    assert done.returncode == 0, done.stderr
+    assert "MANAGER=true" in done.stdout
+    assert "addons (default)" in done.stderr
+    assert "needs Docker Desktop" not in done.stderr
+
+
+def test_macos_with_docker_desktop_keeps_a_previous_no():
+    assert "MANAGER=false" in _ask("Darwin", sticky="false", engine="Docker Desktop").stdout
+
+
+def test_macos_without_docker_desktop_defaults_to_no_manager_and_says_why():
     done = _ask("Darwin")
     assert done.returncode == 0, done.stderr
     assert "MANAGER=false" in done.stdout
