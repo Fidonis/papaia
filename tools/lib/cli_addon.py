@@ -823,7 +823,12 @@ def cmd_addon_actions(args: argparse.Namespace) -> int:
         print(
             json.dumps(
                 [
-                    {"name": n, "service": a["service"], "description": a["description"]}
+                    {
+                        "name": n,
+                        "service": a["service"],
+                        "description": a["description"],
+                        "destructive": a["destructive"],
+                    }
                     for n, a in sorted(actions.items())
                 ]
             )

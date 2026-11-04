@@ -954,7 +954,12 @@ def _action_addon(tmp_path: Path) -> Path:
         "version": "1.0.0",
         "papaia_compat": ">=0.8.0",
         "actions": {
-            "reset": {"service": "job", "args": ["--reset-existing"], "description": "Reset"},
+            "reset": {
+                "service": "job",
+                "args": ["--reset-existing"],
+                "description": "Reset",
+                "destructive": True,
+            },
         },
     }
     (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
@@ -1009,5 +1014,5 @@ def test_addon_actions_lists_as_json(repo_root, config_dir, tmp_path, capsys):
     )
     assert cmd_addon_actions(args) == 0
     assert yaml.safe_load(capsys.readouterr().out) == [
-        {"name": "reset", "service": "job", "description": "Reset"}
+        {"name": "reset", "service": "job", "description": "Reset", "destructive": True}
     ]

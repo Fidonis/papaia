@@ -417,8 +417,8 @@ def test_addon_actions_parses_and_defaults():
     actions = {"reset": {"service": "job", "args": ["--all"]}, "check": {"service": "job"}}
     manifest = {"actions": actions}
     assert compat.addon_actions(manifest) == {
-        "reset": {"service": "job", "args": ["--all"], "description": ""},
-        "check": {"service": "job", "args": [], "description": ""},
+        "reset": {"service": "job", "args": ["--all"], "description": "", "destructive": False},
+        "check": {"service": "job", "args": [], "description": "", "destructive": False},
     }
 
 
@@ -430,6 +430,7 @@ def test_addon_actions_parses_and_defaults():
         {"reset": {"args": ["x"]}},
         {"reset": {"service": "job", "args": "x"}},
         {"reset": {"service": "job", "args": [1]}},
+        {"reset": {"service": "job", "destructive": "yes"}},
     ],
 )
 def test_malformed_actions_are_a_manifest_error(actions):
