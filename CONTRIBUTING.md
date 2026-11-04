@@ -4,7 +4,7 @@ Thanks for considering a contribution to papAIa! This document describes how to 
 
 ## Code of Conduct
 
-A formal Code of Conduct is being added - see [#23](https://github.com/Fidonis/papaia/issues/23). In the meantime, please follow common sense: be kind, assume good intent, and keep discussions focused on the project.
+Everyone taking part in this project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report unacceptable behavior to `security@fidonis.de`.
 
 ## Where to ask questions
 
