@@ -107,6 +107,8 @@ usage() {
 SH_LIB="$REPO_ROOT/tools/lib/sh"
 # shellcheck source=lib/sh/log.sh
 source "$SH_LIB/log.sh"
+# shellcheck source=lib/sh/python.sh
+source "$SH_LIB/python.sh"
 # shellcheck source=lib/sh/prompt.sh
 source "$SH_LIB/prompt.sh"
 # shellcheck source=lib/sh/certs.sh
@@ -135,21 +137,7 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 2
 fi
 
-PYTHON_BIN=""
-for candidate in python3 python; do
-    # command -v alone isn't enough: on Windows, `python3`/`python` may
-    # resolve to the Microsoft Store's inert app-execution-alias stub even
-    # when no real interpreter is installed under that name. Only accept a
-    # candidate that actually runs.
-    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
-        PYTHON_BIN="$candidate"
-        break
-    fi
-done
-if [ -z "$PYTHON_BIN" ]; then
-    error "python3 not found on PATH. papaia-ctl requires Python 3.10+."
-    exit 2
-fi
+find_python || exit 2
 
 # Every `lib.cli` subcommand pulls in PyYAML transitively (lib/backup.py imports
 # it at module load), so without it each command aborts with a bare
@@ -159,7 +147,9 @@ if ! "$PYTHON_BIN" -c 'import yaml' >/dev/null 2>&1; then
     error "Python module 'yaml' (PyYAML) not found for '$PYTHON_BIN'. Install it and re-run:"
     error "  Debian/Ubuntu: sudo apt-get install -y python3-yaml"
     error "  Fedora/RHEL:   sudo dnf install -y python3-pyyaml"
-    error "  macOS / other: $PYTHON_BIN -m pip install 'PyYAML>=6.0'"
+    error "  macOS:         brew install pyyaml (for Homebrew's Python)"
+    error "  other:         $PYTHON_BIN -m pip install 'PyYAML>=6.0', in a virtual environment"
+    error "                 if pip refuses with 'externally-managed-environment'"
     exit 2
 fi
 

@@ -91,21 +91,27 @@ def test_stamp_workspace_dir_skips_when_checkout_not_named_papaia(tmp_path):
     assert tree[""]["PAPAIA_WORKSPACE_DIR"] == "/srv/papaia/workspace"
 
 
-def test_stamp_docker_gid_detects_socket_gid_over_placeholder(monkeypatch):
+@pytest.fixture
+def linux_host(monkeypatch):
+    # The socket GID is only read on hosts where the path is the socket containers see.
+    monkeypatch.setattr(envtree.sys, "platform", "linux")
+
+
+def test_stamp_docker_gid_detects_socket_gid_over_placeholder(monkeypatch, linux_host):
     tree = {"": {"DOCKER_GID": "999"}}
     monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=1001))
     envtree.stamp_docker_gid(tree)
     assert tree[""]["DOCKER_GID"] == "1001"
 
 
-def test_stamp_docker_gid_detects_when_value_empty(monkeypatch):
+def test_stamp_docker_gid_detects_when_value_empty(monkeypatch, linux_host):
     tree: dict = {"": {}}
     monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=1001))
     envtree.stamp_docker_gid(tree)
     assert tree[""]["DOCKER_GID"] == "1001"
 
 
-def test_stamp_docker_gid_keeps_operator_customised_value(monkeypatch):
+def test_stamp_docker_gid_keeps_operator_customised_value(monkeypatch, linux_host):
     tree = {"": {"DOCKER_GID": "1234"}}
     # A real, non-placeholder value stays sticky even when a socket is present.
     monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=1001))
@@ -113,7 +119,7 @@ def test_stamp_docker_gid_keeps_operator_customised_value(monkeypatch):
     assert tree[""]["DOCKER_GID"] == "1234"
 
 
-def test_stamp_docker_gid_keeps_value_when_socket_absent(monkeypatch):
+def test_stamp_docker_gid_keeps_value_when_socket_absent(monkeypatch, linux_host):
     tree = {"": {"DOCKER_GID": "999"}}
 
     def _raise(_path):
@@ -122,6 +128,16 @@ def test_stamp_docker_gid_keeps_value_when_socket_absent(monkeypatch):
     monkeypatch.setattr(envtree.os, "stat", _raise)
     envtree.stamp_docker_gid(tree)
     # No local socket to probe -- the existing value is left untouched.
+    assert tree[""]["DOCKER_GID"] == "999"
+
+
+def test_stamp_docker_gid_keeps_placeholder_on_macos(monkeypatch):
+    # Docker Desktop: the host path is a symlink owned by the user's group (staff, 20),
+    # not the socket inside Docker's VM that the manager container gets (#288).
+    tree = {"": {"DOCKER_GID": "999"}}
+    monkeypatch.setattr(envtree.sys, "platform", "darwin")
+    monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=20))
+    envtree.stamp_docker_gid(tree)
     assert tree[""]["DOCKER_GID"] == "999"
 
 

@@ -135,7 +135,7 @@ _node_add() {
     [ -n "$root" ] && register+=(--root="$root")
     [ -n "$gpu" ] && register+=(--gpu="$gpu")
     [ -n "$bind_ip" ] && register+=(--bind-ip="$bind_ip")
-    py_cli node-register "${register[@]}"
+    py_cli node-register ${register[@]+"${register[@]}"}
 
     if [ "$bootstrap" = "join" ]; then
         [ -z "$output" ] && output="$PWD/papaia-join-$name.tar.gz"
@@ -166,7 +166,7 @@ _node_add() {
     # The archive goes into a directory mktemp made on the node, owned by the admin login and
     # closed to everyone else, so no other user there can put a file in its place.
     local remote_dir=""
-    if ! remote_dir="$(ssh -p "$admin_port" "${ssh_opts[@]}" -- "$admin_target" 'mktemp -d' | tr -d '\r')" \
+    if ! remote_dir="$(ssh -p "$admin_port" ${ssh_opts[@]+"${ssh_opts[@]}"} -- "$admin_target" 'mktemp -d' | tr -d '\r')" \
         || ! [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
         rm -f "$archive"
         error "Could not create a temporary directory on $admin_target."
@@ -174,7 +174,7 @@ _node_add() {
     fi
     local remote="$remote_dir/papaia-join-$name.tar.gz"
     info "Copying the join archive to $admin_target..."
-    if ! scp -q -P "$admin_port" "${ssh_opts[@]}" -- "$archive" "$admin_target:$remote"; then
+    if ! scp -q -P "$admin_port" ${ssh_opts[@]+"${ssh_opts[@]}"} -- "$archive" "$admin_target:$remote"; then
         rm -f "$archive"
         error "Could not copy the join archive to $admin_target."
         exit 3
@@ -183,7 +183,7 @@ _node_add() {
     info "Running the install script on $name (sudo asks for the admin password if it needs one)..."
     # The remote command line is fixed text plus values papaia-ctl validated ($name is a node
     # name, $remote_dir a path mktemp printed and the pattern above checked).
-    if ! ssh -t -p "$admin_port" "${ssh_opts[@]}" -- "$admin_target" \
+    if ! ssh -t -p "$admin_port" ${ssh_opts[@]+"${ssh_opts[@]}"} -- "$admin_target" \
         "set -e; d='$remote_dir'; tar -xzf \"\$d/papaia-join-$name.tar.gz\" -C \"\$d\"; sudo bash \"\$d/papaia-join-$name/install.sh\"; rm -rf \"\$d\""; then
         error "The install script did not finish on $name. Nothing was stored of the admin login."
         exit 3
@@ -207,7 +207,7 @@ _node_list() {
     done
     CONFIG_DIR="$config_dir"
     _node_require_distributed
-    py_cli node-list "${extra[@]}"
+    py_cli node-list ${extra[@]+"${extra[@]}"}
 }
 
 _node_check() {
@@ -236,7 +236,7 @@ _node_check() {
     if [ "$name" != "${controller%$'\r'}" ]; then
         _node_pin_host_key "$name" "$fingerprint" "$assume_yes"
     fi
-    py_cli node-check --name="$name" "${extra[@]}"
+    py_cli node-check --name="$name" ${extra[@]+"${extra[@]}"}
 }
 
 _node_remove() {
@@ -323,5 +323,5 @@ _node_sync() {
     [ "$checkout" -eq 1 ] && extra+=(--checkout)
     if [ "$name" = "all" ]; then extra+=(--all); else extra+=(--name="$name"); fi
     py_cli render
-    py_cli node-push "${extra[@]}"
+    py_cli node-push ${extra[@]+"${extra[@]}"}
 }
