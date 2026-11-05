@@ -1,18 +1,33 @@
 # Parallel Search MCP in LibreChat (opt-in)
 
 This guide connects LibreChat to the hosted [Parallel MCP server](https://docs.parallel.ai/integrations/mcp/quickstart)
-through the customer overlay. It adds two tools to LibreChat: `web_search` (search the
-public web) and `web_fetch` (read the content of given URLs). Nothing in the shipped
-configuration changes, and the server stays off unless an operator adds it.
+through the customer overlay. LibreChat offers the tools the server lists. Without a key
+these are, at the time of writing:
+
+- `web_search`: search the public web,
+- `web_fetch`: read the content of given URLs,
+- `web_decisions`: answer typed questions about a subject (a probability, a pick among
+  options, a score) from web evidence,
+- `send_feedback`: report a problem with a tool call to Parallel.
+
+A key adds `web_research`. The server decides the list, so it can change; the log line under
+[Check it](#check-it) shows the current one. Nothing in the shipped configuration changes,
+and the server stays off unless an operator adds it.
 
 ## What leaves the installation
 
 Parallel is a hosted service outside the self-hosted deployment. Once the server is
 configured, every tool call sends the following to Parallel:
 
-- the search objective and queries the model writes, which are usually derived from the
-  user's chat,
-- the URLs the model asks to fetch,
+- `web_search`: the search objective and queries the model writes, which are usually
+  derived from the user's chat,
+- `web_fetch`: the URLs the model asks to fetch, optionally with an objective and queries,
+- `web_decisions`: the subject of the questions as JSON (`state`) and the questions
+  themselves. Of all tools, this one is the most likely to carry chat content verbatim,
+- `send_feedback`: a free-text problem report with the requests involved, which the model
+  may send on its own when a tool call goes wrong,
+- with `web_search` and `web_fetch`, optionally the name of the model (`client_model`) and a
+  `session_id` from an earlier result, both filled in by the model,
 - the API key, when one is configured.
 
 Parallel's MCP documentation does not state a retention period for queries or fetched
@@ -70,11 +85,13 @@ search with SearXNG and Firecrawl (the `librechat-websearch` profile and the
    tools/papaia-ctl start
    ```
 
+Where papaia-manager is installed, steps 1 to 3 can be done in Settings → Overlay instead:
+it shows the diff against the current file and recreates LibreChat on *Apply*.
+
 ## Optional: an API key
 
 Without a key the server answers anonymously at lower rate limits. The `web_research` tool
-of the same server needs a key; without one, only `web_search`, `web_fetch` and
-`web_decisions` work. With a key, usage is billed to the Parallel account.
+of the same server needs a key; without one, only the tools listed at the top work. With a key, usage is billed to the Parallel account.
 
 1. Add the key to `$PAPAIA_CONFIG_DIR/ai/librechat/.env`. `papaia-ctl` keeps variables it
    does not ship:
@@ -102,10 +119,17 @@ of the same server needs a key; without one, only `web_search`, `web_fetch` and
 
    ```sh
    docker compose -f src/docker-compose.yml --env-file src/.env logs librechat \
-     | grep -i parallel
+     | grep -F '[MCP][ParallelSearch]'
    ```
 
-   An error that names the domain means the `allowedDomains` entry is missing.
+   A working server logs `[MCP][ParallelSearch] Tools: web_search, web_fetch, …`. A plain
+   `grep -i parallel` always matches, since LibreChat logs the loaded configuration at
+   startup, so it says nothing about the connection.
+
+   - An error that names the domain means the `allowedDomains` entry is missing.
+   - `Invalid API key` after three attempts means the key is wrong, or the header is in
+     place but `PARALLEL_API_KEY` is missing from `ai/librechat/.env`. The server then has
+     no tools at all; it does not fall back to anonymous access.
 
 2. In LibreChat, open a new chat, select **Parallel Search** in the MCP server menu below
    the input, and ask a question about current public information, for example the latest
