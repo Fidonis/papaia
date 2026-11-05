@@ -447,7 +447,10 @@ create the client from its export when the realm lacks it, with that secret
 and, when `root_url_env` names a set key, that root URL. An existing client
 only gets its secret aligned with the add-on `.env`, as core clients do, so a
 secret changed there takes effect on the next start. Nothing else about an
-existing client is changed. Clients not named under `client_secrets` keep the
+existing client is changed. A secret that is still a placeholder in the add-on
+`.env` (`GENERATE_*`, `REPLACE_WITH_*`, `CHANGE_ME`, empty), as an install from
+before the add-on named its client there carries, is generated and written to
+the `.env` first. Clients not named under `client_secrets` keep the
 manual import, and with `auth_provider=external_oidc` nothing is created. A
 core without this step ignores `client_secrets` and shows the manual import
 for the same clients, so an add-on can use it without raising `addon_api`.

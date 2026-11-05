@@ -338,11 +338,9 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
         return 2
 
-    addons.materialize_addon_env(config_dir, addon_path, name)
-    render_core.render(config_dir, repo_root)
-    gen_override.generate_overrides(config_dir, repo_root)
-    # Clients the add-on declares with a secret key: created or aligned now, so the
-    # login works on this start. Not fatal: `papaia-ctl start` runs the same step.
+    # Clients the add-on names under client_secrets: created or aligned now, so the
+    # login works on this start. Before the .env is materialized: the sync may generate
+    # a secret that is still a placeholder. Not fatal: `papaia-ctl start` runs it too.
     if keycloak_role_sync.managed_clients(manifest):
         tree = envtree.load_config_dir_tree(config_dir, repo_root)
         if not keycloak_role_sync.sync_addon_clients(tree, config_dir, repo_root, {name}):
@@ -351,6 +349,9 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
                 "Run 'papaia-ctl keycloak-role-sync' once Keycloak is up.",
                 file=sys.stderr,
             )
+    addons.materialize_addon_env(config_dir, addon_path, name)
+    render_core.render(config_dir, repo_root)
+    gen_override.generate_overrides(config_dir, repo_root)
     return 0
 
 

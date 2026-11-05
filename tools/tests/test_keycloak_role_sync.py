@@ -1118,10 +1118,21 @@ def test_addon_clients_carry_the_secret_and_root_url_of_the_addon_env(tmp_path):
 
 
 @pytest.mark.parametrize("secret", ["", "GENERATE_SECRET", "REPLACE_WITH_SECRET", "CHANGE_ME"])
-def test_a_client_without_a_real_secret_is_left_out(tmp_path, capsys, secret):
-    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": secret})
+def test_a_placeholder_secret_is_generated_into_the_env(tmp_path, secret):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": secret, "OTHER": "kept"})
+    (client,) = kcs.addon_clients(config, tmp_path)
+    env = (config / "addons" / "wiki" / ".env").read_text(encoding="utf-8")
+    assert f"KC_WIKI_SECRET={client['secret']}\n" in env and len(client["secret"]) == 48
+    assert "OTHER=kept" in env
+    # The next run keeps it.
+    (again,) = kcs.addon_clients(config, tmp_path)
+    assert again["secret"] == client["secret"]
+
+
+def test_a_client_whose_secret_key_is_missing_is_left_out(tmp_path, capsys):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"OTHER": "x"})
     assert kcs.addon_clients(config, tmp_path) == []
-    assert "KC_WIKI_SECRET is not set" in capsys.readouterr().err
+    assert "KC_WIKI_SECRET is not in its .env" in capsys.readouterr().err
 
 
 def test_plain_entries_and_inactive_addons_stay_manual(tmp_path):

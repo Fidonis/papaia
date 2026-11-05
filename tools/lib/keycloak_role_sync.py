@@ -352,6 +352,11 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tu
     return created, updated
 
 
+def _unset(value: str) -> bool:
+    """A secret that is still a placeholder of the .env templates."""
+    return common.is_placeholder(value) or value.startswith(("CHANGE_ME", "REPLACE_WITH_"))
+
+
 def managed_clients(manifest: dict) -> list[dict]:
     """The clients an add-on manifest hands to the sync: every entry of
     `integration.keycloak.client_secrets` (`<path>: {secret_env, root_url_env}`) whose path
@@ -397,7 +402,8 @@ def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = No
         entries = managed_clients(manifest or {})
         if not entries:
             continue
-        env = common.parse_env_file(config_dir / "addons" / name / ".env")
+        env_path = config_dir / "addons" / name / ".env"
+        env = common.parse_env_file(env_path)
         for entry in entries:
             export = addon_path / entry["path"]
             try:
@@ -406,13 +412,21 @@ def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = No
                 print(f"  client of add-on {name} skipped: {export}: {exc}", file=sys.stderr)
                 continue
             secret = _compose_value(env.get(entry["secret_env"], ""))
-            if common.is_placeholder(secret) or secret.startswith(("CHANGE_ME", "REPLACE_WITH_")):
-                print(
-                    f"  client {client.get('clientId')} of add-on {name} skipped: "
-                    f"{entry['secret_env']} is not set in its .env",
-                    file=sys.stderr,
-                )
-                continue
+            if _unset(secret):
+                if entry["secret_env"] not in env:
+                    print(
+                        f"  client {client.get('clientId')} of add-on {name} skipped: "
+                        f"{entry['secret_env']} is not in its .env",
+                        file=sys.stderr,
+                    )
+                    continue
+                # Still the placeholder of a manual import that never happened (an install
+                # from before the add-on named the client here): no login has worked with
+                # it, so a generated secret replaces it, in the .env and on the client.
+                secret = common.generate_secret(entry["secret_env"])
+                env[entry["secret_env"]] = secret
+                common.write_env_file(env_path, env)
+                print(f"  {entry['secret_env']} of add-on {name} generated", flush=True)
             # An export carries the id of the realm it came from; Keycloak assigns a new one.
             client.pop("id", None)
             client["clientAuthenticatorType"] = "client-secret"
