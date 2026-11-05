@@ -108,7 +108,8 @@ it shows the diff against the current file and recreates LibreChat on *Apply*.
 ## Optional: an API key
 
 Without a key the server answers anonymously at lower rate limits. The `web_research` tool
-of the same server needs a key; without one, only the tools listed at the top work. With a key, usage is billed to the Parallel account.
+of the same server needs a key; without one, only the tools listed at the top work. With a
+key, usage is billed to the Parallel account.
 
 1. Add the key to `$PAPAIA_CONFIG_DIR/ai/librechat/.env`. `papaia-ctl` keeps variables it
    does not ship:
@@ -136,7 +137,7 @@ of the same server needs a key; without one, only the tools listed at the top wo
 
    ```sh
    docker compose -f src/docker-compose.yml --env-file src/.env logs librechat \
-     | grep -F '[MCP][ParallelSearch]'
+     | grep -E '\[MCP\]\[ParallelSearch\]|server "ParallelSearch"'
    ```
 
    A working server logs `[MCP][ParallelSearch] Tools: web_search, web_fetch, …`. A plain
@@ -144,9 +145,11 @@ of the same server needs a key; without one, only the tools listed at the top wo
    startup, so it says nothing about the connection.
 
    - An error that names the domain means the `allowedDomains` entry is missing.
-   - `Invalid API key` after three attempts means the key is wrong, or the header is in
-     place but `PARALLEL_API_KEY` is missing from `ai/librechat/.env`. The server then has
-     no tools at all; it does not fall back to anonymous access.
+   - `[MCP][ParallelSearch] Failed to initialize`, with `Invalid API key` in the
+     `[MCPServersRegistry] Failed to inspect server "ParallelSearch"` line after three
+     attempts, means the key is wrong, or the header is in place but `PARALLEL_API_KEY` is
+     missing from `ai/librechat/.env`. The server then has no tools at all; it does not
+     fall back to anonymous access.
 
 2. In LibreChat, open a new chat, select **Parallel Search** in the MCP server menu below
    the input, and ask a question about current public information, for example the latest
