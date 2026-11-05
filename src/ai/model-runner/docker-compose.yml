@@ -1,0 +1,85 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Docker Model Runner · local inference on Apple Silicon
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OPTIONAL — activate with profile `model-runner`:
+#   COMPOSE_PROFILES=...,model-runner   OR   papaia-ctl setup --model-runner
+#
+# The inference engine is Docker Desktop's Model Runner on the host (llama.cpp
+# with Metal, MLX through vllm-metal), not a container of this stack: Docker
+# Desktop cannot pass the Apple GPU into a Linux container. See
+# docs/adr/0011-local-inference-on-apple-silicon-through-docker-model-runner.md.
+#
+# The profile holds one one-shot job. It waits for the runner to answer, then
+# pulls every model of models.txt that the runner does not have yet, through the
+# runner's native model API. LiteLLM reaches the models at
+# http://model-runner.docker.internal/engines/v1 (registered at render time).
+#
+# The runner's API has no authentication. Keep host-side TCP off in Docker
+# Desktop's settings; users reach the models only through LiteLLM.
+services:
+  model-runner-model-init:
+    image: curlimages/curl:latest
+    restart: "no"
+    volumes:
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/model-runner/models.txt
+        target: /models-config/models.txt
+        read_only: true
+    entrypoint: sh
+    command:
+      - -c
+      - |
+        runner=http://model-runner.docker.internal
+        tries=0
+        until curl -fsS -o /dev/null "$$runner/engines/v1/models"; do
+          tries=$$((tries + 1))
+          if test "$$tries" -ge 30; then
+            echo "[model-init] Docker Model Runner does not answer at $$runner." >&2
+            echo "[model-init] Enable it in Docker Desktop: Settings > AI > Enable Docker Model Runner." >&2
+            exit 1
+          fi
+          sleep 2
+        done
+
+        # Filtered into a file rather than piped into the loop: a pipe runs the
+        # loop in a subshell, and the failure count would not survive it.
+        grep -v '^[[:space:]]*#' /models-config/models.txt | grep -v '^[[:space:]]*$$' > /tmp/models
+        failed=0
+        while read -r ref alias rest; do
+          case "$$ref" in
+            *[!A-Za-z0-9._:/@-]*)
+              echo "[model-init] $$ref is not a model reference — skipped" >&2
+              failed=$$((failed + 1))
+              continue
+              ;;
+          esac
+          # -f without -S: a 404 here only means "not pulled yet".
+          if curl -fs -o /dev/null "$$runner/models/$$ref"; then
+            echo "[model-init] $$ref already present — skipped"
+            continue
+          fi
+          echo "[model-init] Pulling $$ref ..."
+          # The pull streams one JSON line per progress step and keeps status 200
+          # even when it fails after the stream started, so the last line decides.
+          last=$$(curl -sS -X POST -H 'Content-Type: application/json' \
+            -d "{\"from\":\"$$ref\"}" "$$runner/models/create" | tail -n 1)
+          case "$$last" in
+            *success*) echo "[model-init] $$ref done" ;;
+            *)
+              echo "[model-init] $$ref FAILED: $$last" >&2
+              failed=$$((failed + 1))
+              ;;
+          esac
+        done < /tmp/models
+        if test "$$failed" -gt 0; then
+          echo "[model-init] $$failed model(s) could not be pulled" >&2
+          exit 1
+        fi
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-model-runner
+      de.fidonis.role:   model-init
+    profiles: [model-runner]

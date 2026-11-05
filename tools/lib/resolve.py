@@ -49,6 +49,7 @@ class SetupArgs:
     localai_variant: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
+    enable_model_runner: bool | None = None  # None = sticky / no change
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
     enable_smtp: bool | None = None
     smtp_host: str | None = None  # upstream mail server host
@@ -626,6 +627,23 @@ def resolve_manager(tree: EnvTree, args: SetupArgs) -> EnvTree:
     profiles = [p for p in profiles if p != "manager"]
     if args.enable_manager:
         profiles.append("manager")
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_model_runner(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `model-runner` Compose profile based on the operator's choice.
+
+    Independent of `localai`: both engines can run side by side, each registered in
+    LiteLLM under its own names. When `enable_model_runner` is None the call is a no-op
+    (sticky)."""
+    if args.enable_model_runner is None:
+        return tree
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    profiles = [p for p in profiles if p != "model-runner"]
+    if args.enable_model_runner:
+        profiles.append("model-runner")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 

@@ -1,0 +1,35 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Docker Model Runner · Model List
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+# One model per line:  <reference> [<alias>]
+#   <reference>  as `docker model pull` takes it: ai/<name>:<tag> (Docker Hub)
+#                or hf.co/<org>/<repo> (Hugging Face)
+#   <alias>      the model name LiteLLM shows; defaults to the reference's
+#                last path segment (qwen3:4b-instruct-2507-q4_K_M)
+# Lines starting with # are ignored. `papaia-ctl start` pulls every listed
+# model the runner does not have yet. To change the list, copy this file to
+# $PAPAIA_CONFIG_DIR/overlay/ai/model-runner/models.txt and edit the copy.
+#
+# Formats and engines:
+#   GGUF (ai/... without -mlx, most hf.co/...-GGUF repos) runs on llama.cpp
+#     with Metal. Docker Desktop ships this engine.
+#   MLX safetensors (ai/...-mlx-..., hf.co/mlx-community/...) runs on
+#     vllm-metal, chat only: install it once with
+#     `docker model install-runner --backend vllm` (Docker Desktop 4.62+).
+
+# ── Chat — GGUF, runs on any Apple Silicon Mac ─────────────────────────────
+ai/qwen3:4b-instruct-2507-q4_K_M qwen3-4b
+
+# ── Embeddings — the RAG system and LibreChat's file upload use this alias ─
+# (RAG_EMBEDDINGS_MODEL). Vectors are model-specific: changing the model means
+# re-indexing every collection.
+ai/nomic-embed-text-v1.5:137M-F16 nomic-embed-text
+
+# ── Chat — MLX, needs the vllm backend ─────────────────────────────────────
+# ai/qwen3:4b-instruct-2507-mlx-4bit qwen3-4b-mlx
+# hf.co/mlx-community/Qwen3-4B-Instruct-2507-4bit
+
+# ── Larger models — 32 GB of unified memory or more ────────────────────────
+# ai/qwen3:30b-a3b-instruct-2507-q4_K_M qwen3-30b
+# ai/qwen3:30b-a3b-instruct-2507-mlx-4bit qwen3-30b-mlx

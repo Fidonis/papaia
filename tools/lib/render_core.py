@@ -36,6 +36,7 @@ BASE_RENDER_TARGETS: list[str] = [
     "ai/litellm/prometheus.yml",
     "ai/localai/models.txt",
     "ai/localai/models",
+    "ai/model-runner/models.txt",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
     "infra/keycloak/themes/papaia",

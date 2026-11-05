@@ -95,7 +95,7 @@ Only what every instance needs as a generic platform stays in the Core:
 |---|---|
 | Identity | Keycloak (OIDC provider), oauth2-proxy (forward auth for services without native OIDC) |
 | Ingress | Nginx Proxy Manager (NPM) |
-| AI-Runtime | LibreChat (chat UI), LiteLLM (LLM gateway), LocalAI (opt-in local inference) |
+| AI-Runtime | LibreChat (chat UI), LiteLLM (LLM gateway), LocalAI (opt-in local inference), Docker Model Runner models (opt-in, profile `model-runner`, Apple Silicon: the engine is Docker Desktop's, see [ADR 0011](adr/0011-local-inference-on-apple-silicon-through-docker-model-runner.md)) |
 | Management | papaia-manager (opt-in; dashboard, add-on lifecycle, host health and backup scheduling UI) |
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
 | Mail | `smtp-relay`, a Postfix relay (opt-in, profile `smtp`) that holds the mail server's credentials once; Keycloak and the add-ons that attach it send through it without any — see [ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md) |
