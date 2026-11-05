@@ -61,6 +61,14 @@ hipblas|vulkan|auto` answers that question non-interactively. The GPU images nee
 drivers — and, for NVIDIA, the NVIDIA Container Toolkit — to be installed beforehand; the
 stack does not provide them. See the README's *GPU acceleration for LocalAI*.
 
+The `model-runner` profile (`--model-runner` / `--no-model-runner`) serves local models from
+the Apple GPU of an Apple Silicon Mac through Docker Desktop's Model Runner on the host. On
+such a Mac, the interactive setup offers it under *Local inference* and recommends it over
+LocalAI, which runs on the CPU there; non-interactively the flag is needed, as for the other
+profiles. The runner itself is enabled in Docker Desktop, not by the stack. Docker Engine on
+Linux is not offered yet: Linux hosts use LocalAI. See the README's *Local inference on Apple
+Silicon*.
+
 ### Upgrading to a new release
 
 Image tags are pinned directly in each service's `docker-compose.yml` (for example

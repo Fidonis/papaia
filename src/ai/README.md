@@ -14,6 +14,7 @@ bind mounts, inspecting a running stack — see [`src/README.md`](../README.md).
 
 ```
 LibreChat  ──▶  LiteLLM  ──▶  LocalAI / hosted providers
+   │                 │  └──▶  Docker Model Runner (Docker Desktop, host; model-runner profile)
    │                 ▲
    │ MCP tools       └── Jina reranker (rerank endpoint)
    ▼
@@ -27,7 +28,11 @@ add-on MCP servers ──▶ their own apps (separate repos, own networks)
   tools listed in the rendered `librechat.yaml`.
 - **LiteLLM** unifies access to local and hosted LLMs and is the single egress
   point for anything that leaves the host.
-- **LocalAI** runs chat-completions inference locally (CPU or NVIDIA GPU).
+- **LocalAI** runs chat-completions inference locally (CPU, or a GPU image for
+  NVIDIA, AMD, Intel or Vulkan).
+- **Docker Model Runner** (optional, profile `model-runner`, Apple Silicon) serves
+  local models from the Apple GPU. The engine is Docker Desktop's, on the host; the
+  profile only pulls the listed models into it, and LiteLLM registers them.
 - **mcp-firecrawl** exposes Firecrawl's crawl / scrape / search / map / extract
   capabilities as MCP tools.
 - **Jina reranker** is an optional reranking endpoint in front of LiteLLM.
@@ -88,6 +93,19 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
 - The models to download are listed in `localai/models.txt`; per-model YAML
   lives next to it in `localai/models/`. Both are render targets, so an
   `overlay/` copy survives every upgrade.
+
+### model-runner — Docker Model Runner models (Apple Silicon)
+
+- Profile: `model-runner`
+- Image: `curlimages/curl` for the one-shot `model-runner-model-init` job; the engine
+  is Docker Desktop's Model Runner on the host, reached at
+  `http://model-runner.docker.internal`
+- No published port, no OIDC: the runner's API is unauthenticated and LiteLLM is
+  the only way users reach it
+- The models are listed in `model-runner/models.txt` (`<reference> [<alias>]`), a
+  render target; each line is pulled by the init job and added to LiteLLM's
+  `model_list` at render time. See the root README, *Local inference on Apple
+  Silicon*, and ADR 0011.
 
 ### mcp-firecrawl — Firecrawl MCP bridge
 

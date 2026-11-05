@@ -51,14 +51,18 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
+| Docker Model Runner models | `model-runner` | — | Local inference on the Apple GPU of an Apple Silicon Mac. The engine is Docker Desktop's Model Runner on the host; the profile pulls the models of `models.txt` into it and LiteLLM serves them. No published port — see [Local inference on Apple Silicon](#local-inference-on-apple-silicon). |
 | papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups, and with the `rag` profile the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
 
-`localai`, `manager`, `librechat-websearch`, `rag` and `smtp` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`). When LocalAI is enabled, setup also asks
-which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
+`localai`, `model-runner`, `manager`, `librechat-websearch`, `rag` and `smtp` are toggled by
+`papaia-ctl setup` (`--local-ai`, `--model-runner`, `--manager`, `--web-search`, `--rag`, `--smtp`).
+When LocalAI is enabled, setup also asks which accelerator image to install — see
+[GPU acceleration](#gpu-acceleration-for-localai). On an Apple Silicon Mac with Docker Model
+Runner enabled, setup offers the runner instead — see
+[Local inference on Apple Silicon](#local-inference-on-apple-silicon).
 The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
 > Everything else — document management, workflow automation — ships as an
@@ -133,8 +137,8 @@ tools/papaia-ctl setup --non-interactive \
   --auth-host=https://auth.papaia.example.com
 ```
 
-> In non-interactive mode, `--local-ai` and `--web-search` are **not** implied. Without those
-> flags the corresponding profiles stay as they are — off, on a fresh install. The same holds
+> In non-interactive mode, `--local-ai`, `--model-runner` and `--web-search` are **not** implied.
+> Without those flags the corresponding profiles stay as they are — off, on a fresh install. The same holds
 > for `--localai-variant`: omitted, the current image variant is kept. Pass
 > `--localai-variant=auto` to let the host detection decide.
 
@@ -257,6 +261,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
+| `--model-runner` / `--no-model-runner` | _(prompted on an Apple Silicon Mac with Docker Model Runner, default on there; off elsewhere)_ | Toggle the `model-runner` profile. On another host it warns: the module needs Docker Desktop on Apple Silicon |
 | `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
@@ -487,6 +492,10 @@ Archives the complete installation into a timestamped subdirectory of the backup
 - **every named volume of an active add-on**, plus the host directories it bind-mounts for user
   data. An add-on that only talks to an existing external instance owns no volumes, so that
   external instance is never pulled into the backup.
+
+The models of the `model-runner` module are not in it: they live in Docker Desktop's model
+store, outside any volume. Its `models.txt` is part of the config directory, so the first
+`start` after a restore pulls the same models again.
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -943,8 +952,10 @@ core's `render-preview` command (`python3 -m lib.cli --repo-root R --config-dir 
 the target now and with the draft.
 
 Render targets: `ai/librechat/librechat.yaml` · `ai/litellm/config.yaml` +
-`prometheus.yml` · `ai/localai/models.txt` + `models/` · `services/searxng/settings.yml` ·
-`infra/keycloak/keycloak.conf`.
+`prometheus.yml` · `ai/localai/models.txt` + `models/` · `ai/model-runner/models.txt` ·
+`services/searxng/settings.yml` · `infra/keycloak/keycloak.conf`. While the `model-runner`
+profile is on, `ai/litellm/config.yaml` also takes a generated `model_list` from
+`ai/model-runner/models.txt`, between the add-on fragments and the overlay.
 
 The same pass also bakes the Keycloak realm (substituting secrets into
 `realm-import/papaia-realm.json`) and regenerates the Compose overrides in `overrides/` — one
@@ -1656,6 +1667,78 @@ Two caveats worth knowing:
   YAMLs under `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
 - **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
+
+### Local inference on Apple Silicon
+
+Docker Desktop on macOS cannot pass the Apple GPU into a Linux container, so LocalAI runs on
+the CPU there. Docker Desktop brings its own engine for that case: **Docker Model Runner**
+runs on the host, GGUF models through llama.cpp with Metal and MLX models through vllm-metal,
+and containers reach it at `http://model-runner.docker.internal`. The `model-runner` module
+connects it to the stack ([ADR 0011](docs/adr/0011-local-inference-on-apple-silicon-through-docker-model-runner.md)).
+
+**Prerequisites** (Apple Silicon, Docker Desktop):
+
+- Enable the runner in Docker Desktop: *Settings > AI > Enable Docker Model Runner*, or
+  `docker desktop enable model-runner`.
+- Leave *Enable host-side TCP support* off. The runner's API has no authentication, and
+  containers reach it without TCP. `docker desktop enable model-runner` switches host TCP on
+  at `127.0.0.1:12434`; turn it off again in the settings. `doctor` warns when the port answers
+  on every interface.
+- For MLX models only: Docker Desktop 4.62 or newer and the vLLM engine,
+  `docker model install-runner --backend vllm`. GGUF models need nothing more.
+
+**Setup.** On such a Mac, `papaia-ctl setup` asks *Local inference*: Docker Model Runner
+(recommended; LocalAI is then off), LocalAI on the CPU, both, or none. It shows the Docker
+Desktop version and the engines the runner reports. On a Mac without the runner it says why
+and asks the LocalAI question as on any other host. Non-interactively:
+`--model-runner` / `--no-model-runner`.
+
+**How it works.** The profile holds one container, `model-runner-model-init`. On every `start`
+it waits for the runner, then pulls each model of `$PAPAIA_CONFIG_DIR/ai/model-runner/models.txt`
+that the runner does not have yet; it exits with an error naming the model when a pull fails.
+The same list is turned into LiteLLM's `model_list` when the configuration is rendered: every
+line becomes a model under its alias, with the API base
+`http://model-runner.docker.internal/engines/v1`. Users reach the models only through LiteLLM,
+like any other model, and LibreChat lists them in *Private-LLM*.
+
+**The model list.** One model per line, `<reference> [<alias>]`:
+
+```text
+ai/qwen3:4b-instruct-2507-q4_K_M qwen3-4b
+ai/nomic-embed-text-v1.5:137M-F16 nomic-embed-text
+# ai/qwen3:4b-instruct-2507-mlx-4bit qwen3-4b-mlx
+```
+
+| Format | Reference | Engine |
+|---|---|---|
+| GGUF | `ai/<name>:<tag>` on Docker Hub, `hf.co/<org>/<repo>-GGUF` on Hugging Face | llama.cpp with Metal, part of Docker Desktop |
+| MLX safetensors | `ai/<name>:<tag>-mlx-…`, `hf.co/mlx-community/<repo>` | vllm-metal (chat only) |
+
+To add a model, copy the file to `$PAPAIA_CONFIG_DIR/overlay/ai/model-runner/models.txt`,
+add a line and run `papaia-ctl start`; removing a line removes the model from LiteLLM on the
+next `start`. Without an alias the model appears under the last part of its reference
+(`qwen3:4b-instruct-2507-q4_K_M`). An entry in the LiteLLM overlay with the same `model_name`
+replaces the generated one.
+
+**Embeddings.** The default list registers `ai/nomic-embed-text-v1.5:137M-F16` as
+`nomic-embed-text`, the name `RAG_EMBEDDINGS_MODEL` points at, so LibreChat's file upload
+and the [RAG system](#rag-system) work without a step in the Admin UI. Keep embedding models
+in GGUF: MLX embedding models do not load in vllm-metal yet. Vectors are model-specific;
+changing the embedding model means re-indexing every collection.
+
+**Operations.** `status` lists the pulled and the loaded models, `doctor` checks the runner
+(`inference`). Switching the module off removes the init job and leaves the models in place;
+deleting its data (`lib.cli module-purge --module=model-runner --data`) removes exactly the models of its list and nothing else from the model store.
+The models are not part of `backup` (see [`backup`](#backup)).
+
+**Security.** The runner's API has no authentication, and every container on the host can
+reach it at `model-runner.docker.internal`, add-ons included. LiteLLM keys and teams are the
+access control for users; there is no realm role like LocalAI's `localai-access`. On a shared
+machine keep host-side TCP off.
+
+Docker Engine on Linux also ships a Model Runner, on another address
+(`model-runner.docker.internal:12434` with an `extra_hosts` entry). The module does not offer
+it yet; Linux hosts use LocalAI.
 
 ### Distributed installations
 
