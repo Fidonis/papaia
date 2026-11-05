@@ -17,6 +17,11 @@ a whole needs** — anything read by more than one service, plus port allocation
 public base URLs, which are stack-wide concerns even when a single service consumes
 them. Everything else lives with its service.
 
+Configuration files such as `librechat.yaml` are changed through the customer overlay in
+`$PAPAIA_CONFIG_DIR/overlay/` ([architecture, section 13](./architecture.md#13-customer-overlay--3rd-render-layer)).
+A worked example is [Parallel Search MCP in LibreChat](./parallel-search-mcp.md), an opt-in
+hosted web search.
+
 ## How a variable reaches a container
 
 This is the least obvious part of the layer, and it matters when adding a variable.
