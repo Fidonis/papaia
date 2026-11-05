@@ -8,6 +8,9 @@ import pytest
 
 from lib import envtree, semver
 
+# Taken before conftest swaps it out for each test.
+_REAL_PROBE = envtree._container_socket_gid
+
 
 def test_resolve_platform_version_prefers_version_file(repo_root):
     # The fixture ships VERSION=0.8.0 next to a CHANGELOG whose first
@@ -131,14 +134,55 @@ def test_stamp_docker_gid_keeps_value_when_socket_absent(monkeypatch, linux_host
     assert tree[""]["DOCKER_GID"] == "999"
 
 
-def test_stamp_docker_gid_keeps_placeholder_on_macos(monkeypatch):
+def test_stamp_docker_gid_reads_the_socket_the_containers_see_on_macos(monkeypatch):
     # Docker Desktop: the host path is a symlink owned by the user's group (staff, 20),
-    # not the socket inside Docker's VM that the manager container gets (#288).
+    # not the socket inside Docker's VM that the manager container gets (#288, #331).
     tree = {"": {"DOCKER_GID": "999"}}
     monkeypatch.setattr(envtree.sys, "platform", "darwin")
     monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=20))
-    envtree.stamp_docker_gid(tree)
+    envtree.stamp_docker_gid(tree, container_gid=lambda: 0)
+    assert tree[""]["DOCKER_GID"] == "0"
+
+
+def test_stamp_docker_gid_keeps_placeholder_on_macos_without_docker(monkeypatch):
+    tree = {"": {"DOCKER_GID": "999"}}
+    monkeypatch.setattr(envtree.sys, "platform", "darwin")
+    envtree.stamp_docker_gid(tree, container_gid=lambda: None)
     assert tree[""]["DOCKER_GID"] == "999"
+
+
+def test_stamp_docker_gid_keeps_a_value_set_by_hand_on_macos(monkeypatch):
+    tree = {"": {"DOCKER_GID": "1234"}}
+    monkeypatch.setattr(envtree.sys, "platform", "darwin")
+
+    def _never():
+        raise AssertionError("probed although the value is sticky")
+
+    envtree.stamp_docker_gid(tree, container_gid=_never)
+    assert tree[""]["DOCKER_GID"] == "1234"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "expected"),
+    [(0, "0\n", 0), (0, "Unable to find image\n101\n", 101), (1, "", None), (0, "x\n", None)],
+    ids=["docker-desktop", "after-a-pull", "docker-down", "garbage"],
+)
+def test_the_container_probe_reads_the_last_line(monkeypatch, returncode, stdout, expected):
+    # The real probe: conftest replaces envtree._container_socket_gid for every test.
+    def _run(cmd, **kwargs):
+        assert cmd[:3] == ["docker", "run", "--rm"]
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout)
+
+    monkeypatch.setattr(envtree.subprocess, "run", _run)
+    assert _REAL_PROBE() == expected
+
+
+def test_the_container_probe_without_docker_is_none(monkeypatch):
+    def _missing(cmd, **kwargs):
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(envtree.subprocess, "run", _missing)
+    assert _REAL_PROBE() is None
 
 
 def test_init_seeds_config_dir_without_touching_repo_tree(repo_root, config_dir):
