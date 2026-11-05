@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -200,9 +201,43 @@ def stamp_backup_dir(tree: EnvTree, *, override: str | None = None) -> EnvTree:
 # so it is overwritten by the detected socket GID rather than kept sticky.
 _DOCKER_GID_PLACEHOLDER = "999"
 _DOCKER_SOCKET = "/var/run/docker.sock"
+# The image the backup and node-shell helpers already use; small and usually present.
+_SOCKET_PROBE_IMAGE = "alpine:3"
+_SOCKET_PROBE_TIMEOUT = 120
 
 
-def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> EnvTree:
+def _container_socket_gid() -> int | None:
+    """The GID of the Docker socket as a container mounts it, or None when it cannot be read.
+
+    On macOS the containers run in a VM (Docker Desktop, Colima, OrbStack), and the socket they
+    get is the VM's, not the host path. A throwaway container that mounts it, as the manager
+    does, reports its group."""
+    try:
+        done = subprocess.run(
+            [
+                "docker", "run", "--rm", "--pull=missing",
+                "-v", f"{_DOCKER_SOCKET}:{_DOCKER_SOCKET}",
+                _SOCKET_PROBE_IMAGE, "stat", "-c", "%g", _DOCKER_SOCKET,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_SOCKET_PROBE_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = done.stdout.strip().splitlines()
+    if done.returncode != 0 or not lines or not lines[-1].isdigit():
+        return None
+    return int(lines[-1])
+
+
+def stamp_docker_gid(
+    tree: EnvTree,
+    *,
+    socket_path: str = _DOCKER_SOCKET,
+    container_gid=None,
+) -> EnvTree:
     """Populate the root .env's DOCKER_GID with the GID that actually owns the
     Docker socket on this host, so the optional papaia-manager's non-root 'app'
     user can reach the Docker API without a hand-editing step.
@@ -218,8 +253,11 @@ def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> Env
     value by hand keeps it. The placeholder shipped in .env.example, or an empty
     value, is replaced by the detected socket GID. If the socket cannot be
     stat'd (setup run on a host without a local Docker socket, e.g. a remote
-    daemon), or on macOS, where the host path is not the socket the containers
-    see, the current value is left untouched."""
+    daemon), the current value is left untouched.
+
+    On macOS the host path is not the socket the containers see, so the GID is read
+    from inside a throwaway container instead (0 under Docker Desktop); if that
+    fails (Docker not running), the current value is left untouched as well."""
     root = tree.setdefault("", {})
     current = root.get("DOCKER_GID", "")
     if current and current != _DOCKER_GID_PLACEHOLDER:
@@ -227,6 +265,9 @@ def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> Env
     if sys.platform == "darwin":
         # Docker Desktop: the host path is a symlink to ~/.docker/run/docker.sock, owned
         # by the user's group, not the socket the containers see inside Docker's VM.
+        gid = (container_gid or _container_socket_gid)()
+        if gid is not None:
+            root["DOCKER_GID"] = str(gid)
         return tree
     try:
         gid = os.stat(socket_path).st_gid

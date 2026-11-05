@@ -1172,8 +1172,10 @@ the same thing inside the container as on the host — **path parity**:
 - `PAPAIA_WORKSPACE_DIR`, `PAPAIA_CONFIG_DIR` and `PAPAIA_BACKUP_DIR` are each mounted at
   their own host path, not remapped to `/workspace` or `/config`. `setup` stamps all three
   automatically.
-- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it on the
-  host. Discover it with:
+- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it as the
+  containers see it. `setup` stamps it: on Linux from the host path, on macOS, where the
+  containers get the socket of Docker's VM, by running the command below. Discover it by hand
+  with:
 
   ```bash
   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine \

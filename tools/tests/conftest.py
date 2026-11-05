@@ -9,6 +9,15 @@ from stack_helpers import build_stack
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _no_container_socket_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # On macOS `setup` reads the Docker socket's GID through a throwaway container
+    # (envtree._container_socket_gid); tests run in-process must not start one.
+    from lib import envtree
+
+    monkeypatch.setattr(envtree, "_container_socket_gid", lambda: None)
+
+
 @pytest.fixture
 def repo_root(tmp_path: Path) -> Path:
     """A synthetic repo root (mirroring src/ + tools/deployment.template.yaml
