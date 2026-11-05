@@ -454,11 +454,11 @@ def format_plan(plan: dict) -> str:
     for verb, key in (("+", "added"), ("-", "removed")):
         if man["attach"][key]:
             lines.append(f"Attached core services {verb} " + ", ".join(man["attach"][key]))
-    manual = [c for c in man["keycloak"]["clients_added"] if isinstance(c, str)]
-    if manual or man["keycloak"]["mappers_added"]:
-        lines.append("New Keycloak clients or mappers: they have to be imported by hand.")
-    if len(manual) < len(man["keycloak"]["clients_added"]):
-        lines.append("New Keycloak clients with a secret key: 'start' creates them.")
+    if man["keycloak"]["clients_added"] or man["keycloak"]["mappers_added"]:
+        lines.append(
+            "New Keycloak clients or mappers: imported by hand, unless the manifest names the "
+            "client under client_secrets ('start' creates it)."
+        )
     if plan["needs_input"]:
         lines.append("Needs a value before it can run: " + ", ".join(plan["needs_input"]))
     return "\n".join(lines)

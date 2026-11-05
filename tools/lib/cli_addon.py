@@ -558,9 +558,10 @@ def _print_upgrade_followups(plan: dict, new_manifest: dict, bundle_env_path: Pa
     """What the operator still has to do by hand after the new version is in place."""
     steps: list[str] = []
     keycloak = plan["manifest"]["keycloak"]
+    managed = {c["path"] for c in keycloak_role_sync.managed_clients(new_manifest)}
     for client in keycloak["clients_added"]:
-        # A managed client (mapping with secret_env) is created by `start`.
-        if isinstance(client, str):
+        # A client named under `client_secrets` is created by `start`.
+        if client not in managed:
             steps.append(f"Import the Keycloak client {client} (Keycloak Admin UI -> Clients).")
     for client, paths in keycloak["mappers_added"].items():
         steps.append(f"Add the protocol mappers {', '.join(paths)} to the client '{client}'.")

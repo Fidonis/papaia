@@ -1050,7 +1050,7 @@ def test_the_login_theme_is_set_once(tmp_path, monkeypatch, capsys):
 # ── Add-on clients (addon_api 4) ─────────────────────────────────────────
 
 
-def _addon(tmp_path, *, clients, env, active=True, name="wiki"):
+def _addon(tmp_path, *, env, secrets=None, active=True, name="wiki"):
     """An add-on checkout with one client export, its bundle .env and a deployment entry."""
     addon_path = tmp_path / "checkout" / name
     (addon_path / "kc").mkdir(parents=True)
@@ -1067,7 +1067,14 @@ def _addon(tmp_path, *, clients, env, active=True, name="wiki"):
         encoding="utf-8",
     )
     (addon_path / "papaia-app.yaml").write_text(
-        yaml.safe_dump({"name": name, "integration": {"keycloak": {"clients": clients}}}),
+        yaml.safe_dump(
+            {
+                "name": name,
+                "integration": {
+                    "keycloak": {"clients": ["kc/wiki.json"], "client_secrets": secrets or {}}
+                },
+            }
+        ),
         encoding="utf-8",
     )
     bundle = tmp_path / "config" / "addons" / name
@@ -1080,23 +1087,27 @@ def _addon(tmp_path, *, clients, env, active=True, name="wiki"):
     return tmp_path / "config"
 
 
-_MANAGED = [{"path": "kc/wiki.json", "secret_env": "KC_WIKI_SECRET", "root_url_env": "WIKI_SERVER"}]
+_SECRETS = {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET", "root_url_env": "WIKI_SERVER"}}
 
 
-def test_client_entry_reads_only_complete_mappings():
-    assert kcs.client_entry("kc/wiki.json") is None
-    assert kcs.client_entry({"path": "kc/wiki.json"}) is None
-    assert kcs.client_entry({"path": "kc/wiki.json", "secret_env": "S"}) == {
-        "path": "kc/wiki.json",
-        "secret_env": "S",
-        "root_url_env": None,
-    }
+def test_managed_clients_need_a_listed_path_and_a_secret_key():
+    def managed(clients, secrets):
+        return kcs.managed_clients(
+            {"integration": {"keycloak": {"clients": clients, "client_secrets": secrets}}}
+        )
+
+    assert managed(["kc/wiki.json"], {}) == []
+    assert managed([], {"kc/wiki.json": {"secret_env": "S"}}) == []
+    assert managed(["kc/wiki.json"], {"kc/wiki.json": {"root_url_env": "U"}}) == []
+    assert managed(["kc/wiki.json"], {"kc/wiki.json": {"secret_env": "S"}}) == [
+        {"path": "kc/wiki.json", "secret_env": "S", "root_url_env": None}
+    ]
 
 
 def test_addon_clients_carry_the_secret_and_root_url_of_the_addon_env(tmp_path):
     config = _addon(
         tmp_path,
-        clients=_MANAGED,
+        secrets=_SECRETS,
         env={"KC_WIKI_SECRET": "s3cret", "WIKI_SERVER": "https://wiki.test:8020"},
     )
     (client,) = kcs.addon_clients(config, tmp_path)
@@ -1108,20 +1119,20 @@ def test_addon_clients_carry_the_secret_and_root_url_of_the_addon_env(tmp_path):
 
 @pytest.mark.parametrize("secret", ["", "GENERATE_SECRET", "REPLACE_WITH_SECRET", "CHANGE_ME"])
 def test_a_client_without_a_real_secret_is_left_out(tmp_path, capsys, secret):
-    config = _addon(tmp_path, clients=_MANAGED, env={"KC_WIKI_SECRET": secret})
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": secret})
     assert kcs.addon_clients(config, tmp_path) == []
     assert "KC_WIKI_SECRET is not set" in capsys.readouterr().err
 
 
 def test_plain_entries_and_inactive_addons_stay_manual(tmp_path):
-    config = _addon(tmp_path, clients=["kc/wiki.json"], env={"KC_WIKI_SECRET": "s"})
+    config = _addon(tmp_path, env={"KC_WIKI_SECRET": "s"})
     assert kcs.addon_clients(config, tmp_path) == []
-    config = _addon(tmp_path / "b", clients=_MANAGED, env={"KC_WIKI_SECRET": "s"}, active=False)
+    config = _addon(tmp_path / "b", secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"}, active=False)
     assert kcs.addon_clients(config, tmp_path / "b") == []
 
 
 def test_start_creates_the_addon_client_and_aligns_its_secret_later(tmp_path, monkeypatch):
-    config = _addon(tmp_path, clients=_MANAGED, env={"KC_WIKI_SECRET": "first"})
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "first"})
     _write_realm_json(config, _realm_def())
     proxy = {"uuid-oauth2-proxy": {"clientId": "oauth2-proxy", "mappers": {}}}
     fake = FakeKeycloak(roles={}, clients=proxy)
@@ -1141,7 +1152,7 @@ def test_start_creates_the_addon_client_and_aligns_its_secret_later(tmp_path, mo
 
 
 def test_addon_start_syncs_only_its_own_clients(tmp_path, monkeypatch):
-    config = _addon(tmp_path, clients=_MANAGED, env={"KC_WIKI_SECRET": "s"})
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
     fake = FakeKeycloak(roles={}, clients={})
     _patch_common(monkeypatch, fake)
 
@@ -1152,7 +1163,7 @@ def test_addon_start_syncs_only_its_own_clients(tmp_path, monkeypatch):
 
 
 def test_addon_clients_are_left_alone_with_an_external_provider(tmp_path, monkeypatch):
-    config = _addon(tmp_path, clients=_MANAGED, env={"KC_WIKI_SECRET": "s"})
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
     fake = FakeKeycloak(roles={}, clients={})
     _patch_common(monkeypatch, fake)
     tree = _tree()

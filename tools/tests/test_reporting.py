@@ -118,10 +118,8 @@ def test_keycloak_checklist_leaves_managed_clients_to_start(tmp_path, capsys):
     manifest = {
         "integration": {
             "keycloak": {
-                "clients": [
-                    {"path": "kc/wiki.json", "secret_env": "KC_WIKI_SECRET"},
-                    "kc/manual.json",
-                ]
+                "clients": ["kc/wiki.json", "kc/manual.json"],
+                "client_secrets": {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET"}},
             }
         }
     }

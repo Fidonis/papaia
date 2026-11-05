@@ -21,12 +21,12 @@ is changed: the core `.env` is canonical for that secret, and a client left over
 from an earlier add-on install would otherwise refuse the service that signs in
 with the generated one.
 
-Add-on clients (addon_api 4): an active add-on that lists a client under
-`integration.keycloak.clients` as a mapping with `secret_env` gets that client
-created from its export when the realm lacks it, with the secret from the
-add-on's `.env` (and `rootUrl` from `root_url_env` when set). An existing
-client gets only its secret aligned, as for core clients. Plain string entries
-stay a manual import. `addon start` runs the same step for its add-on alone.
+Add-on clients (addon_api 4): a client an active add-on lists under
+`integration.keycloak.clients` and names under `client_secrets` with its
+`secret_env` is created from its export when the realm lacks it, with the
+secret from the add-on's `.env` (and `rootUrl` from `root_url_env` when set).
+An existing client gets only its secret aligned, as for core clients. Other
+clients stay a manual import. `addon start` runs the same step for its add-on.
 
 The realm's mail server follows the optional `smtp` profile: while the mail relay is on
 and configured, an existing realm without a mail server gets the relay (and the
@@ -352,29 +352,33 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tu
     return created, updated
 
 
-def client_entry(entry: object) -> dict | None:
-    """A managed client entry of `integration.keycloak.clients`: a mapping with `path` and
-    `secret_env` (and optionally `root_url_env`). None for a plain path, which stays a
-    manual import, and for anything malformed."""
-    if not isinstance(entry, dict):
-        return None
-    path, secret_env = entry.get("path"), entry.get("secret_env")
-    if not isinstance(path, str) or not isinstance(secret_env, str) or not path or not secret_env:
-        return None
-    root_url_env = entry.get("root_url_env")
-    return {
-        "path": path,
-        "secret_env": secret_env,
-        "root_url_env": root_url_env if isinstance(root_url_env, str) else None,
-    }
-
-
 def managed_clients(manifest: dict) -> list[dict]:
-    """The managed client entries an add-on manifest declares."""
+    """The clients an add-on manifest hands to the sync: every entry of
+    `integration.keycloak.client_secrets` (`<path>: {secret_env, root_url_env}`) whose path
+    is listed under `clients`. Each comes back as {path, secret_env, root_url_env}.
+
+    A separate key rather than a new form of `clients` entries: a core that predates it
+    ignores the key and keeps showing the manual import for the same paths."""
     cfg = (manifest.get("integration") or {}).get("keycloak") or {}
-    clients = cfg.get("clients") if isinstance(cfg, dict) else None
-    entries = [client_entry(c) for c in clients] if isinstance(clients, list) else []
-    return [e for e in entries if e is not None]
+    if not isinstance(cfg, dict):
+        return []
+    clients = cfg.get("clients") if isinstance(cfg.get("clients"), list) else []
+    secrets = cfg.get("client_secrets") if isinstance(cfg.get("client_secrets"), dict) else {}
+    entries = []
+    for path, spec in secrets.items():
+        if path not in clients or not isinstance(spec, dict):
+            continue
+        secret_env, root_url_env = spec.get("secret_env"), spec.get("root_url_env")
+        if not isinstance(secret_env, str) or not secret_env:
+            continue
+        entries.append(
+            {
+                "path": path,
+                "secret_env": secret_env,
+                "root_url_env": root_url_env if isinstance(root_url_env, str) else None,
+            }
+        )
+    return entries
 
 
 def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = None) -> list[dict]:

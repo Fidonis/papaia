@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, envtree, secrets, smtp
+from . import common, envtree, keycloak_role_sync, secrets, smtp
 
 
 def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:
@@ -127,11 +127,10 @@ def print_keycloak_checklist(
 ) -> None:
     integration = manifest.get("integration") or {}
     keycloak_cfg = integration.get("keycloak") or {}
-    all_clients = keycloak_cfg.get("clients") or []
-    # Mappings with `secret_env` are created by `start` (keycloak_role_sync); only plain
-    # paths remain a manual import.
-    clients = [c for c in all_clients if isinstance(c, str)]
-    managed = [c["path"] for c in all_clients if isinstance(c, dict) and c.get("path")]
+    # Clients named under `client_secrets` are created by `start` (keycloak_role_sync);
+    # the others remain a manual import.
+    managed = [c["path"] for c in keycloak_role_sync.managed_clients(manifest)]
+    clients = [c for c in keycloak_cfg.get("clients") or [] if c not in managed]
     mappers = keycloak_cfg.get("client_mappers") or {}
     replace_secret_cfg = manifest.get("env_replace_secrets") or {}
 
