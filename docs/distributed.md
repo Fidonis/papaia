@@ -148,7 +148,7 @@ exactly these. `doctor` names a missing rule when a link cannot be reached.
 | `start [--node=NAME] [--addons]` | Renders, hands each node its release and bundle, then starts in order: link gateways, Keycloak and the mail relay, LiteLLM, the application, the proxy last. A failing node stops the sequence and is named. |
 | `stop [--node=NAME] [--clean-up] [--addons]` | The same order backwards. |
 | `status [--json]` | One report, a section per node; JSON adds `node` and `nodes`. |
-| `doctor [--json]` | The controller's checks plus `nodes` (each node's own checks, version skew, clock) and `links` (a TLS handshake per link, certificate expiry). |
+| `doctor [--json]` | The controller's checks plus `nodes` (each node's own checks, version skew, clock), `links` (a TLS handshake per link, certificate expiry) and `file_modes` (the config dir keeps the mode 600 of the link keys; not the case on a Windows drive in WSL2 without `metadata`). |
 | `node list --check` | Every node, its address, its services, whether it answers. |
 | `node renew-link NAME` | A new link certificate for the node; `doctor` warns 30 days before one expires. |
 | `node remove NAME` | Stops the node's link gateway and deletes its SSH key and link certificate. Follow it with `node sync --all` (see the security notes). |
