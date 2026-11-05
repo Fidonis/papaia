@@ -383,21 +383,7 @@ cmd_setup() {
             localai_variant="$(_prompt_localai_variant)"
         fi
         if [ -z "$manager" ]; then
-            local manager_default="1"
-            [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
-            printf '\n%sEnable Extension Manager%s\n' "$CYAN" "$NC" >&2
-            printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons (default)\n' >&2
-            printf '  2) No   — skip papaia-manager (the core runs without it)\n' >&2
-            local manager_choice
-            manager_choice="$(prompt_with_default "  Choose" "$manager_default")"
-            case "$manager_choice" in
-                1|yes) manager="true" ;;
-                2|no)  manager="false" ;;
-                *)
-                    warn "Unrecognized choice '$manager_choice'; defaulting to disabled."
-                    manager="false"
-                    ;;
-            esac
+            manager="$(_prompt_manager)"
         fi
         if [ "$manager" = "true" ] && [ -z "$manager_host" ]; then
             local manager_default_url="${MANAGER_HOST_STICKY:-}"
@@ -687,6 +673,36 @@ _localai_variant_unverified() {
     warn "$1 was not detected on this host. Install the driver and container runtime before starting the stack, or re-run setup and choose CPU."
 }
 
+# Asks whether to run papaia-manager; prints "true" or "false". The manager profile needs
+# a Linux host (README, papaia-manager), which Docker Desktop on macOS is not, so there
+# the default is no, unless a previous run said yes.
+_prompt_manager() {
+    local manager_default="1" on_mac=0
+    [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
+    if [ "$(uname -s)" = "Darwin" ] && [ "${MANAGER_STICKY:-}" != "true" ]; then
+        on_mac=1
+        manager_default="2"
+    fi
+    local yes_default="" no_default=""
+    if [ "$manager_default" = "1" ]; then yes_default=" (default)"; else no_default=" (default)"; fi
+    printf '\n%sEnable Extension Manager%s\n' "$CYAN" "$NC" >&2
+    printf '  1) Yes  — run papaia-manager, the web UI for installing and updating addons%s\n' "$yes_default" >&2
+    printf '  2) No   — skip papaia-manager (the core runs without it)%s\n' "$no_default" >&2
+    if [ "$on_mac" -eq 1 ]; then
+        printf '  papaia-manager needs a Linux host; see "papaia-manager" in README.md.\n' >&2
+    fi
+    local manager_choice
+    manager_choice="$(prompt_with_default "  Choose" "$manager_default")"
+    case "$manager_choice" in
+        1|yes) echo "true" ;;
+        2|no)  echo "false" ;;
+        *)
+            warn "Unrecognized choice '$manager_choice'; defaulting to disabled."
+            echo "false"
+            ;;
+    esac
+}
+
 # Asks which LocalAI accelerator image to install. Everything the operator sees
 # goes to stderr; only the chosen variant id reaches stdout.
 _prompt_localai_variant() {
@@ -812,14 +828,14 @@ _run_setup_py() {
     [ "$force" = "1" ] && extra+=(--force)
     # The mail relay flags are collected by cmd_setup; empty on the re-render paths.
     if [ "${#SETUP_SMTP_ARGS[@]}" -gt 0 ]; then
-        extra+=("${SETUP_SMTP_ARGS[@]}")
+        extra+=(${SETUP_SMTP_ARGS[@]+"${SETUP_SMTP_ARGS[@]}"})
     fi
     if [ "${#SETUP_TOPOLOGY_ARGS[@]}" -gt 0 ]; then
-        extra+=("${SETUP_TOPOLOGY_ARGS[@]}")
+        extra+=(${SETUP_TOPOLOGY_ARGS[@]+"${SETUP_TOPOLOGY_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.
-    PAPAIA_SMTP_PASSWORD="${SETUP_SMTP_PASSWORD:-}" py_cli setup --env="$env_name" "${extra[@]}"
+    PAPAIA_SMTP_PASSWORD="${SETUP_SMTP_PASSWORD:-}" py_cli setup --env="$env_name" ${extra[@]+"${extra[@]}"}
 }
 
 # Asks for the mail server behind the relay. Fills the smtp_* variables of cmd_setup
