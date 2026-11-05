@@ -87,7 +87,7 @@ Please run them locally before pushing if you can. Configuration lives in `.gith
     uv run --locked --extra dev python -m ruff check lib tests
     uv run --locked --extra dev python -m pytest tests/
 
-The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker compose config` only with the Compose release it records; CI installs that release. `ruff format` is not enforced.
+The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker compose config` only with the Compose release it records; CI installs that release. Every image bump, including the ones Dependabot proposes, changes that snapshot: regenerate it on the pull request's branch with `PAPAIA_UPDATE_GOLDEN=1 uv run --locked --extra dev python -m pytest tests/test_golden_single_node.py` (from `tools/`) before merging. `ruff format` is not enforced.
 
 ## Local development
 
