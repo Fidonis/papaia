@@ -224,7 +224,11 @@ local_ca_env:                      # optional: env vars pointing at the local
 
 integration:
   keycloak:
-    clients: [integration/keycloak/<client>.json]
+    clients:
+      - integration/keycloak/<client>.json   # imported by hand (install checklist)
+      - path: integration/keycloak/<other>.json  # addon_api 4: created by `start`
+        secret_env: KC_<OTHER>_CLIENT_SECRET     # GENERATE_SECRET in .env.example
+        root_url_env: <APP>_SERVER               # optional, replaces rootUrl
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/<name>.yaml   # optional
@@ -433,6 +437,17 @@ Client JSONs from `integration/keycloak/` are registered **additively and
 idempotently** in the Keycloak realm (via the Keycloak Admin REST API or a
 bootstrap script), including audience mappers for the MCP token flow. Base:
 the existing idempotent Keycloak client sync in `papaia/src/infra/keycloak/bootstrap.sh`.
+
+**Managed clients (addon_api 4).** A `clients` entry written as a mapping with
+`path` and `secret_env` is created without the Admin UI: `addon install`
+generates the secret like any `GENERATE_SECRET` value, and `papaia-ctl start`
+(the `keycloak-role-sync` step) as well as `papaia-ctl addon start <name>`
+create the client from its export when the realm lacks it, with that secret
+and, when `root_url_env` names a set key, that root URL. An existing client
+only gets its secret aligned with the add-on `.env`, as core clients do, so a
+secret changed there takes effect on the next start. Nothing else about an
+existing client is changed. Plain string entries keep the manual import, and
+with `auth_provider=external_oidc` nothing is created.
 
 ### Seam 3 — LibreChat-MCP
 

@@ -23,6 +23,7 @@ from . import (
     deployment,
     envtree,
     gen_override,
+    keycloak_role_sync,
     render_core,
     reporting,
     topology,
@@ -340,6 +341,16 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     addons.materialize_addon_env(config_dir, addon_path, name)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
+    # Clients the add-on declares with a secret key: created or aligned now, so the
+    # login works on this start. Not fatal: `papaia-ctl start` runs the same step.
+    if keycloak_role_sync.managed_clients(manifest):
+        tree = envtree.load_config_dir_tree(config_dir, repo_root)
+        if not keycloak_role_sync.sync_addon_clients(tree, config_dir, repo_root, {name}):
+            print(
+                f"WARNING: the Keycloak clients of '{name}' are not in place yet. "
+                "Run 'papaia-ctl keycloak-role-sync' once Keycloak is up.",
+                file=sys.stderr,
+            )
     return 0
 
 
@@ -548,7 +559,9 @@ def _print_upgrade_followups(plan: dict, new_manifest: dict, bundle_env_path: Pa
     steps: list[str] = []
     keycloak = plan["manifest"]["keycloak"]
     for client in keycloak["clients_added"]:
-        steps.append(f"Import the Keycloak client {client} (Keycloak Admin UI -> Clients).")
+        # A managed client (mapping with secret_env) is created by `start`.
+        if isinstance(client, str):
+            steps.append(f"Import the Keycloak client {client} (Keycloak Admin UI -> Clients).")
     for client, paths in keycloak["mappers_added"].items():
         steps.append(f"Add the protocol mappers {', '.join(paths)} to the client '{client}'.")
     hints = new_manifest.get("env_replace_secrets") or {}

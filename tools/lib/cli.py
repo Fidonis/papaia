@@ -554,7 +554,7 @@ def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    if not keycloak_role_sync.sync_roles(tree, config_dir):
+    if not keycloak_role_sync.sync_roles(tree, config_dir, repo_root):
         return 1
     return 0
 

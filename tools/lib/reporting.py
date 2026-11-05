@@ -127,7 +127,11 @@ def print_keycloak_checklist(
 ) -> None:
     integration = manifest.get("integration") or {}
     keycloak_cfg = integration.get("keycloak") or {}
-    clients = keycloak_cfg.get("clients") or []
+    all_clients = keycloak_cfg.get("clients") or []
+    # Mappings with `secret_env` are created by `start` (keycloak_role_sync); only plain
+    # paths remain a manual import.
+    clients = [c for c in all_clients if isinstance(c, str)]
+    managed = [c["path"] for c in all_clients if isinstance(c, dict) and c.get("path")]
     mappers = keycloak_cfg.get("client_mappers") or {}
     replace_secret_cfg = manifest.get("env_replace_secrets") or {}
 
@@ -140,6 +144,12 @@ def print_keycloak_checklist(
     # not one step per character.
     if isinstance(notes, str):
         notes = [notes]
+
+    if managed:
+        print()
+        print(f"Addon '{name}' — Keycloak clients created by 'papaia-ctl start':")
+        for rel in managed:
+            print(f"   {addon_path / rel}")
 
     if not clients and not mappers and not replace_keys and not notes:
         return
