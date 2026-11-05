@@ -96,8 +96,8 @@ access. See `src/infra/keycloak/README.md` for the full role table.
 - PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
   library. On a minimal host install it with `sudo apt-get install -y
   python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
-  (Fedora/RHEL), `brew install pyyaml` (macOS), or `pip install 'PyYAML>=6.0'` in a
-  virtual environment
+  (Fedora/RHEL), or `pip install 'PyYAML>=6.0'` in a virtual environment (macOS, see
+  below)
 - `openssl`, only when Keycloak TLS is enabled
 - At least 8 GB RAM recommended ([`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
@@ -111,16 +111,25 @@ Linux host:
   recommendation applies to the memory assigned to it (Settings > Resources). `doctor`
   measures what Docker reports.
 - **Python.** The `python3` of the Xcode Command Line Tools is 3.9, too old for
-  `papaia-ctl`. Install a current one with PyYAML: `brew install python pyyaml`.
-  `papaia-ctl` also finds Homebrew's `python3.X` when the old `python3` comes first on
-  `PATH`, and names the version it found when there is none.
+  `papaia-ctl`. Homebrew no longer ships PyYAML as a formula, and its Python refuses a
+  plain `pip install`, so install both into a virtual environment:
+
+  ```bash
+  brew install python
+  "$(brew --prefix)/bin/python3" -m venv ~/.venvs/papaia
+  ~/.venvs/papaia/bin/pip install 'PyYAML>=6.0'
+  source ~/.venvs/papaia/bin/activate   # before running tools/papaia-ctl
+  ```
+
+  `papaia-ctl` then uses the environment's `python3`, and names the version it found
+  when none is new enough.
 - **Bash and OpenSSL.** The system Bash 3.2 and the system LibreSSL work; Homebrew's
   versions are not needed.
 - **Paths.** Docker Desktop bind-mounts only the host paths it shares with its VM
   (Settings > Resources > File sharing; `/Users`, `/Volumes`, `/private`, `/tmp` and
   `/var/folders` by default). Keep `--config-dir` and `--backup-dir` there. The default
-  config directory next to the checkout under `/Users` works; `/srv` and `/opt` do not, and
-  `/srv` cannot be created on the read-only system volume.
+  config directory next to the checkout under `/Users` works. `/opt` works only after it is
+  added under File sharing, and `/srv` cannot be created on the read-only system volume.
 - **papaia-manager.** It needs a Linux host. `setup` defaults to *no* on macOS; leave it
   off (`--no-manager`).
 - **Keycloak certificate.** With the default local URLs, trust the generated local CA
