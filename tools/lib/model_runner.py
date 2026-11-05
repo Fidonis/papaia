@@ -316,3 +316,147 @@ def detection_vars(detection: Detection) -> dict[str, str]:
         "MODEL_RUNNER_DESKTOP_VERSION": detection.desktop_version,
         "MODEL_RUNNER_ENGINES": ",".join(detection.running_engines),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Runner state, for `doctor` and `status`
+
+# The port Docker Desktop serves the runner on when host-side TCP is on. `docker desktop
+# enable model-runner` switches it on with this port unless told otherwise.
+HOST_TCP_PORT = 12434
+
+_COLUMNS_RE = re.compile(r"\s{2,}")
+
+
+@dataclass
+class RunnerState:
+    reachable: bool
+    reason: str = ""  # why not, when not reachable
+    engines: dict[str, str] = field(default_factory=dict)  # engine -> status text
+    models: list[dict] = field(default_factory=list)  # {name, tags, format, size}
+    loaded: list[dict] = field(default_factory=list)  # {model, engine, mode}
+    source: str = ""  # "cli" on the host, "api" inside a container
+
+    @property
+    def running_engines(self) -> list[str]:
+        return [name for name, state in self.engines.items() if state.startswith("Running")]
+
+    def tags(self) -> set[str]:
+        return {tag for model in self.models for tag in model["tags"]}
+
+    def missing(self, models: list[Model]) -> list[str]:
+        """The references of `models` the runner does not have."""
+        present = self.tags()
+        return [m.reference for m in models if normalise(m.reference) not in present]
+
+    def to_dict(self) -> dict:
+        return {
+            "reachable": self.reachable,
+            "reason": self.reason or None,
+            "source": self.source,
+            "engines": self.engines,
+            "models": self.models,
+            "loaded": self.loaded,
+        }
+
+
+def _model_entries(data) -> list[dict]:
+    """`GET /models` and `docker model list --json`, which share their shape."""
+    entries = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict):
+            continue
+        tags = [str(t) for t in item.get("tags") or []]
+        config = item.get("config") if isinstance(item.get("config"), dict) else {}
+        entries.append(
+            {
+                "name": tags[0] if tags else str(item.get("id", "")),
+                "tags": tags,
+                "format": str(config.get("format", "")),
+                "size": str(config.get("size", "")),
+            }
+        )
+    return entries
+
+
+def _loaded_from_api(data) -> list[dict]:
+    return [
+        {
+            "model": str(item.get("model_name", "")),
+            "engine": str(item.get("backend_name", "")),
+            "mode": str(item.get("mode", "")),
+        }
+        for item in (data if isinstance(data, list) else [])
+        if isinstance(item, dict)
+    ]
+
+
+def parse_ps_table(text: str) -> list[dict]:
+    """`docker model ps`, which has no JSON output: MODEL NAME, BACKEND, MODE, UNTIL."""
+    rows = []
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    for line in lines[1:] if lines and lines[0].startswith("MODEL") else lines:
+        columns = _COLUMNS_RE.split(line.strip())
+        if len(columns) >= 3:
+            rows.append({"model": columns[0], "engine": columns[1], "mode": columns[2]})
+    return rows
+
+
+def _json(text: str):
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def probe(
+    *,
+    in_container: bool,
+    run: Callable[..., object] = run_command,
+    request: Callable[..., tuple[int, str]] = http_request,
+) -> RunnerState:
+    """Ask the runner what it has. Never raises.
+
+    On the host through the `docker model` plugin, inside a container (papaia-manager,
+    which has no plugin) through the runner's API. `run` may return a CompletedProcess
+    or anything with returncode, stdout and stderr, or None when nothing could run."""
+    if in_container:
+        try:
+            status, body = request("GET", "/engines/status")
+        except RunnerError as exc:
+            return RunnerState(False, str(exc), source="api")
+        if status != 200:
+            return RunnerState(False, f"{BASE_URL} answered {status}", source="api")
+        state = RunnerState(True, source="api")
+        engines = _json(body)
+        state.engines = (
+            {str(k): str(v) for k, v in engines.items()} if isinstance(engines, dict) else {}
+        )
+        for path, attr, parse in (
+            ("/models", "models", _model_entries),
+            ("/engines/ps", "loaded", _loaded_from_api),
+        ):
+            try:
+                code, text = request("GET", path)
+            except RunnerError:
+                continue
+            if code == 200:
+                setattr(state, attr, parse(_json(text)))
+        return state
+
+    done = run(["docker", "model", "status", "--json"], 15.0)
+    if done is None or getattr(done, "returncode", 127) == 127:
+        return RunnerState(False, "the docker model plugin is not installed", source="cli")
+    running, engines = parse_status(getattr(done, "stdout", ""))
+    if not running:
+        return RunnerState(
+            False, "Docker Model Runner is not running", engines=engines, source="cli"
+        )
+    state = RunnerState(True, engines=engines, source="cli")
+    listed = run(["docker", "model", "list", "--json"], 15.0)
+    if listed is not None and getattr(listed, "returncode", 1) == 0:
+        state.models = _model_entries(_json(getattr(listed, "stdout", "")))
+    ps = run(["docker", "model", "ps"], 15.0)
+    if ps is not None and getattr(ps, "returncode", 1) == 0:
+        state.loaded = parse_ps_table(getattr(ps, "stdout", ""))
+    return state

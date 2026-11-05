@@ -586,3 +586,153 @@ def test_run_command_captures_output():
     result = status.run_command([sys.executable, "-c", "print('hi')"], 10.0)
 
     assert (result.returncode, result.stdout.strip()) == (0, "hi")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Docker Model Runner
+# ─────────────────────────────────────────────────────────────────────────
+
+from lib import model_runner  # noqa: E402
+
+_RUNNER = model_runner.RunnerState(
+    True,
+    engines={"llama.cpp": "Running: llama.cpp b9879-metal", "vllm": "Not Installed"},
+    models=[
+        {
+            "name": "docker.io/ai/qwen3:4b-instruct-2507-q4_K_M",
+            "tags": ["docker.io/ai/qwen3:4b-instruct-2507-q4_K_M"],
+            "format": "gguf",
+            "size": "2.3GiB",
+        },
+        {
+            "name": "huggingface.co/mlx-community/qwen3-4b-4bit:latest",
+            "tags": ["huggingface.co/mlx-community/qwen3-4b-4bit:latest"],
+            "format": "safetensors",
+            "size": "2.2GB",
+        },
+    ],
+    # As `docker model ps` names them: lower case, no registry.
+    loaded=[
+        {"model": "qwen3:4b-instruct-2507-q4_k_m", "engine": "llama.cpp", "mode": "completion"}
+    ],
+    source="cli",
+)
+
+
+def _with_model_runner(stack) -> None:
+    env = stack["config"] / ".env"
+    text = env.read_text(encoding="utf-8")
+    env.write_text(
+        text.replace("COMPOSE_PROFILES=", "COMPOSE_PROFILES=model-runner,", 1), encoding="utf-8"
+    )
+
+
+def test_no_model_runner_section_while_the_profile_is_off(stack):
+    asked = []
+    report = collect(stack, FakeDocker(healthy_core()), runner_probe=lambda: asked.append(1))
+    assert report.model_runner is None
+    assert asked == []
+    assert "model_runner" not in report.to_dict()
+
+
+def test_the_runner_section_lists_pulled_and_loaded_models(stack):
+    _with_model_runner(stack)
+    report = collect(stack, FakeDocker(healthy_core()), runner_probe=lambda: _RUNNER)
+    document = report.to_dict()["model_runner"]
+    assert document["reachable"] is True
+    assert [m["name"] for m in document["models"]] == [
+        "docker.io/ai/qwen3:4b-instruct-2507-q4_K_M",
+        "huggingface.co/mlx-community/qwen3-4b-4bit:latest",
+    ]
+    assert document["loaded"][0]["engine"] == "llama.cpp"
+    assert_schema_valid(report)
+
+    table = status.format_table(report)
+    assert "DOCKER MODEL RUNNER: engines llama.cpp" in table
+    assert "llama.cpp (completion)" in table
+    line = next(row for row in table.splitlines() if row.startswith("huggingface.co/"))
+    assert line.rstrip().endswith("-")
+
+
+def test_an_unreachable_runner_is_reported_without_failing_status(stack):
+    _with_model_runner(stack)
+    state = model_runner.RunnerState(False, "Docker Model Runner is not running", source="cli")
+    report = collect(stack, FakeDocker(healthy_core()), runner_probe=lambda: state)
+    assert "DOCKER MODEL RUNNER: not reachable (Docker Model Runner is not running)" in (
+        status.format_table(report)
+    )
+    assert_schema_valid(report)
+
+
+def test_the_runner_is_reported_even_when_docker_ps_fails(stack):
+    _with_model_runner(stack)
+    docker = FakeDocker(ps_result=CommandResult(1, "", "Cannot connect to the Docker daemon"))
+    report = collect(stack, docker, runner_probe=lambda: _RUNNER)
+    assert report.docker.reachable is False
+    assert report.model_runner is _RUNNER
+    assert_schema_valid(report)
+
+
+def test_the_host_probe_reads_the_docker_model_plugin():
+    calls = []
+    outputs = {
+        ("docker", "model", "status", "--json"): (
+            0,
+            json.dumps({"running": True, "backends": {"llama.cpp": "Running: b1"}}),
+        ),
+        ("docker", "model", "list", "--json"): (
+            0,
+            json.dumps(
+                [{"id": "sha256:1", "tags": ["docker.io/ai/x:1"], "config": {"format": "gguf"}}]
+            ),
+        ),
+        ("docker", "model", "ps"): (
+            0,
+            "MODEL NAME  BACKEND    MODE        UNTIL\n"
+            "x:1         llama.cpp  completion  4 minutes\n",
+        ),
+    }
+
+    def run(argv, timeout):
+        calls.append(tuple(argv))
+        code, out = outputs[tuple(argv)]
+        return CommandResult(code, out, "")
+
+    state = model_runner.probe(in_container=False, run=run)
+    assert state.reachable and state.source == "cli"
+    assert state.models[0]["name"] == "docker.io/ai/x:1"
+    assert state.loaded == [{"model": "x:1", "engine": "llama.cpp", "mode": "completion"}]
+
+
+def test_the_container_probe_reads_the_api():
+    answers = {
+        "/engines/status": (200, json.dumps({"llama.cpp": "Running: b1"})),
+        "/models": (200, json.dumps([{"id": "sha256:1", "tags": ["docker.io/ai/x:1"]}])),
+        "/engines/ps": (
+            200,
+            json.dumps(
+                [{"backend_name": "llama.cpp", "model_name": "ai/x:1", "mode": "embedding"}]
+            ),
+        ),
+    }
+    state = model_runner.probe(in_container=True, request=lambda method, path: answers[path])
+    assert state.reachable and state.source == "api"
+    assert state.running_engines == ["llama.cpp"]
+    assert state.loaded == [{"model": "ai/x:1", "engine": "llama.cpp", "mode": "embedding"}]
+
+
+def test_the_container_probe_without_an_answer():
+    def request(method, path):
+        raise model_runner.RunnerError("http://model-runner.docker.internal does not answer: x")
+
+    state = model_runner.probe(in_container=True, request=request)
+    assert not state.reachable
+    assert "does not answer" in state.reason
+
+
+def test_the_host_probe_without_the_plugin():
+    state = model_runner.probe(
+        in_container=False, run=lambda argv, timeout: CommandResult(127, "", "not found")
+    )
+    assert not state.reachable
+    assert "plugin is not installed" in state.reason

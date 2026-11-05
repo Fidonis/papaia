@@ -187,6 +187,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # memory
         PASS,  # cpu
         SKIP,  # gpu: LocalAI is not enabled
+        SKIP,  # inference: Docker Model Runner is not enabled
         PASS,  # ports
         SKIP,  # dns: only local hostnames configured
         PASS,  # time_sync
@@ -208,6 +209,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "memory",
         "cpu",
         "gpu",
+        "inference",
         "ports",
         "dns",
         "time_sync",
@@ -2140,3 +2142,144 @@ def test_smtp_report_validates_and_holds_no_secret(stack):
     document = doctor.to_json(report)
     assert not list(VALIDATOR.iter_errors(json.loads(document)))
     assert UPSTREAM_PASSWORD not in document
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# inference (Docker Model Runner)
+# ─────────────────────────────────────────────────────────────────────────
+
+from lib import model_runner  # noqa: E402
+
+LISTED = "ai/qwen3:4b chat\nai/nomic-embed-text-v1.5:137M-F16 nomic-embed-text\n"
+PRESENT = [
+    {"name": "docker.io/ai/qwen3:4b", "tags": ["docker.io/ai/qwen3:4b"], "format": "gguf",
+     "size": "2.3GiB"},
+    {"name": "docker.io/ai/nomic-embed-text-v1.5:137M-F16",
+     "tags": ["docker.io/ai/nomic-embed-text-v1.5:137M-F16"], "format": "gguf", "size": "260MiB"},
+]
+ENGINES = {"llama.cpp": "Running: llama.cpp b9879-metal", "vllm": "Not Installed"}
+
+
+def enable_model_runner(stack, models: str = LISTED) -> None:
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},model-runner")
+    target = stack["config"] / "ai" / "model-runner" / "models.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(models, encoding="utf-8")
+
+
+def runner(reachable=True, *, models=None, engines=None, reason="", calls=None):
+    def probe(run, in_container):
+        if calls is not None:
+            calls.append(in_container)
+        return model_runner.RunnerState(
+            reachable,
+            reason,
+            engines=ENGINES if engines is None else engines,
+            models=PRESENT if models is None else models,
+            source="api" if in_container else "cli",
+        )
+
+    return probe
+
+
+def test_inference_is_skipped_while_the_module_is_off(stack):
+    check = result(run_doctor(stack, model_runner=runner()), "inference")
+    assert check.status == SKIP
+    assert "not enabled" in check.summary
+
+
+def test_inference_passes_with_every_listed_model_and_names_the_engines(stack):
+    enable_model_runner(stack)
+    check = result(run_doctor(stack, model_runner=runner()), "inference")
+    assert check.status == PASS, check.summary
+    assert "2 listed model(s) present (engines: llama.cpp)" in check.summary
+    assert check.details["engines"] == ["llama.cpp"]
+    assert check.details["missing"] == []
+    assert check.details["host_tcp"] == "off"
+
+
+def test_inference_fails_when_the_runner_does_not_answer_and_names_the_setting(stack):
+    enable_model_runner(stack)
+    probe = runner(False, reason="Docker Model Runner is not running")
+    check = result(run_doctor(stack, model_runner=probe), "inference")
+    assert check.status == FAIL
+    assert "Settings > AI > Enable Docker Model Runner" in check.summary
+    assert check.details["reason"] == "Docker Model Runner is not running"
+
+
+def test_a_missing_model_is_a_warning_with_its_name(stack):
+    enable_model_runner(stack)
+    check = result(run_doctor(stack, model_runner=runner(models=PRESENT[:1])), "inference")
+    assert check.status == WARN
+    assert "ai/nomic-embed-text-v1.5:137M-F16" in check.summary
+    assert "papaia-ctl start" in check.summary
+    assert check.details["missing"] == ["ai/nomic-embed-text-v1.5:137M-F16"]
+
+
+def test_an_mlx_model_without_vllm_is_a_warning(stack):
+    enable_model_runner(stack, LISTED + "ai/qwen3:4b-instruct-2507-mlx-4bit mlx\n")
+    mlx = {"name": "x", "tags": ["docker.io/ai/qwen3:4b-instruct-2507-mlx-4bit"], "format": "",
+           "size": ""}
+    check = result(run_doctor(stack, model_runner=runner(models=[*PRESENT, mlx])), "inference")
+    assert check.status == WARN
+    assert "install-runner --backend vllm" in check.summary
+
+
+def test_an_mlx_model_on_an_old_docker_desktop_names_the_version(stack):
+    enable_model_runner(stack, "ai/qwen3:4b-instruct-2507-mlx-4bit\n")
+    mlx = {"name": "x", "tags": ["docker.io/ai/qwen3:4b-instruct-2507-mlx-4bit"], "format": "",
+           "size": ""}
+    docker = healthy_docker(engine=CommandResult(0, "Docker Desktop 4.40.0 (1)\n", ""))
+    check = result(run_doctor(stack, docker, model_runner=runner(models=[mlx])), "inference")
+    assert check.status == WARN
+    assert "4.62 or newer (this is 4.40.0)" in check.summary
+
+
+def test_the_api_on_every_interface_is_a_warning(stack):
+    enable_model_runner(stack)
+    check = result(
+        run_doctor(
+            stack,
+            model_runner=runner(),
+            connect=lambda host, port: port == model_runner.HOST_TCP_PORT,
+            lan_address=lambda: "192.168.1.20",
+        ),
+        "inference",
+    )
+    assert check.status == WARN
+    assert "every interface" in check.summary
+    assert check.details["host_tcp"] == "all interfaces"
+
+
+def test_the_api_on_loopback_only_passes(stack):
+    enable_model_runner(stack)
+    check = result(
+        run_doctor(
+            stack,
+            model_runner=runner(),
+            connect=lambda host, port: host == "127.0.0.1" and port == 12434,
+            lan_address=lambda: "192.168.1.20",
+        ),
+        "inference",
+    )
+    assert check.status == PASS
+    assert check.details["host_tcp"] == "loopback"
+
+
+def test_inside_a_container_the_runner_is_read_through_its_api(stack):
+    enable_model_runner(stack)
+    calls: list[bool] = []
+    report = run_doctor(stack, model_runner=runner(calls=calls), in_container=lambda: True)
+    check = result(report, "inference")
+    assert check.status == PASS
+    assert check.details["source"] == "api"
+    assert check.details["host_tcp"] == "unknown"
+    # One probe for the check and the status report it shares.
+    assert calls == [True]
+    VALIDATOR.validate(report.to_dict())
+
+
+def test_inference_details_match_the_schema(stack):
+    enable_model_runner(stack)
+    for probe in (runner(), runner(False, reason="no"), runner(models=[])):
+        VALIDATOR.validate(run_doctor(stack, model_runner=probe).to_dict())
