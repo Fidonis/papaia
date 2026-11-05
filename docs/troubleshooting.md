@@ -160,6 +160,37 @@ The image alone is not enough — the host prerequisites have to be in place:
   models — set `mmap: false` in the model YAMLs under
   `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
 
+### Docker Model Runner (Apple Silicon)
+
+`tools/papaia-ctl doctor` reports the runner as the `inference` check, and the init job's log
+says which model it could not pull:
+
+```bash
+# <project> is COMPOSE_PROJECT_NAME from $PAPAIA_CONFIG_DIR/.env (papaia by default)
+docker logs <project>-model-runner-model-init-1
+```
+
+- **`docker: 'model' is not a docker command`.** The `docker model` CLI plugin is a symlink
+  that Docker Desktop installs in `~/.docker/cli-plugins/docker-model`, pointing into
+  `/Applications/Docker.app/Contents/Resources/cli-plugins/`. Restore it by restarting Docker
+  Desktop or re-creating the link. Without the plugin, `doctor` on the host reports `fail`;
+  the init job and LiteLLM do not need it, they use the runner's API.
+- **The runner does not answer after a Docker Desktop update** (`doctor`: `fail`, init job:
+  "Docker Model Runner does not answer"). Updates can switch the feature off. Enable it again
+  under *Settings > AI > Enable Docker Model Runner* (or `docker desktop enable model-runner`,
+  which also switches host TCP on; turn that off again in the settings), then run
+  `tools/papaia-ctl start`.
+- **An MLX model is listed but does not answer** (`doctor`: `warn`, "need the vllm engine").
+  MLX models run on vllm-metal, which is not installed by default:
+  `docker model install-runner --backend vllm` (Docker Desktop 4.62 or newer). GGUF models
+  need nothing more. MLX embedding models do not load in vllm-metal yet; keep embeddings in
+  GGUF.
+- **A Hugging Face model fails with `Unauthorized`.** Hugging Face answers that for a
+  repository that does not exist as well; check the spelling in `models.txt`.
+- **`model-runner.docker.internal` does not resolve.** The name exists in containers under
+  Docker Desktop only. Docker Engine on Linux serves its Model Runner on another address,
+  which the module does not support yet.
+
 ### Password-reset and other mails do not arrive
 
 Mail goes through the relay of the `smtp` profile, and a message that Keycloak or papaia-manager
