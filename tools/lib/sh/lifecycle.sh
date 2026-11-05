@@ -40,7 +40,7 @@ _addon_compose_all() {
         [ -z "$addon_name" ] && continue
         addon_path="$(_addon_path "$addon_name")"
         info "  addon $addon_name: docker compose $verb"
-        _addon_compose "$verb" "$addon_name" "$addon_path" "${extra[@]}"
+        _addon_compose "$verb" "$addon_name" "$addon_path" ${extra[@]+"${extra[@]}"}
     done < <(py_cli active-addons 2>/dev/null)
 }
 
@@ -58,7 +58,7 @@ _require_profiles_resolve() {
     local profiles="$1" env_file="$2"; shift 2
     local -a files=("$@")
     local services status=0
-    services="$(COMPOSE_PROFILES="$profiles" docker compose "${files[@]}" \
+    services="$(COMPOSE_PROFILES="$profiles" docker compose ${files[@]+"${files[@]}"} \
         --env-file "$env_file" config --services 2>&1)" || status=$?
 
     if [ "$status" -ne 0 ]; then
@@ -73,6 +73,12 @@ _require_profiles_resolve() {
         error "COMPOSE_PROFILES in $env_file."
         exit 2
     fi
+}
+
+# Docker Desktop drops the bind-mount proxy paths of a stopped container, and `up` would
+# start that container with its old mount source. Only a new container gets a valid one.
+_stopped_containers_go_stale() {
+    [ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)" = "Docker Desktop" ]
 }
 
 cmd_start() {
@@ -117,7 +123,7 @@ cmd_start() {
     # started; --force degrades incompatibilities to warnings.
     local -a check_flags=()
     [ "$force" -eq 1 ] && check_flags+=(--force)
-    if ! py_cli addon-check "${check_flags[@]}"; then
+    if ! py_cli addon-check ${check_flags[@]+"${check_flags[@]}"}; then
         error "Addon compatibility check failed. See 'papaia-ctl addon check', or re-run with --force to override."
         exit 2
     fi
@@ -148,7 +154,7 @@ cmd_start() {
             [ -z "$addon_name" ] && continue
             addon_path="$(_addon_path "$addon_name")"
             info "  addon $addon_name: materialising env + starting"
-            py_cli addon-start --name="$addon_name" "${check_flags[@]}"
+            py_cli addon-start --name="$addon_name" ${check_flags[@]+"${check_flags[@]}"}
             _addon_compose_up "$addon_name" "$addon_path"
         done < <(py_cli active-addons 2>/dev/null)
     fi
@@ -176,11 +182,16 @@ cmd_start() {
         done
     fi
 
+    local up_flags=(-d)
+    if _stopped_containers_go_stale; then
+        up_flags+=(--force-recreate)
+    fi
+
     if [ -n "$profiles" ]; then
         info "Starting core with profiles: $profiles"
-        COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
+        COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" ${compose_overrides[@]+"${compose_overrides[@]}"} --env-file "$env_file" up ${up_flags[@]+"${up_flags[@]}"}
     else
-        docker compose -f "$COMPOSE_FILE" "${compose_overrides[@]}" --env-file "$env_file" up -d
+        docker compose -f "$COMPOSE_FILE" ${compose_overrides[@]+"${compose_overrides[@]}"} --env-file "$env_file" up ${up_flags[@]+"${up_flags[@]}"}
     fi
 
     # In a container (papaia-manager and its runners) the provisioning steps reach the stack
@@ -221,7 +232,7 @@ _start_distributed() {
     _cluster_require_unlocked
     local -a check_flags=()
     [ "$force" -eq 1 ] && check_flags+=(--force)
-    if ! py_cli addon-check "${check_flags[@]}"; then
+    if ! py_cli addon-check ${check_flags[@]+"${check_flags[@]}"}; then
         error "Addon compatibility check failed. See 'papaia-ctl addon check', or re-run with --force to override."
         exit 2
     fi
@@ -232,7 +243,7 @@ _start_distributed() {
     [ -n "$node" ] && extra+=(--node="$node")
     [ -n "$profiles" ] && extra+=(--profiles="$profiles")
     [ "$addons" -eq 1 ] && extra+=(--addons)
-    py_cli cluster-start "${extra[@]}" || exit $?
+    py_cli cluster-start ${extra[@]+"${extra[@]}"} || exit $?
     success "start complete."
 }
 
@@ -244,7 +255,7 @@ _stop_distributed() {
     [ -n "$profiles" ] && extra+=(--profiles="$profiles")
     [ "$clean_up" -eq 1 ] && extra+=(--clean-up)
     [ "$addons" -eq 1 ] && extra+=(--addons)
-    py_cli cluster-stop "${extra[@]}" || exit $?
+    py_cli cluster-stop ${extra[@]+"${extra[@]}"} || exit $?
     success "stop complete."
 }
 
@@ -293,7 +304,7 @@ _require_deletable_profiles() {
     local profiles="$1" profile allowed
     local -a names
     IFS=',' read -r -a names <<< "$profiles"
-    for profile in "${names[@]}"; do
+    for profile in ${names[@]+"${names[@]}"}; do
         allowed=0
         for known in $_VOLUME_DELETE_PROFILES; do
             [ "$profile" = "$known" ] && allowed=1

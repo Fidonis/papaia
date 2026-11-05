@@ -7,7 +7,37 @@ updates:
       day: "monday"
     open-pull-requests-limit: 5
     labels:
-      - "type: chore"
+      - "type: core"
     commit-message:
       prefix: "ci"
       include: "scope"
+
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/src/ai/*"
+      - "/src/infra/*"
+      - "/src/manager"
+      - "/src/services/*"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "type: core"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      compose-patch:
+        update-types:
+          - "patch"
+    # Stateful images whose new versions need a data migration that a tag change does not
+    # do (pg_upgrade or dump and restore, MongoDB's feature compatibility steps, a
+    # Meilisearch dump). Upgrades of these stay deliberate changes with their own step.
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mongo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "getmeili/meilisearch"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
