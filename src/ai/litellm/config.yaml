@@ -65,6 +65,24 @@ model_list: []
   #     api_base: "http://localai:8080/v1"
   #     api_key: "sk-notused"
 
+  # ── A server on the host — LocalAI native build, mlx_lm.server, LM Studio,
+  #    Ollama, ... (README: "Other host-side servers") ────────────────────────
+  # host.docker.internal resolves under Docker Desktop; on Docker Engine use the
+  # gateway address of the papaia-net network. Ports: LocalAI and mlx_lm.server
+  # 8080, LM Studio 1234, Ollama 11434.
+
+  # - model_name: host-chat
+  #   litellm_params:
+  #     model: "openai/<model name on the server>"
+  #     api_base: "http://host.docker.internal:1234/v1"
+  #     api_key: "not-needed"
+
+  # - model_name: nomic-embed-text
+  #   litellm_params:
+  #     model: "openai/<embedding model name on the server>"
+  #     api_base: "http://host.docker.internal:11434/v1"
+  #     api_key: "not-needed"
+
   # ── Cloud models ──────────────────────────────────────────────────────────
 
   # Mammouth.ai — requires MAMMOUTH_API_KEY in litellm/.env

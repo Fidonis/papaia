@@ -1743,6 +1743,37 @@ Docker Engine on Linux also ships a Model Runner, on another address
 (`model-runner.docker.internal:12434` with an `extra_hosts` entry). The module does not offer
 it yet; Linux hosts use LocalAI.
 
+#### Other host-side servers
+
+Any inference server with an OpenAI-compatible API that runs on the host can serve papAIa
+through LiteLLM today, without a change to the stack: LocalAI's native macOS build with its
+MLX backends, `mlx-lm` (`mlx_lm.server`), LM Studio, Ollama. Register each model in LiteLLM
+(Admin UI → Models, or the commented examples in `src/ai/litellm/config.yaml` through the
+overlay) with:
+
+- **model**: `openai/<the name the server knows the model by>`
+- **API base**: `http://host.docker.internal:<port>/v1`
+- **API key**: any non-empty value such as `not-needed` when the server takes none; LiteLLM
+  does not send a request without one.
+
+`host.docker.internal` resolves in every container under Docker Desktop and reaches servers
+that listen on the host's loopback only. The LiteLLM container has no `host-gateway` entry, so
+on Docker Engine (Linux) the name does not resolve there: use the gateway address of the
+stack's network instead (`docker network inspect papaia-net --format '{{(index .IPAM.Config 0).Gateway}}'`)
+and let the server listen on it. `RAG_EMBEDDINGS_MODEL` can name a model served this way, as
+long as the server offers embeddings.
+
+| Server | Default port | `/v1/embeddings` |
+|---|---|---|
+| LocalAI (native build) | 8080 | yes |
+| `mlx_lm.server` | 8080 | no, chat only |
+| LM Studio | 1234 | yes |
+| Ollama | 11434 | yes |
+
+These servers are outside `papaia-ctl`: `start`, `stop`, `status`, `doctor` and `backup` do not
+see them, and they are outside the OIDC gate. LiteLLM keys and teams are the access control,
+as for every other model.
+
 ### Distributed installations
 
 > **Experimental.** The distributed mode has not yet been checked on real machines. Until
