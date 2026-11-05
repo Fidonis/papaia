@@ -104,6 +104,25 @@ def parse_models(text: str) -> ModelList:
     return result
 
 
+def litellm_entries(models: list[Model]) -> list[dict]:
+    """LiteLLM `model_list` entries for the models, in list order.
+
+    The `openai/` provider sends the rest of the name as the request's `model`, which is
+    the reference as models.txt holds it; the runner resolves that form itself. The runner
+    takes no key, but LiteLLM's OpenAI client refuses to send a request without one."""
+    return [
+        {
+            "model_name": model.alias,
+            "litellm_params": {
+                "model": f"openai/{model.reference}",
+                "api_base": OPENAI_BASE_URL,
+                "api_key": "not-needed",
+            },
+        }
+        for model in models
+    ]
+
+
 def normalise(reference: str) -> str:
     """The name the runner lists a model under: `ai/x` -> `docker.io/ai/x:latest`,
     `hf.co/Org/Repo` -> `huggingface.co/org/repo:latest`.
