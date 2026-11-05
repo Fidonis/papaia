@@ -1,6 +1,7 @@
 # Example: provision a Paperless assistant agent.
 # Copy this file to <LIBRECHAT_AGENTS_DIR>/paperless.yaml and adjust as needed.
-id: paperless-assistant          # unique, stable — used as the upsert key
+id: paperless-assistant          # unique, stable — stored as agent_paperless-assistant (the agent_ prefix
+                                 # is added when missing); use that id in links (?agent_id=...)
 name: Paperless-Assistent
 description: Search and manage documents in Paperless-ngx.
 provider: Private-LLM            # must match a configured LLM endpoint
