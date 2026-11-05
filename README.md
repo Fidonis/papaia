@@ -127,9 +127,11 @@ Linux host:
   versions are not needed.
 - **Paths.** Docker Desktop bind-mounts only the host paths it shares with its VM
   (Settings > Resources > File sharing; `/Users`, `/Volumes`, `/private`, `/tmp` and
-  `/var/folders` by default). Keep `--config-dir` and `--backup-dir` there. The default
-  config directory next to the checkout under `/Users` works. `/opt` works only after it is
-  added under File sharing, and `/srv` cannot be created on the read-only system volume.
+  `/var/folders` by default). Keep the checkout, `--config-dir` and `--backup-dir` there:
+  LibreChat mounts files from `src/ai/librechat/` in the checkout, as well as
+  `LIBRECHAT_AGENTS_DIR` and `LIBRECHAT_PROMPTS_DIR` when they are set. A checkout under
+  `/Users` with the default config directory next to it works. `/opt` works only after it
+  is added under File sharing, and `/srv` cannot be created on the read-only system volume.
 - **papaia-manager.** It needs a Linux host. `setup` defaults to *no* on macOS; leave it
   off (`--no-manager`).
 - **Keycloak certificate.** With the default local URLs, trust the generated local CA
