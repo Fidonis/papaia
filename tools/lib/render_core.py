@@ -4,6 +4,7 @@ Renders the effective core configuration into $PAPAIA_CONFIG_DIR:
 
     repo base (src/<target>)
       + active-profile fragments (src/<module>/integration/<target>, PROFILE_FRAGMENTS)
+      + generated fragments (the Docker Model Runner models in LiteLLM's model_list)
       + active-addon fragments (addons/<name>/integration/<target>)
       + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>)
       --render--> $PAPAIA_CONFIG_DIR/<target>
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, deployment, smtp
+from . import common, deployment, model_runner, smtp
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -51,6 +52,9 @@ _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 # layer.
 PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag"}
 
+# LiteLLM's configuration, which takes the generated model_list of the model-runner module.
+LITELLM_CONFIG = "ai/litellm/config.yaml"
+
 
 class RenderError(Exception):
     """A user-facing rendering failure (e.g. an unresolved realm placeholder).
@@ -63,14 +67,44 @@ class RenderError(Exception):
         self.column = column
 
 
-def _profile_layers(config_dir: Path) -> list[dict]:
-    """One add-on-shaped layer per active profile that ships fragments.
-
-    COMPOSE_PROFILES is read from the root .env, which is what compose itself
-    uses; deployment.yaml only mirrors it."""
+def _active_profiles(config_dir: Path) -> set[str]:
+    """COMPOSE_PROFILES from the root .env, which is what compose itself uses;
+    deployment.yaml only mirrors it."""
     raw = common.parse_env_file(config_dir / ".env").get("COMPOSE_PROFILES", "")
-    active = {p.strip() for p in raw.split(",") if p.strip()}
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _profile_layers(config_dir: Path) -> list[dict]:
+    """One add-on-shaped layer per active profile that ships fragments."""
+    active = _active_profiles(config_dir)
     return [{"path": path} for profile, path in PROFILE_FRAGMENTS.items() if profile in active]
+
+
+def _model_runner_models(
+    repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> list[dict] | None:
+    """The LiteLLM entries of the model-runner module, or None while it is off.
+
+    Built from the effective models.txt (with its overlay), not from the rendered file on
+    disk: `render` writes LiteLLM's configuration first, and a preview must not depend on
+    a render having run."""
+    if model_runner.PROFILE not in _active_profiles(config_dir):
+        return None
+    text = _effective_text(model_runner.MODELS_FILE, repo_root, config_dir, active_addons)
+    if text is None:
+        return None
+    return model_runner.litellm_entries(model_runner.parse_models(text).models)
+
+
+def _without_overridden(generated: list[dict], overlay) -> list[dict]:
+    """The generated entries whose model_name the overlay does not list itself.
+
+    A list merge appends, so an overlay entry with the same name would otherwise sit next
+    to the generated one and LiteLLM would route the name to either."""
+    if not isinstance(overlay, dict) or not isinstance(overlay.get("model_list"), list):
+        return generated
+    names = {e.get("model_name") for e in overlay["model_list"] if isinstance(e, dict)}
+    return [e for e in generated if e["model_name"] not in names]
 
 
 def _active_layers(config_dir: Path) -> list[dict]:
@@ -190,12 +224,20 @@ def _effective_text(
             if frag_path.is_file():
                 label = f"{addon['path']}/integration/{rel_path}"
                 merged = _merge_layer(merged, _load_structured(frag_path, label), label)
+        layer = None
         if overlay_text is _ON_DISK:
             if overlay_path.is_file():
                 layer = _load_structured(overlay_path, overlay_label)
-                merged = _merge_layer(merged, layer, overlay_label)
         elif overlay_text is not None:
             layer = _parse_structured(base_path.suffix, overlay_text, overlay_label)
+        if rel_path == LITELLM_CONFIG:
+            generated = _model_runner_models(repo_root, config_dir, active_addons)
+            if generated is not None:
+                generated = _without_overridden(generated, layer)
+                merged = _merge_layer(
+                    merged, {"model_list": generated}, f"{model_runner.MODELS_FILE} (generated)"
+                )
+        if layer is not None:
             merged = _merge_layer(merged, layer, overlay_label)
         return _dump_structured(base_path.suffix, merged)
 

@@ -40,6 +40,12 @@ router_settings:
 # The LibreChat RAG API embeds with the model named in RAG_EMBEDDINGS_MODEL
 # (ai/librechat/.env, default nomic-embed-text). Register a model under that name
 # or change the variable.
+#
+# With the model-runner module on (Apple Silicon), every model of
+# ai/model-runner/models.txt is added to this list when the configuration is
+# rendered, under its alias, served from Docker Desktop's Model Runner; the
+# default list registers nomic-embed-text that way. An overlay entry with the
+# same model_name replaces the generated one.
 
 model_list: []
 

@@ -363,3 +363,126 @@ def test_the_realm_template_themes_the_login_clients_but_not_the_realm():
             assert theme == "papaia", client["clientId"]
         else:
             assert theme is None, client["clientId"]
+
+
+# -- Docker Model Runner: the generated model_list ------------------------------------------
+
+_MODELS = "ai/qwen3:4b chat\nai/nomic-embed-text-v1.5:137M-F16 nomic-embed-text\n"
+
+
+def _install_model_runner(repo_root, models: str = _MODELS) -> None:
+    target = repo_root / "src" / "ai" / "model-runner" / "models.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(models, encoding="utf-8")
+
+
+def _rendered_litellm(config_dir):
+    return yaml.safe_load((config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8"))
+
+
+def _model_names(config_dir) -> list[str]:
+    return [e["model_name"] for e in _rendered_litellm(config_dir).get("model_list") or []]
+
+
+def test_the_model_runner_models_are_registered_while_the_profile_is_active(
+    repo_root, config_dir
+):
+    _install_model_runner(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,model-runner")
+    render_core.render(config_dir, repo_root)
+
+    rendered = _rendered_litellm(config_dir)
+    assert rendered["model_list"] == [
+        {
+            "model_name": "chat",
+            "litellm_params": {
+                "model": "openai/ai/qwen3:4b",
+                "api_base": "http://model-runner.docker.internal/engines/v1",
+                "api_key": "not-needed",
+            },
+        },
+        {
+            "model_name": "nomic-embed-text",
+            "litellm_params": {
+                "model": "openai/ai/nomic-embed-text-v1.5:137M-F16",
+                "api_base": "http://model-runner.docker.internal/engines/v1",
+                "api_key": "not-needed",
+            },
+        },
+    ]
+
+
+def test_with_the_profile_off_litellm_renders_as_the_base(repo_root, config_dir):
+    _install_model_runner(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm")
+    render_core.render(config_dir, repo_root)
+    base = (repo_root / "src/ai/litellm/config.yaml").read_text(encoding="utf-8")
+    rendered = (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    assert yaml.safe_load(rendered) == yaml.safe_load(base)
+
+
+def test_the_models_overlay_drives_the_list_and_a_removed_line_is_gone(repo_root, config_dir):
+    _install_model_runner(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,model-runner")
+    overlay = config_dir / "overlay" / "ai" / "model-runner" / "models.txt"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text("ai/nomic-embed-text-v1.5:137M-F16 nomic-embed-text\nai/gemma3\n")
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == ["nomic-embed-text", "gemma3"]
+
+    overlay.write_text("ai/gemma3\n")
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == ["gemma3"]
+
+
+def test_an_overlay_entry_with_the_same_name_wins(repo_root, config_dir):
+    _install_model_runner(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,model-runner")
+    overlay = config_dir / "overlay" / "ai" / "litellm" / "config.yaml"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text(
+        "model_list:\n"
+        "  - model_name: chat\n"
+        "    litellm_params:\n"
+        "      model: openai/gpt-4o-mini\n"
+        "      api_key: os.environ/OPENAI_API_KEY\n"
+    )
+    render_core.render(config_dir, repo_root)
+
+    entries = _rendered_litellm(config_dir)["model_list"]
+    assert [e["model_name"] for e in entries] == ["nomic-embed-text", "chat"]
+    assert entries[1]["litellm_params"]["model"] == "openai/gpt-4o-mini"
+
+
+def test_a_malformed_line_is_left_out_of_litellm(repo_root, config_dir):
+    _install_model_runner(repo_root, "ai/ok:1 ok\nai/bad;rm\n")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,model-runner")
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == ["ok"]
+
+
+def test_the_preview_of_litellm_shows_the_generated_models(repo_root, config_dir):
+    _install_model_runner(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,model-runner")
+    render_core.render(config_dir, repo_root)
+
+    draft = "model_list:\n  - model_name: chat\n    litellm_params:\n      model: openai/x\n"
+    result = render_core.preview(config_dir, repo_root, "ai/litellm/config.yaml", draft)
+    assert "openai/ai/qwen3:4b" in result["current"]
+    preview = yaml.safe_load(result["preview"])
+    assert [e["model_name"] for e in preview["model_list"]] == ["nomic-embed-text", "chat"]
+    assert result["changed"] is True
+
+
+def test_the_preview_of_the_model_list_itself(repo_root, config_dir):
+    _install_model_runner(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    result = render_core.preview(config_dir, repo_root, "ai/model-runner/models.txt", "ai/x\n")
+    assert result["structured"] is False
+    assert result["preview"] == "ai/x\n"
