@@ -63,7 +63,8 @@ def test_a_too_old_python3_is_rejected_with_its_version(tmp_path):
     assert done.returncode == 1
     assert "BIN=\n" in done.stdout
     assert "requires Python 3.10 or newer; found python3 3.9.6" in done.stderr
-    assert "brew install python" in done.stderr
+    assert "brew install python, then PyYAML in a virtual environment" in done.stderr
+    assert "pyyaml" not in done.stderr
 
 
 @needs_bash
@@ -74,6 +75,43 @@ def test_a_versioned_interpreter_stands_in_for_a_too_old_python3(tmp_path):
     done = _find_python(tmp_path)
     assert done.returncode == 0
     assert "BIN=python3.12" in done.stdout
+
+
+@needs_bash
+def test_a_minor_release_beyond_any_fixed_list_is_found(tmp_path):
+    # Homebrew's python is python@3.15 now; any later one has to be found the same way.
+    _old(tmp_path, "python3")
+    _new(tmp_path, "python3.15")
+    done = _find_python(tmp_path)
+    assert done.returncode == 0
+    assert "BIN=python3.15" in done.stdout
+
+
+@needs_bash
+def test_the_newest_versioned_interpreter_is_tried_first(tmp_path):
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    _old(first, "python3")
+    _new(first, "python3.12")
+    _new(second, "python3.15")
+    _new(second, "python3.9")
+    (second / "python3.15-config").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (second / "python3.15-config").chmod(0o755)
+    assert BASH is not None
+    script = (
+        f'source "{SH_LIB / "log.sh"}"; source "{SH_LIB / "python.sh"}"; '
+        'echo "LIST=$(_versioned_pythons)"; find_python; echo "BIN=$PYTHON_BIN"'
+    )
+    done = subprocess.run(
+        [BASH, "-c", script],
+        env={"PATH": f"{first}:{second}:{first}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert "LIST=python3.15 python3.12 python3.9 \n" in done.stdout
+    assert "BIN=python3.15" in done.stdout
 
 
 @needs_bash
