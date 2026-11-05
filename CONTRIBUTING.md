@@ -4,7 +4,7 @@ Thanks for considering a contribution to papAIa! This document describes how to 
 
 ## Code of Conduct
 
-A formal Code of Conduct is being added - see [#23](https://github.com/Fidonis/papaia/issues/23). In the meantime, please follow common sense: be kind, assume good intent, and keep discussions focused on the project.
+Everyone taking part in this project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report unacceptable behavior to `security@fidonis.de`.
 
 ## Where to ask questions
 
@@ -77,14 +77,17 @@ Linters run on every push and pull request:
 - **Shell scripts** - [shellcheck](https://www.shellcheck.net/)
 - **YAML** - [yamllint](https://yamllint.readthedocs.io/)
 - **Dockerfiles** - [hadolint](https://github.com/hadolint/hadolint)
+- **Python** - `ruff check` and `pytest` in `tools/`
 
 Please run them locally before pushing if you can. Configuration lives in `.github/workflows/ci.yml`.
 
-**Python** (`tools/lib/*.py`) - [ruff](https://docs.astral.sh/ruff/) (config in `tools/pyproject.toml`) and `pytest` (`tools/tests/`). Not yet wired into CI; run locally before pushing changes under `tools/`:
+**Python** (`tools/lib/*.py`) - [ruff](https://docs.astral.sh/ruff/) (config in `tools/pyproject.toml`) and `pytest` (`tools/tests/`). CI runs `ruff check` and the full suite; run them locally before pushing changes under `tools/`:
 
-    cd tools && pip install -e ".[dev]"
-    ruff check lib tests && ruff format --check lib tests
-    pytest tests/
+    cd tools
+    uv run --locked --extra dev python -m ruff check lib tests
+    uv run --locked --extra dev python -m pytest tests/
+
+The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker compose config` only with the Compose release it records; CI installs that release. Every image bump, including the ones Dependabot proposes, changes that snapshot: regenerate it on the pull request's branch with `PAPAIA_UPDATE_GOLDEN=1 uv run --locked --extra dev python -m pytest tests/test_golden_single_node.py` (from `tools/`) before merging. `ruff format` is not enforced.
 
 ## Local development
 

@@ -236,6 +236,10 @@ env_prompts:                       # optional: metadata per .env.example key
 env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
     hint: "Copy from Keycloak"     # hint is shown in the configuration overview
+
+install_notes:                     # optional: further numbered steps in the checklist,
+                                   # a list or a single string; display only
+  - "Set MW_SERVER in the add-on .env when the wiki is not on the default URL."
 ```
 
 #### `.env.example` value markers
@@ -630,7 +634,8 @@ application services, and the Nginx Proxy Manager last. `stop` runs backwards. T
 provisioning steps (`npm-provision`, `keycloak-role-sync`) run on the node of their service.
 `status` merges every node's report and adds `node` per module and container, plus `nodes`.
 `doctor` checks the controller's own node and adds `nodes` (version skew, clock deviation,
-each node's own checks) and `links` (a TLS handshake per link, certificate expiry). The JSON
+each node's own checks), `links` (a TLS handshake per link, certificate expiry) and
+`file_modes` (the config dir keeps the mode 600 of the link keys). The JSON
 schemas grow additively and `schema_version` stays 1.
 
 **Data** (`tools/lib/cluster_data.py`). A restore point of a distributed installation lives on
