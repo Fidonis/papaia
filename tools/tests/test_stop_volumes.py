@@ -61,7 +61,9 @@ def _stop(tmp_path: Path, *args: str) -> tuple[subprocess.CompletedProcess[str],
     return done, [c for c in calls if " config --services" not in c]
 
 
-@pytest.mark.parametrize("profile", ["localai", "librechat-websearch", "rag", "smtp"])
+@pytest.mark.parametrize(
+    "profile", ["localai", "librechat-websearch", "model-runner", "rag", "smtp"]
+)
 def test_volumes_are_deleted_with_the_containers_of_exactly_the_named_profile(
     tmp_path: Path, profile: str
 ) -> None:
