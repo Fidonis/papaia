@@ -23,6 +23,7 @@ from . import (
     deployment,
     envtree,
     gen_override,
+    keycloak_role_sync,
     render_core,
     reporting,
     topology,
@@ -337,6 +338,17 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
         return 2
 
+    # Clients the add-on names under client_secrets: created or aligned now, so the
+    # login works on this start. Before the .env is materialized: the sync may generate
+    # a secret that is still a placeholder. Not fatal: `papaia-ctl start` runs it too.
+    if keycloak_role_sync.managed_clients(manifest):
+        tree = envtree.load_config_dir_tree(config_dir, repo_root)
+        if not keycloak_role_sync.sync_addon_clients(tree, config_dir, repo_root, {name}):
+            print(
+                f"WARNING: the Keycloak clients of '{name}' are not in place yet. "
+                "Run 'papaia-ctl keycloak-role-sync' once Keycloak is up.",
+                file=sys.stderr,
+            )
     addons.materialize_addon_env(config_dir, addon_path, name)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
@@ -547,8 +559,11 @@ def _print_upgrade_followups(plan: dict, new_manifest: dict, bundle_env_path: Pa
     """What the operator still has to do by hand after the new version is in place."""
     steps: list[str] = []
     keycloak = plan["manifest"]["keycloak"]
+    managed = {c["path"] for c in keycloak_role_sync.managed_clients(new_manifest)}
     for client in keycloak["clients_added"]:
-        steps.append(f"Import the Keycloak client {client} (Keycloak Admin UI -> Clients).")
+        # A client named under `client_secrets` is created by `start`.
+        if client not in managed:
+            steps.append(f"Import the Keycloak client {client} (Keycloak Admin UI -> Clients).")
     for client, paths in keycloak["mappers_added"].items():
         steps.append(f"Add the protocol mappers {', '.join(paths)} to the client '{client}'.")
     hints = new_manifest.get("env_replace_secrets") or {}

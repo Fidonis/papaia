@@ -21,6 +21,13 @@ is changed: the core `.env` is canonical for that secret, and a client left over
 from an earlier add-on install would otherwise refuse the service that signs in
 with the generated one.
 
+Add-on clients (addon_api 4): a client an active add-on lists under
+`integration.keycloak.clients` and names under `client_secrets` with its
+`secret_env` is created from its export when the realm lacks it, with the
+secret from the add-on's `.env` (and `rootUrl` from `root_url_env` when set).
+An existing client gets only its secret aligned, as for core clients. Other
+clients stay a manual import. `addon start` runs the same step for its add-on.
+
 The realm's mail server follows the optional `smtp` profile: while the mail relay is on
 and configured, an existing realm without a mail server gets the relay (and the
 reset-password link); a mail server the operator configured is never overwritten.
@@ -44,7 +51,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import common, smtp
+from . import common, deployment, smtp
 from .envtree import EnvTree
 
 _KEYCLOAK_NODE = "infra/keycloak"
@@ -345,6 +352,124 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tu
     return created, updated
 
 
+def _unset(value: str) -> bool:
+    """A secret that is still a placeholder of the .env templates."""
+    return common.is_placeholder(value) or value.startswith(("CHANGE_ME", "REPLACE_WITH_"))
+
+
+def managed_clients(manifest: dict) -> list[dict]:
+    """The clients an add-on manifest hands to the sync: every entry of
+    `integration.keycloak.client_secrets` (`<path>: {secret_env, root_url_env}`) whose path
+    is listed under `clients`. Each comes back as {path, secret_env, root_url_env}.
+
+    A separate key rather than a new form of `clients` entries: a core that predates it
+    ignores the key and keeps showing the manual import for the same paths."""
+    cfg = (manifest.get("integration") or {}).get("keycloak") or {}
+    if not isinstance(cfg, dict):
+        return []
+    clients = cfg.get("clients") if isinstance(cfg.get("clients"), list) else []
+    secrets = cfg.get("client_secrets") if isinstance(cfg.get("client_secrets"), dict) else {}
+    entries = []
+    for path, spec in secrets.items():
+        if path not in clients or not isinstance(spec, dict):
+            continue
+        secret_env, root_url_env = spec.get("secret_env"), spec.get("root_url_env")
+        if not isinstance(secret_env, str) or not secret_env:
+            continue
+        entries.append(
+            {
+                "path": path,
+                "secret_env": secret_env,
+                "root_url_env": root_url_env if isinstance(root_url_env, str) else None,
+            }
+        )
+    return entries
+
+
+def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = None) -> list[dict]:
+    """Client representations for the managed clients of the active add-ons (all of them,
+    or those in `names`), each with the secret from the add-on's `.env`.
+
+    A client whose export cannot be read, or whose secret is not generated yet, is left out
+    with a warning: the next run picks it up once it is in place."""
+    clients: list[dict] = []
+    for addon in deployment.active_addons(deployment.load(config_dir)):
+        name = addon.get("name")
+        if not name or (names is not None and name not in names):
+            continue
+        addon_path = deployment.resolve_addon_path(addon, repo_root)
+        manifest, _ = deployment.load_addon_manifest(addon_path)
+        entries = managed_clients(manifest or {})
+        if not entries:
+            continue
+        env_path = config_dir / "addons" / name / ".env"
+        env = common.parse_env_file(env_path)
+        for entry in entries:
+            export = addon_path / entry["path"]
+            try:
+                client = json.loads(export.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                print(f"  client of add-on {name} skipped: {export}: {exc}", file=sys.stderr)
+                continue
+            secret = _compose_value(env.get(entry["secret_env"], ""))
+            if _unset(secret):
+                if entry["secret_env"] not in env:
+                    print(
+                        f"  client {client.get('clientId')} of add-on {name} skipped: "
+                        f"{entry['secret_env']} is not in its .env",
+                        file=sys.stderr,
+                    )
+                    continue
+                # Still the placeholder of a manual import that never happened (an install
+                # from before the add-on named the client here): no login has worked with
+                # it, so a generated secret replaces it, in the .env and on the client.
+                secret = common.generate_secret(entry["secret_env"])
+                env[entry["secret_env"]] = secret
+                common.write_env_file(env_path, env)
+                print(f"  {entry['secret_env']} of add-on {name} generated", flush=True)
+            # An export carries the id of the realm it came from; Keycloak assigns a new one.
+            client.pop("id", None)
+            client["clientAuthenticatorType"] = "client-secret"
+            client["secret"] = secret
+            root_url = _compose_value(env.get(entry["root_url_env"] or "", ""))
+            if root_url and not root_url.startswith("CHANGE_ME"):
+                client["rootUrl"] = root_url
+            clients.append(client)
+    return clients
+
+
+def sync_addon_clients(
+    tree: EnvTree, config_dir: Path, repo_root: Path, names: set[str] | None = None
+) -> bool:
+    """Create or align the managed Keycloak clients of the active add-ons (or those in
+    `names`) on their own, as `addon start` does. Same rules as the realm sync; True when
+    there was nothing to do or everything went through."""
+    root = tree.get("", {})
+    if root.get("AUTH_PROVIDER", "internal_keycloak") != "internal_keycloak":
+        return True
+    clients = addon_clients(config_dir, repo_root, names)
+    if not clients:
+        return True
+    keycloak = tree.get(_KEYCLOAK_NODE, {})
+    admin_password = _compose_value(keycloak.get("KC_ADMIN_PASSWORD", ""))
+    if not admin_password or admin_password.startswith("GENERATE_"):
+        print("Keycloak clients skipped: KC_ADMIN_PASSWORD is not set.", file=sys.stderr)
+        return False
+    base_url = _admin_base_url(root)
+    ctx = _ssl_context(config_dir)
+    try:
+        _wait_for_keycloak(base_url, ctx, timeout=30)
+        token = _get_admin_token(base_url, ctx, admin_password)
+        created, updated = _sync_clients(
+            base_url, ctx, token, {"clients": clients}, {c["clientId"] for c in clients}
+        )
+    except (TimeoutError, urllib.error.HTTPError, OSError) as exc:
+        print(f"Keycloak clients skipped: {exc}", file=sys.stderr, flush=True)
+        return False
+    print(f"Keycloak add-on clients: {created} created, {updated} secret(s) updated.", flush=True)
+    return True
+
+
 def _sync_login_theme(base_url, ctx, token, realm_def: dict) -> int:
     """Give the existing clients the login theme the rendered template names for them.
 
@@ -500,7 +625,7 @@ def _migrate_legacy_admins(base_url, ctx, token, existing_roles: dict[str, dict]
     return migrated
 
 
-def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
+def sync_roles(tree: EnvTree, config_dir: Path, repo_root: Path | None = None) -> bool:
     """Reconcile realm roles/composites/protocol-mappers and run the
     admin -> papaia-admin migration. No-op when AUTH_PROVIDER is not
     'internal_keycloak' — an external OIDC provider is the operator's own
@@ -558,6 +683,13 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         clients_created, secrets_updated = _sync_clients(
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
+        if repo_root is not None:
+            extra = addon_clients(config_dir, repo_root)
+            created, updated = _sync_clients(
+                base_url, ctx, token, {"clients": extra}, {c["clientId"] for c in extra}
+            )
+            clients_created += created
+            secrets_updated += updated
         themes_set = _sync_login_theme(base_url, ctx, token, realm_def)
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
         _sync_smtp(base_url, ctx, token, realm_def)

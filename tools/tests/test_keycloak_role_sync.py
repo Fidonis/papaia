@@ -6,6 +6,7 @@ import re
 import urllib.error
 
 import pytest
+import yaml
 
 from lib import keycloak_role_sync as kcs
 
@@ -1044,3 +1045,139 @@ def test_the_login_theme_is_set_once(tmp_path, monkeypatch, capsys):
 
     assert len(fake.clients["uuid-oauth2-proxy"]["put_bodies"]) == 1
     assert "0 login theme(s) set" in capsys.readouterr().out
+
+
+# ── Add-on clients (addon_api 4) ─────────────────────────────────────────
+
+
+def _addon(tmp_path, *, env, secrets=None, active=True, name="wiki"):
+    """An add-on checkout with one client export, its bundle .env and a deployment entry."""
+    addon_path = tmp_path / "checkout" / name
+    (addon_path / "kc").mkdir(parents=True)
+    (addon_path / "kc" / "wiki.json").write_text(
+        json.dumps(
+            {
+                "id": "uuid-from-the-exporting-realm",
+                "clientId": "wiki",
+                "rootUrl": "https://wiki.example",
+                "redirectUris": ["/login"],
+                "protocolMappers": [{"name": "groups", "protocolMapper": "x", "config": {}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (addon_path / "papaia-app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": name,
+                "integration": {
+                    "keycloak": {"clients": ["kc/wiki.json"], "client_secrets": secrets or {}}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    bundle = tmp_path / "config" / "addons" / name
+    bundle.mkdir(parents=True)
+    (bundle / ".env").write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
+    (tmp_path / "config" / "deployment.yaml").write_text(
+        yaml.safe_dump({"addons": [{"name": name, "path": str(addon_path), "active": active}]}),
+        encoding="utf-8",
+    )
+    return tmp_path / "config"
+
+
+_SECRETS = {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET", "root_url_env": "WIKI_SERVER"}}
+
+
+def test_managed_clients_need_a_listed_path_and_a_secret_key():
+    def managed(clients, secrets):
+        return kcs.managed_clients(
+            {"integration": {"keycloak": {"clients": clients, "client_secrets": secrets}}}
+        )
+
+    assert managed(["kc/wiki.json"], {}) == []
+    assert managed([], {"kc/wiki.json": {"secret_env": "S"}}) == []
+    assert managed(["kc/wiki.json"], {"kc/wiki.json": {"root_url_env": "U"}}) == []
+    assert managed(["kc/wiki.json"], {"kc/wiki.json": {"secret_env": "S"}}) == [
+        {"path": "kc/wiki.json", "secret_env": "S", "root_url_env": None}
+    ]
+
+
+def test_addon_clients_carry_the_secret_and_root_url_of_the_addon_env(tmp_path):
+    config = _addon(
+        tmp_path,
+        secrets=_SECRETS,
+        env={"KC_WIKI_SECRET": "s3cret", "WIKI_SERVER": "https://wiki.test:8020"},
+    )
+    (client,) = kcs.addon_clients(config, tmp_path)
+    assert client["secret"] == "s3cret"
+    assert client["rootUrl"] == "https://wiki.test:8020"
+    assert client["clientAuthenticatorType"] == "client-secret"
+    assert "id" not in client  # Keycloak assigns its own
+
+
+@pytest.mark.parametrize("secret", ["", "GENERATE_SECRET", "REPLACE_WITH_SECRET", "CHANGE_ME"])
+def test_a_placeholder_secret_is_generated_into_the_env(tmp_path, secret):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": secret, "OTHER": "kept"})
+    (client,) = kcs.addon_clients(config, tmp_path)
+    env = (config / "addons" / "wiki" / ".env").read_text(encoding="utf-8")
+    assert f"KC_WIKI_SECRET={client['secret']}\n" in env and len(client["secret"]) == 48
+    assert "OTHER=kept" in env
+    # The next run keeps it.
+    (again,) = kcs.addon_clients(config, tmp_path)
+    assert again["secret"] == client["secret"]
+
+
+def test_a_client_whose_secret_key_is_missing_is_left_out(tmp_path, capsys):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"OTHER": "x"})
+    assert kcs.addon_clients(config, tmp_path) == []
+    assert "KC_WIKI_SECRET is not in its .env" in capsys.readouterr().err
+
+
+def test_plain_entries_and_inactive_addons_stay_manual(tmp_path):
+    config = _addon(tmp_path, env={"KC_WIKI_SECRET": "s"})
+    assert kcs.addon_clients(config, tmp_path) == []
+    config = _addon(tmp_path / "b", secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"}, active=False)
+    assert kcs.addon_clients(config, tmp_path / "b") == []
+
+
+def test_start_creates_the_addon_client_and_aligns_its_secret_later(tmp_path, monkeypatch):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "first"})
+    _write_realm_json(config, _realm_def())
+    proxy = {"uuid-oauth2-proxy": {"clientId": "oauth2-proxy", "mappers": {}}}
+    fake = FakeKeycloak(roles={}, clients=proxy)
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=config, repo_root=tmp_path) is True
+    created = fake.clients["uuid-wiki"]
+    assert created["created_from"]["secret"] == "first"
+    assert "groups" in created["mappers"]
+
+    # The operator rotates the secret in the add-on .env: the next start aligns it.
+    (config / "addons" / "wiki" / ".env").write_text("KC_WIKI_SECRET=second\n", encoding="utf-8")
+    created["secret"] = "first"
+    assert kcs.sync_roles(_tree(), config_dir=config, repo_root=tmp_path) is True
+    assert created["secret"] == "second"
+    assert [c["clientId"] for c in fake.clients.values()].count("wiki") == 1
+
+
+def test_addon_start_syncs_only_its_own_clients(tmp_path, monkeypatch):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    fake = FakeKeycloak(roles={}, clients={})
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_addon_clients(_tree(), config, tmp_path, {"other"}) is True
+    assert fake.clients == {}
+    assert kcs.sync_addon_clients(_tree(), config, tmp_path, {"wiki"}) is True
+    assert {c["clientId"] for c in fake.clients.values()} == {"wiki"}
+
+
+def test_addon_clients_are_left_alone_with_an_external_provider(tmp_path, monkeypatch):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    fake = FakeKeycloak(roles={}, clients={})
+    _patch_common(monkeypatch, fake)
+    tree = _tree()
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+    assert kcs.sync_addon_clients(tree, config, tmp_path, None) is True
+    assert fake.clients == {}
