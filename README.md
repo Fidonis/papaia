@@ -888,9 +888,9 @@ checks are added (on one host they never appear):
 |---|---|---|
 | `nodes` | Every node answers and runs the controller's release. Each node's own `doctor` result is listed (worst status, failing checks). The node's clock is compared with the controller's: JWTs carry `exp` and `nbf`, so a deviation breaks sign-ins. | `fail` for an unreachable node, a version skew (run [`upgrade`](#upgrade)), a failing check on a node or a clock 60 s or more off; `warn` from 5 s |
 | `links` | From the calling side of every link: a TLS handshake with the peer's link port, with the node's certificate, the link CA and the peer's name. Also the expiry of every node's link certificate. | `fail` for a peer that cannot be reached (the message names the firewall rule `<from> -> <to> tcp/<port>`) or a certificate that does not verify or has expired; `warn` 30 days before expiry (run `node renew-link`) |
-| `file_modes` | The controller's config dir keeps the file modes it sets. The link CA and the link keys are written with mode 600; a Windows drive under `/mnt` in WSL2 mounted without the `metadata` option refuses or ignores that. `setup` and `node sync` refuse such a config dir as well. | `fail` when a mode does not stick; move the config dir to a Linux filesystem (inside the WSL distribution) or mount the drive with `metadata` |
+| `file_modes` | The controller's config dir keeps the file modes it sets. The link CA and the link keys are written with mode 600; a Windows drive under `/mnt` in WSL2 mounted without the `metadata` option refuses or ignores that. `setup`, `start` (also of an existing installation) and `node sync` refuse such a config dir as well. | `fail` when a mode does not stick; move the config dir to a Linux filesystem (inside the WSL distribution) or mount the drive with `metadata` |
 
-`--skip=nodes,links` is accepted on every installation.
+`--skip=nodes,links,file_modes` is accepted on every installation.
 
 ### Configuration & render lifecycle
 

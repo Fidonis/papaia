@@ -18,6 +18,7 @@ import os
 import secrets
 import shutil
 import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -215,14 +216,18 @@ def file_mode_problem(directory: Path) -> str | None:
 
     A Windows drive mounted into WSL2 without the `metadata` option (DrvFs) refuses chmod
     to a process that does not own the file and ignores it for the owner, so the mode is
-    checked after setting it, twice, to catch a chmod that silently does nothing."""
+    checked after setting it, twice, to catch a chmod that silently does nothing.
+
+    The probe file gets a name of its own, so two runs at once do not remove each other's.
+    An OSError while creating it is raised: a directory the caller cannot write to says
+    nothing about file modes."""
     if os.name == "nt":
         return None
-    probe = directory / ".papaia-mode-probe"
+    ensure_dir(directory)
+    fd, name = tempfile.mkstemp(dir=directory, prefix=".papaia-mode-probe-")
+    os.close(fd)
+    probe = Path(name)
     try:
-        ensure_dir(directory)
-        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.close(fd)
         for mode in (0o600, 0o644):
             os.chmod(probe, mode)
             kept = stat.S_IMODE(os.stat(probe).st_mode)

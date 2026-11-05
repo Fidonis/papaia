@@ -569,6 +569,26 @@ def test_doctor_fails_on_a_config_dir_that_does_not_keep_file_modes(distributed,
     assert not list(DOCTOR_SCHEMA.iter_errors(report.to_dict()))
 
 
+def test_doctor_names_a_config_dir_it_cannot_write_to(distributed, monkeypatch):
+    version = topology.envtree.resolve_platform_version(distributed.repo)
+
+    def _refuse(directory):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(cluster.common, "file_mode_problem", _refuse)
+    report = doctor_report(
+        distributed,
+        monkeypatch,
+        node_doctor(version, probes=[ok_probe("edge")]),
+        node_doctor(version, probes=[ok_probe("internal")]),
+    )
+    result = check(report, "file_modes")
+    assert result.status == "fail"
+    assert "cannot create a file in the config dir (Permission denied)" in result.summary
+    assert "file modes" not in result.summary
+    assert not list(DOCTOR_SCHEMA.iter_errors(report.to_dict()))
+
+
 def test_doctor_reports_version_skew_and_clock_deviation(distributed, monkeypatch):
     version = topology.envtree.resolve_platform_version(distributed.repo)
     report = doctor_report(

@@ -1207,7 +1207,13 @@ def require_file_modes(config_dir: Path) -> None:
     600 (lib/link.py). A config dir that cannot keep modes, such as a Windows drive under
     /mnt in WSL2 mounted without `metadata`, would fail halfway through the projection or
     leave the keys readable, so it is refused up front."""
-    problem = common.file_mode_problem(config_dir)
+    try:
+        problem = common.file_mode_problem(config_dir)
+    except OSError as exc:
+        raise TopologyError(
+            f"Cannot create a file in the config dir {config_dir}: {exc.strerror or exc}. "
+            "Run papaia-ctl as the user that owns it."
+        ) from exc
     if problem:
         raise TopologyError(
             f"The config dir {config_dir} does not keep file modes ({problem}). A "

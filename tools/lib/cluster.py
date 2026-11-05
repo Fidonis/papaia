@@ -696,7 +696,17 @@ def run_doctor(
 
 def check_file_modes(cluster: Cluster) -> doctor.CheckResult:
     """The controller's config dir keeps file modes, which the link keys rely on."""
-    problem = common.file_mode_problem(cluster.config_dir)
+    try:
+        problem = common.file_mode_problem(cluster.config_dir)
+    except OSError as exc:
+        reason = exc.strerror or str(exc)
+        return doctor.CheckResult(
+            "file_modes",
+            doctor.FAIL,
+            f"cannot create a file in the config dir ({reason}); run doctor as the user "
+            "that owns it",
+            {"config_dir": str(cluster.config_dir), "problem": reason},
+        )
     if problem:
         return doctor.CheckResult(
             "file_modes",
