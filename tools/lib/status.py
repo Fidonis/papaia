@@ -35,6 +35,11 @@ is many-to-many (`librechat-websearch` brings up four modules, `oauth2-proxy`
 is labelled `auth`), so it is read out of the fragments, never derived from the
 profile name.
 
+Docker Model Runner (the `model-runner` profile) has no long-running container of the stack;
+its engine is Docker Desktop's. While the profile is on, the report carries a `model_runner`
+section with what the runner has pulled and loaded, read through `docker model` on the host
+and through the runner's API from inside a container.
+
 Reading is all this module does: it starts, stops and writes nothing.
 """
 
@@ -52,7 +57,7 @@ from typing import Any
 
 import yaml
 
-from . import common, compat, deployment, envtree
+from . import common, compat, deployment, envtree, model_runner
 
 SCHEMA_VERSION = 1
 
@@ -280,6 +285,8 @@ class StatusReport:
     # Aggregates: None when the section was not asked for or has nothing in it.
     aggregate_core: Health | None = None
     aggregate_addons: Health | None = None
+    # While the model-runner profile is on: what Docker Model Runner has.
+    model_runner: model_runner.RunnerState | None = None
 
     @property
     def modules(self) -> list[Module]:
@@ -316,6 +323,7 @@ class StatusReport:
                 "core": self.aggregate_core.value if self.aggregate_core else None,
                 "addons": self.aggregate_addons.value if self.aggregate_addons else None,
             },
+            **({"model_runner": self.model_runner.to_dict()} if self.model_runner else {}),
         }
 
 
@@ -781,6 +789,7 @@ def collect(
     include_addons: bool = False,
     run: Runner | None = None,
     now: datetime | None = None,
+    runner_probe: Callable[[], model_runner.RunnerState] | None = None,
 ) -> StatusReport:
     """Read the stack as it is and as it should be.
 
@@ -821,6 +830,15 @@ def collect(
         docker=DockerState(reachable=True),
         include_addons=include_addons,
     )
+
+    # Before the containers: the runner is Docker Desktop's and answers, or not, whatever
+    # `docker ps` says.
+    if model_runner.PROFILE in active and (wanted is None or model_runner.PROFILE in wanted):
+        report.model_runner = (
+            runner_probe()
+            if runner_probe is not None
+            else model_runner.probe(in_container=common.in_container(), run=run)
+        )
 
     output, reason = query_containers(run)
     if output is None:
@@ -907,7 +925,50 @@ def format_table(report: StatusReport) -> str:
     if report.include_addons:
         lines.append("")
         lines.extend(_section_lines("ADD-ONS", report.addons, report.aggregate_addons))
+    if report.model_runner is not None:
+        lines.append("")
+        lines.extend(_model_runner_lines(report.model_runner))
     return "\n".join(lines)
+
+
+def _model_runner_lines(state: model_runner.RunnerState) -> list[str]:
+    if not state.reachable:
+        return [f"DOCKER MODEL RUNNER: not reachable ({state.reason})"]
+    engines = ", ".join(state.running_engines) or "none running"
+    lines = [f"DOCKER MODEL RUNNER: engines {engines}"]
+    loaded = {entry["model"].lower(): entry for entry in state.loaded}
+    if not state.models:
+        lines.append("  no models pulled")
+        return lines
+    rows = []
+    for model in state.models:
+        # `docker model ps` and /engines/ps name a model without the registry prefix and in
+        # lower case; any of its tags may be the one that was asked for.
+        short = {_short_name(tag) for tag in model["tags"]}
+        hit = next((loaded[k] for k in loaded if _short_name(k) in short), None)
+        rows.append(
+            (
+                model["name"],
+                model["format"] or "-",
+                model["size"] or "-",
+                f"{hit['engine']} ({hit['mode']})" if hit else "-",
+            )
+        )
+    lines.extend(_format_rows(("MODEL", "FORMAT", "SIZE", "LOADED"), rows))
+    return lines
+
+
+def _short_name(name: str) -> str:
+    """A model name the way every listing can agree on: no registry, lower case, no
+    `:latest`."""
+    lowered = name.lower()
+    for prefix in ("docker.io/", "huggingface.co/", "hf.co/"):
+        if lowered.startswith(prefix):
+            lowered = lowered[len(prefix) :]
+            break
+    if lowered.startswith("ai/"):
+        lowered = lowered[3:]
+    return lowered.removesuffix(":latest")
 
 
 def to_json(report: StatusReport) -> str:

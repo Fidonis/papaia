@@ -29,7 +29,36 @@
             "type": "object",
             "description": "Raw values behind the summary (bytes, ports, days left, ...), so a consumer does not have to parse the text. Keys differ per check."
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "name": { "const": "inference" }, "status": { "enum": ["pass", "warn", "fail"] } },
+              "required": ["name", "status"]
+            },
+            "then": {
+              "properties": {
+                "details": {
+                  "description": "Docker Model Runner. `fail` carries `reason`; `pass` and `warn` add the model lists and the host-side TCP state.",
+                  "required": ["source", "engines", "docker_desktop"],
+                  "properties": {
+                    "source": { "enum": ["cli", "api"] },
+                    "engines": { "type": "array", "items": { "type": "string" }, "description": "Engines the runner reports as running." },
+                    "docker_desktop": { "type": ["string", "null"], "description": "Docker Desktop version; null when it could not be read." },
+                    "reason": { "type": "string" },
+                    "listed": { "type": "array", "items": { "type": "string" }, "description": "References in the rendered models.txt." },
+                    "missing": { "type": "array", "items": { "type": "string" }, "description": "Listed references the runner does not have." },
+                    "loaded": { "type": "array", "items": { "type": "string" } },
+                    "host_tcp": {
+                      "enum": ["off", "loopback", "all interfaces", "unknown"],
+                      "description": "Whether the unauthenticated API is served on host port 12434; `unknown` inside a container."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "summary": {

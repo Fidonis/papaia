@@ -65,6 +65,48 @@
           "papaia_version": { "type": ["string", "null"] }
         }
       }
+    },
+    "model_runner": {
+      "type": "object",
+      "description": "Only while the model-runner profile is active: what Docker Model Runner (Docker Desktop's engine on the host) has. Read with `docker model` on the host and through the runner's API from inside a container.",
+      "required": ["reachable", "reason", "source", "engines", "models", "loaded"],
+      "properties": {
+        "reachable": { "type": "boolean" },
+        "reason": { "type": ["string", "null"], "description": "Why the runner could not be asked; null when it answered." },
+        "source": { "enum": ["cli", "api"], "description": "`cli`: the docker model plugin on the host; `api`: the runner's HTTP API from inside a container." },
+        "engines": {
+          "type": "object",
+          "description": "Engine (llama.cpp, vllm, mlx, diffusers) -> its state as the runner reports it, e.g. 'Running: llama.cpp b9879-metal' or 'Not Installed'.",
+          "additionalProperties": { "type": "string" }
+        },
+        "models": {
+          "type": "array",
+          "description": "Every pulled model, under the names the runner lists it.",
+          "items": {
+            "type": "object",
+            "required": ["name", "tags", "format", "size"],
+            "properties": {
+              "name": { "type": "string" },
+              "tags": { "type": "array", "items": { "type": "string" } },
+              "format": { "type": "string" },
+              "size": { "type": "string" }
+            }
+          }
+        },
+        "loaded": {
+          "type": "array",
+          "description": "The models currently loaded into an engine.",
+          "items": {
+            "type": "object",
+            "required": ["model", "engine", "mode"],
+            "properties": {
+              "model": { "type": "string" },
+              "engine": { "type": "string" },
+              "mode": { "type": "string" }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {

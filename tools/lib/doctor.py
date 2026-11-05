@@ -9,7 +9,8 @@ command exit non-zero.
 Nothing here changes anything. The probes are reads: `docker version/info` and
 `docker system df`, `shutil.disk_usage`, `/proc/meminfo` and the load average, `nvidia-smi` /
 `rocm-smi` / `timedatectl`, a TCP connect to localhost, a name lookup,
-`openssl x509` on a file, a handshake with the configured mail server (greeting, EHLO,
+`openssl x509` on a file, `docker model status/list/ps` (Docker Model Runner; its HTTP API from
+inside a container), a handshake with the configured mail server (greeting, EHLO,
 STARTTLS and a login -- no mail is sent) and `postqueue -p` in the mail relay's container,
 plus everything `status` reads. Inside a container,
 where the host's driver tools and `timedatectl` are out of reach, the NVIDIA GPU
@@ -57,6 +58,7 @@ from . import (
     deployment,
     envtree,
     gpu_detect,
+    model_runner,
     semver,
     smtp,
     status,
@@ -118,6 +120,9 @@ SMTP_QUEUE_TIMEOUT_SECONDS = 10.0
 # under sixteen seconds. The kernel starts at exactly that figure and only lowers
 # it while something disciplines the clock.
 KERNEL_CLOCK_SYNCED_MAXERROR_US = 16_000_000
+
+# What to enable when Docker Model Runner does not answer.
+MODEL_RUNNER_SETTING = "Docker Desktop: Settings > AI > Enable Docker Model Runner"
 
 LOCALAI_PROFILE = "localai"
 LOCALAI_SERVICE = "localai"
@@ -260,6 +265,23 @@ def _loadavg() -> tuple[float, float, float] | None:
         return None
 
 
+def _lan_address() -> str | None:
+    """The address this host uses towards other machines, or None without a route.
+
+    A UDP connect sends nothing; it only makes the kernel pick the interface."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))  # TEST-NET-1, never routed anywhere real
+            address = probe.getsockname()[0]
+    except OSError:
+        return None
+    return None if address.startswith("127.") or address == "0.0.0.0" else address
+
+
+def _model_runner_state(run: Runner, in_container: bool) -> model_runner.RunnerState:
+    return model_runner.probe(in_container=in_container, run=run)
+
+
 def _in_container() -> bool:
     """Whether this process runs inside a container, where the host's driver
     tools, device nodes and `timedatectl` are not visible. `papaia-manager`
@@ -346,6 +368,9 @@ class Probes:
     smtp_probe: Callable[..., smtp.ProbeResult] = smtp.probe_upstream
     # Where device nodes live; the same seam `gpu_detect.compose_fragment` has.
     dev_root: Path = Path("/dev")
+    # (run, in_container) -> what Docker Model Runner has
+    model_runner: Callable[[Runner, bool], model_runner.RunnerState] = _model_runner_state
+    lan_address: Callable[[], str | None] = _lan_address
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -374,6 +399,7 @@ class Context:
         self._status: status.StatusReport | None = None
         self._env: dict[str, dict[str, str]] | None = None
         self._totals: tuple[int | None, int | None] | None = None
+        self._runner: model_runner.RunnerState | None = None
 
     def docker_totals(self) -> tuple[int | None, int | None]:
         """(CPU count, memory in bytes) as the Docker daemon sees them.
@@ -425,10 +451,21 @@ class Context:
     def active_profiles(self) -> set[str]:
         return status.active_profiles(self.config_dir)
 
+    def model_runner_state(self) -> model_runner.RunnerState:
+        """What Docker Model Runner has, asked once for `inference` and `status`."""
+        if self._runner is None:
+            self._runner = self.probes.model_runner(self.run, self.probes.in_container())
+        return self._runner
+
     def status_report(self) -> status.StatusReport:
         if self._status is None:
             self._status = status.collect(
-                self.config_dir, self.repo_root, include_addons=True, run=self.run, now=self.now
+                self.config_dir,
+                self.repo_root,
+                include_addons=True,
+                run=self.run,
+                now=self.now,
+                runner_probe=self.model_runner_state,
             )
         return self._status
 
@@ -1136,6 +1173,102 @@ def check_gpu(ctx: Context) -> CheckResult:
     return _gpu_render_node(ctx, variant, details)
 
 
+def _host_tcp(ctx: Context) -> str:
+    """Whether the runner's unauthenticated API is on a host port: "off", "loopback",
+    "all interfaces", or "unknown" inside a container, which cannot see the host's
+    interfaces. Only the port `docker desktop enable model-runner` picks is looked at."""
+    if ctx.probes.in_container():
+        return "unknown"
+    port = model_runner.HOST_TCP_PORT
+    if not ctx.probes.connect("127.0.0.1", port):
+        return "off"
+    address = ctx.probes.lan_address()
+    if address and ctx.probes.connect(address, port):
+        return "all interfaces"
+    return "loopback"
+
+
+def check_inference(ctx: Context) -> CheckResult:
+    """Docker Model Runner: answers, has the listed models, can run them, is not exposed."""
+    name = "inference"
+    if not ctx.configured:
+        return _not_set_up(name)
+    if model_runner.PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "Docker Model Runner is not enabled")
+
+    state = ctx.model_runner_state()
+    version = ctx.run(
+        ["docker", "version", "--format", "{{.Server.Platform.Name}}"],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    desktop = model_runner.desktop_version(version.stdout if version.returncode == 0 else "")
+    details: dict[str, Any] = {
+        "source": state.source,
+        "engines": state.running_engines,
+        "docker_desktop": ".".join(str(p) for p in desktop) if desktop else None,
+    }
+    if not state.reachable:
+        return CheckResult(
+            name,
+            FAIL,
+            f"Docker Model Runner does not answer ({state.reason}); enable it in"
+            f" {MODEL_RUNNER_SETTING}",
+            {**details, "reason": state.reason},
+        )
+
+    try:
+        text = (ctx.config_dir / model_runner.MODELS_FILE).read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    listed = model_runner.parse_models(text)
+    missing = state.missing(listed.models)
+    host_tcp = _host_tcp(ctx)
+    details.update(
+        {
+            "listed": [m.reference for m in listed.models],
+            "missing": missing,
+            "loaded": [entry["model"] for entry in state.loaded],
+            "host_tcp": host_tcp,
+        }
+    )
+
+    problems: list[str] = []
+    if missing:
+        problems.append(
+            f"missing from the runner: {', '.join(missing)} (run 'papaia-ctl start' to pull)"
+        )
+    if listed.errors:
+        problems.append(f"{model_runner.MODELS_FILE}: {'; '.join(listed.errors)}")
+    mlx = [m.reference for m in listed.models if m.is_mlx]
+    if mlx and "vllm" not in state.running_engines:
+        if desktop and desktop[:2] < model_runner.MIN_DESKTOP_FOR_VLLM:
+            problems.append(
+                f"MLX models listed ({', '.join(mlx)}) need Docker Desktop 4.62 or newer"
+                f" (this is {details['docker_desktop']})"
+            )
+        else:
+            problems.append(
+                f"MLX models listed ({', '.join(mlx)}) need the vllm engine:"
+                " docker model install-runner --backend vllm"
+            )
+    if host_tcp == "all interfaces":
+        problems.append(
+            f"host-side TCP serves the unauthenticated runner API on port"
+            f" {model_runner.HOST_TCP_PORT} of every interface; turn it off in Docker"
+            " Desktop: Settings > AI > Enable host-side TCP support"
+        )
+    if problems:
+        return CheckResult(name, WARN, "; ".join(problems), details)
+    engines = ", ".join(state.running_engines) or "none running"
+    return CheckResult(
+        name,
+        PASS,
+        f"Docker Model Runner answers, {len(listed.models)} listed model(s) present"
+        f" (engines: {engines})",
+        details,
+    )
+
+
 def _published_host_port(entry: str, env: dict[str, str]) -> tuple[str, int] | None:
     """(bind address, host port) of one short-syntax `ports:` entry, or None
     when the host side is not a single resolvable port (ephemeral, range,
@@ -1561,6 +1694,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("memory", check_memory),
     ("cpu", check_cpu),
     ("gpu", check_gpu),
+    ("inference", check_inference),
     ("ports", check_ports),
     ("dns", check_dns),
     ("time_sync", check_time_sync),
