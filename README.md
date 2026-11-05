@@ -383,9 +383,11 @@ link gateways last). `--node=NAME` stops one node; `--volumes` is not available 
 `--volumes` (only together with `--clean-up` and `--profiles`) also deletes the data of those
 profiles: `docker compose down --volumes` removes the named volumes of their services and the
 anonymous volumes of their containers (a Redis or Postgres image declares one). It is limited to
-the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`); the always-on services and
-the manager keep their data, and any other profile is refused before anything runs. A volume that
-a service of another profile still mounts is left in place by Compose.
+the optional modules (`localai`, `librechat-websearch`, `model-runner`, `rag`, `smtp`); the
+always-on services and the manager keep their data, and any other profile is refused before
+anything runs. A volume that a service of another profile still mounts is left in place by
+Compose. `model-runner` has no volumes: its models live in Docker Desktop and are removed by the
+module's data deletion (`module-purge`, see below), not by `--volumes`.
 
 papaia-manager's Settings > Modules tab switches the optional modules on and off with these
 pieces and offers to delete a module's data and settings when it switches one off. It uses two
@@ -396,7 +398,8 @@ switched on (the public URL of LocalAI and of Qdrant: the `setup` option that ta
 the default derived from the stack's host and whether the question is still open), as JSON, and
 writes nothing; `module-purge
 --module=NAME [--data] [--config]` removes the module's named volumes (by name, from the compose
-files' own table of who mounts what) and/or puts its settings back to what the release ships (its
+files' own table of who mounts what; for `model-runner` the models its `models.txt` lists, from
+Docker Desktop's runner, and nothing else) and/or puts its settings back to what the release ships (its
 `.env` files and the public URL kept in the root `.env`, plus the files it keeps outside them:
 the mail relay's password, the RAG catalog). A question is open when its stored URL is empty, a
 placeholder or the one the release ships, which is what the reset leaves, so a front end can ask it
