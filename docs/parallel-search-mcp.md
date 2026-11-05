@@ -1,34 +1,51 @@
 # Parallel Search MCP in LibreChat (opt-in)
 
 This guide connects LibreChat to the hosted [Parallel MCP server](https://docs.parallel.ai/integrations/mcp/quickstart)
-through the customer overlay. LibreChat offers the tools the server lists. Without a key
-these are, at the time of writing:
+through the customer overlay. LibreChat offers every tool the server lists, and the server
+decides that list: Parallel can add, change or remove tools at any time, without a change in
+this installation. In November 2026 the list without a key was:
 
 - `web_search`: search the public web,
 - `web_fetch`: read the content of given URLs,
 - `web_decisions`: answer typed questions about a subject (a probability, a pick among
   options, a score) from web evidence,
-- `send_feedback`: report a problem with a tool call to Parallel.
+- `find_verticals`: find specialized data sources beyond web search, such as PubMed,
+  ClinicalTrials.gov or a registry of US healthcare providers, each with a price per call,
+- `search_vertical`: query one of these sources.
 
-A key adds `web_research`. The server decides the list, so it can change; the log line under
-[Check it](#check-it) shows the current one. Nothing in the shipped configuration changes,
-and the server stays off unless an operator adds it.
+A key adds `web_research`. The log line under [Check it](#check-it) shows the current list.
+Nothing in the shipped configuration changes, and the server stays off unless an operator
+adds it.
 
 ## What leaves the installation
 
 Parallel is a hosted service outside the self-hosted deployment. Once the server is
-configured, every tool call sends the following to Parallel:
+configured, every tool call sends Parallel the arguments the model fills in. The model
+writes them from the chat, so treat the content of a chat that uses the server as content
+that can leave the installation. Which fields a tool takes is decided by the server, not by
+this guide. For the tools listed above (November 2026) they are:
 
-- `web_search`: the search objective and queries the model writes, which are usually
-  derived from the user's chat,
-- `web_fetch`: the URLs the model asks to fetch, optionally with an objective and queries,
+- `web_search`: the search objective and queries,
+- `web_fetch`: the URLs to fetch, optionally with an objective and queries,
 - `web_decisions`: the subject of the questions as JSON (`state`) and the questions
-  themselves. Of all tools, this one is the most likely to carry chat content verbatim,
-- `send_feedback`: a free-text problem report with the requests involved, which the model
-  may send on its own when a tool call goes wrong,
+  themselves. Of these tools, it is the most likely to carry chat content verbatim,
+- `find_verticals`: what the user wants to find, in natural language (`objective`),
+- `search_vertical`: the id of a source and the search arguments for it,
 - with `web_search` and `web_fetch`, optionally the name of the model (`client_model`) and a
-  `session_id` from an earlier result, both filled in by the model,
-- the API key, when one is configured.
+  `session_id` from an earlier result.
+
+The API key is sent as well, when one is configured.
+
+After every recreate of LibreChat, compare the `Tools:` line under [Check it](#check-it)
+with this list. Before users rely on a tool that is not on it, check what it sends: the
+server describes each tool and its input fields.
+
+```sh
+curl -s https://mcp.parallel.ai/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | sed -n 's/^data: //p' | python3 -m json.tool
+```
 
 Parallel's MCP documentation does not state a retention period for queries or fetched
 pages. Check Parallel's terms and privacy policy against your data-protection requirements
@@ -47,7 +64,7 @@ search with SearXNG and Firecrawl (the `librechat-websearch` profile and the
    mcpServers:
      ParallelSearch:
        title: 'Parallel Search'
-       description: 'Public web search and page fetching through the hosted Parallel MCP server. Queries and URLs leave this installation.'
+       description: 'Web search and related tools of the hosted Parallel MCP server. Queries, URLs and questions from the chat leave this installation.'
        type: streamable-http
        url: https://mcp.parallel.ai/mcp
 
