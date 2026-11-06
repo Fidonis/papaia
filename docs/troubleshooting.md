@@ -111,7 +111,7 @@ verification on that hop. A plain-HTTP `proxy_pass` to port 8110 cannot work. Se
 [External reverse proxy](../README.md#external-reverse-proxy) for working Caddy and nginx
 configurations.
 
-### "host.docker.internal: cannot resolve" on Linux
+### "host.docker.internal: cannot resolve" on Linux or macOS
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
