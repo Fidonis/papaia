@@ -34,7 +34,7 @@ def test_linux_defaults_to_the_manager():
     assert done.returncode == 0, done.stderr
     assert "MANAGER=true" in done.stdout
     assert "addons (default)" in done.stderr
-    assert "Linux host" not in done.stderr
+    assert "shared folders" not in done.stderr
 
 
 def test_macos_defaults_to_no_manager_and_says_why():
@@ -42,7 +42,7 @@ def test_macos_defaults_to_no_manager_and_says_why():
     assert done.returncode == 0, done.stderr
     assert "MANAGER=false" in done.stdout
     assert "without it) (default)" in done.stderr
-    assert "papaia-manager needs a Linux host" in done.stderr
+    assert "papaia-manager needs its directories in Docker Desktop's shared folders" in done.stderr
 
 
 def test_macos_still_takes_an_explicit_yes():
@@ -52,7 +52,7 @@ def test_macos_still_takes_an_explicit_yes():
 def test_macos_keeps_a_previous_yes_as_the_default():
     done = _ask("Darwin", sticky="true")
     assert "MANAGER=true" in done.stdout
-    assert "Linux host" not in done.stderr
+    assert "shared folders" not in done.stderr
 
 
 def test_a_previous_no_stays_the_default_on_linux():

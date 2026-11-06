@@ -51,7 +51,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups, and with the `rag` profile the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups, and with the `rag` profile the RAG system's connections, collections and ingest jobs. Native OIDC. Linux, or macOS with Docker Desktop; not Docker Desktop on Windows — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
@@ -161,7 +161,7 @@ Once the stack is up, the default endpoints for a local install are:
 - Keycloak admin — `https://host.docker.internal:8110`, user `admin` (setup generates the
   password; read it with `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`)
 - papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
-  (Linux hosts only — see [papaia-manager](#papaia-manager))
+  (Linux or macOS, not Windows — see [papaia-manager](#papaia-manager))
 
 The realm ships two test users: `admin` / `admin` (roles `admin`, `user`, `localai-access`)
 and `testuser` / `testuser` (roles `user`, `finance`).
@@ -1185,10 +1185,15 @@ the same thing inside the container as on the host — **path parity**:
 - The container runs as the host `UID`/`GID` so that files it writes into the config
   directory keep the ownership `setup` established.
 
-> **The `manager` profile therefore requires a Linux host.** Docker Desktop on Windows and
-> macOS does not preserve host-path parity across its VM boundary, so the mounts above
-> cannot be satisfied. Everything else in the stack runs on Docker Desktop as usual — leave
-> the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+> **The `manager` profile therefore needs a Linux host or Docker Desktop on macOS.** Docker
+> Desktop on macOS shares `/Users`, `/Volumes`, `/private`, `/tmp` and `/var/folders` with its
+> VM under the same paths, so the mounts above resolve as long as the workspace, config and
+> backup directories lie inside one of these folders (or another one added under Settings >
+> Resources > File sharing). `setup` defaults to *no* on macOS all the same; answer *yes* or
+> pass `--manager`. Docker Desktop on Windows does not preserve host-path parity across its
+> VM boundary, so the mounts cannot be satisfied there. Everything else in the stack runs on
+> Docker Desktop as usual — leave the profile off with `--no-manager` and drive the lifecycle
+> through `papaia-ctl`.
 
 Granting a container access to the Docker socket is granting it root on the host. That is
 inherent to what the manager does, and the reason its access is role-gated and its
@@ -1533,7 +1538,7 @@ external OIDC provider, create the same objects there yourself.
    connection `default` to the integrated Qdrant itself, and it is where collections and their
    access roles, the embedding of files and the ingest jobs, their runs and the credentials of
    remote sources are managed. The ingester has no web interface of its own.
-4. Without the `manager` profile (the manager runs on Linux hosts only) there is no interface:
+4. Without the `manager` profile (the manager runs on Linux and macOS, not Windows) there is no interface:
    edit the catalog files `jobs.yaml`, `connections.yaml` and `secrets.yaml` in
    `$PAPAIA_CONFIG_DIR/ai/rag/catalog` yourself, as the qdrant-ingest documentation describes.
    Sources of type `local` read `$PAPAIA_CONFIG_DIR/ai/rag/documents` unless `QI_LOCAL_MOUNT`
