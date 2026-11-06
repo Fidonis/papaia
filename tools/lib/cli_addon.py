@@ -83,6 +83,55 @@ def placement_result(
     )
 
 
+def active_addon_versions(
+    deployed: dict, repo_root: Path, *, exclude: str | None = None
+) -> dict[str, str | None]:
+    """Name -> version of every active addon, read from its manifest (falling back
+    to the version recorded in deployment.yaml). `exclude` leaves one addon out, so
+    an addon never satisfies its own requirement."""
+    versions: dict[str, str | None] = {}
+    for addon in deployment.active_addons(deployed):
+        name = addon.get("name")
+        if not name or name == exclude:
+            continue
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        version = (manifest or {}).get("version") or addon.get("version")
+        versions[name] = str(version) if version is not None else None
+    return versions
+
+
+def _with_required_addons(
+    result: compat.CompatResult, name: str, manifest: dict, deployed: dict, repo_root: Path
+) -> compat.CompatResult:
+    """Fold the `requires.addons` verdict into a core verdict. A malformed field
+    always wins; an unmet requirement replaces an OK or UNKNOWN verdict."""
+    if result.status == compat.STATUS_ERROR:
+        return result
+    required = compat.evaluate_required_addons(
+        name, manifest, active_addon_versions(deployed, repo_root, exclude=name)
+    )
+    if required is None:
+        return result
+    if required.status == compat.STATUS_ERROR:
+        return required
+    unmet = required.status == compat.STATUS_INCOMPATIBLE
+    if unmet and result.status != compat.STATUS_INCOMPATIBLE:
+        return required
+    if required.warnings:
+        return compat.CompatResult(
+            result.name,
+            result.status,
+            axis=result.axis,
+            requirement=result.requirement,
+            core_value=result.core_value,
+            reason=result.reason,
+            warnings=result.warnings + required.warnings,
+        )
+    return result
+
+
 def _evaluate_gate(
     name: str,
     manifest: dict,
@@ -101,6 +150,7 @@ def _evaluate_gate(
     core = compat.resolve_core_target(repo_root)
     profiles = (deployed.get("core") or {}).get("profiles")
     result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+    result = _with_required_addons(result, name, manifest, deployed, repo_root)
     mode = compat.resolve_mode(deployed)
     exit_code = compat.gate([result], mode=mode, force=force)
     if exit_code == 0 or result.status != compat.STATUS_ERROR:
@@ -284,6 +334,7 @@ def evaluate_active_addons(
             results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
             continue
         result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+        result = _with_required_addons(result, name, manifest, deployed, repo_root)
         if result.status != compat.STATUS_ERROR:
             # A placement problem outranks a compatible verdict: it cannot be forced.
             result = placement_result(name, manifest, deployed, repo_root) or result
@@ -658,6 +709,53 @@ def cmd_addon_list(args: argparse.Namespace) -> int:
     else:
         print("No addons registered.")
     return 0
+
+
+def dependent_addons(name: str, deployed: dict, repo_root: Path) -> list[str]:
+    """The other active addons whose `requires.addons` names `name`. A manifest
+    that cannot be read or parsed counts as requiring nothing."""
+    dependents: list[str] = []
+    for addon in deployment.active_addons(deployed):
+        other = addon.get("name")
+        if not other or other == name:
+            continue
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        try:
+            required = compat.required_addons(manifest or {})
+        except ValueError:
+            continue
+        if any(required_name == name for required_name, _ in required):
+            dependents.append(other)
+    return dependents
+
+
+def cmd_addon_dependents(args: argparse.Namespace) -> int:
+    """Refuse (exit 2) to take an addon away while another active addon requires it.
+    Runs before `addon remove` and `addon uninstall` touch anything; --force
+    proceeds with a warning."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir)
+    if not deployed:
+        return 0
+    dependents = dependent_addons(args.name, deployed, repo_root)
+    if not dependents:
+        return 0
+    listed = ", ".join(f"'{d}'" for d in dependents)
+    if args.force:
+        print(
+            f"WARNING: addon '{args.name}' is required by {listed} -- continuing due to --force",
+            file=sys.stderr,
+        )
+        return 0
+    print(
+        f"ERROR: addon '{args.name}' is required by {listed}."
+        " Remove those first, or pass --force.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def cmd_addon_remove(args: argparse.Namespace) -> int:

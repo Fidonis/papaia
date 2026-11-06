@@ -45,7 +45,13 @@ _SURFACE_CHANGED = (
 # server's credentials. Nothing existing changed, so `min` stays 1; add-ons that
 # attach it declare `requires.addon_api: 3`, and an older core reports them
 # incompatible instead of failing on an unknown service.
-ADDON_API_WINDOW = (1, 3)
+#
+# Gen 4 (additive): `requires.addons` names other add-ons an add-on builds on;
+# install, start, upgrade and `addon check` refuse it while one of them is not
+# active or too old. Manifests without the key are unchanged, so `min` stays 1;
+# add-ons that use it declare `requires.addon_api: 4`, and an older core reports
+# them incompatible instead of ignoring the requirement.
+ADDON_API_WINDOW = (1, 4)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -119,6 +125,7 @@ MANIFEST_KEYS = [
     "integration.keycloak.client_mappers",
     "integration.<service> (fragment paths)",
     "requires.addon_api",
+    "requires.addons",
     "papaia_compat",
     # Display only: printed after the core's own steps in the install checklist. An older
     # core ignores the key and an add-on has nothing to gate on, so no ADDON_API bump.
@@ -167,4 +174,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 14, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 15, _SURFACE_CHANGED

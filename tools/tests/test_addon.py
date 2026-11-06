@@ -744,3 +744,123 @@ def test_addon_check_json_emitted_even_on_exit_2(repo_root, config_dir, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload[0]["status"] == "INCOMPATIBLE"
     assert payload[0]["reason"]
+
+
+# ── requires.addons ───────────────────────────────────────────────────────────
+
+
+def _dependent_addon(tmp_path: Path, requires: list) -> Path:
+    path = tmp_path / "addon-dependent"
+    path.mkdir()
+    manifest = {
+        "name": "dependent",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "requires": {"addons": requires},
+    }
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return path
+
+
+def test_install_refuses_while_required_addon_is_missing(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    deployment_before = (config_dir / "deployment.yaml").read_text(encoding="utf-8")
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+    )
+    assert result == 2
+    assert "'paperless' is not installed and active" in capsys.readouterr().err
+    assert (config_dir / "deployment.yaml").read_text(encoding="utf-8") == deployment_before
+    assert not (config_dir / "addons" / "dependent").exists()
+
+
+def test_install_proceeds_once_the_required_addon_is_active(repo_root, config_dir, tmp_path):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, [{"name": "paperless", "version": ">=1.0.0"}])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+    )
+    assert result == 0
+
+
+def test_install_refuses_a_too_old_required_addon(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, [{"name": "paperless", "version": ">=2.0.0"}])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+    )
+    assert result == 2
+    assert "does not satisfy '>=2.0.0'" in capsys.readouterr().err
+
+
+def test_install_force_skips_a_missing_required_addon(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent), force=True)
+    )
+    assert result == 0
+    assert "WARNING" in capsys.readouterr().err
+
+
+def test_check_reports_an_unmet_requirement(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+    assert (
+        cmd_addon_install(
+            _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+        )
+        == 0
+    )
+    deployment = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    for addon in deployment["addons"]:
+        if addon["name"] == "paperless":
+            addon["active"] = False
+    (config_dir / "deployment.yaml").write_text(yaml.safe_dump(deployment), encoding="utf-8")
+    capsys.readouterr()
+
+    assert cmd_addon_check(_check_args(config_dir, repo_root)) == 2
+    assert "'paperless' is not installed and active" in capsys.readouterr().out
+
+
+def _dependents_args(config_dir: Path, repo_root: Path, *, force: bool = False):
+    return argparse.Namespace(
+        config_dir=str(config_dir), repo_root=str(repo_root), name="paperless", force=force
+    )
+
+
+def test_dependents_refuses_while_another_addon_requires_it(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_dependents
+
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+    assert (
+        cmd_addon_install(
+            _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root)) == 2
+    assert "required by 'dependent'" in capsys.readouterr().err
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root, force=True)) == 0
+
+
+def test_dependents_passes_without_dependents(repo_root, config_dir):
+    from lib.cli_addon import cmd_addon_dependents
+
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root)) == 0

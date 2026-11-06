@@ -236,11 +236,20 @@ cmd_addon_stop() {
     success "addon stop complete: $addon_name"
 }
 
+# Exits 2 while another active add-on requires $1 (requires.addons), before anything is
+# taken down; $2 = 1 (--force) continues with a warning.
+_addon_refuse_while_required() {
+    local -a dependents_args=(--name="$1")
+    [ "$2" -eq 1 ] && dependents_args+=(--force)
+    py_cli addon-dependents ${dependents_args[@]+"${dependents_args[@]}"} || exit 2
+}
+
 cmd_addon_remove() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -248,11 +257,12 @@ cmd_addon_remove() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon remove <name>"
+        error "Usage: papaia-ctl addon remove <name> [--force]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    _addon_refuse_while_required "$addon_name" "$force"
     py_cli addon-remove --name="$addon_name"
     success "addon remove complete: $addon_name"
 }
@@ -576,11 +586,12 @@ cmd_addon_list() {
 }
 
 cmd_addon_uninstall() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0 force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --clean-up) clean_up=1 ;;
+            --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -588,11 +599,12 @@ cmd_addon_uninstall() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon uninstall <name> [--clean-up]"
+        error "Usage: papaia-ctl addon uninstall <name> [--clean-up] [--force]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    _addon_refuse_while_required "$addon_name" "$force"
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
     info "Removing containers for addon $addon_name..."
