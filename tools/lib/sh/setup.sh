@@ -186,7 +186,7 @@ cmd_setup() {
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "external_oidc" ]; then
             info "  Identity provider = external OIDC"
         else
-            info "  Keycloak URL      = $AUTH_HOST_STICKY"
+            info "  Keycloak URL      = ${AUTH_HOST_STICKY:-$AUTH_HOST_DERIVED}"
         fi
         if [ -n "${REVERSE_PROXY_PROVIDER_STICKY:-}" ]; then
             local _rp_label="Nginx Proxy Manager (bundled)"
@@ -285,7 +285,12 @@ cmd_setup() {
             fi
         fi
         if [ -z "$auth_host" ] && [ "$auth_provider" != "external_oidc" ]; then
+            # Empty when setup would derive it again (provider switch, or just the stored
+            # app host's derivation); the stored app host's derivation comes from defaults.
             local auth_default="${AUTH_HOST_STICKY:-}"
+            if [ -z "$auth_default" ] && [ "$app_host" = "${APP_HOST_STICKY:-}" ]; then
+                auth_default="${AUTH_HOST_DERIVED:-}"
+            fi
             [ -z "$auth_default" ] && auth_default="$(_derive_auth_default "$app_host")"
             auth_host="$(prompt_field "Public Keycloak URL" \
                 "Where browsers reach the bundled Keycloak." \
