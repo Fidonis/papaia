@@ -167,6 +167,11 @@ operator-supplied.
 | Generated (see [Secrets handling](#secrets-handling)) | every key shipped with a `GENERATE_…` placeholder |
 | Static defaults | `*_EXT_PORT` variables, `TRUST_PROXY` |
 
+A later `setup` or `upgrade` without `--auth-host` keeps the stored `AUTH_HOST`, and with
+it the token issuer. The exception is a value that only matches what setup derived from the
+previous `PAPAIA_HOST`: it follows a changed `--app-host`. After changing `KEYCLOAK_EXT_PORT`
+on a local host, pass `--auth-host` with the new port.
+
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.
 
