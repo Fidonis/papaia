@@ -12,6 +12,46 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.8.0] - 2026-11-07
+
+### 🚀 Features
+
+- feat(addon): let a manifest add steps to the install checklist (#278) @fwahl711
+- feat(topology): run an installation on several nodes (#267) @fwahl711
+- feat(keycloak): brand the login page for logins started by papaia services (#261) @marko-boehm
+- feat(addon): add upgrade, rollback and list verbs (#253) @marko-boehm
+- feat(backup): back up part of the installation with --only (#252) @marko-boehm
+
+### 🐛 Bug Fixes
+
+- fix(setup): keep the stored AUTH_HOST when --auth-host is not given (#257) @WilhelmSebastian
+- fix(keycloak): reach the published port on HOST_IP in keycloak-role-sync (#258) @WilhelmSebastian
+- fix(ctl): find any python3.x on path and fix the macos install hints (#328) @fwahl711
+- fix(topology): refuse a config dir that does not keep file modes (#274) @fwahl711
+- fix(mcp-firecrawl): run the amd64-only image emulated on arm64 hosts (#294) @fwahl711
+- fix(setup): default papaia-manager to off on macos (#295) @fwahl711
+- fix(certs): issue a keycloak certificate that macos accepts (#293) @fwahl711
+- fix(ctl): expand empty arrays safely under bash 3.2 (#291) @fwahl711
+- fix(ctl): reject python older than 3.10 in the preflight (#292) @fwahl711
+- fix(lifecycle): recreate containers on docker desktop (#276) @fwahl711
+- fix(oauth2-proxy): keep the csrf nonce per login request (#275) @fwahl711
+- fix(backup): let a whole-stack restore through target validation (#259) @WilhelmSebastian
+
+### 📖 Documentation
+
+- docs: add an opt-in guide for parallel search mcp in librechat (#297) @fwahl711
+- docs: document macos prerequisites and limitations (#296) @fwahl711
+- docs: add a code of conduct (#277) @fwahl711
+
+### 🧹 Maintenance
+
+- chore: bump papaia-manager to 1.6.0, qdrant-ingest to 1.0.1 and jina-reranker-api to 0.1.3 (#PRNUM) @marko-boehm
+- ci: scan the compose images for known vulnerabilities (#280) @fwahl711
+- ci: propose compose image updates (#281) @fwahl711
+- ci: run ruff and pytest on every pull request (#279) @fwahl711
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.7.0...v1.8.0
+
 ## [1.7.0] - 2026-10-24
 
 ### 🚀 Features
