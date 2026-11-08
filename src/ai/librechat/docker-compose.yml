@@ -100,7 +100,7 @@ services:
 
   librechat-mongodb:
     restart: unless-stopped
-    image: mongo:8.0.20
+    image: mongo:8.3.13
     volumes:
       - librechat-mongodb:/data/db
     command: mongod --noauth
