@@ -28,20 +28,21 @@ their images there; the table below covers the Core only.
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.3 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
 | `boky/postfix` | 5.1.0-alpine | MIT | `infra/smtp-relay` | optional mail relay (profile `smtp`); the image bundles Postfix (IPL-1.0 or EPL-2.0), OpenDKIM and rsyslog (GPL-3.0-or-later among others), used as network service |
+| `haproxy` | 3.2.26-alpine | GPL-2.0 | `infra/link-gateway` | mTLS link gateway between the nodes of a distributed installation (profile `link-gateway`, not in the include list); its include files are LGPL-2.1; used as network service |
 | `ghcr.io/fidonis/papaia-manager` | 1.6.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
 | `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
 | `mongo` | 8.0.20 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |
 | `pgvector/pgvector` | 0.8.0-pg15-trixie | PostgreSQL License | `ai/librechat` | |
 | `ghcr.io/librechat-ai/librechat-rag-api-dev-lite` | v0.8.0 | MIT | `ai/librechat` | |
-| `ghcr.io/berriai/litellm` | v1.100.0 | MIT | `ai/litellm` | |
+| `ghcr.io/berriai/litellm` | v1.108.3 | MIT | `ai/litellm` | |
 | `postgres` | 16 | PostgreSQL License | `ai/litellm` | LiteLLM database |
-| `prom/prometheus` | v3.13.1 | Apache-2.0 | `ai/litellm` | |
+| `prom/prometheus` | v3.15.1 | Apache-2.0 | `ai/litellm` | |
 | `localai/localai` | v4.7.1 | MIT | `ai/localai` | CPU image; the NVIDIA CUDA, Intel, hipBLAS and Vulkan variants are the same license |
 | `curlimages/curl` | latest | MIT | `ai/localai` | model-init helper |
 | `ghcr.io/fidonis/jina-reranker-api` | 0.1.3 | Apache-2.0 | `ai/jinaai` | Fidonis-maintained wrapper; Jina AI reranker base is Apache-2.0 |
 | `qdrant/qdrant` | v1.19.0 | Apache-2.0 | `ai/rag` | vector database |
-| `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.0 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
+| `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.1 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
 | `ghcr.io/fidonis/qdrant-ingest` | 1.0.1 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service |
 | `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |
@@ -61,6 +62,7 @@ their images there; the table below covers the Core only.
 | Apache-2.0 | Apache License 2.0 |
 | MIT | MIT License |
 | AGPL-3.0 | GNU Affero General Public License v3.0 |
+| GPL-2.0 | GNU General Public License v2.0 |
 | SSPL | Server Side Public License v1 (MongoDB / Elastic) |
 | RSALv2 | Redis Source Available License v2 |
 | BUSL-1.1 | Business Source License 1.1 |
