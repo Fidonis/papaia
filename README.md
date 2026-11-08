@@ -51,7 +51,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health, model usage, backup/restore with scheduled backups, the nodes of a distributed installation and, with the `rag` profile, the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health, model usage, backup/restore with scheduled backups, the nodes of a distributed installation and, with the `rag` profile, the RAG system's connections, collections and ingest jobs. Native OIDC. Linux hosts and Docker Desktop on macOS — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
@@ -132,15 +132,23 @@ Linux host:
   `LIBRECHAT_AGENTS_DIR` and `LIBRECHAT_PROMPTS_DIR` when they are set. A checkout under
   `/Users` with the default config directory next to it works. `/opt` works only after it
   is added under File sharing, and `/srv` cannot be created on the read-only system volume.
-- **papaia-manager.** It needs a Linux host. `setup` defaults to *no* on macOS; leave it
-  off (`--no-manager`).
-- **Keycloak certificate.** With the default local URLs, trust the generated local CA
-  once so browsers accept Keycloak's certificate:
+- **papaia-manager.** It runs on Docker Desktop, with its workspace, configuration and
+  backup directories below `/Users`; a checkout there with the default directories meets
+  this. `setup` recognises Docker Desktop and defaults to *yes* there; with another
+  engine it defaults to *no*, so leave the profile off (`--no-manager`). See
+  [papaia-manager](#papaia-manager).
+- **Keycloak certificate.** With the default local URLs, browsers on the Mac check
+  Keycloak's certificate against the login keychain. `setup` offers to trust the
+  generated local CA there once (no admin rights needed). In a non-interactive run, or
+  when the offer is declined, it prints the command instead:
 
   ```bash
-  sudo security add-trusted-cert -d -r trustRoot \
-    -k /Library/Keychains/System.keychain "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
+  security add-trusted-cert -r trustRoot \
+    -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
   ```
+
+  The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
+  through an `/etc/hosts` entry; `setup` prints the command when it is missing.
 
   The server certificate is issued for 825 days with `serverAuth`, as macOS requires.
   `setup` renews an older or expiring one with the same CA, so the trust stays; restart
@@ -210,7 +218,7 @@ Once the stack is up, the default endpoints for a local install are:
 - Keycloak admin — `https://host.docker.internal:8110`, user `admin` (setup generates the
   password; read it with `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`)
 - papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
-  (Linux hosts only — see [papaia-manager](#papaia-manager))
+  (Linux hosts and Docker Desktop on macOS — see [papaia-manager](#papaia-manager))
 
 The realm ships two test users: `admin` / `admin` (roles `admin`, `user`, `localai-access`)
 and `testuser` / `testuser` (roles `user`, `finance`).
@@ -306,7 +314,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
-| `--manager` / `--no-manager` | _(prompted, default on; off on macOS)_ | Toggle the `manager` profile |
+| `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
@@ -1228,8 +1236,9 @@ the same thing inside the container as on the host — **path parity**:
 - `PAPAIA_WORKSPACE_DIR`, `PAPAIA_CONFIG_DIR` and `PAPAIA_BACKUP_DIR` are each mounted at
   their own host path, not remapped to `/workspace` or `/config`. `setup` stamps all three
   automatically.
-- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it on the
-  host. Discover it with:
+- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it inside
+  the container. `setup` stamps it: on Linux from the socket on the host, under Docker
+  Desktop on macOS as `0`. Check it with:
 
   ```bash
   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine \
@@ -1239,10 +1248,16 @@ the same thing inside the container as on the host — **path parity**:
 - The container runs as the host `UID`/`GID` so that files it writes into the config
   directory keep the ownership `setup` established.
 
-> **The `manager` profile therefore requires a Linux host.** Docker Desktop on Windows and
-> macOS does not preserve host-path parity across its VM boundary, so the mounts above
-> cannot be satisfied. Everything else in the stack runs on Docker Desktop as usual — leave
-> the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+> **The `manager` profile therefore runs on Linux hosts and on Docker Desktop for macOS.**
+> Docker Desktop on macOS shares `/Users` with its VM under the same path, so the workspace,
+> configuration and backup directories must live below `/Users` (the default). Docker
+> Desktop on Windows does not preserve host-path parity across its VM boundary; there,
+> leave the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+>
+> On macOS, browsers check Keycloak's certificate against the login keychain and reach
+> Keycloak from the Mac itself. `setup` offers to trust the local CA there (or prints the
+> `security add-trusted-cert` command) and reports when `host.docker.internal` needs an
+> `/etc/hosts` entry.
 
 Granting a container access to the Docker socket is granting it root on the host. That is
 inherent to what the manager does, and the reason its access is role-gated and its
@@ -1587,7 +1602,7 @@ external OIDC provider, create the same objects there yourself.
    connection `default` to the integrated Qdrant itself, and it is where collections and their
    access roles, the embedding of files and the ingest jobs, their runs and the credentials of
    remote sources are managed. The ingester has no web interface of its own.
-4. Without the `manager` profile (the manager runs on Linux hosts only) there is no interface:
+4. Without the `manager` profile (see [papaia-manager](#papaia-manager) for the hosts it runs on) there is no interface:
    edit the catalog files `jobs.yaml`, `connections.yaml` and `secrets.yaml` in
    `$PAPAIA_CONFIG_DIR/ai/rag/catalog` yourself, as the qdrant-ingest documentation describes.
    Sources of type `local` read `$PAPAIA_CONFIG_DIR/ai/rag/documents` unless `QI_LOCAL_MOUNT`

@@ -39,12 +39,14 @@ based on merged pull requests; this file mirrors the published releases.
 
 ### 📖 Documentation
 
+- docs: list haproxy in the third-party licenses (#339) @marko-boehm
 - docs: add an opt-in guide for parallel search mcp in librechat (#297) @fwahl711
 - docs: document macos prerequisites and limitations (#296) @fwahl711
 - docs: add a code of conduct (#277) @fwahl711
 
 ### 🧹 Maintenance
 
+- chore: bump qdrant-mcp-rbac to 0.4.1 (#340) @marko-boehm
 - chore: bump papaia-manager to 1.6.0, qdrant-ingest to 1.0.1 and jina-reranker-api to 0.1.3 (#337) @marko-boehm
 - ci: scan the compose images for known vulnerabilities (#280) @fwahl711
 - ci: propose compose image updates (#281) @fwahl711
