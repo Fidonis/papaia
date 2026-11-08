@@ -161,3 +161,48 @@ def test_doctor_asks_the_shared_container_check(monkeypatch):
     assert doctor._in_container() is True
     monkeypatch.setattr(common, "in_container", lambda: False)
     assert doctor._in_container() is False
+
+
+# --- file_mode_problem: DrvFs without `metadata` (#131, #274) -----------------
+
+
+def test_a_regular_directory_keeps_file_modes(tmp_path):
+    assert common.file_mode_problem(tmp_path) is None
+    assert list(tmp_path.iterdir()) == [], "the probe file is removed"
+
+
+def test_a_refused_chmod_is_reported(tmp_path, monkeypatch):
+    # DrvFs: a process that does not own the file may not chmod it.
+    def _refuse(path, mode):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(common.os, "chmod", _refuse)
+    assert common.file_mode_problem(tmp_path) == "chmod failed: Operation not permitted"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_chmod_without_effect_is_reported(tmp_path, monkeypatch):
+    # DrvFs: for the owner chmod succeeds and changes nothing.
+    monkeypatch.setattr(common.os, "chmod", lambda path, mode: None)
+    problem = common.file_mode_problem(tmp_path)
+    assert problem is not None and problem.startswith("chmod ")
+    assert "left mode" in problem
+
+
+def test_a_leftover_probe_of_another_run_is_left_alone(tmp_path):
+    # Each run probes with a file of its own, so a concurrent run's probe (or a leftover
+    # owned by another user) neither fails this one nor gets removed by it.
+    other = tmp_path / ".papaia-mode-probe"
+    other.write_text("", encoding="utf-8")
+    assert common.file_mode_problem(tmp_path) is None
+    assert list(tmp_path.iterdir()) == [other]
+
+
+def test_a_probe_that_cannot_be_created_is_raised_not_reported(tmp_path, monkeypatch):
+    # Not writable says nothing about file modes, so it is not reported as such.
+    def _refuse(**kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(common.tempfile, "mkstemp", _refuse)
+    with pytest.raises(PermissionError):
+        common.file_mode_problem(tmp_path)
