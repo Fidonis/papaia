@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.7.0 |
-| **Date** | 2026-10-24 |
-| **Status** | Active — describes the 1.7.0 release as built |
+| **Version** | 1.8.0 |
+| **Date** | 2026-11-07 |
+| **Status** | Active — describes the 1.8.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -1104,7 +1104,7 @@ above), so a manager on such a core could take its own stack down.
 
 ### Long-running operations
 
-Installs, updates and lifecycle verbs shell out to `papaia-ctl` and can take minutes
+Installs, upgrades and lifecycle verbs shell out to `papaia-ctl` and can take minutes
 (image pulls, container starts). They run as queued jobs processed by a single
 worker, with live status and streamed log output.
 
@@ -1230,6 +1230,41 @@ and follows runs through its REST API; the ingester mounts the directory read-on
 the Embedding page are staged in `$PAPAIA_CONFIG_DIR/ai/rag/documents/uploads/` and deleted
 after a run that succeeded without a failed document. Without the `manager` profile, which
 runs on Linux hosts only, there is no interface and the catalog files are edited by hand.
+
+### Models and usage
+
+The *Models & Usage* page (`/models`, administrators only) shows which models LiteLLM serves
+and what they consumed: tokens, spend and requests per day and per model, for a window of UTC
+days. It reads LiteLLM's HTTP API at `LITELLM_URL` (`http://litellm:4000` on the stack network)
+with GET requests to three routes only (`/health/readiness`, `/model/info`,
+`/user/daily/activity`), so it cannot change LiteLLM; models, prices, teams and keys stay in
+LiteLLM's own Admin UI. The master key is read from `$PAPAIA_CONFIG_DIR/ai/litellm/.env` when a
+request needs it, like the RAG secrets, so the core needs no change and the key is never a
+setting of the manager. A LiteLLM that is down or a key it refuses is a message on the page.
+
+### Nodes
+
+On a [distributed installation](distributed.md) ([ADR 0009](adr/0009-place-services-on-nodes-with-a-topology-block.md),
+[ADR 0010](adr/0010-connect-nodes-through-ssh-and-an-mtls-link.md)) the manager runs on the
+controller and reaches the other nodes only through the core's Python CLI: read-only questions
+and the `compose-up` / `compose-stop` of a node go through `lib.cli node-exec`, and the commands
+that change the set of nodes (`node-register`, `node-unregister`, `node-pin`, `node-join-bundle`,
+`node-push`) through their own sub-commands. Keys and pinned host keys stay in the configuration
+directory, managed by the core; the manager has no raw `docker` or Git on a node. The image
+carries an SSH client, and its entrypoint names the host's user id, which OpenSSH needs, since
+the container runs as the host's `UID`.
+
+A *Nodes* page lists the machines with their services, address, status, version and link
+health. Adding and removing a node, handing it its bundle and confirming a host key need a fresh
+sign-in at Keycloak (`prompt=login`, valid for five minutes) on top of the admin role, and are
+audited. The other pages follow the placement: the service snapshot comes from the core's merged
+`status --json --addons`, a group action and a module, overlay or mail change name the node with
+`--node=` (a `start` then also visits the nodes of the proxy and of Keycloak, whose provisioning
+steps it needs), backups take `--only=node:NAME` and a restore can pick a remote node as a whole.
+The core's `upgrade.lock` and each node's `state.json` drive a banner and the same refusals the
+core would make. Switching a module off keeps its data, because the core does not delete volumes
+across nodes. Without a topology in `deployment.yaml` none of this runs, and a single host
+behaves as before.
 
 ---
 
