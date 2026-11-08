@@ -9,6 +9,14 @@
 // LibreChat treats every agent id without the `agent_` prefix as an ephemeral
 // agent and never loads the stored document, so the prefix is added when the
 // YAML omits it (`id: paperless-assistant` is stored as `agent_paperless-assistant`).
+// A document an earlier version stored under the bare id is removed, together with
+// the ACL entries LibreChat granted on it.
+//
+// Every user may view and use a provisioned agent unless the YAML sets
+// `is_collaborative: false`. LibreChat decides that by an ACL entry for the public
+// principal; `migrate:agent-permissions` only grants one to agents of the legacy
+// `instance` project, and only once, so this script writes (or removes) it on every
+// run. The owner's entry stays with the migration, which runs after this script.
 //
 // Silent if the directory is empty or missing (default behaviour for
 // deployments that don't opt in via LIBRECHAT_AGENTS_DIR). Non-fatal:
@@ -24,6 +32,10 @@ const { MongoClient } = require('mongodb');
 
 const AGENTS_DIR = '/app/api/data/agents';
 const MONGO_URI = process.env.MONGO_URI;
+
+// LibreChat's access role for "can view and use" an agent, and its permission bits.
+const VIEWER_ROLE = 'agent_viewer';
+const VIEW_BITS = 1;
 
 const log = (msg) => console.log(`[agents-init] ${msg}`);
 const warn = (msg) => console.warn(`[agents-init] ${msg}`);
@@ -42,6 +54,31 @@ async function resolveAuthorId(users, doc) {
   if (admin) return admin._id;
   const anyUser = await users.findOne();
   return anyUser ? anyUser._id : null;
+}
+
+// Grants every user view access to the agent document `agentDoc`, or takes it away
+// when `shared` is false. The role reference is added once LibreChat has seeded its
+// access roles (the first start runs this script before the server does).
+async function setPublicAccess(db, agentDoc, shared) {
+  const acl = db.collection('aclentries');
+  const query = { principalType: 'public', resourceType: 'agent', resourceId: agentDoc._id };
+  if (!shared) {
+    await acl.deleteMany(query);
+    return;
+  }
+  const role = await db.collection('accessroles').findOne({ accessRoleId: VIEWER_ROLE });
+  await acl.updateOne(
+    query,
+    {
+      $set: {
+        permBits: role ? role.permBits : VIEW_BITS,
+        grantedBy: agentDoc.author,
+        grantedAt: new Date(),
+        ...(role ? { roleId: role._id } : {}),
+      },
+    },
+    { upsert: true },
+  );
 }
 
 async function main() {
@@ -112,29 +149,37 @@ async function main() {
           mcpServers: Array.isArray(doc.mcpServers) ? doc.mcpServers : [],
           model_parameters: doc.model_parameters ?? {},
           tools: Array.isArray(doc.tools) ? doc.tools : [],
-          // Shared with everyone in the instance by default; YAML can opt out.
-          is_collaborative: doc.is_collaborative !== false,
           // Re-stamp the author on every run so a re-imported agent stays
           // owned by the right user even if the user document was rebuilt.
           author: authorId,
           updatedAt: new Date(),
         };
 
-        await agents.updateOne(
+        const stored = await agents.findOneAndUpdate(
           { id: agentId },
           {
             $set: update,
+            // Written by earlier versions; LibreChat's schema has no such field.
+            $unset: { is_collaborative: '' },
             $setOnInsert: {
               createdAt: new Date(),
               versions: [],
             },
           },
-          { upsert: true },
+          { upsert: true, returnDocument: 'after' },
         );
-        // A document stored by an earlier run under the bare id cannot be used.
+        // A document stored by an earlier run under the bare id cannot be used. The id
+        // is matched as the YAML has it, so a numeric one is found too.
         if (agentId !== doc.id) {
-          await agents.deleteOne({ id: String(doc.id) });
+          const stale = await agents.findOneAndDelete({ id: doc.id });
+          if (stale) {
+            await db
+              .collection('aclentries')
+              .deleteMany({ resourceType: 'agent', resourceId: stale._id });
+            log(`removed ${doc.id}, stored without the agent_ prefix`);
+          }
         }
+        await setPublicAccess(db, stored, doc.is_collaborative !== false);
         upserted += 1;
         log(`upserted ${agentId} (${file}) author=${authorId}`);
       } catch (err) {
