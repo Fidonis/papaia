@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from install_helpers import Installation
 
 from lib import envtree, resolve
 
@@ -98,6 +99,112 @@ def test_resolve_hostnames_librechat_sticky_reused_when_not_fresh(repo_root):
     )
     tree = resolve.resolve_hostnames(tree, args)
     assert tree["ai/librechat"]["DOMAIN_SERVER"] == "http://prior-run.example.com:8000"
+
+
+def test_resolve_hostnames_auth_host_sticky_kept_without_flag(repo_root):
+    # An upgrade re-runs setup non-interactively without --auth-host: the stored
+    # value must survive, and the issuer with it.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "https://chat.example.org"
+    tree[""]["AUTH_HOST"] = "https://auth.example.org"
+    args = resolve.SetupArgs(config_dir=repo_root, non_interactive=True, fresh_init=False)
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.example.org"
+    assert tree["infra/keycloak"]["KC_HOSTNAME"] == "https://auth.example.org"
+    assert tree[""]["OIDC_ISSUER"] == "https://auth.example.org/realms/papaia"
+
+
+def test_resolve_hostnames_auth_host_flag_overrides_sticky(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["AUTH_HOST"] = "https://auth.example.org"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://chat.example.org",
+        auth_host="https://sso.example.org",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://sso.example.org"
+
+
+def test_resolve_hostnames_derived_auth_host_follows_new_app_host(repo_root):
+    # A stored value that is only the old app host's derivation was never chosen;
+    # it moves with --app-host.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["AUTH_HOST"] = "http://host.docker.internal:8110"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        app_host="https://papaia.example.com",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.papaia.example.com"
+
+
+def test_resolve_hostnames_derived_auth_host_is_recognised_across_schemes(repo_root):
+    # Older releases derived local hosts as http; the value is still only a derivation.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://host.docker.internal"
+    tree[""]["AUTH_HOST"] = "http://host.docker.internal:8110"
+    args = resolve.SetupArgs(config_dir=repo_root, non_interactive=True, fresh_init=False)
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://host.docker.internal:8110"
+
+
+def test_resolve_hostnames_auth_host_keeps_its_port_when_the_ext_port_changes(repo_root):
+    # The previous port is not stored, so this cannot be told from a chosen value.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "https://host.docker.internal"
+    tree[""]["AUTH_HOST"] = "https://host.docker.internal:8110"
+    tree[""]["KEYCLOAK_EXT_PORT"] = "9110"
+    args = resolve.SetupArgs(config_dir=repo_root, non_interactive=True, fresh_init=False)
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://host.docker.internal:8110"
+
+
+def test_resolve_hostnames_seed_auth_host_is_not_sticky_after_external_oidc(repo_root):
+    # external_oidc never writes AUTH_HOST, so the switch finds the shipped seed value.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "https://chat.example.org"
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+    args = resolve.SetupArgs(
+        config_dir=repo_root,
+        auth_provider="internal_keycloak",
+        non_interactive=True,
+        fresh_init=False,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.chat.example.org"
+    assert tree["infra/keycloak"]["KC_HOSTNAME"] == "https://auth.chat.example.org"
+
+
+def test_a_run_without_flags_keeps_the_stored_auth_host(tmp_path):
+    # What `upgrade` does through `setup --env-only`: no --auth-host on the second run.
+    inst = Installation(tmp_path, [])
+    inst.setup("--app-host=https://chat.example.org", "--auth-host=https://sso.example.net")
+    inst.setup()
+    tree = envtree.load_config_dir_tree(inst.config, inst.repo)
+    assert tree[""]["AUTH_HOST"] == "https://sso.example.net"
+    assert tree[""]["OIDC_ISSUER"] == "https://sso.example.net/realms/papaia"
+
+
+def test_resolve_hostnames_auth_host_prompt_defaults_to_sticky(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "https://chat.example.org"
+    tree[""]["AUTH_HOST"] = "https://auth.example.org"
+    seen = {}
+
+    def fake_prompt(message, default):
+        if message.startswith("Public Keycloak URL"):
+            seen["default"] = default
+        return default
+
+    args = resolve.SetupArgs(config_dir=repo_root, prompt=fake_prompt, fresh_init=False)
+    resolve.resolve_hostnames(tree, args)
+    assert seen["default"] == "https://auth.example.org"
 
 
 def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):

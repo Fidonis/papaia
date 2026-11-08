@@ -17,6 +17,8 @@ import base64
 import os
 import secrets
 import shutil
+import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -207,6 +209,38 @@ def atomic_write_private(path: Path, content: str) -> None:
     if path.is_dir():
         shutil.rmtree(path)
     os.replace(tmp_path, path)
+
+
+def file_mode_problem(directory: Path) -> str | None:
+    """Why files in `directory` do not keep the mode they are given, or None when they do.
+
+    A Windows drive mounted into WSL2 without the `metadata` option (DrvFs) refuses chmod
+    to a process that does not own the file and ignores it for the owner, so the mode is
+    checked after setting it, twice, to catch a chmod that silently does nothing.
+
+    The probe file gets a name of its own, so two runs at once do not remove each other's.
+    An OSError while creating it is raised: a directory the caller cannot write to says
+    nothing about file modes."""
+    if os.name == "nt":
+        return None
+    ensure_dir(directory)
+    fd, name = tempfile.mkstemp(dir=directory, prefix=".papaia-mode-probe-")
+    os.close(fd)
+    probe = Path(name)
+    try:
+        for mode in (0o600, 0o644):
+            os.chmod(probe, mode)
+            kept = stat.S_IMODE(os.stat(probe).st_mode)
+            if kept != mode:
+                return f"chmod {mode:o} left mode {kept:o}"
+    except OSError as exc:
+        return f"chmod failed: {exc.strerror or exc}"
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    return None
 
 
 def atomic_write(path: Path, content: str) -> None:
