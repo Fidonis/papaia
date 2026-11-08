@@ -17,6 +17,11 @@ a whole needs** — anything read by more than one service, plus port allocation
 public base URLs, which are stack-wide concerns even when a single service consumes
 them. Everything else lives with its service.
 
+Configuration files such as `librechat.yaml` are changed through the customer overlay in
+`$PAPAIA_CONFIG_DIR/overlay/` ([architecture, section 13](./architecture.md#13-customer-overlay--3rd-render-layer)).
+A worked example is [Parallel Search MCP in LibreChat](./parallel-search-mcp.md), an opt-in
+hosted web search.
+
 ## How a variable reaches a container
 
 This is the least obvious part of the layer, and it matters when adding a variable.
@@ -101,6 +106,7 @@ compile but never reach the container.
 | `MANAGER_USER_ROLE` | Realm role granting dashboard-only access; admins hold it implicitly |
 | `MANAGER_IDENTITY_ADMIN_ROLE` | Realm role that may manage the realm's users and roles (the Users page); `papaia-admin` by default, which carries Keycloak's user and role administration rights ([ADR 0006](adr/0006-manage-accounts-with-the-signed-in-users-token.md)) |
 | `MANAGER_DEFAULT_LOCALE` | Optional. Language of the interface for an account that has not chosen one and whose browser asks for none the manager ships (`de`, `en`); anything else means `en`. Every account picks its own language in the account menu |
+| `LITELLM_URL` | Optional. Where the manager reaches LiteLLM's HTTP API for the Models & Usage page (default `http://litellm:4000`, on the stack network). The page only reads; the master key is read from `ai/litellm/.env` at request time and is not a setting |
 | `LOG_LEVEL` | Manager application log level |
 
 ## RAG variables
@@ -161,6 +167,11 @@ operator-supplied.
 | Derived from the above | `OIDC_ISSUER`, `OIDC_AUTH_URL`/`OIDC_TOKEN_URL`/`OIDC_JWKS_URL`, `OPENID_ISSUER`, `GENERIC_*_ENDPOINT`, `DOMAIN_SERVER`/`DOMAIN_CLIENT`, `*_PUBLIC_URL`, `OAUTH2_PROXY_COOKIE_SECURE`, `COMPOSE_PROJECT_NAME`, `PAPAIA_PROJECT`, `DOCKER_NETWORK`, `PAPAIA_BACKUP_DIR` |
 | Generated (see [Secrets handling](#secrets-handling)) | every key shipped with a `GENERATE_…` placeholder |
 | Static defaults | `*_EXT_PORT` variables, `TRUST_PROXY` |
+
+A later `setup` or `upgrade` without `--auth-host` keeps the stored `AUTH_HOST`, and with
+it the token issuer. The exception is a value that only matches what setup derived from the
+previous `PAPAIA_HOST`: it follows a changed `--app-host`. After changing `KEYCLOAK_EXT_PORT`
+on a local host, pass `--auth-host` with the new port.
 
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.

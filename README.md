@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.7.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.8.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -51,7 +51,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health and backup/restore with scheduled backups, and with the `rag` profile the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health, model usage, backup/restore with scheduled backups, the nodes of a distributed installation and, with the `rag` profile, the RAG system's connections, collections and ingest jobs. Native OIDC. Linux hosts and Docker Desktop on macOS — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
@@ -96,10 +96,67 @@ access. See `src/infra/keycloak/README.md` for the full role table.
 - PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
   library. On a minimal host install it with `sudo apt-get install -y
   python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
-  (Fedora/RHEL), or `pip install 'PyYAML>=6.0'`
+  (Fedora/RHEL), or `pip install 'PyYAML>=6.0'` in a virtual environment (macOS, see
+  below)
 - `openssl`, only when Keycloak TLS is enabled
 - At least 8 GB RAM recommended ([`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
+
+#### macOS
+
+papAIa runs on Docker Desktop for Mac, on Apple Silicon and Intel. What differs from a
+Linux host:
+
+- **Docker Desktop memory.** The containers run in Docker Desktop's VM, so the 8 GB
+  recommendation applies to the memory assigned to it (Settings > Resources). `doctor`
+  measures what Docker reports.
+- **Python.** The `python3` of the Xcode Command Line Tools is 3.9, too old for
+  `papaia-ctl`. Homebrew no longer ships PyYAML as a formula, and its Python refuses a
+  plain `pip install`, so install both into a virtual environment:
+
+  ```bash
+  brew install python
+  "$(brew --prefix)/bin/python3" -m venv ~/.venvs/papaia
+  ~/.venvs/papaia/bin/pip install 'PyYAML>=6.0'
+  source ~/.venvs/papaia/bin/activate   # before running tools/papaia-ctl
+  ```
+
+  `papaia-ctl` then uses the environment's `python3`, and names the version it found
+  when none is new enough.
+- **Bash and OpenSSL.** The system Bash 3.2 and the system LibreSSL work; Homebrew's
+  versions are not needed.
+- **Paths.** Docker Desktop bind-mounts only the host paths it shares with its VM
+  (Settings > Resources > File sharing; `/Users`, `/Volumes`, `/private`, `/tmp` and
+  `/var/folders` by default). Keep the checkout, `--config-dir` and `--backup-dir` there:
+  LibreChat mounts files from `src/ai/librechat/` in the checkout, as well as
+  `LIBRECHAT_AGENTS_DIR` and `LIBRECHAT_PROMPTS_DIR` when they are set. A checkout under
+  `/Users` with the default config directory next to it works. `/opt` works only after it
+  is added under File sharing, and `/srv` cannot be created on the read-only system volume.
+- **papaia-manager.** It runs on Docker Desktop, with its workspace, configuration and
+  backup directories below `/Users`; a checkout there with the default directories meets
+  this. `setup` recognises Docker Desktop and defaults to *yes* there; with another
+  engine it defaults to *no*, so leave the profile off (`--no-manager`). See
+  [papaia-manager](#papaia-manager).
+- **Keycloak certificate.** With the default local URLs, browsers on the Mac check
+  Keycloak's certificate against the login keychain. `setup` offers to trust the
+  generated local CA there once (no admin rights needed). In a non-interactive run, or
+  when the offer is declined, it prints the command instead:
+
+  ```bash
+  security add-trusted-cert -r trustRoot \
+    -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
+  ```
+
+  The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
+  through an `/etc/hosts` entry; `setup` prints the command when it is missing.
+
+  The server certificate is issued for 825 days with `serverAuth`, as macOS requires.
+  `setup` renews an older or expiring one with the same CA, so the trust stays; restart
+  the stack afterwards (`papaia-ctl stop`, `papaia-ctl start`).
+- **Web search on Apple Silicon.** The Firecrawl MCP image exists for `linux/amd64` only and
+  runs emulated; Docker Desktop provides the emulation (Rosetta or QEMU).
+- **LocalAI.** Docker on macOS has no GPU access, so LocalAI runs on the CPU. `setup`
+  detects this and picks the `cpu` variant.
 
 ### Single-host setup
 
@@ -161,7 +218,7 @@ Once the stack is up, the default endpoints for a local install are:
 - Keycloak admin — `https://host.docker.internal:8110`, user `admin` (setup generates the
   password; read it with `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`)
 - papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
-  (Linux hosts only — see [papaia-manager](#papaia-manager))
+  (Linux hosts and Docker Desktop on macOS — see [papaia-manager](#papaia-manager))
 
 The realm ships two test users: `admin` / `admin` (roles `admin`, `user`, `localai-access`)
 and `testuser` / `testuser` (roles `user`, `finance`).
@@ -257,7 +314,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
-| `--manager` / `--no-manager` | _(prompted, default on)_ | Toggle the `manager` profile |
+| `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
@@ -420,7 +477,7 @@ tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [
 
 Moves the installation to a release. Without `--version` the newest release is used;
 when the installation already runs it, the command reports so and exits 0, which makes
-it safe to run unattended. `--version` accepts `1.7.0` and `v1.7.0` alike and is the
+it safe to run unattended. `--version` accepts `1.8.0` and `v1.8.0` alike and is the
 only way onto a pre-release. Downgrades are refused — restore a backup instead.
 
 The run, in order:
@@ -448,7 +505,7 @@ required.
 
 **Migrations.** A release may ship scripts in `tools/migrations/` that adapt an
 existing config bundle to a change the render pass cannot express on its own. Every
-release carries the complete set, so a jump from 1.0.0 to 1.7.0 runs the 1.1.0 … 1.7.0
+release carries the complete set, so a jump from 1.0.0 to 1.8.0 runs the 1.1.0 … 1.8.0
 steps in between, in order. Applied migrations are recorded in
 `$PAPAIA_CONFIG_DIR/migrations/applied.json` and never run twice. If one fails, the
 upgrade stops and prints the commands to return to the previous release; fixing the
@@ -773,7 +830,7 @@ active Compose profile to the modules it brings up.
 {
   "schema_version": 1,
   "generated_at": "2026-09-27T10:15:00Z",
-  "platform_version": "1.7.0",
+  "platform_version": "1.8.0",
   "compose_project": "papaia",
   "docker": { "reachable": true, "reason": null },
   "modules": [
@@ -885,15 +942,16 @@ Not covered: Python and PyYAML (`papaia-ctl` verifies both before any command ru
 of add-ons, and certificates that were uploaded to Nginx Proxy Manager instead of requested
 through it.
 
-In a distributed installation the checks above describe the controller's own node, and two
+In a distributed installation the checks above describe the controller's own node, and three
 checks are added (on one host they never appear):
 
 | Check | Verifies | Result |
 |---|---|---|
 | `nodes` | Every node answers and runs the controller's release. Each node's own `doctor` result is listed (worst status, failing checks). The node's clock is compared with the controller's: JWTs carry `exp` and `nbf`, so a deviation breaks sign-ins. | `fail` for an unreachable node, a version skew (run [`upgrade`](#upgrade)), a failing check on a node or a clock 60 s or more off; `warn` from 5 s |
 | `links` | From the calling side of every link: a TLS handshake with the peer's link port, with the node's certificate, the link CA and the peer's name. Also the expiry of every node's link certificate. | `fail` for a peer that cannot be reached (the message names the firewall rule `<from> -> <to> tcp/<port>`) or a certificate that does not verify or has expired; `warn` 30 days before expiry (run `node renew-link`) |
+| `file_modes` | The controller's config dir keeps the file modes it sets. The link CA and the link keys are written with mode 600; a Windows drive under `/mnt` in WSL2 mounted without the `metadata` option refuses or ignores that. `setup`, `start` (also of an existing installation) and `node sync` refuse such a config dir as well. | `fail` when a mode does not stick; move the config dir to a Linux filesystem (inside the WSL distribution) or mount the drive with `metadata` |
 
-`--skip=nodes,links` is accepted on every installation.
+`--skip=nodes,links,file_modes` is accepted on every installation.
 
 ### Configuration & render lifecycle
 
@@ -1106,12 +1164,14 @@ node and restarts its gateway.
 
 `papaia-ctl` is a CLI: precise, scriptable, and shell access on the host is the price of
 admission. **papaia-manager** is the browser counterpart — an optional core service
-(profile `manager`, port 8120) that lets an operator discover, install, start, stop, update
-and remove add-ons, see what the stack is running and how the host is doing, take,
-schedule or replay a backup, switch the optional modules on and off, edit the customer
-overlay, manage the realm's accounts and roles, set up the [mail relay](#outbound-mail) and
-what it is used for and, with the optional [RAG system](#rag-system), manage its
-connections, collections and ingest jobs, without ever opening a terminal on the host.
+(profile `manager`, port 8120) that lets an operator discover, install, start, stop,
+upgrade, roll back and remove add-ons, see what the stack is running and how the host is
+doing, see which models LiteLLM serves and what they consumed, take, schedule or replay a
+backup, switch the optional modules on and off, edit the customer overlay, manage the
+realm's accounts and roles, set up the [mail relay](#outbound-mail) and what it is used for,
+manage the nodes of a [distributed installation](docs/distributed.md) and, with the optional
+[RAG system](#rag-system), manage its connections, collections and ingest jobs, without ever
+opening a terminal on the host.
 
 It does not reimplement any of it. Every mutating operation shells out to `papaia-ctl`, and
 status queries read the same modules under `tools/lib/`, so the UI and the CLI cannot drift
@@ -1132,7 +1192,9 @@ from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the pr
 |---|---|
 | **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. Administrators edit it in the browser (groups, tiles, drag and drop, a live preview). Besides links, a group can hold *widgets*, cards that show one piece of live state and link to the page that explains it: the installed papAIa release, the age of the newest backup, free disk space, how many services run, open warnings and the nearest certificate expiry. They refresh on their own and read what the manager already knows instead of measuring again. The default tiles (LibreChat, LiteLLM, Keycloak, NGINX Proxy Manager and Qdrant) show an icon that ships inside the manager, so nothing is loaded from another site; the logos stay the property of their owners. |
 | **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. A status row in the sidebar of every page summarises the core, the add-ons and the host for every signed-in role, as counts only. |
-| **Add-ons** | Catalogues, install, start/stop, update and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. When a catalogue's manifest lists the software an add-on bundles (`components`), the gallery card names the primary components and the detail page lists all of them with their role, the version an update brings and the tags an operator pinned in the add-on's `.env`; the manager reads those itself, and [`papaia-ctl addon components`](#addon) prints the same on the command line. *Remove* takes the add-on's containers down before it marks the add-on inactive (volumes and configuration stay) and is refused while the add-on's `docker-compose.yml` is missing. |
+| **Add-ons** | Catalogues, install, start/stop, upgrade, rollback and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. When a catalogue's manifest lists the software an add-on bundles (`components`), the gallery card names the primary components and the detail page lists all of them with their role, the version an update brings and the tags an operator pinned in the add-on's `.env`; the manager reads those itself, and [`papaia-ctl addon components`](#addon) prints the same on the command line. *Remove* takes the add-on's containers down before it marks the add-on inactive (volumes and configuration stay) and is refused while the add-on's `docker-compose.yml` is missing. An upgrade is reviewed first: *Review upgrade* stages the catalogue's version and shows what [`papaia-ctl addon upgrade --dry-run`](#addon) reports (compatibility, components, new and removed settings, the add-on's changelog) and asks for the values the new version needs; the upgrade then applies exactly that version with a restore point of the add-on. *Roll back* returns to the version before, with the code and configuration only or with the data of that restore point. The Add-ons page counts and lists the waiting upgrades. Upgrading and rolling back need a core with these verbs (1.8.0 or newer). |
+| **Models & Usage** (`/models`) | Which models LiteLLM serves and what they consumed: tokens, spend in USD and requests per day, for all models and per model, over the last 7, 30 or 90 days, this month or a custom range. Administrators only, and read-only: models, prices, teams and keys stay in LiteLLM's own Admin UI, which the page links to. The manager reads LiteLLM at `LITELLM_URL` with the master key from `ai/litellm/.env`, which it never shows or logs. Days are UTC days, and a model without a price shows no spend. |
+| **Nodes** (`/nodes`) | Only on a [distributed installation](docs/distributed.md): the machines with their services, address, status, version and link health; adding a node with its enrolment commands, confirming its host keys, handing it its bundle and removing it. Each of these changes needs a fresh sign-in at Keycloak on top of the admin role. The other pages follow the nodes: Services has a section per node and acts on the node that owns a group, Host has a node selector, the widgets and notifications look at every node, Backup backs up one node or all and restores a node as a whole, Upgrade shows the release per node, and module, overlay and mail changes run on their node. While an upgrade has not finished or a node runs another release, every admin page says so and refuses what the core would refuse. On a single host none of this appears. |
 | **RAG** (`/connections`, `/collections`, `/embedding`, `/ingest/jobs`) | The management side of the [RAG system](#rag-system), for administrators only and only while the `rag` profile is active; without it the pages answer 404 and nothing new appears. *Connections* are the vector databases the system works with (the integrated Qdrant is created as `default`). *Collections* creates and deletes Qdrant collections and keeps the realm roles that may read or write each of them, in the format `qdrant-mcp-rbac` enforces. *Embedding* puts uploaded files, or files already in the documents folder, into a collection through the ingester. *Ingest Jobs* edits the ingester's jobs, shows their runs file by file and stores the credentials of remote sources encrypted. The dashboard gains a *Qdrant* tile for administrators. The ingester has no web interface of its own; these pages replace it. They need a core that ships the `rag` profile (1.5.0 or newer). |
 | **Host** (`/host`) | The state of the machine under the deployment: memory, CPU load, GPU, clock synchronisation, free disk space and certificate expiry, plus what Docker's data takes. The manager measures nothing itself: it shows the verdicts of [`papaia-ctl doctor`](#doctor), so the page and a shell on the host cannot disagree about a threshold. It needs a core that ships `doctor` (1.4.0 or newer); on an older one the page says so. How often the host is re-measured is a setting. |
 | **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and a configurable retention period. Backups can run on a schedule (every day, on chosen days, every few hours or a cron expression, in a timezone of choice), run by a scheduler inside the manager, so the host needs no cron job or systemd timer. |
@@ -1147,9 +1209,11 @@ A catalogue is a source of add-ons — a Git repository or a local directory —
 runtime rather than shipped with the Core, in
 `$PAPAIA_CONFIG_DIR/manager/catalogs.yaml`. Each is scanned for top-level `papaia-app.yaml`
 manifests. Installing materialises a **pinned snapshot at a specific commit**, so refreshing
-a catalogue later never moves code out from under a running container. An update is an
-explicit operation: refresh, diff the candidate's `.env.example` against the installed
-bundle so new `CHANGE_ME` keys can be filled in first, then stop, re-materialise and start.
+a catalogue later never moves code out from under a running container. Every version gets a
+directory of its own, `addons/_managed/<catalogue>/<revision>/<add-on>`, written once and
+never overwritten. An upgrade is an explicit operation that the manager hands to
+[`papaia-ctl addon upgrade`](#addon) after the review described above, and a rollback to
+`papaia-ctl addon rollback` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)).
 
 ### Access control
 
@@ -1159,7 +1223,7 @@ guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface except Users — add-ons, catalogues, services, host, backup, mail, settings (modules and overlay), jobs and, while the `rag` profile is active, the RAG pages |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface except Users — add-ons, catalogues, services, host, models, backup, mail, settings (modules and overlay), jobs, nodes and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 | `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page: accounts, roles and sessions of the realm. `manager-admin` alone is not enough |
 
@@ -1176,8 +1240,9 @@ the same thing inside the container as on the host — **path parity**:
 - `PAPAIA_WORKSPACE_DIR`, `PAPAIA_CONFIG_DIR` and `PAPAIA_BACKUP_DIR` are each mounted at
   their own host path, not remapped to `/workspace` or `/config`. `setup` stamps all three
   automatically.
-- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it on the
-  host. Discover it with:
+- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it inside
+  the container. `setup` stamps it: on Linux from the socket on the host, under Docker
+  Desktop on macOS as `0`. Check it with:
 
   ```bash
   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine \
@@ -1187,10 +1252,16 @@ the same thing inside the container as on the host — **path parity**:
 - The container runs as the host `UID`/`GID` so that files it writes into the config
   directory keep the ownership `setup` established.
 
-> **The `manager` profile therefore requires a Linux host.** Docker Desktop on Windows and
-> macOS does not preserve host-path parity across its VM boundary, so the mounts above
-> cannot be satisfied. Everything else in the stack runs on Docker Desktop as usual — leave
-> the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+> **The `manager` profile therefore runs on Linux hosts and on Docker Desktop for macOS.**
+> Docker Desktop on macOS shares `/Users` with its VM under the same path, so the workspace,
+> configuration and backup directories must live below `/Users` (the default). Docker
+> Desktop on Windows does not preserve host-path parity across its VM boundary; there,
+> leave the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+>
+> On macOS, browsers check Keycloak's certificate against the login keychain and reach
+> Keycloak from the Mac itself. `setup` offers to trust the local CA there (or prints the
+> `security add-trusted-cert` command) and reports when `host.docker.internal` needs an
+> `/etc/hosts` entry.
 
 Granting a container access to the Docker socket is granting it root on the host. That is
 inherent to what the manager does, and the reason its access is role-gated and its
@@ -1535,7 +1606,7 @@ external OIDC provider, create the same objects there yourself.
    connection `default` to the integrated Qdrant itself, and it is where collections and their
    access roles, the embedding of files and the ingest jobs, their runs and the credentials of
    remote sources are managed. The ingester has no web interface of its own.
-4. Without the `manager` profile (the manager runs on Linux hosts only) there is no interface:
+4. Without the `manager` profile (see [papaia-manager](#papaia-manager) for the hosts it runs on) there is no interface:
    edit the catalog files `jobs.yaml`, `connections.yaml` and `secrets.yaml` in
    `$PAPAIA_CONFIG_DIR/ai/rag/catalog` yourself, as the qdrant-ingest documentation describes.
    Sources of type `local` read `$PAPAIA_CONFIG_DIR/ai/rag/documents` unless `QI_LOCAL_MOUNT`

@@ -118,6 +118,7 @@ docs/
   troubleshooting.md            # Common issues and fixes
   distributed.md                # Running on several machines (operator guide)
   distributed-validation.md     # Hand-run check of a two-node installation
+  parallel-search-mcp.md        # Opt-in hosted web search through the overlay
   adr/                          # Architecture Decision Records
 .github/
   workflows/ci.yml            # Lint (shellcheck, yamllint, hadolint), ruff + pytest, PR-title check
