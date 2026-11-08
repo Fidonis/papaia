@@ -148,7 +148,7 @@ exactly these. `doctor` names a missing rule when a link cannot be reached.
 | `start [--node=NAME] [--addons]` | Renders, hands each node its release and bundle, then starts in order: link gateways, Keycloak and the mail relay, LiteLLM, the application, the proxy last. A failing node stops the sequence and is named. |
 | `stop [--node=NAME] [--clean-up] [--addons]` | The same order backwards. |
 | `status [--json]` | One report, a section per node; JSON adds `node` and `nodes`. |
-| `doctor [--json]` | The controller's checks plus `nodes` (each node's own checks, version skew, clock) and `links` (a TLS handshake per link, certificate expiry). |
+| `doctor [--json]` | The controller's checks plus `nodes` (each node's own checks, version skew, clock), `links` (a TLS handshake per link, certificate expiry) and `file_modes` (the config dir keeps the mode 600 of the link keys; not the case on a Windows drive in WSL2 without `metadata`). |
 | `node list --check` | Every node, its address, its services, whether it answers. |
 | `node renew-link NAME` | A new link certificate for the node; `doctor` warns 30 days before one expires. |
 | `node remove NAME` | Stops the node's link gateway and deletes its SSH key and link certificate. Follow it with `node sync --all` (see the security notes). |
@@ -315,10 +315,22 @@ A few names differ from the ones the planning issues used:
 | the link gateway's "own profile" | the Compose profile `link-gateway` |
 | the verbs `compose-up\|down\|restart\|ps\|pull\|logs` | also `compose-stop`, so `stop` keeps the containers, as on one host |
 
-## What is not covered here
+## papaia-manager
 
-papaia-manager knows nothing of nodes yet: it runs on the controller and shows that machine.
-Managing a distributed installation from the manager is its own work.
+papaia-manager runs on the controller and, from version 1.6.0 (bundled with 1.8.0), follows the
+nodes. A *Nodes* page lists them with their services, address, status, version and link health,
+adds a node with its enrolment commands, confirms the host keys it offers, hands it its bundle
+and removes it; each of these changes needs a fresh sign-in at Keycloak on top of the admin role.
+Services has a section per node, Host has a node selector, the dashboard widgets and the
+notifications look at every node, the Backup page backs up one node or all and restores a remote
+node as a whole, and the Upgrade page shows the release of each node. Module, overlay and mail
+changes run on the node of the module and then on the nodes of the proxy and of Keycloak; if one
+of those two does not answer, the change stays in place and the job names the `papaia-ctl start
+--profiles=<profile> --node=<node>` that catches the node up. Switching a module off keeps its
+data, because `stop --volumes` is refused across nodes. While an upgrade has not finished or a
+node runs another release, every admin page says so and refuses what `papaia-ctl` would refuse.
+The manager reaches the nodes only through the core's own commands, with the keys the core keeps
+in the configuration directory.
 
 ## Checking it on real machines
 
