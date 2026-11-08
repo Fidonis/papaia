@@ -6,6 +6,10 @@
 // upsert is keyed by the YAML `id` field so re-running on every container
 // start is idempotent.
 //
+// LibreChat treats every agent id without the `agent_` prefix as an ephemeral
+// agent and never loads the stored document, so the prefix is added when the
+// YAML omits it (`id: paperless-assistant` is stored as `agent_paperless-assistant`).
+//
 // Silent if the directory is empty or missing (default behaviour for
 // deployments that don't opt in via LIBRECHAT_AGENTS_DIR). Non-fatal:
 // any failure here is logged and swallowed so a broken agent file does
@@ -89,6 +93,8 @@ async function main() {
           continue;
         }
 
+        const agentId = String(doc.id).startsWith('agent_') ? String(doc.id) : `agent_${doc.id}`;
+
         const authorId = await resolveAuthorId(users, doc);
         if (!authorId) {
           warn(`${file}: no LibreChat user available to own the agent — skip`);
@@ -97,7 +103,7 @@ async function main() {
         }
 
         const update = {
-          id: doc.id,
+          id: agentId,
           name: doc.name,
           description: doc.description ?? '',
           provider: doc.provider,
@@ -115,7 +121,7 @@ async function main() {
         };
 
         await agents.updateOne(
-          { id: doc.id },
+          { id: agentId },
           {
             $set: update,
             $setOnInsert: {
@@ -125,8 +131,12 @@ async function main() {
           },
           { upsert: true },
         );
+        // A document stored by an earlier run under the bare id cannot be used.
+        if (agentId !== doc.id) {
+          await agents.deleteOne({ id: String(doc.id) });
+        }
         upserted += 1;
-        log(`upserted ${doc.id} (${file}) author=${authorId}`);
+        log(`upserted ${agentId} (${file}) author=${authorId}`);
       } catch (err) {
         warn(`${file}: ${err.message}`);
         failed += 1;

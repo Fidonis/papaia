@@ -385,7 +385,12 @@ def _project_bundles(config_dir: Path, repo_root: Path) -> int:
     _print_findings(findings)
     if not findings.ok:
         return 3
-    for bundle in topology.project(config_dir, repo_root, topo):
+    try:
+        bundles = topology.project(config_dir, repo_root, topo)
+    except topology.TopologyError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    for bundle in bundles:
         services = ", ".join(bundle.services) or "no services"
         print(f"Node bundle for '{bundle.node}' ({services}): {bundle.path}")
     return 0
