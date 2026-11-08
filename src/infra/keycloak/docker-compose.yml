@@ -15,6 +15,12 @@ services:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/infra/keycloak/realm-import
         target: /opt/keycloak/data/import
+      # Login theme of the papAIa clients (client attribute login_theme); rendered
+      # from the repo, replaceable through the overlay.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/infra/keycloak/themes/papaia
+        target: /opt/keycloak/themes/papaia
+        read_only: true
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/certs
         target: /opt/keycloak/conf/certs

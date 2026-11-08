@@ -87,13 +87,20 @@ cmd_upgrade() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    local distributed=0 mode
+    mode="$(_topology_mode)" || exit 3
+    [ "$mode" = "distributed" ] && distributed=1
+    # The upgrade's own backup, stop and start are not held up by the lock it takes (and
+    # a retry by the lock an earlier attempt left).
+    [ "$distributed" -eq 1 ] && UPGRADE_IN_PROGRESS=1
 
     if [ -n "$resume_from" ]; then
         if [ -z "$resume_target" ]; then
             error "--resume-from requires --resume-target. Both are set by papaia-ctl itself."
             exit 2
         fi
-        _upgrade_apply "$resume_from" "$resume_target" "$resume_restore_point" "$force"
+        _upgrade_apply "$resume_from" "$resume_target" "$resume_restore_point" "$force" \
+            "$distributed"
         return 0
     fi
 
@@ -136,7 +143,7 @@ cmd_upgrade() {
     # tr -d '\r': on Windows the interpreter emits CRLF and IFS=$'\t' leaves the
     # CR on the last field — a tag name ending in CR matches no ref.
     if ! resolved="$(py_cli upgrade-resolve --tags-file="$tags_file" \
-            "${resolve_flags[@]}" | tr -d '\r')"; then
+            ${resolve_flags[@]+"${resolve_flags[@]}"} | tr -d '\r')"; then
         exit 3
     fi
 
@@ -172,7 +179,7 @@ cmd_upgrade() {
     local -a check_flags=()
     [ "$force" -eq 1 ] && check_flags+=(--force)
     info "Checking active add-ons against $target..."
-    if ! _py_cli_at "$worktree" addon-check "${check_flags[@]}"; then
+    if ! _py_cli_at "$worktree" addon-check ${check_flags[@]+"${check_flags[@]}"}; then
         error "Add-on compatibility check failed against $target. Nothing has been changed."
         error "Update the add-ons first, or re-run with --force to upgrade anyway."
         exit 2
@@ -181,6 +188,17 @@ cmd_upgrade() {
     info "Migrations to run:"
     if ! _upgrade_print_migrations "$worktree" "$current" "$target"; then
         info "    none"
+    fi
+
+    if [ "$distributed" -eq 1 ]; then
+        # Stop the world: every node moves to the same release in one run, so every node
+        # has to answer before anything is touched.
+        info "Checking that every node answers..."
+        py_cli cluster-upgrade-check || exit 3
+        # Here, not when the migrations run: by then the stack is down and the checkout moved.
+        info "Checking where the migrations run..."
+        _py_cli_at "$worktree" upgrade-plan --from="$current" --to="$target" --check-markers \
+            >/dev/null || exit 3
     fi
 
     if [ "$dry_run" -eq 1 ]; then
@@ -226,10 +244,20 @@ cmd_upgrade() {
     info "Stopping and removing the containers (volumes are kept)..."
     cmd_stop --clean-up --addons --config-dir="$CONFIG_DIR"
 
+    # --- lock ---------------------------------------------------------------
+    # From the moment the releases can differ until the upgrade has finished, a distributed
+    # installation accepts nothing but the upgrade itself and the way back (restore).
+    if [ "$distributed" -eq 1 ]; then
+        py_cli cluster-lock --set --from="$current" --to="$target" \
+            ${restore_point:+--restore-point="$restore_point"}
+    fi
+
     _upgrade_cleanup  # the EXIT trap does not fire across the exec below
 
     info "Moving the checkout to $tag..."
     if ! git -C "$REPO_ROOT" checkout --detach --quiet "$tag"; then
+        # Nothing moved: no reason to keep the installation locked.
+        [ "$distributed" -eq 1 ] && py_cli cluster-lock --clear
         error "Could not check out $tag. The stack is stopped and the checkout is unchanged."
         error "Start it again with 'papaia-ctl start --addons'."
         _upgrade_log "$current" "$target" failed "stage=checkout"
@@ -250,17 +278,22 @@ cmd_upgrade() {
     # is not guaranteed to carry the execute bit (nor is the checkout guaranteed
     # to sit on an exec-permitting mount). This mirrors how the manager and every
     # migration invoke the script.
-    exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" upgrade "${resume_flags[@]}"
+    exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" upgrade ${resume_flags[@]+"${resume_flags[@]}"}
 }
 
 # Phase 2 — runs from the target release's checkout.
 # $1 = from version, $2 = target version, $3 = restore point (may be empty),
-# $4 = force flag
+# $4 = force flag, $5 = 1 for a distributed installation
 _upgrade_apply() {
-    local from="$1" target="$2" restore_point="$3" force="$4"
+    local from="$1" target="$2" restore_point="$3" force="$4" distributed="${5:-0}"
     local previous_tag="v$from"
 
     info "Running $target's papaia-ctl from here on."
+
+    if [ "$distributed" -eq 1 ]; then
+        _upgrade_apply_distributed "$from" "$target" "$restore_point" "$force"
+        return 0
+    fi
 
     local plan_file
     plan_file="$(mktemp)"
@@ -313,7 +346,7 @@ _upgrade_apply() {
     local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
     [ "$force" = "1" ] && start_flags+=(--force)
     info "Starting the stack..."
-    if ! cmd_start "${start_flags[@]}"; then
+    if ! cmd_start ${start_flags[@]+"${start_flags[@]}"}; then
         error "The stack did not come up on $target."
         _upgrade_failed "$from" "$target" "$restore_point" "$previous_tag" \
             "the upgrade itself is complete — only the start failed, so 'papaia-ctl start --addons' may be all that is missing" \
@@ -323,6 +356,44 @@ _upgrade_apply() {
     _upgrade_log "$from" "$target" ok \
         "migrations=${#ids[@]} restore_point=${restore_point:-none}"
     success "upgrade complete: $from → $target"
+    if [ -n "$restore_point" ]; then
+        info "Restore point taken before the upgrade: $restore_point"
+    fi
+}
+
+# Phase 2 of a distributed installation: every node gets the target release, the
+# migrations run where their data lives, then the configuration is re-rendered and the
+# installation started in order. The lock is released at the very end.
+_upgrade_apply_distributed() {
+    local from="$1" target="$2" restore_point="$3" force="$4"
+    local previous_tag="v$from"
+    UPGRADE_IN_PROGRESS=1
+    info "Installing $target on every node and running the migrations..."
+    if ! py_cli cluster-migrate --from="$from" --to="$target"; then
+        _upgrade_failed "$from" "$target" "$restore_point" "$previous_tag" \
+            "the installation is stopped on every node" "stage=migration"
+    fi
+    info "Applying $target's configuration to $CONFIG_DIR..."
+    if ! cmd_setup --env-only --config-dir="$CONFIG_DIR"; then
+        _upgrade_failed "$from" "$target" "$restore_point" "$previous_tag" \
+            "every migration ran, but the configuration was not re-rendered — every node is stopped" \
+            "stage=render"
+    fi
+    local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
+    [ "$force" = "1" ] && start_flags+=(--force)
+    info "Starting every node..."
+    if ! ( cmd_start ${start_flags[@]+"${start_flags[@]}"} ); then
+        # Every node runs $target now; only the start is missing, so nothing to lock.
+        py_cli cluster-lock --clear
+        UPGRADE_IN_PROGRESS=0
+        _upgrade_failed "$from" "$target" "$restore_point" "$previous_tag" \
+            "the upgrade itself is complete — only the start failed, so 'papaia-ctl start --addons' may be all that is missing" \
+            "stage=start"
+    fi
+    py_cli cluster-lock --clear
+    UPGRADE_IN_PROGRESS=0
+    _upgrade_log "$from" "$target" ok "restore_point=${restore_point:-none} distributed=1"
+    success "upgrade complete: $from → $target on every node"
     if [ -n "$restore_point" ]; then
         info "Restore point taken before the upgrade: $restore_point"
     fi
@@ -345,9 +416,27 @@ _upgrade_failed() {
     error "    git -C $REPO_ROOT checkout $previous_tag"
     if [ -n "$restore_point" ]; then
         error "    papaia-ctl restore --restore-point=$restore_point --config-dir=$CONFIG_DIR"
+    elif [ "${UPGRADE_IN_PROGRESS:-0}" = "1" ]; then
+        error "    papaia-ctl start --addons --unlock --config-dir=$CONFIG_DIR"
+        error "  (no restore point was created — the upgrade ran with --no-backup; --unlock"
+        error "  releases the upgrade lock and puts $from back on every node)"
     else
         error "    papaia-ctl start --addons --config-dir=$CONFIG_DIR"
         error "  (no restore point was created — the upgrade ran with --no-backup)"
+    fi
+    if [ "${UPGRADE_IN_PROGRESS:-0}" = "1" ]; then
+        # The other nodes: each one is put back on $from by the restore above, which
+        # installs the controller's release on any node that runs another one.
+        local node
+        while IFS= read -r node; do
+            node="${node%$'\r'}"
+            [ -z "$node" ] && continue
+            error "  node $node: gets $from again with the restore, or on its own with"
+            error "    papaia-ctl node sync $node --checkout --config-dir=$CONFIG_DIR"
+        done < <(py_cli node-list --json 2>/dev/null \
+            | "$PYTHON_BIN" -c 'import json,sys; [print(r["name"]) for r in json.load(sys.stdin) if not r["controller"]]' 2>/dev/null || true)
+        error "  The upgrade lock stays until 'upgrade' finishes or the restore puts the"
+        error "  configuration back."
     fi
     error ""
     error "To retry after fixing the cause, run 'papaia-ctl upgrade --version=$target'"

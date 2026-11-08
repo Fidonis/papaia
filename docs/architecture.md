@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.7.0 |
-| **Date** | 2026-10-24 |
-| **Status** | Active — describes the 1.7.0 release as built |
+| **Version** | 1.8.0 |
+| **Date** | 2026-11-07 |
+| **Status** | Active — describes the 1.8.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -236,6 +236,10 @@ env_prompts:                       # optional: metadata per .env.example key
 env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
     hint: "Copy from Keycloak"     # hint is shown in the configuration overview
+
+install_notes:                     # optional: further numbered steps in the checklist,
+                                   # a list or a single string; display only
+  - "Set MW_SERVER in the add-on .env when the wiki is not on the default URL."
 ```
 
 #### `.env.example` value markers
@@ -427,7 +431,7 @@ No Core changes required.
 | `papaia-ctl start [--addons] [--profiles=LIST]` | Copy Core `.env` from config bundle into checkout → render config → start Core. With `--addons`: also start active add-ons, and gate the start on their compatibility. |
 | `papaia-ctl stop [--clean-up] [--addons]` | `docker compose stop` (stop containers, do not remove). With `--clean-up`: `docker compose down` (remove containers, keep volumes). With `--addons`: same for active add-ons. |
 | `papaia-ctl upgrade [--version=X.Y.Z] [--dry-run]` | Move the installation to a release: check active add-ons against the target, take a restore point, check out the tag, re-execute from the new tree, run the pending migrations, re-render, start. Downgrades are refused. |
-| `papaia-ctl backup [--retention-period-days=N]` | Hot backup of `$PAPAIA_CONFIG_DIR`, every Core volume, and every add-on volume and data bind mount into a timestamped restore point |
+| `papaia-ctl backup [--retention-period-days=N] [--only=SEL[,SEL]]` | Hot backup of `$PAPAIA_CONFIG_DIR`, every Core volume, and every add-on volume and data bind mount into a timestamped restore point. `--only` (`module:`, `addon:` or `volume:` selectors, as for `restore`) archives just those units — never the config directory — and records the scope in the restore point; a selector that matches nothing exits 2 and writes no archive. A scoped restore point is restored with `restore-scoped`; a plain `restore` of it is refused. |
 | `papaia-ctl backup-delete --restore-point=ID [...]` | Delete specific restore points — the snapshot directory and its `backup.yaml` entry. Repeatable / comma-separated; every id is validated before anything is removed; only catalogued directories inside the backup directory are touched; the stack is not stopped |
 | `papaia-ctl restore [--restore-point=ID] [--list] [--only=SEL[,SEL]]` | Restore a catalogued restore point. Containers are removed and recreated around the restore, not merely stopped. `--only` (`module:`, `addon:` or `volume:` selectors) scopes both the teardown and the restart to the selected units, leaving everything else running; it reads the `version: 2` manifest and is refused with `--restart-clean`, a config-directory selection, or the `manager` profile. |
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
@@ -439,6 +443,9 @@ No Core changes required.
 | `papaia-ctl addon components [<name>] [--json]` | Read-only. List the software each registered add-on bundles (the manifest's `components`: name, version, role, image variable), with the tag the add-on's `.env` pins instead of the catalog's marked as overridden. |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
+| `papaia-ctl addon upgrade <name> --path=DIR [--dry-run [--json]]` | Move the add-on to the version in `DIR`: preconditions → compatibility gate → plan (`--dry-run` stops here) → values for new `CHANGE_ME` keys → add-on scoped restore point → seed the new keys, repoint `path`/`version`, keep the old ones as `previous` → render → `docker compose up -d --remove-orphans` if it was running. Nothing changes before the restore point; a failed start is not rolled back. |
+| `papaia-ctl addon rollback <name> [--restore-data]` | Repoint to `previous` (the gate runs against the current core), forget it, recreate the add-on. With `--restore-data`: also restore the restore point the upgrade took (`restore-scoped`). |
+| `papaia-ctl addon list [--json]` | Read-only. Every registered add-on with path, version, components, compatibility verdict and `previous`. |
 | `papaia-ctl addon stop <name>` | `docker compose stop` (stop containers, do not remove) |
 | `papaia-ctl addon stop <name> --clean-up` | `docker compose down` (remove containers, keep volumes) |
 | `papaia-ctl addon remove <name>` | Remove override → re-render Core → `active: false` in manifest. **Containers untouched, config bundle kept.** |
@@ -452,6 +459,38 @@ the project, and with the core `.env` in play it would act on the core project i
 `restore`) therefore run as `docker compose -p <name> stop|down` alone, without `-f`, `--env-file` or the
 caller's `COMPOSE_*` variables, and address the containers, networks and (with `-v`) volumes labelled with
 that project. `addon start` and every other verb that needs the file are refused with an error.
+
+### Upgrading an add-on
+
+An upgrade does not write into the directory the add-on is registered at. The new version is a
+directory of its own (`--path`, same directory name as before, because Compose derives the project
+name from it), and `addon upgrade` repoints `path` and `version` in `deployment.yaml` and keeps the
+entry it replaced as `previous` (`path`, `version`, and the id of the restore point taken for the
+upgrade). `addon rollback` repoints back and clears `previous`, so one step back is possible and the
+files it needs are still on disk. The decision and its trade-offs are in
+[ADR 0008](adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md).
+
+What an upgrade does is decided by a pure function of the two manifests, the two `.env.example`
+files and the configuration bundle (`tools/lib/addon_upgrade.py`), so `--dry-run --json` shows what
+the real run will do ([`tools/schemas/addon-upgrade.schema.json`](../tools/schemas/addon-upgrade.schema.json)):
+
+- **Keys.** A key the bundle lacks is new and is classified by its value in the candidate's
+  `.env.example`: `GENERATE_*` becomes a fresh secret, `CHANGE_ME` is a value to supply (a
+  default from `env_prompts` or from the core counts as supplied, everything else is in
+  `needs_input` and blocks the upgrade until a prompt or `--answers-file` answers it),
+  `REPLACE_WITH_*` or a key under `env_replace_secrets` is a Keycloak client secret to copy in
+  after the client is imported, and anything else is copied as shipped. Values already in the
+  bundle are never changed; keys that disappeared stay.
+- **Components and manifest.** The `components` delta by id, and the changes in `version`,
+  `requires.addon_api`, `networks.attach`, new `env_replace_secrets` and new Keycloak clients and
+  mappers.
+- **Compatibility.** The verdict of the gate against the current core; a refused plan is printed
+  with `"blocked": true` and exits 2.
+
+The restore point is `backup --only=addon:NAME`: the add-on's volumes and writable data
+directories, never the configuration directory. Rolling back with `--restore-data` replaces them
+through `restore-scoped`. An add-on that keeps writable data in its own directory instead of a named
+volume does not carry that data to the new directory.
 
 ### Config bundle seeding at `addon install`
 
@@ -543,6 +582,73 @@ git-pristine; the source of truth lives in the config directory.
 Add-ons are registered explicitly by path — there is no auto-discovery — so the
 directory name above is a convention, not a requirement. What matters is the
 `path:` recorded in `deployment.yaml`.
+
+### Distributed installations
+
+> **Experimental.** The distributed mode has not yet been checked on real machines. Until
+> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
+> not in production. A single-host installation is not affected.
+
+By default an installation is one host. A distributed installation spreads the core services
+over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,
+ADR 0009). One node is the **controller**: it runs `papaia-ctl`, holds the configuration
+tree, the CA keys and the SSH keys, and runs papaia-manager and the RAG system. Every other
+node holds only its **bundle**, which every render writes to
+`$PAPAIA_CONFIG_DIR/nodes/<name>/bundle/`: the env files, rendered configuration and
+certificates of the services placed there.
+
+```
+controller (internal)                         edge node
+papaia-config/                                /srv/papaia-node/
+├── link-ca/ca.key, ca.crt     (never leaves) ├── checkout -> releases/<version>
+├── nodes/edge/ssh/id_ed25519  (never leaves) ├── releases/<version>/   (git archive)
+├── nodes/edge/link/node.key   ── bundle ──>  ├── config/               (the bundle)
+└── nodes/edge/bundle/         ── bundle ──>  │   └── link/haproxy.cfg, node.pem, ca.crt
+                                              ├── audit.log
+                                              └── .ssh/authorized_keys (forced command)
+```
+
+**Control channel** (ADR 0010). The controller reaches a node over SSH as the unprivileged
+user `papaia`. The node's `authorized_keys` entry forces `papaia-ctl node-shell`, which
+accepts only an allowlist of verbs and checks every name against the node's bundle:
+`ping`, `version`, `status`, `doctor`, `compose-up|down|stop|restart|ps|pull|logs`,
+`bundle-put`, `checkout-put`, `image-load`, `hook`. Bundles and releases travel as archives
+over the same channel, and the node needs neither Git nor access to GitHub. The controller
+runs its own node through the same shim (the `local` executor).
+
+**Link gateway** (ADR 0010). Each node runs one HAProxy container (`src/infra/link-gateway/`,
+profile `link-gateway`, never loaded on a single host). For a service that runs on another
+node, it carries the service's name as a network alias and listens on its usual port, so
+`litellm:4000`, `keycloak:8443` and `librechat:3080` keep working everywhere. It wraps the
+connection in mutual TLS with a certificate of the link CA (separate from the Keycloak CA)
+and hands it to the target node's link port. That port routes by SNI and lets each client
+node reach only the services the edge table in `tools/lib/link.py` allows. The inner
+protocol is passed through untouched, and a peer that is down means a refused connection.
+`papaia-ctl topology firewall` lists the connections between nodes that this opens.
+
+**Operations** (`tools/lib/cluster.py`). A distributed installation is set up once, as a new
+installation (`setup --topology=distributed`); `setup` never changes the shape of an existing
+one. `start` renders the bundles, hands each node its release and bundle, and starts the link
+gateways first and then the services in groups: Keycloak and the mail relay, LiteLLM, the
+application services, and the Nginx Proxy Manager last. `stop` runs backwards. The
+provisioning steps (`npm-provision`, `keycloak-role-sync`) run on the node of their service.
+`status` merges every node's report and adds `node` per module and container, plus `nodes`.
+`doctor` checks the controller's own node and adds `nodes` (version skew, clock deviation,
+each node's own checks), `links` (a TLS handshake per link, certificate expiry) and
+`file_modes` (the config dir keeps the mode 600 of the link keys). The JSON
+schemas grow additively and `schema_version` stays 1.
+
+**Data** (`tools/lib/cluster_data.py`). A restore point of a distributed installation lives on
+the controller, in the one catalogue. It holds the controller's configuration directory and
+every node's volumes, remote state and add-on data, streamed through the node's executor; each
+artifact records its `node`, and `node:NAME` selects one node for `backup --only` and
+`restore --only`. An **upgrade** moves every node at once: all nodes answer, a restore point is
+taken, a lock (`upgrade.lock`, plus any node on another release) blocks everything but the
+upgrade and the way back, every node gets the release, and each migration runs on the node of
+the service it names (`# papaia-migration: runs-with=<service>`), recorded with its node in the
+ledger. An **add-on** runs on one node: `addon install --node`, and the compatibility gate
+refuses an add-on that attaches to core services on two nodes. The operator guide is
+[distributed.md](distributed.md).
 
 ---
 
@@ -641,7 +747,9 @@ sovereignty, so the architecture is built so that it does not.
 
 - **Image-based distribution**: first-party add-ons as pinned images published by
   [Fidonis](https://www.fidonis.de) under `ghcr.io/fidonis/...`, not as source.
-  Update = bump ref + re-apply idempotent `install`; rollback = previous image pin.
+  Upgrade = `papaia-ctl addon upgrade` against the new version's directory; rollback =
+  `papaia-ctl addon rollback`, one step back to the previous directory (see
+  [ADR 0008](adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)).
 - **Per-customer deployment manifest**: `deployment.yaml` in the config directory
   is the **single source of truth** per installation (Core profiles + active
   add-ons + versions + hosting type). Drives the orchestrator and update runs.
@@ -696,17 +804,54 @@ addons:
     path: ../papaia-addons/paperless   # Path as passed to `addon install --path=`
     version: 1.0.0                  # Pinned version
     active: true                    # false = installed but not integrated
+    previous:                       # written by `addon upgrade`, cleared by `addon rollback`
+      path: ../snapshots/5d07e8c4/paperless
+      version: 0.9.0
+      restore_point: 2026-10-25_10-00-00   # absent when no restore point was taken
   - name: qdrant-rbac
     path: ../papaia-addons/qdrant-rbac
     version: 0.1.0
     active: false                   # deactivated
 ```
 
+### Topology (distributed installations)
+
+An optional `topology` block describes an installation that runs on more than one machine.
+Without it — the default, and every installation that existed before it — the installation
+is a single host.
+
+```yaml
+topology:
+  mode: single | distributed
+  controller: <node>                # runs papaia-ctl; config tree, CA keys, SSH keys
+  link:
+    port: 7443                      # the port each node's link gateway listens on
+  nodes:
+    <name>:
+      address: <ip or host>
+      executor: local | ssh         # local only for the controller
+      ssh: {user: papaia, port: 22, host: <optional>}
+      root: /srv/papaia-node        # node directory; config dir <root>/config
+      bind_ip: <optional>           # HOST_IP on that node (default 127.0.0.1 behind the proxy)
+      gpu: none | nvidia | amd | intel | vulkan   # optional hint for LocalAI
+  placement:                        # catalogue service -> node; default: the controller
+    <service>: <node>
+```
+
+The unit of placement is a service of the catalogue in `tools/lib/topology.py`: a service is
+one or two Compose profiles and everything they always bring along. On each node
+`COMPOSE_PROFILES` names what starts there, while `PAPAIA_ACTIVE_MODULES` keeps the profiles
+of the whole installation for what is decided cluster-wide (realm clients, proxy hosts, the
+mail relay). In distributed mode the render projects one bundle per node into
+`$PAPAIA_CONFIG_DIR/nodes/<name>/bundle/` with only that node's env files, configuration,
+certificates and overrides. The decision is recorded in ADR 0009.
+
 ### Active set
 
 The orchestrator derives the active set (which add-ons participate in render and
 `docker compose up`) from `active: true` entries. The manifest itself is never
-deleted by `install`/`remove` — only the `active` flag and `version` are updated.
+deleted by `install`/`remove` — only the `active` flag and `version` are updated. `upgrade`
+and `rollback` change `path` and `version` and write or clear `previous`.
 
 ---
 
@@ -864,12 +1009,15 @@ for top-level `papaia-app.yaml` manifests.
 
 Installing materialises a **pinned snapshot at a specific commit** rather than
 tracking a branch, so refreshing a catalogue never moves code out from under a
-running container. Updating is an explicit operation: refresh, diff the candidate's
-`.env.example` against the installed bundle so new `CHANGE_ME` keys can be answered
-first, then stop, re-materialise at the new commit, reinstall and start. This is the
+running container. Upgrading is an explicit operation and the manager does not implement it
+itself: it stages the candidate commit as a snapshot of its own (a new directory, never an
+overwrite), shows what `papaia-ctl addon upgrade --dry-run --json` reports — new settings,
+component changes, compatibility — asks for the values the new version needs, and applies it
+with `papaia-ctl addon upgrade`. Rolling back is `papaia-ctl addon rollback`. This is the
 add-on-side counterpart to `papaia-ctl upgrade` for the Core — same principle, same
 guarantee that nothing changes underneath a running installation without a deliberate
-step.
+step. It needs a core that has these verbs (1.8.0 or newer); an older core shows the action
+with a hint instead.
 
 ### State
 
@@ -956,7 +1104,7 @@ above), so a manager on such a core could take its own stack down.
 
 ### Long-running operations
 
-Installs, updates and lifecycle verbs shell out to `papaia-ctl` and can take minutes
+Installs, upgrades and lifecycle verbs shell out to `papaia-ctl` and can take minutes
 (image pulls, container starts). They run as queued jobs processed by a single
 worker, with live status and streamed log output.
 
@@ -1082,6 +1230,41 @@ and follows runs through its REST API; the ingester mounts the directory read-on
 the Embedding page are staged in `$PAPAIA_CONFIG_DIR/ai/rag/documents/uploads/` and deleted
 after a run that succeeded without a failed document. Without the `manager` profile, which
 runs on Linux hosts only, there is no interface and the catalog files are edited by hand.
+
+### Models and usage
+
+The *Models & Usage* page (`/models`, administrators only) shows which models LiteLLM serves
+and what they consumed: tokens, spend and requests per day and per model, for a window of UTC
+days. It reads LiteLLM's HTTP API at `LITELLM_URL` (`http://litellm:4000` on the stack network)
+with GET requests to three routes only (`/health/readiness`, `/model/info`,
+`/user/daily/activity`), so it cannot change LiteLLM; models, prices, teams and keys stay in
+LiteLLM's own Admin UI. The master key is read from `$PAPAIA_CONFIG_DIR/ai/litellm/.env` when a
+request needs it, like the RAG secrets, so the core needs no change and the key is never a
+setting of the manager. A LiteLLM that is down or a key it refuses is a message on the page.
+
+### Nodes
+
+On a [distributed installation](distributed.md) ([ADR 0009](adr/0009-place-services-on-nodes-with-a-topology-block.md),
+[ADR 0010](adr/0010-connect-nodes-through-ssh-and-an-mtls-link.md)) the manager runs on the
+controller and reaches the other nodes only through the core's Python CLI: read-only questions
+and the `compose-up` / `compose-stop` of a node go through `lib.cli node-exec`, and the commands
+that change the set of nodes (`node-register`, `node-unregister`, `node-pin`, `node-join-bundle`,
+`node-push`) through their own sub-commands. Keys and pinned host keys stay in the configuration
+directory, managed by the core; the manager has no raw `docker` or Git on a node. The image
+carries an SSH client, and its entrypoint names the host's user id, which OpenSSH needs, since
+the container runs as the host's `UID`.
+
+A *Nodes* page lists the machines with their services, address, status, version and link
+health. Adding and removing a node, handing it its bundle and confirming a host key need a fresh
+sign-in at Keycloak (`prompt=login`, valid for five minutes) on top of the admin role, and are
+audited. The other pages follow the placement: the service snapshot comes from the core's merged
+`status --json --addons`, a group action and a module, overlay or mail change name the node with
+`--node=` (a `start` then also visits the nodes of the proxy and of Keycloak, whose provisioning
+steps it needs), backups take `--only=node:NAME` and a restore can pick a remote node as a whole.
+The core's `upgrade.lock` and each node's `state.json` drive a banner and the same refusals the
+core would make. Switching a module off keeps its data, because the core does not delete volumes
+across nodes. Without a topology in `deployment.yaml` none of this runs, and a single host
+behaves as before.
 
 ---
 

@@ -8,7 +8,13 @@ Welcome to the papAIa documentation.
 - [Configuration](./configuration.md) — environment variables and configuration files
 - [Deployment](./deployment.md) — local and remote deployment paths
 - [Troubleshooting](./troubleshooting.md) — common issues and fixes
+- [Running on several machines](./distributed.md) — the operator guide of a distributed
+  installation
+- [Validating a two-node installation](./distributed-validation.md) — the hand-run check of
+  the distributed mode on two machines
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions
+- [Parallel Search MCP in LibreChat](./parallel-search-mcp.md) — opt-in hosted web search
+  through the customer overlay
 
 ## Conventions
 

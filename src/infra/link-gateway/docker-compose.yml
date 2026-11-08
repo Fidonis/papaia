@@ -1,0 +1,30 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa - Link gateway (distributed installations only)
+# ═══════════════════════════════════════════════════════════════════════════
+# Not part of src/docker-compose.yml: a single-host installation never loads
+# this file. On a node of a distributed installation papaia-ctl adds it with
+# `-f`, together with the node's generated override, which supplies
+#   - the bind mount of the node's link directory (haproxy.cfg, certificates),
+#   - the published link port (on the node's address only),
+#   - the network aliases of the services that run on other nodes, and
+#   - the user the gateway runs as (the owner of the node's key file).
+# Everything the gateway does is in the generated haproxy.cfg; see
+# tools/lib/link.py and docs/adr/0010-connect-nodes-through-ssh-and-an-mtls-link.md.
+
+services:
+  link-gateway:
+    image: haproxy:3.2.26-alpine
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # The gateway listens on the usual ports of the services it stands in for,
+    # 443 and 587 among them, as an unprivileged user.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-link-gateway
+      de.fidonis.role:   link-gateway
+    profiles: [link-gateway]

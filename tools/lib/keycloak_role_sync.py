@@ -15,8 +15,9 @@ signed-in account's own token), and an existing realm gets them from here.
 Clients are handled only for the Compose profiles that need them
 (PROFILE_CLIENTS), so an installation that never enables such a profile keeps
 a realm without them. A missing client is created. For one that exists, the
-secret is aligned with the rendered template and nothing else about it is
-changed: the core `.env` is canonical for that secret, and a client left over
+secret is aligned with the rendered template and, when the template names a
+login theme for it, a missing `login_theme` attribute is added; nothing else about it
+is changed: the core `.env` is canonical for that secret, and a client left over
 from an earlier add-on install would otherwise refuse the service that signs in
 with the generated one.
 
@@ -33,6 +34,7 @@ npm_provision.py).
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import ssl
@@ -77,6 +79,24 @@ def _error_detail(exc: urllib.error.HTTPError) -> str:
         return exc.reason if isinstance(exc.reason, str) else ""
 
 
+# Bind addresses that publish on every interface: the host reaches those on localhost.
+_ANY_ADDRESS = {"", "0.0.0.0", "::", "[::]"}
+
+
+def _published_host(root: dict[str, str]) -> str:
+    """The address Keycloak's port is published on, as a URL host.
+
+    `--host-ip` binds the published ports to one address; `localhost` then refuses
+    the connection, so the sync has to dial that address instead. Compose needs an
+    IPv6 address in brackets already, and a URL does too."""
+    host_ip = root.get("HOST_IP", "").strip()
+    if host_ip in _ANY_ADDRESS:
+        return "localhost"
+    if ":" in host_ip and not host_ip.startswith("["):
+        return f"[{host_ip}]"
+    return host_ip
+
+
 def _admin_base_url(root: dict[str, str]) -> str:
     """Where this process reaches Keycloak.
 
@@ -85,7 +105,7 @@ def _admin_base_url(root: dict[str, str]) -> str:
     the sync would wait and skip. There it takes the address the stack's own services
     use: the origin of `OIDC_TOKEN_URL` (`https://keycloak:8443`), which the local CA
     certificate covers. Without such a URL the published port is all there is."""
-    local = f"https://localhost:{root.get('KEYCLOAK_EXT_PORT', '8110')}"
+    local = f"https://{_published_host(root)}:{root.get('KEYCLOAK_EXT_PORT', '8110')}"
     if not common.in_container():
         return local
     parts = urllib.parse.urlsplit(root.get("OIDC_TOKEN_URL", "").strip())
@@ -94,11 +114,44 @@ def _admin_base_url(root: dict[str, str]) -> str:
     return local
 
 
-def _ssl_context(config_dir: Path) -> ssl.SSLContext:
+def _tls_server_name(base_url: str) -> str | None:
+    """The name to verify Keycloak's certificate against, when the URL host is not one.
+
+    The local CA certificate names `keycloak`, `localhost` and `host.docker.internal`,
+    never the `--host-ip` address; the published port serves that same certificate, so
+    a connection to the address is verified as `localhost`."""
+    host = urllib.parse.urlsplit(base_url).hostname or ""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    return "localhost"
+
+
+class _ServerNameContext(ssl.SSLContext):
+    """An SSLContext that verifies every connection against one fixed server name."""
+
+    def __new__(cls, server_name: str):
+        self = super().__new__(cls, ssl.PROTOCOL_TLS_CLIENT)
+        self.server_name = server_name
+        return self
+
+    def wrap_socket(self, sock, *args, server_hostname=None, **kwargs):
+        return super().wrap_socket(sock, *args, server_hostname=self.server_name, **kwargs)
+
+
+def _ssl_context(config_dir: Path, server_name: str | None = None) -> ssl.SSLContext:
     ca_file = config_dir / "certs" / "local-ca.crt"
+    if server_name is None:
+        if ca_file.is_file():
+            return ssl.create_default_context(cafile=str(ca_file))
+        return ssl.create_default_context()
+    ctx = _ServerNameContext(server_name)
     if ca_file.is_file():
-        return ssl.create_default_context(cafile=str(ca_file))
-    return ssl.create_default_context()
+        ctx.load_verify_locations(cafile=str(ca_file))
+    else:
+        ctx.load_default_certs()
+    return ctx
 
 
 def _wait_for_keycloak(base_url: str, ctx: ssl.SSLContext, timeout: int = 90) -> None:
@@ -273,8 +326,9 @@ def _sync_composites(base_url, ctx, token, realm_def: dict) -> int:
 
 
 def _active_profile_clients(root: dict[str, str]) -> set[str]:
-    """Client IDs the root .env's COMPOSE_PROFILES asks for."""
-    profiles = {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
+    """Client IDs the installation's profiles ask for. Cluster-wide: in a distributed
+    installation Keycloak's node does not run the services the clients belong to."""
+    profiles = common.cluster_profiles(root)
     return {cid for profile, cids in PROFILE_CLIENTS.items() if profile in profiles for cid in cids}
 
 
@@ -341,6 +395,40 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tu
         created += 1
         print(f"  client created: {client_id}", flush=True)
     return created, updated
+
+
+def _sync_login_theme(base_url, ctx, token, realm_def: dict) -> int:
+    """Give the existing clients the login theme the rendered template names for them.
+
+    The theme is a per-client attribute (never the realm's), so a login that a papAIa
+    service starts is branded and a direct Keycloak login is not. An attribute that is
+    already set stays, whatever it holds: a theme chosen by hand is never overwritten.
+    Keycloak's client update replaces the whole attribute map, so the existing
+    attributes are sent along. Returns the number of clients changed."""
+    changed = 0
+    for client in realm_def.get("clients", []):
+        theme = (client.get("attributes") or {}).get("login_theme")
+        if not theme:
+            continue
+        matches = _api(
+            base_url,
+            ctx,
+            token,
+            "GET",
+            f"/clients?clientId={urllib.parse.quote(client['clientId'])}",
+        )
+        if not matches:
+            continue
+        uuid = matches[0]["id"]
+        current = _api(base_url, ctx, token, "GET", f"/clients/{uuid}") or {}
+        attributes = dict(current.get("attributes") or {})
+        if "login_theme" in attributes:
+            continue
+        attributes["login_theme"] = theme
+        _api(base_url, ctx, token, "PUT", f"/clients/{uuid}", {"attributes": attributes})
+        changed += 1
+        print(f"  login theme set: {client['clientId']}", flush=True)
+    return changed
 
 
 def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
@@ -493,7 +581,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
     realm_def = json.loads(realm_json_path.read_text(encoding="utf-8"))
 
     base_url = _admin_base_url(root)
-    ctx = _ssl_context(config_dir)
+    ctx = _ssl_context(config_dir, _tls_server_name(base_url))
 
     print("Waiting for Keycloak to become ready...", flush=True)
     try:
@@ -522,6 +610,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         clients_created, secrets_updated = _sync_clients(
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
+        themes_set = _sync_login_theme(base_url, ctx, token, realm_def)
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
         _sync_smtp(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
@@ -539,7 +628,8 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
     print(
         f"Keycloak role sync complete: {roles_created} role(s) created, "
         f"{composites_added} composite edge(s) added, {clients_created} client(s) "
-        f"created, {secrets_updated} client secret(s) updated, {mappers_added} "
+        f"created, {secrets_updated} client secret(s) updated, {themes_set} login "
+        f"theme(s) set, {mappers_added} "
         f"protocol mapper(s) created, {migrated} user(s) migrated to "
         f"{_MIGRATION_TARGET_ROLE}.",
         flush=True,

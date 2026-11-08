@@ -17,6 +17,8 @@ import base64
 import os
 import secrets
 import shutil
+import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -75,6 +77,23 @@ def generate_secret(key: str) -> str:
     if key.endswith("_COOKIE_SECRET"):
         return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
     return secrets.token_hex(24)
+
+
+# On a node of a distributed installation, COMPOSE_PROFILES names what runs on that node
+# and this key names the profiles of the whole installation (see lib/topology.py). A
+# single-node .env never carries it.
+ACTIVE_MODULES_KEY = "PAPAIA_ACTIVE_MODULES"
+
+
+def cluster_profiles(root_env: dict[str, str]) -> set[str]:
+    """The Compose profiles switched on for the whole installation.
+
+    For what is decided once for all nodes (realm clients, proxy hosts, whether the mail
+    relay exists), not for what starts on this host: that is COMPOSE_PROFILES."""
+    raw = root_env.get(ACTIVE_MODULES_KEY)
+    if raw is None:
+        raw = root_env.get("COMPOSE_PROFILES", "")
+    return {p.strip() for p in raw.split(",") if p.strip()}
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -190,6 +209,38 @@ def atomic_write_private(path: Path, content: str) -> None:
     if path.is_dir():
         shutil.rmtree(path)
     os.replace(tmp_path, path)
+
+
+def file_mode_problem(directory: Path) -> str | None:
+    """Why files in `directory` do not keep the mode they are given, or None when they do.
+
+    A Windows drive mounted into WSL2 without the `metadata` option (DrvFs) refuses chmod
+    to a process that does not own the file and ignores it for the owner, so the mode is
+    checked after setting it, twice, to catch a chmod that silently does nothing.
+
+    The probe file gets a name of its own, so two runs at once do not remove each other's.
+    An OSError while creating it is raised: a directory the caller cannot write to says
+    nothing about file modes."""
+    if os.name == "nt":
+        return None
+    ensure_dir(directory)
+    fd, name = tempfile.mkstemp(dir=directory, prefix=".papaia-mode-probe-")
+    os.close(fd)
+    probe = Path(name)
+    try:
+        for mode in (0o600, 0o644):
+            os.chmod(probe, mode)
+            kept = stat.S_IMODE(os.stat(probe).st_mode)
+            if kept != mode:
+                return f"chmod {mode:o} left mode {kept:o}"
+    except OSError as exc:
+        return f"chmod failed: {exc.strerror or exc}"
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    return None
 
 
 def atomic_write(path: Path, content: str) -> None:

@@ -27,7 +27,7 @@ LAST_BACKUP_ID=""
 _unpause_all() {
     local cid
     if [ ${#_PAUSED_CONTAINERS[@]} -gt 0 ]; then
-        for cid in "${_PAUSED_CONTAINERS[@]}"; do
+        for cid in ${_PAUSED_CONTAINERS[@]+"${_PAUSED_CONTAINERS[@]}"}; do
             docker unpause "$cid" >/dev/null 2>&1 || true
         done
         _PAUSED_CONTAINERS=()
@@ -39,7 +39,7 @@ _backup_cleanup() {
     _unpause_all
     local f
     if [ ${#_BACKUP_TMPFILES[@]} -gt 0 ]; then
-        for f in "${_BACKUP_TMPFILES[@]}"; do
+        for f in ${_BACKUP_TMPFILES[@]+"${_BACKUP_TMPFILES[@]}"}; do
             [ -f "$f" ] && rm -f "$f"
         done
         _BACKUP_TMPFILES=()
@@ -131,7 +131,7 @@ _resolve_backup_dir() {
     local override="$1" resolved
     local -a extra=()
     [ -n "$override" ] && extra+=(--backup-dir="$override")
-    if ! resolved="$(py_cli backup-dir "${extra[@]}")"; then
+    if ! resolved="$(py_cli backup-dir ${extra[@]+"${extra[@]}"})"; then
         return 3
     fi
     printf '%s' "${resolved%$'\r'}"
@@ -141,12 +141,13 @@ _resolve_backup_dir() {
 # backup
 # ─────────────────────────────────────────────────────────────────────────
 cmd_backup() {
-    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention=""
+    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention="" only="" only_given=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --retention-period-days=*) retention="${1#*=}" ;;
+            --only=*) only="${1#*=}"; only_given=1 ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for backup: $1"; exit 2 ;;
         esac
@@ -156,8 +157,20 @@ cmd_backup() {
         error "--retention-period-days must be a whole number of days (got: $retention)"
         exit 2
     fi
+    # An empty --only= is a mistake worth stopping on: quietly backing up the
+    # whole stack is the opposite of what the caller asked for.
+    if [ "$only_given" -eq 1 ] && [ -z "$only" ]; then
+        error "--only needs at least one selector (addon:NAME, module:NAME or volume:NAME)."
+        exit 2
+    fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        _backup_distributed "$backup_dir" "$retention" "$only" "$only_given"
+        return
+    fi
 
     trap _backup_cleanup EXIT INT TERM
 
@@ -175,17 +188,25 @@ cmd_backup() {
 
     local plan_file
     plan_file="$(_new_tmpfile)"
+    local -a plan_extra=()
+    [ "$only_given" -eq 1 ] && plan_extra+=(--only="$only")
     # `tr -d '\r'`: on Windows the Python interpreter emits CRLF, and IFS=$'\t'
     # leaves the CR attached to the last field -- a snapshot path ending in CR
     # makes docker bind-mount (and auto-create) a second, wrong directory.
-    # pipefail is set, so a failing py_cli still fails the pipeline.
-    if ! py_cli backup-plan --backup-dir="$backup_dir" --existing-volumes="$volumes_file" \
-            | tr -d '\r' > "$plan_file"; then
+    # pipefail is set, so a failing py_cli still fails the pipeline, and its
+    # status is the pipeline's: 2 means the selection cannot be met (it said why
+    # on stderr and wrote nothing), anything else is a planning failure.
+    local plan_rc=0
+    py_cli backup-plan --backup-dir="$backup_dir" --existing-volumes="$volumes_file" \
+            ${plan_extra[@]+"${plan_extra[@]}"} | tr -d '\r' > "$plan_file" || plan_rc=$?
+    if [ "$plan_rc" -eq 2 ]; then
+        exit 2
+    elif [ "$plan_rc" -ne 0 ]; then
         error "Could not plan the backup."
         exit 3
     fi
 
-    local snapshot="" kind archive source owner
+    local snapshot="" scope="" kind archive source owner
     local total=0 failed=0
     local started=$SECONDS
 
@@ -193,6 +214,11 @@ cmd_backup() {
         [ -z "$kind" ] && continue
         if [ "$kind" = "SNAPSHOT" ]; then
             snapshot="$archive"
+            continue
+        fi
+        if [ "$kind" = "SCOPE" ]; then
+            scope="$archive"
+            info "Scope: $scope (the configuration directory and everything else is not included)"
             continue
         fi
         total=$((total + 1))
@@ -240,7 +266,7 @@ cmd_backup() {
     LAST_BACKUP_ID="$backup_id"
 
     _backup_log "$backup_dir" backup "$backup_id" "$result" \
-        "artifacts=$artifacts/$total size_mb=$size_mb duration=$((SECONDS - started))s"
+        "artifacts=$artifacts/$total size_mb=$size_mb duration=$((SECONDS - started))s${scope:+ scope=$scope}"
 
     if [ -n "$retention" ]; then
         info "Applying retention: keeping backups newer than $retention day(s)..."
@@ -257,6 +283,97 @@ cmd_backup() {
         ok)      success "backup complete: $backup_id ($artifacts artifacts, ${size_mb} MB)" ;;
         partial) warn "backup completed with errors: $backup_id ($failed of $total artifacts failed)" ;;
         failed)  error "backup failed: $backup_id (no artifact could be written)"; exit 3 ;;
+    esac
+}
+
+# backup of a distributed installation: one restore point on this controller, every node's
+# data streamed into it (lib/cluster_data.py). Sets LAST_BACKUP_ID like cmd_backup.
+# $1 backup dir (may be empty), $2 retention days, $3 selection, $4 1 if --only was given
+_backup_distributed() {
+    local backup_dir="$1" retention="$2" only="$3" only_given="$4"
+    _cluster_require_unlocked
+    local -a extra=()
+    [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
+    [ -n "$retention" ] && extra+=(--retention-period-days="$retention")
+    [ "$only_given" -eq 1 ] && extra+=(--only="$only")
+    local out rc=0
+    out="$(mktemp)"
+    py_cli cluster-backup ${extra[@]+"${extra[@]}"} | tee "$out" || rc=$?
+    local key value backup_id="" result=""
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            ID) backup_id="${value%$'\r'}" ;;
+            RESULT) result="${value%$'\r'}" ;;
+        esac
+    done < "$out"
+    rm -f "$out"
+    [ "$rc" -eq 2 ] && exit 2
+    # shellcheck disable=SC2034  # read by cmd_upgrade in lib/sh/upgrade.sh
+    LAST_BACKUP_ID="$backup_id"
+    case "$result" in
+        ok)      success "backup complete: $backup_id" ;;
+        partial) warn "backup completed with errors: $backup_id" ;;
+        *)       error "backup failed${backup_id:+: $backup_id}"; exit 3 ;;
+    esac
+}
+
+# restore of a distributed installation. $1 backup dir, $2 restore point, $3 selection,
+# $4 1 for --no-restart, $5 1 for --restart-clean, $6 1 for -y
+_restore_distributed() {
+    local backup_dir="$1" restore_point="$2" only="$3" no_restart="$4" restart_clean="$5"
+    local assume_yes="$6"
+    if [ "$restart_clean" -eq 1 ]; then
+        error "--restart-clean is not available for a distributed installation."
+        exit 2
+    fi
+    local -a extra=()
+    [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
+    [ -n "$restore_point" ] && extra+=(--restore-point="$restore_point")
+    [ -n "$only" ] && extra+=(--only="$only")
+    local plan rc=0
+    plan="$(py_cli cluster-restore --plan ${extra[@]+"${extra[@]}"})" || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    local key value restore_id=""
+    warn "This restore will overwrite:"
+    while IFS=$'\t' read -r key value; do
+        value="${value%$'\r'}"
+        case "$key" in
+            ID) restore_id="$value" ;;
+            WILL) warn "  $value" ;;
+        esac
+    done <<< "$plan"
+    if [ "$no_restart" -eq 1 ]; then
+        warn "  --no-restart: containers are neither stopped nor started again."
+    elif [ -n "$only" ]; then
+        warn "  the services whose data it replaces are stopped and started again; nothing"
+        warn "  else, and no other node, is touched"
+    else
+        warn "  every node is stopped, its data replaced and the installation started again"
+    fi
+    warn "  Nodes are restored one after another; their data comes from points a few"
+    warn "  minutes apart, as it was archived."
+    if [ "$assume_yes" -eq 0 ]; then
+        if ! is_tty; then
+            error "Refusing to restore without confirmation. Re-run with -y in non-interactive contexts."
+            exit 2
+        fi
+        confirm "Proceed with restore of $restore_id?" "N" || { error "Aborted."; exit 3; }
+    fi
+    [ "$no_restart" -eq 1 ] && extra+=(--no-restart)
+    local out
+    out="$(mktemp)"
+    rc=0
+    py_cli cluster-restore ${extra[@]+"${extra[@]}"} | tee "$out" || rc=$?
+    local result=""
+    while IFS=$'\t' read -r key value; do
+        [ "$key" = "RESULT" ] && result="${value%$'\r'}"
+    done < "$out"
+    rm -f "$out"
+    [ "$rc" -eq 2 ] && exit 2
+    case "$result" in
+        ok)      success "restore complete: $restore_id" ;;
+        partial) warn "restore completed with errors: $restore_id" ;;
+        *)       error "restore failed: $restore_id"; exit 3 ;;
     esac
 }
 
@@ -349,7 +466,7 @@ cmd_backup_delete() {
             exit 2
         fi
         warn "About to permanently delete ${#points[@]} restore point(s):"
-        printf '  %s\n' "${points[@]}" >&2
+        printf '  %s\n' ${points[@]+"${points[@]}"} >&2
         if ! confirm "Delete permanently?" "N"; then
             error "Aborted."
             exit 3
@@ -358,14 +475,14 @@ cmd_backup_delete() {
 
     local -a args=()
     local p
-    for p in "${points[@]}"; do
+    for p in ${points[@]+"${points[@]}"}; do
         args+=(--restore-point="$p")
     done
 
     # tr -d '\r': see the note in cmd_backup -- a CR on the id would otherwise
     # travel into the backup.log line and the info output.
     local removed
-    if ! removed="$(py_cli backup-delete --backup-dir="$backup_dir" "${args[@]}" | tr -d '\r')"; then
+    if ! removed="$(py_cli backup-delete --backup-dir="$backup_dir" ${args[@]+"${args[@]}"} | tr -d '\r')"; then
         error "Could not delete the requested restore point(s)."
         exit 3
     fi
@@ -404,6 +521,13 @@ cmd_restore() {
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ] && [ "$list_only" -eq 0 ]; then
+        _restore_distributed "$backup_dir" "$restore_point" "$only" "$no_restart" \
+            "$restart_clean" "$assume_yes"
+        return
+    fi
 
     backup_dir="$(_resolve_backup_dir "$backup_dir")" || exit 3
 
@@ -439,8 +563,14 @@ cmd_restore() {
     trap _backup_cleanup EXIT INT TERM
     # tr -d '\r': see the note in cmd_backup -- a CR on the last TSV field would
     # otherwise end up inside a snapshot path or a docker volume name.
-    if ! py_cli restore-resolve --backup-dir="$backup_dir" "${extra[@]}" \
-            | tr -d '\r' > "$plan_file"; then
+    # Status 2 is a request that does not fit the restore point (a scoped backup
+    # asked for as a whole); the reason is already on stderr.
+    local resolve_rc=0
+    py_cli restore-resolve --backup-dir="$backup_dir" ${extra[@]+"${extra[@]}"} \
+            | tr -d '\r' > "$plan_file" || resolve_rc=$?
+    if [ "$resolve_rc" -eq 2 ]; then
+        exit 2
+    elif [ "$resolve_rc" -ne 0 ]; then
         error "Could not resolve a restore point. Use 'papaia-ctl restore --list' to see what is available."
         exit 3
     fi
@@ -678,7 +808,11 @@ _restore_teardown_scoped() {
             continue
         fi
         info "  addon $addon_name: docker compose down"
-        docker compose -f "$addon_path/docker-compose.yml" down
+        # Through _addon_compose, as `addon stop --clean-up` does: the project
+        # name, the root and add-on env files and the override files must match
+        # what `up` used, or a network named after ${PAPAIA_PROJECT} resolves
+        # to its fallback here and the real one stays behind.
+        _addon_compose down "$addon_name" "$addon_path"
         _restore_step teardown "addon:$addon_name" ok
     done < <(_split_list "$addons")
 
@@ -743,9 +877,9 @@ _restore_teardown() {
         info "Stopping and removing containers (core + addons)..."
     fi
     if [ -f "$CONFIG_DIR/deployment.yaml" ]; then
-        _addon_compose_all down "${extra[@]}"
+        _addon_compose_all down ${extra[@]+"${extra[@]}"}
     fi
-    docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down "${extra[@]}"
+    docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down ${extra[@]+"${extra[@]}"}
 }
 
 # $1 snapshot, $2 kind, $3 archive, $4 target, $5 owner

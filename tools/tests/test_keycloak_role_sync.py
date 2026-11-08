@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import ssl
 import urllib.error
 
 import pytest
@@ -175,11 +176,21 @@ class FakeKeycloak:
             return {"type": "secret", "value": self.clients[m.group(1)].get("secret")}
 
         m = re.fullmatch(r"/clients/([^/]+)", path)
+        if m and method == "GET":
+            client = self.clients[m.group(1)]
+            return {
+                "id": m.group(1),
+                "clientId": client["clientId"],
+                "attributes": dict(client.get("attributes", {})),
+            }
         if m and method == "PUT":
             client = self.clients[m.group(1)]
             client.setdefault("put_bodies", []).append(body)
             if "secret" in body:
                 client["secret"] = body["secret"]
+            if "attributes" in body:
+                # Keycloak replaces the whole attribute map.
+                client["attributes"] = dict(body["attributes"])
             return None
 
         m = re.fullmatch(r"/clients\?clientId=([^&]+)", path)
@@ -287,6 +298,63 @@ def test_the_host_reaches_keycloak_at_its_published_port(monkeypatch):
     root = {"KEYCLOAK_EXT_PORT": "18110", "OIDC_TOKEN_URL": _INTERNAL_TOKEN_URL}
     # The internal name does not resolve on the host, so it is never used there.
     assert kcs._admin_base_url(root) == "https://localhost:18110"
+
+
+@pytest.mark.parametrize(
+    ("host_ip", "expected"),
+    [
+        ("", "https://localhost:8110"),
+        ("0.0.0.0", "https://localhost:8110"),
+        ("::", "https://localhost:8110"),
+        ("10.42.0.1", "https://10.42.0.1:8110"),
+        ("[::]", "https://localhost:8110"),
+        ("[fd00::1]", "https://[fd00::1]:8110"),
+        ("fd00::1", "https://[fd00::1]:8110"),
+    ],
+)
+def test_the_host_dials_the_address_the_port_is_published_on(monkeypatch, host_ip, expected):
+    # --host-ip binds the published port to one address; localhost is refused there.
+    monkeypatch.setattr(kcs.common, "in_container", lambda: False)
+    assert kcs._admin_base_url({"HOST_IP": host_ip}) == expected
+
+
+def test_a_container_ignores_the_host_ip(monkeypatch):
+    monkeypatch.setattr(kcs.common, "in_container", lambda: True)
+    root = {"HOST_IP": "10.42.0.1", "OIDC_TOKEN_URL": _INTERNAL_TOKEN_URL}
+    assert kcs._admin_base_url(root) == "https://keycloak:8443"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://localhost:8110", None),
+        ("https://keycloak:8443", None),
+        ("https://10.42.0.1:8110", "localhost"),
+        ("https://[fd00::1]:8110", "localhost"),
+    ],
+)
+def test_an_address_is_verified_as_localhost(base_url, expected):
+    # The local CA certificate names localhost, never the --host-ip address.
+    assert kcs._tls_server_name(base_url) == expected
+
+
+def test_the_server_name_context_overrides_the_url_host(tmp_path, monkeypatch):
+    ctx = kcs._ssl_context(tmp_path, "localhost")
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname
+
+    seen = {}
+
+    def _record(self, sock, *args, server_hostname=None, **kwargs):
+        seen["name"] = server_hostname
+
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", _record)
+    ctx.wrap_socket(object(), server_hostname="10.42.0.1")
+    assert seen["name"] == "localhost"
+
+
+def test_without_a_server_name_the_default_context_is_kept(tmp_path):
+    assert not isinstance(kcs._ssl_context(tmp_path), kcs._ServerNameContext)
 
 
 def test_the_published_port_defaults_to_the_shipped_one(monkeypatch):
@@ -972,3 +1040,65 @@ def test_a_realm_without_smtp_and_without_the_profile_is_untouched(tmp_path, mon
 
     assert fake.realm_puts == []
     assert fake.realm["resetPasswordAllowed"] is True
+
+
+def _themed_realm_def() -> dict:
+    realm_def = _realm_def()
+    realm_def["clients"][0]["attributes"] = {"login_theme": "papaia"}
+    return realm_def
+
+
+def _existing_oauth2_proxy(attributes: dict | None = None) -> dict:
+    client = {"clientId": "oauth2-proxy", "mappers": {}}
+    if attributes is not None:
+        client["attributes"] = attributes
+    return {"uuid-oauth2-proxy": client}
+
+
+def test_an_existing_client_gets_the_login_theme_and_keeps_its_attributes(
+    tmp_path, monkeypatch, capsys
+):
+    _write_realm_json(tmp_path, _themed_realm_def())
+    fake = FakeKeycloak(
+        roles={"user": _role("user")},
+        clients=_existing_oauth2_proxy({"pkce.code.challenge.method": "S256"}),
+    )
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    client = fake.clients["uuid-oauth2-proxy"]
+    assert client["attributes"] == {
+        "pkce.code.challenge.method": "S256",
+        "login_theme": "papaia",
+    }
+    out = capsys.readouterr().out
+    assert "login theme set: oauth2-proxy" in out
+    assert "1 login theme(s) set" in out
+
+
+def test_a_login_theme_chosen_by_hand_is_never_overwritten(tmp_path, monkeypatch):
+    _write_realm_json(tmp_path, _themed_realm_def())
+    fake = FakeKeycloak(
+        roles={"user": _role("user")},
+        clients=_existing_oauth2_proxy({"login_theme": "keycloak.v2"}),
+    )
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    client = fake.clients["uuid-oauth2-proxy"]
+    assert client["attributes"] == {"login_theme": "keycloak.v2"}
+    assert "put_bodies" not in client
+
+
+def test_the_login_theme_is_set_once(tmp_path, monkeypatch, capsys):
+    _write_realm_json(tmp_path, _themed_realm_def())
+    fake = FakeKeycloak(roles={"user": _role("user")}, clients=_existing_oauth2_proxy())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert len(fake.clients["uuid-oauth2-proxy"]["put_bodies"]) == 1
+    assert "0 login theme(s) set" in capsys.readouterr().out

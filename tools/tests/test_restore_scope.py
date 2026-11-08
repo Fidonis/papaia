@@ -399,6 +399,18 @@ def test_an_absolute_target_is_accepted_in_either_platforms_spelling(
     backup.validate_target(artifact, tmp_path / "elsewhere")
 
 
+def test_the_config_dir_artifact_passes_validation(tmp_path: Path):
+    # Its target is the config directory itself; restore-resolve redirects it to
+    # the live one, so the containment rule must not refuse it.
+    config_dir = tmp_path / "papaia-config"
+    backup.validate_target(
+        backup.Artifact(
+            kind="configdir", archive="papaia-config.tar.gz", source=str(config_dir), owner="core"
+        ),
+        config_dir,
+    )
+
+
 def test_ordinary_targets_pass_validation(tmp_path: Path):
     config_dir = tmp_path / "papaia-config"
     backup.validate_target(
