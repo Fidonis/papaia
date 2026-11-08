@@ -39,6 +39,7 @@ based on merged pull requests; this file mirrors the published releases.
 
 ### 📖 Documentation
 
+- docs: list haproxy in the third-party licenses (#339) @marko-boehm
 - docs: add an opt-in guide for parallel search mcp in librechat (#297) @fwahl711
 - docs: document macos prerequisites and limitations (#296) @fwahl711
 - docs: add a code of conduct (#277) @fwahl711
