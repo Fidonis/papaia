@@ -148,7 +148,9 @@ if ! "$PYTHON_BIN" -c 'import yaml' >/dev/null 2>&1; then
     error "Python module 'yaml' (PyYAML) not found for '$PYTHON_BIN'. Install it and re-run:"
     error "  Debian/Ubuntu: sudo apt-get install -y python3-yaml"
     error "  Fedora/RHEL:   sudo dnf install -y python3-pyyaml"
-    error "  macOS:         brew install pyyaml (for Homebrew's Python)"
+    error "  macOS:         $PYTHON_BIN -m venv ~/.venvs/papaia"
+    error "                 ~/.venvs/papaia/bin/pip install 'PyYAML>=6.0'"
+    error "                 source ~/.venvs/papaia/bin/activate"
     error "  other:         $PYTHON_BIN -m pip install 'PyYAML>=6.0', in a virtual environment"
     error "                 if pip refuses with 'externally-managed-environment'"
     exit 2

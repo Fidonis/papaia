@@ -59,6 +59,7 @@ py_cli() {
             return @PLAN_RC@
             ;;
         restore-resolve) return @RESOLVE_RC@ ;;
+        addon-dependents) return @DEPS_RC@ ;;
         *) ;;
     esac
 }
@@ -88,6 +89,7 @@ _DEFAULTS = {
     "UP_RC": "0",
     "RUNNING": "1",
     "POINT": "2026-10-25_10-00-00",
+    "DEPS_RC": "0",
 }
 
 
@@ -426,3 +428,24 @@ def test_update_is_not_a_verb_and_points_at_upgrade(
 
     assert done.returncode == 2
     assert f"Did you mean '{hint}'?" in done.stdout + done.stderr
+
+
+# ── remove / uninstall while another add-on requires it ───────────────────────
+
+
+@pytest.mark.parametrize("command", ["remove paperless", "uninstall paperless --clean-up"])
+def test_a_required_addon_is_not_taken_away(tmp_path: Path, command: str) -> None:
+    done, calls = _run(tmp_path, f"cmd_addon_{command}", DEPS_RC="2")
+
+    assert done.returncode == 2
+    # Refused before the registration or a container is touched.
+    assert calls == ["py_cli addon-dependents --name=paperless"]
+
+
+@pytest.mark.parametrize("verb", ["remove", "uninstall"])
+def test_force_hands_the_override_on_and_continues(tmp_path: Path, verb: str) -> None:
+    done, calls = _run(tmp_path, f"cmd_addon_{verb} paperless --force")
+
+    assert done.returncode == 0, done.stderr
+    assert calls[0] == "py_cli addon-dependents --name=paperless --force"
+    assert f"py_cli addon-{verb} --name=paperless" in [" ".join(c.split()[:3]) for c in calls]
