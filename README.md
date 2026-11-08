@@ -132,15 +132,23 @@ Linux host:
   `LIBRECHAT_AGENTS_DIR` and `LIBRECHAT_PROMPTS_DIR` when they are set. A checkout under
   `/Users` with the default config directory next to it works. `/opt` works only after it
   is added under File sharing, and `/srv` cannot be created on the read-only system volume.
-- **papaia-manager.** It needs a Linux host. `setup` defaults to *no* on macOS; leave it
-  off (`--no-manager`).
-- **Keycloak certificate.** With the default local URLs, trust the generated local CA
-  once so browsers accept Keycloak's certificate:
+- **papaia-manager.** It runs on Docker Desktop, with its workspace, configuration and
+  backup directories below `/Users`; a checkout there with the default directories meets
+  this. `setup` recognises Docker Desktop and defaults to *yes* there; with another
+  engine it defaults to *no*, so leave the profile off (`--no-manager`). See
+  [papaia-manager](#papaia-manager).
+- **Keycloak certificate.** With the default local URLs, browsers on the Mac check
+  Keycloak's certificate against the login keychain. `setup` offers to trust the
+  generated local CA there once (no admin rights needed). In a non-interactive run, or
+  when the offer is declined, it prints the command instead:
 
   ```bash
-  sudo security add-trusted-cert -d -r trustRoot \
-    -k /Library/Keychains/System.keychain "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
+  security add-trusted-cert -r trustRoot \
+    -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
   ```
+
+  The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
+  through an `/etc/hosts` entry; `setup` prints the command when it is missing.
 
   The server certificate is issued for 825 days with `serverAuth`, as macOS requires.
   `setup` renews an older or expiring one with the same CA, so the trust stays; restart
@@ -306,7 +314,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
-| `--manager` / `--no-manager` | _(prompted, default on; off on macOS)_ | Toggle the `manager` profile |
+| `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
