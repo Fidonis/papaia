@@ -133,7 +133,7 @@ services:
     profiles: [librechat]
 
   librechat-vectordb:
-    image: pgvector/pgvector:0.8.0-pg15-trixie
+    image: pgvector/pgvector:0.8.7-pg15-trixie
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${VECTORDB_NAME}
