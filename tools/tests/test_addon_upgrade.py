@@ -279,6 +279,20 @@ def test_the_same_directory_is_an_in_place_upgrade():
     assert "no way back" in addon_upgrade.format_plan(plan)
 
 
+
+def test_the_review_names_unmet_requirements_of_other_addons():
+    plan = _plan_of(_candidate({}, {}))
+    plan["compat"] = {
+        "status": "INCOMPATIBLE",
+        "axis": "requires",
+        "reason": "addon 'dependent' requires 'paperless ^1.0.0', which 2.0.0 does not satisfy",
+    }
+
+    text = addon_upgrade.format_plan(plan)
+
+    assert "Add-on requirements: UNMET (addon 'dependent' requires" in text
+    assert "Compatibility with this core" not in text
+
 # ── dry run ──────────────────────────────────────────────────────────────────
 
 

@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import addons, common, components, deployment, semver
+from . import addons, common, compat, components, deployment, semver
 
 SCHEMA_VERSION = 1
 
@@ -425,7 +425,12 @@ def format_plan(plan: dict) -> str:
     verdict = plan.get("compat")
     if verdict:
         reason = f" ({verdict['reason']})" if verdict["reason"] else ""
-        lines.append(f"Compatibility with this core: {verdict['status']}{reason}")
+        unmet = verdict["status"] == compat.STATUS_INCOMPATIBLE
+        if unmet and verdict.get("axis") == compat.REQUIRES_AXIS:
+            # Not about the core: other add-ons require what this version does not meet.
+            lines.append(f"Add-on requirements: UNMET{reason}")
+        else:
+            lines.append(f"Compatibility with this core: {verdict['status']}{reason}")
 
     env = plan["env"]
     if env["new"]:
