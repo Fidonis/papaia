@@ -82,7 +82,7 @@ services:
   #  to read and write the same two collections.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-mcp:
-    image: ghcr.io/fidonis/qdrant-mcp-rbac:0.4.0
+    image: ghcr.io/fidonis/qdrant-mcp-rbac:0.4.1
     restart: unless-stopped
     environment:
       OIDC_ISSUER_URL:        ${OIDC_ISSUER}
@@ -164,7 +164,7 @@ services:
   #  and a different value would lock everybody out.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest:
-    image: ghcr.io/fidonis/qdrant-ingest:1.0.0
+    image: ghcr.io/fidonis/qdrant-ingest:1.0.1
     restart: unless-stopped
     # Jobs stop cooperatively between documents; give them room to finish.
     stop_grace_period: 60s

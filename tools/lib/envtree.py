@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -200,6 +201,25 @@ def stamp_backup_dir(tree: EnvTree, *, override: str | None = None) -> EnvTree:
 # so it is overwritten by the detected socket GID rather than kept sticky.
 _DOCKER_GID_PLACEHOLDER = "999"
 _DOCKER_SOCKET = "/var/run/docker.sock"
+# Docker Desktop hands containers a socket owned by root:root, whatever the host path says.
+_DOCKER_DESKTOP_SOCKET_GID = "0"
+
+
+def _is_docker_desktop() -> bool:
+    """True when the local docker CLI talks to Docker Desktop."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        done = subprocess.run(
+            ["docker", "info", "--format", "{{.OperatingSystem}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0 and done.stdout.strip() == "Docker Desktop"
 
 
 def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> EnvTree:
@@ -218,8 +238,11 @@ def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> Env
     value by hand keeps it. The placeholder shipped in .env.example, or an empty
     value, is replaced by the detected socket GID. If the socket cannot be
     stat'd (setup run on a host without a local Docker socket, e.g. a remote
-    daemon), or on macOS, where the host path is not the socket the containers
-    see, the current value is left untouched."""
+    daemon), the current value is left untouched.
+
+    On macOS the host path is not the socket the containers see: under Docker
+    Desktop that one is owned by GID 0, which is stamped instead. Any other
+    macOS engine leaves the current value untouched."""
     root = tree.setdefault("", {})
     current = root.get("DOCKER_GID", "")
     if current and current != _DOCKER_GID_PLACEHOLDER:
@@ -227,6 +250,8 @@ def stamp_docker_gid(tree: EnvTree, *, socket_path: str = _DOCKER_SOCKET) -> Env
     if sys.platform == "darwin":
         # Docker Desktop: the host path is a symlink to ~/.docker/run/docker.sock, owned
         # by the user's group, not the socket the containers see inside Docker's VM.
+        if _is_docker_desktop():
+            root["DOCKER_GID"] = _DOCKER_DESKTOP_SOCKET_GID
         return tree
     try:
         gid = os.stat(socket_path).st_gid

@@ -111,7 +111,7 @@ verification on that hop. A plain-HTTP `proxy_pass` to port 8110 cannot work. Se
 [External reverse proxy](../README.md#external-reverse-proxy) for working Caddy and nginx
 configurations.
 
-### "host.docker.internal: cannot resolve" on Linux
+### "host.docker.internal: cannot resolve" on Linux or macOS
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
@@ -223,6 +223,19 @@ relay as its mail server; `papaia-ctl keycloak-role-sync` shows what it did to t
 Most likely its Compose profile is not active. Check `COMPOSE_PROFILES` in
 `$PAPAIA_CONFIG_DIR/.env`, and see
 [Selective module enable / disable](deployment.md#selective-module-enable--disable).
+
+### mcp-firecrawl fails with "exec format error" on an arm64 host
+
+The Firecrawl MCP image (profile `librechat-websearch`) is published for `linux/amd64` only, so
+its service pins `platform: linux/amd64` and runs emulated on arm64. Docker Desktop on Apple
+Silicon emulates it out of the box (Rosetta). A Linux arm64 host needs QEMU user emulation
+registered with binfmt_misc first, e.g.:
+
+```sh
+docker run --privileged --rm tonistiigi/binfmt --install amd64
+```
+
+Then run `tools/papaia-ctl start` again.
 
 ## Logs
 
