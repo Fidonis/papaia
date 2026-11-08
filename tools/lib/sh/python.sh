@@ -10,13 +10,38 @@ _python_version() {
     "$1" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null
 }
 
+# Prints the names of the `python3.X` interpreters on PATH, newest first, each once.
+# Derived from PATH rather than a fixed list, so a new minor release is found too. Plain
+# Bash only: the preflight runs before anything else is known to be on PATH.
+_versioned_pythons() {
+    local dir file name minor newest=0 found=" "
+    local IFS=:
+    for dir in $PATH; do
+        [ -n "$dir" ] || continue
+        for file in "$dir"/python3.[0-9]*; do
+            name="${file##*/}"
+            # Skips python3.15-config and the unexpanded pattern of a directory without one.
+            case "$name" in python3.*[!0-9]*) continue ;; esac
+            [ -x "$file" ] || continue
+            minor=$((10#${name#python3.}))
+            found="${found}python3.$minor "
+            [ "$minor" -le "$newest" ] || newest="$minor"
+        done
+    done
+    while [ "$newest" -gt 0 ]; do
+        case "$found" in *" python3.$newest "*) printf '%s ' "python3.$newest" ;; esac
+        newest=$((newest - 1))
+    done
+}
+
 # Sets PYTHON_BIN to the first interpreter on PATH at PYTHON_MIN_VERSION or newer. macOS
 # puts the Command Line Tools' Python 3.9 at `python3` and Homebrew's at `python3.X`,
 # so the versioned names are tried as well. Otherwise prints why and returns 1.
 find_python() {
-    local candidate version too_old=""
+    local candidate candidates version too_old=""
     PYTHON_BIN=""
-    for candidate in python3 python python3.14 python3.13 python3.12 python3.11 python3.10; do
+    candidates="python3 python $(_versioned_pythons)"
+    for candidate in $candidates; do
         # command -v alone isn't enough: on Windows, `python3`/`python` may
         # resolve to the Microsoft Store's inert app-execution-alias stub even
         # when no real interpreter is installed under that name. Only accept a
@@ -34,7 +59,8 @@ find_python() {
     done
     if [ -n "$too_old" ]; then
         error "papaia-ctl requires Python $PYTHON_MIN_VERSION or newer; found $too_old."
-        error "  macOS:         brew install python pyyaml"
+        error "  macOS:         brew install python, then PyYAML in a virtual environment"
+        error "                 (README, Prerequisites > macOS)"
         error "  Debian/Ubuntu: sudo apt-get install -y python3 python3-yaml"
         error "Put the newer python3 first on PATH and re-run."
     else
