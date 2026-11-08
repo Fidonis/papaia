@@ -989,11 +989,14 @@ papaia-manager:
   group_add: ["${DOCKER_GID}"]                           # access to docker.sock
 ```
 
-`DOCKER_GID` must match the GID owning `/var/run/docker.sock` on the host; the
-container itself runs as a non-root user.
+`DOCKER_GID` must match the GID owning `/var/run/docker.sock` inside the container;
+`setup` reads it from the host socket on Linux and stamps `0` under Docker Desktop
+on macOS, whose socket proxy is owned by root. The container itself runs as a
+non-root user.
 
-Path parity is the reason the `manager` profile is **Linux-only**: Docker Desktop
-on Windows and macOS cannot present a host path unchanged inside the container, so
+Path parity decides where the `manager` profile runs: on Linux hosts, and on Docker
+Desktop for macOS, which shares `/Users` with its VM under the same path. Docker
+Desktop on Windows cannot present a host path unchanged inside the container, so
 the mounts above cannot be satisfied there. Every other profile is unaffected —
 `--no-manager` leaves an otherwise identical stack.
 
@@ -1228,8 +1231,8 @@ The manager does not run ingestion itself. It writes the ingester's own catalog 
 compare-and-swap write, asks it to reload, checks that it serves what was written and starts
 and follows runs through its REST API; the ingester mounts the directory read-only. Files for
 the Embedding page are staged in `$PAPAIA_CONFIG_DIR/ai/rag/documents/uploads/` and deleted
-after a run that succeeded without a failed document. Without the `manager` profile, which
-runs on Linux hosts only, there is no interface and the catalog files are edited by hand.
+after a run that succeeded without a failed document. Without the `manager` profile there
+is no interface and the catalog files are edited by hand.
 
 ### Models and usage
 
