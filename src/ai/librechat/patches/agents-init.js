@@ -17,6 +17,12 @@
 // so removing an add-on removes its agents. Agents from the operator
 // directory or the UI are never deleted.
 //
+// `is_collaborative` (default true) shares an agent with every user of the
+// instance: LibreChat 0.8.x decides access by its ACL alone, so the script
+// keeps a public VIEW entry (role `agent_viewer`) for the agent, and removes
+// it when the YAML sets `is_collaborative: false`. The owner's entry is
+// granted by LibreChat's own `migrate:agent-permissions` on startup.
+//
 // Silent if the directories are empty or missing (default behaviour for
 // deployments that don't opt in via LIBRECHAT_AGENTS_DIR). Non-fatal:
 // any failure here is logged and swallowed so a broken agent file does
@@ -67,7 +73,7 @@ function listYaml(dir) {
 }
 
 // Upserts one agent file. Returns the stored agent id, or null when skipped.
-async function upsertAgent(agents, users, aclentries, dir, file, managedBy) {
+async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, managedBy) {
   const raw = fs.readFileSync(path.join(dir, file), 'utf8');
   const doc = yaml.load(raw);
   if (!doc || typeof doc !== 'object') {
@@ -118,16 +124,39 @@ async function upsertAgent(agents, users, aclentries, dir, file, managedBy) {
     },
     { upsert: true },
   );
-  // A document stored by an earlier run under the bare id cannot be used.
+  // A document stored by an earlier run under the bare id cannot be used. The
+  // old code stored the YAML value as it was, so a numeric id is a number.
   if (agentId !== doc.id) {
-    const stale = await agents.findOne({ id: String(doc.id) }, { projection: { _id: 1 } });
-    if (stale) {
-      await agents.deleteOne({ _id: stale._id });
-      await aclentries.deleteMany({ resourceType: 'agent', resourceId: stale._id });
+    const stale = await agents
+      .find({ id: { $in: [doc.id, String(doc.id)] } }, { projection: { _id: 1 } })
+      .toArray();
+    for (const { _id } of stale) {
+      await agents.deleteOne({ _id });
+      await aclentries.deleteMany({ resourceType: 'agent', resourceId: _id });
     }
   }
+  const stored = await agents.findOne({ id: agentId }, { projection: { _id: 1 } });
+  await sharePublicly(aclentries, stored._id, update.is_collaborative, viewerRoleId, authorId);
   log(`upserted ${agentId} (${file}) author=${authorId}`);
   return agentId;
+}
+
+// Keeps or removes the public VIEW entry that makes an agent usable by every
+// user of the instance. Without the `agent_viewer` role (LibreChat seeds it on
+// its first start) the entry carries the permission bits only.
+async function sharePublicly(aclentries, resourceId, shared, viewerRoleId, grantedBy) {
+  const key = { principalType: 'public', resourceType: 'agent', resourceId };
+  if (!shared) {
+    await aclentries.deleteMany(key);
+    return;
+  }
+  const entry = { permBits: 1, grantedBy, updatedAt: new Date() };
+  if (viewerRoleId) entry.roleId = viewerRoleId;
+  await aclentries.updateOne(
+    key,
+    { $set: entry, $setOnInsert: { grantedAt: new Date(), createdAt: new Date() } },
+    { upsert: true },
+  );
 }
 
 // Deletes the add-on agents whose file is gone (the add-on was removed or no
@@ -168,12 +197,25 @@ async function main() {
     const agents = db.collection('agents');
     const users = db.collection('users');
     const aclentries = db.collection('aclentries');
+    const viewerRole = await db
+      .collection('accessroles')
+      .findOne({ accessRoleId: 'agent_viewer' }, { projection: { _id: 1 } });
+    const viewerRoleId = viewerRole ? viewerRole._id : null;
 
     let upserted = 0;
     let failed = 0;
     for (const file of operatorFiles || []) {
       try {
-        if (await upsertAgent(agents, users, aclentries, AGENTS_DIR, file, null)) upserted += 1;
+        const agentId = await upsertAgent(
+          agents,
+          users,
+          aclentries,
+          viewerRoleId,
+          AGENTS_DIR,
+          file,
+          null,
+        );
+        if (agentId) upserted += 1;
         else failed += 1;
       } catch (err) {
         warn(`${file}: ${err.message}`);
@@ -191,6 +233,7 @@ async function main() {
           agents,
           users,
           aclentries,
+          viewerRoleId,
           ADDON_AGENTS_DIR,
           file,
           managedBy,
