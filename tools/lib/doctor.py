@@ -1574,7 +1574,7 @@ CHECK_NAMES = tuple(name for name, _ in CHECKS)
 
 # Added by lib/cluster.py in a distributed installation only; a single host never reports
 # them. Accepted by --skip everywhere, so a script can pass them unconditionally.
-DISTRIBUTED_CHECK_NAMES = ("nodes", "links")
+DISTRIBUTED_CHECK_NAMES = ("nodes", "links", "file_modes")
 
 
 # ─────────────────────────────────────────────────────────────────────────

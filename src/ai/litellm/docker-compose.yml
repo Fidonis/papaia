@@ -57,7 +57,7 @@ services:
     profiles: [litellm]
 
   litellm-prometheus:
-    image: prom/prometheus:v3.13.1
+    image: prom/prometheus:v3.15.1
     restart: unless-stopped
     env_file:
       - ./.env

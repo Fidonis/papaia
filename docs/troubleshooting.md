@@ -193,6 +193,19 @@ Most likely its Compose profile is not active. Check `COMPOSE_PROFILES` in
 `$PAPAIA_CONFIG_DIR/.env`, and see
 [Selective module enable / disable](deployment.md#selective-module-enable--disable).
 
+### mcp-firecrawl fails with "exec format error" on an arm64 host
+
+The Firecrawl MCP image (profile `librechat-websearch`) is published for `linux/amd64` only, so
+its service pins `platform: linux/amd64` and runs emulated on arm64. Docker Desktop on Apple
+Silicon emulates it out of the box (Rosetta). A Linux arm64 host needs QEMU user emulation
+registered with binfmt_misc first, e.g.:
+
+```sh
+docker run --privileged --rm tonistiigi/binfmt --install amd64
+```
+
+Then run `tools/papaia-ctl start` again.
+
 ## Logs
 
 Start with `tools/papaia-ctl status` (what is running, and which module is unhealthy or not
