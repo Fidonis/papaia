@@ -155,7 +155,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.8.0
+    image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.9.0
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb
