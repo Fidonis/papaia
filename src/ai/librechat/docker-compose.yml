@@ -100,7 +100,7 @@ services:
 
   librechat-mongodb:
     restart: unless-stopped
-    image: mongo:8.0.20
+    image: mongo:8.3.13
     volumes:
       - librechat-mongodb:/data/db
     command: mongod --noauth
@@ -133,7 +133,7 @@ services:
     profiles: [librechat]
 
   librechat-vectordb:
-    image: pgvector/pgvector:0.8.0-pg15-trixie
+    image: pgvector/pgvector:0.8.7-pg15-trixie
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${VECTORDB_NAME}
@@ -155,7 +155,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.8.0
+    image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.9.0
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb
