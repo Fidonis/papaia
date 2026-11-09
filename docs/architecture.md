@@ -176,6 +176,10 @@ requires:
   addon_api: 1                     # Contract generation the add-on is built against
                                    # (integer or list, e.g. [1, 2]);
                                    # checked against the Core's ADDON_API window
+  addons:                          # optional (addon_api 4): add-ons this one builds on;
+    - <name>                       # each must be installed and active, a mapping adds
+    - name: <name>                 # a SemVer range against that add-on's `version`
+      version: ">=<semver>"
 papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core version
 description: "<description>"
 
@@ -281,7 +285,10 @@ Only values that differ from the `.env.example` literal are written to the confi
 >    the contract does not lock the add-on out.
 >
 > In addition, all `networks.attach` entries are structurally validated against
-> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Policy:
+> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Each
+> `requires.addons` entry must name an add-on that is active in `deployment.yaml`,
+> and its manifest `version` must satisfy the entry's range; a missing, inactive
+> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.

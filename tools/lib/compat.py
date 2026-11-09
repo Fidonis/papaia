@@ -20,6 +20,10 @@ the running checkout and against an update candidate (`addon check
 Additionally, `networks.attach` entries are validated structurally against
 the core compose's service names -- the one seam break that has actually
 happened (a core service rename) is detectable without any version number.
+
+`requires.addons` (addon_api 4) names other addons an addon builds on;
+`evaluate_required_addons` checks it against the addons active in a
+deployment.
 """
 
 from __future__ import annotations
@@ -292,6 +296,93 @@ def evaluate_addon(
         requirement=requirement,
         core_value=core_value,
         reason=reason,
+        warnings=tuple(warnings),
+    )
+
+
+REQUIRES_AXIS = "requires"
+
+
+def required_addons(manifest: dict) -> list[tuple[str, str | None]]:
+    """The `requires.addons` entries of a manifest as (name, version range or None).
+
+    An entry is a name or a mapping with `name` and an optional SemVer `version`
+    range. Raises ValueError for a malformed list, entry or range."""
+    requires = manifest.get("requires") or {}
+    if not isinstance(requires, dict):
+        raise ValueError("requires: must be a mapping")
+    entries = requires.get("addons")
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("requires.addons must be a list")
+    result: list[tuple[str, str | None]] = []
+    for entry in entries:
+        if isinstance(entry, str) and entry:
+            result.append((entry, None))
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise ValueError("requires.addons entries must be a name or a mapping with 'name'")
+        if not entry["name"]:
+            raise ValueError("requires.addons entries must be a name or a mapping with 'name'")
+        version = entry.get("version")
+        if version is not None:
+            if not isinstance(version, str):
+                raise ValueError(f"requires.addons '{entry['name']}': version must be a string")
+            semver.parse_constraint(version)
+        result.append((entry["name"], version))
+    return result
+
+
+def evaluate_required_addons(
+    name: str, manifest: dict, active: dict[str, str | None]
+) -> CompatResult | None:
+    """Check `requires.addons` against the active addons of a deployment.
+
+    `active` maps each active addon's name to its version (None when unknown).
+    Returns None when the manifest requires nothing or every requirement is met;
+    an ERROR result for a malformed field; otherwise an INCOMPATIBLE result naming
+    what is missing. A requirement on a version the active addon does not state
+    passes with a warning."""
+    try:
+        requirements = required_addons(manifest)
+    except ValueError as exc:
+        return CompatResult(name, STATUS_ERROR, axis=REQUIRES_AXIS, reason=str(exc))
+    if not requirements:
+        return None
+    problems: list[str] = []
+    warnings: list[str] = []
+    for required, version_range in requirements:
+        if required not in active:
+            problems.append(f"add-on '{required}' is not installed and active")
+            continue
+        if version_range is None:
+            continue
+        version = active[required]
+        if version is None:
+            warnings.append(
+                f"add-on '{required}' states no version; '{version_range}' not checked"
+            )
+            continue
+        try:
+            ok = semver.satisfies(version, version_range)
+        except ValueError:
+            warnings.append(
+                f"add-on '{required}' has version '{version}'; '{version_range}' not checked"
+            )
+            continue
+        if not ok:
+            problems.append(
+                f"add-on '{required}' {version} does not satisfy '{version_range}'"
+            )
+    if not problems and not warnings:
+        return None
+    return CompatResult(
+        name,
+        STATUS_INCOMPATIBLE if problems else STATUS_OK,
+        axis=REQUIRES_AXIS,
+        requirement=[n if r is None else f"{n} {r}" for n, r in requirements],
+        reason="; ".join(problems) if problems else None,
         warnings=tuple(warnings),
     )
 
