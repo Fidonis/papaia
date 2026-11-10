@@ -812,6 +812,44 @@ def test_install_force_skips_a_missing_required_addon(repo_root, config_dir, tmp
     assert "WARNING" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("requires", "join", "error"),
+    [
+        (
+            {"addon_api": 4},
+            [{"addon": "paperless", "services": ["job"]}],
+            "'paperless' is not listed in requires.addons",
+        ),
+        (None, [{"addon": "paperless", "services": []}], "services must be a non-empty list"),
+    ],
+)
+def test_join_addons_is_checked_without_requires_addons(
+    repo_root, config_dir, tmp_path, capsys, requires, join, error
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    path = tmp_path / "addon-joiner"
+    path.mkdir()
+    manifest: dict = {
+        "name": "joiner",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "networks": {"join_addons": join},
+    }
+    if requires is not None:
+        manifest["requires"] = requires
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    capsys.readouterr()
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="joiner", path=str(path), force=True)
+    )
+
+    # A malformed manifest stays fatal with --force, as with requires.addons present.
+    assert result == 2
+    assert error in capsys.readouterr().err
+
+
 def test_check_reports_an_unmet_requirement(repo_root, config_dir, tmp_path, capsys):
     _setup(repo_root, config_dir)
     assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
