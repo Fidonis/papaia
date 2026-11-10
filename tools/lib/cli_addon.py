@@ -106,13 +106,20 @@ def active_addon_versions(
 def _with_required_addons(
     result: compat.CompatResult, name: str, manifest: dict, deployed: dict, repo_root: Path
 ) -> compat.CompatResult:
-    """Fold the `requires.addons` verdict into a core verdict. A malformed field
-    always wins; an unmet requirement replaces an OK or UNKNOWN verdict and is
-    added to an INCOMPATIBLE one, so the operator sees every problem at once."""
+    """Fold the `requires.addons` verdict, which also covers `networks.join_addons`,
+    into a core verdict. A malformed field always wins; an unmet requirement
+    replaces an OK or UNKNOWN verdict and is added to an INCOMPATIBLE one, so the
+    operator sees every problem at once."""
     if result.status == compat.STATUS_ERROR:
         return result
     requires = manifest.get("requires")
-    if requires is None or (isinstance(requires, dict) and requires.get("addons") is None):
+    networks = manifest.get("networks")
+    # join_addons is checked even without requires.addons: naming an add-on that is
+    # not required is a manifest error, not something to skip.
+    joins = isinstance(networks, dict) and networks.get("join_addons") is not None
+    if not joins and (
+        requires is None or (isinstance(requires, dict) and requires.get("addons") is None)
+    ):
         # Nothing to check: leave the old path untouched, without loading other manifests.
         return result
     required = compat.evaluate_required_addons(
@@ -275,6 +282,7 @@ def _render_integration(config_dir: Path, repo_root: Path) -> None:
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
 
 
 def cmd_addon_install(args: argparse.Namespace) -> int:
@@ -913,6 +921,10 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
         config_dir / "overrides" / "addons" / f"docker-compose.{name}-ssl-cert.override.yml"
     )
     ssl_override_file.unlink(missing_ok=True)
+    join_override_file = (
+        config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
+    )
+    join_override_file.unlink(missing_ok=True)
 
     bundle_dir = config_dir / "addons" / name
     if bundle_dir.is_dir():

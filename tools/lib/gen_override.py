@@ -13,11 +13,12 @@ no-op rather than a special case.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import yaml
 
-from . import common, deployment, gpu_detect
+from . import common, compat, deployment, gpu_detect
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
 # `networks.app_network` may use to scope its bridge name to the deployment
@@ -123,6 +124,88 @@ def external_networks(override_path: Path) -> list[str]:
         for name, cfg in (doc.get("networks") or {}).items()
         if (cfg or {}).get("external")
     ]
+
+
+def _service_networks(addon_path: Path, service: str) -> list[str]:
+    """The networks `service` already joins in the addon's own compose file, or
+    ["default"] when it names none. A compose `networks:` override replaces the
+    service's list, so the join override has to repeat them."""
+    compose = addon_path / "docker-compose.yml"
+    if not compose.is_file():
+        return ["default"]
+    doc = yaml.safe_load(compose.read_text(encoding="utf-8")) or {}
+    networks = ((doc.get("services") or {}).get(service) or {}).get("networks")
+    if isinstance(networks, dict):
+        return list(networks) or ["default"]
+    if isinstance(networks, list):
+        return [n for n in networks if isinstance(n, str)] or ["default"]
+    return ["default"]
+
+
+def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
+    """Write or remove each addon's `networks.join_addons` override.
+
+    For an active addon that declares
+
+        networks:
+          join_addons:
+            - addon: <required addon>
+              services: [<service>, ...]
+
+    the listed services join the required addon's resolved `app_network`
+    (declared external); every other service of the addon stays off it. The
+    file lives in overrides/addons/ and is applied to the addon's own compose
+    project by `papaia-ctl addon start`, like the ssl-cert overrides.
+    """
+    deployed = deployment.load(config_dir)
+    entries = deployed.get("addons") or [] if deployed else []
+    manifests: dict[str, tuple[dict, Path]] = {}
+    for addon in entries:
+        if not addon.get("name") or not addon.get("path"):
+            continue
+        path = deployment.resolve_addon_path(addon, repo_root)
+        manifest, _ = deployment.load_addon_manifest(path)
+        if manifest is not None:
+            manifests[addon["name"]] = (manifest, path)
+
+    for addon in entries:
+        name = addon.get("name")
+        if not name:
+            continue
+        out_path = config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
+        manifest, path = manifests.get(name, ({}, Path()))
+        try:
+            joins = compat.joined_addons(manifest) if addon.get("active") else []
+        except ValueError:
+            joins = []  # the compatibility gate reports the malformed manifest
+        services: dict[str, list[str]] = {}
+        external: dict[str, dict] = {}
+        for target, joining in joins:
+            target_manifest = manifests.get(target, ({}, Path()))[0]
+            raw = (target_manifest.get("networks") or {}).get("app_network")
+            if not raw:
+                print(
+                    f"WARNING: addon '{name}': '{target}' declares no networks.app_network;"
+                    " join_addons entry skipped",
+                    file=sys.stderr,
+                )
+                continue
+            network = resolve_app_network(raw, config_dir)
+            external[network] = {"external": True}
+            for service in joining:
+                current = services.setdefault(service, _service_networks(path, service))
+                if network not in current:
+                    current.append(network)
+        if not services:
+            out_path.unlink(missing_ok=True)
+            continue
+        override = {
+            "services": {service: {"networks": nets} for service, nets in services.items()},
+            "networks": external,
+        }
+        common.atomic_write(
+            out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+        )
 
 
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For
