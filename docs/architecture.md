@@ -294,7 +294,9 @@ Only values that differ from the `.env.example` literal are written to the confi
 > the Core Compose service names; an unknown name is `INCOMPATIBLE`. Each
 > `requires.addons` entry must name an add-on that is active in `deployment.yaml`,
 > and its manifest `version` must satisfy the entry's range; a missing, inactive
-> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Policy:
+> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Each
+> `networks.join_addons` entry must name an add-on from `requires.addons` and
+> list at least one service; anything else is a malformed manifest. Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
