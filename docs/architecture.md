@@ -246,7 +246,12 @@ env_prompts:                       # optional: metadata per .env.example key
                                    # add-on in requires.addons that lists the key under
                                    # `exports`; filled at install, never echoed. Sticky
                                    # like every bundle value: after the other add-on
-                                   # rotates it, reinstall this add-on to pick it up.
+                                   # rotates it, set the new value in this add-on's
+                                   # $PAPAIA_CONFIG_DIR/addons/<name>/.env and run
+                                   # `papaia-ctl addon start <name>`. Installing again
+                                   # keeps the old value; `addon uninstall` + `install`
+                                   # also regenerates this add-on's own GENERATE_*
+                                   # secrets while its volumes stay.
   AUTO_SECRET:
     secret: true                   # required for GENERATE_* values without _KEY suffix
     label:  "Database password"
