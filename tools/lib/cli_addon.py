@@ -124,8 +124,10 @@ def _with_required_addons(
 def _fold(
     result: compat.CompatResult, other: compat.CompatResult | None
 ) -> compat.CompatResult:
-    """Combine a core verdict with a verdict on the `requires` axis."""
-    if other is None:
+    """Combine a core verdict with a verdict on the `requires` axis. An ERROR on
+    either side wins, so an unmet requirement can never turn a malformed manifest
+    into something --force lets through."""
+    if other is None or result.status == compat.STATUS_ERROR:
         return result
     if other.status == compat.STATUS_ERROR:
         return other

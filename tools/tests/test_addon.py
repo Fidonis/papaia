@@ -978,3 +978,31 @@ def test_upgrade_and_rollback_check_what_dependents_require(
         assert "addon 'dependent' requires 'paperless" in result.reason
         assert _gate("paperless", manifest, config_dir, repo_root, force=True)[1] == 0
 
+
+@pytest.mark.parametrize(
+    ("requires", "error"),
+    [
+        ({"addon_api": 1, "addons": "not-a-list"}, "requires.addons must be a list"),
+        ({"addon_api": "abc"}, "requires.addon_api entries must be integers"),
+    ],
+)
+def test_a_malformed_manifest_stays_fatal_when_it_also_breaks_a_dependent(
+    repo_root, config_dir, tmp_path, requires, error
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    _install_dependent(
+        repo_root, config_dir, tmp_path, [{"name": "paperless", "version": "^1.0.0"}]
+    )
+    manifest = yaml.safe_load((ADDON_PAPERLESS / "papaia-app.yaml").read_text(encoding="utf-8"))
+    manifest["version"] = "2.0.0"
+    manifest["requires"] = requires
+
+    result, exit_code = _gate("paperless", manifest, config_dir, repo_root, force=True)
+
+    # The dependent's unmet range must not hide the malformed field: --force never
+    # lets an ERROR through.
+    assert exit_code == 2
+    assert result.status == "ERROR"
+    assert error in result.reason
+
