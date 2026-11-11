@@ -82,6 +82,7 @@
 #   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 #   papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
+#   papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
 #   papaia-ctl help
 #
 # Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
@@ -96,7 +97,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,89p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,90p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -207,7 +208,8 @@ case "$cmd" in
             stop)      cmd_addon_stop "$@" ;;
             remove)    cmd_addon_remove "$@" ;;
             uninstall) cmd_addon_uninstall "$@" ;;
-            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, upgrade, rollback, list, check, components, stop, remove, uninstall."; exit 2 ;;
+            run)       cmd_addon_run "$@" ;;
+            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, upgrade, rollback, list, check, components, stop, remove, uninstall, run."; exit 2 ;;
         esac
         ;;
     help|-h|--help) usage ;;

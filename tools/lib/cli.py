@@ -1286,6 +1286,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_list.add_argument("--json", action="store_true")
     p_addon_list.set_defaults(func=cli_addon.cmd_addon_list)
 
+    p_addon_action = sub.add_parser("addon-action")
+    p_addon_action.add_argument("--name", required=True)
+    p_addon_action.add_argument("--action", required=True)
+    p_addon_action.set_defaults(func=cli_addon.cmd_addon_action)
+
+    p_addon_actions = sub.add_parser("addon-actions")
+    p_addon_actions.add_argument("--name", required=True)
+    p_addon_actions.add_argument("--json", action="store_true")
+    p_addon_actions.set_defaults(func=cli_addon.cmd_addon_actions)
+
     p_addon_dependents = sub.add_parser("addon-dependents")
     p_addon_dependents.add_argument("--name", required=True)
     p_addon_dependents.add_argument("--force", action="store_true")

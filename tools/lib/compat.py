@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -267,6 +268,11 @@ def evaluate_addon(
     else:
         reason = "manifest declares no compatibility requirement"
 
+    try:
+        addon_actions(manifest)
+    except ValueError as exc:
+        return CompatResult(name, STATUS_ERROR, axis="actions", reason=str(exc))
+
     warnings: list[str] = []
     attach = (manifest.get("networks") or {}).get("attach") or []
     if attach and not isinstance(attach, list):
@@ -301,6 +307,44 @@ def evaluate_addon(
 
 
 REQUIRES_AXIS = "requires"
+
+_ACTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def addon_actions(manifest: dict) -> dict[str, dict]:
+    """The `actions` block (addon_api 4) as {name: {service, args, description,
+    destructive}}.
+
+    Each action names a service of the addon's own compose file and optional fixed
+    string arguments; `destructive: true` asks callers such as papaia-manager to
+    confirm before running it. Raises ValueError for a malformed block."""
+    actions = manifest.get("actions")
+    if actions is None:
+        return {}
+    if not isinstance(actions, dict):
+        raise ValueError("actions: must be a mapping")
+    result: dict[str, dict] = {}
+    for name, spec in actions.items():
+        if not isinstance(name, str) or not _ACTION_NAME_RE.match(name):
+            raise ValueError(f"actions: '{name}' is not a valid name (a-z, 0-9, -)")
+        if not isinstance(spec, dict) or not isinstance(spec.get("service"), str):
+            raise ValueError(f"actions.{name}: needs a 'service'")
+        args = spec.get("args") or []
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            raise ValueError(f"actions.{name}.args must be a list of strings")
+        description = spec.get("description") or ""
+        if not isinstance(description, str):
+            raise ValueError(f"actions.{name}.description must be a string")
+        destructive = spec.get("destructive", False)
+        if not isinstance(destructive, bool):
+            raise ValueError(f"actions.{name}.destructive must be true or false")
+        result[name] = {
+            "service": spec["service"],
+            "args": list(args),
+            "description": description,
+            "destructive": destructive,
+        }
+    return result
 
 
 def required_addons(manifest: dict) -> list[tuple[str, str | None]]:

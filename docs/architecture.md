@@ -264,6 +264,14 @@ env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
     hint: "Copy from Keycloak"     # hint is shown in the configuration overview
 
+actions:                           # optional (addon_api 4): maintenance actions,
+  reset:                           # run by `papaia-ctl addon run <name> reset` as
+    service: maintenance           # `docker compose run --rm <service> <args>` in the
+    args: ["--reset-existing"]     # add-on's project; fixed arguments only. Give the
+    description: "Restore the initial data"  # service a compose profile (e.g.
+                                   # `profiles: [actions]`) so `addon start` skips it.
+    destructive: true              # optional: callers (papaia-manager) confirm first
+
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
   - "Set MW_SERVER in the add-on .env when the wiki is not on the default URL."
