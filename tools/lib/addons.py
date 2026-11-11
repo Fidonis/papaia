@@ -71,12 +71,62 @@ def seed_addon_env(addon_path: Path, config_dir: Path) -> None:
 _CHANGE_ME = "CHANGE_ME"
 
 
-def prompt_change_me_vars(env_path: Path, manifest: dict, config_dir: Path) -> dict[str, str]:
+def resolve_addon_defaults(
+    manifest: dict, provider_manifests: dict[str, dict], config_dir: Path
+) -> dict[str, str]:
+    """Values for the env prompts that declare `default_from_addon: "<addon>:<KEY>"`.
+
+    `provider_manifests` maps each active addon's name to its manifest. The named
+    addon must be listed in `requires.addons` and list KEY under `exports`; the value
+    is read from that addon's config bundle. Keys a provider does not export are never
+    read. Raises ValueError naming the first problem. Returns {prompt key: value}
+    for the values that are set."""
+    required = {
+        entry if isinstance(entry, str) else (entry or {}).get("name")
+        for entry in ((manifest.get("requires") or {}).get("addons") or [])
+    }
+    values: dict[str, str] = {}
+    bundles: dict[str, dict[str, str]] = {}
+    for key, cfg in (manifest.get("env_prompts") or {}).items():
+        source = (cfg or {}).get("default_from_addon")
+        if source is None:
+            continue
+        if not isinstance(source, str) or source.count(":") != 1:
+            raise ValueError(f"env_prompts.{key}.default_from_addon must be '<addon>:<KEY>'")
+        provider, provider_key = source.split(":")
+        if provider not in required:
+            raise ValueError(
+                f"env_prompts.{key}: add-on '{provider}' is not listed in requires.addons"
+            )
+        if provider not in provider_manifests:
+            raise ValueError(f"env_prompts.{key}: add-on '{provider}' is not installed and active")
+        exports = provider_manifests[provider].get("exports") or []
+        if not isinstance(exports, list) or provider_key not in exports:
+            raise ValueError(
+                f"env_prompts.{key}: add-on '{provider}' does not export '{provider_key}'"
+            )
+        if provider not in bundles:
+            bundles[provider] = common.parse_env_file(config_dir / "addons" / provider / ".env")
+        value = bundles[provider].get(provider_key, "")
+        if value and value != _CHANGE_ME and not common.marks_generated_secret(value):
+            values[key] = value
+    return values
+
+
+def prompt_change_me_vars(
+    env_path: Path,
+    manifest: dict,
+    config_dir: Path,
+    addon_defaults: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Prompt interactively for CHANGE_ME values in the seeded bundle env.
 
     Returns a dict of key→value pairs the caller should write back.
     Non-interactive stdin → warns on stderr and returns {} (values stay CHANGE_ME).
+    `addon_defaults` (from resolve_addon_defaults) fills keys non-interactively and
+    is offered as the default interactively, without echoing the value.
     """
+    addon_defaults = addon_defaults or {}
     env_vals = common.parse_env_file(env_path)
     change_me_keys = [k for k, v in env_vals.items() if v == _CHANGE_ME]
     if not change_me_keys:
@@ -91,6 +141,9 @@ def prompt_change_me_vars(env_path: Path, manifest: dict, config_dir: Path) -> d
 
         for key in change_me_keys:
             cfg = prompts_cfg.get(key) or {}
+            if key in addon_defaults:
+                auto_filled[key] = addon_defaults[key]
+                continue
             if "default_from_core" in cfg:
                 value = core_env.get(cfg["default_from_core"], "")
                 if value and value != _CHANGE_ME and not common.marks_generated_secret(value):
@@ -124,6 +177,12 @@ def prompt_change_me_vars(env_path: Path, manifest: dict, config_dir: Path) -> d
             if core_env is None:
                 core_env = common.parse_env_file(config_dir / ".env")
             default = core_env.get(cfg["default_from_core"], default)
+
+        if key in addon_defaults:
+            source = str(cfg.get("default_from_addon", "")).split(":")[0]
+            answer = input(f"  {label} [value from {source}]: ").strip()
+            updates[key] = answer or addon_defaults[key]
+            continue
 
         suffix = f" [{default}]" if default else ""
         answer = input(f"  {label}{suffix}: ").strip() or default

@@ -49,8 +49,10 @@ _SURFACE_CHANGED = (
 # Gen 4 (additive): `requires.addons` names other add-ons an add-on builds on;
 # install, start, upgrade and `addon check` refuse it while one of them is not
 # active or too old. `networks.join_addons` lets listed services of an add-on
-# join a required add-on's network. Manifests without the key are unchanged, so `min` stays 1;
-# add-ons that use it declare `requires.addon_api: 4`, and an older core reports
+# join a required add-on's network. `exports` lists bundle keys an add-on lets
+# others read, and `env_prompts.<key>.default_from_addon` fills a prompt from one.
+# Manifests without these keys are unchanged, so `min` stays 1; add-ons that
+# use them declare `requires.addon_api: 4`, and an older core reports
 # them incompatible instead of ignoring the requirement.
 ADDON_API_WINDOW = (1, 4)
 
@@ -122,6 +124,8 @@ MANIFEST_KEYS = [
     "networks.join_addons",
     "local_ca_env",
     "env_prompts",
+    "env_prompts.<key>.default_from_addon",
+    "exports",
     "env_replace_secrets",
     "integration.keycloak.clients",
     "integration.keycloak.client_mappers",
@@ -176,4 +180,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 16, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 18, _SURFACE_CHANGED
