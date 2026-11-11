@@ -812,6 +812,44 @@ def test_install_force_skips_a_missing_required_addon(repo_root, config_dir, tmp
     assert "WARNING" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("requires", "join", "error"),
+    [
+        (
+            {"addon_api": 4},
+            [{"addon": "paperless", "services": ["job"]}],
+            "'paperless' is not listed in requires.addons",
+        ),
+        (None, [{"addon": "paperless", "services": []}], "services must be a non-empty list"),
+    ],
+)
+def test_join_addons_is_checked_without_requires_addons(
+    repo_root, config_dir, tmp_path, capsys, requires, join, error
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    path = tmp_path / "addon-joiner"
+    path.mkdir()
+    manifest: dict = {
+        "name": "joiner",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "networks": {"join_addons": join},
+    }
+    if requires is not None:
+        manifest["requires"] = requires
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    capsys.readouterr()
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="joiner", path=str(path), force=True)
+    )
+
+    # A malformed manifest stays fatal with --force, as with requires.addons present.
+    assert result == 2
+    assert error in capsys.readouterr().err
+
+
 def test_check_reports_an_unmet_requirement(repo_root, config_dir, tmp_path, capsys):
     _setup(repo_root, config_dir)
     assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
@@ -1129,4 +1167,32 @@ def test_upgrade_and_rollback_check_what_dependents_require(
         assert result.axis == "requires"
         assert "addon 'dependent' requires 'paperless" in result.reason
         assert _gate("paperless", manifest, config_dir, repo_root, force=True)[1] == 0
+
+
+@pytest.mark.parametrize(
+    ("requires", "error"),
+    [
+        ({"addon_api": 1, "addons": "not-a-list"}, "requires.addons must be a list"),
+        ({"addon_api": "abc"}, "requires.addon_api entries must be integers"),
+    ],
+)
+def test_a_malformed_manifest_stays_fatal_when_it_also_breaks_a_dependent(
+    repo_root, config_dir, tmp_path, requires, error
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    _install_dependent(
+        repo_root, config_dir, tmp_path, [{"name": "paperless", "version": "^1.0.0"}]
+    )
+    manifest = yaml.safe_load((ADDON_PAPERLESS / "papaia-app.yaml").read_text(encoding="utf-8"))
+    manifest["version"] = "2.0.0"
+    manifest["requires"] = requires
+
+    result, exit_code = _gate("paperless", manifest, config_dir, repo_root, force=True)
+
+    # The dependent's unmet range must not hide the malformed field: --force never
+    # lets an ERROR through.
+    assert exit_code == 2
+    assert result.status == "ERROR"
+    assert error in result.reason
 

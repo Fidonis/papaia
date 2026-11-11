@@ -248,7 +248,12 @@ env_prompts:                       # optional: metadata per .env.example key
                                    # add-on in requires.addons that lists the key under
                                    # `exports`; filled at install, never echoed. Sticky
                                    # like every bundle value: after the other add-on
-                                   # rotates it, reinstall this add-on to pick it up.
+                                   # rotates it, set the new value in this add-on's
+                                   # $PAPAIA_CONFIG_DIR/addons/<name>/.env and run
+                                   # `papaia-ctl addon start <name>`. Installing again
+                                   # keeps the old value; `addon uninstall` + `install`
+                                   # also regenerates this add-on's own GENERATE_*
+                                   # secrets while its volumes stay.
   AUTO_SECRET:
     secret: true                   # required for GENERATE_* values without _KEY suffix
     label:  "Database password"
@@ -316,7 +321,9 @@ Only values that differ from the `.env.example` literal are written to the confi
 > the Core Compose service names; an unknown name is `INCOMPATIBLE`. Each
 > `requires.addons` entry must name an add-on that is active in `deployment.yaml`,
 > and its manifest `version` must satisfy the entry's range; a missing, inactive
-> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Policy:
+> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Each
+> `networks.join_addons` entry must name an add-on from `requires.addons` and
+> list at least one service; anything else is a malformed manifest. Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.

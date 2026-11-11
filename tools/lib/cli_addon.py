@@ -123,13 +123,20 @@ def active_addon_versions(
 def _with_required_addons(
     result: compat.CompatResult, name: str, manifest: dict, deployed: dict, repo_root: Path
 ) -> compat.CompatResult:
-    """Fold the `requires.addons` verdict into a core verdict. A malformed field
-    always wins; an unmet requirement replaces an OK or UNKNOWN verdict and is
-    added to an INCOMPATIBLE one, so the operator sees every problem at once."""
+    """Fold the `requires.addons` verdict, which also covers `networks.join_addons`,
+    into a core verdict. A malformed field always wins; an unmet requirement
+    replaces an OK or UNKNOWN verdict and is added to an INCOMPATIBLE one, so the
+    operator sees every problem at once."""
     if result.status == compat.STATUS_ERROR:
         return result
     requires = manifest.get("requires")
-    if requires is None or (isinstance(requires, dict) and requires.get("addons") is None):
+    networks = manifest.get("networks")
+    # join_addons is checked even without requires.addons: naming an add-on that is
+    # not required is a manifest error, not something to skip.
+    joins = isinstance(networks, dict) and networks.get("join_addons") is not None
+    if not joins and (
+        requires is None or (isinstance(requires, dict) and requires.get("addons") is None)
+    ):
         # Nothing to check: leave the old path untouched, without loading other manifests.
         return result
     required = compat.evaluate_required_addons(
@@ -141,8 +148,10 @@ def _with_required_addons(
 def _fold(
     result: compat.CompatResult, other: compat.CompatResult | None
 ) -> compat.CompatResult:
-    """Combine a core verdict with a verdict on the `requires` axis."""
-    if other is None:
+    """Combine a core verdict with a verdict on the `requires` axis. An ERROR on
+    either side wins, so an unmet requirement can never turn a malformed manifest
+    into something --force lets through."""
+    if other is None or result.status == compat.STATUS_ERROR:
         return result
     if other.status == compat.STATUS_ERROR:
         return other
