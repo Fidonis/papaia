@@ -176,6 +176,10 @@ requires:
   addon_api: 1                     # Contract generation the add-on is built against
                                    # (integer or list, e.g. [1, 2]);
                                    # checked against the Core's ADDON_API window
+  addons:                          # optional (addon_api 4): add-ons this one builds on;
+    - <name>                       # each must be installed and active, a mapping adds
+    - name: <name>                 # a SemVer range against that add-on's `version`
+      version: ">=<semver>"
 papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core version
 description: "<description>"
 
@@ -205,6 +209,12 @@ networks:
   attach: [nginx-proxy-manager, librechat]
                                    # Core containers to attach to the app network;
                                    # validated against the Core Compose service names
+  join_addons:                     # optional (addon_api 4): services of this add-on
+    - addon: <required add-on>     # that join the app network of an add-on listed
+      services: [<service>]        # in requires.addons; the others stay isolated.
+                                   # Written to overrides/addons/docker-compose.
+                                   # <name>-join.override.yml. Single host only: a
+                                   # network cannot span two nodes.
 
 local_ca_env:                      # optional: env vars pointing at the local
   <service>: [SSL_CERT_FILE]       # Keycloak CA certificate — cleared via override
@@ -229,13 +239,38 @@ env_prompts:                       # optional: metadata per .env.example key
     pattern: "^[a-z]+$"           # regex for type: text (HTML + server)
     default: "http://localhost"    # static fallback value
     default_from_core: ENV_KEY     # value from the Core .env (overrides default)
+  OTHER_API_KEY:
+    secret: true
+    default_from_addon: "other-addon:OTHER_API_KEY"
+                                   # addon_api 4: value from the config bundle of an
+                                   # add-on in requires.addons that lists the key under
+                                   # `exports`; filled at install, never echoed. Sticky
+                                   # like every bundle value: after the other add-on
+                                   # rotates it, set the new value in this add-on's
+                                   # $PAPAIA_CONFIG_DIR/addons/<name>/.env and run
+                                   # `papaia-ctl addon start <name>`. Installing again
+                                   # keeps the old value; `addon uninstall` + `install`
+                                   # also regenerates this add-on's own GENERATE_*
+                                   # secrets while its volumes stay.
   AUTO_SECRET:
     secret: true                   # required for GENERATE_* values without _KEY suffix
     label:  "Database password"
 
+exports: [OTHER_API_KEY]           # optional (addon_api 4): bundle .env keys other
+                                   # add-ons may read via default_from_addon; no other
+                                   # key of this add-on is ever read by another add-on
+
 env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
     hint: "Copy from Keycloak"     # hint is shown in the configuration overview
+
+actions:                           # optional (addon_api 4): maintenance actions,
+  reset:                           # run by `papaia-ctl addon run <name> reset` as
+    service: maintenance           # `docker compose run --rm <service> <args>` in the
+    args: ["--reset-existing"]     # add-on's project; fixed arguments only. Give the
+    description: "Restore the initial data"  # service a compose profile (e.g.
+                                   # `profiles: [actions]`) so `addon start` skips it.
+    destructive: true              # optional: callers (papaia-manager) confirm first
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -281,7 +316,12 @@ Only values that differ from the `.env.example` literal are written to the confi
 >    the contract does not lock the add-on out.
 >
 > In addition, all `networks.attach` entries are structurally validated against
-> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Policy:
+> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Each
+> `requires.addons` entry must name an add-on that is active in `deployment.yaml`,
+> and its manifest `version` must satisfy the entry's range; a missing, inactive
+> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Each
+> `networks.join_addons` entry must name an add-on from `requires.addons` and
+> list at least one service; anything else is a malformed manifest. Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
