@@ -746,6 +746,9 @@ posture:
 - **Local-first inference**: LocalAI as the default backend via LiteLLM; external
   LLM APIs are **opt-in** and centrally disableable at exactly one point (LiteLLM)
   → "nothing leaves the building" is enforceable and auditable (one egress point).
+  The optional voice engines (profile `voice`) process audio locally and sit behind
+  the same point; their one outbound exception is the first-start model download
+  from huggingface.co (telemetry disabled), documented in the README.
 - **Authorization at the data edge, not only in the UI**: MCP servers validate the
   Keycloak bearer token + audience and scope **every** request:
   - `mcp-qdrant-rbac` → Qdrant JWT per collection ACL (role-scoped retrieval)

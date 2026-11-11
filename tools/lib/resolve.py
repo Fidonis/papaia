@@ -49,6 +49,7 @@ class SetupArgs:
     localai_variant: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
+    enable_voice: bool | None = None  # None = sticky / no change
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
     enable_smtp: bool | None = None
     smtp_host: str | None = None  # upstream mail server host
@@ -734,6 +735,21 @@ def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "rag"]
     if args.enable_rag:
         profiles.append("rag")
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `voice` Compose profile based on the operator's choice.
+
+    When `enable_voice` is None the call is a no-op -- whatever was already written to
+    COMPOSE_PROFILES on a prior run is preserved (sticky)."""
+    if args.enable_voice is None:
+        return tree
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "voice"]
+    if args.enable_voice:
+        profiles.append("voice")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
     return tree
 

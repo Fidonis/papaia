@@ -25,6 +25,7 @@ LOCALAI = {"localai-models", "localai-data"}
 WEB_SEARCH = {"searxng_config", "searxng_data"}
 RAG = {"qdrant-storage", "qdrant-ingest-cache", "qdrant-ingest-state"}
 MAIL = {"smtp-relay-queue"}
+VOICE = {"speaches-hf-cache", "chatterbox-hf-cache"}
 
 
 @pytest.fixture
@@ -102,7 +103,13 @@ def _all_volumes(keys: set[str], project: str = PROJECT) -> set[str]:
 
 @pytest.mark.parametrize(
     ("name", "keys"),
-    [("localai", LOCALAI), ("web-search", WEB_SEARCH), ("rag", RAG), ("mail", MAIL)],
+    [
+        ("localai", LOCALAI),
+        ("web-search", WEB_SEARCH),
+        ("rag", RAG),
+        ("mail", MAIL),
+        ("voice", VOICE),
+    ],
 )
 def test_each_module_owns_exactly_its_volumes(name: str, keys: set[str]) -> None:
     assert set(modules.volume_keys(REAL_REPO, modules.spec(name))) == keys

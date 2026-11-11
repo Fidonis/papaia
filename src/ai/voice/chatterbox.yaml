@@ -1,0 +1,35 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Voice · Chatterbox-TTS-Server configuration
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+# Rendered to $PAPAIA_CONFIG_DIR/ai/voice/chatterbox.yaml and mounted at
+# /app/config.yaml. The server deep-merges this over its built-in defaults and
+# reads NO environment variables, so every deliberate setting must be listed
+# here. It also writes UI state back into the mounted file; the next `start`
+# re-renders it, so lasting changes belong in the overlay
+# ($PAPAIA_CONFIG_DIR/overlay/ai/voice/chatterbox.yaml).
+
+server:
+  host: 0.0.0.0
+  # The built-in default is 8000; everything in papaia addresses
+  # chatterbox:8004, so keep these two in sync.
+  port: 8004
+
+model:
+  # The multilingual checkpoint carries the 23 supported languages, German
+  # among them. The default (chatterbox-turbo) is English-only.
+  repo_id: chatterbox-multilingual
+
+tts_engine:
+  # The pinned image is the CPU build; `auto` would merely re-detect that.
+  device: cpu
+  # One of the voices shipped inside the image (server-side filenames).
+  # With the multilingual model, any reference voice speaks the language the
+  # request asks for. LibreChat's voice list must name the same file — see
+  # integration/ai/librechat/librechat.yaml.
+  default_voice_id: Emily.wav
+
+generation_defaults:
+  # Callers may override per request; LibreChat does not send a language, so
+  # this default decides how replies are pronounced.
+  language: de

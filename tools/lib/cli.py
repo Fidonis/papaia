@@ -201,6 +201,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_voice=_tristate(args.enable_voice),
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
         smtp_port=args.smtp_port,
@@ -240,6 +241,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
+        tree = resolve.resolve_voice(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -1119,6 +1121,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)

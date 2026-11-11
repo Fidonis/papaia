@@ -1,0 +1,32 @@
+# LiteLLM routes of the voice profile. render_core appends these entries to
+# the model_list in ai/litellm/config.yaml only while the `voice` profile is
+# active. Through them the engines are usable outside LibreChat as well: any
+# holder of a LiteLLM virtual key can call /v1/audio/transcriptions and
+# /v1/audio/speech on the LiteLLM endpoint, with spend tracking attached.
+# Prompt contents stay out of the spend logs (store_prompts_in_spend_logs
+# keeps its off default).
+model_list:
+  - model_name: voice-stt
+    litellm_params:
+      # Everything after `openai/` is the model id speaches loads — a
+      # faster-whisper conversion published under an explicit MIT license.
+      # Swap it (e.g. for the German finetune primeline/whisper-large-v3-turbo
+      # -german in CTranslate2 form, or Systran/faster-whisper-small on tight
+      # memory) through the overlay.
+      model: openai/deepdml/faster-whisper-large-v3-turbo-ct2
+      api_base: http://speaches:8000/v1
+      api_key: os.environ/VOICE_API_KEY
+    model_info:
+      mode: audio_transcription
+
+  - model_name: voice-tts
+    litellm_params:
+      # The TTS server ignores the model name; the route exists for the
+      # OpenAI-shaped request. mp3 is pinned because LibreChat's streaming
+      # player handles only audio/mpeg — the engine's own default is wav.
+      model: openai/tts-1
+      api_base: http://chatterbox:8004/v1
+      api_key: not-needed
+      response_format: mp3
+    model_info:
+      mode: tts

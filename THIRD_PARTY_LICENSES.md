@@ -45,6 +45,8 @@ their images there; the table below covers the Core only.
 | `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.1 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
 | `ghcr.io/fidonis/qdrant-ingest` | 1.0.1 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service |
 | `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
+| `ghcr.io/speaches-ai/speaches` | 0.8.3-cpu (digest-pinned) | MIT | `ai/voice` | speech-to-text (profile `voice`); the image bundles piper-tts, phonemizer and espeak-ng (GPL-3.0) plus Ubuntu's ffmpeg build (GPL), used as network service; the shipped default model `deepdml/faster-whisper-large-v3-turbo-ct2` is MIT |
+| `ghcr.io/devnen/chatterbox-tts-server` | sha-915ae28-cpu (digest-pinned) | MIT | `ai/voice` | text-to-speech (profile `voice`); Chatterbox model code and the multilingual weights (Resemble AI) are MIT, the embedded Perth watermarker is MIT |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |
 | `ghcr.io/firecrawl/firecrawl` | 2.11.85 | AGPL-3.0 | `services/firecrawl` | used as network service |
 | `ghcr.io/firecrawl/playwright-service` | (digest-pinned) | Apache-2.0 | `services/firecrawl` | |
@@ -63,6 +65,7 @@ their images there; the table below covers the Core only.
 | MIT | MIT License |
 | AGPL-3.0 | GNU Affero General Public License v3.0 |
 | GPL-2.0 | GNU General Public License v2.0 |
+| GPL-3.0 | GNU General Public License v3.0 |
 | SSPL | Server Side Public License v1 (MongoDB / Elastic) |
 | RSALv2 | Redis Source Available License v2 |
 | BUSL-1.1 | Business Source License 1.1 |

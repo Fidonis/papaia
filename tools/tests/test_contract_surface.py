@@ -55,10 +55,17 @@ _SURFACE_CHANGED = (
 # Manifests without these keys are unchanged, so `min` stays 1; add-ons that
 # use them declare `requires.addon_api: 4`, and an older core reports
 # them incompatible instead of ignoring the requirement.
-ADDON_API_WINDOW = (1, 4)
+#
+# Gen 5 (additive): the voice profile's engines `speaches` and `chatterbox` are
+# core services an add-on may list under `networks.attach`, and
+# `ai/voice/chatterbox.yaml` is a render target add-ons may layer fragments
+# onto. Nothing existing changed, so `min` stays 1; add-ons that attach the
+# engines or layer that target declare `requires.addon_api: 5`.
+ADDON_API_WINDOW = (1, 5)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
+    "chatterbox": ["voice"],
     "firecrawl": ["librechat-websearch"],
     "firecrawl-nuq-postgres": ["librechat-websearch"],
     "firecrawl-playwright-service": ["librechat-websearch"],
@@ -88,6 +95,7 @@ ATTACHABLE_SERVICES = {
     "qdrant-mcp": ["rag"],
     "searxng": ["librechat-websearch"],
     "smtp-relay": ["smtp"],
+    "speaches": ["voice"],
 }
 
 # Seam 2: render targets addons may layer integration fragments onto.
@@ -103,6 +111,7 @@ BASE_RENDER_TARGETS = [
     "ai/litellm/prometheus.yml",
     "ai/localai/models.txt",
     "ai/localai/models",
+    "ai/voice/chatterbox.yaml",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
     "infra/keycloak/themes/papaia",
@@ -155,6 +164,7 @@ SECRET_ALIASES = {
         ("ai/rag", "QI_EMBEDDING_API_KEY"),
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
+    ("ai/voice", "VOICE_API_KEY"): [("ai/litellm", "VOICE_API_KEY")],
 }
 
 

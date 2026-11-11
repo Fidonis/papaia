@@ -26,6 +26,7 @@ include:
   - path: ./ai/mcp-firecrawl/docker-compose.yml
   - path: ./ai/jinaai/docker-compose.yml
   - path: ./ai/rag/docker-compose.yml
+  - path: ./ai/voice/docker-compose.yml
 
 networks:
   papaia-net:

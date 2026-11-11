@@ -39,7 +39,7 @@ cmd_setup() {
     local qdrant_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" localai_variant="" manager="" rag="" reranker_model="" backup_dir=""
+    local web_search="" local_ai="" localai_variant="" manager="" rag="" voice="" reranker_model="" backup_dir=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
@@ -104,6 +104,8 @@ cmd_setup() {
             --rag) rag="true" ;;
             --no-rag) rag="false" ;;
             --qdrant-host=*) qdrant_host="${1#*=}" ;;
+            --voice) voice="true" ;;
+            --no-voice) voice="false" ;;
             --smtp) smtp="true" ;;
             --no-smtp) smtp="false" ;;
             --smtp-host=*) smtp_host="${1#*=}" ;;
@@ -227,6 +229,11 @@ cmd_setup() {
             info "  RAG System        = $_rag_label"
             [ "$RAG_STICKY" = "true" ] && [ -n "${QDRANT_HOST_STICKY:-}" ] && \
                 info "  Qdrant URL        = $QDRANT_HOST_STICKY"
+        fi
+        if [ -n "${VOICE_STICKY:-}" ]; then
+            local _voice_label="disabled"
+            [ "$VOICE_STICKY" = "true" ] && _voice_label="enabled"
+            info "  Voice (STT/TTS)   = $_voice_label"
         fi
         if [ -n "${SMTP_STICKY:-}" ]; then
             local _smtp_label="disabled"
@@ -420,6 +427,25 @@ cmd_setup() {
                 "Where browsers reach Qdrant (REST API; the dashboard is under /dashboard)." \
                 "QDRANT_PUBLIC_URL" "$qdrant_default")"
         fi
+        if [ -z "$voice" ]; then
+            # Off for a fresh install: the engines add several GB of RAM and model
+            # downloads. A previous opt-in stays the default so a re-run does not flip it.
+            local voice_default="2"
+            [ "${VOICE_STICKY:-}" = "true" ] && voice_default="1"
+            printf '\n%sInstall Voice (speech-to-text and text-to-speech)%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — run local STT and TTS engines, wired into LibreChat and LiteLLM\n' >&2
+            printf '  2) No   — skip the voice engines (default)\n' >&2
+            local voice_choice
+            voice_choice="$(prompt_with_default "  Choose" "$voice_default")"
+            case "$voice_choice" in
+                1|yes) voice="true" ;;
+                2|no)  voice="false" ;;
+                *)
+                    warn "Unrecognized choice '$voice_choice'; defaulting to disabled."
+                    voice="false"
+                    ;;
+            esac
+        fi
         if [ -z "$smtp" ]; then
             # Off for a fresh install: the relay needs a mail server only the operator
             # knows. A previous opt-in stays the default so a re-run does not flip it.
@@ -499,7 +525,7 @@ cmd_setup() {
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
     local setup_rc=0
-    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" || setup_rc=$?
+    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$voice" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
     if [ "$setup_rc" -eq 4 ]; then
         # SETUP_REFUSED: a request that does not fit this installation (a topology for an
@@ -806,7 +832,7 @@ _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
     local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}" localai_variant="${21:-}"
-    local rag="${22:-}" qdrant_host="${23:-}"
+    local rag="${22:-}" qdrant_host="${23:-}" voice="${24:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -825,6 +851,7 @@ _run_setup_py() {
     [ -n "$localai_variant" ] && extra+=(--localai-variant="$localai_variant")
     [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$rag" ] && extra+=(--enable-rag="$rag")
+    [ -n "$voice" ] && extra+=(--enable-voice="$voice")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
     [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")

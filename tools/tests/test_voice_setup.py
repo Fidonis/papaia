@@ -1,0 +1,101 @@
+"""The `voice` choice in `papaia-ctl setup`: the profile toggle, its sticky
+default, the secret fan-out to LiteLLM, and the CLI path from the flag to the
+stored environment."""
+
+from __future__ import annotations
+
+import pytest
+
+from lib import cli, common, defaults, envtree, resolve
+
+
+def _args(repo_root, **kwargs) -> resolve.SetupArgs:
+    kwargs.setdefault("non_interactive", True)
+    return resolve.SetupArgs(config_dir=repo_root, **kwargs)
+
+
+def _tree(repo_root, host="https://papaia.example.com") -> dict:
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = host
+    return tree
+
+
+def test_enabling_adds_the_profile_once_and_keeps_the_others(repo_root):
+    tree = _tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,librechat,manager"
+
+    tree = resolve.resolve_voice(tree, _args(repo_root, enable_voice=True))
+    tree = resolve.resolve_voice(tree, _args(repo_root, enable_voice=True))
+
+    assert tree[""]["COMPOSE_PROFILES"] == "keycloak,librechat,manager,voice"
+
+
+def test_disabling_removes_only_the_profile(repo_root):
+    tree = _tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,voice,librechat"
+
+    tree = resolve.resolve_voice(tree, _args(repo_root, enable_voice=False))
+
+    assert tree[""]["COMPOSE_PROFILES"] == "keycloak,librechat"
+
+
+@pytest.mark.parametrize("profiles", ["keycloak,librechat", "keycloak,voice,librechat"])
+def test_no_flag_leaves_the_profiles_alone(repo_root, profiles):
+    tree = _tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = profiles
+
+    tree = resolve.resolve_voice(tree, _args(repo_root))
+
+    assert tree[""]["COMPOSE_PROFILES"] == profiles
+
+
+def test_defaults_report_the_stored_choice_for_the_wizard(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,librechat,voice"
+    envtree.persist_tree(tree, config_dir, repo_root)
+
+    assert defaults.compute_defaults(config_dir, repo_root)["VOICE_STICKY"] == "true"
+
+
+def test_defaults_are_empty_before_the_config_dir_exists(repo_root, config_dir):
+    assert defaults.compute_defaults(config_dir, repo_root)["VOICE_STICKY"] == ""
+
+
+def _setup(repo_root, config_dir, *flags: str) -> int:
+    return cli.main(
+        [
+            "--repo-root",
+            str(repo_root),
+            "--config-dir",
+            str(config_dir),
+            "setup",
+            "--app-host=https://papaia.example.com",
+            *flags,
+        ]
+    )
+
+
+def _stored(config_dir, relative: str = "") -> dict[str, str]:
+    path = config_dir / relative / ".env" if relative else config_dir / ".env"
+    return common.parse_env_file(path)
+
+
+def test_setup_flag_reaches_the_stored_environment(repo_root, config_dir):
+    assert _setup(repo_root, config_dir, "--enable-voice=true") == 0
+
+    assert "voice" in _stored(config_dir)["COMPOSE_PROFILES"].split(",")
+
+
+def test_setup_without_a_voice_flag_leaves_the_profile_off(repo_root, config_dir):
+    assert _setup(repo_root, config_dir) == 0
+
+    assert "voice" not in _stored(config_dir)["COMPOSE_PROFILES"].split(",")
+
+
+def test_the_engine_key_is_generated_and_fanned_out_to_litellm(repo_root, config_dir):
+    assert _setup(repo_root, config_dir, "--enable-voice=true") == 0
+
+    canonical = _stored(config_dir, "ai/voice")["VOICE_API_KEY"]
+    assert canonical and not canonical.startswith("GENERATE_")
+    assert _stored(config_dir, "ai/litellm")["VOICE_API_KEY"] == canonical

@@ -187,6 +187,13 @@ CATALOGUE: dict[str, ServiceSpec] = {
             public_url=("", "QDRANT_PUBLIC_URL"),
         ),
         ServiceSpec(
+            "voice",
+            "Voice (STT/TTS)",
+            ("voice",),
+            ("ai/voice",),
+            start_group=2,
+        ),
+        ServiceSpec(
             "smtp",
             "SMTP relay",
             ("smtp",),

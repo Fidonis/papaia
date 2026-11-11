@@ -123,6 +123,11 @@ MODULES: dict[str, ModuleSpec] = {
         env_dirs=("infra/smtp-relay",),
         files=("infra/smtp-relay/upstream-password",),
     ),
+    "voice": ModuleSpec(
+        name="voice",
+        profile="voice",
+        env_dirs=("ai/voice",),
+    ),
 }
 
 # Named volumes are `<project>_<key>` and the key is a plain compose name. Checked before a

@@ -363,3 +363,48 @@ def test_the_realm_template_themes_the_login_clients_but_not_the_realm():
             assert theme == "papaia", client["clientId"]
         else:
             assert theme is None, client["clientId"]
+
+
+def _install_voice_module(repo_root):
+    """The real voice module's fragments and its TTS config base, not stand-ins,
+    so the test breaks when they drift from the render layering."""
+    shutil.copytree(
+        REAL_REPO / "src" / "ai" / "voice" / "integration",
+        repo_root / "src" / "ai" / "voice" / "integration",
+    )
+    shutil.copy(
+        REAL_REPO / "src" / "ai" / "voice" / "chatterbox.yaml",
+        repo_root / "src" / "ai" / "voice" / "chatterbox.yaml",
+    )
+
+
+def test_render_merges_the_voice_fragments_only_while_the_profile_is_active(
+    repo_root, config_dir
+):
+    _install_voice_module(repo_root)
+    _setup_minimal(repo_root, config_dir)
+
+    _set_profiles(config_dir, "keycloak,librechat,litellm,voice")
+    render_core.render(config_dir, repo_root)
+
+    speech = _rendered_librechat(config_dir)["speech"]
+    assert speech["stt"]["openai"]["url"] == "http://litellm:4000/v1/audio/transcriptions"
+    assert speech["tts"]["openai"]["voices"] == ["Emily.wav"]
+    litellm = yaml.safe_load(
+        (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    )
+    names = [entry["model_name"] for entry in litellm["model_list"]]
+    assert names == ["voice-stt", "voice-tts"], "fragment entries must append to the base list"
+    tts_config = yaml.safe_load(
+        (config_dir / "ai/voice/chatterbox.yaml").read_text(encoding="utf-8")
+    )
+    assert tts_config["generation_defaults"]["language"] == "de"
+
+    _set_profiles(config_dir, "keycloak,librechat,litellm")
+    render_core.render(config_dir, repo_root)
+
+    assert "speech" not in _rendered_librechat(config_dir)
+    litellm = yaml.safe_load(
+        (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    )
+    assert litellm["model_list"] == []

@@ -1,0 +1,116 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Voice · local speech-to-text and text-to-speech
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OPTIONAL — activate with profile `voice`:
+#   COMPOSE_PROFILES=...,voice   OR   papaia-ctl setup --voice
+#
+# Two services form one module (label `de.fidonis.module: papaia-voice`):
+#
+#   speaches     Whisper speech-to-text, OpenAI-compatible /v1/audio/transcriptions
+#   chatterbox   Chatterbox Multilingual text-to-speech, /v1/audio/speech
+#
+# Neither publishes a host port: LiteLLM fronts both as the models `voice-stt`
+# and `voice-tts` (see integration/ai/litellm/config.yaml), which makes them
+# usable outside LibreChat with a LiteLLM virtual key, and LibreChat's speech
+# panel goes through LiteLLM as well (integration/ai/librechat/librechat.yaml).
+#
+# Both engines download their models from huggingface.co on first use
+# (~1.6 GB Whisper, ~3.2 GB Chatterbox) into named volumes; later starts are
+# offline. See the README section "Voice" for air-gapped installations.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env
+# merged with ai/voice/.env. Both services take their values only through
+# environment:, never env_file: — enabling the profile by editing
+# COMPOSE_PROFILES by hand must not fail on a .env that setup has not
+# seeded yet.
+services:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  SPEECH-TO-TEXT — speaches (faster-whisper)
+  #
+  #  Models are loaded per request (the caller names the model id) and unloaded
+  #  WHISPER__TTL seconds after the last use, so memory is only held while
+  #  someone is dictating. The first request for a model downloads it.
+  #
+  #  API_KEY guards every route, /health included — the MCP-rendering
+  #  playwright service and other containers share papaia-net, and an open
+  #  transcription endpoint would accept audio from any of them.
+  # ═══════════════════════════════════════════════════════════════════════════
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
+    restart: unless-stopped
+    environment:
+      API_KEY:                  ${VOICE_API_KEY}
+      # int8 halves the memory of the default compute type at no noticeable
+      # quality loss on Whisper; see ai/voice/.env for the model choice.
+      WHISPER__COMPUTE_TYPE:    ${VOICE_STT_COMPUTE_TYPE:-int8}
+      # 0 = all cores. Cap this on a host that shares cores with the LLM stack.
+      WHISPER__CPU_THREADS:     ${VOICE_STT_CPU_THREADS:-0}
+      WHISPER__TTL:             ${VOICE_STT_MODEL_TTL:-300}
+      ENABLE_UI:                "false"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      LOG_LEVEL:                ${VOICE_STT_LOG_LEVEL:-info}
+    volumes:
+      - speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub
+    healthcheck:
+      # /health sits behind the same bearer auth as every other route.
+      test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer $$API_KEY\" http://127.0.0.1:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: ${VOICE_STT_HEALTHCHECK_START_PERIOD:-30s}
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-voice
+      de.fidonis.role:   stt
+    profiles: [voice]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  TEXT-TO-SPEECH — Chatterbox Multilingual (Chatterbox-TTS-Server)
+  #
+  #  The model stays resident once loaded (~4-6 GB), hence the memory limit:
+  #  an out-of-memory kill must hit this container, not the host's OOM killer
+  #  picking a database. The server is configured only through the mounted
+  #  config.yaml (it reads no environment variables); the file is rendered
+  #  from ai/voice/chatterbox.yaml and re-written on every `start`, so edits
+  #  belong in the overlay, not in the container. The mount is writable
+  #  because the server persists UI state into its config file.
+  #
+  #  The image has no auth option (its auth settings are unused upstream), so
+  #  this service relies on being internal-only — the trade-off and the
+  #  voice-cloning surface are documented in ADR 0011.
+  # ═══════════════════════════════════════════════════════════════════════════
+  chatterbox:
+    image: ghcr.io/devnen/chatterbox-tts-server:sha-915ae28-cpu@sha256:848adb0dce2f0274bad4214a056320a0c8c32d82267e717a4caeffce7169a4e3
+    restart: unless-stopped
+    mem_limit: ${VOICE_TTS_MEM_LIMIT:-8g}
+    environment:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/voice/chatterbox.yaml
+        target: /app/config.yaml
+      - chatterbox-hf-cache:/app/hf_cache
+    healthcheck:
+      # No curl in the image and no /health route; the voices listing is the
+      # cheapest request that proves the app is serving.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/v1/audio/voices', timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      # The first start downloads ~3.2 GB of model weights and then loads them;
+      # on a slow line this takes well over ten minutes.
+      start_period: ${VOICE_TTS_HEALTHCHECK_START_PERIOD:-180s}
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-voice
+      de.fidonis.role:   tts
+    profiles: [voice]
+
+volumes:
+  speaches-hf-cache:
+  chatterbox-hf-cache:

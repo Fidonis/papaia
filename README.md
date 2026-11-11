@@ -55,9 +55,10 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
+| Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
 
-`localai`, `manager`, `librechat-websearch`, `rag` and `smtp` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`). When LocalAI is enabled, setup also asks
+`localai`, `manager`, `librechat-websearch`, `rag`, `smtp` and `voice` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
 The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
@@ -316,6 +317,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
 | `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
+| `--voice` / `--no-voice` | _(prompted, default off)_ | Toggle the `voice` profile (the local [speech engines](#voice-local-speech)) |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
 | `--smtp-security=MODE` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (no encryption and no login) |
@@ -1691,6 +1693,66 @@ The relay's one volume (`smtp-relay-queue`) belongs to the module `smtp-relay`, 
 backup` includes it and `restore --only=module:smtp-relay` restores it. The password is in the
 configuration backup in plain text, like the other secrets. The design and its limits are in
 [ADR 0007](docs/adr/0007-outbound-mail-through-an-internal-relay.md).
+
+### Voice (local speech)
+
+The `voice` profile adds two internal services: `speaches`, a Whisper server for speech-to-text,
+and `chatterbox`, a Chatterbox Multilingual server for text-to-speech. Neither publishes a host
+port. LiteLLM fronts both as the models `voice-stt` and `voice-tts`, so any holder of a LiteLLM
+key can call `/v1/audio/transcriptions` and `/v1/audio/speech` on the LiteLLM endpoint — an
+automation, an agent, your own web app — with spend tracking attached, and LibreChat's speech
+panel goes through the same routes. Audio is processed on your host; nothing reaches a cloud
+service.
+
+What you get once it is on: a microphone button next to LibreChat's message box, spoken replies
+(streamed sentence by sentence while the answer is still being written), and transcription of
+uploaded audio files. Defaults are tuned for German (`languageSTT: de-DE`, replies pronounced as
+German); each user can change language, voice and engines under **Settings → Speech**. A
+semi-automatic voice conversation works with one keypress per turn (Shift+Alt+L starts the
+recording; it stops on silence, sends, and the reply plays back automatically).
+
+**Enable it** with `papaia-ctl setup`: the wizard asks whether to install the voice engines.
+Non-interactively:
+
+```bash
+tools/papaia-ctl setup -y --voice
+```
+
+**Requirements and first start.** The TTS model stays resident once loaded — plan roughly
+**6 GB of RAM on top** of the stack's baseline (the container is capped by `VOICE_TTS_MEM_LIMIT`,
+default 8g). On the first use each engine downloads its model from huggingface.co (~1.6 GB for
+Whisper, ~3.2 GB for Chatterbox) into a named volume; later starts are offline. For an air-gapped
+installation, run the first start on a connected network or copy a populated
+`speaches-hf-cache` / `chatterbox-hf-cache` volume over. On a CPU-only host, speech-to-text is
+fast enough for dictation; text-to-speech may lag behind real time — if replies play back
+haltingly, switch **Settings → Speech → Text-to-speech engine** to `Browser`, or give the
+container a GPU. Both engines process one request at a time; they are sized for a handful of
+users speaking occasionally, not for parallel transcription jobs.
+
+**The microphone needs a secure context.** Browsers only expose recording on HTTPS pages or on
+literally `localhost` — on `http://host.docker.internal:8000` or a plain-HTTP LAN address the
+microphone button reports a permission error. Use the HTTPS route of your reverse proxy (or
+`http://localhost:<port>` on the host itself).
+
+**Models and voices.** The transcription model (`deepdml/faster-whisper-large-v3-turbo-ct2`, MIT)
+is named in the LiteLLM route; swap it through the overlay
+(`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`) — for example for a German fine-tune, or
+for `Systran/faster-whisper-small` on tight memory. The TTS server is configured through
+`ai/voice/chatterbox.yaml` (same overlay mechanism); the default voice is one of the samples
+shipped in the image, and with the multilingual model any voice speaks the language of the reply.
+The engine watermarks its audio output (Resemble Perth), which makes generated speech
+identifiable as such.
+
+**Operator note (GDPR).** Voice recordings are personal data. Recorded audio is transcribed and
+discarded, but the **transcripts become ordinary chat messages**: they are stored in LibreChat's
+MongoDB and indexed by Meilisearch like anything a user types. Add the voice feature to your
+records of processing activities and inform your users. Note also that the browser speech
+engines (`Browser` STT/TTS in the user settings) use whatever the browser provides — on many
+platforms that is a cloud service of the browser vendor, not a local engine.
+
+The engines' volumes hold only re-downloadable model caches; `papaia-ctl backup` includes them
+like every named volume. The design, the engine choice and its trade-offs are in
+[ADR 0011](docs/adr/0011-local-voice-as-an-optional-core-profile.md).
 
 ### GPU acceleration for LocalAI
 
