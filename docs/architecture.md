@@ -157,8 +157,8 @@ papaia-addons/<name>/
 ├── integration/             # The 4 seams as fragments (all optional)
 │   ├── keycloak/            # OIDC client + audience mapper JSONs
 │   ├── librechat/           # mcpServers + allowedDomains fragment (YAML)
-│   ├── ai/librechat/agents/ # optional: LibreChat agents (addon_api 4, Seam 3)
-│   ├── ai/librechat/prompts/# optional: LibreChat prompts (addon_api 4, Seam 3)
+│   ├── ai/librechat/agents/  # optional: LibreChat agents (addon_api 4, Seam 3)
+│   ├── ai/librechat/prompts/ # optional: LibreChat prompts (addon_api 4, Seam 3)
 │   └── nginx/               # Optional ingress snippet
 └── README.md                # Self-contained manual integration path (public-clean)
 ```
@@ -252,7 +252,12 @@ env_prompts:                       # optional: metadata per .env.example key
                                    # add-on in requires.addons that lists the key under
                                    # `exports`; filled at install, never echoed. Sticky
                                    # like every bundle value: after the other add-on
-                                   # rotates it, reinstall this add-on to pick it up.
+                                   # rotates it, set the new value in this add-on's
+                                   # $PAPAIA_CONFIG_DIR/addons/<name>/.env and run
+                                   # `papaia-ctl addon start <name>`. Installing again
+                                   # keeps the old value; `addon uninstall` + `install`
+                                   # also regenerates this add-on's own GENERATE_*
+                                   # secrets while its volumes stay.
   AUTO_SECRET:
     secret: true                   # required for GENERATE_* values without _KEY suffix
     label:  "Database password"
@@ -320,7 +325,9 @@ Only values that differ from the `.env.example` literal are written to the confi
 > the Core Compose service names; an unknown name is `INCOMPATIBLE`. Each
 > `requires.addons` entry must name an add-on that is active in `deployment.yaml`,
 > and its manifest `version` must satisfy the entry's range; a missing, inactive
-> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Policy:
+> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Each
+> `networks.join_addons` entry must name an add-on from `requires.addons` and
+> list at least one service; anything else is a malformed manifest. Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
@@ -496,11 +503,19 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
   the UI or from the operator directories are never touched.
 - **Validation at render:** An agent that names an MCP server the rendered
   `librechat.yaml` does not define is skipped with a warning, because it would
-  appear without its tools.
+  appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
+  `mcpServers` is not a list of server names; the rest of the render goes on.
+- **Operator files win:** An agent in `LIBRECHAT_AGENTS_DIR` with the id of an
+  add-on agent replaces it: the add-on file is skipped with a warning, and the
+  stored agent loses its add-on mark, so removing the add-on keeps it. Operator
+  prompts never take over an add-on prompt of the same name.
 - **Overwritten edits:** Changes made in the UI to an add-on agent or prompt are
   overwritten on the next start.
 - **Ids:** Agent ids are stored with the `agent_` prefix, so links use
   `?agent_id=agent_<id>`. Add-on prompts are keyed by add-on and `command`.
+- **Known limitation:** A distributed installation does not ship the override or
+  the two directories to a node bundle, so add-on agents and prompts are not
+  provisioned there (Fidonis/papaia#368).
 
 ### Seam 4 — Ingress (optional)
 

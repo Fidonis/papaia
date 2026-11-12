@@ -108,11 +108,11 @@ LIBRECHAT_ADDON_OVERRIDE = "overrides/docker-compose.librechat-addons.override.y
 _LIBRECHAT_DATA = "/app/api/data"
 
 
-def _agent_problem(path: Path, mcp_servers: set[str]) -> str | None:
+def _agent_problem(text: str, mcp_servers: set[str]) -> str | None:
     """Why an add-on agent file cannot be provisioned, or None. An agent that names
     an MCP server the rendered librechat.yaml lacks would appear without its tools."""
     try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         return f"not valid YAML ({exc})"
     if not isinstance(doc, dict):
@@ -120,7 +120,10 @@ def _agent_problem(path: Path, mcp_servers: set[str]) -> str | None:
     missing = [k for k in ("id", "name", "provider", "model") if not doc.get(k)]
     if missing:
         return "missing " + ", ".join(missing)
-    unknown = [s for s in doc.get("mcpServers") or [] if s not in mcp_servers]
+    servers = doc.get("mcpServers") or []
+    if not isinstance(servers, list) or not all(isinstance(s, str) for s in servers):
+        return "has an mcpServers entry that is not a list of server names"
+    unknown = [s for s in servers if s not in mcp_servers]
     if unknown:
         return "names MCP servers librechat.yaml does not define: " + ", ".join(unknown)
     return None
@@ -152,13 +155,21 @@ def render_librechat_addon_content(config_dir: Path, repo_root: Path) -> list[st
             for src in sorted(src_dir.iterdir()):
                 if not src.is_file() or src.suffix.lower() not in suffixes:
                     continue
+                # A file that cannot be read is skipped like an invalid one: one broken
+                # add-on file must not stop `start` for the whole stack.
+                try:
+                    content = src.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    warnings.append(
+                        f"addon '{addon['name']}': {kind[:-1]} {src.name} cannot be read ({exc})"
+                    )
+                    continue
                 if kind == "agents":
-                    problem = _agent_problem(src, mcp_servers)
+                    problem = _agent_problem(content, mcp_servers)
                     if problem:
                         warnings.append(f"addon '{addon['name']}': agent {src.name} {problem}")
                         continue
                 name = f"{addon['name']}__{src.name}"
-                content = src.read_text(encoding="utf-8")
                 common.atomic_write(out_dir / name, content)
                 digest.update(f"{kind}/{name}\0{content}\0".encode())
                 written += 1

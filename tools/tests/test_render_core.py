@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
 from lib import common, envtree, render_core, resolve, secrets
@@ -461,6 +462,40 @@ def test_an_agent_with_an_unknown_mcp_server_is_skipped(repo_root, config_dir, c
     # The prompt still renders, so the override stays.
     volumes = _override(config_dir)["services"]["librechat"]["volumes"]
     assert [v["target"] for v in volumes] == ["/app/api/data/addon-prompts"]
+
+
+@pytest.mark.parametrize(
+    "servers",
+    ["mcpServers: PaperlessMCP", "mcpServers: [{name: PaperlessMCP}]", "mcpServers: [1]"],
+)
+def test_an_agent_whose_mcp_servers_are_not_names_is_skipped(
+    repo_root, config_dir, capsys, servers
+):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    agent = addon / "integration/ai/librechat/agents/assistant.yaml"
+    agent.write_text(
+        agent.read_text(encoding="utf-8").replace("mcpServers: [PaperlessMCP]", servers)
+    )
+
+    render_core.render(config_dir, repo_root)
+
+    assert not (config_dir / "ai/librechat/addon-agents").exists()
+    assert "not a list of server names" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("kind", ["agents/assistant.yaml", "prompts/summary.md"])
+def test_a_file_that_is_not_utf8_is_skipped(repo_root, config_dir, capsys, kind):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    (addon / "integration/ai/librechat" / kind).write_bytes(b"name: \xff\xfe\n")
+
+    render_core.render(config_dir, repo_root)
+
+    assert "cannot be read" in capsys.readouterr().err
+    rendered = list((config_dir / "ai/librechat").glob("addon-*/*"))
+    assert len(rendered) == 1
+    assert Path(kind).name not in rendered[0].name
 
 
 def test_no_addon_content_writes_no_override(repo_root, config_dir):
