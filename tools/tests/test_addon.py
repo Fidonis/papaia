@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
 from lib import common, envtree, gen_override
@@ -744,3 +746,453 @@ def test_addon_check_json_emitted_even_on_exit_2(repo_root, config_dir, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload[0]["status"] == "INCOMPATIBLE"
     assert payload[0]["reason"]
+
+
+# ── requires.addons ───────────────────────────────────────────────────────────
+
+
+def _dependent_addon(tmp_path: Path, requires: list) -> Path:
+    path = tmp_path / "addon-dependent"
+    path.mkdir()
+    manifest = {
+        "name": "dependent",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "requires": {"addons": requires},
+    }
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return path
+
+
+def test_install_refuses_while_required_addon_is_missing(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    deployment_before = (config_dir / "deployment.yaml").read_text(encoding="utf-8")
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+    )
+    assert result == 2
+    assert "'paperless' is not installed and active" in capsys.readouterr().err
+    assert (config_dir / "deployment.yaml").read_text(encoding="utf-8") == deployment_before
+    assert not (config_dir / "addons" / "dependent").exists()
+
+
+def test_install_proceeds_once_the_required_addon_is_active(repo_root, config_dir, tmp_path):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, [{"name": "paperless", "version": ">=1.0.0"}])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+    )
+    assert result == 0
+
+
+def test_install_refuses_a_too_old_required_addon(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, [{"name": "paperless", "version": ">=2.0.0"}])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+    )
+    assert result == 2
+    assert "does not satisfy '>=2.0.0'" in capsys.readouterr().err
+
+
+def test_install_force_skips_a_missing_required_addon(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="dependent", path=str(dependent), force=True)
+    )
+    assert result == 0
+    assert "WARNING" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("requires", "join", "error"),
+    [
+        (
+            {"addon_api": 4},
+            [{"addon": "paperless", "services": ["job"]}],
+            "'paperless' is not listed in requires.addons",
+        ),
+        (None, [{"addon": "paperless", "services": []}], "services must be a non-empty list"),
+    ],
+)
+def test_join_addons_is_checked_without_requires_addons(
+    repo_root, config_dir, tmp_path, capsys, requires, join, error
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    path = tmp_path / "addon-joiner"
+    path.mkdir()
+    manifest: dict = {
+        "name": "joiner",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "networks": {"join_addons": join},
+    }
+    if requires is not None:
+        manifest["requires"] = requires
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    capsys.readouterr()
+
+    result = cmd_addon_install(
+        _install_args(config_dir, repo_root, name="joiner", path=str(path), force=True)
+    )
+
+    # A malformed manifest stays fatal with --force, as with requires.addons present.
+    assert result == 2
+    assert error in capsys.readouterr().err
+
+
+def test_check_reports_an_unmet_requirement(repo_root, config_dir, tmp_path, capsys):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+    assert (
+        cmd_addon_install(
+            _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+        )
+        == 0
+    )
+    deployment = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    for addon in deployment["addons"]:
+        if addon["name"] == "paperless":
+            addon["active"] = False
+    (config_dir / "deployment.yaml").write_text(yaml.safe_dump(deployment), encoding="utf-8")
+    capsys.readouterr()
+
+    assert cmd_addon_check(_check_args(config_dir, repo_root)) == 2
+    assert "'paperless' is not installed and active" in capsys.readouterr().out
+
+
+def _dependents_args(config_dir: Path, repo_root: Path, *, force: bool = False):
+    return argparse.Namespace(
+        config_dir=str(config_dir), repo_root=str(repo_root), name="paperless", force=force
+    )
+
+
+def test_dependents_refuses_while_another_addon_requires_it(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_dependents
+
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+    assert (
+        cmd_addon_install(
+            _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root)) == 2
+    assert "required by 'dependent'" in capsys.readouterr().err
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root, force=True)) == 0
+
+
+def test_dependents_passes_without_dependents(repo_root, config_dir):
+    from lib.cli_addon import cmd_addon_dependents
+
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    assert cmd_addon_dependents(_dependents_args(config_dir, repo_root)) == 0
+
+
+# ── env_prompts.*.default_from_addon / exports ───────────────────────────────
+
+
+def _provider_and_consumer(tmp_path: Path, *, exports: list | None = None) -> tuple[Path, Path]:
+    provider = tmp_path / "addon-provider"
+    provider.mkdir()
+    provider_manifest = {"name": "provider", "version": "1.0.0", "papaia_compat": ">=0.8.0"}
+    if exports is not None:
+        provider_manifest["exports"] = exports
+    (provider / "papaia-app.yaml").write_text(yaml.safe_dump(provider_manifest), "utf-8")
+    (provider / ".env.example").write_text(
+        "PROVIDER_API_KEY=GENERATE_SECRET\nPROVIDER_DB_PASSWORD=GENERATE_SECRET\n", "utf-8"
+    )
+    consumer = tmp_path / "addon-consumer"
+    consumer.mkdir()
+    consumer_manifest = {
+        "name": "consumer",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "requires": {"addons": ["provider"]},
+        "env_prompts": {
+            "PROVIDER_API_KEY": {
+                "label": "API key of the provider",
+                "default_from_addon": "provider:PROVIDER_API_KEY",
+                "secret": True,
+            }
+        },
+    }
+    (consumer / "papaia-app.yaml").write_text(yaml.safe_dump(consumer_manifest), "utf-8")
+    (consumer / ".env.example").write_text("PROVIDER_API_KEY=CHANGE_ME\n", "utf-8")
+    return provider, consumer
+
+
+def test_install_fills_a_prompt_from_an_exported_value(repo_root, config_dir, tmp_path):
+    _setup(repo_root, config_dir)
+    provider, consumer = _provider_and_consumer(tmp_path, exports=["PROVIDER_API_KEY"])
+    args = _install_args(config_dir, repo_root, name="provider", path=str(provider))
+    assert cmd_addon_install(args) == 0
+    provider_env = common.parse_env_file(config_dir / "addons" / "provider" / ".env")
+
+    args = _install_args(config_dir, repo_root, name="consumer", path=str(consumer))
+    assert cmd_addon_install(args) == 0
+
+    consumer_env = common.parse_env_file(config_dir / "addons" / "consumer" / ".env")
+    assert consumer_env["PROVIDER_API_KEY"] == provider_env["PROVIDER_API_KEY"]
+    assert not (consumer / ".env").exists()
+
+
+def test_install_refuses_a_key_the_provider_does_not_export(
+    repo_root, config_dir, tmp_path, capsys
+):
+    _setup(repo_root, config_dir)
+    provider, consumer = _provider_and_consumer(tmp_path, exports=["SOMETHING_ELSE"])
+    args = _install_args(config_dir, repo_root, name="provider", path=str(provider))
+    assert cmd_addon_install(args) == 0
+    deployment_before = (config_dir / "deployment.yaml").read_text(encoding="utf-8")
+
+    args = _install_args(config_dir, repo_root, name="consumer", path=str(consumer))
+    assert cmd_addon_install(args) == 2
+    assert "does not export 'PROVIDER_API_KEY'" in capsys.readouterr().err
+    assert (config_dir / "deployment.yaml").read_text(encoding="utf-8") == deployment_before
+    assert not (config_dir / "addons" / "consumer").exists()
+
+
+def test_install_force_leaves_an_unresolvable_prompt_unset(
+    repo_root, config_dir, tmp_path, capsys
+):
+    _setup(repo_root, config_dir)
+    _, consumer = _provider_and_consumer(tmp_path, exports=["PROVIDER_API_KEY"])
+
+    args = _install_args(config_dir, repo_root, name="consumer", path=str(consumer), force=True)
+    assert cmd_addon_install(args) == 0
+    assert "WARNING" in capsys.readouterr().err
+    consumer_env = common.parse_env_file(config_dir / "addons" / "consumer" / ".env")
+    assert consumer_env["PROVIDER_API_KEY"] == "CHANGE_ME"
+
+
+# ── actions ───────────────────────────────────────────────────────────────────
+
+
+def _action_addon(tmp_path: Path) -> Path:
+    path = tmp_path / "addon-actions"
+    path.mkdir()
+    manifest = {
+        "name": "acting",
+        "version": "1.0.0",
+        "papaia_compat": ">=0.8.0",
+        "actions": {
+            "reset": {
+                "service": "job",
+                "args": ["--reset-existing"],
+                "description": "Reset",
+                "destructive": True,
+            },
+        },
+    }
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return path
+
+
+def _action_args(config_dir: Path, repo_root: Path, action: str) -> argparse.Namespace:
+    return argparse.Namespace(
+        config_dir=str(config_dir), repo_root=str(repo_root), name="acting", action=action
+    )
+
+
+def test_addon_action_prints_service_and_arguments(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path)
+    install = _install_args(config_dir, repo_root, name="acting", path=str(addon))
+    assert cmd_addon_install(install) == 0
+    capsys.readouterr()
+
+    assert cmd_addon_action(_action_args(config_dir, repo_root, "reset")) == 0
+    assert capsys.readouterr().out == "job\0--reset-existing\0"
+
+
+def test_addon_action_refuses_an_undeclared_action(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path)
+    install = _install_args(config_dir, repo_root, name="acting", path=str(addon))
+    assert cmd_addon_install(install) == 0
+    capsys.readouterr()
+
+    assert cmd_addon_action(_action_args(config_dir, repo_root, "purge")) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Declared: reset." in captured.err
+
+
+def test_addon_actions_lists_as_json(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_actions
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path)
+    install = _install_args(config_dir, repo_root, name="acting", path=str(addon))
+    assert cmd_addon_install(install) == 0
+    capsys.readouterr()
+
+    args = argparse.Namespace(
+        config_dir=str(config_dir), repo_root=str(repo_root), name="acting", json=True
+    )
+    assert cmd_addon_actions(args) == 0
+    assert yaml.safe_load(capsys.readouterr().out) == [
+        {"name": "reset", "service": "job", "description": "Reset", "destructive": True}
+    ]
+
+
+def _install_dependent(repo_root, config_dir, tmp_path, requires: list) -> None:
+    dependent = _dependent_addon(tmp_path, requires)
+    assert (
+        cmd_addon_install(
+            _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+        )
+        == 0
+    )
+
+
+def _deactivate(config_dir: Path, name: str) -> dict:
+    deployed = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    for addon in deployed["addons"]:
+        if addon["name"] == name:
+            addon["active"] = False
+    (config_dir / "deployment.yaml").write_text(yaml.safe_dump(deployed), encoding="utf-8")
+    return deployed
+
+
+def test_list_gives_the_verdict_check_gives(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_list
+
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    _install_dependent(repo_root, config_dir, tmp_path, ["paperless"])
+    _deactivate(config_dir, "paperless")
+    capsys.readouterr()
+
+    args = argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root), json=True)
+    assert cmd_addon_list(args) == 0
+    rows = {row["name"]: row for row in json.loads(capsys.readouterr().out)["addons"]}
+    assert rows["dependent"]["compat"]["status"] == "INCOMPATIBLE"
+    assert rows["dependent"]["compat"]["axis"] == "requires"
+    assert rows["paperless"]["compat"]["status"] == "OK"
+
+
+def test_an_unmet_requirement_is_not_called_a_core_incompatibility(
+    repo_root, config_dir, tmp_path, capsys
+):
+    _setup(repo_root, config_dir)
+    dependent = _dependent_addon(tmp_path, ["paperless"])
+
+    assert (
+        cmd_addon_install(
+            _install_args(config_dir, repo_root, name="dependent", path=str(dependent))
+        )
+        == 2
+    )
+    err = capsys.readouterr().err
+    assert "has an unmet add-on requirement" in err
+    assert "incompatible with this core" not in err
+
+
+def test_a_core_incompatibility_and_an_unmet_requirement_are_both_reported(
+    repo_root, config_dir, tmp_path, capsys
+):
+    _setup(repo_root, config_dir)
+    path = tmp_path / "both"
+    path.mkdir()
+    manifest = {
+        "name": "both",
+        "version": "1.0.0",
+        "papaia_compat": ">=99.0.0",
+        "requires": {"addons": ["paperless"]},
+    }
+    (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    assert (
+        cmd_addon_install(_install_args(config_dir, repo_root, name="both", path=str(path)))
+        == 2
+    )
+    err = capsys.readouterr().err
+    assert ">=99.0.0" in err
+    assert "'paperless' is not installed and active" in err
+
+
+def _gate(name: str, manifest: dict, config_dir: Path, repo_root: Path, *, force=False):
+    from lib.cli_addon import _evaluate_gate
+
+    deployed = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    return _evaluate_gate(name, manifest, deployed, repo_root, force=force, dependents=True)
+
+
+@pytest.mark.parametrize(
+    ("required", "new_version", "refused"),
+    [
+        ("^1.0.0", "2.0.0", True),  # upgrade past the range
+        (">=1.0.0", "0.9.0", True),  # rollback below it
+        ("^1.0.0", "1.4.0", False),
+        (None, "2.0.0", False),  # a requirement without a range is met by any version
+    ],
+)
+def test_upgrade_and_rollback_check_what_dependents_require(
+    repo_root, config_dir, tmp_path, required, new_version, refused
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    entry = "paperless" if required is None else {"name": "paperless", "version": required}
+    _install_dependent(repo_root, config_dir, tmp_path, [entry])
+    manifest = yaml.safe_load((ADDON_PAPERLESS / "papaia-app.yaml").read_text(encoding="utf-8"))
+    manifest["version"] = new_version
+
+    result, exit_code = _gate("paperless", manifest, config_dir, repo_root)
+
+    assert (exit_code == 2) is refused
+    if refused:
+        assert result.axis == "requires"
+        assert "addon 'dependent' requires 'paperless" in result.reason
+        assert _gate("paperless", manifest, config_dir, repo_root, force=True)[1] == 0
+
+
+@pytest.mark.parametrize(
+    ("requires", "error"),
+    [
+        ({"addon_api": 1, "addons": "not-a-list"}, "requires.addons must be a list"),
+        ({"addon_api": "abc"}, "requires.addon_api entries must be integers"),
+    ],
+)
+def test_a_malformed_manifest_stays_fatal_when_it_also_breaks_a_dependent(
+    repo_root, config_dir, tmp_path, requires, error
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    _install_dependent(
+        repo_root, config_dir, tmp_path, [{"name": "paperless", "version": "^1.0.0"}]
+    )
+    manifest = yaml.safe_load((ADDON_PAPERLESS / "papaia-app.yaml").read_text(encoding="utf-8"))
+    manifest["version"] = "2.0.0"
+    manifest["requires"] = requires
+
+    result, exit_code = _gate("paperless", manifest, config_dir, repo_root, force=True)
+
+    # The dependent's unmet range must not hide the malformed field: --force never
+    # lets an ERROR through.
+    assert exit_code == 2
+    assert result.status == "ERROR"
+    assert error in result.reason
+

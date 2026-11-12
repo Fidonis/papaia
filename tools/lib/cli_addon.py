@@ -25,6 +25,7 @@ from . import (
     gen_override,
     render_core,
     reporting,
+    semver,
     topology,
 )
 
@@ -34,16 +35,16 @@ def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bo
     if result.status == compat.STATUS_ERROR:
         print(f"ERROR: addon '{result.name}': {result.reason}", file=sys.stderr)
     elif result.status == compat.STATUS_INCOMPATIBLE:
+        # An unmet `requires.addons` is about the other add-ons, not about this core.
+        unmet = result.axis == compat.REQUIRES_AXIS
         if fatal:
-            print(
-                f"ERROR: addon '{result.name}' is incompatible with this core:"
-                f" {result.reason}",
-                file=sys.stderr,
-            )
+            what = "has an unmet add-on requirement" if unmet else "is incompatible with this core"
+            print(f"ERROR: addon '{result.name}' {what}: {result.reason}", file=sys.stderr)
         else:
             cause = "--force" if force else "warn mode"
+            what = "has an unmet add-on requirement" if unmet else "is incompatible"
             print(
-                f"WARNING: addon '{result.name}' is incompatible ({result.reason})"
+                f"WARNING: addon '{result.name}' {what} ({result.reason})"
                 f" -- continuing due to {cause}",
                 file=sys.stderr,
             )
@@ -83,6 +84,158 @@ def placement_result(
     )
 
 
+def _active_manifests(
+    deployed: dict, repo_root: Path, *, exclude: str | None = None
+) -> dict[str, dict]:
+    """Name -> manifest of every active addon whose manifest loads."""
+    manifests: dict[str, dict] = {}
+    for addon in deployment.active_addons(deployed):
+        name = addon.get("name")
+        if not name or name == exclude:
+            continue
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        if manifest is not None:
+            manifests[name] = manifest
+    return manifests
+
+
+def active_addon_versions(
+    deployed: dict, repo_root: Path, *, exclude: str | None = None
+) -> dict[str, str | None]:
+    """Name -> version of every active addon, read from its manifest (falling back
+    to the version recorded in deployment.yaml). `exclude` leaves one addon out, so
+    an addon never satisfies its own requirement."""
+    versions: dict[str, str | None] = {}
+    for addon in deployment.active_addons(deployed):
+        name = addon.get("name")
+        if not name or name == exclude:
+            continue
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        version = (manifest or {}).get("version") or addon.get("version")
+        versions[name] = str(version) if version is not None else None
+    return versions
+
+
+def _with_required_addons(
+    result: compat.CompatResult, name: str, manifest: dict, deployed: dict, repo_root: Path
+) -> compat.CompatResult:
+    """Fold the `requires.addons` verdict, which also covers `networks.join_addons`,
+    into a core verdict. A malformed field always wins; an unmet requirement
+    replaces an OK or UNKNOWN verdict and is added to an INCOMPATIBLE one, so the
+    operator sees every problem at once."""
+    if result.status == compat.STATUS_ERROR:
+        return result
+    requires = manifest.get("requires")
+    networks = manifest.get("networks")
+    # join_addons is checked even without requires.addons: naming an add-on that is
+    # not required is a manifest error, not something to skip.
+    joins = isinstance(networks, dict) and networks.get("join_addons") is not None
+    if not joins and (
+        requires is None or (isinstance(requires, dict) and requires.get("addons") is None)
+    ):
+        # Nothing to check: leave the old path untouched, without loading other manifests.
+        return result
+    required = compat.evaluate_required_addons(
+        name, manifest, active_addon_versions(deployed, repo_root, exclude=name)
+    )
+    return _fold(result, required)
+
+
+def _fold(
+    result: compat.CompatResult, other: compat.CompatResult | None
+) -> compat.CompatResult:
+    """Combine a core verdict with a verdict on the `requires` axis. An ERROR on
+    either side wins, so an unmet requirement can never turn a malformed manifest
+    into something --force lets through."""
+    if other is None or result.status == compat.STATUS_ERROR:
+        return result
+    if other.status == compat.STATUS_ERROR:
+        return other
+    unmet = other.status == compat.STATUS_INCOMPATIBLE
+    if unmet and result.status != compat.STATUS_INCOMPATIBLE:
+        return compat.CompatResult(
+            other.name,
+            other.status,
+            axis=other.axis,
+            requirement=other.requirement,
+            core_value=other.core_value,
+            reason=other.reason,
+            warnings=result.warnings + other.warnings,
+        )
+    if not unmet and not other.warnings:
+        return result
+    reason = result.reason
+    if unmet:
+        reason = "; ".join(r for r in (result.reason, other.reason) if r)
+    return compat.CompatResult(
+        result.name,
+        result.status,
+        axis=result.axis,
+        requirement=result.requirement,
+        core_value=result.core_value,
+        reason=reason,
+        warnings=result.warnings + other.warnings,
+    )
+
+
+def dependents_result(
+    name: str, manifest: dict, deployed: dict, repo_root: Path
+) -> compat.CompatResult | None:
+    """Whether the version in `manifest` still meets what the other active addons
+    require of `name` (`requires.addons` with a range), for `upgrade` and `rollback`
+    of a required addon. None when nothing requires a range of it; INCOMPATIBLE on
+    the `requires` axis naming each dependent the new version would break."""
+    version = addon_upgrade.manifest_version(manifest)
+    problems: list[str] = []
+    warnings: list[str] = []
+    for addon in deployment.active_addons(deployed):
+        other = addon.get("name")
+        if not other or other == name:
+            continue
+        other_manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        try:
+            required = compat.required_addons(other_manifest or {})
+        except ValueError:
+            continue
+        for required_name, version_range in required:
+            if required_name != name or version_range is None:
+                continue
+            if version is None:
+                warnings.append(
+                    f"addon '{other}' requires '{name} {version_range}';"
+                    " the new version states none, not checked"
+                )
+                continue
+            try:
+                ok = semver.satisfies(version, version_range)
+            except ValueError:
+                warnings.append(
+                    f"addon '{other}' requires '{name} {version_range}';"
+                    f" '{version}' not checked"
+                )
+                continue
+            if not ok:
+                problems.append(
+                    f"addon '{other}' requires '{name} {version_range}', which {version}"
+                    " does not satisfy"
+                )
+    if not problems and not warnings:
+        return None
+    return compat.CompatResult(
+        name,
+        compat.STATUS_INCOMPATIBLE if problems else compat.STATUS_OK,
+        axis=compat.REQUIRES_AXIS,
+        reason="; ".join(problems) if problems else None,
+        warnings=tuple(warnings),
+    )
+
+
 def _evaluate_gate(
     name: str,
     manifest: dict,
@@ -91,9 +244,14 @@ def _evaluate_gate(
     *,
     force: bool,
     node: str | None = None,
+    dependents: bool = False,
 ) -> tuple[compat.CompatResult, int]:
     """The verdict on one addon against this checkout's core, and what the gate
     policy makes of it: 0 (proceed) or 2 (abort).
+
+    `dependents` also checks the new version against what other active addons require
+    of it (`upgrade`, `rollback`), so changing a required addon cannot break them
+    unnoticed; --force and warn mode let it through, as on the other axes.
 
     In a distributed installation the add-on must also be placeable on its node. That is
     no policy call: a network cannot span two Docker daemons, so neither --force nor warn
@@ -101,6 +259,9 @@ def _evaluate_gate(
     core = compat.resolve_core_target(repo_root)
     profiles = (deployed.get("core") or {}).get("profiles")
     result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+    result = _with_required_addons(result, name, manifest, deployed, repo_root)
+    if dependents:
+        result = _fold(result, dependents_result(name, manifest, deployed, repo_root))
     mode = compat.resolve_mode(deployed)
     exit_code = compat.gate([result], mode=mode, force=force)
     if exit_code == 0 or result.status != compat.STATUS_ERROR:
@@ -118,12 +279,13 @@ def _compat_gate_addon(
     *,
     force: bool,
     node: str | None = None,
+    dependents: bool = False,
 ) -> int:
     """Evaluate one addon against this checkout's core and apply the gate
     policy. Returns 0 (proceed) or 2 (abort). Must run before any mutation,
     so a refused install/start leaves no trace."""
     result, exit_code = _evaluate_gate(
-        name, manifest, deployed, repo_root, force=force, node=node
+        name, manifest, deployed, repo_root, force=force, node=node, dependents=dependents
     )
     _report_compat_result(result, fatal=bool(exit_code), force=force)
     return exit_code
@@ -137,6 +299,7 @@ def _render_integration(config_dir: Path, repo_root: Path) -> None:
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
 
 
 def cmd_addon_install(args: argparse.Namespace) -> int:
@@ -187,6 +350,16 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         )
     if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force, node=node):
         return 2
+    try:
+        addon_defaults = addons.resolve_addon_defaults(
+            manifest, _active_manifests(deployed, repo_root, exclude=name), config_dir
+        )
+    except ValueError as exc:
+        if not args.force:
+            print(f"ERROR: addon '{name}': {exc}", file=sys.stderr)
+            return 2
+        print(f"WARNING: addon '{name}': {exc} -- continuing due to --force", file=sys.stderr)
+        addon_defaults = {}
 
     if existing:
         if args.path:
@@ -211,7 +384,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     addons.seed_addon_env(addon_path, config_dir)
 
     bundle_env_path = config_dir / "addons" / name / ".env"
-    updates = addons.prompt_change_me_vars(bundle_env_path, manifest, config_dir)
+    updates = addons.prompt_change_me_vars(bundle_env_path, manifest, config_dir, addon_defaults)
     if updates:
         env_vals = common.parse_env_file(bundle_env_path)
         env_vals.update(updates)
@@ -284,6 +457,7 @@ def evaluate_active_addons(
             results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
             continue
         result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+        result = _with_required_addons(result, name, manifest, deployed, repo_root)
         if result.status != compat.STATUS_ERROR:
             # A placement problem outranks a compatible verdict: it cannot be forced.
             result = placement_result(name, manifest, deployed, repo_root) or result
@@ -440,7 +614,12 @@ def cmd_addon_upgrade_plan(args: argparse.Namespace) -> int:
     deployed, candidate = found
 
     result, exit_code = _evaluate_gate(
-        args.name, candidate.new_manifest, deployed, Path(args.repo_root), force=args.force
+        args.name,
+        candidate.new_manifest,
+        deployed,
+        Path(args.repo_root),
+        force=args.force,
+        dependents=True,
     )
     plan = addon_upgrade.build_plan(candidate, Path(args.config_dir))
     plan["compat"] = _compat_json(result)
@@ -495,7 +674,9 @@ def cmd_addon_upgrade_apply(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     name = args.name
 
-    if _compat_gate_addon(name, candidate.new_manifest, deployed, repo_root, force=args.force):
+    if _compat_gate_addon(
+        name, candidate.new_manifest, deployed, repo_root, force=args.force, dependents=True
+    ):
         return 2
     plan = addon_upgrade.build_plan(candidate, config_dir)
     try:
@@ -532,7 +713,9 @@ def _rollback_target(args: argparse.Namespace) -> tuple[dict, dict, Path, dict] 
     except addon_upgrade.UpgradeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return None
-    if _compat_gate_addon(args.name, manifest, deployed, repo_root, force=args.force):
+    if _compat_gate_addon(
+        args.name, manifest, deployed, repo_root, force=args.force, dependents=True
+    ):
         return None
     return deployed, entry, target, manifest
 
@@ -590,8 +773,10 @@ def _list_row(entry: dict, deployed: dict, config_dir: Path, repo_root: Path) ->
         )["components"]
         core = compat.resolve_core_target(repo_root)
         profiles = (deployed.get("core") or {}).get("profiles")
+        result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+        # The same verdict `addon check` gives, `requires.addons` included.
         row["compat"] = _compat_json(
-            compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+            _with_required_addons(result, name, manifest, deployed, repo_root)
         )
     previous = entry.get("previous")
     if isinstance(previous, dict) and previous.get("path"):
@@ -660,6 +845,135 @@ def cmd_addon_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def dependent_addons(name: str, deployed: dict, repo_root: Path) -> list[str]:
+    """The other active addons whose `requires.addons` names `name`. A manifest
+    that cannot be read or parsed counts as requiring nothing."""
+    dependents: list[str] = []
+    for addon in deployment.active_addons(deployed):
+        other = addon.get("name")
+        if not other or other == name:
+            continue
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        try:
+            required = compat.required_addons(manifest or {})
+        except ValueError:
+            continue
+        if any(required_name == name for required_name, _ in required):
+            dependents.append(other)
+    return dependents
+
+
+def cmd_addon_action(args: argparse.Namespace) -> int:
+    """Resolve `papaia-ctl addon run <addon> <action>` for bash: materialize the
+    addon's .env and print the service and its fixed arguments, NUL-separated.
+    Exit 2 for an addon that is not active or an undeclared action."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir) or {}
+    entry = next(
+        (a for a in deployed.get("addons") or [] if a.get("name") == args.name), None
+    )
+    if entry is None or not entry.get("active"):
+        print(f"ERROR: addon '{args.name}' is not installed and active.", file=sys.stderr)
+        return 2
+    addon_path = deployment.resolve_addon_path(entry, repo_root)
+    manifest, manifest_error = deployment.load_addon_manifest(addon_path)
+    if manifest is None:
+        print(f"ERROR: {manifest_error}", file=sys.stderr)
+        return 2
+    try:
+        actions = compat.addon_actions(manifest)
+    except ValueError as exc:
+        print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
+        return 2
+    action = actions.get(args.action)
+    if action is None:
+        declared = ", ".join(sorted(actions)) or "none"
+        print(
+            f"ERROR: addon '{args.name}' declares no action '{args.action}'."
+            f" Declared: {declared}.",
+            file=sys.stderr,
+        )
+        return 2
+    addons.materialize_addon_env(config_dir, addon_path, args.name)
+    sys.stdout.write("".join(f"{part}\0" for part in [action["service"], *action["args"]]))
+    return 0
+
+
+def cmd_addon_actions(args: argparse.Namespace) -> int:
+    """List an addon's declared actions (`addon run <addon>` without an action),
+    as text or, with --json, as [{name, service, description}]."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir) or {}
+    entry = next(
+        (a for a in deployed.get("addons") or [] if a.get("name") == args.name), None
+    )
+    if entry is None:
+        print(f"ERROR: addon '{args.name}' is not registered.", file=sys.stderr)
+        return 2
+    manifest, manifest_error = deployment.load_addon_manifest(
+        deployment.resolve_addon_path(entry, repo_root)
+    )
+    if manifest is None:
+        print(f"ERROR: {manifest_error}", file=sys.stderr)
+        return 2
+    try:
+        actions = compat.addon_actions(manifest)
+    except ValueError as exc:
+        print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {
+                        "name": n,
+                        "service": a["service"],
+                        "description": a["description"],
+                        "destructive": a["destructive"],
+                    }
+                    for n, a in sorted(actions.items())
+                ]
+            )
+        )
+    elif not actions:
+        print(f"Addon '{args.name}' declares no actions.")
+    else:
+        for name, action in sorted(actions.items()):
+            print(f"{name:<20} {action['description']}".rstrip())
+    return 0
+
+
+def cmd_addon_dependents(args: argparse.Namespace) -> int:
+    """Refuse (exit 2) to take an addon away while another active addon requires it.
+    Runs before `addon remove` and `addon uninstall` touch anything; --force
+    proceeds with a warning."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir)
+    if not deployed:
+        return 0
+    dependents = dependent_addons(args.name, deployed, repo_root)
+    if not dependents:
+        return 0
+    listed = ", ".join(f"'{d}'" for d in dependents)
+    if args.force:
+        print(
+            f"WARNING: addon '{args.name}' is required by {listed} -- continuing due to --force",
+            file=sys.stderr,
+        )
+        return 0
+    print(
+        f"ERROR: addon '{args.name}' is required by {listed}."
+        " Remove those first, or pass --force.",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def cmd_addon_remove(args: argparse.Namespace) -> int:
     """Remove integration only: override gone, active=false, re-render. Bundle kept."""
     config_dir = Path(args.config_dir)
@@ -716,6 +1030,10 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
         config_dir / "overrides" / "addons" / f"docker-compose.{name}-ssl-cert.override.yml"
     )
     ssl_override_file.unlink(missing_ok=True)
+    join_override_file = (
+        config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
+    )
+    join_override_file.unlink(missing_ok=True)
 
     bundle_dir = config_dir / "addons" / name
     if bundle_dir.is_dir():
