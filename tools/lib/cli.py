@@ -39,6 +39,7 @@ from . import (
     gen_override,
     gpu_detect,
     keycloak_role_sync,
+    librechat_history,
     migrations,
     modules,
     nodes,
@@ -897,6 +898,24 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_librechat_clear_history(args: argparse.Namespace) -> int:
+    """Count (`--dry-run`) or remove one user's LibreChat history. Exit 1 on every
+    failure, also when some files could not be removed from storage."""
+    try:
+        result = librechat_history.clear_history(
+            Path(args.repo_root),
+            Path(args.config_dir),
+            args.email,
+            before=args.before,
+            dry_run=args.dry_run,
+        )
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(librechat_history.format_result(result, before=args.before))
+    return 1 if result.get("files_failed") else 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
@@ -1403,6 +1422,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--skip", action="append", default=None)
     p_doctor.add_argument("--json", action="store_true")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_clear = sub.add_parser("librechat-clear-history")
+    p_clear.add_argument("--email", required=True)
+    p_clear.add_argument("--before", default=None)
+    p_clear.add_argument("--dry-run", action="store_true")
+    p_clear.set_defaults(func=cmd_librechat_clear_history)
 
     return parser
 
