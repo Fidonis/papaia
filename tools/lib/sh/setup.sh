@@ -438,8 +438,8 @@ cmd_setup() {
             local voice_choice
             voice_choice="$(prompt_with_default "  Choose" "$voice_default")"
             case "$voice_choice" in
-                1|yes) voice="true" ;;
-                2|no)  voice="false" ;;
+                1|[Yy]|[Yy]es|YES) voice="true" ;;
+                2|[Nn]|[Nn]o|NO)   voice="false" ;;
                 *)
                     warn "Unrecognized choice '$voice_choice'; defaulting to disabled."
                     voice="false"

@@ -8,11 +8,11 @@
 model_list:
   - model_name: voice-stt
     litellm_params:
-      # Everything after `openai/` is the model id speaches loads — a
+      # Everything after `openai/` is the model id speaches serves — a
       # faster-whisper conversion published under an explicit MIT license.
-      # Swap it (e.g. for the German finetune primeline/whisper-large-v3-turbo
-      # -german in CTranslate2 form, or Systran/faster-whisper-small on tight
-      # memory) through the overlay.
+      # It must stay equal to VOICE_STT_MODEL in ai/voice/.env (the id the
+      # init container installs); swapping the model means changing both,
+      # this one through the overlay.
       model: openai/deepdml/faster-whisper-large-v3-turbo-ct2
       api_base: http://speaches:8000/v1
       api_key: os.environ/VOICE_API_KEY

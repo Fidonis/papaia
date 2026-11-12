@@ -132,16 +132,15 @@ must not be set in this file.
 
 ## Voice variables
 
-`src/ai/voice/.env` (profile `voice`). Both services take their values only through
+`src/ai/voice/.env` (profile `voice`). All services take their values only through
 `environment:` interpolation (path 1), each with a default, so a profile switched on by hand
 before `setup` has run starts — the engines merely refuse requests until the key exists. The
-transcription model id is not set here: it lives in the LiteLLM route
-(`integration/ai/litellm/config.yaml`, changed through the overlay), and the TTS server is
-configured through the rendered `ai/voice/chatterbox.yaml`, not through variables.
+TTS server is configured through the rendered `ai/voice/chatterbox.yaml`, not through variables.
 
 | Variable | Purpose |
 |---|---|
 | `VOICE_API_KEY` | Bearer key the STT engine requires on every request (generated); synced to `ai/litellm/.env`, where the LiteLLM route reads it as `os.environ/VOICE_API_KEY` |
+| `VOICE_STT_MODEL` | The faster-whisper model the init container installs, commented out with its default. Must stay equal to the id the LiteLLM route `voice-stt` sends (overlay on `ai/litellm/config.yaml`) |
 | `VOICE_STT_COMPUTE_TYPE` | faster-whisper quantization, commented out with its default `int8` |
 | `VOICE_STT_CPU_THREADS` | CPU threads for transcription; `0` (default) uses all cores — cap it on a host that shares cores with LLM inference |
 | `VOICE_STT_MODEL_TTL` | Seconds an idle model stays loaded (default 300; `-1` never unloads) |

@@ -39,7 +39,7 @@ their images there; the table below covers the Core only.
 | `postgres` | 16 | PostgreSQL License | `ai/litellm` | LiteLLM database |
 | `prom/prometheus` | v3.15.1 | Apache-2.0 | `ai/litellm` | |
 | `localai/localai` | v4.7.1 | MIT | `ai/localai` | CPU image; the NVIDIA CUDA, Intel, hipBLAS and Vulkan variants are the same license |
-| `curlimages/curl` | latest | MIT | `ai/localai` | model-init helper |
+| `curlimages/curl` | latest | MIT | `ai/localai`, `ai/voice` | model-init helpers |
 | `ghcr.io/fidonis/jina-reranker-api` | 0.1.3 | Apache-2.0 | `ai/jinaai` | Fidonis-maintained wrapper; Jina AI reranker base is Apache-2.0 |
 | `qdrant/qdrant` | v1.19.0 | Apache-2.0 | `ai/rag` | vector database |
 | `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.1 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |

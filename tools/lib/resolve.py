@@ -721,6 +721,16 @@ def _refuse_conflicting_rag_addons(config_dir: Path) -> None:
         )
 
 
+def _toggle_profile(tree: EnvTree, name: str, enabled: bool) -> EnvTree:
+    """Add or remove one Compose profile in COMPOSE_PROFILES, keeping the others."""
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != name]
+    if enabled:
+        profiles.append(name)
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
 def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Add or remove the `rag` Compose profile based on the operator's choice.
 
@@ -731,12 +741,7 @@ def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
         return tree
     if args.enable_rag:
         _refuse_conflicting_rag_addons(args.config_dir)
-    root = tree.setdefault("", {})
-    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "rag"]
-    if args.enable_rag:
-        profiles.append("rag")
-    root["COMPOSE_PROFILES"] = ",".join(profiles)
-    return tree
+    return _toggle_profile(tree, "rag", args.enable_rag)
 
 
 def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
@@ -746,12 +751,7 @@ def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
     COMPOSE_PROFILES on a prior run is preserved (sticky)."""
     if args.enable_voice is None:
         return tree
-    root = tree.setdefault("", {})
-    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "voice"]
-    if args.enable_voice:
-        profiles.append("voice")
-    root["COMPOSE_PROFILES"] = ",".join(profiles)
-    return tree
+    return _toggle_profile(tree, "voice", args.enable_voice)
 
 
 def _smtp_fields_given(args: SetupArgs) -> bool:

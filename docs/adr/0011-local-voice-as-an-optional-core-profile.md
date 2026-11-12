@@ -97,9 +97,12 @@ Security posture:
   cloning endpoints; a compromised container inside the network could. Voice biometrics
   are special-category data, so the README tells operators to record the feature in
   their processing register.
-- Model downloads happen once, from huggingface.co, with HF telemetry disabled —
-  the single documented exception to the one-egress-point rule, and avoidable by
-  pre-seeding the cache volumes (air-gap path in the README).
+- Model downloads happen once, from huggingface.co, with HF telemetry disabled and
+  the flaky Xet transfer path turned off — the single documented exception to the
+  one-egress-point rule, and avoidable by pre-seeding the cache volumes (air-gap
+  path in the README). The STT engine serves only models installed through its
+  API, so a one-shot `speaches-model-init` container (localai-model-init
+  precedent) installs the configured model after the engine is healthy.
 
 Contract surface: the two services are attachable (`networks.attach`) and the TTS
 config is a render target, so `ADDON_API` moves to generation 5 (additive; `min`

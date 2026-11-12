@@ -96,6 +96,7 @@ ATTACHABLE_SERVICES = {
     "searxng": ["librechat-websearch"],
     "smtp-relay": ["smtp"],
     "speaches": ["voice"],
+    "speaches-model-init": ["voice"],
 }
 
 # Seam 2: render targets addons may layer integration fragments onto.

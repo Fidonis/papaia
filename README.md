@@ -1720,9 +1720,11 @@ tools/papaia-ctl setup -y --voice
 
 **Requirements and first start.** The TTS model stays resident once loaded — plan roughly
 **6 GB of RAM on top** of the stack's baseline (the container is capped by `VOICE_TTS_MEM_LIMIT`,
-default 8g). On the first use each engine downloads its model from huggingface.co (~1.6 GB for
-Whisper, ~3.2 GB for Chatterbox) into a named volume; later starts are offline. For an air-gapped
-installation, run the first start on a connected network or copy a populated
+default 8g). On the first start the models are downloaded from huggingface.co into named volumes
+(~1.6 GB Whisper, installed by the one-shot `speaches-model-init` container; ~3.2 GB Chatterbox,
+fetched by the server itself — it answers requests only once that is done); later starts are
+offline. An interrupted download is resumed on the next start. For an air-gapped installation,
+run the first start on a connected network or copy a populated
 `speaches-hf-cache` / `chatterbox-hf-cache` volume over. On a CPU-only host, speech-to-text is
 fast enough for dictation; text-to-speech may lag behind real time — if replies play back
 haltingly, switch **Settings → Speech → Text-to-speech engine** to `Browser`, or give the
@@ -1735,9 +1737,10 @@ microphone button reports a permission error. Use the HTTPS route of your revers
 `http://localhost:<port>` on the host itself).
 
 **Models and voices.** The transcription model (`deepdml/faster-whisper-large-v3-turbo-ct2`, MIT)
-is named in the LiteLLM route; swap it through the overlay
-(`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`) — for example for a German fine-tune, or
-for `Systran/faster-whisper-small` on tight memory. The TTS server is configured through
+is named twice: `VOICE_STT_MODEL` in `ai/voice/.env` tells the init container what to install,
+and the LiteLLM route sends the same id per request — swapping the model (for example for a
+German fine-tune, or `Systran/faster-whisper-small` on tight memory) means changing both, the
+route through the overlay (`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`). The TTS server is configured through
 `ai/voice/chatterbox.yaml` (same overlay mechanism); the default voice is one of the samples
 shipped in the image, and with the multilingual model any voice speaks the language of the reply.
 The engine watermarks its audio output (Resemble Perth), which makes generated speech

@@ -6,19 +6,22 @@
 # OPTIONAL — activate with profile `voice`:
 #   COMPOSE_PROFILES=...,voice   OR   papaia-ctl setup --voice
 #
-# Two services form one module (label `de.fidonis.module: papaia-voice`):
+# Three services form one module (label `de.fidonis.module: papaia-voice`):
 #
-#   speaches     Whisper speech-to-text, OpenAI-compatible /v1/audio/transcriptions
-#   chatterbox   Chatterbox Multilingual text-to-speech, /v1/audio/speech
+#   speaches            Whisper speech-to-text, OpenAI /v1/audio/transcriptions
+#   speaches-model-init one-shot: installs the Whisper model over the API
+#   chatterbox          Chatterbox Multilingual text-to-speech, /v1/audio/speech
 #
-# Neither publishes a host port: LiteLLM fronts both as the models `voice-stt`
-# and `voice-tts` (see integration/ai/litellm/config.yaml), which makes them
-# usable outside LibreChat with a LiteLLM virtual key, and LibreChat's speech
-# panel goes through LiteLLM as well (integration/ai/librechat/librechat.yaml).
+# Neither engine publishes a host port: LiteLLM fronts both as the models
+# `voice-stt` and `voice-tts` (see integration/ai/litellm/config.yaml), which
+# makes them usable outside LibreChat with a LiteLLM virtual key, and
+# LibreChat's speech panel goes through LiteLLM as well
+# (integration/ai/librechat/librechat.yaml).
 #
-# Both engines download their models from huggingface.co on first use
-# (~1.6 GB Whisper, ~3.2 GB Chatterbox) into named volumes; later starts are
-# offline. See the README section "Voice" for air-gapped installations.
+# First start downloads the models from huggingface.co into named volumes
+# (~1.6 GB Whisper via the init container, ~3.2 GB Chatterbox by the server
+# itself); later starts are offline. See the README section "Voice" for
+# air-gapped installations.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env
 # merged with ai/voice/.env. Both services take their values only through
@@ -32,7 +35,9 @@ services:
   #
   #  Models are loaded per request (the caller names the model id) and unloaded
   #  WHISPER__TTL seconds after the last use, so memory is only held while
-  #  someone is dictating. The first request for a model downloads it.
+  #  someone is dictating. The engine serves only models installed through its
+  #  API (a request for any other id is a 404) — speaches-model-init below
+  #  installs the configured one.
   #
   #  API_KEY guards every route, /health included — the MCP-rendering
   #  playwright service and other containers share papaia-net, and an open
@@ -51,12 +56,18 @@ services:
       WHISPER__TTL:             ${VOICE_STT_MODEL_TTL:-300}
       ENABLE_UI:                "false"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      # The Xet transfer path has proven flaky (TLS resets mid-download leave
+      # sparse, unloadable model files); the plain CDN path resumes cleanly.
+      HF_HUB_DISABLE_XET:       "1"
       LOG_LEVEL:                ${VOICE_STT_LOG_LEVEL:-info}
     volumes:
       - speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub
     healthcheck:
-      # /health sits behind the same bearer auth as every other route.
-      test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer $$API_KEY\" http://127.0.0.1:8000/health || exit 1"]
+      # /health sits behind the same bearer auth as every other route. An empty
+      # API_KEY would start speaches with auth DISABLED (the profile was enabled
+      # by hand before setup seeded ai/voice/.env), so the check fails first on
+      # the missing key — an open engine must show up as unhealthy, not as fine.
+      test: ["CMD-SHELL", "[ -n \"$$API_KEY\" ] && curl -fsS -H \"Authorization: Bearer $$API_KEY\" http://127.0.0.1:8000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -66,6 +77,48 @@ services:
     labels:
       de.fidonis.module: papaia-voice
       de.fidonis.role:   stt
+    profiles: [voice]
+
+  # One-shot helper: installs the transcription model through the engine's API
+  # once speaches is healthy, then exits. Re-runs on an already installed model
+  # return within seconds, and an interrupted download is resumed, so the
+  # container is harmless on every later `start`. Mirrors localai-model-init.
+  # The model id must match what the LiteLLM route voice-stt sends — see
+  # integration/ai/litellm/config.yaml.
+  speaches-model-init:
+    image: curlimages/curl:latest
+    restart: "no"
+    depends_on:
+      speaches:
+        condition: service_healthy
+    environment:
+      VOICE_API_KEY:   ${VOICE_API_KEY}
+      VOICE_STT_MODEL: ${VOICE_STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        model=$$(printf '%s' "$$VOICE_STT_MODEL" | sed 's|/|%2F|g')
+        attempt=1
+        while [ "$$attempt" -le 8 ]; do
+          code=$$(curl -s -o /tmp/out -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $$VOICE_API_KEY" \
+            "http://speaches:8000/v1/models/$$model") || code=000
+          if [ "$$code" = "200" ] || [ "$$code" = "201" ]; then
+            cat /tmp/out; echo; exit 0
+          fi
+          echo "installing $$VOICE_STT_MODEL returned HTTP $$code (attempt $$attempt/8); retrying in 30s" >&2
+          cat /tmp/out >&2 2>/dev/null || true
+          attempt=$$((attempt + 1))
+          sleep 30
+        done
+        echo "giving up installing $$VOICE_STT_MODEL" >&2
+        exit 1
+    networks:
+      - papaia-net
+    labels:
+      de.fidonis.module: papaia-voice
+      de.fidonis.role:   stt-model-init
     profiles: [voice]
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -85,10 +138,16 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
   chatterbox:
     image: ghcr.io/devnen/chatterbox-tts-server:sha-915ae28-cpu@sha256:848adb0dce2f0274bad4214a056320a0c8c32d82267e717a4caeffce7169a4e3
+    # The upstream CPU image is published for linux/amd64 only. Declared so an
+    # ARM host (Apple Silicon under Docker Desktop) runs it under emulation
+    # instead of failing the pull with "no matching manifest".
+    platform: linux/amd64
     restart: unless-stopped
     mem_limit: ${VOICE_TTS_MEM_LIMIT:-8g}
     environment:
       HF_HUB_DISABLE_TELEMETRY: "1"
+      # Same rationale as on speaches: the Xet path breaks mid-download.
+      HF_HUB_DISABLE_XET:       "1"
     volumes:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/ai/voice/chatterbox.yaml
@@ -100,10 +159,11 @@ services:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/v1/audio/voices', timeout=5)\" || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 20
       # The first start downloads ~3.2 GB of model weights and then loads them;
-      # on a slow line this takes well over ten minutes.
-      start_period: ${VOICE_TTS_HEALTHCHECK_START_PERIOD:-180s}
+      # on a slow line this takes well over ten minutes, so the health budget
+      # (start_period + retries x interval = ~25 min) covers that worst case.
+      retries: 40
+      start_period: ${VOICE_TTS_HEALTHCHECK_START_PERIOD:-300s}
     networks:
       - papaia-net
     labels:
