@@ -81,6 +81,14 @@ _stopped_containers_go_stale() {
     [ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)" = "Docker Desktop" ]
 }
 
+# Without a terminal, Compose prints one line per progress event of every layer it pulls.
+# papaia-manager reads a fixed tail of its runner logs, and a pull of new images would push
+# the opening lines of a start, upgrade or restore out of it. A terminal keeps the progress
+# bars; errors of a failed pull still reach stderr either way.
+_pull_quietly() {
+    [ ! -t 2 ]
+}
+
 cmd_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
     while [ $# -gt 0 ]; do
@@ -185,6 +193,10 @@ cmd_start() {
     local up_flags=(-d)
     if _stopped_containers_go_stale; then
         up_flags+=(--force-recreate)
+    fi
+    if _pull_quietly; then
+        up_flags+=(--quiet-pull)
+        info "Starting the containers; missing images are pulled without progress output..."
     fi
 
     if [ -n "$profiles" ]; then
