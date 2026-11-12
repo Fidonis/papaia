@@ -87,8 +87,8 @@ def _published_host(root: dict[str, str]) -> str:
     """The address Keycloak's port is published on, as a URL host.
 
     `--host-ip` binds the published ports to one address; `localhost` then refuses
-    the connection, so the sync has to dial that address instead. Compose needs an
-    IPv6 address in brackets already, and a URL does too."""
+    the connection, so the sync has to dial that address instead. Compose accepts an
+    IPv6 address with or without brackets; a URL needs them."""
     host_ip = root.get("HOST_IP", "").strip()
     if host_ip in _ANY_ADDRESS:
         return "localhost"
@@ -129,11 +129,16 @@ def _tls_server_name(base_url: str) -> str | None:
 
 
 class _ServerNameContext(ssl.SSLContext):
-    """An SSLContext that verifies every connection against one fixed server name."""
+    """An SSLContext that verifies every connection against one fixed server name.
+
+    It takes the verify flags of `ssl.create_default_context()`, which the `localhost`
+    path uses, so both are as strict (from Python 3.13 on, that adds X.509 strict and
+    partial-chain checks)."""
 
     def __new__(cls, server_name: str):
         self = super().__new__(cls, ssl.PROTOCOL_TLS_CLIENT)
         self.server_name = server_name
+        self.verify_flags = ssl.create_default_context().verify_flags
         return self
 
     def wrap_socket(self, sock, *args, server_hostname=None, **kwargs):
