@@ -1239,6 +1239,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_start = sub.add_parser("addon-start")
     p_addon_start.add_argument("--name", required=True)
     p_addon_start.add_argument("--force", action="store_true")
+    # `start` creates the Keycloak clients after `up`; this only fills in their secrets.
+    p_addon_start.add_argument("--no-keycloak", action="store_true")
     p_addon_start.set_defaults(func=cli_addon.cmd_addon_start)
 
     p_addon_check = sub.add_parser("addon-check")

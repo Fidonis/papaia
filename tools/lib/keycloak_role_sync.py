@@ -147,6 +147,13 @@ class _ServerNameContext(ssl.SSLContext):
         return super().wrap_socket(sock, *args, server_hostname=self.server_name, **kwargs)
 
 
+def _admin_connection(root: dict[str, str], config_dir: Path) -> tuple[str, ssl.SSLContext]:
+    """The Admin API base URL and the TLS context for it. One place for both, so every
+    caller verifies a `HOST_IP` connection by the certificate's name, as `sync_roles` does."""
+    base_url = _admin_base_url(root)
+    return base_url, _ssl_context(config_dir, _tls_server_name(base_url))
+
+
 def _ssl_context(config_dir: Path, server_name: str | None = None) -> ssl.SSLContext:
     ca_file = config_dir / "certs" / "local-ca.crt"
     if server_name is None:
@@ -404,6 +411,11 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tu
     return created, updated
 
 
+# A short probe: `addon start` and `addon upgrade` run while Keycloak is up as a rule, and
+# a Keycloak that is down is left to `start` and `keycloak-role-sync`.
+ADDON_CLIENTS_WAIT_SECONDS = 5
+
+
 def _unset(value: str) -> bool:
     """A secret that is still a placeholder of the .env templates."""
     return common.is_placeholder(value) or value.startswith(("CHANGE_ME", "REPLACE_WITH_"))
@@ -438,6 +450,28 @@ def managed_clients(manifest: dict) -> list[dict]:
     return entries
 
 
+def fill_client_secrets(manifest: dict, env_path: Path, name: str) -> list[str]:
+    """Generate the secrets of the managed clients that are still a placeholder in the
+    add-on's bundle `.env` at `env_path`, and return their keys.
+
+    Such a value is the placeholder of a manual import that never happened (an install
+    from before the add-on named the client under `client_secrets`): no login has worked
+    with it, so a generated secret replaces it. Callers run this before the `.env` is
+    materialized into the checkout, so the add-on's containers get the same value the
+    client is created with. Needs no Keycloak."""
+    env = common.parse_env_file(env_path)
+    generated: dict[str, str] = {}
+    for entry in managed_clients(manifest):
+        key = entry["secret_env"]
+        if key in env and key not in generated and _unset(_compose_value(env[key])):
+            generated[key] = common.generate_secret(key)
+    if generated:
+        common.write_env_file(env_path, generated)
+        for key in generated:
+            print(f"  {key} of add-on {name} generated", flush=True)
+    return list(generated)
+
+
 def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = None) -> list[dict]:
     """Client representations for the managed clients of the active add-ons (all of them,
     or those in `names`), each with the secret from the add-on's `.env`.
@@ -463,22 +497,22 @@ def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = No
             except (OSError, ValueError) as exc:
                 print(f"  client of add-on {name} skipped: {export}: {exc}", file=sys.stderr)
                 continue
+            if entry["secret_env"] not in env:
+                print(
+                    f"  client {client.get('clientId')} of add-on {name} skipped: "
+                    f"{entry['secret_env']} is not in its .env",
+                    file=sys.stderr,
+                )
+                continue
+            if fill_client_secrets(manifest or {}, env_path, name):
+                # Here the add-on's checkout copy of the .env still has the placeholder,
+                # and so do its running containers.
+                print(
+                    f"  run 'papaia-ctl addon start {name}' so the add-on uses it",
+                    flush=True,
+                )
+                env = common.parse_env_file(env_path)
             secret = _compose_value(env.get(entry["secret_env"], ""))
-            if _unset(secret):
-                if entry["secret_env"] not in env:
-                    print(
-                        f"  client {client.get('clientId')} of add-on {name} skipped: "
-                        f"{entry['secret_env']} is not in its .env",
-                        file=sys.stderr,
-                    )
-                    continue
-                # Still the placeholder of a manual import that never happened (an install
-                # from before the add-on named the client here): no login has worked with
-                # it, so a generated secret replaces it, in the .env and on the client.
-                secret = common.generate_secret(entry["secret_env"])
-                env[entry["secret_env"]] = secret
-                common.write_env_file(env_path, env)
-                print(f"  {entry['secret_env']} of add-on {name} generated", flush=True)
             # An export carries the id of the realm it came from; Keycloak assigns a new one.
             client.pop("id", None)
             client["clientAuthenticatorType"] = "client-secret"
@@ -491,11 +525,19 @@ def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = No
 
 
 def sync_addon_clients(
-    tree: EnvTree, config_dir: Path, repo_root: Path, names: set[str] | None = None
+    tree: EnvTree,
+    config_dir: Path,
+    repo_root: Path,
+    names: set[str] | None = None,
+    *,
+    wait: int = ADDON_CLIENTS_WAIT_SECONDS,
 ) -> bool:
     """Create or align the managed Keycloak clients of the active add-ons (or those in
-    `names`) on their own, as `addon start` does. Same rules as the realm sync; True when
-    there was nothing to do or everything went through."""
+    `names`) on their own, as `addon start` and `addon upgrade` do. Same rules as the realm
+    sync; True when there was nothing to do or everything went through.
+
+    Waits only `wait` seconds for Keycloak: a Keycloak that is down (a cold start) is not
+    waited for, `papaia-ctl start` and `keycloak-role-sync` create the clients later."""
     root = tree.get("", {})
     if root.get("AUTH_PROVIDER", "internal_keycloak") != "internal_keycloak":
         return True
@@ -507,10 +549,9 @@ def sync_addon_clients(
     if not admin_password or admin_password.startswith("GENERATE_"):
         print("Keycloak clients skipped: KC_ADMIN_PASSWORD is not set.", file=sys.stderr)
         return False
-    base_url = _admin_base_url(root)
-    ctx = _ssl_context(config_dir)
+    base_url, ctx = _admin_connection(root, config_dir)
     try:
-        _wait_for_keycloak(base_url, ctx, timeout=30)
+        _wait_for_keycloak(base_url, ctx, timeout=wait)
         token = _get_admin_token(base_url, ctx, admin_password)
         created, updated = _sync_clients(
             base_url, ctx, token, {"clients": clients}, {c["clientId"] for c in clients}
@@ -705,8 +746,7 @@ def sync_roles(tree: EnvTree, config_dir: Path, repo_root: Path | None = None) -
         return False
     realm_def = json.loads(realm_json_path.read_text(encoding="utf-8"))
 
-    base_url = _admin_base_url(root)
-    ctx = _ssl_context(config_dir, _tls_server_name(base_url))
+    base_url, ctx = _admin_connection(root, config_dir)
 
     print("Waiting for Keycloak to become ready...", flush=True)
     try:

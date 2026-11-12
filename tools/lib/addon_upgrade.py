@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import addons, common, compat, components, deployment, semver
+from . import addons, common, compat, components, deployment, keycloak_role_sync, semver
 
 SCHEMA_VERSION = 1
 
@@ -366,6 +366,9 @@ def apply_upgrade(
             chosen[item["key"]] = item["default"]
     if chosen:
         common.write_env_file(bundle_env_path, chosen)
+    # A managed Keycloak client whose secret is still a placeholder gets one now, before the
+    # checkout copy is written: the containers recreated after this must not start with it.
+    keycloak_role_sync.fill_client_secrets(candidate.new_manifest, bundle_env_path, name)
     addons.materialize_addon_env(config_dir, candidate.new_path, name)
 
     new_version = manifest_version(candidate.new_manifest)

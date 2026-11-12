@@ -1239,3 +1239,76 @@ def test_addon_clients_are_left_alone_with_an_external_provider(tmp_path, monkey
     tree[""]["AUTH_PROVIDER"] = "external_oidc"
     assert kcs.sync_addon_clients(tree, config, tmp_path, None) is True
     assert fake.clients == {}
+
+
+def test_addon_clients_verify_a_host_ip_connection_like_the_role_sync(tmp_path, monkeypatch):
+    # The local CA certificate names localhost, not the --host-ip address: both syncs have to
+    # dial the address and verify the name, or `addon start` fails where the role sync works.
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    _write_realm_json(config, _realm_def())
+    fake = FakeKeycloak(roles={}, clients={})
+    _patch_common(monkeypatch, fake)
+    monkeypatch.setattr(kcs.common, "in_container", lambda: False)
+    seen: list[tuple[str, str | None]] = []
+    real = kcs._ssl_context
+
+    def _record(config_dir, server_name=None):
+        seen.append(("ctx", server_name))
+        return real(config_dir, server_name)
+
+    def _wait(base_url, ctx, timeout=90):
+        seen.append(("url", base_url))
+
+    monkeypatch.setattr(kcs, "_ssl_context", _record)
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", _wait)
+    tree = _tree()
+    tree[""]["HOST_IP"] = "10.42.0.1"
+
+    assert kcs.sync_addon_clients(tree, config, tmp_path, {"wiki"}) is True
+    addon_start = list(seen)
+    seen.clear()
+    assert kcs.sync_roles(tree, config_dir=config, repo_root=tmp_path) is True
+    assert addon_start == seen == [("ctx", "localhost"), ("url", "https://10.42.0.1:8110")]
+
+
+def test_addon_clients_wait_only_briefly_for_keycloak(tmp_path, monkeypatch, capsys):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    _patch_common(monkeypatch, FakeKeycloak(roles={}, clients={}))
+    waited = []
+
+    def _down(base_url, ctx, timeout=90):
+        waited.append(timeout)
+        raise TimeoutError("Keycloak did not become ready")
+
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", _down)
+    assert kcs.sync_addon_clients(_tree(), config, tmp_path, {"wiki"}) is False
+    assert waited == [kcs.ADDON_CLIENTS_WAIT_SECONDS]
+    assert "Keycloak clients skipped" in capsys.readouterr().err
+
+
+def test_fill_client_secrets_replaces_only_placeholders(tmp_path, capsys):
+    config = _addon(
+        tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "REPLACE_WITH_X", "OTHER": "kept"}
+    )
+    env_path = config / "addons" / "wiki" / ".env"
+    manifest = yaml.safe_load((tmp_path / "checkout" / "wiki" / "papaia-app.yaml").read_text())
+
+    assert kcs.fill_client_secrets(manifest, env_path, "wiki") == ["KC_WIKI_SECRET"]
+    first = _env_of(env_path)
+    assert len(first["KC_WIKI_SECRET"]) == 48 and first["OTHER"] == "kept"
+    assert "KC_WIKI_SECRET of add-on wiki generated" in capsys.readouterr().out
+    # A value that is set is never replaced.
+    assert kcs.fill_client_secrets(manifest, env_path, "wiki") == []
+    assert _env_of(env_path) == first
+
+
+def test_a_secret_the_role_sync_generates_asks_for_an_addon_start(tmp_path, capsys):
+    # The role sync runs after the add-on's .env reached its checkout; the add-on has to be
+    # started again to pick up the new value.
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "GENERATE_SECRET"})
+    kcs.addon_clients(config, tmp_path)
+    assert "run 'papaia-ctl addon start wiki' so the add-on uses it" in capsys.readouterr().out
+
+
+def _env_of(path):
+    return kcs.common.parse_env_file(path)
