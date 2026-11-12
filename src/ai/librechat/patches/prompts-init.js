@@ -85,8 +85,9 @@ function listPrompts(dir) {
 }
 
 // Upserts one prompt file. Returns the prompt group id, or null when skipped.
-// Operator prompts are keyed by (name, author); add-on prompts by (owning add-on,
-// command), which stays stable when the author falls back to another user.
+// Operator prompts are keyed by (name, author) among the groups without an add-on
+// mark, so an add-on group of the same name is never taken over; add-on prompts by
+// (owning add-on, command), which stays stable when the author falls back to another user.
 async function upsertPrompt(db, dir, file, managedBy) {
   const users = db.collection('users');
   const projects = db.collection('projects');
@@ -120,7 +121,7 @@ async function upsertPrompt(db, dir, file, managedBy) {
 
   const key = managedBy
     ? { papaia_managed_by: managedBy, command: meta.command }
-    : { name: meta.name, author: authorId };
+    : { name: meta.name, author: authorId, papaia_managed_by: { $exists: false } };
   let group = await promptgroups.findOne(key);
   const fields = {
     name: meta.name,

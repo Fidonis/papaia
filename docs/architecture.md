@@ -157,8 +157,8 @@ papaia-addons/<name>/
 ├── integration/             # The 4 seams as fragments (all optional)
 │   ├── keycloak/            # OIDC client + audience mapper JSONs
 │   ├── librechat/           # mcpServers + allowedDomains fragment (YAML)
-│   ├── ai/librechat/agents/ # optional: LibreChat agents (addon_api 4, Seam 3)
-│   ├── ai/librechat/prompts/# optional: LibreChat prompts (addon_api 4, Seam 3)
+│   ├── ai/librechat/agents/  # optional: LibreChat agents (addon_api 4, Seam 3)
+│   ├── ai/librechat/prompts/ # optional: LibreChat prompts (addon_api 4, Seam 3)
 │   └── nginx/               # Optional ingress snippet
 └── README.md                # Self-contained manual integration path (public-clean)
 ```
@@ -470,11 +470,19 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
   the UI or from the operator directories are never touched.
 - **Validation at render:** An agent that names an MCP server the rendered
   `librechat.yaml` does not define is skipped with a warning, because it would
-  appear without its tools.
+  appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
+  `mcpServers` is not a list of server names; the rest of the render goes on.
+- **Operator files win:** An agent in `LIBRECHAT_AGENTS_DIR` with the id of an
+  add-on agent replaces it: the add-on file is skipped with a warning, and the
+  stored agent loses its add-on mark, so removing the add-on keeps it. Operator
+  prompts never take over an add-on prompt of the same name.
 - **Overwritten edits:** Changes made in the UI to an add-on agent or prompt are
   overwritten on the next start.
 - **Ids:** Agent ids are stored with the `agent_` prefix, so links use
   `?agent_id=agent_<id>`. Add-on prompts are keyed by add-on and `command`.
+- **Known limitation:** A distributed installation does not ship the override or
+  the two directories to a node bundle, so add-on agents and prompts are not
+  provisioned there (Fidonis/papaia#368).
 
 ### Seam 4 — Ingress (optional)
 

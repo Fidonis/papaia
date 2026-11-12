@@ -15,7 +15,9 @@
 // `papaia_managed_by: <addon>`, and an add-on agent whose file is gone is
 // deleted together with its access entries and project links (tombstone),
 // so removing an add-on removes its agents. Agents from the operator
-// directory or the UI are never deleted.
+// directory or the UI are never deleted. An operator file with the id of an
+// add-on agent wins: the add-on file is skipped with a warning and the stored
+// agent loses its add-on mark, so it survives the removal of the add-on.
 //
 // `is_collaborative` (default true) shares an agent with every user of the
 // instance: LibreChat 0.8.x decides access by its ACL alone, so the script
@@ -72,8 +74,12 @@ function listYaml(dir) {
   }
 }
 
-// Upserts one agent file. Returns the stored agent id, or null when skipped.
-async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, managedBy) {
+// Returned for an add-on file whose id an operator file already provides.
+const TAKEN = Symbol('taken');
+
+// Upserts one agent file. Returns the stored agent id, null when the file is
+// skipped, or TAKEN when an add-on file collides with an operator agent.
+async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, managedBy, taken) {
   const raw = fs.readFileSync(path.join(dir, file), 'utf8');
   const doc = yaml.load(raw);
   if (!doc || typeof doc !== 'object') {
@@ -86,6 +92,10 @@ async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, m
   }
 
   const agentId = String(doc.id).startsWith('agent_') ? String(doc.id) : `agent_${doc.id}`;
+  if (managedBy && taken.has(agentId)) {
+    warn(`${file}: ${agentId} is provided by the operator directory — the add-on file is skipped`);
+    return TAKEN;
+  }
 
   const authorId = await resolveAuthorId(users, doc);
   if (!authorId) {
@@ -111,19 +121,18 @@ async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, m
     updatedAt: new Date(),
   };
   // Add-on agents carry their owner, so they can be removed with the add-on.
-  if (managedBy) update.papaia_managed_by = managedBy;
-
-  await agents.updateOne(
-    { id: agentId },
-    {
-      $set: update,
-      $setOnInsert: {
-        createdAt: new Date(),
-        versions: [],
-      },
+  // An operator file drops the mark: the agent is no longer the add-on's.
+  const change = {
+    $set: update,
+    $setOnInsert: {
+      createdAt: new Date(),
+      versions: [],
     },
-    { upsert: true },
-  );
+  };
+  if (managedBy) update.papaia_managed_by = managedBy;
+  else change.$unset = { papaia_managed_by: '' };
+
+  await agents.updateOne({ id: agentId }, change, { upsert: true });
   // A document stored by an earlier run under the bare id cannot be used. The
   // old code stored the YAML value as it was, so a numeric id is a number.
   if (agentId !== doc.id) {
@@ -204,6 +213,8 @@ async function main() {
 
     let upserted = 0;
     let failed = 0;
+    // Ids the operator directory provides; an add-on file cannot take them over.
+    const taken = new Set();
     for (const file of operatorFiles || []) {
       try {
         const agentId = await upsertAgent(
@@ -214,9 +225,14 @@ async function main() {
           AGENTS_DIR,
           file,
           null,
+          taken,
         );
-        if (agentId) upserted += 1;
-        else failed += 1;
+        if (agentId) {
+          taken.add(agentId);
+          upserted += 1;
+        } else {
+          failed += 1;
+        }
       } catch (err) {
         warn(`${file}: ${err.message}`);
         failed += 1;
@@ -237,7 +253,9 @@ async function main() {
           ADDON_AGENTS_DIR,
           file,
           managedBy,
+          taken,
         );
+        if (agentId === TAKEN) continue;
         if (agentId) {
           keep.push(agentId);
           upserted += 1;
