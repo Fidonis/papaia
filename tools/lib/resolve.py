@@ -96,6 +96,43 @@ def derive_auth_host_default(app_host: str, keycloak_ext_port: str) -> str:
     return f"https://{hostname}:{keycloak_ext_port}"
 
 
+def _is_local_host(hostname: str) -> bool:
+    """A host derive_auth_host_default treats as local: no FQDN, so https and a port."""
+    return (
+        hostname in _HOSTLIKE_NO_FQDN or bool(_IPV4_RE.match(hostname)) or "." not in hostname
+    )
+
+
+def sticky_auth_host(
+    stored: str, *, prior_provider: str, stored_app_host: str, keycloak_ext_port: str
+) -> str:
+    """The stored AUTH_HOST if the operator chose it, else "" (derive it again).
+
+    Only Keycloak's own setup writes a value worth keeping: after external_oidc the
+    stored one never served this installation's Keycloak. That also drops a value
+    chosen before a switch to external_oidc and back, which an explicit provider
+    switch accepts.
+
+    A value that is just the stored app host's derivation was never chosen either: it
+    follows a changed app host instead of pinning the old one. That covers an
+    --auth-host equal to the derivation as well: the two look the same. Local hosts
+    are compared without the scheme, since older releases derived them as http; the
+    old KEYCLOAK_EXT_PORT is gone by now, so a local value with another port counts as
+    chosen. An FQDN keeps the app host's scheme in the derivation, so it is compared
+    with it."""
+    if prior_provider != "internal_keycloak" or not stored or common.is_placeholder(stored):
+        return ""
+    if stored_app_host:
+        old_derived = urlsplit(derive_auth_host_default(stored_app_host, keycloak_ext_port))
+        value = urlsplit(stored)
+        same_host = value.netloc.lower() == old_derived.netloc.lower()
+        if same_host and (
+            _is_local_host(old_derived.hostname or "") or value.scheme == old_derived.scheme
+        ):
+            return ""
+    return stored
+
+
 def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
     """Default browser-facing LibreChat URL (DOMAIN_SERVER/DOMAIN_CLIENT):
     the public host plus the external LibreChat port.
@@ -259,27 +296,18 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         # A prior run's AUTH_HOST wins over the derived default, like LITELLM_PUBLIC_URL:
         # an upgrade re-runs setup non-interactively without --auth-host, and
         # re-deriving here moved KC_HOSTNAME and the issuer of every client.
-        # Only Keycloak's own setup writes it: after external_oidc the stored value is
-        # still the shipped seed, which says nothing about this installation.
-        sticky_auth_host = ""
-        if not args.fresh_init and prior_auth_provider == "internal_keycloak":
-            sticky_auth_host = root.get("AUTH_HOST", "")
-        if sticky_auth_host and common.is_placeholder(sticky_auth_host):
-            sticky_auth_host = ""
-        # A value that is just the old app host's derivation was never chosen by
-        # the operator: it follows a changed --app-host instead of pinning the old one.
-        # That covers a --auth-host equal to the derivation as well: the two look the same.
-        # Compared without the scheme -- older releases derived local hosts as http.
-        # The old KEYCLOAK_EXT_PORT is gone by now, so a local value with another port
-        # counts as chosen and stays until --auth-host replaces it.
-        if sticky_app_host and sticky_auth_host:
-            old_derived = derive_auth_host_default(sticky_app_host, keycloak_port)
-            if urlsplit(sticky_auth_host).netloc == urlsplit(old_derived).netloc:
-                sticky_auth_host = ""
-        auth_host = args.auth_host or sticky_auth_host or derived_auth_host
+        # `papaia-ctl defaults` applies the same rules to the interactive prompt.
+        stored_auth_host = "" if args.fresh_init else root.get("AUTH_HOST", "")
+        sticky_auth = sticky_auth_host(
+            stored_auth_host,
+            prior_provider=prior_auth_provider,
+            stored_app_host=sticky_app_host,
+            keycloak_ext_port=keycloak_port,
+        )
+        auth_host = args.auth_host or sticky_auth or derived_auth_host
         if not args.auth_host and not args.non_interactive and args.prompt is not None:
             auth_host = args.prompt(
-                "Public Keycloak URL (AUTH_HOST)", sticky_auth_host or derived_auth_host
+                "Public Keycloak URL (AUTH_HOST)", sticky_auth or derived_auth_host
             )
         root["AUTH_HOST"] = auth_host
         keycloak["KC_HOSTNAME"] = auth_host
