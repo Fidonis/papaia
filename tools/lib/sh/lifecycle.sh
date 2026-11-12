@@ -466,9 +466,48 @@ cmd_uninstall() {
 
     if [ -d "$CONFIG_DIR" ]; then
         info "Deleting $CONFIG_DIR..."
-        rm -rf "$CONFIG_DIR"
+        if ! _remove_config_dir "$CONFIG_DIR"; then
+            exit 1
+        fi
     fi
     success "uninstall complete."
+}
+
+# Deletes the configuration directory. Containers write some of their bind-mounted data as
+# root (Nginx Proxy Manager's `infra/nginx/nginx-data/`, for one), which a non-root
+# operator cannot delete. What is left after the first attempt is deleted the way it was
+# written: by a short-lived container that mounts the directory. If that is not possible
+# either, the leftover path and the command that removes it are named.
+_remove_config_dir() {
+    local dir="$1" physical
+    rm -rf "$dir" 2>/dev/null || true
+    [ -e "$dir" ] || return 0
+
+    physical="$(cd "$dir" 2>/dev/null && pwd -P)" || physical=""
+    case "$physical" in
+        ""|/)
+            error "Could not delete $dir completely; refusing to clean it up through a container."
+            error "Remove it by hand: sudo rm -rf '$dir'"
+            return 1
+            ;;
+    esac
+    if [ -n "${HOME:-}" ] && [ "$physical" = "$(cd "$HOME" 2>/dev/null && pwd -P)" ]; then
+        error "$dir is the home directory; refusing to delete what is left in it."
+        return 1
+    fi
+
+    info "Some files in $dir belong to root (written by containers); deleting them through a container..."
+    if command -v docker >/dev/null 2>&1 \
+        && _docker_run --network none -v "$(_docker_hostpath "$physical"):/target" \
+            "$BACKUP_IMAGE" find /target -mindepth 1 -delete; then
+        rm -rf "$dir" 2>/dev/null || true
+    fi
+    if [ -e "$dir" ]; then
+        error "Could not delete $dir completely."
+        error "Remove what is left with: sudo rm -rf '$dir'"
+        return 1
+    fi
+    return 0
 }
 
 _require_setup_done() {
