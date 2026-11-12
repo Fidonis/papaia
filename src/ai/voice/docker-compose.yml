@@ -159,6 +159,27 @@ services:
         target: /app/config.yaml
         read_only: true
       - chatterbox-hf-cache:/app/hf_cache
+    # The bundled chatterbox package cannot load the multilingual checkpoints
+    # on a machine without CUDA: two of its torch.load calls lack a
+    # map_location, and the published checkpoints carry CUDA storages (fix PR
+    # unmerged when the upstream repo was archived; the server's own fork has
+    # not picked it up either). Until a fixed image exists, start the server
+    # through a wrapper that maps CUDA-saved tensors onto the CPU; with CUDA
+    # available the wrapper changes nothing. Replaces the image CMD
+    # ["python3", "server.py"].
+    command:
+      - python3
+      - -c
+      - |
+        import torch
+        if not torch.cuda.is_available():
+            _load = torch.load
+            def _cpu_load(*args, **kwargs):
+                kwargs.setdefault("map_location", "cpu")
+                return _load(*args, **kwargs)
+            torch.load = _cpu_load
+        import runpy
+        runpy.run_path("server.py", run_name="__main__")
     healthcheck:
       # No curl in the image and no /health route; the voices listing is the
       # cheapest request that proves the app is serving.

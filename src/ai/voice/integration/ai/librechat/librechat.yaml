@@ -23,10 +23,17 @@ speech:
       # silence, so a further delay only feels sluggish.
       autoSendText: 0
     textToSpeech:
-      engineTTS: "external"
+      # "browser" by default: the CPU build of the TTS engine synthesizes
+      # slower than real time, and LibreChat silently stops a playback stream
+      # that stalls for 15 s — spoken replies would cut out mid-sentence. The
+      # engine and the voice-tts route below stay wired up; a user on a host
+      # with enough CPU headroom (or a GPU, once the GPU variant lands)
+      # switches to "external" under Settings → Speech.
+      engineTTS: "browser"
       automaticPlayback: true
-      # Must name an entry of tts.openai.voices below, or LibreChat picks a
-      # random voice per user.
+      # Takes effect when a user switches to the external engine. Must name an
+      # entry of tts.openai.voices below, or LibreChat picks a random voice
+      # per user.
       voice: "Emily.wav"
   stt:
     # LibreChat refuses private upstream addresses unless they are listed here

@@ -1704,12 +1704,17 @@ automation, an agent, your own web app — with spend tracking attached, and Lib
 panel goes through the same routes. Audio is processed on your host; nothing reaches a cloud
 service.
 
-What you get once it is on: a microphone button next to LibreChat's message box, spoken replies
-(streamed sentence by sentence while the answer is still being written), and transcription of
-uploaded audio files. Defaults are tuned for German (`languageSTT: de-DE`, replies pronounced as
-German); each user can change language, voice and engines under **Settings → Speech**. A
-semi-automatic voice conversation works with one keypress per turn (Shift+Alt+L starts the
-recording; it stops on silence, sends, and the reply plays back automatically).
+What you get once it is on: a microphone button next to LibreChat's message box, spoken replies,
+and transcription of uploaded audio files. Defaults are tuned for German (`languageSTT: de-DE`);
+each user can change language, voice and engines under **Settings → Speech**. A semi-automatic
+voice conversation works with one keypress per turn (Shift+Alt+L starts the recording; it stops
+on silence, sends, and the reply plays back automatically). Spoken replies use the browser's own
+voice by default — the local TTS engine is wired up but **opt-in per user** (switch
+**Settings → Speech → Text-to-speech engine** to `External`), because on CPU it synthesizes
+slower than real time and LibreChat cuts off a playback stream that stalls 15 s. With enough CPU
+headroom it is worth trying; a GPU variant is a planned follow-up. Calls through the `voice-tts`
+LiteLLM route are not affected by the playback timeout — generating audio files from an
+automation just takes its time.
 
 **Enable it** with `papaia-ctl setup`: the wizard asks whether to install the voice engines.
 Non-interactively:
@@ -1726,10 +1731,9 @@ fetched by the server itself — it answers requests only once that is done); la
 offline. An interrupted download is resumed on the next start. For an air-gapped installation,
 run the first start on a connected network or copy a populated
 `speaches-hf-cache` / `chatterbox-hf-cache` volume over. On a CPU-only host, speech-to-text is
-fast enough for dictation; text-to-speech may lag behind real time — if replies play back
-haltingly, switch **Settings → Speech → Text-to-speech engine** to `Browser`, or give the
-container a GPU. Both engines process one request at a time; they are sized for a handful of
-users speaking occasionally, not for parallel transcription jobs.
+fast enough for dictation; text-to-speech lags behind real time, which is why spoken replies
+default to the browser engine (see above). Both engines process one request at a time; they are
+sized for a handful of users speaking occasionally, not for parallel transcription jobs.
 
 **The microphone needs a secure context.** Browsers only expose recording on HTTPS pages or on
 literally `localhost` — on `http://host.docker.internal:8000` or a plain-HTTP LAN address the

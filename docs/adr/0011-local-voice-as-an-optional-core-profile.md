@@ -82,6 +82,23 @@ Configure the TTS server through the new render target `ai/voice/chatterbox.yaml
 German is the default (`languageSTT: de-DE`, TTS `generation_defaults.language: de`);
 users change language, voice and engines per account in LibreChat.
 
+Two findings from running the stack shape the defaults:
+
+- **The bundled chatterbox package cannot load the multilingual checkpoints
+  without CUDA**: two of its `torch.load` calls pass no `map_location`, and the
+  published checkpoints carry CUDA storages. The fix was still an unmerged PR when
+  Resemble archived the repository, and the server's fork has not picked it up. The
+  Compose service therefore starts the server through a small wrapper that defaults
+  `map_location` to the CPU when CUDA is unavailable — verified to load and
+  synthesize correctly; remove it when a fixed image appears.
+- **CPU synthesis is slower than real time** (measured well above RTF 1 even before
+  emulation overhead is discounted), and LibreChat silently stops a playback stream
+  that stalls 15 s. Spoken replies therefore default to the **browser** TTS engine;
+  the external engine stays fully wired and is a per-user switch in Settings →
+  Speech, with the GPU variant as the planned way to make it the default. STT is
+  unaffected and defaults to the local engine. Callers on the `voice-tts` route
+  (no playback timeout) can use the slow synthesis as is.
+
 Security posture:
 
 - The STT engine requires a bearer key (`VOICE_API_KEY`, generated on setup and synced
@@ -118,10 +135,11 @@ stays 1).
 - ~6 GB additional resident RAM while the profile is on — the TTS model never unloads.
   `mem_limit` (default 8g) contains an OOM to the TTS container. Hosts at the 8 GB
   baseline cannot run the profile; the README says so.
-- CPU-only text-to-speech may be slower than real time; LibreChat plays audio sentence
-  by sentence but silently stops a stream that stalls 15 s, so the README documents the
-  browser-engine fallback and the GPU option. Speech-to-text is unaffected (turbo
-  Whisper at int8 transcribes dictation-length audio in seconds).
+- Spoken replies in LibreChat use the browser voice until a user opts into the
+  external engine, so the out-of-the-box replies are not watermarked and, on many
+  platforms, use a browser-vendor cloud voice — the README states both. Speech-to-text
+  is local from the start (turbo Whisper at int8 transcribes dictation-length audio
+  in seconds).
 - Audio output carries Resemble's Perth watermark — generated speech stays
   identifiable, which supports rather than hurts the sovereignty pitch.
 - Both upstreams carry maintenance risk: Resemble has archived the Chatterbox repo
