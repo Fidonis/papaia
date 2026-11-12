@@ -5,6 +5,7 @@ Renders the effective core configuration into $PAPAIA_CONFIG_DIR:
     repo base (src/<target>)
       + active-profile fragments (src/<module>/integration/<target>, PROFILE_FRAGMENTS)
       + active-addon fragments (addons/<name>/integration/<target>)
+      + generated fragments (the LocalAI models in LiteLLM's model_list)
       + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>)
       --render--> $PAPAIA_CONFIG_DIR/<target>
 
@@ -50,6 +51,14 @@ _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 # layer.
 PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag"}
 
+# LiteLLM's configuration, which takes the generated model_list of the LocalAI models.
+LITELLM_CONFIG = "ai/litellm/config.yaml"
+LOCALAI_PROFILE = "localai"
+LOCALAI_MODELS_FILE = "ai/localai/models.txt"
+LOCALAI_MODELS_DIR = "ai/localai/models"
+# LiteLLM resolves `os.environ/...` itself, so the key is never written into the file.
+LOCALAI_API_KEY_REF = "os.environ/LOCALAI_API_KEY"
+
 
 class RenderError(Exception):
     """A user-facing rendering failure (e.g. an unresolved realm placeholder).
@@ -60,6 +69,93 @@ class RenderError(Exception):
         super().__init__(message)
         self.line = line
         self.column = column
+
+
+def _localai_api_base(config_dir: Path) -> str:
+    """Where LiteLLM reaches LocalAI's OpenAI-compatible API."""
+    return "http://localai:8080/v1"
+
+
+def _active_model_files(models_text: str) -> set[str]:
+    """The file names models.txt downloads: the last path segment of every active line, as
+    the init job derives them."""
+    names = set()
+    for line in models_text.splitlines():
+        url = line.strip()
+        if url and not url.startswith("#"):
+            names.add(url.rsplit("/", 1)[-1])
+    return names
+
+
+def _localai_model_configs(
+    repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> list[dict]:
+    """The effective LocalAI model YAMLs: the shipped ones with their overlay, and those that
+    exist only in the overlay. Only the top level, which is all the init job copies."""
+    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
+    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
+    names = {p.name for d in (shipped, overlay) if d.is_dir() for p in d.glob("*.y*ml")}
+    configs = []
+    for name in sorted(names):
+        rel_path = f"{LOCALAI_MODELS_DIR}/{name}"
+        text = _effective_text(rel_path, repo_root, config_dir, active_addons)
+        if text is None:
+            text = _overlay_only_text(rel_path, config_dir)
+        data = yaml.safe_load(text)
+        if isinstance(data, dict):
+            configs.append(data)
+    return configs
+
+
+def _localai_models(
+    repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> list[dict] | None:
+    """The LiteLLM entries of the LocalAI models that models.txt downloads, sorted by name, or
+    None while the localai profile is off.
+
+    Built from the effective models.txt (with its overlay), not from the rendered file on
+    disk: `render` writes LiteLLM's configuration first, and a preview must not depend on
+    a render having run. A model is registered when its YAML's `parameters.model` is the
+    file name of an active line."""
+    root_env = common.parse_env_file(config_dir / ".env")
+    if LOCALAI_PROFILE not in common.cluster_profiles(root_env):
+        return None
+    text = _effective_text(LOCALAI_MODELS_FILE, repo_root, config_dir, active_addons)
+    if text is None:
+        return None
+    files = _active_model_files(text)
+    api_base = _localai_api_base(config_dir)
+    entries = []
+    for model in _localai_model_configs(repo_root, config_dir, active_addons):
+        name = model.get("name")
+        params = model.get("parameters")
+        if not isinstance(name, str) or not name or not isinstance(params, dict):
+            continue
+        if params.get("model") not in files:
+            continue
+        entry: dict = {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"openai/{name}",
+                "api_base": api_base,
+                "api_key": LOCALAI_API_KEY_REF,
+            },
+        }
+        if model.get("embeddings") is True:
+            entry["model_info"] = {"mode": "embedding"}
+        entries.append(entry)
+    return sorted(entries, key=lambda e: e["model_name"])
+
+
+def _without_overridden(generated: list[dict], overlay) -> list[dict]:
+    """The generated entries whose model_name the overlay does not list itself.
+
+    A list merge appends, so an overlay entry with the same name would otherwise sit next
+    to the generated one and LiteLLM would route the name to either."""
+    if not isinstance(overlay, dict) or not isinstance(overlay.get("model_list"), list):
+        return generated
+    names = {e.get("model_name") for e in overlay["model_list"] if isinstance(e, dict)}
+    return [e for e in generated if e["model_name"] not in names]
 
 
 def _profile_layers(config_dir: Path) -> list[dict]:
@@ -189,12 +285,20 @@ def _effective_text(
             if frag_path.is_file():
                 label = f"{addon['path']}/integration/{rel_path}"
                 merged = _merge_layer(merged, _load_structured(frag_path, label), label)
+        layer = None
         if overlay_text is _ON_DISK:
             if overlay_path.is_file():
                 layer = _load_structured(overlay_path, overlay_label)
-                merged = _merge_layer(merged, layer, overlay_label)
         elif overlay_text is not None:
             layer = _parse_structured(base_path.suffix, overlay_text, overlay_label)
+        if rel_path == LITELLM_CONFIG:
+            generated = _localai_models(repo_root, config_dir, active_addons)
+            if generated is not None:
+                generated = _without_overridden(generated, layer)
+                merged = _merge_layer(
+                    merged, {"model_list": generated}, f"{LOCALAI_MODELS_FILE} (generated)"
+                )
+        if layer is not None:
             merged = _merge_layer(merged, layer, overlay_label)
         return _dump_structured(base_path.suffix, merged)
 
@@ -249,6 +353,16 @@ def preview(config_dir: Path, repo_root: Path, rel_path: str, overlay_text: str 
     }
 
 
+def _overlay_only_text(rel_path: str, config_dir: Path) -> str:
+    """The text of an overlay file the repository has no base for. A structured file that does
+    not parse is a RenderError that names it, as for every other layer."""
+    path = config_dir / "overlay" / rel_path
+    text = path.read_text(encoding="utf-8")
+    if path.suffix in _STRUCTURED_SUFFIXES:
+        _parse_structured(path.suffix, text, f"overlay/{rel_path}")
+    return text
+
+
 def _render_dir(
     rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> None:
@@ -260,6 +374,16 @@ def _render_dir(
         if file_path.is_file():
             sub_rel = file_path.relative_to(src_root).as_posix()
             _render_file(sub_rel, repo_root, config_dir, active_addons)
+    # Files only the overlay has, such as an operator's own LocalAI model YAML, are rendered
+    # as they are.
+    overlay_dir = config_dir / "overlay" / rel_path
+    if overlay_dir.is_dir():
+        overlay_root = config_dir / "overlay"
+        for file_path in sorted(overlay_dir.rglob("*")):
+            sub_rel = file_path.relative_to(overlay_root).as_posix()
+            if file_path.is_file() and not (src_root / sub_rel).is_file():
+                text = _overlay_only_text(sub_rel, config_dir)
+                common.atomic_write(config_dir / sub_rel, text)
 
 
 def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:

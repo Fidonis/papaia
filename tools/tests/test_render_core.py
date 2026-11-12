@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
 from lib import common, envtree, render_core, resolve, secrets
@@ -363,3 +364,194 @@ def test_the_realm_template_themes_the_login_clients_but_not_the_realm():
             assert theme == "papaia", client["clientId"]
         else:
             assert theme is None, client["clientId"]
+
+
+# -- LocalAI: the generated model_list in LiteLLM ---------------------------------------------
+
+_LOCALAI_MODELS = (
+    "# a comment\n"
+    "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/"
+    "qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
+    "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/"
+    "nomic-embed-text-v1.5.Q8_0.gguf\n"
+)
+
+
+def _install_localai(repo_root, models: str = _LOCALAI_MODELS) -> None:
+    """The real model YAMLs next to the fixture's stub, and `models` as the shipped list."""
+    target = repo_root / "src" / "ai" / "localai"
+    for path in (REAL_REPO / "src" / "ai" / "localai" / "models").glob("*.yaml"):
+        shutil.copy(path, target / "models" / path.name)
+    (target / "models.txt").write_text(models, encoding="utf-8")
+
+
+def _rendered_litellm(config_dir):
+    return yaml.safe_load((config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8"))
+
+
+def _model_names(config_dir) -> list[str]:
+    return [e["model_name"] for e in _rendered_litellm(config_dir).get("model_list") or []]
+
+
+def _localai_overlay(config_dir, rel: str, text: str) -> None:
+    path = config_dir / "overlay" / "ai" / "localai" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_the_localai_models_are_registered_while_the_profile_is_active(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    render_core.render(config_dir, repo_root)
+
+    assert _rendered_litellm(config_dir)["model_list"] == [
+        {
+            "model_name": "nomic-embed-text",
+            "litellm_params": {
+                "model": "openai/nomic-embed-text",
+                "api_base": "http://localai:8080/v1",
+                "api_key": "os.environ/LOCALAI_API_KEY",
+            },
+            "model_info": {"mode": "embedding"},
+        },
+        {
+            "model_name": "qwen2.5-1.5b-instruct",
+            "litellm_params": {
+                "model": "openai/qwen2.5-1.5b-instruct",
+                "api_base": "http://localai:8080/v1",
+                "api_key": "os.environ/LOCALAI_API_KEY",
+            },
+        },
+    ]
+
+
+def test_with_the_localai_profile_off_litellm_renders_as_the_base(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm")
+    render_core.render(config_dir, repo_root)
+    base = (repo_root / "src/ai/litellm/config.yaml").read_text(encoding="utf-8")
+    rendered = (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    assert yaml.safe_load(rendered) == yaml.safe_load(base)
+
+
+def test_only_models_whose_file_is_downloaded_are_registered(repo_root, config_dir):
+    _install_localai(repo_root, "# https://example.org/qwen2.5-1.5b-instruct-q4_k_m.gguf\n")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == []
+
+
+def test_the_models_overlay_drives_the_list_and_a_removed_line_is_gone(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    _localai_overlay(config_dir, "models.txt", _LOCALAI_MODELS)
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == ["nomic-embed-text", "qwen2.5-1.5b-instruct"]
+
+    _localai_overlay(config_dir, "models.txt", _LOCALAI_MODELS.splitlines(True)[-1])
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == ["nomic-embed-text"]
+
+
+def test_an_overlay_entry_with_the_same_name_replaces_the_generated_one(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    overlay = config_dir / "overlay" / "ai" / "litellm" / "config.yaml"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text(
+        "model_list:\n"
+        "  - model_name: qwen2.5-1.5b-instruct\n"
+        "    litellm_params:\n"
+        "      model: openai/gpt-4o-mini\n"
+        "      api_key: os.environ/OPENAI_API_KEY\n"
+    )
+    render_core.render(config_dir, repo_root)
+
+    entries = _rendered_litellm(config_dir)["model_list"]
+    assert [e["model_name"] for e in entries] == ["nomic-embed-text", "qwen2.5-1.5b-instruct"]
+    assert entries[1]["litellm_params"]["model"] == "openai/gpt-4o-mini"
+
+
+def test_an_overlay_only_model_yaml_is_rendered_and_registered(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    own = "name: my-model\nbackend: llama-cpp\nparameters:\n  model: my-model.gguf\n"
+    _localai_overlay(config_dir, "models/my-model.yaml", own)
+    _localai_overlay(config_dir, "models.txt", "https://example.org/files/my-model.gguf\n")
+    render_core.render(config_dir, repo_root)
+
+    assert (config_dir / "ai/localai/models/my-model.yaml").read_text(encoding="utf-8") == own
+    assert (config_dir / "ai/localai/models/stub.yaml").is_file()
+    assert _model_names(config_dir) == ["my-model"]
+
+
+def test_an_overlay_only_model_yaml_that_does_not_parse_is_named(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _localai_overlay(config_dir, "models/broken.yaml", "name: [unclosed\n")
+    with pytest.raises(render_core.RenderError, match="overlay/ai/localai/models/broken.yaml"):
+        render_core.render(config_dir, repo_root)
+
+
+def test_the_localai_key_is_named_but_never_written(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    key = "localai-key-must-not-be-rendered"
+    for rel in ("ai/localai", "ai/litellm"):
+        env = config_dir / rel / ".env"
+        env.parent.mkdir(parents=True, exist_ok=True)
+        with env.open("a", encoding="utf-8") as handle:
+            handle.write(f"LOCALAI_API_KEY={key}\n")
+    render_core.render(config_dir, repo_root)
+
+    rendered = (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    assert "os.environ/LOCALAI_API_KEY" in rendered
+    assert key not in rendered
+    result = render_core.preview(config_dir, repo_root, "ai/litellm/config.yaml", "")
+    assert key not in result["current"] + result["preview"]
+
+
+def test_the_preview_of_litellm_shows_the_generated_models_before_any_render(
+    repo_root, config_dir
+):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    assert not (config_dir / "ai/litellm/config.yaml").exists()
+
+    draft = (
+        "model_list:\n  - model_name: nomic-embed-text\n    litellm_params:\n"
+        "      model: openai/x\n"
+    )
+    result = render_core.preview(config_dir, repo_root, "ai/litellm/config.yaml", draft)
+    assert "openai/qwen2.5-1.5b-instruct" in result["current"]
+    preview = yaml.safe_load(result["preview"])
+    assert [e["model_name"] for e in preview["model_list"]] == [
+        "qwen2.5-1.5b-instruct",
+        "nomic-embed-text",
+    ]
+    assert preview["model_list"][1]["litellm_params"]["model"] == "openai/x"
+
+
+def test_every_shipped_model_yaml_matches_a_line_of_the_shipped_list():
+    """Each YAML is named after its `name` (LocalAI loads it under that file name on the first
+    request) and points at a file the list downloads once its line is active."""
+    localai = REAL_REPO / "src" / "ai" / "localai"
+    files = {
+        line.lstrip("# ").strip().rsplit("/", 1)[-1]
+        for line in (localai / "models.txt").read_text(encoding="utf-8").splitlines()
+        if line.lstrip("# ").startswith("https://")
+    }
+    yamls = sorted((localai / "models").glob("*.yaml"))
+    assert len(yamls) == len(files) == 5
+    for path in yamls:
+        model = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert path.name == f"{model['name']}.yaml"
+        assert model["parameters"]["model"] in files, path.name

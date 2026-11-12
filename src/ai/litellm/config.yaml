@@ -28,39 +28,27 @@ router_settings:
 # Per-user budgets and rate limits can be set under Settings → Users.
 
 # ── Models ─────────────────────────────────────────────────────────────────
-# No models are shipped by default. A model registered here without a usable
-# backend (missing .gguf download, missing API key) only fails on first use, so
-# the operator adds the models that are actually available.
+# With the localai module on, every LocalAI model that models.txt downloads
+# and that a model YAML in ai/localai/models/ describes is added to this list
+# when the configuration is rendered, under the YAML's name. The entries send
+# LOCALAI_API_KEY (litellm/.env, copied from ai/localai/.env during setup); the
+# key itself is never written here. An overlay entry with the same model_name
+# replaces the generated one.
 #
-# Add models via Admin UI → Models, so that API keys are stored in the
-# database and not in this file. The examples below can be used instead:
-# replace `model_list: []` with `model_list:`, uncomment the entries you need
-# and set the API keys in litellm/.env.
+# Other models are added in the Admin UI → Models, so that their API keys are
+# stored in the database and not in this file, or through an overlay of this
+# file ($PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml) with `api_key:
+# os.environ/<VAR>` and the variable in litellm/.env. Do not register a
+# generated name in the Admin UI as well: LiteLLM would split the traffic
+# between both entries.
 #
 # The LibreChat RAG API embeds with the model named in RAG_EMBEDDINGS_MODEL
-# (ai/librechat/.env, default nomic-embed-text). Register a model under that name
-# or change the variable.
+# (ai/librechat/.env, default nomic-embed-text). Activate its line in the
+# LocalAI models.txt, register a model under that name or change the variable.
 
 model_list: []
 
-  # ── LocalAI — available when LocalAI service is running ──────────────────
-  # Models are only usable if the corresponding .gguf file was downloaded
-  # (configured via src/ai/localai/models.txt).
-
-  # - model_name: qwen2.5-1.5b-instruct
-  #   litellm_params:
-  #     model: "openai/qwen2.5-1.5b-instruct"
-  #     api_base: "http://localai:8080/v1"
-  #     api_key: "sk-notused"
-
-  # - model_name: nomic-embed-text
-  #   litellm_params:
-  #     model: "openai/nomic-embed-text"
-  #     api_base: "http://localai:8080/v1"
-  #     api_key: "sk-notused"
-
   # ── Cloud models ──────────────────────────────────────────────────────────
-
   # Mammouth.ai — requires MAMMOUTH_API_KEY in litellm/.env
   # Check available model IDs in your Mammouth dashboard.
   # - model_name: mammouth-chat
