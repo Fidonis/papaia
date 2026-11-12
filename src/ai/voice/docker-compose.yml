@@ -124,13 +124,18 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
   #  TEXT-TO-SPEECH — Chatterbox Multilingual (Chatterbox-TTS-Server)
   #
-  #  The model stays resident once loaded (~4-6 GB), hence the memory limit:
-  #  an out-of-memory kill must hit this container, not the host's OOM killer
-  #  picking a database. The server is configured only through the mounted
-  #  config.yaml (it reads no environment variables); the file is rendered
-  #  from ai/voice/chatterbox.yaml and re-written on every `start`, so edits
-  #  belong in the overlay, not in the container. The mount is writable
-  #  because the server persists UI state into its config file.
+  #  The model stays resident once loaded (~4-6 GB, and the LOAD peak exceeds
+  #  6 GB), hence the memory limit: an out-of-memory kill must hit this
+  #  container, not the host's OOM killer picking a database. The server is
+  #  configured only through the mounted config.yaml (it reads no environment
+  #  variables); the file is rendered from ai/voice/chatterbox.yaml, so edits
+  #  belong in the overlay, and a changed config reaches the server when the
+  #  container is restarted. The mount is READ-ONLY on purpose: the server
+  #  would otherwise persist UI state — and, the API being unauthenticated,
+  #  anything a caller posts to its settings endpoints — into the rendered
+  #  file on the host. Saving settings through its web UI therefore fails,
+  #  which is acceptable: the UI is unreachable from outside papaia-net and
+  #  unused.
   #
   #  The image has no auth option (its auth settings are unused upstream), so
   #  this service relies on being internal-only — the trade-off and the
@@ -152,6 +157,7 @@ services:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/ai/voice/chatterbox.yaml
         target: /app/config.yaml
+        read_only: true
       - chatterbox-hf-cache:/app/hf_cache
     healthcheck:
       # No curl in the image and no /health route; the voices listing is the

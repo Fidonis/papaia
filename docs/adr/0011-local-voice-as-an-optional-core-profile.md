@@ -89,7 +89,9 @@ Security posture:
 - The TTS server's auth settings are non-functional placeholders upstream, so it runs
   unauthenticated behind the network boundary — the same deliberate exception the stack
   already makes for LibreChat's MongoDB. Its web UI cannot be disabled; it is simply
-  unreachable from outside `papaia-net`.
+  unreachable from outside `papaia-net`. Its config file is mounted read-only so the
+  unauthenticated settings endpoints cannot persist attacker-chosen settings into the
+  rendered file on the host (saving through its UI fails, which is accepted).
 - **Residual risk, accepted:** the TTS server exposes zero-shot voice cloning (a caller
   can upload reference audio and synthesize that voice). Within `papaia-net` that is
   reachable by other core containers, including the Firecrawl playwright renderer. The

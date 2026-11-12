@@ -2,12 +2,14 @@
 # papAIa — Voice · Chatterbox-TTS-Server configuration
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
-# Rendered to $PAPAIA_CONFIG_DIR/ai/voice/chatterbox.yaml and mounted at
-# /app/config.yaml. The server deep-merges this over its built-in defaults and
-# reads NO environment variables, so every deliberate setting must be listed
-# here. It also writes UI state back into the mounted file; the next `start`
-# re-renders it, so lasting changes belong in the overlay
-# ($PAPAIA_CONFIG_DIR/overlay/ai/voice/chatterbox.yaml).
+# Rendered to $PAPAIA_CONFIG_DIR/ai/voice/chatterbox.yaml and mounted
+# read-only at /app/config.yaml (read-only so that neither the server's UI
+# nor its unauthenticated settings endpoints can write into the rendered
+# file on the host). The server deep-merges this over its built-in defaults
+# and reads NO environment variables, so every deliberate setting must be
+# listed here. Changes belong in the overlay
+# ($PAPAIA_CONFIG_DIR/overlay/ai/voice/chatterbox.yaml) and reach the server
+# with the next container restart.
 
 server:
   host: 0.0.0.0
