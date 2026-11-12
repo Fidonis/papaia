@@ -177,6 +177,16 @@ provider was in use is not kept either: switching back to the bundled Keycloak d
 again. The interactive prompt pre-fills by the same rules. After changing
 `KEYCLOAK_EXT_PORT` on a local host, pass `--auth-host` with the new port.
 
+When the `AUTH_HOST` hostname also serves a plain-http browser URL — the local
+default: LibreChat, papaia-manager and LiteLLM on `http://host.docker.internal`,
+Keycloak on `https://host.docker.internal:8110` — the rendered realm sets
+Keycloak's `Strict-Transport-Security` header to `max-age=0`. HSTS applies to a
+hostname on every port, so Keycloak's default (`includeSubDomains`, one year)
+would make the browser upgrade those http URLs to https after a single Keycloak
+visit; `max-age=0` also clears what a browser learned from an earlier papaia.
+A deployment whose plain-http services live on their own hostnames keeps
+Keycloak's default HSTS.
+
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.
 

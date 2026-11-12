@@ -24,6 +24,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -379,6 +380,27 @@ def _render_dir(
             _render_file(sub_rel, repo_root, config_dir, active_addons)
 
 
+def _auth_host_shares_a_plain_http_hostname(env: dict[str, str], domain_server: str) -> bool:
+    """True when the auth host's hostname also serves a plain-http browser URL.
+
+    HSTS applies to a hostname on every port, so Keycloak's default header
+    (includeSubDomains, one year) makes the browser upgrade those http URLs
+    to https after a single Keycloak visit. The local defaults put LibreChat,
+    papaia-manager and LiteLLM on the auth host's hostname; a deployment whose
+    plain-http services live on their own hostnames is unaffected.
+    """
+    auth_hostname = urlsplit(env.get("AUTH_HOST", "")).hostname
+    if not auth_hostname:
+        return False
+    url_keys = ("PAPAIA_HOST", "MANAGER_PUBLIC_URL", "LITELLM_PUBLIC_URL")
+    browser_urls = [env.get(key, "") for key in url_keys]
+    browser_urls.append(domain_server)
+    return any(
+        url.startswith("http://") and urlsplit(url).hostname == auth_hostname
+        for url in browser_urls
+    )
+
+
 def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     template_path = repo_root / "src/infra/keycloak/realm-import/papaia-realm.json.template"
     template = template_path.read_text(encoding="utf-8")
@@ -396,6 +418,7 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     resolved = re.sub(r"\$\{env\.([^}]+)\}", replace, template)
     realm = json.loads(resolved)  # validate the substitution didn't break the JSON
 
+    changed = False
     # The mail relay is optional, so its block cannot sit in the template: a
     # placeholder substitution cannot leave an object out. The relay needs no
     # login, which is also why no secret is baked in here. While the profile is off
@@ -405,6 +428,21 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
         realm["smtpServer"] = smtp.realm_smtp_server(relay)
         # A reset link is only worth offering where it can be delivered.
         realm["resetPasswordAllowed"] = True
+        changed = True
+
+    # On a hostname shared with plain-http services, Keycloak must not send its
+    # default HSTS header (see _auth_host_shares_a_plain_http_hostname). max-age=0
+    # instead of an empty header: it also clears the entry a browser has already
+    # learned from an earlier papaia. Only this header is set; Keycloak keeps its
+    # defaults for every browser header the realm does not name.
+    domain_server = common.parse_env_file(config_dir / "ai/librechat/.env").get(
+        "DOMAIN_SERVER", ""
+    )
+    if _auth_host_shares_a_plain_http_hostname(env, domain_server):
+        realm["browserSecurityHeaders"] = {"strictTransportSecurity": "max-age=0"}
+        changed = True
+
+    if changed:
         resolved = json.dumps(realm, indent=2, ensure_ascii=False) + "\n"
 
     out_dir = config_dir / "infra/keycloak/realm-import"

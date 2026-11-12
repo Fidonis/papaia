@@ -334,6 +334,45 @@ def test_render_switching_the_relay_off_restores_the_plain_realm(repo_root, conf
     assert _realm_file(config_dir).read_bytes() == plain
 
 
+# ── Keycloak's HSTS header on a shared local hostname ─────────────────────────
+
+
+def test_render_disables_hsts_while_plain_http_services_share_the_auth_hostname(
+    repo_root, config_dir
+):
+    # The local defaults: LibreChat and papaia-manager on http://host.docker.internal,
+    # Keycloak on https://host.docker.internal:8110 — the same hostname.
+    _setup_minimal(repo_root, config_dir)
+
+    render_core.render(config_dir, repo_root)
+
+    realm = json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+    # max-age=0, not an empty header: it also clears what a browser already learned.
+    assert realm["browserSecurityHeaders"] == {"strictTransportSecurity": "max-age=0"}
+
+
+def test_render_keeps_keycloak_hsts_on_a_hostname_of_its_own(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    tree = secrets.generate_missing_secrets(tree, seed)
+    args = resolve.SetupArgs(
+        config_dir=config_dir,
+        app_host="http://localhost",
+        auth_host="https://host.docker.internal:8110",
+        non_interactive=True,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    tree = resolve.resolve_multi_env(tree, args)
+    tree = resolve.resolve_reverse_proxy(tree, args)
+    envtree.persist_tree(tree, config_dir, repo_root)
+
+    render_core.render(config_dir, repo_root)
+
+    realm = json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+    assert "browserSecurityHeaders" not in realm
+
+
 def test_render_ships_the_login_theme_and_the_overlay_replaces_a_file(repo_root, config_dir):
     shutil.copytree(
         REAL_REPO / "src/infra/keycloak/themes", repo_root / "src/infra/keycloak/themes"
