@@ -348,7 +348,17 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
             manifest,
             topology.active_services((deployed.get("core") or {}).get("profiles") or []),
         )
-    if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force, node=node):
+    # Re-pointing an installed addon is an upgrade or a rollback by another route:
+    # the new version must still meet what the other active addons require of it.
+    if _compat_gate_addon(
+        name,
+        manifest,
+        deployed,
+        repo_root,
+        force=args.force,
+        node=node,
+        dependents=existing is not None,
+    ):
         return 2
     try:
         addon_defaults = addons.resolve_addon_defaults(
