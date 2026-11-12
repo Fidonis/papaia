@@ -95,8 +95,9 @@ Two findings from running the stack shape the defaults:
   emulation overhead is discounted), and LibreChat silently stops a playback stream
   that stalls 15 s. Spoken replies therefore default to the **browser** TTS engine;
   the external engine stays fully wired and is a per-user switch in Settings →
-  Speech, with the GPU variant as the planned way to make it the default. STT is
-  unaffected and defaults to the local engine. Callers on the `voice-tts` route
+  Speech, with the accelerator images (`setup --voice-variant`) as the way to
+  make the local voice fast enough for live playback. STT is unaffected and
+  defaults to the local engine. Callers on the `voice-tts` route
   (no playback timeout) can use the slow synthesis as is.
 
 Security posture:
@@ -149,5 +150,9 @@ stays 1).
 - The model caches (~5 GB, re-downloadable) live in named volumes and therefore land
   in every `papaia-ctl backup`. Accepted for now; a volume-level backup opt-out is a
   follow-up.
-- A GPU variant for the TTS container follows later, generalizing the LocalAI override
-  mechanism; nothing in this decision blocks it.
+- The TTS container has accelerator variants from the start: upstream publishes
+  CUDA-12.8 and ROCm builds of the pinned commit, and `setup --voice-variant`
+  selects one through a generated override in `$PAPAIA_CONFIG_DIR/overrides/` —
+  the LocalAI mechanism generalized as planned, with the image pins kept in the
+  voice compose file so release bumps carry through. The rendered TTS config says
+  `device: auto`, which resolves to the CPU or the GPU depending on the image.

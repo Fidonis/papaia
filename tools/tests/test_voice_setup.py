@@ -99,3 +99,39 @@ def test_the_engine_key_is_generated_and_fanned_out_to_litellm(repo_root, config
     canonical = _stored(config_dir, "ai/voice")["VOICE_API_KEY"]
     assert canonical and not canonical.startswith("GENERATE_")
     assert _stored(config_dir, "ai/litellm")["VOICE_API_KEY"] == canonical
+
+
+def test_voice_variant_is_sticky_until_a_new_choice(repo_root):
+    tree = _tree(repo_root)
+
+    tree = resolve.resolve_voice_variant(tree, _args(repo_root, voice_variant="nvidia"))
+    assert tree[""]["VOICE_TTS_IMAGE_VARIANT"] == "nvidia"
+
+    # None = no flag given: the stored choice survives the re-run.
+    tree = resolve.resolve_voice_variant(tree, _args(repo_root))
+    assert tree[""]["VOICE_TTS_IMAGE_VARIANT"] == "nvidia"
+
+    tree = resolve.resolve_voice_variant(tree, _args(repo_root, voice_variant="cpu"))
+    assert tree[""]["VOICE_TTS_IMAGE_VARIANT"] == "cpu"
+
+
+def test_setup_voice_variant_writes_the_override_and_cpu_removes_it(repo_root, config_dir):
+    override = config_dir / "overrides" / "docker-compose.voice-gpu.override.yml"
+
+    assert _setup(repo_root, config_dir, "--enable-voice=true", "--voice-variant=nvidia") == 0
+    assert _stored(config_dir)["VOICE_TTS_IMAGE_VARIANT"] == "nvidia"
+    assert override.is_file()
+
+    # A re-run without the flag keeps both the stored variant and the override.
+    assert _setup(repo_root, config_dir) == 0
+    assert _stored(config_dir)["VOICE_TTS_IMAGE_VARIANT"] == "nvidia"
+    assert override.is_file()
+
+    assert _setup(repo_root, config_dir, "--voice-variant=cpu") == 0
+    assert not override.exists()
+
+
+def test_defaults_report_the_stored_variant_for_the_wizard(repo_root, config_dir):
+    assert _setup(repo_root, config_dir, "--enable-voice=true", "--voice-variant=hipblas") == 0
+
+    assert defaults.compute_defaults(config_dir, repo_root)["VOICE_VARIANT_STICKY"] == "hipblas"

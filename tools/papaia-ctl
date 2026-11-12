@@ -21,7 +21,7 @@
 #                       [--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto]
 #                       [--manager|--no-manager] [--manager-host=URL]
 #                       [--rag|--no-rag] [--qdrant-host=URL]
-#                       [--voice|--no-voice]
+#                       [--voice|--no-voice] [--voice-variant=cpu|nvidia|hipblas|auto]
 #                       [--smtp|--no-smtp] [--smtp-host=HOST] [--smtp-port=PORT]
 #                       [--smtp-security=starttls|tls|none] [--smtp-user=NAME|--smtp-no-auth]
 #                       [--smtp-from=ADDRESS] [--smtp-from-name=NAME]

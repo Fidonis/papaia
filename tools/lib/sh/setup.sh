@@ -39,7 +39,7 @@ cmd_setup() {
     local qdrant_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" localai_variant="" manager="" rag="" voice="" reranker_model="" backup_dir=""
+    local web_search="" local_ai="" localai_variant="" manager="" rag="" voice="" voice_variant="" reranker_model="" backup_dir=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
@@ -93,6 +93,16 @@ cmd_setup() {
                     cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto) : ;;
                     *)
                         error "Invalid --localai-variant value: '$localai_variant' (must be 'cpu', 'nvidia-cuda-12', 'nvidia-cuda-13', 'intel', 'hipblas', 'vulkan', or 'auto')"
+                        exit 2
+                        ;;
+                esac
+                ;;
+            --voice-variant=*)
+                voice_variant="${1#*=}"
+                case "$voice_variant" in
+                    cpu|nvidia|hipblas|auto) : ;;
+                    *)
+                        error "Invalid --voice-variant value: '$voice_variant' (must be 'cpu', 'nvidia', 'hipblas', or 'auto')"
                         exit 2
                         ;;
                 esac
@@ -161,6 +171,12 @@ cmd_setup() {
         load_localai_variants
         localai_variant="${LOCALAI_VARIANT_RECOMMENDED:-cpu}"
         info "Detected LocalAI image variant: $localai_variant"
+    fi
+    if [ "$voice_variant" = "auto" ]; then
+        info "Detecting available GPU accelerators, this can take a few seconds..."
+        load_localai_variants
+        voice_variant="$(_voice_variant_from "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
+        info "Detected voice TTS image variant: $voice_variant"
     fi
 
     if [ "$env_only" -eq 1 ]; then
@@ -234,6 +250,8 @@ cmd_setup() {
             local _voice_label="disabled"
             [ "$VOICE_STICKY" = "true" ] && _voice_label="enabled"
             info "  Voice (STT/TTS)   = $_voice_label"
+            [ "$VOICE_STICKY" = "true" ] && [ -n "${VOICE_VARIANT_STICKY:-}" ] && \
+                info "  Voice TTS Image   = $VOICE_VARIANT_STICKY"
         fi
         if [ -n "${SMTP_STICKY:-}" ]; then
             local _smtp_label="disabled"
@@ -446,6 +464,9 @@ cmd_setup() {
                     ;;
             esac
         fi
+        if [ "$voice" = "true" ] && [ -z "$voice_variant" ]; then
+            voice_variant="$(_prompt_voice_variant)"
+        fi
         if [ -z "$smtp" ]; then
             # Off for a fresh install: the relay needs a mail server only the operator
             # knows. A previous opt-in stays the default so a re-run does not flip it.
@@ -525,7 +546,7 @@ cmd_setup() {
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
     local setup_rc=0
-    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$voice" || setup_rc=$?
+    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$voice" "$voice_variant" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
     if [ "$setup_rc" -eq 4 ]; then
         # SETUP_REFUSED: a request that does not fit this installation (a topology for an
@@ -798,6 +819,72 @@ _prompt_localai_variant() {
     printf '%s' "$variant"
 }
 
+# Maps a LocalAI variant id (detection speaks that vocabulary) onto the voice
+# TTS catalogue, which only has CUDA and ROCm accelerator builds.
+_voice_variant_from() {
+    case "$1" in
+        nvidia-cuda-12|nvidia-cuda-13) printf 'nvidia' ;;
+        hipblas)                       printf 'hipblas' ;;
+        *)                             printf 'cpu' ;;
+    esac
+}
+
+# Asks which image the voice TTS engine should run on. The catalogue is
+# shorter than LocalAI's -- upstream publishes only CUDA-12.8 and ROCm
+# accelerator builds of the pinned commit. Everything the operator sees goes
+# to stderr; only the chosen variant id reaches stdout.
+_prompt_voice_variant() {
+    printf '\n%sVoice TTS Image%s\n' "$CYAN" "$NC" >&2
+    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    load_localai_variants
+
+    local default_slot
+    case "${VOICE_VARIANT_STICKY:-}" in
+        nvidia)  default_slot="1" ;;
+        hipblas) default_slot="2" ;;
+        cpu)     default_slot="3" ;;
+        *)
+            case "${LOCALAI_VARIANT_RECOMMENDED:-cpu}" in
+                nvidia-cuda-12|nvidia-cuda-13) default_slot="1" ;;
+                hipblas)                       default_slot="2" ;;
+                *)                             default_slot="3" ;;
+            esac
+            ;;
+    esac
+
+    printf '\n  On the CPU the TTS engine is slower than real time, so spoken replies in\n' >&2
+    printf '  LibreChat default to the browser voice. A GPU makes the local voice fast\n' >&2
+    printf '  enough for live playback. The GPU images need the matching host\n' >&2
+    printf '  prerequisites in place already (NVIDIA: driver + Container Toolkit;\n' >&2
+    printf '  AMD: ROCm kernel driver); the stack does not install them.\n\n' >&2
+
+    _localai_variant_option 1 "NVIDIA GPU (CUDA)" \
+        "${LOCALAI_VARIANT_NVIDIA:-}" "${LOCALAI_VARIANT_NVIDIA_LABEL:-}" "${LOCALAI_VARIANT_NVIDIA_WARN:-}"
+    _localai_variant_option 2 "AMD GPU (ROCm)" \
+        "${LOCALAI_VARIANT_AMD:-}" "${LOCALAI_VARIANT_AMD_LABEL:-}" "${LOCALAI_VARIANT_AMD_WARN:-}"
+    _localai_variant_option 3 "CPU only" \
+        "${LOCALAI_VARIANT_CPU:-cpu}" "${LOCALAI_VARIANT_CPU_LABEL:-runs on any hardware}" ""
+
+    local choice variant
+    choice="$(prompt_with_default "  Choose" "$default_slot")"
+    case "$choice" in
+        1|nvidia)
+            variant="nvidia"
+            [ -z "${LOCALAI_VARIANT_NVIDIA:-}" ] && _localai_variant_unverified "An NVIDIA GPU"
+            ;;
+        2|amd|hipblas)
+            variant="hipblas"
+            [ -z "${LOCALAI_VARIANT_AMD:-}" ] && _localai_variant_unverified "An AMD GPU with ROCm"
+            ;;
+        3|cpu) variant="cpu" ;;
+        *)
+            warn "Unrecognized choice '$choice'; defaulting to the CPU image."
+            variant="cpu"
+            ;;
+    esac
+    printf '%s' "$variant"
+}
+
 _derive_manager_default() {
     # Best-effort bash-side prefill for the papaia-manager URL prompt; the
     # authoritative derivation lives in resolve.derive_manager_url_default.
@@ -832,7 +919,7 @@ _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
     local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}" localai_variant="${21:-}"
-    local rag="${22:-}" qdrant_host="${23:-}" voice="${24:-}"
+    local rag="${22:-}" qdrant_host="${23:-}" voice="${24:-}" voice_variant="${25:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -852,6 +939,7 @@ _run_setup_py() {
     [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$rag" ] && extra+=(--enable-rag="$rag")
     [ -n "$voice" ] && extra+=(--enable-voice="$voice")
+    [ -n "$voice_variant" ] && extra+=(--voice-variant="$voice_variant")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
     [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")

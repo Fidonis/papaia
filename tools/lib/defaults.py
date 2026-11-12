@@ -81,6 +81,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         ),
         "RAG_STICKY": (("true" if "rag" in profiles else "false") if config_seeded else ""),
         "VOICE_STICKY": (("true" if "voice" in profiles else "false") if config_seeded else ""),
+        "VOICE_VARIANT_STICKY": root.get("VOICE_TTS_IMAGE_VARIANT", "") if config_seeded else "",
         "SMTP_STICKY": (
             ("true" if smtp.PROFILE in profiles else "false") if config_seeded else ""
         ),

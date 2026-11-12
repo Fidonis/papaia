@@ -318,6 +318,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--voice` / `--no-voice` | _(prompted, default off)_ | Toggle the `voice` profile (the local [speech engines](#voice-local-speech)) |
+| `--voice-variant=cpu\|nvidia\|hipblas\|auto` | _(prompted while voice is on)_ | Which image the TTS engine runs on; `auto` probes the host like the LocalAI image choice |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
 | `--smtp-security=MODE` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (no encryption and no login) |
@@ -1711,10 +1712,11 @@ voice conversation works with one keypress per turn (Shift+Alt+L starts the reco
 on silence, sends, and the reply plays back automatically). Spoken replies use the browser's own
 voice by default — the local TTS engine is wired up but **opt-in per user** (switch
 **Settings → Speech → Text-to-speech engine** to `External`), because on CPU it synthesizes
-slower than real time and LibreChat cuts off a playback stream that stalls 15 s. With enough CPU
-headroom it is worth trying; a GPU variant is a planned follow-up. Calls through the `voice-tts`
-LiteLLM route are not affected by the playback timeout — generating audio files from an
-automation just takes its time.
+slower than real time and LibreChat cuts off a playback stream that stalls 15 s. On a host with
+an NVIDIA or AMD GPU, install the accelerator image instead (`--voice-variant`, prompted during
+setup) — then the local voice is fast enough for live playback and worth making the per-account
+default. Calls through the `voice-tts` LiteLLM route are not affected by the playback timeout —
+generating audio files from an automation just takes its time.
 
 **Enable it** with `papaia-ctl setup`: the wizard asks whether to install the voice engines.
 Non-interactively:
@@ -1732,8 +1734,12 @@ offline. An interrupted download is resumed on the next start. For an air-gapped
 run the first start on a connected network or copy a populated
 `speaches-hf-cache` / `chatterbox-hf-cache` volume over. On a CPU-only host, speech-to-text is
 fast enough for dictation; text-to-speech lags behind real time, which is why spoken replies
-default to the browser engine (see above). Both engines process one request at a time; they are
-sized for a handful of users speaking occasionally, not for parallel transcription jobs.
+default to the browser engine (see above). With `--voice-variant nvidia` (CUDA) or `hipblas`
+(ROCm) the TTS engine runs on the GPU through a generated override in
+`$PAPAIA_CONFIG_DIR/overrides/` — the same mechanism as the LocalAI accelerator images, with the
+same host prerequisites (driver plus, for NVIDIA, the Container Toolkit). Both engines process
+one request at a time; they are sized for a handful of users speaking occasionally, not for
+parallel transcription jobs.
 
 **The microphone needs a secure context.** Browsers only expose recording on HTTPS pages or on
 literally `localhost` — on `http://host.docker.internal:8000` or a plain-HTTP LAN address the

@@ -50,6 +50,8 @@ class SetupArgs:
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
     enable_voice: bool | None = None  # None = sticky / no change
+    # Voice TTS accelerator image variant ("cpu", "nvidia", "hipblas"); None = sticky
+    voice_variant: str | None = None
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
     enable_smtp: bool | None = None
     smtp_host: str | None = None  # upstream mail server host
@@ -752,6 +754,18 @@ def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_voice is None:
         return tree
     return _toggle_profile(tree, "voice", args.enable_voice)
+
+
+def resolve_voice_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write VOICE_TTS_IMAGE_VARIANT into the root env when the operator chose one.
+
+    Same contract as resolve_localai_variant: only the variant id is stored,
+    the image pins stay in ai/voice/docker-compose.yml, and None preserves
+    whatever a prior run wrote (sticky)."""
+    if args.voice_variant is None:
+        return tree
+    tree.setdefault("", {})["VOICE_TTS_IMAGE_VARIANT"] = args.voice_variant
+    return tree
 
 
 def _smtp_fields_given(args: SetupArgs) -> bool:

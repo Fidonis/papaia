@@ -28,6 +28,17 @@
 # environment:, never env_file: — enabling the profile by editing
 # COMPOSE_PROFILES by hand must not fail on a .env that setup has not
 # seeded yet.
+
+# Accelerator builds of the SAME upstream commit as the chatterbox CPU pin
+# below. `papaia-ctl setup --voice-variant` selects one via a generated
+# override in $PAPAIA_CONFIG_DIR/overrides/ (LocalAI precedent: the override
+# generator re-reads this mapping on every render, so bumping the pins here
+# carries straight through an upgrade). The upstream build publishes no
+# CUDA-12.1 or Intel/Vulkan tags, hence the short list.
+x-papaia-voice-tts-gpu-images:
+  nvidia: ghcr.io/devnen/chatterbox-tts-server:sha-915ae28-cu128@sha256:bdf8f7050e9b68aac9a80204666e9a6713c39a8ddc1eb1fdc5544e65b31edc12
+  hipblas: ghcr.io/devnen/chatterbox-tts-server:sha-915ae28-rocm@sha256:8ef7a9a89355cb3f4ac8d1075e25bed0f1bca028db47cacaa8ec8576aff40f58
+
 services:
 
   # ═══════════════════════════════════════════════════════════════════════════

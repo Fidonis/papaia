@@ -23,8 +23,10 @@ model:
   repo_id: chatterbox-multilingual
 
 tts_engine:
-  # The pinned image is the CPU build; `auto` would merely re-detect that.
-  device: cpu
+  # `auto` resolves to the CPU on the default image and to the GPU on the
+  # accelerator images (papaia-ctl setup --voice-variant), so one rendered
+  # config serves every variant.
+  device: auto
   # One of the voices shipped inside the image (server-side filenames).
   # With the multilingual model, any reference voice speaks the language the
   # request asks for. LibreChat's voice list must name the same file — see

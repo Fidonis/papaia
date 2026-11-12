@@ -202,6 +202,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
         enable_voice=_tristate(args.enable_voice),
+        voice_variant=args.voice_variant or None,
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
         smtp_port=args.smtp_port,
@@ -242,6 +243,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
         tree = resolve.resolve_voice(tree, setup_args)
+        tree = resolve.resolve_voice_variant(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -299,6 +301,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    gen_override.generate_voice_gpu_override(
+        config_dir, repo_root, tree.get("", {}).get("VOICE_TTS_IMAGE_VARIANT", "")
+    )
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -345,6 +350,9 @@ def cmd_render(args: argparse.Namespace) -> int:
     # both an upgrade and a variant change.
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
+    )
+    gen_override.generate_voice_gpu_override(
+        config_dir, repo_root, tree.get("", {}).get("VOICE_TTS_IMAGE_VARIANT", "")
     )
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
@@ -1122,6 +1130,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
+    p_setup.add_argument("--voice-variant", choices=["cpu", "nvidia", "hipblas"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)
