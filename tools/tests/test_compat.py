@@ -320,3 +320,120 @@ def test_to_json_shape():
             "reason": None,
         }
     ]
+
+
+# ── requires.addons ───────────────────────────────────────────────────────────
+
+
+def test_required_addons_accepts_names_and_mappings():
+    manifest = {"requires": {"addons": ["wiki", {"name": "crm", "version": ">=1.2.0"}]}}
+    assert compat.required_addons(manifest) == [("wiki", None), ("crm", ">=1.2.0")]
+
+
+def test_required_addons_absent_is_empty():
+    assert compat.required_addons({"requires": {"addon_api": 4}}) == []
+    assert compat.required_addons({}) == []
+
+
+@pytest.mark.parametrize(
+    "addons",
+    ["wiki", [{"version": ">=1.0.0"}], [{"name": "wiki", "version": 1}], [""], [42]],
+)
+def test_malformed_required_addons_is_error(addons):
+    result = compat.evaluate_required_addons("demo", {"requires": {"addons": addons}}, {})
+    assert result is not None
+    assert result.status == compat.STATUS_ERROR
+    assert compat.gate([result], mode=compat.MODE_ENFORCE, force=True) == 2
+
+
+def test_invalid_required_version_range_is_error():
+    manifest = {"requires": {"addons": [{"name": "wiki", "version": ">=banana"}]}}
+    result = compat.evaluate_required_addons("demo", manifest, {"wiki": "1.0.0"})
+    assert result is not None and result.status == compat.STATUS_ERROR
+
+
+def test_met_requirements_return_none():
+    manifest = {"requires": {"addons": ["wiki", {"name": "crm", "version": ">=1.2.0"}]}}
+    active = {"wiki": "1.0.0", "crm": "1.3.0"}
+    assert compat.evaluate_required_addons("demo", manifest, active) is None
+
+
+def test_missing_required_addon_is_incompatible():
+    manifest = {"requires": {"addons": ["wiki", "crm"]}}
+    result = compat.evaluate_required_addons("demo", manifest, {"wiki": "1.0.0"})
+    assert result is not None
+    assert result.status == compat.STATUS_INCOMPATIBLE
+    assert result.axis == compat.REQUIRES_AXIS
+    assert "'crm' is not installed and active" in (result.reason or "")
+    assert compat.gate([result], mode=compat.MODE_ENFORCE) == 2
+    assert compat.gate([result], mode=compat.MODE_ENFORCE, force=True) == 0
+
+
+def test_too_old_required_addon_is_incompatible():
+    manifest = {"requires": {"addons": [{"name": "crm", "version": ">=2.0.0"}]}}
+    result = compat.evaluate_required_addons("demo", manifest, {"crm": "1.3.0"})
+    assert result is not None and result.status == compat.STATUS_INCOMPATIBLE
+    assert "1.3.0 does not satisfy '>=2.0.0'" in (result.reason or "")
+
+
+def test_required_addon_without_version_passes_with_warning():
+    manifest = {"requires": {"addons": [{"name": "crm", "version": ">=2.0.0"}]}}
+    result = compat.evaluate_required_addons("demo", manifest, {"crm": None})
+    assert result is not None and result.status == compat.STATUS_OK
+    assert result.warnings
+
+
+# ── networks.join_addons ──────────────────────────────────────────────────────
+
+
+def test_joined_addons_parses_entries():
+    manifest = {
+        "requires": {"addons": ["wiki"]},
+        "networks": {"join_addons": [{"addon": "wiki", "services": ["job"]}]},
+    }
+    assert compat.joined_addons(manifest) == [("wiki", ["job"])]
+
+
+@pytest.mark.parametrize(
+    "join",
+    [
+        [{"addon": "crm", "services": ["job"]}],  # not in requires.addons
+        [{"addon": "wiki", "services": []}],
+        [{"addon": "wiki"}],
+        [{"services": ["job"]}],
+        {"addon": "wiki"},
+    ],
+)
+def test_malformed_join_addons_is_a_manifest_error(join):
+    manifest = {"requires": {"addons": ["wiki"]}, "networks": {"join_addons": join}}
+    result = compat.evaluate_required_addons("demo", manifest, {"wiki": "1.0.0"})
+    assert result is not None and result.status == compat.STATUS_ERROR
+
+
+# ── actions ───────────────────────────────────────────────────────────────────
+
+
+def test_addon_actions_parses_and_defaults():
+    actions = {"reset": {"service": "job", "args": ["--all"]}, "check": {"service": "job"}}
+    manifest = {"actions": actions}
+    assert compat.addon_actions(manifest) == {
+        "reset": {"service": "job", "args": ["--all"], "description": "", "destructive": False},
+        "check": {"service": "job", "args": [], "description": "", "destructive": False},
+    }
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        ["reset"],
+        {"Reset": {"service": "job"}},
+        {"reset": {"args": ["x"]}},
+        {"reset": {"service": "job", "args": "x"}},
+        {"reset": {"service": "job", "args": [1]}},
+        {"reset": {"service": "job", "destructive": "yes"}},
+    ],
+)
+def test_malformed_actions_are_a_manifest_error(actions):
+    result = compat.evaluate_addon("a", {"actions": actions}, _core())
+    assert result.status == compat.STATUS_ERROR
+    assert result.axis == "actions"

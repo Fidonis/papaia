@@ -157,6 +157,8 @@ papaia-addons/<name>/
 ├── integration/             # The 4 seams as fragments (all optional)
 │   ├── keycloak/            # OIDC client + audience mapper JSONs
 │   ├── librechat/           # mcpServers + allowedDomains fragment (YAML)
+│   ├── ai/librechat/agents/  # optional: LibreChat agents (addon_api 4, Seam 3)
+│   ├── ai/librechat/prompts/ # optional: LibreChat prompts (addon_api 4, Seam 3)
 │   └── nginx/               # Optional ingress snippet
 └── README.md                # Self-contained manual integration path (public-clean)
 ```
@@ -176,6 +178,10 @@ requires:
   addon_api: 1                     # Contract generation the add-on is built against
                                    # (integer or list, e.g. [1, 2]);
                                    # checked against the Core's ADDON_API window
+  addons:                          # optional (addon_api 4): add-ons this one builds on;
+    - <name>                       # each must be installed and active, a mapping adds
+    - name: <name>                 # a SemVer range against that add-on's `version`
+      version: ">=<semver>"
 papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core version
 description: "<description>"
 
@@ -205,6 +211,12 @@ networks:
   attach: [nginx-proxy-manager, librechat]
                                    # Core containers to attach to the app network;
                                    # validated against the Core Compose service names
+  join_addons:                     # optional (addon_api 4): services of this add-on
+    - addon: <required add-on>     # that join the app network of an add-on listed
+      services: [<service>]        # in requires.addons; the others stay isolated.
+                                   # Written to overrides/addons/docker-compose.
+                                   # <name>-join.override.yml. Single host only: a
+                                   # network cannot span two nodes.
 
 local_ca_env:                      # optional: env vars pointing at the local
   <service>: [SSL_CERT_FILE]       # Keycloak CA certificate — cleared via override
@@ -212,7 +224,11 @@ local_ca_env:                      # optional: env vars pointing at the local
 
 integration:
   keycloak:
-    clients: [integration/keycloak/<client>.json]
+    clients: [integration/keycloak/<client>.json]  # imported by hand, unless named below
+    client_secrets:                    # optional (addon_api 4): clients `start` creates
+      integration/keycloak/<client>.json:
+        secret_env: KC_<CLIENT>_CLIENT_SECRET    # GENERATE_SECRET in .env.example
+        root_url_env: <APP>_SERVER               # optional, replaces rootUrl
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/<name>.yaml   # optional
@@ -229,13 +245,38 @@ env_prompts:                       # optional: metadata per .env.example key
     pattern: "^[a-z]+$"           # regex for type: text (HTML + server)
     default: "http://localhost"    # static fallback value
     default_from_core: ENV_KEY     # value from the Core .env (overrides default)
+  OTHER_API_KEY:
+    secret: true
+    default_from_addon: "other-addon:OTHER_API_KEY"
+                                   # addon_api 4: value from the config bundle of an
+                                   # add-on in requires.addons that lists the key under
+                                   # `exports`; filled at install, never echoed. Sticky
+                                   # like every bundle value: after the other add-on
+                                   # rotates it, set the new value in this add-on's
+                                   # $PAPAIA_CONFIG_DIR/addons/<name>/.env and run
+                                   # `papaia-ctl addon start <name>`. Installing again
+                                   # keeps the old value; `addon uninstall` + `install`
+                                   # also regenerates this add-on's own GENERATE_*
+                                   # secrets while its volumes stay.
   AUTO_SECRET:
     secret: true                   # required for GENERATE_* values without _KEY suffix
     label:  "Database password"
 
+exports: [OTHER_API_KEY]           # optional (addon_api 4): bundle .env keys other
+                                   # add-ons may read via default_from_addon; no other
+                                   # key of this add-on is ever read by another add-on
+
 env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
     hint: "Copy from Keycloak"     # hint is shown in the configuration overview
+
+actions:                           # optional (addon_api 4): maintenance actions,
+  reset:                           # run by `papaia-ctl addon run <name> reset` as
+    service: maintenance           # `docker compose run --rm <service> <args>` in the
+    args: ["--reset-existing"]     # add-on's project; fixed arguments only. Give the
+    description: "Restore the initial data"  # service a compose profile (e.g.
+                                   # `profiles: [actions]`) so `addon start` skips it.
+    destructive: true              # optional: callers (papaia-manager) confirm first
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -281,7 +322,12 @@ Only values that differ from the `.env.example` literal are written to the confi
 >    the contract does not lock the add-on out.
 >
 > In addition, all `networks.attach` entries are structurally validated against
-> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Policy:
+> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Each
+> `requires.addons` entry must name an add-on that is active in `deployment.yaml`,
+> and its manifest `version` must satisfy the entry's range; a missing, inactive
+> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Each
+> `networks.join_addons` entry must name an add-on from `requires.addons` and
+> list at least one service; anything else is a malformed manifest. Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
@@ -399,12 +445,77 @@ idempotently** in the Keycloak realm (via the Keycloak Admin REST API or a
 bootstrap script), including audience mappers for the MCP token flow. Base:
 the existing idempotent Keycloak client sync in `papaia/src/infra/keycloak/bootstrap.sh`.
 
+**Managed clients (addon_api 4).** A client listed under `clients` and named
+under `client_secrets` with its `secret_env` is created without the Admin UI:
+`addon install`
+generates the secret like any `GENERATE_SECRET` value, and `papaia-ctl start`
+(the `keycloak-role-sync` step after `docker compose up`), `papaia-ctl addon
+start <name>` and `papaia-ctl addon upgrade <name>` create the client from its
+export when the realm lacks it, with that secret and, when `root_url_env` names
+a set key, that root URL. An existing client only gets its secret aligned with
+the add-on `.env`, as core clients do, so a secret changed there takes effect on
+the next start. Nothing else about an existing client is changed. A secret that
+is still a placeholder in the add-on `.env` (`GENERATE_*`, `REPLACE_WITH_*`,
+`CHANGE_ME`, empty), as an install from before the add-on named its client
+there carries, is generated and written to the `.env` before the `.env` reaches
+the add-on's checkout, so the add-on's containers start with the value the
+client gets. `addon start` and `addon upgrade` wait only a few seconds for
+Keycloak; when it is not up, they say so and `start` or `papaia-ctl
+keycloak-role-sync` creates the client later. Within `start --addons`, the
+add-ons start before Keycloak may be up, so the clients are left to the
+`keycloak-role-sync` step that follows. Clients not named under
+`client_secrets` keep the manual import, and with `auth_provider=external_oidc`
+nothing is created. A core without this step ignores `client_secrets` and shows
+the manual import for the same clients, so an add-on can use it without raising
+`addon_api`.
+
+In a distributed installation, `keycloak-role-sync` runs on Keycloak's node
+with that node's bundle, which carries only the add-ons placed on that node.
+The clients of add-ons placed on other nodes are therefore not created by
+`start`; until that is supported, import them by hand as before.
+
 ### Seam 3 — LibreChat-MCP
 
 The `mcpServers` and `allowedDomains` fragment from `integration/librechat/`
 is **merged at render time** into the effective `librechat.yaml` in the config
 directory. Render process: base template + sum of active add-on fragments +
 customer overlay.
+
+**Agents and prompts (addon_api 4).** An add-on may ship LibreChat agents and
+prompts in the same formats as `LIBRECHAT_AGENTS_DIR` / `LIBRECHAT_PROMPTS_DIR`
+(`src/ai/librechat/agent.yaml.example`, `prompt.md.example`):
+
+```
+<addon>/integration/ai/librechat/agents/<file>.yaml
+<addon>/integration/ai/librechat/prompts/<file>.md
+```
+
+Every render copies the files of the active add-ons to
+`$PAPAIA_CONFIG_DIR/ai/librechat/addon-agents/` and `addon-prompts/` as
+`<addon>__<file>` and writes `overrides/docker-compose.librechat-addons.override.yml`.
+That override mounts both directories into LibreChat and labels the service with a
+hash of their content, so the next `papaia-ctl start` recreates LibreChat whenever
+the content changes, the add-on is removed included. On start, `agents-init.js` and
+`prompts-init.js` upsert the files and store them with `papaia_managed_by: <addon>`:
+
+- **Tombstones:** An agent or prompt whose add-on no longer provides it is deleted,
+  together with its access entries and project links. Agents and prompts created in
+  the UI or from the operator directories are never touched.
+- **Validation at render:** An agent that names an MCP server the rendered
+  `librechat.yaml` does not define is skipped with a warning, because it would
+  appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
+  `mcpServers` is not a list of server names; the rest of the render goes on.
+- **Operator files win:** An agent in `LIBRECHAT_AGENTS_DIR` with the id of an
+  add-on agent replaces it: the add-on file is skipped with a warning, and the
+  stored agent loses its add-on mark, so removing the add-on keeps it. Operator
+  prompts never take over an add-on prompt of the same name.
+- **Overwritten edits:** Changes made in the UI to an add-on agent or prompt are
+  overwritten on the next start.
+- **Ids:** Agent ids are stored with the `agent_` prefix, so links use
+  `?agent_id=agent_<id>`. Add-on prompts are keyed by add-on and `command`.
+- **Known limitation:** A distributed installation does not ship the override or
+  the two directories to a node bundle, so add-on agents and prompts are not
+  provisioned there (Fidonis/papaia#368).
 
 ### Seam 4 — Ingress (optional)
 

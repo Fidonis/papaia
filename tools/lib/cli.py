@@ -293,6 +293,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
@@ -336,6 +337,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
     # Also regenerated here, not just in cmd_setup: `papaia-ctl start` renders
     # before bringing the stack up, so a stale override would otherwise survive
     # both an upgrade and a variant change.
@@ -557,7 +559,7 @@ def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    if not keycloak_role_sync.sync_roles(tree, config_dir):
+    if not keycloak_role_sync.sync_roles(tree, config_dir, repo_root):
         return 1
     return 0
 
@@ -1237,6 +1239,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_start = sub.add_parser("addon-start")
     p_addon_start.add_argument("--name", required=True)
     p_addon_start.add_argument("--force", action="store_true")
+    # `start` creates the Keycloak clients after `up`; this only fills in their secrets.
+    p_addon_start.add_argument("--no-keycloak", action="store_true")
     p_addon_start.set_defaults(func=cli_addon.cmd_addon_start)
 
     p_addon_check = sub.add_parser("addon-check")
@@ -1283,6 +1287,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_list = sub.add_parser("addon-list")
     p_addon_list.add_argument("--json", action="store_true")
     p_addon_list.set_defaults(func=cli_addon.cmd_addon_list)
+
+    p_addon_action = sub.add_parser("addon-action")
+    p_addon_action.add_argument("--name", required=True)
+    p_addon_action.add_argument("--action", required=True)
+    p_addon_action.set_defaults(func=cli_addon.cmd_addon_action)
+
+    p_addon_actions = sub.add_parser("addon-actions")
+    p_addon_actions.add_argument("--name", required=True)
+    p_addon_actions.add_argument("--json", action="store_true")
+    p_addon_actions.set_defaults(func=cli_addon.cmd_addon_actions)
+
+    p_addon_dependents = sub.add_parser("addon-dependents")
+    p_addon_dependents.add_argument("--name", required=True)
+    p_addon_dependents.add_argument("--force", action="store_true")
+    p_addon_dependents.set_defaults(func=cli_addon.cmd_addon_dependents)
 
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)
