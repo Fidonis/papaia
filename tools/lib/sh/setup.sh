@@ -676,6 +676,33 @@ _localai_variant_unverified() {
     warn "$1 was not detected on this host. Install the driver and container runtime before starting the stack, or re-run setup and choose CPU."
 }
 
+# How long `docker info` may take before the engine counts as unknown. The Python side
+# (envtree._is_docker_desktop) waits as long.
+_DOCKER_INFO_TIMEOUT_SECONDS=15
+
+# The engine `docker info` reports ("Docker Desktop", ...), or nothing when the CLI is
+# missing, the daemon refuses, or it does not answer in time: a daemon that hangs must not
+# hold the prompt. Bash 3.2 and macOS have no `timeout`, so the call runs in the
+# background and is stopped after the limit.
+_docker_engine_name() {
+    local out pid ticks=0
+    out="$(mktemp "${TMPDIR:-/tmp}/papaia-docker-info.XXXXXX")" || return 0
+    docker info --format '{{.OperatingSystem}}' >"$out" 2>/dev/null &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$ticks" -ge $((_DOCKER_INFO_TIMEOUT_SECONDS * 5)) ]; then
+            kill "$pid" 2>/dev/null || true
+            break
+        fi
+        sleep 0.2
+        ticks=$((ticks + 1))
+    done
+    if wait "$pid" 2>/dev/null; then
+        cat "$out"
+    fi
+    rm -f "$out"
+}
+
 # Asks whether to run papaia-manager; prints "true" or "false". On macOS the manager runs
 # on Docker Desktop only (README, papaia-manager), so with another engine the default is
 # no, unless a previous run said yes.
@@ -683,7 +710,7 @@ _prompt_manager() {
     local manager_default="1" on_mac=0
     [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
     if [ "$(uname -s)" = "Darwin" ] && [ "${MANAGER_STICKY:-}" != "true" ] \
-        && [ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" != "Docker Desktop" ]; then
+        && [ "$(_docker_engine_name)" != "Docker Desktop" ]; then
         on_mac=1
         manager_default="2"
     fi
