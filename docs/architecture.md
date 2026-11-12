@@ -224,7 +224,11 @@ local_ca_env:                      # optional: env vars pointing at the local
 
 integration:
   keycloak:
-    clients: [integration/keycloak/<client>.json]
+    clients: [integration/keycloak/<client>.json]  # imported by hand, unless named below
+    client_secrets:                    # optional (addon_api 4): clients `start` creates
+      integration/keycloak/<client>.json:
+        secret_env: KC_<CLIENT>_CLIENT_SECRET    # GENERATE_SECRET in .env.example
+        root_url_env: <APP>_SERVER               # optional, replaces rootUrl
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/<name>.yaml   # optional
@@ -440,6 +444,35 @@ Client JSONs from `integration/keycloak/` are registered **additively and
 idempotently** in the Keycloak realm (via the Keycloak Admin REST API or a
 bootstrap script), including audience mappers for the MCP token flow. Base:
 the existing idempotent Keycloak client sync in `papaia/src/infra/keycloak/bootstrap.sh`.
+
+**Managed clients (addon_api 4).** A client listed under `clients` and named
+under `client_secrets` with its `secret_env` is created without the Admin UI:
+`addon install`
+generates the secret like any `GENERATE_SECRET` value, and `papaia-ctl start`
+(the `keycloak-role-sync` step after `docker compose up`), `papaia-ctl addon
+start <name>` and `papaia-ctl addon upgrade <name>` create the client from its
+export when the realm lacks it, with that secret and, when `root_url_env` names
+a set key, that root URL. An existing client only gets its secret aligned with
+the add-on `.env`, as core clients do, so a secret changed there takes effect on
+the next start. Nothing else about an existing client is changed. A secret that
+is still a placeholder in the add-on `.env` (`GENERATE_*`, `REPLACE_WITH_*`,
+`CHANGE_ME`, empty), as an install from before the add-on named its client
+there carries, is generated and written to the `.env` before the `.env` reaches
+the add-on's checkout, so the add-on's containers start with the value the
+client gets. `addon start` and `addon upgrade` wait only a few seconds for
+Keycloak; when it is not up, they say so and `start` or `papaia-ctl
+keycloak-role-sync` creates the client later. Within `start --addons`, the
+add-ons start before Keycloak may be up, so the clients are left to the
+`keycloak-role-sync` step that follows. Clients not named under
+`client_secrets` keep the manual import, and with `auth_provider=external_oidc`
+nothing is created. A core without this step ignores `client_secrets` and shows
+the manual import for the same clients, so an add-on can use it without raising
+`addon_api`.
+
+In a distributed installation, `keycloak-role-sync` runs on Keycloak's node
+with that node's bundle, which carries only the add-ons placed on that node.
+The clients of add-ons placed on other nodes are therefore not created by
+`start`; until that is supported, import them by hand as before.
 
 ### Seam 3 — LibreChat-MCP
 
