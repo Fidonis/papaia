@@ -69,6 +69,12 @@ def cmd_defaults(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_derive_auth_host(args: argparse.Namespace) -> int:
+    """Print the Keycloak URL setup derives for an app host, for the interactive prompt."""
+    print(resolve.derive_auth_host_default(args.app_host, args.keycloak_ext_port))
+    return 0
+
+
 def cmd_localai_variants(args: argparse.Namespace) -> int:
     """Print the detected LocalAI image variants as shell-safe KEY=VALUE lines.
 
@@ -1089,6 +1095,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_defaults = sub.add_parser("defaults")
     p_defaults.set_defaults(func=cmd_defaults)
+
+    p_derive_auth = sub.add_parser("derive-auth-host")
+    p_derive_auth.add_argument("app_host")
+    p_derive_auth.add_argument("keycloak_ext_port")
+    p_derive_auth.set_defaults(func=cmd_derive_auth_host)
 
     p_localai_variants = sub.add_parser("localai-variants")
     p_localai_variants.set_defaults(func=cmd_localai_variants)

@@ -70,6 +70,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "AUTH_HOST_DERIVED": resolve.derive_auth_host_default(
             app_host or "http://host.docker.internal", keycloak_port
         ),
+        "KEYCLOAK_EXT_PORT": keycloak_port,
         "LIBRECHAT_HOST_STICKY": librechat_sticky,
         "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),
         "LOCALAI_HOST_STICKY": localai_sticky,

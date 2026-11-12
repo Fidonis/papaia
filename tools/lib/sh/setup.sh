@@ -628,16 +628,10 @@ _setup_distributed() {
 }
 
 _derive_auth_default() {
-    # Best-effort bash-side fallback if defaults() had no sticky value yet;
-    # the authoritative derivation lives in resolve.derive_auth_host_default
-    # and is what setup actually applies -- this is only used to pre-fill
-    # the interactive prompt.
-    case "$1" in
-        *host.docker.internal*|*localhost*|*127.0.0.1*)
-            printf 'https://host.docker.internal:%s' "${KEYCLOAK_EXT_PORT:-8110}" ;;
-        *)
-            printf '%s' "$1" | sed -E 's#^(https?://)([^:/]+).*#\1auth.\2#' ;;
-    esac
+    # The prompt's pre-fill for an app host the defaults did not know yet. One
+    # derivation for both paths: resolve.derive_auth_host_default, which setup -y
+    # applies, with the installation's KEYCLOAK_EXT_PORT from defaults.
+    py_cli derive-auth-host "$1" "${KEYCLOAK_EXT_PORT:-8110}"
 }
 
 _derive_litellm_default() {
