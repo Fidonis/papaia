@@ -113,8 +113,11 @@ Security posture:
 - **Residual risk, accepted:** the TTS server exposes zero-shot voice cloning (a caller
   can upload reference audio and synthesize that voice). Within `papaia-net` that is
   reachable by other core containers, including the Firecrawl playwright renderer. The
-  configuration pins one shipped sample voice and nothing in the stack calls the
-  cloning endpoints; a compromised container inside the network could. Voice biometrics
+  configuration offers a fixed set of predefined voices — two public-domain German
+  audiobook narrations the module ships (`src/ai/voice/voices/`, cloning a reference
+  voice copies its accent, so German output wants a German reference) next to the
+  image's English samples — and nothing in the stack calls the cloning endpoints; a
+  compromised container inside the network could. Voice biometrics
   are special-category data, so the README tells operators to record the feature in
   their processing register.
 - Model downloads happen once, from huggingface.co, with HF telemetry disabled and

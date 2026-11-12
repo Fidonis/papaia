@@ -1751,10 +1751,11 @@ is named twice: `VOICE_STT_MODEL` in `ai/voice/.env` tells the init container wh
 and the LiteLLM route sends the same id per request — swapping the model (for example for a
 German fine-tune, or `Systran/faster-whisper-small` on tight memory) means changing both, the
 route through the overlay (`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`). The TTS server is configured through
-`ai/voice/chatterbox.yaml` (same overlay mechanism); the default voice is one of the samples
-shipped in the image, and with the multilingual model any voice speaks the language of the reply.
-The engine watermarks its audio output (Resemble Perth), which makes generated speech
-identifiable as such.
+`ai/voice/chatterbox.yaml` (same overlay mechanism). The TTS engine clones whatever reference
+voice a request names — accent included — so the module ships two public-domain German
+audiobook voices (default `Hokuspokus.wav`, see `src/ai/voice/voices/README.md` for sources and
+how to add your own); the English samples inside the image remain selectable. The engine
+watermarks its audio output (Resemble Perth), which makes generated speech identifiable as such.
 
 **Operator note (GDPR).** Voice recordings are personal data. Recorded audio is transcribed and
 discarded, but the **transcripts become ordinary chat messages**: they are stored in LibreChat's

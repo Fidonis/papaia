@@ -169,6 +169,11 @@ services:
         source: ${PAPAIA_CONFIG_DIR}/ai/voice/chatterbox.yaml
         target: /app/config.yaml
         read_only: true
+      # German reference voices (see voices/README.md): mounted file by file
+      # into the engine's predefined-voices directory so the built-in English
+      # set stays available next to them.
+      - ./voices/Hokuspokus.wav:/app/voices/Hokuspokus.wav:ro
+      - ./voices/Karlsson.wav:/app/voices/Karlsson.wav:ro
       - chatterbox-hf-cache:/app/hf_cache
     # The bundled chatterbox package cannot load the multilingual checkpoints
     # on a machine without CUDA: two of its torch.load calls lack a
