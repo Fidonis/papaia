@@ -18,8 +18,11 @@ the realm JSON before Keycloak ever sees the file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import shutil
+import sys
 from pathlib import Path
 
 import yaml
@@ -87,7 +90,121 @@ def render(config_dir: Path, repo_root: Path) -> None:
         else:
             _render_file(target, repo_root, config_dir, active_addons)
 
+    render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
+
+
+# Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under
+# <addon>/integration/ai/librechat/{agents,prompts}/, rendered as <addon>__<file> into
+# $PAPAIA_CONFIG_DIR/ai/librechat/addon-{agents,prompts}/ and mounted by a generated
+# override, whose label carries a hash of the content so `start` recreates LibreChat
+# when it changes. Its init scripts upsert the files and delete what an add-on no
+# longer provides.
+LIBRECHAT_ADDON_CONTENT: dict[str, tuple[str, tuple[str, ...]]] = {
+    "agents": ("addon-agents", (".yaml", ".yml")),
+    "prompts": ("addon-prompts", (".md", ".markdown")),
+}
+LIBRECHAT_ADDON_OVERRIDE = "overrides/docker-compose.librechat-addons.override.yml"
+_LIBRECHAT_DATA = "/app/api/data"
+
+
+def _agent_problem(text: str, mcp_servers: set[str]) -> str | None:
+    """Why an add-on agent file cannot be provisioned, or None. An agent that names
+    an MCP server the rendered librechat.yaml lacks would appear without its tools."""
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        return f"not valid YAML ({exc})"
+    if not isinstance(doc, dict):
+        return "not a mapping"
+    missing = [k for k in ("id", "name", "provider", "model") if not doc.get(k)]
+    if missing:
+        return "missing " + ", ".join(missing)
+    servers = doc.get("mcpServers") or []
+    if not isinstance(servers, list) or not all(isinstance(s, str) for s in servers):
+        return "has an mcpServers entry that is not a list of server names"
+    unknown = [s for s in servers if s not in mcp_servers]
+    if unknown:
+        return "names MCP servers librechat.yaml does not define: " + ", ".join(unknown)
+    return None
+
+
+def render_librechat_addon_content(config_dir: Path, repo_root: Path) -> list[str]:
+    """Render the LibreChat agents and prompts of the active add-ons and write or
+    remove their override. Returns the warnings printed for skipped files."""
+    rendered_yaml = config_dir / "ai" / "librechat" / "librechat.yaml"
+    try:
+        librechat = yaml.safe_load(rendered_yaml.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        librechat = {}
+    mcp_servers = set((librechat.get("mcpServers") or {}) if isinstance(librechat, dict) else {})
+
+    warnings: list[str] = []
+    digest = hashlib.sha256()
+    mounts: list[dict] = []
+    addons = [a for a in deployment.active_addons(deployment.load(config_dir)) if a.get("name")]
+    for kind, (dirname, suffixes) in LIBRECHAT_ADDON_CONTENT.items():
+        out_dir = config_dir / "ai" / "librechat" / dirname
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        written = 0
+        for addon in addons:
+            src_dir = repo_root / addon["path"] / "integration" / "ai" / "librechat" / kind
+            if not src_dir.is_dir():
+                continue
+            for src in sorted(src_dir.iterdir()):
+                if not src.is_file() or src.suffix.lower() not in suffixes:
+                    continue
+                # A file that cannot be read is skipped like an invalid one: one broken
+                # add-on file must not stop `start` for the whole stack.
+                try:
+                    content = src.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    warnings.append(
+                        f"addon '{addon['name']}': {kind[:-1]} {src.name} cannot be read ({exc})"
+                    )
+                    continue
+                if kind == "agents":
+                    problem = _agent_problem(content, mcp_servers)
+                    if problem:
+                        warnings.append(f"addon '{addon['name']}': agent {src.name} {problem}")
+                        continue
+                name = f"{addon['name']}__{src.name}"
+                common.atomic_write(out_dir / name, content)
+                digest.update(f"{kind}/{name}\0{content}\0".encode())
+                written += 1
+        if written:
+            mounts.append(
+                {
+                    "type": "bind",
+                    "source": str(out_dir),
+                    "target": f"{_LIBRECHAT_DATA}/{dirname}",
+                    "read_only": True,
+                }
+            )
+
+    for warning in warnings:
+        print(f"WARNING: {warning} -- skipped", file=sys.stderr)
+
+    override_path = config_dir / LIBRECHAT_ADDON_OVERRIDE
+    if not mounts:
+        # Removing the override changes LibreChat's labels too, so the next start
+        # recreates it and its init scripts delete the agents and prompts of the
+        # removed add-ons.
+        override_path.unlink(missing_ok=True)
+        return warnings
+    override = {
+        "services": {
+            "librechat": {
+                "volumes": mounts,
+                "labels": {"org.papaia.addon-content": digest.hexdigest()[:16]},
+            }
+        }
+    }
+    common.atomic_write(
+        override_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+    return warnings
 
 
 def _parse_structured(suffix: str, text: str, label: str):

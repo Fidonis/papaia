@@ -565,7 +565,7 @@ def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    if not keycloak_role_sync.sync_roles(tree, config_dir):
+    if not keycloak_role_sync.sync_roles(tree, config_dir, repo_root):
         return 1
     return 0
 
@@ -1250,6 +1250,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_start = sub.add_parser("addon-start")
     p_addon_start.add_argument("--name", required=True)
     p_addon_start.add_argument("--force", action="store_true")
+    # `start` creates the Keycloak clients after `up`; this only fills in their secrets.
+    p_addon_start.add_argument("--no-keycloak", action="store_true")
     p_addon_start.set_defaults(func=cli_addon.cmd_addon_start)
 
     p_addon_check = sub.add_parser("addon-check")
