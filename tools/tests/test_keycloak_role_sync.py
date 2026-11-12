@@ -354,6 +354,15 @@ def test_the_server_name_context_overrides_the_url_host(tmp_path, monkeypatch):
     assert seen["name"] == "localhost"
 
 
+def test_the_server_name_context_is_as_strict_as_the_default_one(tmp_path):
+    ctx = kcs._ssl_context(tmp_path, "localhost")
+    default = ssl.create_default_context()
+    assert ctx.verify_flags == default.verify_flags
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname
+    assert ctx.minimum_version == default.minimum_version
+
+
 def test_without_a_server_name_the_default_context_is_kept(tmp_path):
     assert not isinstance(kcs._ssl_context(tmp_path), kcs._ServerNameContext)
 

@@ -44,6 +44,20 @@ function matches(doc, query) {
   });
 }
 
+// MongoDB rejects an update that names one path in two operators (`$set` and `$unset`
+// of the same field, say) and fails the whole update; the stand-in does the same, so
+// such an update cannot pass the tests.
+function checkConflicts(change) {
+  const paths = Object.entries(change).flatMap(([op, fields]) => Object.keys(fields || {}).map((p) => [op, p]));
+  for (const [op, p] of paths) {
+    for (const [otherOp, other] of paths) {
+      if (op !== otherOp && (p === other || p.startsWith(`${other}.`))) {
+        throw new Error(`Updating the path '${p}' would create a conflict at '${other}'`);
+      }
+    }
+  }
+}
+
 function apply(doc, change) {
   Object.assign(doc, change.$set || {});
   for (const key of Object.keys(change.$unset || {})) delete doc[key];
@@ -87,10 +101,14 @@ class Collection {
     this.docs.push(stored);
     return { insertedId: stored._id };
   }
-  async updateOne(query, change, opts = {}) {
+  // Applies `change` to the first match, or to a new document on upsert. Returns the
+  // document before and after the change (null where there is none).
+  modify(query, change, opts) {
+    checkConflicts(change);
     let doc = this.docs.find((d) => matches(d, query));
+    const before = doc ? JSON.parse(JSON.stringify(doc)) : null;
     if (!doc) {
-      if (!opts.upsert) return;
+      if (!opts.upsert) return { before, after: null };
       doc = { _id: `oid${nextId++}` };
       for (const [key, cond] of Object.entries(query)) {
         if (cond === null || typeof cond !== 'object') doc[key] = cond;
@@ -99,13 +117,29 @@ class Collection {
       this.docs.push(doc);
     }
     apply(doc, change);
+    return { before, after: doc };
+  }
+  async updateOne(query, change, opts = {}) {
+    this.modify(query, change, opts);
+  }
+  // Returns the document itself, as the driver (6.x) does: before the change unless
+  // `returnDocument: 'after'`.
+  async findOneAndUpdate(query, change, opts = {}) {
+    const { before, after } = this.modify(query, change, opts);
+    const doc = opts.returnDocument === 'after' ? after : before;
+    return doc ? project(doc, opts.projection) : null;
   }
   async updateMany(query, change) {
+    checkConflicts(change);
     for (const doc of this.docs.filter((d) => matches(d, query))) apply(doc, change);
   }
   async deleteOne(query) {
     const i = this.docs.findIndex((d) => matches(d, query));
     if (i >= 0) this.docs.splice(i, 1);
+  }
+  async findOneAndDelete(query) {
+    const i = this.docs.findIndex((d) => matches(d, query));
+    return i >= 0 ? this.docs.splice(i, 1)[0] : null;
   }
   async deleteMany(query) {
     for (let i = this.docs.length - 1; i >= 0; i -= 1) if (matches(this.docs[i], query)) this.docs.splice(i, 1);

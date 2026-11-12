@@ -22,7 +22,7 @@ HARNESS = Path(__file__).parent / "fixtures" / "librechat_init_harness.js"
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 ADMIN = {"_id": "oid900", "email": "admin@example.org", "role": "ADMIN"}
-VIEWER = {"_id": "oid901", "accessRoleId": "agent_viewer"}
+VIEWER = {"_id": "oid901", "accessRoleId": "agent_viewer", "permBits": 1}
 
 
 @pytest.fixture
@@ -77,12 +77,31 @@ def test_an_addon_agent_is_shared_and_removed_with_its_file(data: Path, db: Path
     agent = _by_id(state, "agent_docs")
     assert agent["papaia_managed_by"] == "paperless"
     public = [e for e in state["aclentries"] if e["principalType"] == "public"]
-    assert [(e["resourceId"], e["roleId"]) for e in public] == [(agent["_id"], VIEWER["_id"])]
+    assert [(e["resourceId"], e["roleId"], e["permBits"]) for e in public] == [
+        (agent["_id"], VIEWER["_id"], 1)
+    ]
 
     (data / "addon-agents" / "paperless__docs.yaml").unlink()
     state = _run("agents-init.js", data, db)
     assert state["agents"] == []
     assert state["aclentries"] == []
+
+
+def test_an_agent_that_is_not_collaborative_loses_its_public_entry(
+    data: Path, db: Path
+) -> None:
+    _write(data / "agents" / "docs.yaml", _agent("docs"))
+    agent = _by_id(_run("agents-init.js", data, db), "agent_docs")
+    # Earlier versions stored the flag on the document; LibreChat's schema has no such field.
+    state = json.loads(db.read_text(encoding="utf-8"))
+    state["agents"][0]["is_collaborative"] = True
+    db.write_text(json.dumps(state), encoding="utf-8")
+
+    _write(data / "agents" / "docs.yaml", {**_agent("docs"), "is_collaborative": False})
+    state = _run("agents-init.js", data, db)
+
+    assert "is_collaborative" not in _by_id(state, "agent_docs")
+    assert [e for e in state["aclentries"] if e["resourceId"] == agent["_id"]] == []
 
 
 def test_an_operator_agent_with_an_addon_id_wins_and_survives_the_addon(

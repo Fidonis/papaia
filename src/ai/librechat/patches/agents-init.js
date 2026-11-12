@@ -9,6 +9,14 @@
 // LibreChat treats every agent id without the `agent_` prefix as an ephemeral
 // agent and never loads the stored document, so the prefix is added when the
 // YAML omits it (`id: paperless-assistant` is stored as `agent_paperless-assistant`).
+// A document an earlier version stored under the bare id is removed, together with
+// the ACL entries LibreChat granted on it.
+//
+// Every user may view and use a provisioned agent unless the YAML sets
+// `is_collaborative: false`. LibreChat decides that by an ACL entry for the public
+// principal; `migrate:agent-permissions` only grants one to agents of the legacy
+// `instance` project, and only once, so this script writes (or removes) it on every
+// run. The owner's entry stays with the migration, which runs after this script.
 //
 // Agents of active add-ons are rendered by papaia-ctl into
 // /app/api/data/addon-agents/ as <addon>__<file>. They are stored with
@@ -18,12 +26,6 @@
 // directory or the UI are never deleted. An operator file with the id of an
 // add-on agent wins: the add-on file is skipped with a warning and the stored
 // agent loses its add-on mark, so it survives the removal of the add-on.
-//
-// `is_collaborative` (default true) shares an agent with every user of the
-// instance: LibreChat 0.8.x decides access by its ACL alone, so the script
-// keeps a public VIEW entry (role `agent_viewer`) for the agent, and removes
-// it when the YAML sets `is_collaborative: false`. The owner's entry is
-// granted by LibreChat's own `migrate:agent-permissions` on startup.
 //
 // Silent if the directories are empty or missing (default behaviour for
 // deployments that don't opt in via LIBRECHAT_AGENTS_DIR). Non-fatal:
@@ -41,6 +43,10 @@ const AGENTS_DIR = '/app/api/data/agents';
 // Agents of active add-ons, rendered by papaia-ctl (absent without any).
 const ADDON_AGENTS_DIR = '/app/api/data/addon-agents';
 const MONGO_URI = process.env.MONGO_URI;
+
+// LibreChat's access role for "can view and use" an agent, and its permission bits.
+const VIEWER_ROLE = 'agent_viewer';
+const VIEW_BITS = 1;
 
 const log = (msg) => console.log(`[agents-init] ${msg}`);
 const warn = (msg) => console.warn(`[agents-init] ${msg}`);
@@ -79,7 +85,8 @@ const TAKEN = Symbol('taken');
 
 // Upserts one agent file. Returns the stored agent id, null when the file is
 // skipped, or TAKEN when an add-on file collides with an operator agent.
-async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, managedBy, taken) {
+async function upsertAgent(db, dir, file, managedBy, taken) {
+  const agents = db.collection('agents');
   const raw = fs.readFileSync(path.join(dir, file), 'utf8');
   const doc = yaml.load(raw);
   if (!doc || typeof doc !== 'object') {
@@ -97,7 +104,7 @@ async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, m
     return TAKEN;
   }
 
-  const authorId = await resolveAuthorId(users, doc);
+  const authorId = await resolveAuthorId(db.collection('users'), doc);
   if (!authorId) {
     warn(`${file}: no LibreChat user available to own the agent — skip`);
     return null;
@@ -113,57 +120,68 @@ async function upsertAgent(agents, users, aclentries, viewerRoleId, dir, file, m
     mcpServers: Array.isArray(doc.mcpServers) ? doc.mcpServers : [],
     model_parameters: doc.model_parameters ?? {},
     tools: Array.isArray(doc.tools) ? doc.tools : [],
-    // Shared with everyone in the instance by default; YAML can opt out.
-    is_collaborative: doc.is_collaborative !== false,
     // Re-stamp the author on every run so a re-imported agent stays
     // owned by the right user even if the user document was rebuilt.
     author: authorId,
     updatedAt: new Date(),
   };
+  // Written by earlier versions; LibreChat's schema has no such field. A path may
+  // appear in only one update operator, so `update` must not set it.
+  const unset = { is_collaborative: '' };
   // Add-on agents carry their owner, so they can be removed with the add-on.
   // An operator file drops the mark: the agent is no longer the add-on's.
-  const change = {
-    $set: update,
-    $setOnInsert: {
-      createdAt: new Date(),
-      versions: [],
-    },
-  };
   if (managedBy) update.papaia_managed_by = managedBy;
-  else change.$unset = { papaia_managed_by: '' };
+  else unset.papaia_managed_by = '';
 
-  await agents.updateOne({ id: agentId }, change, { upsert: true });
-  // A document stored by an earlier run under the bare id cannot be used. The
-  // old code stored the YAML value as it was, so a numeric id is a number.
+  const stored = await agents.findOneAndUpdate(
+    { id: agentId },
+    {
+      $set: update,
+      $unset: unset,
+      $setOnInsert: {
+        createdAt: new Date(),
+        versions: [],
+      },
+    },
+    { upsert: true, returnDocument: 'after' },
+  );
+  // A document stored by an earlier run under the bare id cannot be used. The id
+  // is matched as the YAML has it, so a numeric one is found too.
   if (agentId !== doc.id) {
-    const stale = await agents
-      .find({ id: { $in: [doc.id, String(doc.id)] } }, { projection: { _id: 1 } })
-      .toArray();
-    for (const { _id } of stale) {
-      await agents.deleteOne({ _id });
-      await aclentries.deleteMany({ resourceType: 'agent', resourceId: _id });
+    const stale = await agents.findOneAndDelete({ id: doc.id });
+    if (stale) {
+      await db
+        .collection('aclentries')
+        .deleteMany({ resourceType: 'agent', resourceId: stale._id });
+      log(`removed ${doc.id}, stored without the agent_ prefix`);
     }
   }
-  const stored = await agents.findOne({ id: agentId }, { projection: { _id: 1 } });
-  await sharePublicly(aclentries, stored._id, update.is_collaborative, viewerRoleId, authorId);
+  await setPublicAccess(db, stored, doc.is_collaborative !== false);
   log(`upserted ${agentId} (${file}) author=${authorId}`);
   return agentId;
 }
 
-// Keeps or removes the public VIEW entry that makes an agent usable by every
-// user of the instance. Without the `agent_viewer` role (LibreChat seeds it on
-// its first start) the entry carries the permission bits only.
-async function sharePublicly(aclentries, resourceId, shared, viewerRoleId, grantedBy) {
-  const key = { principalType: 'public', resourceType: 'agent', resourceId };
+// Grants every user view access to the agent document `agentDoc`, or takes it away
+// when `shared` is false. The role reference is added once LibreChat has seeded its
+// access roles (the first start runs this script before the server does).
+async function setPublicAccess(db, agentDoc, shared) {
+  const acl = db.collection('aclentries');
+  const query = { principalType: 'public', resourceType: 'agent', resourceId: agentDoc._id };
   if (!shared) {
-    await aclentries.deleteMany(key);
+    await acl.deleteMany(query);
     return;
   }
-  const entry = { permBits: 1, grantedBy, updatedAt: new Date() };
-  if (viewerRoleId) entry.roleId = viewerRoleId;
-  await aclentries.updateOne(
-    key,
-    { $set: entry, $setOnInsert: { grantedAt: new Date(), createdAt: new Date() } },
+  const role = await db.collection('accessroles').findOne({ accessRoleId: VIEWER_ROLE });
+  await acl.updateOne(
+    query,
+    {
+      $set: {
+        permBits: role ? role.permBits : VIEW_BITS,
+        grantedBy: agentDoc.author,
+        grantedAt: new Date(),
+        ...(role ? { roleId: role._id } : {}),
+      },
+    },
     { upsert: true },
   );
 }
@@ -203,13 +221,6 @@ async function main() {
   try {
     await client.connect();
     const db = client.db();
-    const agents = db.collection('agents');
-    const users = db.collection('users');
-    const aclentries = db.collection('aclentries');
-    const viewerRole = await db
-      .collection('accessroles')
-      .findOne({ accessRoleId: 'agent_viewer' }, { projection: { _id: 1 } });
-    const viewerRoleId = viewerRole ? viewerRole._id : null;
 
     let upserted = 0;
     let failed = 0;
@@ -217,16 +228,7 @@ async function main() {
     const taken = new Set();
     for (const file of operatorFiles || []) {
       try {
-        const agentId = await upsertAgent(
-          agents,
-          users,
-          aclentries,
-          viewerRoleId,
-          AGENTS_DIR,
-          file,
-          null,
-          taken,
-        );
+        const agentId = await upsertAgent(db, AGENTS_DIR, file, null, taken);
         if (agentId) {
           taken.add(agentId);
           upserted += 1;
@@ -245,16 +247,7 @@ async function main() {
     for (const file of addonFiles || []) {
       const managedBy = file.includes('__') ? file.split('__')[0] : null;
       try {
-        const agentId = await upsertAgent(
-          agents,
-          users,
-          aclentries,
-          viewerRoleId,
-          ADDON_AGENTS_DIR,
-          file,
-          managedBy,
-          taken,
-        );
+        const agentId = await upsertAgent(db, ADDON_AGENTS_DIR, file, managedBy, taken);
         if (agentId === TAKEN) continue;
         if (agentId) {
           keep.push(agentId);
