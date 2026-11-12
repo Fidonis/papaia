@@ -27,6 +27,10 @@ _is_local_auth_host() {
 _KEYCLOAK_CERT_DAYS=825
 # A server certificate this close to its end (in seconds) is issued again.
 _KEYCLOAK_CERT_RENEW_BEFORE=$((30 * 24 * 3600))
+# The names Keycloak's certificate serves. A new local CA is limited to them (name
+# constraints), so its key cannot issue a certificate for any other domain that a browser
+# trusting the CA would accept. A CA made before keeps working without the limit.
+_LOCAL_CA_DNS_NAMES="keycloak localhost host.docker.internal"
 
 # Runs `openssl "$@"` for the step named in $1. Its output is kept back unless it fails:
 # then the step and openssl's own message are printed and papaia-ctl exits.
@@ -65,8 +69,10 @@ _issue_keycloak_cert() {
         -subj "/CN=keycloak/O=papAIa"
 
     # SAN covers all names the certificate must serve
+    local san="" name
+    for name in $_LOCAL_CA_DNS_NAMES; do san="${san:+$san,}DNS:$name"; done
     printf '%s\n' \
-        "subjectAltName=DNS:keycloak,DNS:localhost,DNS:host.docker.internal" \
+        "subjectAltName=$san" \
         "basicConstraints=critical,CA:FALSE" \
         "keyUsage=critical,digitalSignature,keyEncipherment" \
         "extendedKeyUsage=serverAuth" \
@@ -98,6 +104,10 @@ _ensure_keycloak_certs() {
         exit 2
     }
 
+    # The CA key is read by papaia-ctl only; no container mounts it. A key from an older
+    # setup was world-readable. Not fatal: a file someone else owns keeps its mode.
+    [ -f "$ca_key" ] && { chmod 600 "$ca_key" 2>/dev/null || true; }
+
     if [ -f "$ca_key" ] && [ -f "$ca_crt" ] && [ -f "$kc_key" ] && [ -f "$kc_crt" ]; then
         if ! _keycloak_cert_outdated "$kc_crt"; then
             info "Keycloak TLS certificates already present — skipping generation."
@@ -115,20 +125,26 @@ _ensure_keycloak_certs() {
     info "Generating local CA and Keycloak TLS certificates..."
     mkdir -p "$certs_dir"
 
-    # Local CA key + self-signed certificate
+    # Local CA key + self-signed certificate, limited to Keycloak's names
+    local constraints="" name
+    for name in $_LOCAL_CA_DNS_NAMES; do
+        constraints="${constraints:+$constraints,}permitted;DNS:$name"
+    done
     _openssl_step "local CA key" genrsa -out "$ca_key" 4096
+    chmod 600 "$ca_key"
     _openssl_step "local CA certificate" req -new -x509 -key "$ca_key" -out "$ca_crt" \
         -days 3650 \
         -subj "/CN=papaia-local-ca/O=papAIa" \
         -addext "basicConstraints=critical,CA:TRUE" \
-        -addext "keyUsage=critical,keyCertSign,cRLSign"
+        -addext "keyUsage=critical,keyCertSign,cRLSign" \
+        -addext "nameConstraints=critical,$constraints"
 
     # Keycloak server key + certificate
     _openssl_step "Keycloak key" genrsa -out "$kc_key" 4096
     _issue_keycloak_cert "$certs_dir"
 
-    # Readable by the Keycloak container user (UID 1000 inside the image)
-    chmod 644 "$ca_key" "$ca_crt"
+    # The certificate is read by the containers that trust Keycloak; the key stays private.
+    chmod 644 "$ca_crt"
 
     success "Keycloak TLS certificates generated in $certs_dir."
 }
@@ -136,8 +152,9 @@ _ensure_keycloak_certs() {
 # macOS only, for a local auth host: browsers there check Keycloak's certificate against
 # the user's keychain, and they reach Keycloak under the auth host's name from the Mac
 # itself, where host.docker.internal resolves only with an /etc/hosts entry. Offers to
-# trust the local CA (no admin rights needed) and names what is still missing. Reads
-# AUTH_HOST from the rendered $CONFIG_DIR/.env, so a derived default counts too.
+# trust the local CA for TLS server certificates only (no admin rights needed) and names
+# what is still missing. Reads AUTH_HOST from the rendered $CONFIG_DIR/.env, so a derived
+# default counts too.
 _macos_local_tls_steps() {
     local non_interactive="$1"
     [ "$(uname -s)" = "Darwin" ] || return 0
@@ -146,17 +163,20 @@ _macos_local_tls_steps() {
     [ -n "$auth_host" ] || return 0
     _is_local_auth_host "$auth_host" || return 0
     local ca_crt="$CONFIG_DIR/certs/local-ca.crt"
+    local kc_crt="$CONFIG_DIR/certs/keycloak.crt"
     local keychain="$HOME/Library/Keychains/login.keychain-db"
     [ -f "$ca_crt" ] || return 0
 
-    if ! security verify-cert -c "$ca_crt" >/dev/null 2>&1; then
+    # Asked the way a browser asks: Keycloak's certificate under the TLS server policy. A
+    # trust limited to that policy (-p ssl) does not show when the CA alone is checked.
+    if ! security verify-cert -c "$kc_crt" -c "$ca_crt" -p ssl -L >/dev/null 2>&1; then
         if [ "$non_interactive" -eq 0 ] && is_tty \
             && confirm "Trust the local CA in your login keychain, so browsers on this Mac accept Keycloak?" "Y" \
-            && security add-trusted-cert -r trustRoot -k "$keychain" "$ca_crt"; then
-            success "Local CA trusted in $keychain."
+            && security add-trusted-cert -r trustRoot -p ssl -k "$keychain" "$ca_crt"; then
+            success "Local CA trusted for TLS in $keychain."
         else
             warn "Browsers on this Mac reject Keycloak until the local CA is trusted. Run:"
-            printf '  security add-trusted-cert -r trustRoot -k %s %s\n' "$keychain" "$ca_crt" >&2
+            printf '  security add-trusted-cert -r trustRoot -p ssl -k %s %s\n' "$keychain" "$ca_crt" >&2
         fi
     fi
 
@@ -164,7 +184,7 @@ _macos_local_tls_steps() {
     host="${host%%:*}"
     host="${host%%/*}"
     if [ "$host" = "host.docker.internal" ] \
-        && ! dscacheutil -q host -a name "$host" 2>/dev/null | grep -q '^ip_address:'; then
+        && ! dscacheutil -q host -a name "$host" 2>/dev/null | grep '^ip_address:' >/dev/null; then
         warn "$host does not resolve on this Mac, so browsers cannot reach Keycloak. Run:"
         printf '  echo "127.0.0.1 %s" | sudo tee -a /etc/hosts\n' "$host" >&2
     fi
