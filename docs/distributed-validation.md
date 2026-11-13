@@ -24,11 +24,19 @@ throwaway config directory. Record the result with the report template at the en
        --node=internal=<B address> --node=edge=<A address>,ssh=papaia@<A address> \
        --preset=dmz-split --app-host=https://papaia.<test domain> \
        --auth-host=https://auth.<test domain> --librechat-host=https://chat.<test domain> \
-       --litellm-host=https://llm.<test domain> -y
+       --litellm-host=https://llm.<test domain> \
+       --manager --manager-host=https://manager.<test domain> -y
    tools/papaia-ctl topology firewall --config-dir=/tmp/papaia-validate
    ```
 
+   `--manager` is part of the run because two checks below exercise papaia-manager. The
+   preset also places `smtp`, which stays off by default -- setup warning
+   "placement of 'smtp' has no effect" is expected unless the mail relay is switched on.
+
 3. Open exactly the rules `topology firewall` prints (plus 80/443 from the clients to A).
+   Open them in the chain that sees forwarded traffic (nftables forward chain, iptables
+   `DOCKER-USER`): the link port is Docker-published, so it is DNATed before routing and an
+   input-only rule set never matches it.
 4. Enrol A with the join archive (`node add edge ... --bootstrap=join`, then
    `sudo ./install.sh` on A, then `node check edge`), and start:
    `tools/papaia-ctl start --config-dir=/tmp/papaia-validate`.
@@ -77,7 +85,10 @@ and its output, a log excerpt).
       to internal. Close any one of them and observe what breaks (`doctor` should name it
       under `links`).
 - [ ] **Clock skew.** Moving A's clock by a few minutes breaks token validation as expected,
-      and `doctor` reports the deviation under `nodes`.
+      and `doctor` reports the deviation under `nodes`. Move it *backwards*: tokens then
+      arrive already expired. A clock running ahead is not necessarily caught -- Keycloak
+      sets no `nbf` claim, so only `exp` moves. On VMs, pause the guest agent first
+      (it re-syncs the clock within seconds and undoes `date -s`).
 
 ## Report
 
