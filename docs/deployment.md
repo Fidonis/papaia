@@ -108,9 +108,16 @@ The volume is prefixed with `COMPOSE_PROJECT_NAME`, so a stack created with `--e
 
 With Docker Desktop on an Apple Silicon Mac, LocalAI can run as a process on the Apple GPU
 instead of a CPU-only container (`setup --localai-runtime=native`). `start` installs the
-pinned LocalAI release below `$PAPAIA_WORKSPACE_DIR/localai/<project>` and prints the script
-that starts it; run it in a terminal. `doctor` reports it as `localai_native`. Details, the
-limits and the way back to the container are in the README under
+pinned LocalAI release below `$PAPAIA_WORKSPACE_DIR/localai/<project>` and runs it as a
+launchd job of the logged-in user (`de.fidonis.papaia.<project>.localai`); there is no
+manual step. `stop` unloads and disables the job, so LocalAI stays off after a restart until
+the next `start`; `upgrade` swaps the binary through its `stop` and `start`; `uninstall`
+removes the job (`--clean-up` also the models). LocalAI logs to
+`$PAPAIA_WORKSPACE_DIR/localai/<project>/logs/localai.log`, and
+`launchctl print gui/$(id -u)/de.fidonis.papaia.<project>.localai` shows the job.
+`doctor` reports both as `localai_native`. Keep the workspace outside `~/Documents`,
+`~/Desktop` and `~/Downloads`: macOS may deny a launchd job access there, and `setup` warns.
+Details, the limits and the way back to the container are in the README under
 [Native LocalAI on Apple Silicon](../README.md#native-localai-on-apple-silicon), the decision
 in [ADR 0012](adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md).
 

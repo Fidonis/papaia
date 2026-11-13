@@ -349,6 +349,8 @@ class Probes:
     dev_root: Path = Path("/dev")
     # Whether the native LocalAI answers on a /readyz URL.
     localai_ready: Callable[[str], bool] = localai_native.probe
+    # Whether launchctl of the logged-in user is at hand (a Mac, not a container).
+    launchd_host: Callable[[], bool] = lambda: localai_native.launchd_host()[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1149,9 +1151,10 @@ def check_localai_native(ctx: Context) -> CheckResult:
     """The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native, ADR 0012).
 
     Whether /readyz answers (on the host at 127.0.0.1, in a container at
-    host.docker.internal) and whether the installed binary is the pinned release. `warn`
-    at most: until launchd manages the process, a LocalAI that is not running is a normal
-    state."""
+    host.docker.internal), whether the installed binary is the pinned release and, on the
+    Mac, the state of the launchd job: `warn` when the job is loaded but LocalAI does not
+    answer, or when it is not loaded although the stack runs. `warn` at most: LocalAI is
+    optional for the rest of the stack."""
     name = "localai_native"
     if not ctx.configured:
         return _not_set_up(name)
@@ -1168,14 +1171,15 @@ def check_localai_native(ctx: Context) -> CheckResult:
     installed = localai_native.installed_version(home)
     url = localai_native.probe_url(env, inside_container=ctx.probes.in_container())
     ready = ctx.probes.localai_ready(url)
+    log = localai_native.log_path(home)
     details: dict[str, Any] = {
         "url": url,
         "home": str(home),
         "pinned": pinned,
         "installed": installed,
         "ready": ready,
+        "log": str(log),
     }
-    script = localai_native.script_path(home)
     if installed is None:
         return CheckResult(
             name, WARN, "the LocalAI binary is not installed yet: run 'papaia-ctl start'", details
@@ -1185,17 +1189,72 @@ def check_localai_native(ctx: Context) -> CheckResult:
             name,
             WARN,
             f"LocalAI {installed} is installed, this release pins {pinned}:"
-            " run 'papaia-ctl start', then restart LocalAI",
+            " run 'papaia-ctl start'",
             details,
         )
-    if not ready:
+    job = _launchd_job(ctx, env, details)
+    if job is None:
+        # In a container (papaia-manager), or launchctl did not answer: the probe alone.
+        if not ready:
+            return CheckResult(
+                name,
+                WARN,
+                f"LocalAI {installed} does not answer on {url}: run 'papaia-ctl start' on the"
+                f" Mac (log: {log})",
+                details,
+            )
+        return CheckResult(name, PASS, f"LocalAI {installed} answers on {url}", details)
+    label = details["launchd"]["label"]
+    if job.loaded:
+        if not ready:
+            state = job.state or "unknown"
+            return CheckResult(
+                name,
+                WARN,
+                f"the launchd job {label} is loaded ({state}) but LocalAI does not answer on"
+                f" {url}: see {log}",
+                details,
+            )
+        return CheckResult(
+            name, PASS, f"LocalAI {installed} answers on {url} (launchd: {label})", details
+        )
+    if _stack_runs(ctx):
+        cause = (
+            "LocalAI answers but not through launchd (started by hand?)"
+            if ready
+            else "LocalAI is stopped"
+        )
         return CheckResult(
             name,
             WARN,
-            f"LocalAI {installed} does not answer on {url}: start it with {script}",
+            f"the launchd job {label} is not loaded although the stack runs: {cause};"
+            " run 'papaia-ctl start'",
             details,
         )
-    return CheckResult(name, PASS, f"LocalAI {installed} answers on {url}", details)
+    return CheckResult(name, SKIP, "the stack is stopped, and LocalAI with it", details)
+
+
+def _launchd_job(
+    ctx: Context, env: dict[str, str], details: dict[str, Any]
+) -> localai_native.JobState | None:
+    """The launchd job of the native LocalAI, or None where launchctl cannot be asked."""
+    if ctx.probes.in_container() or not ctx.probes.launchd_host():
+        return None
+    try:
+        label = localai_native.label_for(env)
+        job = localai_native.state(label, run=ctx.run)
+    except localai_native.LaunchdError:
+        return None
+    details["launchd"] = {"label": label, **job.to_dict()}
+    return job
+
+
+def _stack_runs(ctx: Context) -> bool:
+    """Whether any container of the core is running."""
+    report = ctx.status_report()
+    return any(
+        container.state == "running" for module in report.core for container in module.containers
+    )
 
 
 def _published_host_port(entry: str, env: dict[str, str]) -> tuple[str, int] | None:

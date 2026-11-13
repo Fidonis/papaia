@@ -25,6 +25,11 @@ manager's Modules tab) can ask them in a dialog and hand the answers to `setup`.
 open when the stored value is empty, a placeholder or what the release ships (`setup` does not
 keep such a value either); the settings reset puts the values back to that state.
 
+A native LocalAI (`LOCALAI_RUNTIME=native`, ADR 0012) keeps its data in directories on the Mac
+instead of volumes: `<home>/models` and `<home>/backends`. `info` lists them under `directories`
+and `purge_data` deletes them; this works from the manager's container too, which mounts the
+workspace at the same path.
+
 Nothing here touches another module, the stack's always-on services, Keycloak or the
 Nginx Proxy Manager. The documents folder of the RAG system holds the operator's own files and is
 never deleted.
@@ -38,7 +43,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, common, envtree, resolve, secrets
+from . import backup, common, envtree, localai_native, resolve, secrets
 
 
 class ModuleError(Exception):
@@ -174,6 +179,19 @@ def _existing_volumes(runner: Runner) -> set[str] | None:
     return {line.strip() for line in done.stdout.splitlines() if line.strip()}
 
 
+def _native_localai_home(config_dir: Path, name: str) -> Path | None:
+    """The home of a native LocalAI when `name` is LocalAI and it runs natively."""
+    if name != "localai":
+        return None
+    root = common.parse_env_file(config_dir / ".env")
+    if localai_native.runtime(root) != localai_native.NATIVE:
+        return None
+    try:
+        return localai_native.localai_home(root)
+    except localai_native.InstallError as exc:
+        raise ModuleError(f"the native LocalAI has no directory: {exc}") from exc
+
+
 def questions(config_dir: Path, name: str) -> list[dict]:
     """What `setup` asks for the module, with the default and whether it is still open.
 
@@ -210,18 +228,27 @@ def info(config_dir: Path, repo_root: Path, name: str, *, runner: Runner | None 
     Docker): the volumes are then listed by name only."""
     module = spec(name)
     project = _project(config_dir)
-    existing = _existing_volumes(runner or _docker)
     volumes = []
-    for key in volume_keys(repo_root, module):
-        real = f"{project}_{key}"
-        volumes.append(
-            {"key": key, "name": real, "exists": None if existing is None else real in existing}
-        )
+    directories = []
+    native_home = _native_localai_home(config_dir, name)
+    if native_home is not None:
+        directories = [
+            {"path": str(native_home / sub), "exists": (native_home / sub).is_dir()}
+            for sub in localai_native.DATA_DIRS
+        ]
+    else:
+        existing = _existing_volumes(runner or _docker)
+        for key in volume_keys(repo_root, module):
+            real = f"{project}_{key}"
+            volumes.append(
+                {"key": key, "name": real, "exists": None if existing is None else real in existing}
+            )
     return {
         "module": module.name,
         "profile": module.profile,
         "active": module.profile in _active_profiles(config_dir),
         "volumes": volumes,
+        "directories": directories,
         "settings": {
             "dirs": list(module.env_dirs),
             "root_keys": list(module.root_keys),
@@ -240,12 +267,18 @@ def purge_data(
 
     Refused while the module's profile is still on: its containers hold the volumes, and the
     caller switches the module off first. A volume that is still in use is reported, never
-    forced."""
+    forced. A native LocalAI has directories instead; their absolute paths are returned."""
     module = spec(name)
     if module.profile in _active_profiles(config_dir):
         raise ModuleError(
             f"{module.name} is still switched on; switch it off before deleting its data"
         )
+    native_home = _native_localai_home(config_dir, name)
+    if native_home is not None:
+        try:
+            return [str(path) for path in localai_native.purge_data(native_home)]
+        except OSError as exc:
+            raise ModuleError(f"could not remove the LocalAI data in {native_home}: {exc}") from exc
     run = runner or _docker
     project = _project(config_dir)
     existing = _existing_volumes(run)

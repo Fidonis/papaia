@@ -311,6 +311,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if runtime_problem:
         print(f"ERROR: {runtime_problem}", file=sys.stderr)
         return 3
+    _warn_protected_localai_home(config_dir)
     if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE and (
         runtime_before != localai_native.NATIVE
     ):
@@ -369,6 +370,27 @@ def _localai_runtime_override(config_dir: Path) -> str | None:
     return problem
 
 
+def _warn_protected_localai_home(config_dir: Path) -> None:
+    """The native LocalAI runs as a launchd job, which macOS may deny access to the folders
+    it guards. Only a warning: whether access is denied depends on the Mac's settings."""
+    root = common.parse_env_file(config_dir / ".env")
+    if localai_native.runtime(root) != localai_native.NATIVE:
+        return
+    try:
+        home = localai_native.localai_home(root)
+    except localai_native.InstallError:
+        return
+    folder = localai_native.protected_folder(home)
+    if folder is None:
+        return
+    print(
+        f"WARNING: the native LocalAI keeps its files in {home}, below {folder}. macOS may"
+        " deny its launchd job access to ~/Documents, ~/Desktop and ~/Downloads; a"
+        " workspace outside these folders avoids that.",
+        file=sys.stderr,
+    )
+
+
 def cmd_localai_native_install(args: argparse.Namespace) -> int:
     """The `start` step of the native LocalAI runtime. KEY=VALUE lines on stdout for the
     shell (LOCALAI_NATIVE = off | skipped | installed | unchanged), messages on stderr."""
@@ -393,14 +415,167 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
     print(f"LOCALAI_NATIVE_VERSION={result.version}")
     print(f"LOCALAI_NATIVE_REPLACED={result.replaced or ''}")
     print(f"LOCALAI_NATIVE_SCRIPT={result.script}")
+    # A running job has to be restarted to pick up a new binary or start script.
+    print(f"LOCALAI_NATIVE_RESTART={1 if result.changed or result.script_changed else 0}")
     return 0
 
 
-def cmd_localai_native_probe(args: argparse.Namespace) -> int:
-    """Exit 0 when the native LocalAI answers on /readyz."""
+def _native_job(config_dir: Path) -> tuple[dict[str, str], Path, str] | None:
+    """(root env, home, label) of the native LocalAI, or None when it has no home."""
+    root = common.parse_env_file(config_dir / ".env")
+    try:
+        return root, localai_native.localai_home(root), localai_native.label_for(root)
+    except (localai_native.InstallError, localai_native.LaunchdError) as exc:
+        print(f"WARNING: native LocalAI: {exc}", file=sys.stderr)
+        return None
+
+
+def cmd_localai_native_start(args: argparse.Namespace) -> int:
+    """The `start` step after `docker compose up`: load (or restart) the launchd job and
+    wait for /readyz. A timeout warns with the log path; exit 1 when launchctl fails."""
+    config_dir = Path(args.config_dir)
+    root = common.parse_env_file(config_dir / ".env")
+    if localai_native.runtime(root) != localai_native.NATIVE or "localai" not in (
+        common.cluster_profiles(root)
+    ):
+        return 0
+    supported, why = localai_native.host_supported()
+    if not supported:
+        print(f"WARNING: native LocalAI not started: {why}", file=sys.stderr)
+        return 0
+    job = _native_job(config_dir)
+    if job is None:
+        return 1
+    root, home, label = job
+    if not localai_native.script_path(home).is_file():
+        print(
+            "ERROR: native LocalAI: the start script is missing; run 'papaia-ctl start' again",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = localai_native.start_job(
+            home, label, localai_native.plist_path(label), restart=args.restart
+        )
+    except localai_native.LaunchdError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    words = {
+        "loaded": "LocalAI starts through launchd",
+        "restarted": "LocalAI restarts through launchd",
+        "started": "LocalAI starts through launchd",
+        "running": "LocalAI runs through launchd",
+    }
+    print(f"{words[result.action]} ({label}); log: {result.log}")
+    url = localai_native.probe_url(root, inside_container=False)
+    timeout = args.wait if args.wait is not None else localai_native.READY_TIMEOUT_SECONDS
+    if localai_native.wait_ready(url, timeout):
+        print(f"LocalAI answers on {url}")
+        return 0
+    print(
+        f"WARNING: LocalAI does not answer on {url} after {timeout:g} s. It keeps starting in"
+        " the background (the first start downloads the Metal backend). Log: "
+        f"{result.log}; state: launchctl print {localai_native.service_target(label)}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _launchd_or_skip(root: dict[str, str], verb: str) -> bool:
+    """Whether a stop or uninstall can reach launchd; says why not for the native runtime."""
+    available, why = localai_native.launchd_host()
+    if not available:
+        if localai_native.runtime(root) == localai_native.NATIVE:
+            print(f"WARNING: native LocalAI not {verb}: {why}", file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_localai_native_stop(args: argparse.Namespace) -> int:
+    """Unload and disable the launchd job (before the Compose part of `stop`). With
+    --purge-models also delete the models and backends. Quiet when there is no job."""
+    config_dir = Path(args.config_dir)
+    root = common.parse_env_file(config_dir / ".env")
+    try:
+        label = localai_native.label_for(root)
+    except localai_native.LaunchdError as exc:
+        print(f"WARNING: native LocalAI: {exc}", file=sys.stderr)
+        return 0
+    plist = localai_native.plist_path(label)
+    native = localai_native.runtime(root) == localai_native.NATIVE
+    if not native and not plist.is_file():
+        return 0
+    status_code = 0
+    if _launchd_or_skip(root, "stopped"):
+        try:
+            if localai_native.stop_job(label):
+                print(f"Stopped the native LocalAI ({label})")
+        except localai_native.LaunchdError as exc:
+            print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+            status_code = 1
+    if args.purge_models and native:
+        job = _native_job(config_dir)
+        if job is not None:
+            for path in localai_native.purge_data(job[1]):
+                print(f"Deleted {path}")
+    return status_code
+
+
+def cmd_localai_native_state(args: argparse.Namespace) -> int:
+    """KEY=VALUE lines: the launchd job of this installation. Exit 3 off a Mac."""
     root = common.parse_env_file(Path(args.config_dir) / ".env")
-    url = localai_native.probe_url(root, inside_container=common.in_container())
-    return 0 if localai_native.probe(url) else 1
+    available, why = localai_native.launchd_host()
+    if not available:
+        print(f"ERROR: {why}", file=sys.stderr)
+        return 3
+    try:
+        label = localai_native.label_for(root)
+        job = localai_native.state(label)
+    except localai_native.LaunchdError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    print(f"LABEL={label}")
+    print(f"PLIST={localai_native.plist_path(label)}")
+    print(f"LOADED={'yes' if job.loaded else 'no'}")
+    print(f"STATE={job.state or ''}")
+    print(f"PID={job.pid or ''}")
+    print(f"LAST_EXIT={job.last_exit or ''}")
+    return 0
+
+
+def cmd_localai_native_uninstall(args: argparse.Namespace) -> int:
+    """Stop the job and remove the plist, the script and the binary; with --purge also the
+    models, backends, logs and the directory (`uninstall --clean-up`)."""
+    config_dir = Path(args.config_dir)
+    root = common.parse_env_file(config_dir / ".env")
+    try:
+        label = localai_native.label_for(root)
+    except localai_native.LaunchdError as exc:
+        print(f"WARNING: native LocalAI: {exc}", file=sys.stderr)
+        return 0
+    plist = localai_native.plist_path(label)
+    try:
+        home = localai_native.localai_home(root)
+    except localai_native.InstallError:
+        home = None
+    if localai_native.runtime(root) != localai_native.NATIVE and not plist.is_file():
+        if home is None or not home.is_dir():
+            return 0
+    if not _launchd_or_skip(root, "removed"):
+        return 0
+    try:
+        if home is None:
+            # No home to clean up; the job and its plist still go.
+            localai_native.stop_job(label)
+            plist.unlink(missing_ok=True)
+            return 0
+        removed = localai_native.uninstall(home, label, plist, purge=args.purge)
+    except localai_native.LaunchdError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    for path in removed:
+        print(f"Removed {path}")
+    return 0
 
 
 def cmd_render(args: argparse.Namespace) -> int:
@@ -596,7 +771,8 @@ def cmd_module_purge(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
     for name in removed:
-        print(f"removed volume {name}")
+        # A native LocalAI keeps its data in directories, named by absolute path.
+        print(f"removed {'directory' if name.startswith('/') else 'volume'} {name}")
     for item in touched:
         print(f"reset {item}")
     return 0
@@ -1179,8 +1355,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_native_install = sub.add_parser("localai-native-install")
     p_native_install.set_defaults(func=cmd_localai_native_install)
 
-    p_native_probe = sub.add_parser("localai-native-probe")
-    p_native_probe.set_defaults(func=cmd_localai_native_probe)
+    p_native_start = sub.add_parser("localai-native-start")
+    p_native_start.add_argument("--restart", action="store_true")
+    # Seconds to wait for /readyz; the default is READY_TIMEOUT_SECONDS.
+    p_native_start.add_argument("--wait", type=float, default=None)
+    p_native_start.set_defaults(func=cmd_localai_native_start)
+
+    p_native_stop = sub.add_parser("localai-native-stop")
+    p_native_stop.add_argument("--purge-models", action="store_true")
+    p_native_stop.set_defaults(func=cmd_localai_native_stop)
+
+    p_native_state = sub.add_parser("localai-native-state")
+    p_native_state.set_defaults(func=cmd_localai_native_state)
+
+    p_native_uninstall = sub.add_parser("localai-native-uninstall")
+    p_native_uninstall.add_argument("--purge", action="store_true")
+    p_native_uninstall.set_defaults(func=cmd_localai_native_uninstall)
 
     p_setup = sub.add_parser("setup")
     p_setup.add_argument("--env", default="papaia")
