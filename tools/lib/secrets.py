@@ -26,6 +26,7 @@ SECRET_ALIASES: dict[tuple[str, str], list[tuple[str, str]]] = {
         ("ai/jinaai", "LITELLM_API_KEY"),
         ("ai/rag", "QDRANT_MCP_EMBEDDING_API_KEY"),
         ("ai/rag", "QI_EMBEDDING_API_KEY"),
+        ("ai/knowledge-map", "KM_EMBEDDING_API_KEY"),
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
 }

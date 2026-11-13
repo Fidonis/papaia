@@ -38,7 +38,9 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
         ("litellm", litellm_redirect or f"{app_host}/sso/callback"),
         ("oauth2-proxy", f"{app_host}/oauth2/callback"),
     ]
-    rag_active = "rag" in _active_profiles(root)
+    active_profiles = _active_profiles(root)
+    rag_active = "rag" in active_profiles
+    knowledge_map_active = "knowledge-map" in active_profiles
 
     sep = "─" * 65
     print()
@@ -57,6 +59,13 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
         print("     and an audience mapper for each on the 'librechat' client's access tokens")
         print("   - the realm roles 'qdrant-ingest-operator' (required for the ingest MCP tools)")
         print("     and 'qdrant-admin'")
+        print()
+    if knowledge_map_active:
+        print("   Knowledge map (profile knowledge-map), in the same provider:")
+        print("   - a resource-server client 'mcp-knowledge-map' (no login flows), and an")
+        print("     audience mapper for it on the 'librechat' client's access tokens")
+        print("   - access tokens must carry the realm roles (flat 'roles' claim or")
+        print("     'realm_access.roles') for the role-based map trimming")
         print()
     if needs_edit:
         print("2. Replace REPLACE_WITH_VALID_SECRET in:")

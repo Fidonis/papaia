@@ -1,0 +1,28 @@
+# Knowledge-map declaration of the RAG module (ADR 0012). Collected only while
+# the rag profile is active. Collection-level entries (one per Qdrant
+# collection, from the manager's catalog) are a follow-up; this entry routes to
+# the vector search as a whole.
+sources:
+  - id: rag.qdrant
+    system: "Document search (RAG)"
+    mcp_server: Qdrant
+    coverage: >-
+      Semantic full-text search over the document collections ingested into
+      the vector store (see the manager's Collections page for what is
+      indexed). Good for "where is this written down" questions across
+      documents.
+    topics:
+      - {id: docs.search, label: "Document search", synonyms: [full-text, semantic search]}
+    not_covered:
+      - what: "live records such as customers, tickets or invoices"
+    example_queries:
+      - "find documents about the onboarding process"
+      - "which file mentions the maintenance interval"
+    counter_examples:
+      - "open invoices of customer X"
+    key_tools: [search_collection_by_text]
+    required_roles: []
+    # The qdrant add-on declares the same docs.search capability; when both
+    # are active the core module owns the topic, so routing between the two
+    # near-identical entries is decided instead of guessed.
+    source_of_truth_for: [docs.search]
