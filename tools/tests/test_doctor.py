@@ -1094,6 +1094,19 @@ def test_gpu_collapses_matching_vendor_demands_into_one_probe(stack):
     assert "other_accelerator" not in check.details
 
 
+def test_gpu_voice_fails_below_the_cuda_floor_of_the_tts_image(stack):
+    # The banner names the highest CUDA the driver supports; below the image's
+    # floor the NVIDIA runtime refuses the container, so doctor must say so.
+    enable_voice(stack, "nvidia")
+    banner = "| NVIDIA-SMI 550.120   Driver Version: 550.120   CUDA Version: 12.4 |"
+
+    check = result(run_doctor(stack, docker=nvidia_docker(smi=banner)), "gpu")
+
+    assert check.status == FAIL
+    assert "12.8" in check.summary
+    assert check.details["cuda_version"] == "12.4"
+
+
 def test_gpu_failures_name_the_voice_engine(stack, tmp_path):
     enable_voice(stack, "hipblas")
 

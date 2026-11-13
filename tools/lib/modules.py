@@ -1,4 +1,4 @@
-"""The optional modules (LocalAI, web search, the RAG system, the mail relay): what each owns.
+"""The optional modules (LocalAI, web search, RAG, the mail relay, voice): what each owns.
 
 Switching a module off removes its containers and keeps everything else (`stop --clean-up`,
 then `setup --no-<module>`). Two things can follow, and they are separate on purpose:

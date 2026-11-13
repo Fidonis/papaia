@@ -153,3 +153,14 @@ def test_defaults_report_the_stored_variant_for_the_wizard(repo_root, config_dir
     assert _setup(repo_root, config_dir, "--enable-voice=true", "--voice-variant=hipblas") == 0
 
     assert defaults.compute_defaults(config_dir, repo_root)["VOICE_VARIANT_STICKY"] == "hipblas"
+
+
+def test_the_template_seed_is_not_reported_as_a_sticky_choice(repo_root, config_dir):
+    # Every install materializes VOICE_TTS_IMAGE_VARIANT=cpu from the template.
+    # While voice is off that is a seed, not a choice — reporting it as sticky
+    # would keep the variant prompt from defaulting to the detection
+    # recommendation on the run that first enables voice.
+    assert _setup(repo_root, config_dir) == 0
+
+    assert _stored(config_dir)["VOICE_TTS_IMAGE_VARIANT"] == "cpu"
+    assert defaults.compute_defaults(config_dir, repo_root)["VOICE_VARIANT_STICKY"] == ""

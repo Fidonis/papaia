@@ -62,7 +62,13 @@ _PREFERENCE: tuple[str, ...] = ("nvidia", "amd", "intel", "vulkan", "cpu")
 _VENDOR_INTEL = "0x8086"
 _VENDOR_AMD = "0x1002"
 
-_CUDA_VERSION_RE = re.compile(r"CUDA Version:\s*(\d+)\.")
+_CUDA_VERSION_RE = re.compile(r"CUDA Version:\s*(\d+)\.(\d+)")
+
+# The NVIDIA accelerator image of the voice TTS engine (the -cu128 pin in
+# src/ai/voice/docker-compose.yml) declares NVIDIA_REQUIRE_CUDA=cuda>=12.8,
+# with brand exceptions that do not cover GeForce cards — on a driver below
+# this the NVIDIA runtime refuses the container. Keep in step with the pin.
+VOICE_NVIDIA_MIN_CUDA = (12, 8)
 _LEADING_INT_RE = re.compile(r"^\d+")
 
 # Minimum NVIDIA driver branches per CUDA major, used only when the
@@ -92,6 +98,17 @@ class SlotInfo:
 class Detection:
     slots: dict[str, SlotInfo] = field(default_factory=dict)
     recommended: str = CPU  # variant id
+    # The voice TTS engine speaks a shorter vocabulary (cpu/nvidia/hipblas)
+    # and its nvidia image has a CUDA floor, so its recommendation is derived
+    # here, from the same probe, rather than re-mapped in the wizard.
+    voice_recommended: str = CPU
+    voice_nvidia_warning: str = ""  # set when a found NVIDIA GPU misses the CUDA floor
+
+
+def cuda_version(banner: str) -> tuple[int, int] | None:
+    """major.minor of the "CUDA Version:" line of a plain `nvidia-smi` banner."""
+    match = _CUDA_VERSION_RE.search(banner or "")
+    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -211,13 +228,19 @@ def _cuda_major_from_driver(driver_version: str) -> int | None:
     return None
 
 
-def _detect_nvidia() -> SlotInfo:
+def _detect_nvidia() -> tuple[SlotInfo, tuple[int, int] | None]:
+    """The NVIDIA menu slot, plus the full CUDA version when it is known.
+
+    The second value feeds the voice recommendation's CUDA floor. It comes
+    from the banner's "CUDA Version:" line; when only the driver branch is
+    readable, a 580+ branch proves CUDA 13 while a 12-branch driver's minor
+    stays unknown (None), which the caller treats as below the floor."""
     if shutil.which("nvidia-smi") is None:
-        return SlotInfo(label="no NVIDIA GPU detected")
+        return SlotInfo(label="no NVIDIA GPU detected"), None
 
     query = _run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"])
     if not query or not query.strip():
-        return SlotInfo(label="nvidia-smi present but reported no GPU")
+        return SlotInfo(label="nvidia-smi present but reported no GPU"), None
 
     name, _, driver = query.strip().splitlines()[0].partition(",")
     name = name.strip()
@@ -226,26 +249,25 @@ def _detect_nvidia() -> SlotInfo:
     # The banner's "CUDA Version:" is the highest CUDA the installed driver
     # supports, which is exactly what picks the image. Fall back to the
     # driver branch when the banner is unavailable or reshaped.
-    cuda_major: int | None = None
+    cuda: tuple[int, int] | None = None
     banner = _run(["nvidia-smi"])
     if banner:
-        match = _CUDA_VERSION_RE.search(banner)
-        if match:
-            cuda_major = int(match.group(1))
-    if cuda_major is None:
-        cuda_major = _cuda_major_from_driver(driver)
+        cuda = cuda_version(banner)
+    cuda_major = cuda[0] if cuda is not None else _cuda_major_from_driver(driver)
+    if cuda is None and cuda_major is not None and cuda_major >= 13:
+        cuda = (cuda_major, 0)
 
     if cuda_major is None or cuda_major < 12:
         return SlotInfo(
             label=f"{name} detected, but the driver is older than CUDA 12 (driver {driver})"
-        )
+        ), None
 
     variant = NVIDIA_CUDA_13 if cuda_major >= _MAX_CUDA_MAJOR else NVIDIA_CUDA_12
     label = f"{name}, driver {driver}, CUDA {min(cuda_major, _MAX_CUDA_MAJOR)}"
     warning = ""
     if not _nvidia_runtime_available():
         warning = "NVIDIA Container Toolkit not found - install it before starting the stack"
-    return SlotInfo(variant=variant, label=label, warning=warning)
+    return SlotInfo(variant=variant, label=label, warning=warning), cuda
 
 
 def _nvidia_runtime_available() -> bool:
@@ -291,8 +313,9 @@ def detect(
     and CPU is always available as the floor.
     """
     vendors = _drm_vendors(sys_class_drm)
+    nvidia, nvidia_cuda = _detect_nvidia()
     slots = {
-        "nvidia": _detect_nvidia(),
+        "nvidia": nvidia,
         "amd": _detect_amd(vendors, dev_root),
         "intel": _detect_intel(vendors, dev_root),
         "vulkan": _detect_vulkan(dev_root),
@@ -305,7 +328,34 @@ def detect(
             recommended = slots[slot].variant
             break
 
-    return Detection(slots=slots, recommended=recommended)
+    # The voice recommendation applies the CUDA floor of the TTS engine's
+    # nvidia image: a usable-for-LocalAI GPU below it gets a warning and no
+    # recommendation, because the runtime would refuse that container.
+    voice_recommended = CPU
+    voice_nvidia_warning = ""
+    if nvidia.available:
+        if nvidia_cuda is not None and nvidia_cuda >= VOICE_NVIDIA_MIN_CUDA:
+            voice_recommended = "nvidia"
+        else:
+            floor = ".".join(str(part) for part in VOICE_NVIDIA_MIN_CUDA)
+            seen = (
+                f"this driver reports CUDA {nvidia_cuda[0]}.{nvidia_cuda[1]}"
+                if nvidia_cuda is not None
+                else "this driver's CUDA minor version could not be read"
+            )
+            voice_nvidia_warning = (
+                f"the TTS accelerator image needs CUDA >= {floor} and {seen}"
+                " - the NVIDIA runtime would refuse the container"
+            )
+    if voice_recommended == CPU and slots["amd"].available:
+        voice_recommended = HIPBLAS
+
+    return Detection(
+        slots=slots,
+        recommended=recommended,
+        voice_recommended=voice_recommended,
+        voice_nvidia_warning=voice_nvidia_warning,
+    )
 
 
 def detection_vars(detection: Detection) -> dict[str, str]:
@@ -321,4 +371,6 @@ def detection_vars(detection: Detection) -> dict[str, str]:
         out[f"{prefix}_LABEL"] = info.label
         out[f"{prefix}_WARN"] = info.warning
     out["LOCALAI_VARIANT_RECOMMENDED"] = detection.recommended
+    out["VOICE_VARIANT_RECOMMENDED"] = detection.voice_recommended
+    out["VOICE_VARIANT_NVIDIA_WARN"] = detection.voice_nvidia_warning
     return out

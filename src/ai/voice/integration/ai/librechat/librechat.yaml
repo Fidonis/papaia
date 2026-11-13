@@ -30,7 +30,12 @@ speech:
       # with enough CPU headroom (or on a GPU image, `setup --voice-variant`)
       # switches to "external" under Settings → Speech.
       engineTTS: "browser"
-      automaticPlayback: true
+      # LibreChat's own default. On, it reads EVERY finished reply aloud,
+      # typed conversations included — and with the browser engine the German
+      # reference voice below does not exist, so the browser substitutes its
+      # first local voice, which need not speak German. Users who want the
+      # hands-free loop switch it on under Settings → Speech.
+      automaticPlayback: false
       # Takes effect when a user switches to the external engine. Must name an
       # entry of tts.openai.voices below, or LibreChat picks a random voice
       # per user.

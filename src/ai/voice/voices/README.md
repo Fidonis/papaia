@@ -24,3 +24,11 @@ the filename in the LibreChat fragment (`integration/ai/librechat/`) so users
 can pick it. Note the GDPR angle documented in ADR 0011: a voice is personal
 data, so clone only voices whose speaker has consented or whose recording is
 free of such claims — like these public-domain audiobook narrations.
+
+One more consideration for the shipped defaults: public domain covers the
+*recordings*, yet the readers remain identifiable people, and personality
+rights over a cloned voice are a younger question than copyright. The clips
+stay reasonable defaults for a self-hosted stack — the engine watermarks its
+output, and nothing here impersonates the readers — but a deployment that is
+sensitive about this should replace them with a consented in-house recording
+(see above; it is a one-file swap plus two config lines).

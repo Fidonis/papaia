@@ -1760,7 +1760,7 @@ offline. An interrupted download is resumed on the next start. For an air-gapped
 run the first start on a connected network or copy a populated
 `speaches-hf-cache` / `chatterbox-hf-cache` volume over. On a CPU-only host, speech-to-text is
 fast enough for dictation; text-to-speech lags behind real time, which is why spoken replies
-default to the browser engine (see above). With `--voice-variant nvidia` (CUDA) or `hipblas`
+default to the browser engine (see above). With `--voice-variant=nvidia` (CUDA) or `--voice-variant=hipblas`
 (ROCm) the TTS engine runs on the GPU through a generated override in
 `$PAPAIA_CONFIG_DIR/overrides/` — the same mechanism as the LocalAI accelerator images, with the
 same host prerequisites (driver plus, for NVIDIA, the Container Toolkit). Both engines process

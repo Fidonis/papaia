@@ -189,7 +189,8 @@ cmd_setup() {
         local voice_effective="${voice:-${VOICE_STICKY:-false}}"
         if [ "$voice_effective" = "true" ]; then
             load_localai_variants
-            voice_variant="$(_voice_variant_from "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
+            voice_variant="${VOICE_VARIANT_RECOMMENDED:-cpu}"
+            [ -n "${VOICE_VARIANT_NVIDIA_WARN:-}" ] && warn "$VOICE_VARIANT_NVIDIA_WARN"
             info "Detected voice TTS image variant: $voice_variant"
         else
             voice_variant=""
@@ -873,16 +874,6 @@ _prompt_localai_variant() {
     printf '%s' "$variant"
 }
 
-# Maps a LocalAI variant id (detection speaks that vocabulary) onto the voice
-# TTS catalogue, which only has CUDA and ROCm accelerator builds.
-_voice_variant_from() {
-    case "$1" in
-        nvidia-cuda-12|nvidia-cuda-13) printf 'nvidia' ;;
-        hipblas)                       printf 'hipblas' ;;
-        *)                             printf 'cpu' ;;
-    esac
-}
-
 # Asks which image the voice TTS engine should run on. The catalogue is
 # shorter than LocalAI's -- upstream publishes only CUDA-12.8 and ROCm
 # accelerator builds of the pinned commit. Everything the operator sees goes
@@ -892,10 +883,11 @@ _prompt_voice_variant() {
     # Normally a no-op; see _prompt_localai_variant.
     load_localai_variants
 
-    # The sticky choice wins; otherwise the detection recommendation decides,
-    # mapped through the same table the --voice-variant=auto path uses.
+    # The sticky choice wins; otherwise the detection recommendation decides
+    # (VOICE_VARIANT_RECOMMENDED, the value --voice-variant=auto resolves to;
+    # it already applies the CUDA floor of the nvidia image).
     local default_variant="${VOICE_VARIANT_STICKY:-}"
-    [ -n "$default_variant" ] || default_variant="$(_voice_variant_from "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
+    [ -n "$default_variant" ] || default_variant="${VOICE_VARIANT_RECOMMENDED:-cpu}"
     local default_slot
     case "$default_variant" in
         nvidia)  default_slot="1" ;;
@@ -909,8 +901,11 @@ _prompt_voice_variant() {
     printf '  prerequisites in place already (NVIDIA: driver + Container Toolkit;\n' >&2
     printf '  AMD: ROCm kernel driver); the stack does not install them.\n\n' >&2
 
+    # The voice-specific warning (the CUDA floor of the TTS image) outranks
+    # the generic toolkit warning when both would apply.
     _localai_variant_option 1 "NVIDIA GPU (CUDA)" \
-        "${LOCALAI_VARIANT_NVIDIA:-}" "${LOCALAI_VARIANT_NVIDIA_LABEL:-}" "${LOCALAI_VARIANT_NVIDIA_WARN:-}"
+        "${LOCALAI_VARIANT_NVIDIA:-}" "${LOCALAI_VARIANT_NVIDIA_LABEL:-}" \
+        "${VOICE_VARIANT_NVIDIA_WARN:-${LOCALAI_VARIANT_NVIDIA_WARN:-}}"
     _localai_variant_option 2 "AMD GPU (ROCm)" \
         "${LOCALAI_VARIANT_AMD:-}" "${LOCALAI_VARIANT_AMD_LABEL:-}" "${LOCALAI_VARIANT_AMD_WARN:-}"
     _localai_variant_option 3 "CPU only" \

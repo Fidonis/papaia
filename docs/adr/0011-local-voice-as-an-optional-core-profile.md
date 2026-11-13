@@ -124,7 +124,11 @@ Security posture:
   image's English samples — and nothing in the stack calls the cloning endpoints; a
   compromised container inside the network could. Voice biometrics
   are special-category data, so the README tells operators to record the feature in
-  their processing register.
+  their processing register. The shipped clips are narrations by identifiable
+  LibriVox readers: public domain covers the recordings, while personality rights
+  over a cloned voice are a younger question — `src/ai/voice/voices/README.md`
+  spells out the consideration and the one-file swap for deployments that would
+  rather clone a consented in-house recording.
 - Model downloads happen once, from huggingface.co, with HF telemetry disabled and
   the flaky Xet transfer path turned off — the single documented exception to the
   one-egress-point rule, and avoidable by pre-seeding the cache volumes (air-gap

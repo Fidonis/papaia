@@ -74,10 +74,11 @@ services:
     volumes:
       - speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub
     healthcheck:
-      # /health sits behind the same bearer auth as every other route. An empty
-      # API_KEY would start speaches with auth DISABLED (the profile was enabled
-      # by hand before setup seeded ai/voice/.env), so the check fails first on
-      # the missing key — an open engine must show up as unhealthy, not as fine.
+      # /health sits behind the same bearer auth as every other route. With an
+      # empty API_KEY (the profile was enabled by hand before setup seeded
+      # ai/voice/.env) speaches treats the empty string as the required key and
+      # refuses every request, so the check fails first on the missing key — an
+      # engine that can serve nobody must show up as unhealthy, not as fine.
       test: ["CMD-SHELL", "[ -n \"$$API_KEY\" ] && curl -fsS -H \"Authorization: Bearer $$API_KEY\" http://127.0.0.1:8000/health || exit 1"]
       interval: 15s
       timeout: 5s

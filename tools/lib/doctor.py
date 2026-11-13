@@ -1218,6 +1218,24 @@ def _gpu_voice(ctx: Context, covered: str | None = None) -> CheckResult | None:
             details,
         )
     if variant == "nvidia":
+        # The nvidia image carries a CUDA floor the runtime enforces (see
+        # gpu_detect.VOICE_NVIDIA_MIN_CUDA); the banner names the highest
+        # CUDA the driver supports. An unreadable banner is not held against
+        # the host — the generic probe below still judges driver and runtime.
+        banner = ctx.run(["nvidia-smi"], GPU_PROBE_TIMEOUT_SECONDS)
+        cuda = gpu_detect.cuda_version(banner.stdout) if banner.returncode == 0 else None
+        if cuda is not None:
+            details["cuda_version"] = f"{cuda[0]}.{cuda[1]}"
+            if cuda < gpu_detect.VOICE_NVIDIA_MIN_CUDA:
+                floor = ".".join(str(part) for part in gpu_detect.VOICE_NVIDIA_MIN_CUDA)
+                return CheckResult(
+                    name,
+                    FAIL,
+                    f"the driver supports CUDA {cuda[0]}.{cuda[1]}, but the voice TTS"
+                    f" accelerator image needs >= {floor} — the NVIDIA runtime refuses"
+                    " the container",
+                    details,
+                )
         return _gpu_nvidia(ctx, variant, details, subject="the voice TTS engine")
     return _gpu_amd(ctx, details, subject="the voice TTS engine")
 
