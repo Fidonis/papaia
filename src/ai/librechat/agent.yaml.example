@@ -8,12 +8,17 @@ provider: Private-LLM            # must match a configured LLM endpoint
 model: qwen2.5-1.5b-instruct
 author_email: admin@example.com  # optional; falls back to the ADMIN user
 is_collaborative: true           # optional; default: true (every user can view and use it);
-                                 # false: only the author
+                                 # false: only the author. The share with everyone is set again
+                                 # on every start, so a change to it in the LibreChat UI does not
+                                 # last; shares with single users or groups stay.
 instructions: |
   You have access to Paperless-ngx via the MCP tool.
   Help with searching, categorising, and tagging documents.
 mcpServers:
   - Paperless                    # must match a configured MCP server
-tools: []
+tools: []                       # empty: every tool of the servers above; or pick single tools
+                                # (<tool>_mcp_<server>, e.g. list_documents_mcp_Paperless) — a
+                                # small selection keeps the tool prompt short, which helps
+                                # small local models
 model_parameters:
   temperature: 0.3
