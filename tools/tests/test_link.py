@@ -66,6 +66,16 @@ def test_dmz_edge_keeps_keycloak_internal():
     assert "auth.example.org" not in plan.for_node("edge").aliases
 
 
+def test_voice_engines_on_another_node_than_litellm_get_their_routes():
+    plan = link.plan(two_nodes(litellm="edge"), [*ALL_PROFILES, "voice"], ENV)
+    edge = plan.for_node("edge")
+    assert {"speaches", "chatterbox"} <= set(edge.aliases)
+    routes = {r.host: (r.port, r.target_node) for r in edge.routes}
+    assert routes["speaches"] == (8000, "internal")
+    assert routes["chatterbox"] == (8004, "internal")
+    assert {"speaches", "chatterbox"} <= set(plan.for_node("internal").inbound)
+
+
 def test_the_public_auth_host_leads_to_the_proxy_port_443():
     plan = link.plan(split(), ALL_PROFILES, ENV)
     host, port, clients = plan.for_node("edge").inbound["auth.example.org"]

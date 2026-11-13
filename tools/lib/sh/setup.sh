@@ -30,7 +30,18 @@ load_defaults() { _load_kv defaults; }
 # LocalAI accelerator detection (LOCALAI_VARIANT_NVIDIA, ..._LABEL, ..._WARN,
 # LOCALAI_VARIANT_RECOMMENDED). Loaded lazily: it forks nvidia-smi and docker,
 # so it must not run on every setup invocation the way load_defaults does.
-load_localai_variants() { _load_kv localai-variants; }
+load_localai_variants() {
+    # The GPU probe is a user-visible multi-second wait and its result cannot
+    # change within one setup run, so one probe serves every caller (the
+    # LocalAI prompt, the voice prompt, and both --*-variant=auto paths).
+    # Callers in a $(...) subshell inherit the parent's cache but cannot fill
+    # it — cmd_setup therefore probes in the parent before those prompts. The
+    # message goes to stderr so a subshell's captured stdout stays clean.
+    [[ -n "${LOCALAI_VARIANTS_LOADED:-}" ]] && return 0
+    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    _load_kv localai-variants
+    LOCALAI_VARIANTS_LOADED=1
+}
 
 cmd_setup() {
     local orig_argc=$#
@@ -39,7 +50,7 @@ cmd_setup() {
     local qdrant_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" localai_variant="" manager="" rag="" reranker_model="" backup_dir=""
+    local web_search="" local_ai="" localai_variant="" manager="" rag="" voice="" voice_variant="" reranker_model="" backup_dir=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
@@ -97,6 +108,16 @@ cmd_setup() {
                         ;;
                 esac
                 ;;
+            --voice-variant=*)
+                voice_variant="${1#*=}"
+                case "$voice_variant" in
+                    cpu|nvidia|hipblas|auto) : ;;
+                    *)
+                        error "Invalid --voice-variant value: '$voice_variant' (must be 'cpu', 'nvidia', 'hipblas', or 'auto')"
+                        exit 2
+                        ;;
+                esac
+                ;;
             --litellm-host=*) litellm_host="${1#*=}" ;;
             --manager) manager="true" ;;
             --no-manager) manager="false" ;;
@@ -104,6 +125,8 @@ cmd_setup() {
             --rag) rag="true" ;;
             --no-rag) rag="false" ;;
             --qdrant-host=*) qdrant_host="${1#*=}" ;;
+            --voice) voice="true" ;;
+            --no-voice) voice="false" ;;
             --smtp) smtp="true" ;;
             --no-smtp) smtp="false" ;;
             --smtp-host=*) smtp_host="${1#*=}" ;;
@@ -155,10 +178,23 @@ cmd_setup() {
     # Resolved here rather than in Python so the CLI contract downstream only
     # ever carries a concrete variant, and so the probe stays opt-in.
     if [ "$localai_variant" = "auto" ]; then
-        info "Detecting available GPU accelerators, this can take a few seconds..."
         load_localai_variants
         localai_variant="${LOCALAI_VARIANT_RECOMMENDED:-cpu}"
         info "Detected LocalAI image variant: $localai_variant"
+    fi
+    if [ "$voice_variant" = "auto" ]; then
+        # The probe is pointless on a host that will not run the TTS engine:
+        # resolve `auto` only when voice is (or stays) enabled, and let an
+        # interactive enable fall through to the variant prompt instead.
+        local voice_effective="${voice:-${VOICE_STICKY:-false}}"
+        if [ "$voice_effective" = "true" ]; then
+            load_localai_variants
+            voice_variant="${VOICE_VARIANT_RECOMMENDED:-cpu}"
+            [ -n "${VOICE_VARIANT_NVIDIA_WARN:-}" ] && warn "$VOICE_VARIANT_NVIDIA_WARN"
+            info "Detected voice TTS image variant: $voice_variant"
+        else
+            voice_variant=""
+        fi
     fi
 
     if [ "$env_only" -eq 1 ]; then
@@ -227,6 +263,13 @@ cmd_setup() {
             info "  RAG System        = $_rag_label"
             [ "$RAG_STICKY" = "true" ] && [ -n "${QDRANT_HOST_STICKY:-}" ] && \
                 info "  Qdrant URL        = $QDRANT_HOST_STICKY"
+        fi
+        if [ -n "${VOICE_STICKY:-}" ]; then
+            local _voice_label="disabled"
+            [ "$VOICE_STICKY" = "true" ] && _voice_label="enabled"
+            info "  Voice (STT/TTS)   = $_voice_label"
+            [ "$VOICE_STICKY" = "true" ] && [ -n "${VOICE_VARIANT_STICKY:-}" ] && \
+                info "  Voice TTS Image   = $VOICE_VARIANT_STICKY"
         fi
         if [ -n "${SMTP_STICKY:-}" ]; then
             local _smtp_label="disabled"
@@ -387,6 +430,10 @@ cmd_setup() {
                 "LOCALAI_PUBLIC_URL" "$localai_default")"
         fi
         if [ "$local_ai" = "true" ] && [ -z "$localai_variant" ]; then
+            # Probed in the parent shell: the prompt's $(...) subshell inherits
+            # the result, and a later voice prompt reuses it instead of probing
+            # again (the cache flag cannot escape a subshell).
+            load_localai_variants
             localai_variant="$(_prompt_localai_variant)"
         fi
         if [ -z "$manager" ]; then
@@ -424,6 +471,29 @@ cmd_setup() {
             qdrant_host="$(prompt_field "Public URL of the Qdrant database" \
                 "Where browsers reach Qdrant (REST API; the dashboard is under /dashboard)." \
                 "QDRANT_PUBLIC_URL" "$qdrant_default")"
+        fi
+        if [ -z "$voice" ]; then
+            # Off for a fresh install: the engines add several GB of RAM and model
+            # downloads. A previous opt-in stays the default so a re-run does not flip it.
+            local voice_default="2"
+            [ "${VOICE_STICKY:-}" = "true" ] && voice_default="1"
+            printf '\n%sInstall Voice (speech-to-text and text-to-speech)%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — run local STT and TTS engines, wired into LibreChat and LiteLLM\n' >&2
+            printf '  2) No   — skip the voice engines (default)\n' >&2
+            local voice_choice
+            voice_choice="$(prompt_with_default "  Choose" "$voice_default")"
+            case "$voice_choice" in
+                1|[Yy]|[Yy]es|YES) voice="true" ;;
+                2|[Nn]|[Nn]o|NO)   voice="false" ;;
+                *)
+                    warn "Unrecognized choice '$voice_choice'; defaulting to disabled."
+                    voice="false"
+                    ;;
+            esac
+        fi
+        if [ "$voice" = "true" ] && [ -z "$voice_variant" ]; then
+            load_localai_variants
+            voice_variant="$(_prompt_voice_variant)"
         fi
         if [ -z "$smtp" ]; then
             # Off for a fresh install: the relay needs a mail server only the operator
@@ -503,8 +573,16 @@ cmd_setup() {
     [ -n "$smtp_from" ] && SETUP_SMTP_ARGS+=(--smtp-from="$smtp_from")
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
+    # A variant is a property of the enabled profile: when voice ends up off
+    # (an explicit --no-voice, a No at the prompt, or an untouched sticky
+    # opt-out), no probed or flagged variant may be stored as a choice.
+    local voice_final="${voice:-${VOICE_STICKY:-false}}"
+    if [ "$voice_final" != "true" ] && [ -n "$voice_variant" ]; then
+        warn "--voice-variant is ignored while the voice profile is disabled."
+        voice_variant=""
+    fi
     local setup_rc=0
-    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" || setup_rc=$?
+    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$voice" "$voice_variant" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
     if [ "$setup_rc" -eq 4 ]; then
         # SETUP_REFUSED: a request that does not fit this installation (a topology for an
@@ -734,10 +812,10 @@ _prompt_manager() {
 # Asks which LocalAI accelerator image to install. Everything the operator sees
 # goes to stderr; only the chosen variant id reaches stdout.
 _prompt_localai_variant() {
-    # Announced before the probe, not after: it shells out to nvidia-smi and
-    # docker info, which takes long enough on a cold host to look like a hang.
     printf '\n%sLocalAI Image%s\n' "$CYAN" "$NC" >&2
-    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    # Normally a no-op: cmd_setup probes in the parent shell before this
+    # subshell, so the flag survives for the voice prompt. The call stays as
+    # the safety net for a caller that did not.
     load_localai_variants
 
     local default_slot
@@ -796,6 +874,63 @@ _prompt_localai_variant() {
     printf '%s' "$variant"
 }
 
+# Asks which image the voice TTS engine should run on. The catalogue is
+# shorter than LocalAI's -- upstream publishes only CUDA-12.8 and ROCm
+# accelerator builds of the pinned commit. Everything the operator sees goes
+# to stderr; only the chosen variant id reaches stdout.
+_prompt_voice_variant() {
+    printf '\n%sVoice TTS Image%s\n' "$CYAN" "$NC" >&2
+    # Normally a no-op; see _prompt_localai_variant.
+    load_localai_variants
+
+    # The sticky choice wins; otherwise the detection recommendation decides
+    # (VOICE_VARIANT_RECOMMENDED, the value --voice-variant=auto resolves to;
+    # it already applies the CUDA floor of the nvidia image).
+    local default_variant="${VOICE_VARIANT_STICKY:-}"
+    [ -n "$default_variant" ] || default_variant="${VOICE_VARIANT_RECOMMENDED:-cpu}"
+    local default_slot
+    case "$default_variant" in
+        nvidia)  default_slot="1" ;;
+        hipblas) default_slot="2" ;;
+        *)       default_slot="3" ;;
+    esac
+
+    printf '\n  On the CPU the TTS engine is slower than real time, so spoken replies in\n' >&2
+    printf '  LibreChat default to the browser voice. A GPU makes the local voice fast\n' >&2
+    printf '  enough for live playback. The GPU images need the matching host\n' >&2
+    printf '  prerequisites in place already (NVIDIA: driver + Container Toolkit;\n' >&2
+    printf '  AMD: ROCm kernel driver); the stack does not install them.\n\n' >&2
+
+    # The voice-specific warning (the CUDA floor of the TTS image) outranks
+    # the generic toolkit warning when both would apply.
+    _localai_variant_option 1 "NVIDIA GPU (CUDA)" \
+        "${LOCALAI_VARIANT_NVIDIA:-}" "${LOCALAI_VARIANT_NVIDIA_LABEL:-}" \
+        "${VOICE_VARIANT_NVIDIA_WARN:-${LOCALAI_VARIANT_NVIDIA_WARN:-}}"
+    _localai_variant_option 2 "AMD GPU (ROCm)" \
+        "${LOCALAI_VARIANT_AMD:-}" "${LOCALAI_VARIANT_AMD_LABEL:-}" "${LOCALAI_VARIANT_AMD_WARN:-}"
+    _localai_variant_option 3 "CPU only" \
+        "${LOCALAI_VARIANT_CPU:-cpu}" "${LOCALAI_VARIANT_CPU_LABEL:-runs on any hardware}" ""
+
+    local choice variant
+    choice="$(prompt_with_default "  Choose" "$default_slot")"
+    case "$choice" in
+        1|nvidia)
+            variant="nvidia"
+            [ -z "${LOCALAI_VARIANT_NVIDIA:-}" ] && _localai_variant_unverified "An NVIDIA GPU"
+            ;;
+        2|amd|hipblas)
+            variant="hipblas"
+            [ -z "${LOCALAI_VARIANT_AMD:-}" ] && _localai_variant_unverified "An AMD GPU with ROCm"
+            ;;
+        3|cpu) variant="cpu" ;;
+        *)
+            warn "Unrecognized choice '$choice'; defaulting to the CPU image."
+            variant="cpu"
+            ;;
+    esac
+    printf '%s' "$variant"
+}
+
 _derive_manager_default() {
     # Best-effort bash-side prefill for the papaia-manager URL prompt; the
     # authoritative derivation lives in resolve.derive_manager_url_default.
@@ -830,7 +965,7 @@ _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
     local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}" localai_variant="${21:-}"
-    local rag="${22:-}" qdrant_host="${23:-}"
+    local rag="${22:-}" qdrant_host="${23:-}" voice="${24:-}" voice_variant="${25:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -849,6 +984,8 @@ _run_setup_py() {
     [ -n "$localai_variant" ] && extra+=(--localai-variant="$localai_variant")
     [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$rag" ] && extra+=(--enable-rag="$rag")
+    [ -n "$voice" ] && extra+=(--enable-voice="$voice")
+    [ -n "$voice_variant" ] && extra+=(--voice-variant="$voice_variant")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
     [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")

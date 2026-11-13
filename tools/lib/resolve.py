@@ -49,6 +49,9 @@ class SetupArgs:
     localai_variant: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
+    enable_voice: bool | None = None  # None = sticky / no change
+    # Voice TTS accelerator image variant ("cpu", "nvidia", "hipblas"); None = sticky
+    voice_variant: str | None = None
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
     enable_smtp: bool | None = None
     smtp_host: str | None = None  # upstream mail server host
@@ -748,6 +751,16 @@ def _refuse_conflicting_rag_addons(config_dir: Path) -> None:
         )
 
 
+def _toggle_profile(tree: EnvTree, name: str, enabled: bool) -> EnvTree:
+    """Add or remove one Compose profile in COMPOSE_PROFILES, keeping the others."""
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != name]
+    if enabled:
+        profiles.append(name)
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
 def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Add or remove the `rag` Compose profile based on the operator's choice.
 
@@ -758,11 +771,28 @@ def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
         return tree
     if args.enable_rag:
         _refuse_conflicting_rag_addons(args.config_dir)
-    root = tree.setdefault("", {})
-    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "rag"]
-    if args.enable_rag:
-        profiles.append("rag")
-    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return _toggle_profile(tree, "rag", args.enable_rag)
+
+
+def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `voice` Compose profile based on the operator's choice.
+
+    When `enable_voice` is None the call is a no-op -- whatever was already written to
+    COMPOSE_PROFILES on a prior run is preserved (sticky)."""
+    if args.enable_voice is None:
+        return tree
+    return _toggle_profile(tree, "voice", args.enable_voice)
+
+
+def resolve_voice_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write VOICE_TTS_IMAGE_VARIANT into the root env when the operator chose one.
+
+    Same contract as resolve_localai_variant: only the variant id is stored,
+    the image pins stay in ai/voice/docker-compose.yml, and None preserves
+    whatever a prior run wrote (sticky)."""
+    if args.voice_variant is None:
+        return tree
+    tree.setdefault("", {})["VOICE_TTS_IMAGE_VARIANT"] = args.voice_variant
     return tree
 
 

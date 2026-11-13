@@ -102,6 +102,8 @@ EDGES: tuple[Edge, ...] = (
     Edge("nginx", "rag", "qdrant", 6333, "public Qdrant URL", required=False),
     Edge("litellm", "keycloak", "keycloak", 8443, "admin UI sign-in", required=False),
     Edge("litellm", "localai", "localai", 8080, "local models", required=False),
+    Edge("litellm", "voice", "speaches", 8000, "speech-to-text", required=False),
+    Edge("litellm", "voice", "chatterbox", 8004, "text-to-speech", required=False),
     Edge("localai", "keycloak", "keycloak", 8443, "API sign-in", required=False),
     Edge("websearch", "litellm", "litellm", 4000, "reranking and extraction", required=False),
     Edge("rag", "litellm", "litellm", 4000, "embeddings"),

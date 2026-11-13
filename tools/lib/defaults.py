@@ -89,6 +89,15 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
             ("true" if "manager" in profiles else "false") if config_seeded else ""
         ),
         "RAG_STICKY": (("true" if "rag" in profiles else "false") if config_seeded else ""),
+        "VOICE_STICKY": (("true" if "voice" in profiles else "false") if config_seeded else ""),
+        # Only a value chosen while the profile was on counts as a choice: the
+        # template seeds cpu on every install, and that seed must not keep the
+        # variant prompt from defaulting to the detection recommendation.
+        "VOICE_VARIANT_STICKY": (
+            root.get("VOICE_TTS_IMAGE_VARIANT", "")
+            if config_seeded and "voice" in profiles
+            else ""
+        ),
         "SMTP_STICKY": (
             ("true" if smtp.PROFILE in profiles else "false") if config_seeded else ""
         ),

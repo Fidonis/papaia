@@ -1,0 +1,48 @@
+# LiteLLM routes of the voice profile. render_core appends these entries to
+# the model_list in ai/litellm/config.yaml only while the `voice` profile is
+# active. Through them the engines are usable outside LibreChat as well: any
+# holder of a LiteLLM virtual key can call /v1/audio/transcriptions and
+# /v1/audio/speech on the LiteLLM endpoint, with spend tracking attached.
+# Prompt contents stay out of the spend logs (store_prompts_in_spend_logs
+# keeps its off default).
+model_list:
+  - model_name: voice-stt
+    litellm_params:
+      # Everything after `openai/` is the model id speaches serves — a
+      # faster-whisper conversion published under an explicit MIT license.
+      # It must stay equal to VOICE_STT_MODEL in ai/voice/.env (the id the
+      # init container installs). Swapping the model: set VOICE_STT_MODEL,
+      # add a route for the new id under a NEW model name through the
+      # overlay (model_list entries merge additively — an overlay entry
+      # named voice-stt would load-balance against this one, not replace
+      # it), and point speech.stt.openai.model in the librechat overlay at
+      # that name.
+      model: openai/deepdml/faster-whisper-large-v3-turbo-ct2
+      api_base: http://speaches:8000/v1
+      api_key: os.environ/VOICE_API_KEY
+    model_info:
+      mode: audio_transcription
+      # Hidden from the model listings by the papaia_hooks callback (see
+      # ai/litellm/config.yaml): without it the route shows up as a
+      # selectable chat model in LibreChat and fails on first message.
+      # The route itself stays fully callable.
+      discoverable: false
+
+  - model_name: voice-tts
+    litellm_params:
+      # The TTS server ignores the model name; the route exists for the
+      # OpenAI-shaped request. mp3 is pinned because LibreChat's streaming
+      # player handles only audio/mpeg — the engine's own default is wav.
+      model: openai/tts-1
+      api_base: http://chatterbox:8004/v1
+      api_key: not-needed
+      response_format: mp3
+    model_info:
+      # audio_speech is LiteLLM's TTS probe mode; anything else makes
+      # /health test this route with a chat completion, which the engine
+      # cannot serve. The probe synthesizes with the named voice (its
+      # fallback "alloy" only exists on OpenAI), so on the CPU image a
+      # /health call takes as long as one short synthesis.
+      mode: audio_speech
+      health_check_voice: Karlsson.wav
+      discoverable: false

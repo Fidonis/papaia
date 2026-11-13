@@ -89,6 +89,20 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
   lives next to it in `localai/models/`. Both are render targets, so an
   `overlay/` copy survives every upgrade.
 
+### voice — local speech-to-text and text-to-speech
+
+- Profile: `voice`
+- Images: `ghcr.io/speaches-ai/speaches` (Whisper STT) and
+  `ghcr.io/devnen/chatterbox-tts-server` (Chatterbox Multilingual TTS), both
+  digest-pinned CPU builds
+- No published ports: LiteLLM fronts both as the models `voice-stt` and
+  `voice-tts`, and LibreChat's speech panel goes through those routes. The STT
+  engine requires a bearer key (`VOICE_API_KEY`); the TTS engine has no auth of
+  its own and relies on the network boundary — see ADR 0011.
+- The transcription model id lives in the LiteLLM route fragment; the TTS
+  server is configured through `voice/chatterbox.yaml`. Both are render
+  targets, so an `overlay/` copy survives every upgrade.
+
 ### mcp-firecrawl — Firecrawl MCP bridge
 
 - Profile: `librechat-websearch`
