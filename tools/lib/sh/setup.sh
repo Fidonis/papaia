@@ -539,7 +539,7 @@ _installation_exists() {
 _prompt_topology() {
     printf '\n%sWhere does papAIa run?%s\n' "$CYAN" "$NC" >&2
     printf '  1) On this machine (default)\n' >&2
-    printf '  2) On two machines (experimental) — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
+    printf '  2) On two machines — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
     printf '     (for more machines, pass --node per machine or --topology-file to setup)\n' >&2
     local choice
     choice="$(prompt_with_default "  Choose" "1")"
@@ -590,8 +590,6 @@ _prompt_topology() {
 _setup_distributed() {
     local non_interactive="$1"
     py_cli topology-project >/dev/null
-    warn "The distributed mode is experimental: it has not yet been checked on real machines"
-    warn "  (docs/distributed-validation.md). Evaluate it before you run it in production."
     info "Topology:"
     py_cli topology-show
     info "Connections between the nodes (open these in the firewalls; papaia-ctl does not):"

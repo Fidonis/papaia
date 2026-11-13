@@ -151,8 +151,27 @@ Linux host:
 
   A local CA that `setup` creates can only sign for Keycloak's names (`keycloak`,
   `localhost`, `host.docker.internal`), and its key `certs/local-ca.key` is readable by
-  its owner only. A CA from an earlier release keeps working without that limit; delete
-  `certs/` and run `setup` again to replace it, then trust the new one.
+  its owner only. A CA from an earlier release keeps working without that limit. To
+  replace it:
+
+  1. Delete `$PAPAIA_CONFIG_DIR/certs/` and run `setup` again.
+  2. Restart the stack with `papaia-ctl stop` and `papaia-ctl start`, so that Keycloak
+     and the containers that read `local-ca.crt` pick up the new files.
+  3. Remove the trust of the old CA from the login keychain. Both CAs are named
+     `papaia-local-ca`, and a trust added by an earlier release covers every policy, not
+     only TLS. List the certificates with that name and their SHA-1 hashes, then delete the
+     old one by its hash (the new one's hash is shown by
+     `openssl x509 -noout -fingerprint -sha1 -in "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"`):
+
+     ```bash
+     security find-certificate -a -c papaia-local-ca -Z ~/Library/Keychains/login.keychain-db
+     security delete-certificate -t -Z <SHA-1 of the old CA> ~/Library/Keychains/login.keychain-db
+     ```
+
+  4. Trust the new CA with the `security add-trusted-cert` command above.
+
+  An add-on that issues certificates with this CA for names other than these three is
+  affected by the limit as well (see Fidonis/papaia-addons#71).
 
   The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
   through an `/etc/hosts` entry; `setup` prints the command when it is missing.
@@ -1777,9 +1796,9 @@ Two caveats worth knowing:
 
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](docs/distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](docs/distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](docs/distributed.md#limits) that hold by design.
 
 papAIa can run on several machines: for example Nginx Proxy Manager, Keycloak, the mail relay
 and LiteLLM on an edge node in a DMZ, and LibreChat, the RAG system, LocalAI and papaia-manager

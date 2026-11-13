@@ -147,6 +147,9 @@ _addon_compose_up() {
     if _stopped_containers_go_stale; then
         up_flags+=(--force-recreate)
     fi
+    if _pull_quietly; then
+        up_flags+=(--quiet-pull)
+    fi
     _addon_compose up "$1" "$2" ${up_flags[@]+"${up_flags[@]}"}
 }
 
@@ -423,7 +426,11 @@ _addon_recreate() {
     local addon_name="$1" addon_path
     addon_path="$(_addon_path "$addon_name")"
     info "Recreating addon $addon_name from $addon_path..."
-    _addon_compose up "$addon_name" "$addon_path" -d --remove-orphans
+    local up_flags=(-d --remove-orphans)
+    if _pull_quietly; then
+        up_flags+=(--quiet-pull)
+    fi
+    _addon_compose up "$addon_name" "$addon_path" ${up_flags[@]+"${up_flags[@]}"}
 }
 
 # Move an installed add-on to another version of itself (a directory of its
