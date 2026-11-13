@@ -83,6 +83,8 @@
 #   papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
 #   papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
+#   papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
+#                              [--config-dir=PATH]
 #   papaia-ctl help
 #
 # Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
@@ -97,7 +99,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,90p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,92p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -130,6 +132,8 @@ source "$SH_LIB/diag.sh"
 source "$SH_LIB/topology.sh"
 # shellcheck source=lib/sh/node.sh
 source "$SH_LIB/node.sh"
+# shellcheck source=lib/sh/librechat.sh
+source "$SH_LIB/librechat.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -194,6 +198,7 @@ case "$cmd" in
     topology)      cmd_topology "$@" ;;
     node)          cmd_node "$@" ;;
     node-shell)    cmd_node_shell "$@" ;;
+    librechat)     cmd_librechat "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

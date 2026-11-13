@@ -149,6 +149,19 @@ its scope); bring it back with `restore-scoped --only=...`. See the
 configs, the Keycloak realm, and `deployment.yaml`. Backing up that directory plus the named
 Docker volumes captures the entire installation, which is exactly what `papaia-ctl backup` does.
 
+### Clearing a LibreChat user's history
+
+```bash
+tools/papaia-ctl librechat clear-history trainee@example.org --dry-run      # counts only
+tools/papaia-ctl librechat clear-history trainee@example.org                # asks, then deletes
+tools/papaia-ctl librechat clear-history trainee@example.org --before=2026-06-01 -y
+```
+
+Resets a shared, training or test account before its next use: conversations, messages, their
+files and shared links go; the account, its agents, prompts and MCP connections stay. It needs the
+running stack and cannot be undone except by restoring a backup, which brings back the data of
+every user. See the [README](../README.md#librechat-clear-history) for the details.
+
 ## Server deployment
 
 <!-- TODO: host hardening, systemd unit, log rotation -->

@@ -296,6 +296,8 @@ papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
+papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
+                     [--config-dir=PATH]
 papaia-ctl topology  <show [--json]|validate|firewall [--format=table|json|csv]>
                      [--config-dir=PATH]
 papaia-ctl node      <add|list|check|remove|join-bundle|renew-link|sync> [OPTIONS]
@@ -700,6 +702,39 @@ and touches no other node. A whole restore stops every node, puts the controller
 configuration back, hands every node its bundle and release, writes back each node's data and
 starts the installation. A restore point taken of a single host is refused in a distributed
 installation, and the other way round. `--restart-clean` is not available there.
+
+### `librechat clear-history`
+
+```bash
+tools/papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y] \
+                                         [--config-dir=PATH]
+```
+
+Removes one LibreChat user's history before an account is used again: a training or test
+account, or the account of someone who left. It removes the user's conversations, their
+messages, the files that belong to them (records and stored files), their shared links and
+the tool call records of those conversations. The account, its sign-in, its MCP connections,
+its agents and prompts, its avatar, the files an agent uses, and everything the stack
+provisions stay.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `<email>` | _(required)_ | E-mail address of the LibreChat user. An unknown address is an error |
+| `--before=YYYY-MM-DD` | _(everything)_ | Only conversations last updated before that day (00:00 UTC), with their messages, files and shared links |
+| `--dry-run` | off | Print what would be removed, per kind, and change nothing |
+| `-y` / `--yes` | _(prompt)_ | Skip the confirmation. Without a terminal, `-y` is required |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Without `-y` the counts are shown first and the deletion waits for a `y`. **The deletion
+cannot be undone** except by restoring a backup; `restore --only=module:librechat` brings back the data of every LibreChat user, not of one.
+
+The command needs the running stack: it runs inside the LibreChat container, through
+LibreChat's own data and file-storage code, so it follows LibreChat's layout across
+releases. Run it while the user is not chatting; a reply that is still being written can
+leave a message behind. In a distributed installation, run it on the node that runs
+LibreChat. Exit status 0 on success, 1 when the user is unknown, LibreChat is not running,
+or a file could not be removed from storage (its record is kept and named), 2 for wrong
+arguments, 3 when the confirmation is declined.
 
 ### `addon`
 
