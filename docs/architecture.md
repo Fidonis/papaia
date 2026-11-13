@@ -157,6 +157,8 @@ papaia-addons/<name>/
 ├── integration/             # The 4 seams as fragments (all optional)
 │   ├── keycloak/            # OIDC client + audience mapper JSONs
 │   ├── librechat/           # mcpServers + allowedDomains fragment (YAML)
+│   ├── ai/librechat/agents/  # optional: LibreChat agents (addon_api 4, Seam 3)
+│   ├── ai/librechat/prompts/ # optional: LibreChat prompts (addon_api 4, Seam 3)
 │   └── nginx/               # Optional ingress snippet
 └── README.md                # Self-contained manual integration path (public-clean)
 ```
@@ -222,7 +224,11 @@ local_ca_env:                      # optional: env vars pointing at the local
 
 integration:
   keycloak:
-    clients: [integration/keycloak/<client>.json]
+    clients: [integration/keycloak/<client>.json]  # imported by hand, unless named below
+    client_secrets:                    # optional (addon_api 4): clients `start` creates
+      integration/keycloak/<client>.json:
+        secret_env: KC_<CLIENT>_CLIENT_SECRET    # GENERATE_SECRET in .env.example
+        root_url_env: <APP>_SERVER               # optional, replaces rootUrl
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/<name>.yaml   # optional
@@ -439,12 +445,83 @@ idempotently** in the Keycloak realm (via the Keycloak Admin REST API or a
 bootstrap script), including audience mappers for the MCP token flow. Base:
 the existing idempotent Keycloak client sync in `papaia/src/infra/keycloak/bootstrap.sh`.
 
+**Managed clients (addon_api 4).** A client listed under `clients` and named
+under `client_secrets` with its `secret_env` is created without the Admin UI:
+`addon install`
+generates the secret like any `GENERATE_SECRET` value, and `papaia-ctl start`
+(the `keycloak-role-sync` step after `docker compose up`), `papaia-ctl addon
+start <name>` and `papaia-ctl addon upgrade <name>` create the client from its
+export when the realm lacks it, with that secret and, when `root_url_env` names
+a set key, that root URL. An existing client only gets its secret aligned with
+the add-on `.env`, as core clients do, so a secret changed there takes effect on
+the next start. Nothing else about an existing client is changed. A secret that
+is still a placeholder in the add-on `.env` (`GENERATE_*`, `REPLACE_WITH_*`,
+`CHANGE_ME`, empty), as an install from before the add-on named its client
+there carries, is generated and written to the `.env` before the `.env` reaches
+the add-on's checkout, so the add-on's containers start with the value the
+client gets. `addon start` and `addon upgrade` wait only a few seconds for
+Keycloak; when it is not up, they say so and `start` or `papaia-ctl
+keycloak-role-sync` creates the client later. Within `start --addons`, the
+add-ons start before Keycloak may be up, so the clients are left to the
+`keycloak-role-sync` step that follows. Clients not named under
+`client_secrets` keep the manual import, and with `auth_provider=external_oidc`
+nothing is created. A core without this step ignores `client_secrets` and shows
+the manual import for the same clients, so an add-on can use it without raising
+`addon_api`.
+
+In a distributed installation, `keycloak-role-sync` runs on Keycloak's node
+with that node's bundle, which carries only the add-ons placed on that node.
+The clients of add-ons placed on other nodes are therefore not created by
+`start`; until that is supported, import them by hand as before.
+
 ### Seam 3 — LibreChat-MCP
 
 The `mcpServers` and `allowedDomains` fragment from `integration/librechat/`
 is **merged at render time** into the effective `librechat.yaml` in the config
 directory. Render process: base template + sum of active add-on fragments +
 customer overlay.
+
+**Agents and prompts (addon_api 4).** An add-on may ship LibreChat agents and
+prompts in the same formats as `LIBRECHAT_AGENTS_DIR` / `LIBRECHAT_PROMPTS_DIR`
+(`src/ai/librechat/agent.yaml.example`, `prompt.md.example`):
+
+```
+<addon>/integration/ai/librechat/agents/<file>.yaml
+<addon>/integration/ai/librechat/prompts/<file>.md
+```
+
+Every render copies the files of the active add-ons to
+`$PAPAIA_CONFIG_DIR/ai/librechat/addon-agents/` and `addon-prompts/` as
+`<addon>__<file>` and writes `overrides/docker-compose.librechat-addons.override.yml`.
+That override mounts both directories into LibreChat and labels the service with a
+hash of their content, so the next `papaia-ctl start` recreates LibreChat whenever
+the content changes, the add-on is removed included. On start, `agents-init.js` and
+`prompts-init.js` upsert the files and store them with `papaia_managed_by: <addon>`:
+
+- **Tombstones:** An agent or prompt whose add-on no longer provides it is deleted,
+  together with its access entries and project links. Agents and prompts created in
+  the UI or from the operator directories are never touched.
+- **Validation at render:** An agent that names an MCP server the rendered
+  `librechat.yaml` does not define is skipped with a warning, because it would
+  appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
+  `mcpServers` is not a list of server names; the rest of the render goes on.
+- **Tools:** LibreChat equips a stored agent from its `tools` list alone;
+  `mcpServers` adds no tools by itself. An empty `tools` next to `mcpServers`
+  therefore means every tool of those servers: the wildcard key of each server
+  (`sys__all__sys_mcp_<server>`) is stored for it. A non-empty list is stored as
+  written, so an agent can carry single tools (`<tool>_mcp_<server>`), which
+  keeps the tool prompt small for small local models.
+- **Operator files win:** An agent in `LIBRECHAT_AGENTS_DIR` with the id of an
+  add-on agent replaces it: the add-on file is skipped with a warning, and the
+  stored agent loses its add-on mark, so removing the add-on keeps it. Operator
+  prompts never take over an add-on prompt of the same name.
+- **Overwritten edits:** Changes made in the UI to an add-on agent or prompt are
+  overwritten on the next start.
+- **Ids:** Agent ids are stored with the `agent_` prefix, so links use
+  `?agent_id=agent_<id>`. Add-on prompts are keyed by add-on and `command`.
+- **Known limitation:** A distributed installation does not ship the override or
+  the two directories to a node bundle, so add-on agents and prompts are not
+  provisioned there (Fidonis/papaia#368).
 
 ### Seam 4 — Ingress (optional)
 
@@ -625,9 +702,9 @@ directory name above is a convention, not a requirement. What matters is the
 
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](distributed.md#limits) that hold by design.
 
 By default an installation is one host. A distributed installation spreads the core services
 over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,

@@ -189,8 +189,12 @@ operator-supplied.
 
 A later `setup` or `upgrade` without `--auth-host` keeps the stored `AUTH_HOST`, and with
 it the token issuer. The exception is a value that only matches what setup derived from the
-previous `PAPAIA_HOST`: it follows a changed `--app-host`. After changing `KEYCLOAK_EXT_PORT`
-on a local host, pass `--auth-host` with the new port.
+previous `PAPAIA_HOST`: it follows a changed `--app-host` (or a new answer to the prompt).
+For a local host the match ignores the scheme, since older releases derived those as
+`http`; a domain name must match with its scheme. A value stored while an external OIDC
+provider was in use is not kept either: switching back to the bundled Keycloak derives it
+again. The interactive prompt pre-fills by the same rules. After changing
+`KEYCLOAK_EXT_PORT` on a local host, pass `--auth-host` with the new port.
 
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.

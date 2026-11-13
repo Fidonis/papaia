@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import common, envtree, gen_override
+from lib import cli_addon, common, envtree, gen_override
 from lib.cli import cmd_override_external_nets
 from lib.cli_addon import (
     cmd_active_addons,
@@ -47,13 +47,19 @@ def _install_args(
 
 
 def _name_args(
-    config_dir: Path, repo_root: Path, *, name: str = "paperless", force: bool = False
+    config_dir: Path,
+    repo_root: Path,
+    *,
+    name: str = "paperless",
+    force: bool = False,
+    no_keycloak: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         config_dir=str(config_dir),
         repo_root=str(repo_root),
         name=name,
         force=force,
+        no_keycloak=no_keycloak,
     )
 
 
@@ -245,6 +251,63 @@ def test_start_materializes_env_into_checkout(repo_root, config_dir):
 
     # cleanup: remove the materialized .env so the fixture stays clean
     checkout_env.unlink(missing_ok=True)
+
+
+def _managed_paperless(tmp_path: Path) -> Path:
+    """A copy of the paperless fixture whose client is named under `client_secrets`."""
+    addon = tmp_path / "paperless"
+    shutil.copytree(ADDON_PAPERLESS, addon)
+    (addon / "integration" / "keycloak").mkdir(parents=True, exist_ok=True)
+    (addon / "integration" / "keycloak" / "paperless.json").write_text(
+        json.dumps({"clientId": "paperless"}), encoding="utf-8"
+    )
+    manifest_path = addon / "papaia-app.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    integration = manifest.setdefault("integration", {})
+    integration["keycloak"] = {
+        "clients": ["integration/keycloak/paperless.json"],
+        "client_secrets": {
+            "integration/keycloak/paperless.json": {"secret_env": "KC_PAPERLESS_CLIENT_SECRET"}
+        },
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return addon
+
+
+@pytest.mark.parametrize("no_keycloak", [True, False])
+def test_start_fills_a_managed_secret_before_it_materializes_the_env(
+    tmp_path, repo_root, config_dir, monkeypatch, capsys, no_keycloak
+):
+    _setup(repo_root, config_dir)
+    addon = _managed_paperless(tmp_path)
+    assert cmd_addon_install(_install_args(config_dir, repo_root, path=str(addon))) == 0
+    bundle_env = config_dir / "addons" / "paperless" / ".env"
+    # As an install from before the add-on named its client: the placeholder is still there.
+    common.write_env_file(
+        bundle_env, {"KC_PAPERLESS_CLIENT_SECRET": "REPLACE_WITH_KC_PAPERLESS_CLIENT_SECRET"}
+    )
+    calls = []
+
+    def _sync(tree, config_dir, repo_root, names=None, **kwargs):
+        calls.append(names)
+        return False  # Keycloak not reachable
+
+    monkeypatch.setattr(cli_addon.keycloak_role_sync, "sync_addon_clients", _sync)
+    capsys.readouterr()
+
+    assert cmd_addon_start(_name_args(config_dir, repo_root, no_keycloak=no_keycloak)) == 0
+
+    secret = common.parse_env_file(bundle_env)["KC_PAPERLESS_CLIENT_SECRET"]
+    assert len(secret) == 48
+    assert common.parse_env_file(addon / ".env")["KC_PAPERLESS_CLIENT_SECRET"] == secret
+    err = capsys.readouterr().err
+    if no_keycloak:
+        # `start`: its keycloak-role-sync step after `up` creates the client.
+        assert calls == []
+        assert "not in place yet" not in err
+    else:
+        assert calls == [{"paperless"}]
+        assert "the Keycloak clients of 'paperless' are not in place yet" in err
 
 
 def test_start_returns_2_for_unregistered_addon(repo_root, config_dir):
@@ -1167,6 +1230,68 @@ def test_upgrade_and_rollback_check_what_dependents_require(
         assert result.axis == "requires"
         assert "addon 'dependent' requires 'paperless" in result.reason
         assert _gate("paperless", manifest, config_dir, repo_root, force=True)[1] == 0
+
+
+def _paperless_at(tmp_path: Path, version: str) -> Path:
+    path = tmp_path / f"paperless-{version}"
+    shutil.copytree(ADDON_PAPERLESS, path)
+    manifest_file = path / "papaia-app.yaml"
+    manifest = yaml.safe_load(manifest_file.read_text(encoding="utf-8"))
+    manifest["version"] = version
+    manifest_file.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return path
+
+
+def _registered_path(config_dir: Path, name: str) -> str:
+    deployed = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    return next(a["path"] for a in deployed["addons"] if a["name"] == name)
+
+
+@pytest.mark.parametrize(
+    ("required", "new_version", "refused"),
+    [
+        ("^1.0.0", "2.0.0", True),
+        (">=1.0.0", "0.9.0", True),
+        ("^1.0.0", "1.4.0", False),
+    ],
+)
+def test_install_path_re_pointing_an_addon_checks_what_dependents_require(
+    repo_root, config_dir, tmp_path, capsys, required, new_version, refused
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    _install_dependent(
+        repo_root, config_dir, tmp_path, [{"name": "paperless", "version": required}]
+    )
+    before = _registered_path(config_dir, "paperless")
+    new_path = str(_paperless_at(tmp_path, new_version))
+    capsys.readouterr()
+
+    exit_code = cmd_addon_install(_install_args(config_dir, repo_root, path=new_path))
+
+    assert (exit_code == 2) is refused
+    if refused:
+        assert "addon 'dependent' requires 'paperless" in capsys.readouterr().err
+        assert _registered_path(config_dir, "paperless") == before
+        forced = _install_args(config_dir, repo_root, path=new_path, force=True)
+        assert cmd_addon_install(forced) == 0
+    assert _registered_path(config_dir, "paperless") != before
+
+
+def test_a_fresh_install_ignores_ranges_on_an_addon_not_yet_installed(
+    repo_root, config_dir, tmp_path
+):
+    _setup(repo_root, config_dir)
+    # The requirement itself is unmet (nothing installed), so only --force gets the
+    # dependent in; the later first install of the required addon is not re-pointing.
+    dependent = _dependent_addon(tmp_path, [{"name": "paperless", "version": "^1.0.0"}])
+    forced = _install_args(
+        config_dir, repo_root, name="dependent", path=str(dependent), force=True
+    )
+    assert cmd_addon_install(forced) == 0
+
+    new_path = str(_paperless_at(tmp_path, "2.0.0"))
+    assert cmd_addon_install(_install_args(config_dir, repo_root, path=new_path)) == 0
 
 
 @pytest.mark.parametrize(

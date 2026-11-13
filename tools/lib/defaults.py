@@ -17,13 +17,21 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
     librechat = tree.get("ai/librechat", {})
     app_host = root.get("PAPAIA_HOST", "")
     keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")
-    auth_host_sticky = root.get("AUTH_HOST", "")
+    config_seeded = (config_dir / ".env").is_file()
+    # The rules of resolve_hostnames: the prompt pre-fills a stored AUTH_HOST only when
+    # setup would keep it, else the derivation from the app host the operator enters.
+    stored_app_host = app_host if config_seeded and not common.is_placeholder(app_host) else ""
+    auth_host_sticky = resolve.sticky_auth_host(
+        root.get("AUTH_HOST", "") if config_seeded else "",
+        prior_provider=root.get("AUTH_PROVIDER", "internal_keycloak"),
+        stored_app_host=stored_app_host,
+        keycloak_ext_port=keycloak_port,
+    )
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
     # Only surface a sticky LibreChat URL once the config dir is actually seeded:
     # on a fresh checkout the tree falls back to the shipped .env.example, whose
     # DOMAIN_SERVER (host.docker.internal:8000) differs from the localhost-based
     # default bash should prefill -- gating avoids a wrong sticky prefill.
-    config_seeded = (config_dir / ".env").is_file()
     librechat_sticky = librechat.get("DOMAIN_SERVER", "") if config_seeded else ""
     if common.is_placeholder(librechat_sticky):
         librechat_sticky = ""
@@ -62,6 +70,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "AUTH_HOST_DERIVED": resolve.derive_auth_host_default(
             app_host or "http://host.docker.internal", keycloak_port
         ),
+        "KEYCLOAK_EXT_PORT": keycloak_port,
         "LIBRECHAT_HOST_STICKY": librechat_sticky,
         "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),
         "LOCALAI_HOST_STICKY": localai_sticky,

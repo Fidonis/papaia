@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
 from lib import common, envtree, render_core, resolve, secrets
@@ -408,3 +409,141 @@ def test_render_merges_the_voice_fragments_only_while_the_profile_is_active(
         (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
     )
     assert litellm["model_list"] == []
+
+
+# ── LibreChat agents and prompts of add-ons ───────────────────────────────────
+
+
+def _librechat_addon(repo_root: Path, config_dir: Path, *, active: bool = True) -> Path:
+    """The paperless fixture (which adds the PaperlessMCP server) plus one agent and
+    one prompt, registered in deployment.yaml."""
+    addon = repo_root / "addons" / "papaia-addon-paperless"
+    shutil.copytree(FIXTURES_DIR / "addon-paperless", addon)
+    content = addon / "integration" / "ai" / "librechat"
+    (content / "agents").mkdir(parents=True)
+    (content / "agents" / "assistant.yaml").write_text(
+        "id: agent_docs\nname: Docs\nprovider: Private-LLM\nmodel: m\n"
+        "mcpServers: [PaperlessMCP]\n",
+        encoding="utf-8",
+    )
+    (content / "prompts").mkdir()
+    (content / "prompts" / "summary.md").write_text(
+        "---\nname: Summary\ncategory: Docs\ncommand: summary\noneliner: Sum up\n---\nSum up.\n",
+        encoding="utf-8",
+    )
+    deployment_path = config_dir / "deployment.yaml"
+    manifest = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    manifest["addons"] = [
+        {"name": "paperless", "path": "addons/papaia-addon-paperless", "active": active}
+    ]
+    deployment_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return addon
+
+
+def _override(config_dir: Path) -> dict | None:
+    path = config_dir / render_core.LIBRECHAT_ADDON_OVERRIDE
+    return yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def test_render_mounts_addon_agents_and_prompts(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    _librechat_addon(repo_root, config_dir)
+
+    render_core.render(config_dir, repo_root)
+
+    agents = config_dir / "ai/librechat/addon-agents"
+    prompts = config_dir / "ai/librechat/addon-prompts"
+    assert [p.name for p in agents.iterdir()] == ["paperless__assistant.yaml"]
+    assert [p.name for p in prompts.iterdir()] == ["paperless__summary.md"]
+    librechat = _override(config_dir)["services"]["librechat"]
+    assert {v["target"]: v["source"] for v in librechat["volumes"]} == {
+        "/app/api/data/addon-agents": str(agents),
+        "/app/api/data/addon-prompts": str(prompts),
+    }
+    assert all(v["read_only"] for v in librechat["volumes"])
+    assert len(librechat["labels"]["org.papaia.addon-content"]) == 16
+
+
+def test_changed_content_changes_the_label(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    before = _override(config_dir)["services"]["librechat"]["labels"]
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir)["services"]["librechat"]["labels"] == before
+
+    prompt = addon / "integration/ai/librechat/prompts/summary.md"
+    prompt.write_text(prompt.read_text(encoding="utf-8") + "More.\n", encoding="utf-8")
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir)["services"]["librechat"]["labels"] != before
+
+
+def test_an_inactive_addon_removes_content_and_override(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    _librechat_addon(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir) is not None
+
+    deployment_path = config_dir / "deployment.yaml"
+    manifest = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    manifest["addons"][0]["active"] = False
+    deployment_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    render_core.render(config_dir, repo_root)
+
+    assert _override(config_dir) is None
+    assert not (config_dir / "ai/librechat/addon-agents").exists()
+
+
+def test_an_agent_with_an_unknown_mcp_server_is_skipped(repo_root, config_dir, capsys):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    agent = addon / "integration/ai/librechat/agents/assistant.yaml"
+    agent.write_text(agent.read_text(encoding="utf-8").replace("PaperlessMCP", "NoSuchMCP"))
+
+    render_core.render(config_dir, repo_root)
+
+    assert not (config_dir / "ai/librechat/addon-agents").exists()
+    assert "NoSuchMCP" in capsys.readouterr().err
+    # The prompt still renders, so the override stays.
+    volumes = _override(config_dir)["services"]["librechat"]["volumes"]
+    assert [v["target"] for v in volumes] == ["/app/api/data/addon-prompts"]
+
+
+@pytest.mark.parametrize(
+    "servers",
+    ["mcpServers: PaperlessMCP", "mcpServers: [{name: PaperlessMCP}]", "mcpServers: [1]"],
+)
+def test_an_agent_whose_mcp_servers_are_not_names_is_skipped(
+    repo_root, config_dir, capsys, servers
+):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    agent = addon / "integration/ai/librechat/agents/assistant.yaml"
+    agent.write_text(
+        agent.read_text(encoding="utf-8").replace("mcpServers: [PaperlessMCP]", servers)
+    )
+
+    render_core.render(config_dir, repo_root)
+
+    assert not (config_dir / "ai/librechat/addon-agents").exists()
+    assert "not a list of server names" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("kind", ["agents/assistant.yaml", "prompts/summary.md"])
+def test_a_file_that_is_not_utf8_is_skipped(repo_root, config_dir, capsys, kind):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    (addon / "integration/ai/librechat" / kind).write_bytes(b"name: \xff\xfe\n")
+
+    render_core.render(config_dir, repo_root)
+
+    assert "cannot be read" in capsys.readouterr().err
+    rendered = list((config_dir / "ai/librechat").glob("addon-*/*"))
+    assert len(rendered) == 1
+    assert Path(kind).name not in rendered[0].name
+
+
+def test_no_addon_content_writes_no_override(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir) is None

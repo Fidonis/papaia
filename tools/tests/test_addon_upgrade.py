@@ -139,6 +139,31 @@ def test_a_new_key_is_classified_by_what_its_example_value_says():
     assert literal["value"] == "eng"
 
 
+def test_the_secret_of_a_managed_client_is_described_as_generated():
+    # An add-on for older cores still ships the placeholder of a manual import; the
+    # upgrade generates it (fill_client_secrets) and creates the client.
+    manifest = {
+        "integration": {
+            "keycloak": {
+                "clients": ["kc/wiki.json"],
+                "client_secrets": {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET"}},
+            }
+        }
+    }
+    plan = _plan_of(
+        _candidate({}, manifest),
+        new_env={"KC_WIKI_SECRET": "REPLACE_WITH_WIKI", "KC_OTHER": "REPLACE_WITH_OTHER"},
+    )
+
+    items = {i["key"]: i for i in plan["env"]["new"]}
+    assert items["KC_WIKI_SECRET"]["managed"] is True
+    assert items["KC_OTHER"]["managed"] is False
+    text = addon_upgrade.format_plan(plan)
+    assert "KC_WIKI_SECRET: the secret of a Keycloak client that papaia-ctl creates" in text
+    assert "KC_OTHER: a Keycloak client secret to copy in" in text
+    assert "applying the upgrade creates it" in text
+
+
 def test_a_key_the_manifest_lists_as_a_replaced_secret_is_one_whatever_its_value():
     candidate = _candidate({}, {"env_replace_secrets": {"TOKEN": {"hint": "copy it"}}})
     plan = _plan_of(candidate, new_env={"TOKEN": "placeholder"})
@@ -277,7 +302,6 @@ def test_the_same_directory_is_an_in_place_upgrade():
 
     assert plan["in_place"] is True
     assert "no way back" in addon_upgrade.format_plan(plan)
-
 
 
 def test_the_review_names_unmet_requirements_of_other_addons():
@@ -875,3 +899,48 @@ def test_the_list_without_a_deployment_asks_for_setup(tmp_path, repo_root, capsy
 
     assert rc == 2
     assert "papaia-ctl setup" in capsys.readouterr().err
+
+
+# ── managed Keycloak clients (client_secrets) ────────────────────────────────
+
+
+def _manage_mcp_client(path: Path) -> None:
+    """Let the v2 manifest name its new client under `client_secrets`."""
+    manifest_path = path / "papaia-app.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["integration"]["keycloak"]["client_secrets"] = {
+        "integration/keycloak/paperless-mcp.json": {
+            "secret_env": "KC_PAPERLESS_MCP_CLIENT_SECRET"
+        }
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+
+@pytest.mark.parametrize("synced", [True, False])
+def test_an_upgrade_generates_a_managed_secret_before_the_env_reaches_the_checkout(
+    world, monkeypatch, capsys, synced
+):
+    # A running add-on is recreated by bash right after this step, without `addon start`:
+    # its containers must start with the secret the client gets, not with the placeholder.
+    _manage_mcp_client(world["v2"])
+    calls = []
+
+    def _sync(tree, config_dir, repo_root, names=None, **kwargs):
+        calls.append(names)
+        return synced
+
+    monkeypatch.setattr(cli_addon.keycloak_role_sync, "sync_addon_clients", _sync)
+    capsys.readouterr()
+
+    assert _apply(
+        world["config"], world["repo"], world["v2"], answers_file=str(world["answers"])
+    ) == 0
+
+    secret = _bundle(world["config"])["KC_PAPERLESS_MCP_CLIENT_SECRET"]
+    assert len(secret) == 48
+    assert common.parse_env_file(world["v2"] / ".env")["KC_PAPERLESS_MCP_CLIENT_SECRET"] == secret
+    assert calls == [{"paperless"}]
+    out = capsys.readouterr().out
+    assert "Import the Keycloak client integration/keycloak/paperless-mcp.json" not in out
+    assert "Set KC_PAPERLESS_MCP_CLIENT_SECRET" not in out
+    assert ("papaia-ctl keycloak-role-sync" in out) is not synced

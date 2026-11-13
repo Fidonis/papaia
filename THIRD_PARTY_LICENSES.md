@@ -26,15 +26,15 @@ their images there; the table below covers the Core only.
 | `quay.io/keycloak/keycloak` | 26.7.0 | Apache-2.0 | `infra/keycloak` | |
 | `postgres` | 18.3 | PostgreSQL License | `infra/keycloak` | Keycloak database |
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
-| `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.3 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
+| `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.6 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
 | `boky/postfix` | 5.1.0-alpine | MIT | `infra/smtp-relay` | optional mail relay (profile `smtp`); the image bundles Postfix (IPL-1.0 or EPL-2.0), OpenDKIM and rsyslog (GPL-3.0-or-later among others), used as network service |
 | `haproxy` | 3.2.26-alpine | GPL-2.0 | `infra/link-gateway` | mTLS link gateway between the nodes of a distributed installation (profile `link-gateway`, not in the include list); its include files are LGPL-2.1; used as network service |
 | `ghcr.io/fidonis/papaia-manager` | 1.6.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
 | `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
-| `mongo` | 8.0.20 | SSPL | `ai/librechat` | used as network service |
+| `mongo` | 8.3.13 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |
-| `pgvector/pgvector` | 0.8.0-pg15-trixie | PostgreSQL License | `ai/librechat` | |
-| `ghcr.io/librechat-ai/librechat-rag-api-dev-lite` | v0.8.0 | MIT | `ai/librechat` | |
+| `pgvector/pgvector` | 0.8.7-pg15-trixie | PostgreSQL License | `ai/librechat` | |
+| `ghcr.io/librechat-ai/librechat-rag-api-dev-lite` | v0.9.0 | MIT | `ai/librechat` | |
 | `ghcr.io/berriai/litellm` | v1.108.3 | MIT | `ai/litellm` | |
 | `postgres` | 16 | PostgreSQL License | `ai/litellm` | LiteLLM database |
 | `prom/prometheus` | v3.15.1 | Apache-2.0 | `ai/litellm` | |
@@ -48,7 +48,7 @@ their images there; the table below covers the Core only.
 | `ghcr.io/speaches-ai/speaches` | 0.8.3-cpu (digest-pinned) | MIT | `ai/voice` | speech-to-text (profile `voice`); the image bundles piper-tts, phonemizer and espeak-ng (GPL-3.0) plus Ubuntu's ffmpeg build (GPL), used as network service; the shipped default model `deepdml/faster-whisper-large-v3-turbo-ct2` is MIT |
 | `ghcr.io/devnen/chatterbox-tts-server` | sha-915ae28-cpu (digest-pinned; accelerator tags `-cu128`/`-rocm` of the same commit selectable via `--voice-variant`) | MIT | `ai/voice` | text-to-speech (profile `voice`); Chatterbox model code and the multilingual weights (Resemble AI) are MIT, the embedded Perth watermarker is MIT |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |
-| `ghcr.io/firecrawl/firecrawl` | 2.11.85 | AGPL-3.0 | `services/firecrawl` | used as network service |
+| `ghcr.io/firecrawl/firecrawl` | 2.11.703 | AGPL-3.0 | `services/firecrawl` | used as network service |
 | `ghcr.io/firecrawl/playwright-service` | (digest-pinned) | Apache-2.0 | `services/firecrawl` | |
 | `ghcr.io/firecrawl/nuq-postgres` | (digest-pinned) | PostgreSQL License | `services/firecrawl` | |
 | `redis` | 8.8.0-alpine | RSALv2 / SSPLv1 / AGPLv3 | `services/firecrawl` | used as network service; Redis 8 is tri-licensed (AGPLv3 is OSI-approved) |

@@ -140,13 +140,39 @@ Linux host:
   [papaia-manager](#papaia-manager).
 - **Keycloak certificate.** With the default local URLs, browsers on the Mac check
   Keycloak's certificate against the login keychain. `setup` offers to trust the
-  generated local CA there once (no admin rights needed). In a non-interactive run, or
-  when the offer is declined, it prints the command instead:
+  generated local CA there once, for TLS server certificates only (no admin rights
+  needed; macOS may still ask for the login password, and over SSH the step fails and
+  `setup` prints the command). In a non-interactive run, or when the offer is declined,
+  it prints the command instead:
 
   ```bash
-  security add-trusted-cert -r trustRoot \
+  security add-trusted-cert -r trustRoot -p ssl \
     -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
   ```
+
+  A local CA that `setup` creates can only sign for Keycloak's names (`keycloak`,
+  `localhost`, `host.docker.internal`), and its key `certs/local-ca.key` is readable by
+  its owner only. A CA from an earlier release keeps working without that limit. To
+  replace it:
+
+  1. Delete `$PAPAIA_CONFIG_DIR/certs/` and run `setup` again.
+  2. Restart the stack with `papaia-ctl stop` and `papaia-ctl start`, so that Keycloak
+     and the containers that read `local-ca.crt` pick up the new files.
+  3. Remove the trust of the old CA from the login keychain. Both CAs are named
+     `papaia-local-ca`, and a trust added by an earlier release covers every policy, not
+     only TLS. List the certificates with that name and their SHA-1 hashes, then delete the
+     old one by its hash (the new one's hash is shown by
+     `openssl x509 -noout -fingerprint -sha1 -in "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"`):
+
+     ```bash
+     security find-certificate -a -c papaia-local-ca -Z ~/Library/Keychains/login.keychain-db
+     security delete-certificate -t -Z <SHA-1 of the old CA> ~/Library/Keychains/login.keychain-db
+     ```
+
+  4. Trust the new CA with the `security add-trusted-cert` command above.
+
+  An add-on that issues certificates with this CA for names other than these three is
+  affected by the limit as well (see Fidonis/papaia-addons#71).
 
   The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
   through an `/etc/hosts` entry; `setup` prints the command when it is missing.
@@ -700,7 +726,7 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 
 | Command | Effect |
 |---|---|
-| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. |
+| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. A `--path` that re-points an installed add-on is refused, like `upgrade`, when the version there no longer meets a range another active add-on requires of it. |
 | `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
 | `install --node=NAME` | Distributed installations only: the node the add-on runs on. Without it, the add-on goes to the node of the core services it attaches to. An add-on whose `networks.attach` names services on two nodes is **not placeable** and is refused whatever `--force` says: its network exists on one node only. On a remote node the add-on travels in the node's bundle, and `start`, `stop` and `start --addons` run it there. |
 | `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. See [Upgrading an add-on](#upgrading-an-add-on). |
@@ -1811,9 +1837,9 @@ Two caveats worth knowing:
 
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](docs/distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](docs/distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](docs/distributed.md#limits) that hold by design.
 
 papAIa can run on several machines: for example Nginx Proxy Manager, Keycloak, the mail relay
 and LiteLLM on an edge node in a DMZ, and LibreChat, the RAG system, LocalAI and papaia-manager

@@ -220,7 +220,7 @@ cmd_setup() {
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "external_oidc" ]; then
             info "  Identity provider = external OIDC"
         else
-            info "  Keycloak URL      = $AUTH_HOST_STICKY"
+            info "  Keycloak URL      = ${AUTH_HOST_STICKY:-$AUTH_HOST_DERIVED}"
         fi
         if [ -n "${REVERSE_PROXY_PROVIDER_STICKY:-}" ]; then
             local _rp_label="Nginx Proxy Manager (bundled)"
@@ -327,7 +327,12 @@ cmd_setup() {
             fi
         fi
         if [ -z "$auth_host" ] && [ "$auth_provider" != "external_oidc" ]; then
+            # Empty when setup would derive it again (provider switch, or just the stored
+            # app host's derivation); the stored app host's derivation comes from defaults.
             local auth_default="${AUTH_HOST_STICKY:-}"
+            if [ -z "$auth_default" ] && [ "$app_host" = "${APP_HOST_STICKY:-}" ]; then
+                auth_default="${AUTH_HOST_DERIVED:-}"
+            fi
             [ -z "$auth_default" ] && auth_default="$(_derive_auth_default "$app_host")"
             auth_host="$(prompt_field "Public Keycloak URL" \
                 "Where browsers reach the bundled Keycloak." \
@@ -596,7 +601,7 @@ _installation_exists() {
 _prompt_topology() {
     printf '\n%sWhere does papAIa run?%s\n' "$CYAN" "$NC" >&2
     printf '  1) On this machine (default)\n' >&2
-    printf '  2) On two machines (experimental) — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
+    printf '  2) On two machines — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
     printf '     (for more machines, pass --node per machine or --topology-file to setup)\n' >&2
     local choice
     choice="$(prompt_with_default "  Choose" "1")"
@@ -647,8 +652,6 @@ _prompt_topology() {
 _setup_distributed() {
     local non_interactive="$1"
     py_cli topology-project >/dev/null
-    warn "The distributed mode is experimental: it has not yet been checked on real machines"
-    warn "  (docs/distributed-validation.md). Evaluate it before you run it in production."
     info "Topology:"
     py_cli topology-show
     info "Connections between the nodes (open these in the firewalls; papaia-ctl does not):"
@@ -685,16 +688,10 @@ _setup_distributed() {
 }
 
 _derive_auth_default() {
-    # Best-effort bash-side fallback if defaults() had no sticky value yet;
-    # the authoritative derivation lives in resolve.derive_auth_host_default
-    # and is what setup actually applies -- this is only used to pre-fill
-    # the interactive prompt.
-    case "$1" in
-        *host.docker.internal*|*localhost*|*127.0.0.1*)
-            printf 'https://host.docker.internal:%s' "${KEYCLOAK_EXT_PORT:-8110}" ;;
-        *)
-            printf '%s' "$1" | sed -E 's#^(https?://)([^:/]+).*#\1auth.\2#' ;;
-    esac
+    # The prompt's pre-fill for an app host the defaults did not know yet. One
+    # derivation for both paths: resolve.derive_auth_host_default, which setup -y
+    # applies, with the installation's KEYCLOAK_EXT_PORT from defaults.
+    py_cli derive-auth-host "$1" "${KEYCLOAK_EXT_PORT:-8110}"
 }
 
 _derive_litellm_default() {
@@ -738,6 +735,33 @@ _localai_variant_unverified() {
     warn "$1 was not detected on this host. Install the driver and container runtime before starting the stack, or re-run setup and choose CPU."
 }
 
+# How long `docker info` may take before the engine counts as unknown. The Python side
+# (envtree._is_docker_desktop) waits as long.
+_DOCKER_INFO_TIMEOUT_SECONDS=15
+
+# The engine `docker info` reports ("Docker Desktop", ...), or nothing when the CLI is
+# missing, the daemon refuses, or it does not answer in time: a daemon that hangs must not
+# hold the prompt. Bash 3.2 and macOS have no `timeout`, so the call runs in the
+# background and is stopped after the limit.
+_docker_engine_name() {
+    local out pid ticks=0
+    out="$(mktemp "${TMPDIR:-/tmp}/papaia-docker-info.XXXXXX")" || return 0
+    docker info --format '{{.OperatingSystem}}' >"$out" 2>/dev/null &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$ticks" -ge $((_DOCKER_INFO_TIMEOUT_SECONDS * 5)) ]; then
+            kill "$pid" 2>/dev/null || true
+            break
+        fi
+        sleep 0.2
+        ticks=$((ticks + 1))
+    done
+    if wait "$pid" 2>/dev/null; then
+        cat "$out"
+    fi
+    rm -f "$out"
+}
+
 # Asks whether to run papaia-manager; prints "true" or "false". On macOS the manager runs
 # on Docker Desktop only (README, papaia-manager), so with another engine the default is
 # no, unless a previous run said yes.
@@ -745,7 +769,7 @@ _prompt_manager() {
     local manager_default="1" on_mac=0
     [ "${MANAGER_STICKY:-}" = "false" ] && manager_default="2"
     if [ "$(uname -s)" = "Darwin" ] && [ "${MANAGER_STICKY:-}" != "true" ] \
-        && [ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" != "Docker Desktop" ]; then
+        && [ "$(_docker_engine_name)" != "Docker Desktop" ]; then
         on_mac=1
         manager_default="2"
     fi
