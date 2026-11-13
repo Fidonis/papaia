@@ -1063,6 +1063,46 @@ def test_gpu_voice_is_not_measurable_from_a_container(stack):
     assert check.status == SKIP
 
 
+def test_gpu_probes_both_engines_across_vendors(stack, tmp_path):
+    # LocalAI on CUDA proves nothing about the TTS engine's ROCm demand: the
+    # missing /dev/kfd must fail the check although nvidia-smi is happy.
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai,voice",
+        LOCALAI_IMAGE_VARIANT="nvidia-cuda-12",
+        VOICE_TTS_IMAGE_VARIANT="hipblas",
+    )
+
+    check = result(run_doctor(stack, docker=nvidia_docker(), dev_root=fake_dev(tmp_path)), "gpu")
+
+    assert check.status == FAIL
+    assert "the voice TTS engine cannot start" in check.summary
+    assert check.details["other_accelerator"]["variant"] == "nvidia-cuda-12"
+
+
+def test_gpu_collapses_matching_vendor_demands_into_one_probe(stack):
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai,voice",
+        LOCALAI_IMAGE_VARIANT="nvidia-cuda-12",
+        VOICE_TTS_IMAGE_VARIANT="nvidia",
+    )
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.status == PASS
+    assert "other_accelerator" not in check.details
+
+
+def test_gpu_failures_name_the_voice_engine(stack, tmp_path):
+    enable_voice(stack, "hipblas")
+
+    check = result(run_doctor(stack, dev_root=fake_dev(tmp_path)), "gpu")
+
+    assert check.status == FAIL
+    assert "the voice TTS engine cannot start" in check.summary
+
+
 @pytest.mark.parametrize(
     ("line", "expected"),
     [

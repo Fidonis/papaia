@@ -196,7 +196,11 @@ services:
         if not torch.cuda.is_available():
             _load = torch.load
             def _cpu_load(*args, **kwargs):
-                kwargs.setdefault("map_location", "cpu")
+                # map_location is also torch.load's second positional
+                # parameter; only default it when the caller left that
+                # slot free, or the call would name the argument twice.
+                if len(args) < 2:
+                    kwargs.setdefault("map_location", "cpu")
                 return _load(*args, **kwargs)
             torch.load = _cpu_load
         import runpy

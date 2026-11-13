@@ -972,7 +972,12 @@ def _exec_failure(result: status.CommandResult) -> str | None:
 
 
 def _gpu_nvidia(
-    ctx: Context, variant: str, details: dict[str, Any], *, container: str | None = None
+    ctx: Context,
+    variant: str,
+    details: dict[str, Any],
+    *,
+    container: str | None = None,
+    subject: str = "LocalAI",
 ) -> CheckResult:
     """`nvidia-smi` on this host, or, given a `container`, inside that one.
 
@@ -1025,19 +1030,19 @@ def _gpu_nvidia(
             name,
             FAIL,
             "the 'nvidia' runtime is not registered with Docker: install the NVIDIA Container"
-            " Toolkit, otherwise LocalAI cannot start",
+            f" Toolkit, otherwise {subject} cannot start",
             details,
         )
     return _gpu_measured(name, gpus, details)
 
 
-def _gpu_amd(ctx: Context, details: dict[str, Any]) -> CheckResult:
+def _gpu_amd(ctx: Context, details: dict[str, Any], *, subject: str = "LocalAI") -> CheckResult:
     name = "gpu"
     if not (ctx.probes.dev_root / "kfd").exists():
         return CheckResult(
             name,
             FAIL,
-            "/dev/kfd is missing: the ROCm kernel driver is not loaded, LocalAI cannot start",
+            f"/dev/kfd is missing: the ROCm kernel driver is not loaded, {subject} cannot start",
             details,
         )
     result = ctx.run(
@@ -1085,16 +1090,56 @@ def _gpu_render_node(ctx: Context, variant: str, details: dict[str, Any]) -> Che
     )
 
 
+# Which voice TTS variant a LocalAI accelerator probe already proves: the engines
+# share the host prerequisites per vendor (NVIDIA: driver plus Container Toolkit;
+# AMD: the ROCm kernel driver), so one probe per vendor is enough. Intel and
+# Vulkan prove neither.
+_LOCALAI_COVERS_VOICE = {
+    gpu_detect.NVIDIA_CUDA_12: "nvidia",
+    gpu_detect.NVIDIA_CUDA_13: "nvidia",
+    gpu_detect.HIPBLAS: "hipblas",
+}
+
+
+def _worse_gpu(a: CheckResult, b: CheckResult) -> CheckResult:
+    """One verdict for two accelerator demands: the more alarming one leads,
+    the other survives in the details so neither probe's outcome is lost."""
+    if _SEVERITY[b.status] < _SEVERITY[a.status]:
+        a, b = b, a
+    details = dict(a.details or {})
+    details["other_accelerator"] = {
+        "variant": (b.details or {}).get("variant"),
+        "status": b.status,
+        "summary": b.summary,
+    }
+    return CheckResult(a.name, a.status, a.summary, details)
+
+
 def check_gpu(ctx: Context) -> CheckResult:
     name = "gpu"
     if not ctx.configured:
         return _not_set_up(name)
+    localai_result: CheckResult | None = None
+    covered: str | None = None
+    if LOCALAI_PROFILE in ctx.active_profiles:
+        variant = ctx.env.get("LOCALAI_IMAGE_VARIANT", "").strip() or gpu_detect.CPU
+        if variant != gpu_detect.CPU:
+            localai_result = _gpu_localai(ctx, variant)
+            covered = _LOCALAI_COVERS_VOICE.get(variant)
+    voice_result = _gpu_voice(ctx, covered)
+    if localai_result is not None and voice_result is not None:
+        return _worse_gpu(localai_result, voice_result)
+    if localai_result is not None:
+        return localai_result
+    if voice_result is not None:
+        return voice_result
     if LOCALAI_PROFILE not in ctx.active_profiles:
-        return _gpu_voice(ctx) or CheckResult(name, SKIP, "LocalAI is not enabled")
-    variant = ctx.env.get("LOCALAI_IMAGE_VARIANT", "").strip() or gpu_detect.CPU
-    if variant == gpu_detect.CPU:
-        return _gpu_voice(ctx) or CheckResult(name, SKIP, "LocalAI runs on the CPU image")
+        return CheckResult(name, SKIP, "LocalAI is not enabled")
+    return CheckResult(name, SKIP, "LocalAI runs on the CPU image")
 
+
+def _gpu_localai(ctx: Context, variant: str) -> CheckResult:
+    name = "gpu"
     details: dict[str, Any] = {
         "variant": variant,
         "override_present": (ctx.config_dir / GPU_OVERRIDE).is_file(),
@@ -1138,18 +1183,18 @@ def check_gpu(ctx: Context) -> CheckResult:
     return _gpu_render_node(ctx, variant, details)
 
 
-def _gpu_voice(ctx: Context) -> CheckResult | None:
-    """The voice TTS accelerator, probed when LocalAI does not already prove the GPU.
+def _gpu_voice(ctx: Context, covered: str | None = None) -> CheckResult | None:
+    """The voice TTS accelerator, probed with the engine named in the verdict.
 
-    The voice images need the same host prerequisites as LocalAI's (NVIDIA: driver plus
-    Container Toolkit; AMD: the ROCm kernel driver), so the LocalAI probes serve here.
-    While LocalAI itself runs an accelerator image, its verdict covers the host and this
-    path stays out of the way; None hands the decision back to the caller."""
+    `covered` is the voice variant a LocalAI probe of this same run already proves
+    (see _LOCALAI_COVERS_VOICE); matching demands collapse into that one probe. A
+    cross-vendor setup (say LocalAI on CUDA, the TTS engine on ROCm) keeps both
+    probes, and check_gpu merges the verdicts. None means nothing to check."""
     name = "gpu"
     if VOICE_PROFILE not in ctx.active_profiles:
         return None
     variant = ctx.env.get("VOICE_TTS_IMAGE_VARIANT", "").strip() or "cpu"
-    if variant == "cpu":
+    if variant == "cpu" or variant == covered:
         return None
     details: dict[str, Any] = {
         "variant": f"{variant} (voice)",
@@ -1173,8 +1218,8 @@ def _gpu_voice(ctx: Context) -> CheckResult | None:
             details,
         )
     if variant == "nvidia":
-        return _gpu_nvidia(ctx, variant, details)
-    return _gpu_amd(ctx, details)
+        return _gpu_nvidia(ctx, variant, details, subject="the voice TTS engine")
+    return _gpu_amd(ctx, details, subject="the voice TTS engine")
 
 
 def _published_host_port(entry: str, env: dict[str, str]) -> tuple[str, int] | None:

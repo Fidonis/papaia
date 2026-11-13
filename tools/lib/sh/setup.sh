@@ -34,7 +34,11 @@ load_localai_variants() {
     # The GPU probe is a user-visible multi-second wait and its result cannot
     # change within one setup run, so one probe serves every caller (the
     # LocalAI prompt, the voice prompt, and both --*-variant=auto paths).
+    # Callers in a $(...) subshell inherit the parent's cache but cannot fill
+    # it — cmd_setup therefore probes in the parent before those prompts. The
+    # message goes to stderr so a subshell's captured stdout stays clean.
     [[ -n "${LOCALAI_VARIANTS_LOADED:-}" ]] && return 0
+    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
     _load_kv localai-variants
     LOCALAI_VARIANTS_LOADED=1
 }
@@ -174,7 +178,6 @@ cmd_setup() {
     # Resolved here rather than in Python so the CLI contract downstream only
     # ever carries a concrete variant, and so the probe stays opt-in.
     if [ "$localai_variant" = "auto" ]; then
-        info "Detecting available GPU accelerators, this can take a few seconds..."
         load_localai_variants
         localai_variant="${LOCALAI_VARIANT_RECOMMENDED:-cpu}"
         info "Detected LocalAI image variant: $localai_variant"
@@ -185,7 +188,6 @@ cmd_setup() {
         # interactive enable fall through to the variant prompt instead.
         local voice_effective="${voice:-${VOICE_STICKY:-false}}"
         if [ "$voice_effective" = "true" ]; then
-            info "Detecting available GPU accelerators, this can take a few seconds..."
             load_localai_variants
             voice_variant="$(_voice_variant_from "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
             info "Detected voice TTS image variant: $voice_variant"
@@ -427,6 +429,10 @@ cmd_setup() {
                 "LOCALAI_PUBLIC_URL" "$localai_default")"
         fi
         if [ "$local_ai" = "true" ] && [ -z "$localai_variant" ]; then
+            # Probed in the parent shell: the prompt's $(...) subshell inherits
+            # the result, and a later voice prompt reuses it instead of probing
+            # again (the cache flag cannot escape a subshell).
+            load_localai_variants
             localai_variant="$(_prompt_localai_variant)"
         fi
         if [ -z "$manager" ]; then
@@ -485,6 +491,7 @@ cmd_setup() {
             esac
         fi
         if [ "$voice" = "true" ] && [ -z "$voice_variant" ]; then
+            load_localai_variants
             voice_variant="$(_prompt_voice_variant)"
         fi
         if [ -z "$smtp" ]; then
@@ -565,6 +572,14 @@ cmd_setup() {
     [ -n "$smtp_from" ] && SETUP_SMTP_ARGS+=(--smtp-from="$smtp_from")
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
+    # A variant is a property of the enabled profile: when voice ends up off
+    # (an explicit --no-voice, a No at the prompt, or an untouched sticky
+    # opt-out), no probed or flagged variant may be stored as a choice.
+    local voice_final="${voice:-${VOICE_STICKY:-false}}"
+    if [ "$voice_final" != "true" ] && [ -n "$voice_variant" ]; then
+        warn "--voice-variant is ignored while the voice profile is disabled."
+        voice_variant=""
+    fi
     local setup_rc=0
     _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$voice" "$voice_variant" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
@@ -796,10 +811,10 @@ _prompt_manager() {
 # Asks which LocalAI accelerator image to install. Everything the operator sees
 # goes to stderr; only the chosen variant id reaches stdout.
 _prompt_localai_variant() {
-    # Announced before the probe, not after: it shells out to nvidia-smi and
-    # docker info, which takes long enough on a cold host to look like a hang.
     printf '\n%sLocalAI Image%s\n' "$CYAN" "$NC" >&2
-    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    # Normally a no-op: cmd_setup probes in the parent shell before this
+    # subshell, so the flag survives for the voice prompt. The call stays as
+    # the safety net for a caller that did not.
     load_localai_variants
 
     local default_slot
@@ -874,7 +889,7 @@ _voice_variant_from() {
 # to stderr; only the chosen variant id reaches stdout.
 _prompt_voice_variant() {
     printf '\n%sVoice TTS Image%s\n' "$CYAN" "$NC" >&2
-    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    # Normally a no-op; see _prompt_localai_variant.
     load_localai_variants
 
     # The sticky choice wins; otherwise the detection recommendation decides,

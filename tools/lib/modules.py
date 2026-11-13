@@ -127,6 +127,9 @@ MODULES: dict[str, ModuleSpec] = {
         name="voice",
         profile="voice",
         env_dirs=("ai/voice",),
+        # The accelerator choice lives in the root .env (like LOCALAI_IMAGE_VARIANT),
+        # so a module reset must restore it to the template's cpu default too.
+        root_keys=("VOICE_TTS_IMAGE_VARIANT",),
     ),
 }
 

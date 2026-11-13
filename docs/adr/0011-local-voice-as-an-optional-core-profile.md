@@ -78,6 +78,11 @@ services, `speaches` and `chatterbox`, both digest-pinned CPU images without pub
 ports. Toggle it with `papaia-ctl setup --voice/--no-voice` like the other modules.
 Merge two fragments while the profile is active: a `speech` block into
 `ai/librechat/librechat.yaml` and the two model routes into `ai/litellm/config.yaml`.
+The audio routes are marked undiscoverable, and a small proxy hook
+(`ai/litellm/papaia_hooks.py`) hides such deployments from the model listings for
+*every* key — LiteLLM's own flag spares admin keys, LibreChat holds the master key,
+and a transcription route offered as a selectable chat model would fail on the first
+message. Hiding is presentation-only; the routes stay fully callable.
 Configure the TTS server through the new render target `ai/voice/chatterbox.yaml`.
 German is the default (`languageSTT: de-DE`, TTS `generation_defaults.language: de`);
 users change language, voice and engines per account in LibreChat.

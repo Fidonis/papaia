@@ -1774,9 +1774,13 @@ microphone button reports a permission error. Use the HTTPS route of your revers
 
 **Models and voices.** The transcription model (`deepdml/faster-whisper-large-v3-turbo-ct2`, MIT)
 is named twice: `VOICE_STT_MODEL` in `ai/voice/.env` tells the init container what to install,
-and the LiteLLM route sends the same id per request — swapping the model (for example for a
-German fine-tune, or `Systran/faster-whisper-small` on tight memory) means changing both, the
-route through the overlay (`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`). The TTS server is configured through
+and the LiteLLM route sends the same id per request. Swapping the model (for example for a
+German fine-tune, or `Systran/faster-whisper-small` on tight memory) means: set
+`VOICE_STT_MODEL`, add a route for the new id under a **new** model name through the LiteLLM
+overlay (`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml` — `model_list` entries merge
+additively, so an overlay entry reusing the name `voice-stt` would be load-balanced against
+the shipped route, not replace it), and point `speech.stt.openai.model` at the new name
+through the LibreChat overlay. The TTS server is configured through
 `ai/voice/chatterbox.yaml` (same overlay mechanism). The TTS engine clones whatever reference
 voice a request names — accent included — so the module ships two public-domain German
 audiobook voices (default `Karlsson.wav`, see `src/ai/voice/voices/README.md` for sources and

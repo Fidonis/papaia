@@ -378,9 +378,14 @@ def generate_voice_gpu_override(
     a host back from GPU to CPU actually take effect."""
     out_path = config_dir / "overrides" / "docker-compose.voice-gpu.override.yml"
 
-    image = _voice_gpu_images(repo_root).get(variant) if variant else None
-    fragment_variant = _VOICE_VARIANT_FRAGMENT.get(variant)
-    if image is None or fragment_variant is None:
+    # cpu (and anything unknown) short-circuits before the compose file is
+    # parsed, like the LocalAI counterpart above.
+    fragment_variant = _VOICE_VARIANT_FRAGMENT.get(variant) if variant else None
+    if fragment_variant is None:
+        out_path.unlink(missing_ok=True)
+        return
+    image = _voice_gpu_images(repo_root).get(variant)
+    if image is None:
         out_path.unlink(missing_ok=True)
         return
 

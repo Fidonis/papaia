@@ -27,7 +27,7 @@ speech:
       # slower than real time, and LibreChat silently stops a playback stream
       # that stalls for 15 s — spoken replies would cut out mid-sentence. The
       # engine and the voice-tts route below stay wired up; a user on a host
-      # with enough CPU headroom (or a GPU, once the GPU variant lands)
+      # with enough CPU headroom (or on a GPU image, `setup --voice-variant`)
       # switches to "external" under Settings → Speech.
       engineTTS: "browser"
       automaticPlayback: true

@@ -134,11 +134,14 @@ must not be set in this file.
 ## Voice variables
 
 `src/ai/voice/.env` (profile `voice`). All services take their values only through
-`environment:` interpolation (path 1), each with a default, so a profile switched on by hand
-before `setup` has run starts — the engines merely refuse requests until the key exists. The
-TTS server is configured through the rendered `ai/voice/chatterbox.yaml`, not through
-variables, and the accelerator image choice (`VOICE_TTS_IMAGE_VARIANT`) lives in the root
-`.env` above, not here.
+`environment:` interpolation (path 1), so a profile switched on by hand before `setup` has
+run still starts — but without auth: `VOICE_API_KEY` has no inline default, and an empty key
+launches the STT engine with its bearer auth *disabled* (the TTS engine never authenticates,
+see ADR 0011). The STT healthcheck fails on the missing key on purpose — an open engine must
+show up as unhealthy, not as fine — so run `setup` to seed the key. The TTS server is
+configured through the rendered `ai/voice/chatterbox.yaml`, not through variables, and the
+accelerator image choice (`VOICE_TTS_IMAGE_VARIANT`) lives in the root `.env` above, not
+here.
 
 | Variable | Purpose |
 |---|---|

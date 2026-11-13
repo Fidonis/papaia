@@ -67,7 +67,10 @@ def _apply_voice_gpu_override(config_dir: Path, repo_root: Path, tree: dict) -> 
     runs the TTS engine must not carry a stray accelerator override (an empty variant
     removes the file)."""
     root = tree.get("", {})
-    active = "voice" in root.get("COMPOSE_PROFILES", "").split(",")
+    # Stripped like render_core parses the same value, so a hand-edited
+    # profile list with spaces cannot activate the fragments while this
+    # helper deletes the override.
+    active = "voice" in {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",")}
     gen_override.generate_voice_gpu_override(
         config_dir, repo_root, root.get("VOICE_TTS_IMAGE_VARIANT", "") if active else ""
     )
