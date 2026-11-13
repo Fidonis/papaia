@@ -1123,3 +1123,55 @@ def test_resolve_localai_variant_can_switch_back_to_cpu(repo_root):
     args = resolve.SetupArgs(config_dir=repo_root, localai_variant="cpu")
     tree = resolve.resolve_localai_variant(tree, args)
     assert tree[""]["LOCALAI_IMAGE_VARIANT"] == "cpu"
+
+
+# ── LocalAI runtime (ADR 0012) ──────────────────────────────────────────────
+
+
+def _runtime_tree(runtime: str = "", url: str = "https://papaia.example.com:8080") -> dict:
+    root = {
+        "PAPAIA_HOST": "https://papaia.example.com",
+        "LOCALAI_EXT_PORT": "8080",
+        "LOCALAI_PUBLIC_URL": url,
+    }
+    if runtime:
+        root["LOCALAI_RUNTIME"] = runtime
+    return {"": root}
+
+
+def test_native_stores_the_runtime_and_the_url_on_the_mac(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path, localai_runtime="native")
+    root = resolve.resolve_localai_runtime(_runtime_tree(), args)[""]
+    assert root["LOCALAI_RUNTIME"] == "native"
+    assert root["LOCALAI_PUBLIC_URL"] == "http://localhost:8080"
+
+
+def test_a_sticky_native_runtime_keeps_its_url(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path)
+    tree = _runtime_tree("native", url="https://papaia.example.com:8080")
+    root = resolve.resolve_localai_runtime(tree, args)[""]
+    assert root["LOCALAI_PUBLIC_URL"] == "http://localhost:8080"
+
+
+def test_back_to_the_container_derives_the_url_again(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path, localai_runtime="container")
+    tree = _runtime_tree("native", "http://localhost:8080")
+    root = resolve.resolve_localai_runtime(tree, args)[""]
+    assert root["LOCALAI_RUNTIME"] == "container"
+    assert root["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
+
+
+def test_back_to_the_container_keeps_a_url_the_operator_gives(tmp_path):
+    args = resolve.SetupArgs(
+        config_dir=tmp_path, localai_runtime="container", localai_host="https://ai.example.com"
+    )
+    tree = _runtime_tree("native", "https://ai.example.com")
+    root = resolve.resolve_localai_runtime(tree, args)[""]
+    assert root["LOCALAI_PUBLIC_URL"] == "https://ai.example.com"
+
+
+def test_without_the_flag_the_container_runtime_is_untouched(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path)
+    root = resolve.resolve_localai_runtime(_runtime_tree(), args)[""]
+    assert "LOCALAI_RUNTIME" not in root
+    assert root["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"

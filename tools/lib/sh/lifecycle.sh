@@ -138,6 +138,10 @@ cmd_start() {
     info "Rendering current configuration..."
     py_cli render
 
+    # The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native): its binary and
+    # start script, before `up` so a failed download is reported before the stack moves.
+    _localai_native_install
+
     local env_file="$REPO_ROOT/src/.env"
 
     # Before the addons, so an unresolvable profile set aborts the whole command
@@ -208,7 +212,59 @@ cmd_start() {
         warn "Keycloak role sync failed. Once Keycloak is healthy, run 'papaia-ctl keycloak-role-sync' to retry."
     fi
 
+    _localai_native_hint
+
     success "start complete."
+}
+
+# What the native LocalAI step of `start` did (LOCALAI_NATIVE = off | skipped | installed |
+# unchanged | failed) and the script that starts it. Set by _localai_native_install.
+LOCALAI_NATIVE="off"
+LOCALAI_NATIVE_SCRIPT=""
+LOCALAI_NATIVE_VERSION=""
+LOCALAI_NATIVE_REPLACED=""
+
+# Installs the pinned LocalAI binary and writes the start script. Inside a container
+# (papaia-manager) or on a host other than an Apple Silicon Mac with Docker Desktop it
+# warns and skips; a failed download or checksum warns and the rest of the stack starts.
+_localai_native_install() {
+    local line out rc=0
+    LOCALAI_NATIVE="off"
+    out="$(py_cli localai-native-install)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        LOCALAI_NATIVE="failed"
+        warn "The native LocalAI was not installed (see above). Fix the cause and run 'papaia-ctl start' again."
+        return 0
+    fi
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+        case "$line" in
+            LOCALAI_NATIVE=*) LOCALAI_NATIVE="${line#*=}" ;;
+            LOCALAI_NATIVE_SCRIPT=*) LOCALAI_NATIVE_SCRIPT="${line#*=}" ;;
+            LOCALAI_NATIVE_VERSION=*) LOCALAI_NATIVE_VERSION="${line#*=}" ;;
+            LOCALAI_NATIVE_REPLACED=*) LOCALAI_NATIVE_REPLACED="${line#*=}" ;;
+        esac
+    done <<< "$out"
+}
+
+# After `up`: how to start the native LocalAI, or that a running one has to be restarted
+# to use a new binary. Nothing when LocalAI already answers on an unchanged binary.
+_localai_native_hint() {
+    case "$LOCALAI_NATIVE" in
+        installed|unchanged) : ;;
+        *) return 0 ;;
+    esac
+    if [ -n "$LOCALAI_NATIVE_REPLACED" ]; then
+        warn "LocalAI $LOCALAI_NATIVE_VERSION is installed. Restart LocalAI to use $LOCALAI_NATIVE_VERSION:"
+        warn "  stop the running one (Ctrl-C in its terminal), then run $LOCALAI_NATIVE_SCRIPT"
+        return 0
+    fi
+    if py_cli localai-native-probe; then
+        return 0
+    fi
+    info "LocalAI runs natively on this Mac. Start it in a terminal and keep that open:"
+    info "  $LOCALAI_NATIVE_SCRIPT"
+    info "The first start downloads the Metal backend; models come from the init job."
 }
 
 # The two provisioning steps `start` runs after `docker compose up`, as commands of their

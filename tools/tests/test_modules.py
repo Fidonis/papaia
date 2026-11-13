@@ -544,3 +544,10 @@ def test_the_commands_only_know_the_optional_modules(real_repo, config_dir, name
 
 def test_this_machines_environment_is_not_what_the_tests_ran_against() -> None:
     assert not os.environ.get("PAPAIA_CONFIG_DIR", "").startswith(str(REAL_REPO))
+
+
+def test_a_native_localai_has_no_url_to_ask_for(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir)
+    env = config_dir / ".env"
+    env.write_text(env.read_text(encoding="utf-8") + "LOCALAI_RUNTIME=native\n", encoding="utf-8")
+    assert modules.questions(config_dir, "localai") == []

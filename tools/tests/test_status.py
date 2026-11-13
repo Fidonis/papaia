@@ -586,3 +586,26 @@ def test_run_command_captures_output():
     result = status.run_command([sys.executable, "-c", "print('hi')"], 10.0)
 
     assert (result.returncode, result.stdout.strip()) == (0, "hi")
+
+
+def test_a_native_localai_is_not_expected_as_a_container(stack):
+    env = stack["config"] / ".env"
+    text = env.read_text(encoding="utf-8")
+    env.write_text(
+        text.replace("COMPOSE_PROFILES=", "COMPOSE_PROFILES=localai,", 1)
+        + "LOCALAI_RUNTIME=native\n",
+        encoding="utf-8",
+    )
+    report = collect(stack, FakeDocker(healthy_core()))
+    services = {c.service for m in report.modules for c in m.containers}
+    assert "localai" not in services
+    # The init job still runs and fills the models directory of the native process.
+    assert "localai-model-init" in services
+
+
+def test_core_inventory_skips_the_named_services(stack):
+    active = {"localai"}
+    names = {e.service for e in status.core_inventory(stack["repo"], active)}
+    skipped = {e.service for e in status.core_inventory(stack["repo"], active, {"localai"})}
+    assert "localai" in names
+    assert names - skipped == {"localai"}

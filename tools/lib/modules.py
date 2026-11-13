@@ -183,6 +183,9 @@ def questions(config_dir: Path, name: str) -> list[dict]:
     module = spec(name)
     root = common.parse_env_file(config_dir / ".env")
     app_host = root.get("PAPAIA_HOST", "")
+    if name == "localai" and root.get("LOCALAI_RUNTIME", "").strip() == "native":
+        # The native process has a fixed URL on the Mac (ADR 0012); nothing to ask.
+        return []
     found = []
     for question in module.questions:
         port = root.get(question.port_key) or question.default_port

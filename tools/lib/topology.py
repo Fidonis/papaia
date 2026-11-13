@@ -220,6 +220,7 @@ COLOCATED = (("websearch", "librechat"),)
 CORE_OVERRIDES = (
     "docker-compose.ssl-cert.override.yml",
     "docker-compose.localai-gpu.override.yml",
+    "docker-compose.localai-runtime.override.yml",
 )
 
 # Root keys that point at the controller's own directories. On another node they are
@@ -764,6 +765,12 @@ def validate(
         )
 
     # --- LocalAI hardware ------------------------------------------------
+    if "localai" in active and env.get("LOCALAI_RUNTIME", "").strip() == "native":
+        found.errors.append(
+            "LOCALAI_RUNTIME=native runs LocalAI as a process on one Mac and is for a"
+            " single-host installation; set it back with"
+            " 'papaia-ctl setup --localai-runtime=container'"
+        )
     if "localai" in active and topo.node_of("localai") in topo.nodes:
         node = topo.nodes[topo.node_of("localai")]
         variant = env.get("LOCALAI_IMAGE_VARIANT", "") or "cpu"

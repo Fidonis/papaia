@@ -114,3 +114,11 @@ def test_the_prompt_derives_again_after_external_oidc(repo_root, config_dir):
     out = defaults.compute_defaults(config_dir, repo_root)
     assert out["AUTH_HOST_STICKY"] == ""
     assert out["AUTH_HOST_DERIVED"] == "https://auth.chat.example.org"
+
+
+def test_the_localai_runtime_is_sticky_once_seeded(repo_root, config_dir):
+    assert defaults.compute_defaults(config_dir, repo_root)["LOCALAI_RUNTIME_STICKY"] == ""
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    env = config_dir / ".env"
+    env.write_text(env.read_text(encoding="utf-8") + "LOCALAI_RUNTIME=native\n", encoding="utf-8")
+    assert defaults.compute_defaults(config_dir, repo_root)["LOCALAI_RUNTIME_STICKY"] == "native"
