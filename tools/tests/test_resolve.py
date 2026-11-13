@@ -181,6 +181,44 @@ def test_resolve_hostnames_seed_auth_host_is_not_sticky_after_external_oidc(repo
     assert tree["infra/keycloak"]["KC_HOSTNAME"] == "https://auth.chat.example.org"
 
 
+def test_resolve_hostnames_fqdn_auth_host_with_another_scheme_is_chosen(repo_root):
+    # For a domain name the derivation keeps the app host's scheme, so a value with
+    # another scheme was chosen and stays.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://chat.example.org"
+    tree[""]["AUTH_HOST"] = "https://auth.chat.example.org"
+    args = resolve.SetupArgs(config_dir=repo_root, non_interactive=True, fresh_init=False)
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.chat.example.org"
+
+
+@pytest.mark.parametrize(
+    ("stored", "provider", "app_host", "expected"),
+    [
+        # chosen
+        ("https://auth.example.org", "internal_keycloak", "https://chat.example.org",
+         "https://auth.example.org"),
+        ("https://auth.chat.example.org", "internal_keycloak", "http://chat.example.org",
+         "https://auth.chat.example.org"),
+        ("https://host.docker.internal:9110", "internal_keycloak",
+         "http://host.docker.internal", "https://host.docker.internal:9110"),
+        # the stored app host's derivation, with or without the old local scheme
+        ("https://auth.chat.example.org", "internal_keycloak", "https://chat.example.org", ""),
+        ("http://host.docker.internal:8110", "internal_keycloak",
+         "http://host.docker.internal", ""),
+        ("https://127.0.0.1:8110", "internal_keycloak", "http://127.0.0.1", ""),
+        # stored under another provider, nothing stored, a placeholder
+        ("https://auth.example.org", "external_oidc", "https://chat.example.org", ""),
+        ("", "internal_keycloak", "https://chat.example.org", ""),
+        ("GENERATE_AUTH_HOST", "internal_keycloak", "https://chat.example.org", ""),
+    ],
+)
+def test_sticky_auth_host(stored, provider, app_host, expected):
+    assert resolve.sticky_auth_host(
+        stored, prior_provider=provider, stored_app_host=app_host, keycloak_ext_port="8110"
+    ) == expected
+
+
 def test_a_run_without_flags_keeps_the_stored_auth_host(tmp_path):
     # What `upgrade` does through `setup --env-only`: no --auth-host on the second run.
     inst = Installation(tmp_path, [])

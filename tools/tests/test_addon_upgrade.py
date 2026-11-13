@@ -874,3 +874,48 @@ def test_the_list_without_a_deployment_asks_for_setup(tmp_path, repo_root, capsy
 
     assert rc == 2
     assert "papaia-ctl setup" in capsys.readouterr().err
+
+
+# ── managed Keycloak clients (client_secrets) ────────────────────────────────
+
+
+def _manage_mcp_client(path: Path) -> None:
+    """Let the v2 manifest name its new client under `client_secrets`."""
+    manifest_path = path / "papaia-app.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["integration"]["keycloak"]["client_secrets"] = {
+        "integration/keycloak/paperless-mcp.json": {
+            "secret_env": "KC_PAPERLESS_MCP_CLIENT_SECRET"
+        }
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+
+@pytest.mark.parametrize("synced", [True, False])
+def test_an_upgrade_generates_a_managed_secret_before_the_env_reaches_the_checkout(
+    world, monkeypatch, capsys, synced
+):
+    # A running add-on is recreated by bash right after this step, without `addon start`:
+    # its containers must start with the secret the client gets, not with the placeholder.
+    _manage_mcp_client(world["v2"])
+    calls = []
+
+    def _sync(tree, config_dir, repo_root, names=None, **kwargs):
+        calls.append(names)
+        return synced
+
+    monkeypatch.setattr(cli_addon.keycloak_role_sync, "sync_addon_clients", _sync)
+    capsys.readouterr()
+
+    assert _apply(
+        world["config"], world["repo"], world["v2"], answers_file=str(world["answers"])
+    ) == 0
+
+    secret = _bundle(world["config"])["KC_PAPERLESS_MCP_CLIENT_SECRET"]
+    assert len(secret) == 48
+    assert common.parse_env_file(world["v2"] / ".env")["KC_PAPERLESS_MCP_CLIENT_SECRET"] == secret
+    assert calls == [{"paperless"}]
+    out = capsys.readouterr().out
+    assert "Import the Keycloak client integration/keycloak/paperless-mcp.json" not in out
+    assert "Set KC_PAPERLESS_MCP_CLIENT_SECRET" not in out
+    assert ("papaia-ctl keycloak-role-sync" in out) is not synced

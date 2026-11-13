@@ -30,7 +30,9 @@ def test_compute_defaults_seeded_config_dir_surfaces_sticky_values(repo_root, co
 
     assert out["CONFIG_SEEDED"] == "true"
     assert out["APP_HOST_STICKY"] == "http://host.docker.internal"
-    assert out["AUTH_HOST_STICKY"] == "http://host.docker.internal:8110"
+    # The seed's AUTH_HOST is only the derivation of its PAPAIA_HOST: setup derives it
+    # again, so the prompt does not pre-fill it.
+    assert out["AUTH_HOST_STICKY"] == ""
     assert out["AUTH_PROVIDER_STICKY"] == "internal_keycloak"
     assert out["REVERSE_PROXY_PROVIDER_STICKY"] == "internal_nginx"
     assert out["NPM_ADMIN_HOST_STICKY"] == "http://host.docker.internal:8100"
@@ -80,3 +82,35 @@ def test_compute_defaults_surfaces_sticky_localai_variant(repo_root, config_dir)
 def test_compute_defaults_localai_variant_not_sticky_before_seeding(repo_root, config_dir):
     out = defaults.compute_defaults(config_dir, repo_root)
     assert out["LOCALAI_VARIANT_STICKY"] == ""
+
+
+def _seeded_with(config_dir, repo_root, **values):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    env = config_dir / ".env"
+    lines = [
+        line for line in env.read_text(encoding="utf-8").splitlines()
+        if line.split("=", 1)[0] not in values
+    ]
+    lines += [f"{key}={value}" for key, value in values.items()]
+    env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_a_chosen_auth_host_is_offered_to_the_prompt(repo_root, config_dir):
+    _seeded_with(
+        config_dir, repo_root,
+        PAPAIA_HOST="https://chat.example.org", AUTH_HOST="https://sso.example.net",
+    )
+    out = defaults.compute_defaults(config_dir, repo_root)
+    assert out["AUTH_HOST_STICKY"] == "https://sso.example.net"
+
+
+def test_the_prompt_derives_again_after_external_oidc(repo_root, config_dir):
+    # Interactive switch from external_oidc: no stale seed value as the pre-fill.
+    _seeded_with(
+        config_dir, repo_root,
+        PAPAIA_HOST="https://chat.example.org", AUTH_PROVIDER="external_oidc",
+        AUTH_HOST="https://host.docker.internal:8110",
+    )
+    out = defaults.compute_defaults(config_dir, repo_root)
+    assert out["AUTH_HOST_STICKY"] == ""
+    assert out["AUTH_HOST_DERIVED"] == "https://auth.chat.example.org"
