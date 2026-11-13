@@ -16,6 +16,9 @@ instructions: |
   Help with searching, categorising, and tagging documents.
 mcpServers:
   - Paperless                    # must match a configured MCP server
-tools: []
+tools: []                       # empty: every tool of the servers above; or pick single tools
+                                # (<tool>_mcp_<server>, e.g. list_documents_mcp_Paperless) — a
+                                # small selection keeps the tool prompt short, which helps
+                                # small local models
 model_parameters:
   temperature: 0.3

@@ -122,6 +122,17 @@ async function upsertAgent(db, dir, file, managedBy, taken, guarded) {
     return null;
   }
 
+  // LibreChat equips a stored agent from `tools` alone; `mcpServers` adds no
+  // tools by itself. An empty list next to MCP servers therefore means every
+  // tool of those servers, so the per-server wildcard key is derived. A
+  // non-empty list is stored as written: single keys (<tool>_mcp_<server>)
+  // keep the tool prompt small, which small local models need.
+  const mcpServers = Array.isArray(doc.mcpServers) ? doc.mcpServers : [];
+  let tools = Array.isArray(doc.tools) ? doc.tools : [];
+  if (tools.length === 0 && mcpServers.length > 0) {
+    tools = mcpServers.map((server) => `sys__all__sys_mcp_${server}`);
+  }
+
   const update = {
     id: agentId,
     name: doc.name,
@@ -129,9 +140,9 @@ async function upsertAgent(db, dir, file, managedBy, taken, guarded) {
     provider: doc.provider,
     model: doc.model,
     instructions: doc.instructions ?? '',
-    mcpServers: Array.isArray(doc.mcpServers) ? doc.mcpServers : [],
+    mcpServers,
     model_parameters: doc.model_parameters ?? {},
-    tools: Array.isArray(doc.tools) ? doc.tools : [],
+    tools,
     // Re-stamp the author on every run so a re-imported agent stays
     // owned by the right user even if the user document was rebuilt.
     author: authorId,
