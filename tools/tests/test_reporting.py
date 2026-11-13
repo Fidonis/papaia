@@ -130,3 +130,54 @@ def test_keycloak_checklist_leaves_managed_clients_to_start(tmp_path, capsys):
     created, manual = out.split("Import these OIDC clients")
     assert "created by 'papaia-ctl start'" in created and "wiki.json" in created
     assert "manual.json" in manual and "wiki.json" not in manual
+
+
+def test_keycloak_checklist_does_not_ask_to_enter_a_managed_secret(tmp_path, capsys):
+    # The placeholder of a manual import, as an add-on for an older core still ships it:
+    # `addon start` generates the value, so only the unmanaged key is listed.
+    addon_path = tmp_path / "addon"
+    addon_path.mkdir()
+    config_dir = tmp_path / "config"
+    (config_dir / "addons" / "wiki").mkdir(parents=True)
+    (config_dir / "addons" / "wiki" / ".env").write_text(
+        "KC_WIKI_SECRET=REPLACE_WITH_WIKI_SECRET\nKC_OTHER_SECRET=REPLACE_WITH_OTHER\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "integration": {
+            "keycloak": {
+                "clients": ["kc/wiki.json", "kc/other.json"],
+                "client_secrets": {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET"}},
+            }
+        }
+    }
+
+    reporting.print_keycloak_checklist("wiki", manifest, addon_path, config_dir)
+
+    out = capsys.readouterr().out
+    assert "their secrets are generated" in out
+    _, steps = out.split("manual steps required")
+    assert "KC_OTHER_SECRET" in steps
+    assert "KC_WIKI_SECRET" not in steps
+
+
+def test_keycloak_checklist_without_manual_steps_for_a_managed_placeholder(tmp_path, capsys):
+    addon_path = tmp_path / "addon"
+    addon_path.mkdir()
+    config_dir = tmp_path / "config"
+    (config_dir / "addons" / "wiki").mkdir(parents=True)
+    (config_dir / "addons" / "wiki" / ".env").write_text(
+        "KC_WIKI_SECRET=REPLACE_WITH_WIKI_SECRET\n", encoding="utf-8"
+    )
+    manifest = {
+        "integration": {
+            "keycloak": {
+                "clients": ["kc/wiki.json"],
+                "client_secrets": {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET"}},
+            }
+        }
+    }
+
+    reporting.print_keycloak_checklist("wiki", manifest, addon_path, config_dir)
+
+    assert "manual steps required" not in capsys.readouterr().out
