@@ -1232,6 +1232,68 @@ def test_upgrade_and_rollback_check_what_dependents_require(
         assert _gate("paperless", manifest, config_dir, repo_root, force=True)[1] == 0
 
 
+def _paperless_at(tmp_path: Path, version: str) -> Path:
+    path = tmp_path / f"paperless-{version}"
+    shutil.copytree(ADDON_PAPERLESS, path)
+    manifest_file = path / "papaia-app.yaml"
+    manifest = yaml.safe_load(manifest_file.read_text(encoding="utf-8"))
+    manifest["version"] = version
+    manifest_file.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return path
+
+
+def _registered_path(config_dir: Path, name: str) -> str:
+    deployed = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    return next(a["path"] for a in deployed["addons"] if a["name"] == name)
+
+
+@pytest.mark.parametrize(
+    ("required", "new_version", "refused"),
+    [
+        ("^1.0.0", "2.0.0", True),
+        (">=1.0.0", "0.9.0", True),
+        ("^1.0.0", "1.4.0", False),
+    ],
+)
+def test_install_path_re_pointing_an_addon_checks_what_dependents_require(
+    repo_root, config_dir, tmp_path, capsys, required, new_version, refused
+):
+    _setup(repo_root, config_dir)
+    assert cmd_addon_install(_install_args(config_dir, repo_root)) == 0
+    _install_dependent(
+        repo_root, config_dir, tmp_path, [{"name": "paperless", "version": required}]
+    )
+    before = _registered_path(config_dir, "paperless")
+    new_path = str(_paperless_at(tmp_path, new_version))
+    capsys.readouterr()
+
+    exit_code = cmd_addon_install(_install_args(config_dir, repo_root, path=new_path))
+
+    assert (exit_code == 2) is refused
+    if refused:
+        assert "addon 'dependent' requires 'paperless" in capsys.readouterr().err
+        assert _registered_path(config_dir, "paperless") == before
+        forced = _install_args(config_dir, repo_root, path=new_path, force=True)
+        assert cmd_addon_install(forced) == 0
+    assert _registered_path(config_dir, "paperless") != before
+
+
+def test_a_fresh_install_ignores_ranges_on_an_addon_not_yet_installed(
+    repo_root, config_dir, tmp_path
+):
+    _setup(repo_root, config_dir)
+    # The requirement itself is unmet (nothing installed), so only --force gets the
+    # dependent in; the later first install of the required addon is not re-pointing.
+    dependent = _dependent_addon(tmp_path, [{"name": "paperless", "version": "^1.0.0"}])
+    forced = _install_args(
+        config_dir, repo_root, name="dependent", path=str(dependent), force=True
+    )
+    assert cmd_addon_install(forced) == 0
+
+    new_path = str(_paperless_at(tmp_path, "2.0.0"))
+    assert cmd_addon_install(_install_args(config_dir, repo_root, path=new_path)) == 0
+
+
 @pytest.mark.parametrize(
     ("requires", "error"),
     [
