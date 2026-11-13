@@ -7,6 +7,7 @@ import ssl
 import urllib.error
 
 import pytest
+import yaml
 
 from lib import keycloak_role_sync as kcs
 
@@ -351,6 +352,15 @@ def test_the_server_name_context_overrides_the_url_host(tmp_path, monkeypatch):
     monkeypatch.setattr(ssl.SSLContext, "wrap_socket", _record)
     ctx.wrap_socket(object(), server_hostname="10.42.0.1")
     assert seen["name"] == "localhost"
+
+
+def test_the_server_name_context_is_as_strict_as_the_default_one(tmp_path):
+    ctx = kcs._ssl_context(tmp_path, "localhost")
+    default = ssl.create_default_context()
+    assert ctx.verify_flags == default.verify_flags
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname
+    assert ctx.minimum_version == default.minimum_version
 
 
 def test_without_a_server_name_the_default_context_is_kept(tmp_path):
@@ -1102,3 +1112,212 @@ def test_the_login_theme_is_set_once(tmp_path, monkeypatch, capsys):
 
     assert len(fake.clients["uuid-oauth2-proxy"]["put_bodies"]) == 1
     assert "0 login theme(s) set" in capsys.readouterr().out
+
+
+# ── Add-on clients (addon_api 4) ─────────────────────────────────────────
+
+
+def _addon(tmp_path, *, env, secrets=None, active=True, name="wiki"):
+    """An add-on checkout with one client export, its bundle .env and a deployment entry."""
+    addon_path = tmp_path / "checkout" / name
+    (addon_path / "kc").mkdir(parents=True)
+    (addon_path / "kc" / "wiki.json").write_text(
+        json.dumps(
+            {
+                "id": "uuid-from-the-exporting-realm",
+                "clientId": "wiki",
+                "rootUrl": "https://wiki.example",
+                "redirectUris": ["/login"],
+                "protocolMappers": [{"name": "groups", "protocolMapper": "x", "config": {}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (addon_path / "papaia-app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": name,
+                "integration": {
+                    "keycloak": {"clients": ["kc/wiki.json"], "client_secrets": secrets or {}}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    bundle = tmp_path / "config" / "addons" / name
+    bundle.mkdir(parents=True)
+    (bundle / ".env").write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
+    (tmp_path / "config" / "deployment.yaml").write_text(
+        yaml.safe_dump({"addons": [{"name": name, "path": str(addon_path), "active": active}]}),
+        encoding="utf-8",
+    )
+    return tmp_path / "config"
+
+
+_SECRETS = {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET", "root_url_env": "WIKI_SERVER"}}
+
+
+def test_managed_clients_need_a_listed_path_and_a_secret_key():
+    def managed(clients, secrets):
+        return kcs.managed_clients(
+            {"integration": {"keycloak": {"clients": clients, "client_secrets": secrets}}}
+        )
+
+    assert managed(["kc/wiki.json"], {}) == []
+    assert managed([], {"kc/wiki.json": {"secret_env": "S"}}) == []
+    assert managed(["kc/wiki.json"], {"kc/wiki.json": {"root_url_env": "U"}}) == []
+    assert managed(["kc/wiki.json"], {"kc/wiki.json": {"secret_env": "S"}}) == [
+        {"path": "kc/wiki.json", "secret_env": "S", "root_url_env": None}
+    ]
+
+
+def test_addon_clients_carry_the_secret_and_root_url_of_the_addon_env(tmp_path):
+    config = _addon(
+        tmp_path,
+        secrets=_SECRETS,
+        env={"KC_WIKI_SECRET": "s3cret", "WIKI_SERVER": "https://wiki.test:8020"},
+    )
+    (client,) = kcs.addon_clients(config, tmp_path)
+    assert client["secret"] == "s3cret"
+    assert client["rootUrl"] == "https://wiki.test:8020"
+    assert client["clientAuthenticatorType"] == "client-secret"
+    assert "id" not in client  # Keycloak assigns its own
+
+
+@pytest.mark.parametrize("secret", ["", "GENERATE_SECRET", "REPLACE_WITH_SECRET", "CHANGE_ME"])
+def test_a_placeholder_secret_is_generated_into_the_env(tmp_path, secret):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": secret, "OTHER": "kept"})
+    (client,) = kcs.addon_clients(config, tmp_path)
+    env = (config / "addons" / "wiki" / ".env").read_text(encoding="utf-8")
+    assert f"KC_WIKI_SECRET={client['secret']}\n" in env and len(client["secret"]) == 48
+    assert "OTHER=kept" in env
+    # The next run keeps it.
+    (again,) = kcs.addon_clients(config, tmp_path)
+    assert again["secret"] == client["secret"]
+
+
+def test_a_client_whose_secret_key_is_missing_is_left_out(tmp_path, capsys):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"OTHER": "x"})
+    assert kcs.addon_clients(config, tmp_path) == []
+    assert "KC_WIKI_SECRET is not in its .env" in capsys.readouterr().err
+
+
+def test_plain_entries_and_inactive_addons_stay_manual(tmp_path):
+    config = _addon(tmp_path, env={"KC_WIKI_SECRET": "s"})
+    assert kcs.addon_clients(config, tmp_path) == []
+    config = _addon(tmp_path / "b", secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"}, active=False)
+    assert kcs.addon_clients(config, tmp_path / "b") == []
+
+
+def test_start_creates_the_addon_client_and_aligns_its_secret_later(tmp_path, monkeypatch):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "first"})
+    _write_realm_json(config, _realm_def())
+    proxy = {"uuid-oauth2-proxy": {"clientId": "oauth2-proxy", "mappers": {}}}
+    fake = FakeKeycloak(roles={}, clients=proxy)
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=config, repo_root=tmp_path) is True
+    created = fake.clients["uuid-wiki"]
+    assert created["created_from"]["secret"] == "first"
+    assert "groups" in created["mappers"]
+
+    # The operator rotates the secret in the add-on .env: the next start aligns it.
+    (config / "addons" / "wiki" / ".env").write_text("KC_WIKI_SECRET=second\n", encoding="utf-8")
+    created["secret"] = "first"
+    assert kcs.sync_roles(_tree(), config_dir=config, repo_root=tmp_path) is True
+    assert created["secret"] == "second"
+    assert [c["clientId"] for c in fake.clients.values()].count("wiki") == 1
+
+
+def test_addon_start_syncs_only_its_own_clients(tmp_path, monkeypatch):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    fake = FakeKeycloak(roles={}, clients={})
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_addon_clients(_tree(), config, tmp_path, {"other"}) is True
+    assert fake.clients == {}
+    assert kcs.sync_addon_clients(_tree(), config, tmp_path, {"wiki"}) is True
+    assert {c["clientId"] for c in fake.clients.values()} == {"wiki"}
+
+
+def test_addon_clients_are_left_alone_with_an_external_provider(tmp_path, monkeypatch):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    fake = FakeKeycloak(roles={}, clients={})
+    _patch_common(monkeypatch, fake)
+    tree = _tree()
+    tree[""]["AUTH_PROVIDER"] = "external_oidc"
+    assert kcs.sync_addon_clients(tree, config, tmp_path, None) is True
+    assert fake.clients == {}
+
+
+def test_addon_clients_verify_a_host_ip_connection_like_the_role_sync(tmp_path, monkeypatch):
+    # The local CA certificate names localhost, not the --host-ip address: both syncs have to
+    # dial the address and verify the name, or `addon start` fails where the role sync works.
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    _write_realm_json(config, _realm_def())
+    fake = FakeKeycloak(roles={}, clients={})
+    _patch_common(monkeypatch, fake)
+    monkeypatch.setattr(kcs.common, "in_container", lambda: False)
+    seen: list[tuple[str, str | None]] = []
+    real = kcs._ssl_context
+
+    def _record(config_dir, server_name=None):
+        seen.append(("ctx", server_name))
+        return real(config_dir, server_name)
+
+    def _wait(base_url, ctx, timeout=90):
+        seen.append(("url", base_url))
+
+    monkeypatch.setattr(kcs, "_ssl_context", _record)
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", _wait)
+    tree = _tree()
+    tree[""]["HOST_IP"] = "10.42.0.1"
+
+    assert kcs.sync_addon_clients(tree, config, tmp_path, {"wiki"}) is True
+    addon_start = list(seen)
+    seen.clear()
+    assert kcs.sync_roles(tree, config_dir=config, repo_root=tmp_path) is True
+    assert addon_start == seen == [("ctx", "localhost"), ("url", "https://10.42.0.1:8110")]
+
+
+def test_addon_clients_wait_only_briefly_for_keycloak(tmp_path, monkeypatch, capsys):
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "s"})
+    _patch_common(monkeypatch, FakeKeycloak(roles={}, clients={}))
+    waited = []
+
+    def _down(base_url, ctx, timeout=90):
+        waited.append(timeout)
+        raise TimeoutError("Keycloak did not become ready")
+
+    monkeypatch.setattr(kcs, "_wait_for_keycloak", _down)
+    assert kcs.sync_addon_clients(_tree(), config, tmp_path, {"wiki"}) is False
+    assert waited == [kcs.ADDON_CLIENTS_WAIT_SECONDS]
+    assert "Keycloak clients skipped" in capsys.readouterr().err
+
+
+def test_fill_client_secrets_replaces_only_placeholders(tmp_path, capsys):
+    config = _addon(
+        tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "REPLACE_WITH_X", "OTHER": "kept"}
+    )
+    env_path = config / "addons" / "wiki" / ".env"
+    manifest = yaml.safe_load((tmp_path / "checkout" / "wiki" / "papaia-app.yaml").read_text())
+
+    assert kcs.fill_client_secrets(manifest, env_path, "wiki") == ["KC_WIKI_SECRET"]
+    first = _env_of(env_path)
+    assert len(first["KC_WIKI_SECRET"]) == 48 and first["OTHER"] == "kept"
+    assert "KC_WIKI_SECRET of add-on wiki generated" in capsys.readouterr().out
+    # A value that is set is never replaced.
+    assert kcs.fill_client_secrets(manifest, env_path, "wiki") == []
+    assert _env_of(env_path) == first
+
+
+def test_a_secret_the_role_sync_generates_asks_for_an_addon_start(tmp_path, capsys):
+    # The role sync runs after the add-on's .env reached its checkout; the add-on has to be
+    # started again to pick up the new value.
+    config = _addon(tmp_path, secrets=_SECRETS, env={"KC_WIKI_SECRET": "GENERATE_SECRET"})
+    kcs.addon_clients(config, tmp_path)
+    assert "run 'papaia-ctl addon start wiki' so the add-on uses it" in capsys.readouterr().out
+
+
+def _env_of(path):
+    return kcs.common.parse_env_file(path)

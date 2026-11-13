@@ -139,13 +139,20 @@ Linux host:
   [papaia-manager](#papaia-manager).
 - **Keycloak certificate.** With the default local URLs, browsers on the Mac check
   Keycloak's certificate against the login keychain. `setup` offers to trust the
-  generated local CA there once (no admin rights needed). In a non-interactive run, or
-  when the offer is declined, it prints the command instead:
+  generated local CA there once, for TLS server certificates only (no admin rights
+  needed; macOS may still ask for the login password, and over SSH the step fails and
+  `setup` prints the command). In a non-interactive run, or when the offer is declined,
+  it prints the command instead:
 
   ```bash
-  security add-trusted-cert -r trustRoot \
+  security add-trusted-cert -r trustRoot -p ssl \
     -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
   ```
+
+  A local CA that `setup` creates can only sign for Keycloak's names (`keycloak`,
+  `localhost`, `host.docker.internal`), and its key `certs/local-ca.key` is readable by
+  its owner only. A CA from an earlier release keeps working without that limit; delete
+  `certs/` and run `setup` again to replace it, then trust the new one.
 
   The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
   through an `/etc/hosts` entry; `setup` prints the command when it is missing.
@@ -403,9 +410,12 @@ the release ships with.
 networks exist by the time the core's generated override files are applied. An override whose
 network does not exist yet is skipped rather than failing the start.
 
-When `--addons` is active, `start` runs a compatibility check against all active add-ons
-before bringing up the core. If any add-on is INCOMPATIBLE the start is aborted. Pass
-`--force` to demote incompatibility to a warning and proceed.
+`start` runs the compatibility check of [`addon check`](#addon) against all active add-ons
+before bringing up the core, with or without `--addons`. If any add-on is INCOMPATIBLE the
+start is aborted: an add-on the core no longer supports, or one whose required add-ons
+(`requires.addons`) are not active or no longer in range. Pass `--force`, or set warn mode
+(`PAPAIA_COMPAT_MODE=warn` or `mode: dev` in `deployment.yaml`), to demote incompatibility to
+a warning and proceed.
 
 `--profiles` takes a comma-separated list of Compose profiles and overrides `COMPOSE_PROFILES`
 for this invocation only. The selection is validated up front: a profile list that names no
@@ -485,8 +495,9 @@ The run, in order:
 2. Fetches the release tags and resolves the target version.
 3. Checks all active add-ons against the target release — the same evaluation as
    `addon check --target-core=PATH`, run against a temporary worktree of the target
-   tag. An incompatible add-on aborts the upgrade before anything is touched;
-   `--force` demotes it to a warning.
+   tag. An incompatible add-on aborts the upgrade before anything is touched, and so
+   does an add-on whose required add-ons (`requires.addons`) are not active or not in
+   range; `--force` demotes it to a warning.
 4. Creates a restore point (`backup`) unless `--no-backup` is given, and stops the
    stack.
 5. Checks out the release tag and re-executes itself from the new tree, so the
@@ -683,8 +694,9 @@ tools/papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force
   [--config-dir=PATH]
 tools/papaia-ctl addon list      [--json] [--config-dir=PATH]
 tools/papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
-tools/papaia-ctl addon remove    <name> [--config-dir=PATH]
-tools/papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
+tools/papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
+tools/papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
 tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
   [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
 tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
@@ -695,12 +707,13 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. |
 | `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
 | `install --node=NAME` | Distributed installations only: the node the add-on runs on. Without it, the add-on goes to the node of the core services it attaches to. An add-on whose `networks.attach` names services on two nodes is **not placeable** and is refused whatever `--force` says: its network exists on one node only. On a remote node the add-on travels in the node's bundle, and `start`, `stop` and `start --addons` run it there. |
-| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). See [Upgrading an add-on](#upgrading-an-add-on). |
-| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. |
+| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. See [Upgrading an add-on](#upgrading-an-add-on). |
+| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. Refused, like `upgrade`, when the older version does not meet a range another active add-on requires of it. |
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
-| `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. |
-| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. |
+| `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
+| `run` | Runs a maintenance action the add-on declares under `actions:` — `docker compose run --rm <service> <args>` in the add-on's project, with the files and env of `addon start` — and exits with the action's code. Only declared actions with their fixed arguments run; without an action, lists the declared ones (`--json` for tools). Single host only. |
+| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. |
 | `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). |
 

@@ -206,6 +206,62 @@ cmd_addon_start() {
     success "addon start complete: $addon_name"
 }
 
+# `papaia-ctl addon run <addon> [<action>] [--json]`: runs an action the add-on declares
+# under `actions:` as `docker compose run --rm <service> <args>` in its project, with the
+# same files and env as `addon start`, and exits with the action's code. Without an
+# action, lists the declared ones. Only declared actions with their fixed arguments run.
+cmd_addon_run() {
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" action="" json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --json) json=1 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option: $1"; exit 2 ;;
+            *)
+                if [ -z "$addon_name" ]; then addon_name="$1"
+                elif [ -z "$action" ]; then action="$1"
+                else error "addon run takes no arguments after the action: $1"; exit 2
+                fi
+                ;;
+        esac
+        shift
+    done
+    if [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon run <name> [<action>] [--json]"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    if [ -z "$action" ]; then
+        if [ "$json" -eq 1 ]; then
+            py_cli addon-actions --name="$addon_name" --json
+        else
+            py_cli addon-actions --name="$addon_name"
+        fi
+        return
+    fi
+    local spec_file
+    spec_file="$(mktemp)"
+    # Not a process substitution: py_cli's exit 2 (unknown action) must stop here.
+    if ! py_cli addon-action --name="$addon_name" --action="$action" > "$spec_file"; then
+        rm -f "$spec_file"
+        exit 2
+    fi
+    local -a spec=()
+    local part
+    while IFS= read -r -d '' part; do
+        spec+=("$part")
+    done < "$spec_file"
+    rm -f "$spec_file"
+    local addon_path
+    addon_path="$(_addon_path "$addon_name")"
+    info "Running action '$action' of addon $addon_name (service ${spec[0]})"
+    local rc=0
+    _addon_compose run "$addon_name" "$addon_path" --rm ${spec[@]+"${spec[@]}"} || rc=$?
+    exit "$rc"
+}
+
 cmd_addon_stop() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0
     while [ $# -gt 0 ]; do
@@ -236,11 +292,20 @@ cmd_addon_stop() {
     success "addon stop complete: $addon_name"
 }
 
+# Exits 2 while another active add-on requires $1 (requires.addons), before anything is
+# taken down; $2 = 1 (--force) continues with a warning.
+_addon_refuse_while_required() {
+    local -a dependents_args=(--name="$1")
+    [ "$2" -eq 1 ] && dependents_args+=(--force)
+    py_cli addon-dependents ${dependents_args[@]+"${dependents_args[@]}"} || exit 2
+}
+
 cmd_addon_remove() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -248,11 +313,12 @@ cmd_addon_remove() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon remove <name>"
+        error "Usage: papaia-ctl addon remove <name> [--force]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    _addon_refuse_while_required "$addon_name" "$force"
     py_cli addon-remove --name="$addon_name"
     success "addon remove complete: $addon_name"
 }
@@ -576,11 +642,12 @@ cmd_addon_list() {
 }
 
 cmd_addon_uninstall() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0 force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --clean-up) clean_up=1 ;;
+            --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -588,11 +655,12 @@ cmd_addon_uninstall() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon uninstall <name> [--clean-up]"
+        error "Usage: papaia-ctl addon uninstall <name> [--clean-up] [--force]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    _addon_refuse_while_required "$addon_name" "$force"
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
     info "Removing containers for addon $addon_name..."
