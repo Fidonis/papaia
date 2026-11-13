@@ -139,13 +139,20 @@ Linux host:
   [papaia-manager](#papaia-manager).
 - **Keycloak certificate.** With the default local URLs, browsers on the Mac check
   Keycloak's certificate against the login keychain. `setup` offers to trust the
-  generated local CA there once (no admin rights needed). In a non-interactive run, or
-  when the offer is declined, it prints the command instead:
+  generated local CA there once, for TLS server certificates only (no admin rights
+  needed; macOS may still ask for the login password, and over SSH the step fails and
+  `setup` prints the command). In a non-interactive run, or when the offer is declined,
+  it prints the command instead:
 
   ```bash
-  security add-trusted-cert -r trustRoot \
+  security add-trusted-cert -r trustRoot -p ssl \
     -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
   ```
+
+  A local CA that `setup` creates can only sign for Keycloak's names (`keycloak`,
+  `localhost`, `host.docker.internal`), and its key `certs/local-ca.key` is readable by
+  its owner only. A CA from an earlier release keeps working without that limit; delete
+  `certs/` and run `setup` again to replace it, then trust the new one.
 
   The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
   through an `/etc/hosts` entry; `setup` prints the command when it is missing.

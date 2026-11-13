@@ -11,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, envtree, secrets, smtp
+from . import common, envtree, keycloak_role_sync, secrets, smtp
 
 
 def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:
@@ -166,7 +166,10 @@ def print_keycloak_checklist(
 ) -> None:
     integration = manifest.get("integration") or {}
     keycloak_cfg = integration.get("keycloak") or {}
-    clients = keycloak_cfg.get("clients") or []
+    # Clients named under `client_secrets` are created by `start` (keycloak_role_sync);
+    # the others remain a manual import.
+    managed = [c["path"] for c in keycloak_role_sync.managed_clients(manifest)]
+    clients = [c for c in keycloak_cfg.get("clients") or [] if c not in managed]
     mappers = keycloak_cfg.get("client_mappers") or {}
     replace_secret_cfg = manifest.get("env_replace_secrets") or {}
 
@@ -179,6 +182,12 @@ def print_keycloak_checklist(
     # not one step per character.
     if isinstance(notes, str):
         notes = [notes]
+
+    if managed:
+        print()
+        print(f"Addon '{name}' — Keycloak clients created by 'papaia-ctl start':")
+        for rel in managed:
+            print(f"   {addon_path / rel}")
 
     if not clients and not mappers and not replace_keys and not notes:
         return
