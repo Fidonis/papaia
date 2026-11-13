@@ -1,8 +1,8 @@
 # Running papAIa on several machines
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](#limits) that hold by design.
 
 papAIa normally runs on one host. A **distributed installation** spreads the core services
 over several machines (nodes). Use it when ingress, identity and the LLM gateway have to sit on
