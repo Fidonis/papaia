@@ -30,7 +30,14 @@ load_defaults() { _load_kv defaults; }
 # LocalAI accelerator detection (LOCALAI_VARIANT_NVIDIA, ..._LABEL, ..._WARN,
 # LOCALAI_VARIANT_RECOMMENDED). Loaded lazily: it forks nvidia-smi and docker,
 # so it must not run on every setup invocation the way load_defaults does.
-load_localai_variants() { _load_kv localai-variants; }
+load_localai_variants() {
+    # The GPU probe is a user-visible multi-second wait and its result cannot
+    # change within one setup run, so one probe serves every caller (the
+    # LocalAI prompt, the voice prompt, and both --*-variant=auto paths).
+    [[ -n "${LOCALAI_VARIANTS_LOADED:-}" ]] && return 0
+    _load_kv localai-variants
+    LOCALAI_VARIANTS_LOADED=1
+}
 
 cmd_setup() {
     local orig_argc=$#
@@ -173,10 +180,18 @@ cmd_setup() {
         info "Detected LocalAI image variant: $localai_variant"
     fi
     if [ "$voice_variant" = "auto" ]; then
-        info "Detecting available GPU accelerators, this can take a few seconds..."
-        load_localai_variants
-        voice_variant="$(_voice_variant_from "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
-        info "Detected voice TTS image variant: $voice_variant"
+        # The probe is pointless on a host that will not run the TTS engine:
+        # resolve `auto` only when voice is (or stays) enabled, and let an
+        # interactive enable fall through to the variant prompt instead.
+        local voice_effective="${voice:-${VOICE_STICKY:-false}}"
+        if [ "$voice_effective" = "true" ]; then
+            info "Detecting available GPU accelerators, this can take a few seconds..."
+            load_localai_variants
+            voice_variant="$(_voice_variant_from "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
+            info "Detected voice TTS image variant: $voice_variant"
+        else
+            voice_variant=""
+        fi
     fi
 
     if [ "$env_only" -eq 1 ]; then
@@ -838,18 +853,15 @@ _prompt_voice_variant() {
     printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
     load_localai_variants
 
+    # The sticky choice wins; otherwise the detection recommendation decides,
+    # mapped through the same table the --voice-variant=auto path uses.
+    local default_variant="${VOICE_VARIANT_STICKY:-}"
+    [ -n "$default_variant" ] || default_variant="$(_voice_variant_from "${LOCALAI_VARIANT_RECOMMENDED:-cpu}")"
     local default_slot
-    case "${VOICE_VARIANT_STICKY:-}" in
+    case "$default_variant" in
         nvidia)  default_slot="1" ;;
         hipblas) default_slot="2" ;;
-        cpu)     default_slot="3" ;;
-        *)
-            case "${LOCALAI_VARIANT_RECOMMENDED:-cpu}" in
-                nvidia-cuda-12|nvidia-cuda-13) default_slot="1" ;;
-                hipblas)                       default_slot="2" ;;
-                *)                             default_slot="3" ;;
-            esac
-            ;;
+        *)       default_slot="3" ;;
     esac
 
     printf '\n  On the CPU the TTS engine is slower than real time, so spoken replies in\n' >&2

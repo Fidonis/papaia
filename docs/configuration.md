@@ -145,7 +145,7 @@ TTS server is configured through the rendered `ai/voice/chatterbox.yaml`, not th
 | `VOICE_STT_CPU_THREADS` | CPU threads for transcription; `0` (default) uses all cores — cap it on a host that shares cores with LLM inference |
 | `VOICE_STT_MODEL_TTL` | Seconds an idle model stays loaded (default 300; `-1` never unloads) |
 | `VOICE_STT_LOG_LEVEL` | One of debug, info, warning, error (default `info`) |
-| `VOICE_TTS_IMAGE_VARIANT` | Root `.env`, written by `setup --voice-variant` (`cpu`, `nvidia`, `hipblas`): which TTS image the generated override in `$PAPAIA_CONFIG_DIR/overrides/` selects; the image pins live in `src/ai/voice/docker-compose.yml` |
+| `VOICE_TTS_IMAGE_VARIANT` | Which TTS image the generated override in `$PAPAIA_CONFIG_DIR/overrides/` selects (`cpu`, `nvidia`, `hipblas`; default `cpu`, set via `setup --voice-variant`). The override only materializes while the `voice` profile is active; the image pins live in `src/ai/voice/docker-compose.yml` |
 | `VOICE_STT_HEALTHCHECK_START_PERIOD`, `VOICE_TTS_HEALTHCHECK_START_PERIOD` | Grace periods before the containers count as unhealthy; raise the TTS one on a slow line (first start downloads ~3.2 GB) |
 | `VOICE_TTS_MEM_LIMIT` | Hard memory ceiling of the TTS container (default `8g`); the loaded model stays resident at ~4-6 GB |
 

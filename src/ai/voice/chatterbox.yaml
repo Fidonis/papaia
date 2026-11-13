@@ -13,8 +13,10 @@
 
 server:
   host: 0.0.0.0
-  # The built-in default is 8000; everything in papaia addresses
-  # chatterbox:8004, so keep these two in sync.
+  # The built-in default is 8000, but the port is part of the module contract:
+  # the container healthcheck and the LiteLLM voice-tts route both address
+  # chatterbox:8004. Changing it through the overlay breaks both, so it is
+  # not overlay material.
   port: 8004
 
 model:

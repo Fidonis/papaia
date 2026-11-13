@@ -131,6 +131,24 @@ def test_setup_voice_variant_writes_the_override_and_cpu_removes_it(repo_root, c
     assert not override.exists()
 
 
+def test_the_override_only_materializes_while_voice_is_active(repo_root, config_dir):
+    override = config_dir / "overrides" / "docker-compose.voice-gpu.override.yml"
+
+    # A host that does not run the engine stores the choice but gets no
+    # override: nothing may feed an accelerator fragment to compose here.
+    assert _setup(repo_root, config_dir, "--voice-variant=nvidia") == 0
+    assert _stored(config_dir)["VOICE_TTS_IMAGE_VARIANT"] == "nvidia"
+    assert not override.exists()
+
+    # Enabling the profile later materializes the stored choice ...
+    assert _setup(repo_root, config_dir, "--enable-voice=true") == 0
+    assert override.is_file()
+
+    # ... and disabling it cleans the override up again.
+    assert _setup(repo_root, config_dir, "--enable-voice=false") == 0
+    assert not override.exists()
+
+
 def test_defaults_report_the_stored_variant_for_the_wizard(repo_root, config_dir):
     assert _setup(repo_root, config_dir, "--enable-voice=true", "--voice-variant=hipblas") == 0
 

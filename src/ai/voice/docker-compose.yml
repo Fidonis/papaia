@@ -90,18 +90,23 @@ services:
       de.fidonis.role:   stt
     profiles: [voice]
 
-  # One-shot helper: installs the transcription model through the engine's API
-  # once speaches is healthy, then exits. Re-runs on an already installed model
-  # return within seconds, and an interrupted download is resumed, so the
-  # container is harmless on every later `start`. Mirrors localai-model-init.
-  # The model id must match what the LiteLLM route voice-stt sends — see
-  # integration/ai/litellm/config.yaml.
+  # One-shot helper: installs the transcription model through the engine's API,
+  # then exits. Re-runs on an already installed model return within seconds,
+  # and an interrupted download is resumed, so the container is harmless on
+  # every later `start`. Mirrors localai-model-init. The model id must match
+  # what the LiteLLM route voice-stt sends — see integration/ai/litellm/config.yaml.
+  #
+  # Deliberately NOT `condition: service_healthy`: the engine's healthcheck
+  # fails by design on an empty API key (see above), and a hard dependency
+  # would turn that into "dependency failed to start" — aborting the whole
+  # `papaia-ctl start` instead of degrading to an unhealthy engine. The retry
+  # loop below covers engine startup on its own.
   speaches-model-init:
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
     restart: "no"
     depends_on:
       speaches:
-        condition: service_healthy
+        condition: service_started
     environment:
       VOICE_API_KEY:   ${VOICE_API_KEY}
       VOICE_STT_MODEL: ${VOICE_STT_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
