@@ -44,6 +44,7 @@ their images there; the table below covers the Core only.
 | `qdrant/qdrant` | v1.19.0 | Apache-2.0 | `ai/rag` | vector database |
 | `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.1 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
 | `ghcr.io/fidonis/qdrant-ingest` | 1.0.1 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service |
+| `ghcr.io/fidonis/papaia-knowledge-map` | 0.1.0 | MIT | `ai/knowledge-map` | Fidonis-maintained role-trimmed MCP directory of knowledge sources |
 | `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |
 | `ghcr.io/firecrawl/firecrawl` | 2.11.85 | AGPL-3.0 | `services/firecrawl` | used as network service |
