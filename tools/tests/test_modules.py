@@ -468,6 +468,7 @@ def test_module_info_prints_one_json_document(real_repo, config_dir, capsys, mon
     document = json.loads(out)
     assert sorted(document) == [
         "active",
+        "directories",
         "module",
         "profile",
         "questions",
@@ -551,3 +552,88 @@ def test_a_native_localai_has_no_url_to_ask_for(real_repo, config_dir) -> None:
     env = config_dir / ".env"
     env.write_text(env.read_text(encoding="utf-8") + "LOCALAI_RUNTIME=native\n", encoding="utf-8")
     assert modules.questions(config_dir, "localai") == []
+
+
+# -- a native LocalAI keeps its data in directories ----------------------------------------
+
+
+def _native(config: Path, workspace: Path) -> Path:
+    """Switch the stored runtime to native; returns the LocalAI directory with data in it."""
+    env = config / ".env"
+    env.write_text(
+        env.read_text(encoding="utf-8")
+        + f"LOCALAI_RUNTIME=native\nPAPAIA_WORKSPACE_DIR={workspace}\n",
+        encoding="utf-8",
+    )
+    home = workspace / "localai" / PROJECT
+    for sub in ("models", "backends", "bin", "data"):
+        (home / sub).mkdir(parents=True)
+    (home / "models" / "qwen.gguf").write_bytes(b"model")
+    (home / "backends" / "metal").write_bytes(b"backend")
+    return home
+
+
+def test_purge_data_of_a_native_localai_deletes_its_directories(
+    real_repo, config_dir, tmp_path
+) -> None:
+    _setup(real_repo, config_dir)
+    home = _native(config_dir, tmp_path / "workspace")
+    docker = _Docker(_all_volumes(LOCALAI))
+
+    removed = modules.purge_data(config_dir, real_repo, "localai", runner=docker)
+
+    assert removed == [str(home / "models"), str(home / "backends")]
+    assert not (home / "models").exists() and not (home / "backends").exists()
+    # The binary and LocalAI's own state stay; no volume is touched.
+    assert (home / "bin").is_dir() and (home / "data").is_dir()
+    assert docker.calls == []
+
+
+def test_purge_data_of_a_native_localai_is_refused_while_it_is_on(
+    real_repo, config_dir, tmp_path
+) -> None:
+    _setup(real_repo, config_dir, "--enable-local-ai=true")
+    home = _native(config_dir, tmp_path / "workspace")
+
+    with pytest.raises(modules.ModuleError, match="still switched on"):
+        modules.purge_data(config_dir, real_repo, "localai", runner=_Docker(set()))
+
+    assert (home / "models" / "qwen.gguf").is_file()
+
+
+def test_info_of_a_native_localai_lists_its_directories(real_repo, config_dir, tmp_path) -> None:
+    _setup(real_repo, config_dir)
+    home = _native(config_dir, tmp_path / "workspace")
+    docker = _Docker(_all_volumes(LOCALAI))
+
+    document = modules.info(config_dir, real_repo, "localai", runner=docker)
+
+    assert document["volumes"] == []
+    assert document["directories"] == [
+        {"path": str(home / "models"), "exists": True},
+        {"path": str(home / "backends"), "exists": True},
+    ]
+    assert docker.calls == []
+
+
+def test_the_other_modules_have_no_directories(real_repo, config_dir, tmp_path) -> None:
+    _setup(real_repo, config_dir)
+    _native(config_dir, tmp_path / "workspace")
+    document = modules.info(config_dir, real_repo, "rag", runner=_Docker(set()))
+    assert document["directories"] == []
+    assert {v["key"] for v in document["volumes"]} == RAG
+
+
+def test_module_purge_names_the_deleted_directories(
+    real_repo, config_dir, tmp_path, capsys
+) -> None:
+    _setup(real_repo, config_dir)
+    home = _native(config_dir, tmp_path / "workspace")
+    capsys.readouterr()
+
+    assert _cli(real_repo, config_dir, "module-purge", "--module=localai", "--data") == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        f"removed directory {home / 'models'}",
+        f"removed directory {home / 'backends'}",
+    ]

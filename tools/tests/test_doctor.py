@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -57,6 +58,8 @@ def probes(**overrides) -> Probes:
         "kernel_clock_synchronized": lambda: True,
         "smtp_probe": lambda *args: smtp.ProbeResult(True, "ok", login="ok"),
         "dev_root": Path("/papaia-test-has-no-devices"),
+        # Not a Mac unless a test says so, wherever the suite runs.
+        "launchd_host": lambda: False,
     }
     values.update(overrides)
     return Probes(**values)
@@ -2165,7 +2168,14 @@ def native_localai(stack, tmp_path: Path, *, installed: str | None = "1") -> Pat
     return home
 
 
-def native_result(stack, ready: bool, *, in_container: bool = False) -> doctor.CheckResult:
+def native_result(
+    stack,
+    ready: bool,
+    *,
+    in_container: bool = False,
+    launchd: bool = False,
+    docker: FakeDocker | None = None,
+) -> doctor.CheckResult:
     asked: list[str] = []
 
     def localai_ready(url: str) -> bool:
@@ -2173,7 +2183,11 @@ def native_result(stack, ready: bool, *, in_container: bool = False) -> doctor.C
         return ready
 
     report = run_doctor(
-        stack, localai_ready=localai_ready, in_container=lambda: in_container
+        stack,
+        docker=docker,
+        localai_ready=localai_ready,
+        in_container=lambda: in_container,
+        launchd_host=lambda: launchd,
     )
     found = result(report, "localai_native")
     found.details["asked"] = asked
@@ -2193,11 +2207,12 @@ def test_localai_native_passes_when_the_pinned_binary_answers(stack, tmp_path):
     assert found.details["asked"] == ["http://127.0.0.1:8200/readyz"]
 
 
-def test_a_native_localai_that_does_not_run_is_a_warning_with_the_script(stack, tmp_path):
+def test_a_native_localai_that_does_not_run_is_a_warning_with_the_log(stack, tmp_path):
     home = native_localai(stack, tmp_path)
     found = native_result(stack, ready=False)
     assert found.status == WARN
-    assert str(home / "run-localai") in found.summary
+    assert "run 'papaia-ctl start'" in found.summary
+    assert str(home / "logs" / "localai.log") in found.summary
 
 
 def test_a_missing_or_outdated_binary_is_a_warning(stack, tmp_path):
@@ -2207,7 +2222,7 @@ def test_a_missing_or_outdated_binary_is_a_warning(stack, tmp_path):
     (tmp_path / "workspace" / "localai" / "papaia" / "bin" / "local-ai-0").write_bytes(b"x")
     found = native_result(stack, ready=True)
     assert found.status == WARN
-    assert "this release pins 1" in found.summary
+    assert "this release pins 1: run 'papaia-ctl start'" in found.summary
 
 
 def test_inside_a_container_the_native_localai_is_probed_through_the_host(stack, tmp_path):
@@ -2221,3 +2236,102 @@ def test_the_gpu_check_skips_a_native_localai_without_a_variant(stack, tmp_path)
     found = result(run_doctor(stack, localai_ready=lambda url: True), "gpu")
     assert found.status == SKIP
     assert "variant" not in found.details
+
+
+# The launchd job on the Mac, from recorded `launchctl print` output.
+LAUNCHCTL_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "launchctl"
+JOB_RUNNING = CommandResult(
+    0, (LAUNCHCTL_FIXTURES / "print-running.txt").read_text(encoding="utf-8"), ""
+)
+JOB_CRASHED = CommandResult(
+    0, (LAUNCHCTL_FIXTURES / "print-crashed.txt").read_text(encoding="utf-8"), ""
+)
+JOB_NOT_LOADED = CommandResult(
+    113,
+    "",
+    'Bad request.\nCould not find service "de.fidonis.papaia.papaia.localai" in domain for'
+    " user gui: 501\n",
+)
+
+
+def launchd_docker(job: CommandResult, *, stack_runs: bool = True) -> FakeDocker:
+    ps = healthy_core() + healthy_addon() if stack_runs else []
+    return FakeDocker(ps, tools={"launchctl": job})
+
+
+def test_a_running_launchd_job_that_answers_passes(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_RUNNING)
+    found = native_result(stack, ready=True, launchd=True, docker=docker)
+    assert found.status == PASS
+    assert "de.fidonis.papaia.papaia.localai" in found.summary
+    assert found.details["launchd"] == {
+        "label": "de.fidonis.papaia.papaia.localai",
+        "loaded": True,
+        "state": "running",
+        "pid": 70027,
+        "last_exit": "(never exited)",
+    }
+    printed = [c for c in docker.calls if c[0] == "launchctl"]
+    target = f"gui/{os.getuid()}/de.fidonis.papaia.papaia.localai"
+    assert printed == [["launchctl", "print", target]]
+
+
+@pytest.mark.parametrize("job", [JOB_RUNNING, JOB_CRASHED])
+def test_a_loaded_job_without_an_answer_is_a_warning(stack, tmp_path, job):
+    home = native_localai(stack, tmp_path)
+    found = native_result(stack, ready=False, launchd=True, docker=launchd_docker(job))
+    assert found.status == WARN
+    assert "is loaded" in found.summary and "does not answer" in found.summary
+    assert str(home / "logs" / "localai.log") in found.summary
+
+
+def test_a_job_that_is_not_loaded_while_the_stack_runs_is_a_warning(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=False, launchd=True, docker=launchd_docker(JOB_NOT_LOADED))
+    assert found.status == WARN
+    assert "not loaded although the stack runs" in found.summary
+    assert found.details["launchd"]["loaded"] is False
+
+
+def test_a_localai_started_by_hand_is_a_warning_too(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True, launchd=True, docker=launchd_docker(JOB_NOT_LOADED))
+    assert found.status == WARN
+    assert "not through launchd" in found.summary
+
+
+def test_a_job_that_is_not_loaded_with_the_stack_stopped_is_skipped(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_NOT_LOADED, stack_runs=False)
+    found = native_result(stack, ready=False, launchd=True, docker=docker)
+    assert found.status == SKIP
+    assert "stack is stopped" in found.summary
+
+
+def test_without_launchctl_the_probe_alone_decides(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True, launchd=True, docker=launchd_docker(
+        CommandResult(127, "", "launchctl: command not found")))  # fmt: skip
+    assert found.status == PASS
+    assert "launchd" not in found.details
+
+
+def test_in_a_container_launchctl_is_not_asked(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_RUNNING)
+    found = native_result(stack, ready=False, in_container=True, launchd=True, docker=docker)
+    assert found.status == WARN
+    assert "on the Mac" in found.summary
+    assert not [c for c in docker.calls if c[0] == "launchctl"]
+
+
+def test_the_doctor_json_with_a_launchd_job_matches_the_schema(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    report = run_doctor(
+        stack,
+        docker=launchd_docker(JOB_RUNNING),
+        localai_ready=lambda url: True,
+        launchd_host=lambda: True,
+    )
+    assert not list(VALIDATOR.iter_errors(json.loads(doctor.to_json(report))))

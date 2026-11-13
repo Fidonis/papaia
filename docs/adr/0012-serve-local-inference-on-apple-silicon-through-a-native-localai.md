@@ -67,8 +67,13 @@ refuses the flag elsewhere. A distributed installation refuses `native`.
   runtimes): download, sha256 against the published checksums, atomic rename, older binaries
   removed. It writes `<home>/run-localai`, which reads the key from the LocalAI `.env` when it
   runs, changes into `<home>` and starts LocalAI on `127.0.0.1:<LOCALAI_EXT_PORT>` without
-  `LOCALAI_AUTH`. In this decision the operator starts that script in a terminal; launchd
-  follows in Fidonis/papaia#367.
+  `LOCALAI_AUTH`.
+- **Process.** launchd runs that script as a LaunchAgent of the logged-in user
+  (`de.fidonis.papaia.<COMPOSE_PROJECT_NAME>.localai`, Fidonis/papaia#367): `start` enables
+  and loads the job after `docker compose up` and waits up to 60 s for `/readyz`, restarting
+  it for a new binary or start script; `stop` unloads and disables it, so it stays off after
+  a login; `uninstall` removes it. The plist names only the script, so the key is in no plist.
+  Inside a container (papaia-manager) these steps warn and are skipped.
 - **LiteLLM** reaches the process at `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`, which
   Docker Desktop resolves in every container.
 - **Models.** When the runtime changes to `native`, setup seeds the overlay `models.txt` once
@@ -76,8 +81,8 @@ refuses the flag elsewhere. A distributed installation refuses `native`.
   Q5_K_M: 58 tokens/s on Metal is fast enough for a chat, and its 5.4 GB fit a 16 GB Mac
   next to the stack. The 1.5B model stays in the list for smaller machines.
 - **status and doctor** do not expect a `localai` container for `native`. A new doctor check,
-  `localai_native`, probes `/readyz` and compares the installed binary with the pin; it is
-  `warn` at most.
+  `localai_native`, probes `/readyz`, compares the installed binary with the pin and, on the
+  Mac, reads the launchd job's state; it is `warn` at most.
 
 ## Consequences
 
@@ -85,8 +90,12 @@ refuses the flag elsewhere. A distributed installation refuses `native`.
   the engine, model list and registration that Linux uses; no second engine.
 - **Positive**: the CPU container, which does not even load a 7B model in the default VM,
   stops being the only choice on a Mac.
-- **Negative**: one process outside Compose. Until Fidonis/papaia#367 it is started by hand
-  and `stop`, `upgrade` and `uninstall` do not touch it.
+- **Negative**: one process outside Compose, managed through launchd. It belongs to the user
+  logged in on the Mac: papaia-manager, which runs in a container, cannot start or stop it,
+  and LocalAI runs only while that user is logged in. Stopping the stack other than with
+  `papaia-ctl stop` leaves the job enabled, and launchd starts it again at the next login.
+- **Negative**: macOS may deny a launchd job access to `~/Documents`, `~/Desktop` and
+  `~/Downloads`; `setup` warns when the LocalAI directory lies below one of them.
 - **Negative**: no login for LocalAI's web UI. The darwin build has no auth database, so the
   OIDC client is not used; the API key is the only protection, and the process listens on
   `127.0.0.1` only, so the web UI is reachable on the Mac alone.
@@ -112,6 +121,10 @@ refuses the flag elsewhere. A distributed installation refuses `native`.
 - **A `metal` LocalAI image variant** — no such image exists, and papaia-manager mirrors the
   variant catalogue in its contract test.
 - **LocalAI's DMG launcher** — cannot be scripted, and its version is not pinned.
+- **A LaunchDaemon** (system domain) — runs without a logged-in user, but needs root and
+  another file layout; a Mac that runs papAIa has a user logged in anyway.
+- **Homebrew services** — a dependency the stack does not otherwise have, and the version
+  would not follow the pin.
 
 ## References
 

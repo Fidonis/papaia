@@ -140,7 +140,10 @@ cmd_start() {
 
     # The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native): its binary and
     # start script, before `up` so a failed download is reported before the stack moves.
-    _localai_native_install
+    LOCALAI_NATIVE="off"
+    if _profiles_include_localai "$profiles"; then
+        _localai_native_install
+    fi
 
     local env_file="$REPO_ROOT/src/.env"
 
@@ -200,6 +203,10 @@ cmd_start() {
         docker compose -f "$COMPOSE_FILE" ${compose_overrides[@]+"${compose_overrides[@]}"} --env-file "$env_file" up ${up_flags[@]+"${up_flags[@]}"}
     fi
 
+    # After `up`, so LiteLLM is there when LocalAI answers. The init job need not have
+    # finished: LocalAI reads a model's `<name>.yaml` on the first request for it.
+    _localai_native_start
+
     # In a container (papaia-manager and its runners) the provisioning steps reach the stack
     # over its network, which `up` has just created; on the host this does nothing.
     py_cli join-stack-network || true
@@ -212,17 +219,25 @@ cmd_start() {
         warn "Keycloak role sync failed. Once Keycloak is healthy, run 'papaia-ctl keycloak-role-sync' to retry."
     fi
 
-    _localai_native_hint
-
     success "start complete."
 }
 
 # What the native LocalAI step of `start` did (LOCALAI_NATIVE = off | skipped | installed |
-# unchanged | failed) and the script that starts it. Set by _localai_native_install.
+# unchanged | failed), the pinned version, and whether a running job has to be
+# restarted (a new binary or start script). Set by _localai_native_install.
 LOCALAI_NATIVE="off"
-LOCALAI_NATIVE_SCRIPT=""
 LOCALAI_NATIVE_VERSION=""
 LOCALAI_NATIVE_REPLACED=""
+LOCALAI_NATIVE_RESTART="0"
+
+# Whether a --profiles list covers LocalAI; no list means the whole stack.
+_profiles_include_localai() {
+    [ -z "$1" ] && return 0
+    case ",$1," in
+        *,localai,*) return 0 ;;
+    esac
+    return 1
+}
 
 # Installs the pinned LocalAI binary and writes the start script. Inside a container
 # (papaia-manager) or on a host other than an Apple Silicon Mac with Docker Desktop it
@@ -230,6 +245,7 @@ LOCALAI_NATIVE_REPLACED=""
 _localai_native_install() {
     local line out rc=0
     LOCALAI_NATIVE="off"
+    LOCALAI_NATIVE_RESTART="0"
     out="$(py_cli localai-native-install)" || rc=$?
     if [ "$rc" -ne 0 ]; then
         LOCALAI_NATIVE="failed"
@@ -240,31 +256,44 @@ _localai_native_install() {
         line="${line%$'\r'}"
         case "$line" in
             LOCALAI_NATIVE=*) LOCALAI_NATIVE="${line#*=}" ;;
-            LOCALAI_NATIVE_SCRIPT=*) LOCALAI_NATIVE_SCRIPT="${line#*=}" ;;
             LOCALAI_NATIVE_VERSION=*) LOCALAI_NATIVE_VERSION="${line#*=}" ;;
             LOCALAI_NATIVE_REPLACED=*) LOCALAI_NATIVE_REPLACED="${line#*=}" ;;
+            LOCALAI_NATIVE_RESTART=*) LOCALAI_NATIVE_RESTART="${line#*=}" ;;
         esac
     done <<< "$out"
 }
 
-# After `up`: how to start the native LocalAI, or that a running one has to be restarted
-# to use a new binary. Nothing when LocalAI already answers on an unchanged binary.
-_localai_native_hint() {
+# After `up`: load the launchd job (or restart it for a new binary) and wait for /readyz.
+# Nothing when the install step was off, skipped or failed; a launchctl error warns and
+# the rest of `start` goes on.
+_localai_native_start() {
     case "$LOCALAI_NATIVE" in
         installed|unchanged) : ;;
         *) return 0 ;;
     esac
     if [ -n "$LOCALAI_NATIVE_REPLACED" ]; then
-        warn "LocalAI $LOCALAI_NATIVE_VERSION is installed. Restart LocalAI to use $LOCALAI_NATIVE_VERSION:"
-        warn "  stop the running one (Ctrl-C in its terminal), then run $LOCALAI_NATIVE_SCRIPT"
-        return 0
+        info "LocalAI $LOCALAI_NATIVE_VERSION replaces $LOCALAI_NATIVE_REPLACED."
     fi
-    if py_cli localai-native-probe; then
-        return 0
+    local -a flags=()
+    [ "$LOCALAI_NATIVE_RESTART" = "1" ] && flags+=(--restart)
+    if ! py_cli localai-native-start ${flags[@]+"${flags[@]}"}; then
+        warn "The native LocalAI did not start (see above). Fix the cause and run 'papaia-ctl start' again."
     fi
-    info "LocalAI runs natively on this Mac. Start it in a terminal and keep that open:"
-    info "  $LOCALAI_NATIVE_SCRIPT"
-    info "The first start downloads the Metal backend; models come from the init job."
+    return 0
+}
+
+# Before the Compose part of `stop`: unload and disable the launchd job, so LocalAI stays
+# off after a login. $1 = profile list, $2 = 1 to delete the models and backends as well.
+# Python decides whether there is a job; off a Mac and in a container it warns and skips.
+_localai_native_stop() {
+    local profiles="$1" purge="$2"
+    _profiles_include_localai "$profiles" || return 0
+    local -a flags=()
+    [ "$purge" -eq 1 ] && flags+=(--purge-models)
+    if ! py_cli localai-native-stop ${flags[@]+"${flags[@]}"}; then
+        warn "The native LocalAI was not stopped (see above). Check it with 'papaia-ctl doctor'."
+    fi
+    return 0
 }
 
 # The two provisioning steps `start` runs after `docker compose up`, as commands of their
@@ -423,6 +452,10 @@ cmd_stop() {
         _require_profiles_resolve "$profiles" "$env_file" -f "$COMPOSE_FILE"
     fi
 
+    local purge_native=0
+    [ "$clean_up" -eq 1 ] && [ "$volumes" -eq 1 ] && purge_native=1
+    _localai_native_stop "$profiles" "$purge_native"
+
     if [ "$addons" -eq 1 ]; then
         info "Stopping active addons..."
         if [ "$clean_up" -eq 1 ]; then
@@ -489,7 +522,8 @@ cmd_uninstall() {
 
     warn "This will stop and remove all core containers and permanently delete $CONFIG_DIR."
     if [ "$clean_up" -eq 1 ]; then
-        warn "  --clean-up: all named volumes will also be removed."
+        warn "  --clean-up: all named volumes will also be removed, and the models of a"
+        warn "  native LocalAI."
     fi
     if [ "$addons" -eq 1 ]; then
         warn "  --addons: active addon containers will also be stopped and removed."
@@ -503,6 +537,15 @@ cmd_uninstall() {
     fi
 
     local env_file="$REPO_ROOT/src/.env"
+
+    # While $CONFIG_DIR still says where the native LocalAI lives.
+    if [ -f "$CONFIG_DIR/.env" ]; then
+        local -a native_flags=()
+        [ "$clean_up" -eq 1 ] && native_flags+=(--purge)
+        if ! py_cli localai-native-uninstall ${native_flags[@]+"${native_flags[@]}"}; then
+            warn "The native LocalAI was not removed completely (see above)."
+        fi
+    fi
 
     if [ "$addons" -eq 1 ] && [ -f "$CONFIG_DIR/deployment.yaml" ]; then
         info "Stopping and removing active addon containers..."
