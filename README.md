@@ -1753,7 +1753,7 @@ German fine-tune, or `Systran/faster-whisper-small` on tight memory) means chang
 route through the overlay (`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`). The TTS server is configured through
 `ai/voice/chatterbox.yaml` (same overlay mechanism). The TTS engine clones whatever reference
 voice a request names — accent included — so the module ships two public-domain German
-audiobook voices (default `Hokuspokus.wav`, see `src/ai/voice/voices/README.md` for sources and
+audiobook voices (default `Karlsson.wav`, see `src/ai/voice/voices/README.md` for sources and
 how to add your own); the English samples inside the image remain selectable. The engine
 watermarks its audio output (Resemble Perth), which makes generated speech identifiable as such.
 

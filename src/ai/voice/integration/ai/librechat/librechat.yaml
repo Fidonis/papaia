@@ -34,7 +34,7 @@ speech:
       # Takes effect when a user switches to the external engine. Must name an
       # entry of tts.openai.voices below, or LibreChat picks a random voice
       # per user.
-      voice: "Hokuspokus.wav"
+      voice: "Karlsson.wav"
   stt:
     # LibreChat refuses private upstream addresses unless they are listed here
     # (host:port, exactly as addressed).
@@ -56,6 +56,6 @@ speech:
       # accent included); Emily is the English sample shipped in the image.
       # Keep speechTab.textToSpeech.voice in this list.
       voices:
-        - "Hokuspokus.wav"
         - "Karlsson.wav"
+        - "Hokuspokus.wav"
         - "Emily.wav"

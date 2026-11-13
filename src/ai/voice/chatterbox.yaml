@@ -32,9 +32,15 @@ tts_engine:
   # The engine clones the reference voice, accent included, so German output
   # wants a German reference. LibreChat's voice list must name the same
   # files — see integration/ai/librechat/librechat.yaml.
-  default_voice_id: Hokuspokus.wav
+  default_voice_id: Karlsson.wav
 
 generation_defaults:
   # Callers may override per request; LibreChat does not send a language, so
   # this default decides how replies are pronounced.
   language: de
+  # Picked by ear against the shipped German references: the engine's own
+  # defaults drone slightly on German; these keep the delivery steady without
+  # flattening it.
+  temperature: 0.6
+  exaggeration: 0.4
+  cfg_weight: 0.5

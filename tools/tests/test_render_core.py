@@ -389,7 +389,7 @@ def test_render_merges_the_voice_fragments_only_while_the_profile_is_active(
 
     speech = _rendered_librechat(config_dir)["speech"]
     assert speech["stt"]["openai"]["url"] == "http://litellm:4000/v1/audio/transcriptions"
-    assert speech["tts"]["openai"]["voices"] == ["Hokuspokus.wav", "Karlsson.wav", "Emily.wav"]
+    assert speech["tts"]["openai"]["voices"] == ["Karlsson.wav", "Hokuspokus.wav", "Emily.wav"]
     litellm = yaml.safe_load(
         (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
     )
