@@ -1052,6 +1052,92 @@ def test_a_realm_without_smtp_and_without_the_profile_is_untouched(tmp_path, mon
     assert fake.realm["resetPasswordAllowed"] is True
 
 
+# ── the realm's HSTS header on a shared local hostname ───────────────────────
+
+# What GET on the realm answers for its browser headers (an excerpt of Keycloak's defaults).
+DEFAULT_HEADERS = {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+    "xFrameOptions": "SAMEORIGIN",
+    "strictTransportSecurity": kcs.KEYCLOAK_DEFAULT_HSTS,
+}
+
+
+def _hsts_realm_def(*, shared: bool = True) -> dict:
+    """The rendered realm: max-age=0 while plain-http services share the auth hostname."""
+    realm = _realm_def()
+    if shared:
+        realm["browserSecurityHeaders"] = {"strictTransportSecurity": kcs.NO_HSTS}
+    return realm
+
+
+def _hsts_fake(headers: dict | None) -> FakeKeycloak:
+    realm = {"smtpServer": {}, "resetPasswordAllowed": False}
+    if headers is not None:
+        realm["browserSecurityHeaders"] = dict(headers)
+    return FakeKeycloak(
+        roles={"user": _role("user")},
+        clients={"uuid-oauth2-proxy": {"clientId": "oauth2-proxy", "mappers": {}}},
+        realm=realm,
+    )
+
+
+def test_an_existing_realm_on_the_default_header_gets_max_age_0(tmp_path, monkeypatch):
+    fake = _hsts_fake(DEFAULT_HEADERS)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _hsts_realm_def(), fake)
+
+    # The whole map goes back: a realm update replaces it, other headers must survive.
+    assert fake.realm_puts == [
+        {"browserSecurityHeaders": {**DEFAULT_HEADERS, "strictTransportSecurity": "max-age=0"}}
+    ]
+
+
+def test_a_realm_without_a_header_value_counts_as_the_default(tmp_path, monkeypatch):
+    fake = _hsts_fake(None)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _hsts_realm_def(), fake)
+
+    assert fake.realm["browserSecurityHeaders"] == {"strictTransportSecurity": "max-age=0"}
+
+
+def test_the_hsts_header_is_written_once(tmp_path, monkeypatch):
+    fake = _hsts_fake(DEFAULT_HEADERS)
+    _write_realm_json(tmp_path, _hsts_realm_def())
+    _patch_common(monkeypatch, fake)
+
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+    assert kcs.sync_roles(_tree(), config_dir=tmp_path) is True
+
+    assert len(fake.realm_puts) == 1
+
+
+def test_a_hand_set_hsts_header_is_left_alone(tmp_path, monkeypatch, capsys):
+    own = {**DEFAULT_HEADERS, "strictTransportSecurity": "max-age=600"}
+    fake = _hsts_fake(own)
+
+    _run_smtp_sync(tmp_path, monkeypatch, _hsts_realm_def(), fake)
+
+    assert fake.realm_puts == []
+    assert "max-age=600" in capsys.readouterr().err
+
+
+def test_separate_hostnames_restore_the_default_header(tmp_path, monkeypatch):
+    fake = _hsts_fake({**DEFAULT_HEADERS, "strictTransportSecurity": "max-age=0"})
+
+    _run_smtp_sync(tmp_path, monkeypatch, _hsts_realm_def(shared=False), fake)
+
+    assert fake.realm["browserSecurityHeaders"] == DEFAULT_HEADERS
+
+
+@pytest.mark.parametrize("value", [kcs.KEYCLOAK_DEFAULT_HSTS, "max-age=600"])
+def test_separate_hostnames_leave_any_other_header_alone(tmp_path, monkeypatch, value):
+    fake = _hsts_fake({**DEFAULT_HEADERS, "strictTransportSecurity": value})
+
+    _run_smtp_sync(tmp_path, monkeypatch, _hsts_realm_def(shared=False), fake)
+
+    assert fake.realm_puts == []
+
+
 def _themed_realm_def() -> dict:
     realm_def = _realm_def()
     realm_def["clients"][0]["attributes"] = {"login_theme": "papaia"}

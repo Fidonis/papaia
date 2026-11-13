@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, deployment, smtp
+from . import common, deployment, keycloak_role_sync, smtp
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -380,25 +380,39 @@ def _render_dir(
             _render_file(sub_rel, repo_root, config_dir, active_addons)
 
 
-def _auth_host_shares_a_plain_http_hostname(env: dict[str, str], domain_server: str) -> bool:
-    """True when the auth host's hostname also serves a plain-http browser URL.
+# Browser-facing URLs in the root .env. A stored URL counts even while its service is off:
+# disabling HSTS where it was not needed costs less than a service the browser cannot reach.
+_BROWSER_URL_KEYS = (
+    "PAPAIA_HOST",
+    "MANAGER_PUBLIC_URL",
+    "LITELLM_PUBLIC_URL",
+    "LOCALAI_PUBLIC_URL",
+    "QDRANT_PUBLIC_URL",
+    "NPM_ADMIN_HOST",
+)
 
-    HSTS applies to a hostname on every port, so Keycloak's default header
-    (includeSubDomains, one year) makes the browser upgrade those http URLs
-    to https after a single Keycloak visit. The local defaults put LibreChat,
-    papaia-manager and LiteLLM on the auth host's hostname; a deployment whose
-    plain-http services live on their own hostnames is unaffected.
+
+def _auth_host_shares_a_plain_http_hostname(env: dict[str, str], domain_server: str) -> bool:
+    """True when a plain-http browser URL is on the auth host's hostname or a subdomain of it.
+
+    HSTS applies to a hostname on every port, and Keycloak's default header carries
+    includeSubDomains, so after a single Keycloak visit the browser upgrades those http
+    URLs to https for a year. The local defaults put papaia-manager, LiteLLM, LocalAI and
+    Qdrant on the auth host's hostname; a deployment whose plain-http services live on
+    hostnames of their own is unaffected.
     """
     auth_hostname = urlsplit(env.get("AUTH_HOST", "")).hostname
     if not auth_hostname:
         return False
-    url_keys = ("PAPAIA_HOST", "MANAGER_PUBLIC_URL", "LITELLM_PUBLIC_URL")
-    browser_urls = [env.get(key, "") for key in url_keys]
+    browser_urls = [env.get(key, "") for key in _BROWSER_URL_KEYS]
     browser_urls.append(domain_server)
-    return any(
-        url.startswith("http://") and urlsplit(url).hostname == auth_hostname
-        for url in browser_urls
-    )
+    for url in browser_urls:
+        if not url.startswith("http://"):
+            continue
+        hostname = urlsplit(url).hostname or ""
+        if hostname == auth_hostname or hostname.endswith("." + auth_hostname):
+            return True
+    return False
 
 
 def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
@@ -430,16 +444,19 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
         realm["resetPasswordAllowed"] = True
         changed = True
 
-    # On a hostname shared with plain-http services, Keycloak must not send its
-    # default HSTS header (see _auth_host_shares_a_plain_http_hostname). max-age=0
-    # instead of an empty header: it also clears the entry a browser has already
-    # learned from an earlier papaia. Only this header is set; Keycloak keeps its
-    # defaults for every browser header the realm does not name.
+    # On a hostname shared with plain-http services, the papaia realm must not send
+    # Keycloak's default HSTS header (see _auth_host_shares_a_plain_http_hostname).
+    # max-age=0 instead of an empty header: a papaia-realm response then also clears
+    # an entry the browser learned before. Only this header is set; Keycloak keeps its
+    # defaults for every browser header the realm does not name. An existing realm
+    # gets the value from keycloak_role_sync, since --import-realm skips it.
     domain_server = common.parse_env_file(config_dir / "ai/librechat/.env").get(
         "DOMAIN_SERVER", ""
     )
     if _auth_host_shares_a_plain_http_hostname(env, domain_server):
-        realm["browserSecurityHeaders"] = {"strictTransportSecurity": "max-age=0"}
+        realm["browserSecurityHeaders"] = {
+            "strictTransportSecurity": keycloak_role_sync.NO_HSTS
+        }
         changed = True
 
     if changed:

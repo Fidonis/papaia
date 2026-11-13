@@ -32,6 +32,11 @@ The realm's mail server follows the optional `smtp` profile: while the mail rela
 and configured, an existing realm without a mail server gets the relay (and the
 reset-password link); a mail server the operator configured is never overwritten.
 
+The realm's HSTS header follows the rendered realm as well: while the auth hostname is
+shared with a plain-http browser URL, the template sets it to `max-age=0`, and an existing
+realm still on Keycloak's default gets that value; once the hostnames no longer overlap,
+`max-age=0` goes back to Keycloak's default. A value the operator chose is never touched.
+
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
 
@@ -702,6 +707,58 @@ def _sync_smtp(base_url, ctx, token, realm_def: dict) -> str:
     return "updated"
 
 
+# Keycloak's default HSTS header (BrowserSecurityHeaders) and the value the rendered realm
+# sets while plain-http services share the auth hostname (render_core.bake_realm_secrets).
+KEYCLOAK_DEFAULT_HSTS = "max-age=31536000; includeSubDomains"
+NO_HSTS = "max-age=0"
+
+
+def _sync_hsts(base_url, ctx, token, realm_def: dict) -> str:
+    """Make the live realm's Strict-Transport-Security header follow the rendered one.
+
+    `--import-realm` skips an existing realm, so without this an upgraded installation
+    would keep Keycloak's default header. Returns what happened:
+
+      set        the rendered realm asks for max-age=0 and the live realm still had
+                 Keycloak's default (or no value, which Keycloak serves as the default)
+      restored   the rendered realm no longer asks for max-age=0 while the live realm still
+                 has it: the hostnames no longer overlap, so Keycloak's default comes back
+      kept       the live realm has a value of its own; never overwritten
+      unchanged  nothing to do
+
+    The whole header map is sent back, because a realm update replaces it as a whole.
+    """
+    desired = (realm_def.get("browserSecurityHeaders") or {}).get("strictTransportSecurity")
+    live = _api(base_url, ctx, token, "GET", "") or {}
+    headers = dict(live.get("browserSecurityHeaders") or {})
+    current = headers.get("strictTransportSecurity") or KEYCLOAK_DEFAULT_HSTS
+
+    if desired == NO_HSTS:
+        if current == NO_HSTS:
+            return "unchanged"
+        if current != KEYCLOAK_DEFAULT_HSTS:
+            print(
+                f"Keycloak realm sends its own Strict-Transport-Security header ('{current}');"
+                " left unchanged. Plain-http services share the auth hostname, so a browser"
+                " may upgrade them to https: set the header to 'max-age=0' in the realm"
+                " settings (Realm settings > Security defenses), or serve those services on"
+                " a hostname of their own.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return "kept"
+        result, value = "set", NO_HSTS
+    else:
+        if current != NO_HSTS:
+            return "unchanged"
+        result, value = "restored", KEYCLOAK_DEFAULT_HSTS
+
+    headers["strictTransportSecurity"] = value
+    _api(base_url, ctx, token, "PUT", "", {"browserSecurityHeaders": headers})
+    print(f"  Strict-Transport-Security {result}: {value}", flush=True)
+    return result
+
+
 def _migrate_legacy_admins(base_url, ctx, token, existing_roles: dict[str, dict]) -> int:
     if _LEGACY_ADMIN_ROLE not in existing_roles or _MIGRATION_TARGET_ROLE not in existing_roles:
         return 0
@@ -790,6 +847,7 @@ def sync_roles(tree: EnvTree, config_dir: Path, repo_root: Path | None = None) -
         themes_set = _sync_login_theme(base_url, ctx, token, realm_def)
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
         _sync_smtp(base_url, ctx, token, realm_def)
+        _sync_hsts(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
     except urllib.error.HTTPError as exc:
         print(

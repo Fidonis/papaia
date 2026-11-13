@@ -373,6 +373,42 @@ def test_render_keeps_keycloak_hsts_on_a_hostname_of_its_own(repo_root, config_d
     assert "browserSecurityHeaders" not in realm
 
 
+_LOCAL_AUTH = "https://host.docker.internal:8110"
+_LOCAL_HTTP = "http://host.docker.internal"
+
+
+@pytest.mark.parametrize(
+    ("env", "domain_server", "shared"),
+    [
+        # The local default: the app host itself shares the hostname.
+        ({"PAPAIA_HOST": _LOCAL_HTTP}, "", True),
+        # One plain-http service on the auth hostname is enough.
+        ({"MANAGER_PUBLIC_URL": f"{_LOCAL_HTTP}:8120"}, "", True),
+        ({"LITELLM_PUBLIC_URL": f"{_LOCAL_HTTP}:8200"}, "", True),
+        ({"LOCALAI_PUBLIC_URL": f"{_LOCAL_HTTP}:8080"}, "", True),
+        ({"QDRANT_PUBLIC_URL": f"{_LOCAL_HTTP}:6333"}, "", True),
+        ({"NPM_ADMIN_HOST": f"{_LOCAL_HTTP}:8100"}, "", True),
+        ({}, f"{_LOCAL_HTTP}:8000", True),
+        # includeSubDomains: a service on a subdomain of the auth hostname is upgraded too.
+        (
+            {"AUTH_HOST": "https://papaia.test:8110", "PAPAIA_HOST": "http://chat.papaia.test"},
+            "",
+            True,
+        ),
+        # https on the same hostname is not upgraded, so it is no reason to drop HSTS.
+        ({"PAPAIA_HOST": "https://host.docker.internal"}, "", False),
+        # Hostnames of their own: the #301 workaround and a public setup.
+        ({"PAPAIA_HOST": "http://localhost"}, "http://localhost:8000", False),
+        ({"AUTH_HOST": "https://auth.papaia.test", "PAPAIA_HOST": "http://papaia.test"}, "", False),
+        # No auth host, nothing to compare with.
+        ({"AUTH_HOST": "", "PAPAIA_HOST": _LOCAL_HTTP}, "", False),
+    ],
+)
+def test_auth_host_shares_a_plain_http_hostname(env, domain_server, shared):
+    env = {"AUTH_HOST": _LOCAL_AUTH, **env}
+    assert render_core._auth_host_shares_a_plain_http_hostname(env, domain_server) is shared
+
+
 def test_render_ships_the_login_theme_and_the_overlay_replaces_a_file(repo_root, config_dir):
     shutil.copytree(
         REAL_REPO / "src/infra/keycloak/themes", repo_root / "src/infra/keycloak/themes"
