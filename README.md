@@ -1761,9 +1761,9 @@ Two caveats worth knowing:
 
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](docs/distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](docs/distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](docs/distributed.md#limits) that hold by design.
 
 papAIa can run on several machines: for example Nginx Proxy Manager, Keycloak, the mail relay
 and LiteLLM on an edge node in a DMZ, and LibreChat, the RAG system, LocalAI and papaia-manager
