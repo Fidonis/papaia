@@ -28,6 +28,7 @@ SECRET_ALIASES: dict[tuple[str, str], list[tuple[str, str]]] = {
         ("ai/rag", "QI_EMBEDDING_API_KEY"),
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
+    ("ai/localai", "LOCALAI_API_KEY"): [("ai/litellm", "LOCALAI_API_KEY")],
 }
 
 # Written to consumer secrets whose canonical lives in a skipped directory

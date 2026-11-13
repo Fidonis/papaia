@@ -1,0 +1,7 @@
+name: mistral-7b-instruct-v0.3
+backend: llama-cpp
+parameters:
+  model: Mistral-7B-Instruct-v0.3-Q5_K_M.gguf
+  seed: -1
+  context_size: 8192
+  f16: true

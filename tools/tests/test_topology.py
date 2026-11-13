@@ -12,7 +12,16 @@ import pytest
 import yaml
 from install_helpers import REPO, Installation, run_cli
 
-from lib import cli, common, deployment, envtree, keycloak_role_sync, npm_provision, topology
+from lib import (
+    cli,
+    common,
+    deployment,
+    envtree,
+    keycloak_role_sync,
+    npm_provision,
+    secrets,
+    topology,
+)
 from lib.topology import Node, Topology
 
 # Every service switched on, public URLs on subdomains: what a distributed installation
@@ -570,6 +579,14 @@ def test_no_bundle_contains_a_secret_of_another_node(full: Installation, preset:
             d for s in topo.services_on(node, active) for d in topology.CATALOGUE[s].env_dirs
         }
         own = {v for d in own_dirs for v in by_dir.get(d, set())}
+        # A secret that setup copies into one of the node's own files is one its services
+        # use (LiteLLM sends LocalAI's key), wherever the service that owns it runs.
+        tree = envtree.load_config_dir_tree(full.config, full.repo)
+        own |= {
+            tree.get(canon_dir, {}).get(canon_key, "")
+            for (canon_dir, canon_key), aliases in secrets.SECRET_ALIASES.items()
+            if any(alias_dir in own_dirs for alias_dir, _ in aliases)
+        } - {""}
         referenced = topology.referenced_variables(
             topology.services_of(full.repo, topo.services_on(node, active))
         )

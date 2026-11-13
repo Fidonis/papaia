@@ -16,6 +16,7 @@ import pytest
 import yaml
 from test_render_core import (
     FIXTURES_DIR,
+    _install_localai,
     _install_rag_fragment,
     _set_profiles,
     _setup_minimal,
@@ -26,6 +27,7 @@ from lib import cli, render_core
 LIBRECHAT = "ai/librechat/librechat.yaml"
 SEARXNG = "services/searxng/settings.yml"
 KEYCLOAK_CONF = "infra/keycloak/keycloak.conf"
+LITELLM = "ai/litellm/config.yaml"
 
 DRAFT = (
     "mcpSettings:\n  allowedDomains:\n    - http://customer.example:9000\n"
@@ -73,12 +75,16 @@ def _snapshot(*roots: Path) -> dict[str, tuple[bytes, int]]:
 # -- the preview cannot disagree with the render ---------------------------------------------
 
 
-@pytest.mark.parametrize("scenario", ["bare", "overlay", "rag-fragment", "addon-fragment"])
+@pytest.mark.parametrize(
+    "scenario", ["bare", "overlay", "rag-fragment", "addon-fragment", "localai-models"]
+)
 def test_the_current_text_is_what_render_writes_for_every_file_target(
     repo_root: Path, config_dir: Path, scenario: str
 ) -> None:
     if scenario == "rag-fragment":
         _install_rag_fragment(repo_root)
+    if scenario == "localai-models":
+        _install_localai(repo_root, "")
     _setup_minimal(repo_root, config_dir)
     if scenario in ("overlay", "rag-fragment"):
         _overlay(config_dir, LIBRECHAT, DRAFT)
@@ -88,8 +94,18 @@ def test_the_current_text_is_what_render_writes_for_every_file_target(
         _set_profiles(config_dir, "librechat,rag")
     if scenario == "addon-fragment":
         _addon(repo_root, config_dir)
+    if scenario == "localai-models":
+        _set_profiles(config_dir, "litellm,localai")
+        _overlay(config_dir, "ai/localai/models.txt", "https://example.org/my-model.gguf\n")
+        _overlay(
+            config_dir,
+            "ai/localai/models/my-model.yaml",
+            "name: my-model\nparameters:\n  model: my-model.gguf\n",
+        )
 
     render_core.render(config_dir, repo_root)
+    if scenario == "localai-models":
+        assert "openai/my-model" in (config_dir / LITELLM).read_text(encoding="utf-8")
 
     targets = _file_targets(repo_root)
     assert LIBRECHAT in targets and SEARXNG in targets and KEYCLOAK_CONF in targets
