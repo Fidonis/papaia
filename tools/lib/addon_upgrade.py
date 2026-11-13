@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import addons, common, compat, components, deployment, semver
+from . import addons, common, compat, components, deployment, keycloak_role_sync, semver
 
 SCHEMA_VERSION = 1
 
@@ -366,6 +366,9 @@ def apply_upgrade(
             chosen[item["key"]] = item["default"]
     if chosen:
         common.write_env_file(bundle_env_path, chosen)
+    # A managed Keycloak client whose secret is still a placeholder gets one now, before the
+    # checkout copy is written: the containers recreated after this must not start with it.
+    keycloak_role_sync.fill_client_secrets(candidate.new_manifest, bundle_env_path, name)
     addons.materialize_addon_env(config_dir, candidate.new_path, name)
 
     new_version = manifest_version(candidate.new_manifest)
@@ -460,7 +463,10 @@ def format_plan(plan: dict) -> str:
         if man["attach"][key]:
             lines.append(f"Attached core services {verb} " + ", ".join(man["attach"][key]))
     if man["keycloak"]["clients_added"] or man["keycloak"]["mappers_added"]:
-        lines.append("New Keycloak clients or mappers: they have to be imported by hand.")
+        lines.append(
+            "New Keycloak clients or mappers: imported by hand, unless the manifest names the "
+            "client under client_secrets ('start' creates it)."
+        )
     if plan["needs_input"]:
         lines.append("Needs a value before it can run: " + ", ".join(plan["needs_input"]))
     return "\n".join(lines)

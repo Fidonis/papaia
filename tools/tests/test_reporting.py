@@ -107,3 +107,26 @@ def test_keycloak_checklist_indents_a_multi_line_install_note(tmp_path, capsys):
 def test_keycloak_checklist_silent_when_nothing_to_do(tmp_path, capsys):
     reporting.print_keycloak_checklist("paperless", {}, tmp_path, tmp_path)
     assert capsys.readouterr().out == ""
+
+
+def test_keycloak_checklist_leaves_managed_clients_to_start(tmp_path, capsys):
+    addon_path = tmp_path / "addon"
+    addon_path.mkdir()
+    config_dir = tmp_path / "config"
+    (config_dir / "addons" / "wiki").mkdir(parents=True)
+    (config_dir / "addons" / "wiki" / ".env").write_text("KC_WIKI_SECRET=s\n", encoding="utf-8")
+    manifest = {
+        "integration": {
+            "keycloak": {
+                "clients": ["kc/wiki.json", "kc/manual.json"],
+                "client_secrets": {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET"}},
+            }
+        }
+    }
+
+    reporting.print_keycloak_checklist("wiki", manifest, addon_path, config_dir)
+
+    out = capsys.readouterr().out
+    created, manual = out.split("Import these OIDC clients")
+    assert "created by 'papaia-ctl start'" in created and "wiki.json" in created
+    assert "manual.json" in manual and "wiki.json" not in manual
