@@ -177,6 +177,32 @@ provider was in use is not kept either: switching back to the bundled Keycloak d
 again. The interactive prompt pre-fills by the same rules. After changing
 `KEYCLOAK_EXT_PORT` on a local host, pass `--auth-host` with the new port.
 
+When a plain-http browser URL (`PAPAIA_HOST`, `MANAGER_PUBLIC_URL`,
+`LITELLM_PUBLIC_URL`, `LOCALAI_PUBLIC_URL`, `QDRANT_PUBLIC_URL`, `NPM_ADMIN_HOST` or
+LibreChat's `DOMAIN_SERVER`) is on the `AUTH_HOST` hostname or a subdomain of it — the
+local default: papaia-manager, LiteLLM, LocalAI and Qdrant on `http://host.docker.internal`,
+Keycloak on `https://host.docker.internal:8110` — the papaia realm sets Keycloak's
+`Strict-Transport-Security` header to `max-age=0`. HSTS applies to a hostname on every
+port, and Keycloak's default (one year, `includeSubDomains`) would make the browser
+upgrade those http URLs to https. `papaia-ctl start` applies the value to an existing
+realm too, as long as the realm still has Keycloak's default header, and restores the
+default once the hostnames no longer overlap. A deployment whose plain-http services
+live on hostnames of their own keeps Keycloak's default HSTS.
+
+This covers responses of the papaia realm only. Keycloak sends its default header on
+responses outside a realm — the static files under `/resources/` that every login page
+loads, `/`, and the admin console of the `master` realm — and that cannot be configured.
+Each Keycloak page visit therefore pins the hostname again; the next papaia-realm
+response clears it, in practice the redirect back to the app after a completed login.
+After an aborted login or a visit to the admin console, the browser upgrades the
+http services on that hostname until then. To clear it, complete a login (LibreChat
+is on `http://localhost:8000` by default and is not affected), or remove the entry in
+the browser (Chrome: `chrome://net-internals/#hsts`, *Delete domain security
+policies*). Serving the plain-http services on a hostname of their own avoids the
+problem completely, e.g. `--manager-host=http://localhost:8120
+--litellm-host=http://localhost:8200` on a new setup (an existing realm keeps the
+redirect URIs it was imported with).
+
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.
 

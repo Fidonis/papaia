@@ -334,6 +334,81 @@ def test_render_switching_the_relay_off_restores_the_plain_realm(repo_root, conf
     assert _realm_file(config_dir).read_bytes() == plain
 
 
+# ── Keycloak's HSTS header on a shared local hostname ─────────────────────────
+
+
+def test_render_disables_hsts_while_plain_http_services_share_the_auth_hostname(
+    repo_root, config_dir
+):
+    # The local defaults: LibreChat and papaia-manager on http://host.docker.internal,
+    # Keycloak on https://host.docker.internal:8110 — the same hostname.
+    _setup_minimal(repo_root, config_dir)
+
+    render_core.render(config_dir, repo_root)
+
+    realm = json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+    # max-age=0, not an empty header: it also clears what a browser already learned.
+    assert realm["browserSecurityHeaders"] == {"strictTransportSecurity": "max-age=0"}
+
+
+def test_render_keeps_keycloak_hsts_on_a_hostname_of_its_own(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    tree = secrets.generate_missing_secrets(tree, seed)
+    args = resolve.SetupArgs(
+        config_dir=config_dir,
+        app_host="http://localhost",
+        auth_host="https://host.docker.internal:8110",
+        non_interactive=True,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    tree = resolve.resolve_multi_env(tree, args)
+    tree = resolve.resolve_reverse_proxy(tree, args)
+    envtree.persist_tree(tree, config_dir, repo_root)
+
+    render_core.render(config_dir, repo_root)
+
+    realm = json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+    assert "browserSecurityHeaders" not in realm
+
+
+_LOCAL_AUTH = "https://host.docker.internal:8110"
+_LOCAL_HTTP = "http://host.docker.internal"
+
+
+@pytest.mark.parametrize(
+    ("env", "domain_server", "shared"),
+    [
+        # The local default: the app host itself shares the hostname.
+        ({"PAPAIA_HOST": _LOCAL_HTTP}, "", True),
+        # One plain-http service on the auth hostname is enough.
+        ({"MANAGER_PUBLIC_URL": f"{_LOCAL_HTTP}:8120"}, "", True),
+        ({"LITELLM_PUBLIC_URL": f"{_LOCAL_HTTP}:8200"}, "", True),
+        ({"LOCALAI_PUBLIC_URL": f"{_LOCAL_HTTP}:8080"}, "", True),
+        ({"QDRANT_PUBLIC_URL": f"{_LOCAL_HTTP}:6333"}, "", True),
+        ({"NPM_ADMIN_HOST": f"{_LOCAL_HTTP}:8100"}, "", True),
+        ({}, f"{_LOCAL_HTTP}:8000", True),
+        # includeSubDomains: a service on a subdomain of the auth hostname is upgraded too.
+        (
+            {"AUTH_HOST": "https://papaia.test:8110", "PAPAIA_HOST": "http://chat.papaia.test"},
+            "",
+            True,
+        ),
+        # https on the same hostname is not upgraded, so it is no reason to drop HSTS.
+        ({"PAPAIA_HOST": "https://host.docker.internal"}, "", False),
+        # Hostnames of their own: the #301 workaround and a public setup.
+        ({"PAPAIA_HOST": "http://localhost"}, "http://localhost:8000", False),
+        ({"AUTH_HOST": "https://auth.papaia.test", "PAPAIA_HOST": "http://papaia.test"}, "", False),
+        # No auth host, nothing to compare with.
+        ({"AUTH_HOST": "", "PAPAIA_HOST": _LOCAL_HTTP}, "", False),
+    ],
+)
+def test_auth_host_shares_a_plain_http_hostname(env, domain_server, shared):
+    env = {"AUTH_HOST": _LOCAL_AUTH, **env}
+    assert render_core._auth_host_shares_a_plain_http_hostname(env, domain_server) is shared
+
+
 def test_render_ships_the_login_theme_and_the_overlay_replaces_a_file(repo_root, config_dir):
     shutil.copytree(
         REAL_REPO / "src/infra/keycloak/themes", repo_root / "src/infra/keycloak/themes"

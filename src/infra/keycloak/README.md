@@ -191,7 +191,10 @@ are synced into an already-imported realm automatically on every
 already exists is left as it is (the `qdrant-ingest-ui` client of an older install is
 no longer used and can be deleted). The sync also grants
 `papaia-admin` to every account that already held the old flat `admin` role,
-without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
+without removing `admin` itself. The realm's `Strict-Transport-Security` header is
+set to `max-age=0` while plain-http services share the auth hostname, and back to
+Keycloak's default once they no longer do; a value set by hand is left alone (see
+`docs/configuration.md`). Run `papaia-ctl keycloak-role-sync` directly
 to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).
 
 **Mail server.** The template carries no `smtpServer`. While the `smtp` profile is on and
