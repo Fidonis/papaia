@@ -139,6 +139,31 @@ def test_a_new_key_is_classified_by_what_its_example_value_says():
     assert literal["value"] == "eng"
 
 
+def test_the_secret_of_a_managed_client_is_described_as_generated():
+    # An add-on for older cores still ships the placeholder of a manual import; the
+    # upgrade generates it (fill_client_secrets) and creates the client.
+    manifest = {
+        "integration": {
+            "keycloak": {
+                "clients": ["kc/wiki.json"],
+                "client_secrets": {"kc/wiki.json": {"secret_env": "KC_WIKI_SECRET"}},
+            }
+        }
+    }
+    plan = _plan_of(
+        _candidate({}, manifest),
+        new_env={"KC_WIKI_SECRET": "REPLACE_WITH_WIKI", "KC_OTHER": "REPLACE_WITH_OTHER"},
+    )
+
+    items = {i["key"]: i for i in plan["env"]["new"]}
+    assert items["KC_WIKI_SECRET"]["managed"] is True
+    assert items["KC_OTHER"]["managed"] is False
+    text = addon_upgrade.format_plan(plan)
+    assert "KC_WIKI_SECRET: the secret of a Keycloak client that papaia-ctl creates" in text
+    assert "KC_OTHER: a Keycloak client secret to copy in" in text
+    assert "applying the upgrade creates it" in text
+
+
 def test_a_key_the_manifest_lists_as_a_replaced_secret_is_one_whatever_its_value():
     candidate = _candidate({}, {"env_replace_secrets": {"TOKEN": {"hint": "copy it"}}})
     plan = _plan_of(candidate, new_env={"TOKEN": "placeholder"})
@@ -277,7 +302,6 @@ def test_the_same_directory_is_an_in_place_upgrade():
 
     assert plan["in_place"] is True
     assert "no way back" in addon_upgrade.format_plan(plan)
-
 
 
 def test_the_review_names_unmet_requirements_of_other_addons():

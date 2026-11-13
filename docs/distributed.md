@@ -141,6 +141,11 @@ This lists every connection between the nodes. For `dmz-split`:
 Plus 80 and 443 from the users to the proxy's node. papaia never changes a firewall; open
 exactly these. `doctor` names a missing rule when a link cannot be reached.
 
+The link port is published by Docker, so its packets are DNATed before routing and traverse
+the host's *forward* chain, never its input chain. Enforce the rules above where forwarded
+traffic is filtered (an nftables forward chain, or iptables' `DOCKER-USER`); an input-only
+rule set -- plain `ufw` among them -- does not apply to the link port at all.
+
 ## Daily operations
 
 | Command | In a distributed installation |
