@@ -696,9 +696,9 @@ directory name above is a convention, not a requirement. What matters is the
 
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](distributed.md#limits) that hold by design.
 
 By default an installation is one host. A distributed installation spreads the core services
 over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,
