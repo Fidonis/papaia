@@ -170,6 +170,18 @@ def test_attachable_services_match_snapshot():
     assert services == ATTACHABLE_SERVICES, _SURFACE_CHANGED
 
 
+# Seam 2b (addon_api 4): directories under <addon>/integration/ an add-on drops
+# LibreChat agents and prompts into, and where they are rendered.
+LIBRECHAT_ADDON_CONTENT = {
+    "agents": ("addon-agents", (".yaml", ".yml")),
+    "prompts": ("addon-prompts", (".md", ".markdown")),
+}
+
+
+def test_librechat_addon_content_matches_snapshot():
+    assert render_core.LIBRECHAT_ADDON_CONTENT == LIBRECHAT_ADDON_CONTENT, _SURFACE_CHANGED
+
+
 def test_base_render_targets_match_snapshot():
     assert render_core.BASE_RENDER_TARGETS == BASE_RENDER_TARGETS, _SURFACE_CHANGED
 
