@@ -102,6 +102,7 @@ FILES=(
     "ai/litellm/config.yaml"
     "ai/litellm/prometheus.yml"
     "ai/localai/models.txt"
+    "ai/voice/chatterbox.yaml"
     "ai/n8n/nginx.conf"
     "infra/keycloak/keycloak.conf"
     "infra/keycloak/realm-import/papaia-realm.json.template"

@@ -122,6 +122,8 @@ KERNEL_CLOCK_SYNCED_MAXERROR_US = 16_000_000
 LOCALAI_PROFILE = "localai"
 LOCALAI_SERVICE = "localai"
 GPU_OVERRIDE = Path("overrides") / "docker-compose.localai-gpu.override.yml"
+VOICE_PROFILE = "voice"
+VOICE_GPU_OVERRIDE = Path("overrides") / "docker-compose.voice-gpu.override.yml"
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
 
@@ -1088,10 +1090,10 @@ def check_gpu(ctx: Context) -> CheckResult:
     if not ctx.configured:
         return _not_set_up(name)
     if LOCALAI_PROFILE not in ctx.active_profiles:
-        return CheckResult(name, SKIP, "LocalAI is not enabled")
+        return _gpu_voice(ctx) or CheckResult(name, SKIP, "LocalAI is not enabled")
     variant = ctx.env.get("LOCALAI_IMAGE_VARIANT", "").strip() or gpu_detect.CPU
     if variant == gpu_detect.CPU:
-        return CheckResult(name, SKIP, "LocalAI runs on the CPU image")
+        return _gpu_voice(ctx) or CheckResult(name, SKIP, "LocalAI runs on the CPU image")
 
     details: dict[str, Any] = {
         "variant": variant,
@@ -1134,6 +1136,45 @@ def check_gpu(ctx: Context) -> CheckResult:
     if variant == gpu_detect.HIPBLAS:
         return _gpu_amd(ctx, details)
     return _gpu_render_node(ctx, variant, details)
+
+
+def _gpu_voice(ctx: Context) -> CheckResult | None:
+    """The voice TTS accelerator, probed when LocalAI does not already prove the GPU.
+
+    The voice images need the same host prerequisites as LocalAI's (NVIDIA: driver plus
+    Container Toolkit; AMD: the ROCm kernel driver), so the LocalAI probes serve here.
+    While LocalAI itself runs an accelerator image, its verdict covers the host and this
+    path stays out of the way; None hands the decision back to the caller."""
+    name = "gpu"
+    if VOICE_PROFILE not in ctx.active_profiles:
+        return None
+    variant = ctx.env.get("VOICE_TTS_IMAGE_VARIANT", "").strip() or "cpu"
+    if variant == "cpu":
+        return None
+    details: dict[str, Any] = {
+        "variant": f"{variant} (voice)",
+        "override_present": (ctx.config_dir / VOICE_GPU_OVERRIDE).is_file(),
+    }
+    if variant not in ("nvidia", "hipblas"):
+        return CheckResult(
+            name,
+            WARN,
+            f"unknown VOICE_TTS_IMAGE_VARIANT '{variant}' (one of: cpu, nvidia, hipblas)",
+            details,
+        )
+    if ctx.probes.in_container():
+        # Unlike LocalAI there is no container that is guaranteed to carry the
+        # vendor tools, so the host is the only place this can be measured.
+        return CheckResult(
+            name,
+            SKIP,
+            "not measurable from inside a container: the host's driver tools and devices"
+            " are not visible",
+            details,
+        )
+    if variant == "nvidia":
+        return _gpu_nvidia(ctx, variant, details)
+    return _gpu_amd(ctx, details)
 
 
 def _published_host_port(entry: str, env: dict[str, str]) -> tuple[str, int] | None:

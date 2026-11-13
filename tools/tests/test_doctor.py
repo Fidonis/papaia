@@ -123,6 +123,13 @@ def enable_localai(stack, variant: str | None = None) -> None:
     set_env(stack, **values)
 
 
+def enable_voice(stack, variant: str | None = None) -> None:
+    values = {"COMPOSE_PROFILES": f"{PROFILES},voice"}
+    if variant is not None:
+        values["VOICE_TTS_IMAGE_VARIANT"] = variant
+    set_env(stack, **values)
+
+
 def fake_dev(tmp_path: Path, *, kfd: bool = False, render_node: bool = False) -> Path:
     """A stand-in for /dev with the device nodes a GPU host would have."""
     dev = tmp_path / "dev"
@@ -1017,6 +1024,43 @@ def test_gpu_notes_whether_the_generated_override_exists(stack):
     check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
 
     assert check.details["override_present"] is True
+
+
+def test_gpu_probes_the_voice_variant_when_localai_does_not(stack):
+    enable_voice(stack, "nvidia")
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.status == PASS
+    assert check.details["variant"] == "nvidia (voice)"
+
+
+def test_gpu_skips_for_a_cpu_voice_variant(stack):
+    enable_voice(stack, "cpu")
+
+    check = result(run_doctor(stack), "gpu")
+
+    assert check.status == SKIP
+
+
+def test_gpu_notes_whether_the_voice_override_exists(stack):
+    enable_voice(stack, "nvidia")
+    override = stack["config"] / "overrides" / "docker-compose.voice-gpu.override.yml"
+    override.parent.mkdir(exist_ok=True)
+    override.write_text("services: {}\n", encoding="utf-8")
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.details["override_present"] is True
+
+
+def test_gpu_voice_is_not_measurable_from_a_container(stack):
+    # Unlike LocalAI there is no container guaranteed to carry the vendor tools.
+    enable_voice(stack, "nvidia")
+
+    check = result(run_doctor(stack, docker=nvidia_docker(), in_container=lambda: True), "gpu")
+
+    assert check.status == SKIP
 
 
 @pytest.mark.parametrize(

@@ -79,6 +79,7 @@ next to it, even when it has an inline `:-` default.
 | `*_EXT_PORT` | External port allocation — kept together to stay collision-free |
 | `LOCALAI_PUBLIC_URL` | Browser-facing LocalAI URL, derived by setup |
 | `LOCALAI_IMAGE_VARIANT` | LocalAI accelerator image chosen during setup (`cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`); drives the generated GPU override |
+| `VOICE_TTS_IMAGE_VARIANT` | Voice TTS accelerator image chosen during setup (`cpu`, `nvidia`, `hipblas`; set via `setup --voice-variant`); drives the generated GPU override, which only materializes while the `voice` profile is active — the image pins live in `src/ai/voice/docker-compose.yml` |
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |
 | `MANAGER_EXT_PORT` | External port the manager (profile `manager`) is published on |
 | `MANAGER_PUBLIC_URL` | Browser-facing papaia-manager URL, derived by setup — interpolated as `MANAGER_HOST` in `src/manager/docker-compose.yml` |
@@ -135,7 +136,9 @@ must not be set in this file.
 `src/ai/voice/.env` (profile `voice`). All services take their values only through
 `environment:` interpolation (path 1), each with a default, so a profile switched on by hand
 before `setup` has run starts — the engines merely refuse requests until the key exists. The
-TTS server is configured through the rendered `ai/voice/chatterbox.yaml`, not through variables.
+TTS server is configured through the rendered `ai/voice/chatterbox.yaml`, not through
+variables, and the accelerator image choice (`VOICE_TTS_IMAGE_VARIANT`) lives in the root
+`.env` above, not here.
 
 | Variable | Purpose |
 |---|---|
@@ -145,7 +148,6 @@ TTS server is configured through the rendered `ai/voice/chatterbox.yaml`, not th
 | `VOICE_STT_CPU_THREADS` | CPU threads for transcription; `0` (default) uses all cores — cap it on a host that shares cores with LLM inference |
 | `VOICE_STT_MODEL_TTL` | Seconds an idle model stays loaded (default 300; `-1` never unloads) |
 | `VOICE_STT_LOG_LEVEL` | One of debug, info, warning, error (default `info`) |
-| `VOICE_TTS_IMAGE_VARIANT` | Which TTS image the generated override in `$PAPAIA_CONFIG_DIR/overrides/` selects (`cpu`, `nvidia`, `hipblas`; default `cpu`, set via `setup --voice-variant`). The override only materializes while the `voice` profile is active; the image pins live in `src/ai/voice/docker-compose.yml` |
 | `VOICE_STT_HEALTHCHECK_START_PERIOD`, `VOICE_TTS_HEALTHCHECK_START_PERIOD` | Grace periods before the containers count as unhealthy; raise the TTS one on a slow line (first start downloads ~3.2 GB) |
 | `VOICE_TTS_MEM_LIMIT` | Hard memory ceiling of the TTS container (default `8g`); the loaded model stays resident at ~4-6 GB |
 

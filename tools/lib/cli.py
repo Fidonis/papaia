@@ -60,6 +60,19 @@ def _tristate(value: str | None) -> bool | None:
     return value == "true"
 
 
+def _apply_voice_gpu_override(config_dir: Path, repo_root: Path, tree: dict) -> None:
+    """Write or remove the voice TTS accelerator override for this tree.
+
+    The variant only materializes while the voice profile is active: a host that never
+    runs the TTS engine must not carry a stray accelerator override (an empty variant
+    removes the file)."""
+    root = tree.get("", {})
+    active = "voice" in root.get("COMPOSE_PROFILES", "").split(",")
+    gen_override.generate_voice_gpu_override(
+        config_dir, repo_root, root.get("VOICE_TTS_IMAGE_VARIANT", "") if active else ""
+    )
+
+
 def cmd_defaults(args: argparse.Namespace) -> int:
     """Print sticky/derived values as shell-safe KEY=VALUE lines, one per
     line, so the bash dispatcher can read them without a JSON parser."""
@@ -307,15 +320,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
-    # The variant only materializes while the voice profile is active: a host
-    # that never runs the TTS engine must not carry a stray accelerator
-    # override (an empty variant removes the file).
-    voice_active = "voice" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
-    gen_override.generate_voice_gpu_override(
-        config_dir,
-        repo_root,
-        tree.get("", {}).get("VOICE_TTS_IMAGE_VARIANT", "") if voice_active else "",
-    )
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -363,12 +368,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
-    voice_active = "voice" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
-    gen_override.generate_voice_gpu_override(
-        config_dir,
-        repo_root,
-        tree.get("", {}).get("VOICE_TTS_IMAGE_VARIANT", "") if voice_active else "",
-    )
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
     print("Rendered.")

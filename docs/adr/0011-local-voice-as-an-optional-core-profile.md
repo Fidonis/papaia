@@ -125,7 +125,9 @@ Security posture:
   one-egress-point rule, and avoidable by pre-seeding the cache volumes (air-gap
   path in the README). The STT engine serves only models installed through its
   API, so a one-shot `speaches-model-init` container (localai-model-init
-  precedent) installs the configured model after the engine is healthy.
+  precedent) installs the configured model, retrying until the engine answers
+  (deliberately not gated on the engine's healthcheck, which fails by design on
+  an empty API key — the compose file explains the trade-off).
 
 Contract surface: the two services are attachable (`networks.attach`) and the TTS
 config is a render target, so `ADDON_API` moves to generation 5 (additive; `min`
