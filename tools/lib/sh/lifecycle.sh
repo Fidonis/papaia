@@ -162,7 +162,9 @@ cmd_start() {
             [ -z "$addon_name" ] && continue
             addon_path="$(_addon_path "$addon_name")"
             info "  addon $addon_name: materialising env + starting"
-            py_cli addon-start --name="$addon_name" ${check_flags[@]+"${check_flags[@]}"}
+            # --no-keycloak: Keycloak may not be up yet; the keycloak-role-sync step
+            # below creates the add-on clients.
+            py_cli addon-start --name="$addon_name" --no-keycloak ${check_flags[@]+"${check_flags[@]}"}
             _addon_compose_up "$addon_name" "$addon_path"
         done < <(py_cli active-addons 2>/dev/null)
     fi

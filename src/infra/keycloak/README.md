@@ -227,18 +227,20 @@ OIDC provider this does not apply.
 | `admin` | `admin` | papaia-admin, user, localai-access |
 | `testuser` | `testuser` | user, finance, librechat-user (no `localai-access` — cannot log in to LocalAI via SSO) |
 
-### Linux Host Note
+### Host Note
 
 `host.docker.internal` is used so that both the browser and Docker containers reach
 Keycloak at the same URL, keeping the OIDC `iss` claim consistent.
 
-On **Linux**, add the entry manually before starting:
+On **Linux** and **macOS**, add the entry manually before starting. Docker Desktop on
+macOS resolves the name inside containers but not on the Mac itself, where the browser
+runs; `setup` prints this command there when the entry is missing:
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 ```
 
-On macOS and Windows (Docker Desktop) it resolves out-of-the-box.
+On Windows, Docker Desktop adds the entry itself.
 
 ---
 
