@@ -505,6 +505,12 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
   `librechat.yaml` does not define is skipped with a warning, because it would
   appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
   `mcpServers` is not a list of server names; the rest of the render goes on.
+- **Tools:** LibreChat equips a stored agent from its `tools` list alone;
+  `mcpServers` adds no tools by itself. An empty `tools` next to `mcpServers`
+  therefore means every tool of those servers: the wildcard key of each server
+  (`sys__all__sys_mcp_<server>`) is stored for it. A non-empty list is stored as
+  written, so an agent can carry single tools (`<tool>_mcp_<server>`), which
+  keeps the tool prompt small for small local models.
 - **Operator files win:** An agent in `LIBRECHAT_AGENTS_DIR` with the id of an
   add-on agent replaces it: the add-on file is skipped with a warning, and the
   stored agent loses its add-on mark, so removing the add-on keeps it. Operator
@@ -696,9 +702,9 @@ directory name above is a convention, not a requirement. What matters is the
 
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](distributed.md#limits) that hold by design.
 
 By default an installation is one host. A distributed installation spreads the core services
 over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,
