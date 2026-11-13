@@ -593,7 +593,9 @@ def _expected(
     )
 
 
-def core_inventory(repo_root: Path, active: set[str]) -> list[ExpectedService]:
+def core_inventory(
+    repo_root: Path, active: set[str], skip: Iterable[str] = ()
+) -> list[ExpectedService]:
     """Core services enabled by `active`, read from the shipped fragments.
 
     Follows the `include:` list of `src/docker-compose.yml` (via
@@ -602,7 +604,11 @@ def core_inventory(repo_root: Path, active: set[str]) -> list[ExpectedService]:
     `docker compose config`: the fields needed here (`profiles`, two labels,
     `ports`) are literals in the shipped fragments, and `config` needs every
     enabled profile's env file rendered and forks a process.
+
+    `skip` names services that run without a container of their own: `localai` while
+    LOCALAI_RUNTIME is native (see `native_skip`).
     """
+    skipped = set(skip)
     root = repo_root / "src" / "docker-compose.yml"
     try:
         files = compat.compose_files(root)
@@ -611,6 +617,8 @@ def core_inventory(repo_root: Path, active: set[str]) -> list[ExpectedService]:
     expected: list[ExpectedService] = []
     for path in files:
         for service, body in _services(_load_yaml(path)).items():
+            if service in skipped:
+                continue
             declared = _profiles_of(body)
             # A service without `profiles` is unconditional in Compose.
             if declared and not (declared & active):
@@ -619,6 +627,13 @@ def core_inventory(repo_root: Path, active: set[str]) -> list[ExpectedService]:
                 _expected(service, body, fallback_module=UNGROUPED_MODULE, active=active)
             )
     return expected
+
+
+def native_skip(config_dir: Path) -> set[str]:
+    """The core services that have no container here: `localai` with the native runtime
+    of an Apple Silicon Mac (its process is checked by doctor's `localai_native`)."""
+    env = common.parse_env_file(config_dir / ".env")
+    return {"localai"} if env.get("LOCALAI_RUNTIME", "").strip() == "native" else set()
 
 
 def addon_inventory(addon_path: Path, fallback_module: str) -> list[ExpectedService]:
@@ -791,7 +806,7 @@ def collect(
     run = run or run_command
     active = active_profiles(config_dir)
     project = compose_project(config_dir)
-    expected_core = core_inventory(repo_root, active)
+    expected_core = core_inventory(repo_root, active, native_skip(config_dir))
 
     wanted: set[str] | None = None
     if profiles:

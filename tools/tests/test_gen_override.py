@@ -489,3 +489,36 @@ def test_join_override_skips_a_target_without_app_network(
 
     assert not _join_override(config_dir, "joiner").exists()
     assert "declares no networks.app_network" in capsys.readouterr().err
+
+
+# ── LocalAI runtime (ADR 0012) ──────────────────────────────────────────────
+
+
+def test_the_native_runtime_override_keeps_the_services_but_runs_no_container(
+    config_dir, tmp_path
+):
+    home = tmp_path / "workspace" / "localai" / "papaia"
+    gen_override.generate_localai_runtime_override(config_dir, "native", home)
+    path = config_dir / "overrides" / gen_override.LOCALAI_RUNTIME_OVERRIDE
+    override = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    assert override["services"]["localai"] == {"pull_policy": "never", "deploy": {"replicas": 0}}
+    assert override["services"]["localai-model-init"]["volumes"] == [
+        {
+            "type": "bind",
+            "source": str(home / "models"),
+            "target": "/models",
+            "bind": {"create_host_path": True},
+        }
+    ]
+    # No add-on network: the start loop never skips it.
+    assert gen_override.external_networks(path) == []
+
+
+def test_the_container_runtime_removes_the_override(config_dir, tmp_path):
+    gen_override.generate_localai_runtime_override(config_dir, "native", tmp_path)
+    gen_override.generate_localai_runtime_override(config_dir, "container", tmp_path)
+    assert not (config_dir / "overrides" / gen_override.LOCALAI_RUNTIME_OVERRIDE).exists()
+    # Also without a home (no workspace stamped yet).
+    gen_override.generate_localai_runtime_override(config_dir, "native", None)
+    assert not (config_dir / "overrides" / gen_override.LOCALAI_RUNTIME_OVERRIDE).exists()

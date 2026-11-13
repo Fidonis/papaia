@@ -338,6 +338,42 @@ def generate_localai_gpu_override(
     )
 
 
+LOCALAI_RUNTIME_OVERRIDE = "docker-compose.localai-runtime.override.yml"
+
+
+def generate_localai_runtime_override(config_dir: Path, runtime: str, home: Path | None) -> None:
+    """Write or remove the override of the native LocalAI runtime (ADR 0012).
+
+    The services stay declared, because the add-on contract pins `localai` and
+    `localai-model-init` (ATTACHABLE_SERVICES): `localai` gets no container (`replicas: 0`)
+    and is never pulled (`pull_policy: never`; `replicas: 0` alone still pulls the
+    multi-GB image), and the init job writes the models into the host directory the
+    native process reads, instead of the `localai-models` volume. Removed for `container`,
+    which is what brings the container back."""
+    out_path = config_dir / "overrides" / LOCALAI_RUNTIME_OVERRIDE
+    if runtime != "native" or home is None:
+        out_path.unlink(missing_ok=True)
+        return
+    override = {
+        "services": {
+            "localai": {"pull_policy": "never", "deploy": {"replicas": 0}},
+            "localai-model-init": {
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": str(home / "models"),
+                        "target": "/models",
+                        "bind": {"create_host_path": True},
+                    }
+                ]
+            },
+        }
+    }
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+
+
 def generate_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:
     """Write or remove the SSL_CERT_FILE override for external OIDC.
 

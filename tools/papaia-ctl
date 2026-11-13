@@ -19,6 +19,7 @@
 #                       [--web-search|--no-web-search] [--reranker-model=NAME]
 #                       [--local-ai|--no-local-ai] [--localai-host=URL]
 #                       [--localai-variant=cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto]
+#                       [--localai-runtime=container|native]
 #                       [--manager|--no-manager] [--manager-host=URL]
 #                       [--rag|--no-rag] [--qdrant-host=URL]
 #                       [--smtp|--no-smtp] [--smtp-host=HOST] [--smtp-port=PORT]
@@ -97,7 +98,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,90p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,91p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

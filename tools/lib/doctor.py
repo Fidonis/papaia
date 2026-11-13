@@ -57,6 +57,7 @@ from . import (
     deployment,
     envtree,
     gpu_detect,
+    localai_native,
     semver,
     smtp,
     status,
@@ -346,6 +347,8 @@ class Probes:
     smtp_probe: Callable[..., smtp.ProbeResult] = smtp.probe_upstream
     # Where device nodes live; the same seam `gpu_detect.compose_fragment` has.
     dev_root: Path = Path("/dev")
+    # Whether the native LocalAI answers on a /readyz URL.
+    localai_ready: Callable[[str], bool] = localai_native.probe
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1089,6 +1092,12 @@ def check_gpu(ctx: Context) -> CheckResult:
         return _not_set_up(name)
     if LOCALAI_PROFILE not in ctx.active_profiles:
         return CheckResult(name, SKIP, "LocalAI is not enabled")
+    if localai_native.runtime(ctx.env) == localai_native.NATIVE:
+        # Metal is not measured here and no variant is reported: papaia-manager maps
+        # details.variant to labels of its own. The process is checked by localai_native.
+        return CheckResult(
+            name, SKIP, "LocalAI runs natively on the Apple GPU (see localai_native)"
+        )
     variant = ctx.env.get("LOCALAI_IMAGE_VARIANT", "").strip() or gpu_detect.CPU
     if variant == gpu_detect.CPU:
         return CheckResult(name, SKIP, "LocalAI runs on the CPU image")
@@ -1136,6 +1145,59 @@ def check_gpu(ctx: Context) -> CheckResult:
     return _gpu_render_node(ctx, variant, details)
 
 
+def check_localai_native(ctx: Context) -> CheckResult:
+    """The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native, ADR 0012).
+
+    Whether /readyz answers (on the host at 127.0.0.1, in a container at
+    host.docker.internal) and whether the installed binary is the pinned release. `warn`
+    at most: until launchd manages the process, a LocalAI that is not running is a normal
+    state."""
+    name = "localai_native"
+    if not ctx.configured:
+        return _not_set_up(name)
+    env = ctx.env
+    if localai_native.runtime(env) != localai_native.NATIVE:
+        return CheckResult(name, SKIP, "LocalAI runs in its container")
+    if LOCALAI_PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "LocalAI is not enabled")
+    try:
+        home = localai_native.localai_home(env)
+        pinned = localai_native.pinned_version(ctx.repo_root)
+    except localai_native.InstallError as exc:
+        return CheckResult(name, WARN, str(exc))
+    installed = localai_native.installed_version(home)
+    url = localai_native.probe_url(env, inside_container=ctx.probes.in_container())
+    ready = ctx.probes.localai_ready(url)
+    details: dict[str, Any] = {
+        "url": url,
+        "home": str(home),
+        "pinned": pinned,
+        "installed": installed,
+        "ready": ready,
+    }
+    script = localai_native.script_path(home)
+    if installed is None:
+        return CheckResult(
+            name, WARN, "the LocalAI binary is not installed yet: run 'papaia-ctl start'", details
+        )
+    if installed != pinned:
+        return CheckResult(
+            name,
+            WARN,
+            f"LocalAI {installed} is installed, this release pins {pinned}:"
+            " run 'papaia-ctl start', then restart LocalAI",
+            details,
+        )
+    if not ready:
+        return CheckResult(
+            name,
+            WARN,
+            f"LocalAI {installed} does not answer on {url}: start it with {script}",
+            details,
+        )
+    return CheckResult(name, PASS, f"LocalAI {installed} answers on {url}", details)
+
+
 def _published_host_port(entry: str, env: dict[str, str]) -> tuple[str, int] | None:
     """(bind address, host port) of one short-syntax `ports:` entry, or None
     when the host side is not a single resolvable port (ephemeral, range,
@@ -1159,7 +1221,10 @@ def check_ports(ctx: Context) -> CheckResult:
         return _not_set_up(name)
 
     env = ctx.env
-    expected = status.core_inventory(ctx.repo_root, ctx.active_profiles)
+    # A native LocalAI holds its port as a host process; that is no conflict.
+    expected = status.core_inventory(
+        ctx.repo_root, ctx.active_profiles, status.native_skip(ctx.config_dir)
+    )
     wanted: dict[int, tuple[str, list[str]]] = {}
     for item in expected:
         for entry in item.ports:
@@ -1561,6 +1626,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("memory", check_memory),
     ("cpu", check_cpu),
     ("gpu", check_gpu),
+    ("localai_native", check_localai_native),
     ("ports", check_ports),
     ("dns", check_dns),
     ("time_sync", check_time_sync),

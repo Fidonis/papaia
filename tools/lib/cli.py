@@ -39,6 +39,7 @@ from . import (
     gen_override,
     gpu_detect,
     keycloak_role_sync,
+    localai_native,
     migrations,
     modules,
     nodes,
@@ -181,6 +182,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    runtime_before = localai_native.runtime(tree.get("", {})) if not fresh_init else ""
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     # Taken out of the environment so nothing started later inherits it. An empty
@@ -205,6 +207,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         enable_web_search=_tristate(args.enable_web_search),
         enable_local_ai=_tristate(args.enable_local_ai),
         localai_variant=args.localai_variant or None,
+        localai_runtime=args.localai_runtime or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
         enable_smtp=_tristate(args.enable_smtp),
@@ -243,6 +246,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_web_search(tree, setup_args)
         tree = resolve.resolve_local_ai(tree, setup_args)
         tree = resolve.resolve_localai_variant(tree, setup_args)
+        tree = resolve.resolve_localai_runtime(tree, setup_args)
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
@@ -303,6 +307,18 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    runtime_problem = _localai_runtime_override(config_dir)
+    if runtime_problem:
+        print(f"ERROR: {runtime_problem}", file=sys.stderr)
+        return 3
+    if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE and (
+        runtime_before != localai_native.NATIVE
+    ):
+        seeded = localai_native.seed_models(config_dir, repo_root)
+        if seeded is not None:
+            print(f"Seeded the LocalAI model list for the native runtime: {seeded}")
+            # The render above ran before the list existed.
+            render_core.render(config_dir, repo_root)
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -334,6 +350,59 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _localai_runtime_override(config_dir: Path) -> str | None:
+    """Write or remove the runtime override; the reason when `native` cannot be set up."""
+    root = common.parse_env_file(config_dir / ".env")
+    runtime = localai_native.runtime(root)
+    problem = None
+    home = None
+    if runtime == localai_native.NATIVE:
+        try:
+            home = localai_native.localai_home(root)
+        except localai_native.InstallError as exc:
+            problem = (
+                f"LOCALAI_RUNTIME=native: {exc}. The native LocalAI keeps its files below"
+                " PAPAIA_WORKSPACE_DIR, which setup derives from a checkout named 'papaia'"
+                " (or set it in the root .env)"
+            )
+    gen_override.generate_localai_runtime_override(config_dir, runtime, home)
+    return problem
+
+
+def cmd_localai_native_install(args: argparse.Namespace) -> int:
+    """The `start` step of the native LocalAI runtime. KEY=VALUE lines on stdout for the
+    shell (LOCALAI_NATIVE = off | skipped | installed | unchanged), messages on stderr."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    root = common.parse_env_file(config_dir / ".env")
+    if localai_native.runtime(root) != localai_native.NATIVE or "localai" not in (
+        common.cluster_profiles(root)
+    ):
+        print("LOCALAI_NATIVE=off")
+        return 0
+    supported, why = localai_native.host_supported()
+    if not supported:
+        print(f"WARNING: native LocalAI skipped: {why}", file=sys.stderr)
+        print("LOCALAI_NATIVE=skipped")
+        return 0
+    try:
+        result = localai_native.install_for(config_dir, repo_root)
+    except localai_native.InstallError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    print(f"LOCALAI_NATIVE={'installed' if result.changed else 'unchanged'}")
+    print(f"LOCALAI_NATIVE_VERSION={result.version}")
+    print(f"LOCALAI_NATIVE_REPLACED={result.replaced or ''}")
+    print(f"LOCALAI_NATIVE_SCRIPT={result.script}")
+    return 0
+
+
+def cmd_localai_native_probe(args: argparse.Namespace) -> int:
+    """Exit 0 when the native LocalAI answers on /readyz."""
+    root = common.parse_env_file(Path(args.config_dir) / ".env")
+    url = localai_native.probe_url(root, inside_container=common.in_container())
+    return 0 if localai_native.probe(url) else 1
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -350,6 +419,9 @@ def cmd_render(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    runtime_problem = _localai_runtime_override(config_dir)
+    if runtime_problem:
+        print(f"WARNING: {runtime_problem}", file=sys.stderr)
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
     print("Rendered.")
@@ -1104,6 +1176,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_localai_variants = sub.add_parser("localai-variants")
     p_localai_variants.set_defaults(func=cmd_localai_variants)
 
+    p_native_install = sub.add_parser("localai-native-install")
+    p_native_install.set_defaults(func=cmd_localai_native_install)
+
+    p_native_probe = sub.add_parser("localai-native-probe")
+    p_native_probe.set_defaults(func=cmd_localai_native_probe)
+
     p_setup = sub.add_parser("setup")
     p_setup.add_argument("--env", default="papaia")
     p_setup.add_argument("--host-ip")
@@ -1128,6 +1206,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
+    p_setup.add_argument("--localai-runtime", choices=list(localai_native.RUNTIMES), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)

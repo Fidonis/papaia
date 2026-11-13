@@ -47,6 +47,8 @@ class SetupArgs:
     enable_local_ai: bool | None = None  # None = sticky / no change
     # LocalAI accelerator image variant (gpu_detect.VARIANTS); None = sticky / no change
     localai_variant: str | None = None
+    # Where LocalAI runs: "container" | "native" (Apple Silicon, ADR 0012); None = sticky
+    localai_runtime: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
@@ -661,6 +663,31 @@ def resolve_localai_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.localai_variant is None:
         return tree
     tree.setdefault("", {})["LOCALAI_IMAGE_VARIANT"] = args.localai_variant
+    return tree
+
+
+def resolve_localai_runtime(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write LOCALAI_RUNTIME and the LocalAI URL that goes with it.
+
+    `native` runs LocalAI as a process on the Mac (ADR 0012): its web UI is reachable there
+    only, at http://localhost:<LOCALAI_EXT_PORT>, so the URL is set without asking and no
+    OIDC client or proxy host is used for it. Going back to `container` replaces that URL
+    with the derivation from the app host, unless the operator gave one. Runs after
+    resolve_hostnames. When localai_runtime is None the stored runtime stays (sticky)."""
+    from . import localai_native
+
+    root = tree.setdefault("", {})
+    before = localai_native.runtime(root)
+    if args.localai_runtime is not None:
+        root[localai_native.RUNTIME_KEY] = args.localai_runtime
+    after = localai_native.runtime(root)
+    if after == localai_native.NATIVE:
+        root["LOCALAI_PUBLIC_URL"] = localai_native.public_url(root)
+    elif before == localai_native.NATIVE and not args.localai_host:
+        if root.get("LOCALAI_PUBLIC_URL", "") == localai_native.public_url(root):
+            root["LOCALAI_PUBLIC_URL"] = derive_localai_url_default(
+                root.get("PAPAIA_HOST", ""), root.get("LOCALAI_EXT_PORT", "8080")
+            )
     return tree
 
 

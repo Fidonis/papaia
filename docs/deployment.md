@@ -104,6 +104,19 @@ The volume is prefixed with `COMPOSE_PROJECT_NAME`, so a stack created with `--e
 > This wipes every user, client secret, and role created through the Keycloak admin UI. Back
 > them up first if they matter.
 
+### Local inference on an Apple Silicon Mac
+
+With Docker Desktop on an Apple Silicon Mac, LocalAI can run as a process on the Apple GPU
+instead of a CPU-only container (`setup --localai-runtime=native`). `start` installs the
+pinned LocalAI release below `$PAPAIA_WORKSPACE_DIR/localai/<project>` and prints the script
+that starts it; run it in a terminal. `doctor` reports it as `localai_native`. Details, the
+limits and the way back to the container are in the README under
+[Native LocalAI on Apple Silicon](../README.md#native-localai-on-apple-silicon), the decision
+in [ADR 0012](adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md).
+
+Migration: an existing Mac installation stays on `container`. Switching to `native` does not
+move the models of the `localai-models` volume; the init job downloads them again.
+
 ### Health check and diagnostics
 
 ```bash
@@ -115,7 +128,8 @@ tools/papaia-ctl doctor --skip=dns,certs # on a host without internet access
 
 Both are read-only. `status` is cheap and also available as `--json`; `doctor` is the check
 to run before `setup` and `upgrade`, or whenever something seems wrong. Besides Docker, disk,
-ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant,
+ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant
+or the native LocalAI of a Mac,
 clock synchronization, what Docker's data takes and, with the mail relay on, whether the mail
 server answers and how many messages wait in the relay's queue. The check list, the thresholds and the JSON formats are documented in the
 README, under

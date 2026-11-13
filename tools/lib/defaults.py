@@ -76,6 +76,9 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "LOCALAI_HOST_STICKY": localai_sticky,
         "LOCALAI_EXT_PORT": root.get("LOCALAI_EXT_PORT", "8080"),
         "LOCALAI_VARIANT_STICKY": localai_variant_sticky,
+        "LOCALAI_RUNTIME_STICKY": (
+            root.get("LOCALAI_RUNTIME", "").strip() if config_seeded else ""
+        ),
         "LITELLM_HOST_STICKY": litellm_sticky,
         "LITELLM_EXT_PORT": root.get("LITELLM_EXT_PORT", "8200"),
         "MANAGER_HOST_STICKY": manager_sticky,

@@ -28,7 +28,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, deployment, smtp
+from . import common, deployment, localai_native, smtp
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -75,7 +75,11 @@ class RenderError(Exception):
 
 
 def _localai_api_base(config_dir: Path) -> str:
-    """Where LiteLLM reaches LocalAI's OpenAI-compatible API."""
+    """Where LiteLLM reaches LocalAI's OpenAI-compatible API: the container on the stack
+    network, or the native process on the Mac (LOCALAI_RUNTIME=native, ADR 0012)."""
+    root_env = common.parse_env_file(config_dir / ".env")
+    if localai_native.runtime(root_env) == localai_native.NATIVE:
+        return localai_native.api_base(root_env)
     return "http://localai:8080/v1"
 
 

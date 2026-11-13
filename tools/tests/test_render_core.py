@@ -693,3 +693,18 @@ def test_no_addon_content_writes_no_override(repo_root, config_dir):
     _setup_minimal(repo_root, config_dir)
     render_core.render(config_dir, repo_root)
     assert _override(config_dir) is None
+
+
+def test_a_native_localai_is_registered_at_the_host(repo_root, config_dir):
+    """LOCALAI_RUNTIME=native: LiteLLM's container reaches the process on the Mac."""
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    env = config_dir / ".env"
+    env.write_text(
+        env.read_text(encoding="utf-8") + "LOCALAI_RUNTIME=native\nLOCALAI_EXT_PORT=8201\n",
+        encoding="utf-8",
+    )
+    render_core.render(config_dir, repo_root)
+    bases = {e["litellm_params"]["api_base"] for e in _rendered_litellm(config_dir)["model_list"]}
+    assert bases == {"http://host.docker.internal:8201/v1"}

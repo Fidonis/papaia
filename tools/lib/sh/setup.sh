@@ -6,6 +6,8 @@
 # The topology flags of the setup run in progress (see cmd_setup). Declared here so that
 # _run_setup_py can be called on its own.
 SETUP_TOPOLOGY_ARGS=()
+# The LocalAI runtime flag of the setup run in progress, same lifetime.
+SETUP_LOCALAI_ARGS=()
 
 # Reads a py_cli subcommand's KEY=VALUE output into the current shell's
 # variables.
@@ -39,7 +41,7 @@ cmd_setup() {
     local qdrant_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" localai_variant="" manager="" rag="" reranker_model="" backup_dir=""
+    local web_search="" local_ai="" localai_variant="" localai_runtime="" manager="" rag="" reranker_model="" backup_dir=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
@@ -49,6 +51,7 @@ cmd_setup() {
     SETUP_SMTP_PASSWORD=""
     # The topology of a distributed installation, same lifetime as the mail arguments.
     SETUP_TOPOLOGY_ARGS=()
+    SETUP_LOCALAI_ARGS=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -93,6 +96,16 @@ cmd_setup() {
                     cpu|nvidia-cuda-12|nvidia-cuda-13|intel|hipblas|vulkan|auto) : ;;
                     *)
                         error "Invalid --localai-variant value: '$localai_variant' (must be 'cpu', 'nvidia-cuda-12', 'nvidia-cuda-13', 'intel', 'hipblas', 'vulkan', or 'auto')"
+                        exit 2
+                        ;;
+                esac
+                ;;
+            --localai-runtime=*)
+                localai_runtime="${1#*=}"
+                case "$localai_runtime" in
+                    container|native) : ;;
+                    *)
+                        error "Invalid --localai-runtime value: '$localai_runtime' (must be 'container' or 'native')"
                         exit 2
                         ;;
                 esac
@@ -151,6 +164,12 @@ cmd_setup() {
     fi
 
     load_defaults
+
+    # The native runtime exists on an Apple Silicon Mac with Docker Desktop only.
+    if [ -n "$localai_runtime" ] && ! _native_localai_host; then
+        error "--localai-runtime is for an Apple Silicon Mac with Docker Desktop; on this host LocalAI runs in its container."
+        exit 2
+    fi
 
     # Resolved here rather than in Python so the CLI contract downstream only
     # ever carries a concrete variant, and so the probe stays opt-in.
@@ -211,8 +230,11 @@ cmd_setup() {
             info "  Local AI          = $_lai_label"
             [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_HOST_STICKY:-}" ] && \
                 info "  LocalAI URL       = $LOCALAI_HOST_STICKY"
-            [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_VARIANT_STICKY:-}" ] && \
+            if [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
+                info "  LocalAI runtime   = native (Apple GPU)"
+            elif [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_VARIANT_STICKY:-}" ]; then
                 info "  LocalAI Image     = $LOCALAI_VARIANT_STICKY"
+            fi
         fi
         if [ -n "${MANAGER_STICKY:-}" ]; then
             local _mgr_label="disabled"
@@ -379,14 +401,19 @@ cmd_setup() {
                     ;;
             esac
         fi
-        if [ "$local_ai" = "true" ] && [ -z "$localai_host" ]; then
+        # Asked before the URL: the native process has a fixed one and no image variant.
+        if [ "$local_ai" = "true" ] && [ -z "$localai_runtime" ] && _native_localai_host; then
+            localai_runtime="$(_prompt_localai_runtime)"
+        fi
+        local effective_runtime="${localai_runtime:-${LOCALAI_RUNTIME_STICKY:-container}}"
+        if [ "$local_ai" = "true" ] && [ -z "$localai_host" ] && [ "$effective_runtime" != "native" ]; then
             local localai_default="${LOCALAI_HOST_STICKY:-}"
             [ -z "$localai_default" ] && localai_default="$(_derive_localai_default "$app_host")"
             localai_host="$(prompt_field "Public URL of LocalAI" \
                 "Where browsers and LiteLLM reach LocalAI." \
                 "LOCALAI_PUBLIC_URL" "$localai_default")"
         fi
-        if [ "$local_ai" = "true" ] && [ -z "$localai_variant" ]; then
+        if [ "$local_ai" = "true" ] && [ -z "$localai_variant" ] && [ "$effective_runtime" != "native" ]; then
             localai_variant="$(_prompt_localai_variant)"
         fi
         if [ -z "$manager" ]; then
@@ -503,6 +530,7 @@ cmd_setup() {
     [ -n "$smtp_from" ] && SETUP_SMTP_ARGS+=(--smtp-from="$smtp_from")
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
+    [ -n "$localai_runtime" ] && SETUP_LOCALAI_ARGS+=(--localai-runtime="$localai_runtime")
     local setup_rc=0
     _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
@@ -733,6 +761,34 @@ _prompt_manager() {
     esac
 }
 
+# Whether LocalAI can run natively here: an Apple Silicon Mac whose Docker is Docker
+# Desktop (LiteLLM reaches the process at host.docker.internal). ADR 0012.
+_native_localai_host() {
+    [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] \
+        && [ "$(_docker_engine_name)" = "Docker Desktop" ]
+}
+
+# Asks where LocalAI runs on an Apple Silicon Mac; prints "native" or "container".
+_prompt_localai_runtime() {
+    local runtime_default="1"
+    [ "${LOCALAI_RUNTIME_STICKY:-}" = "container" ] && runtime_default="2"
+    local native_default=" (default)" container_default=""
+    if [ "$runtime_default" = "2" ]; then native_default=""; container_default=" (default)"; fi
+    printf '\n%sLocalAI on this Mac%s\n' "$CYAN" "$NC" >&2
+    printf '  1) Native     — run LocalAI as a process on the Apple GPU (Metal)%s\n' "$native_default" >&2
+    printf '  2) Container  — run LocalAI in Docker Desktop, on the CPU only%s\n' "$container_default" >&2
+    local runtime_choice
+    runtime_choice="$(prompt_with_default "  Choose" "$runtime_default")"
+    case "$runtime_choice" in
+        1|native) echo "native" ;;
+        2|container) echo "container" ;;
+        *)
+            warn "Unrecognized choice '$runtime_choice'; keeping LocalAI in its container."
+            echo "container"
+            ;;
+    esac
+}
+
 # Asks which LocalAI accelerator image to install. Everything the operator sees
 # goes to stderr; only the chosen variant id reaches stdout.
 _prompt_localai_variant() {
@@ -862,6 +918,10 @@ _run_setup_py() {
     fi
     if [ "${#SETUP_TOPOLOGY_ARGS[@]}" -gt 0 ]; then
         extra+=(${SETUP_TOPOLOGY_ARGS[@]+"${SETUP_TOPOLOGY_ARGS[@]}"})
+    fi
+    # _run_setup_py already takes 23 positional arguments; new ones come bundled.
+    if [ "${#SETUP_LOCALAI_ARGS[@]}" -gt 0 ]; then
+        extra+=(${SETUP_LOCALAI_ARGS[@]+"${SETUP_LOCALAI_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.

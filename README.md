@@ -132,6 +132,9 @@ Linux host:
   `LIBRECHAT_AGENTS_DIR` and `LIBRECHAT_PROMPTS_DIR` when they are set. A checkout under
   `/Users` with the default config directory next to it works. `/opt` works only after it
   is added under File sharing, and `/srv` cannot be created on the read-only system volume.
+- **LocalAI on the Apple GPU.** In Docker Desktop's VM LocalAI runs on the CPU. On an
+  Apple Silicon Mac with Docker Desktop, `setup` offers to run it natively on the GPU
+  instead; see [Native LocalAI on Apple Silicon](#native-localai-on-apple-silicon).
 - **papaia-manager.** It runs on Docker Desktop, with its workspace, configuration and
   backup directories below `/Users`; a checkout there with the default directories meets
   this. `setup` recognises Docker Desktop and defaults to *yes* there; with another
@@ -321,6 +324,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
+| `--localai-runtime=container\|native` | _(prompted on an Apple Silicon Mac with Docker Desktop, default `native` there; `container` elsewhere)_ | Where LocalAI runs: in its container, or as a process on the Apple GPU ([Native LocalAI on Apple Silicon](#native-localai-on-apple-silicon)). Refused with exit 2 on any other host |
 | `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
@@ -893,7 +897,8 @@ raw values behind its summary in `details`.
 | `docker_usage` | What Docker's data takes, from `docker system df`: images, containers, volumes and build cache, each with its size and the part the daemon calls reclaimable. It asks the daemon, so it also works where `disk_space` cannot see the data root (Docker Desktop, inside a container). | never `warn` or `fail`; `skip` if Docker cannot be asked, the call times out or the output is not recognised |
 | `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
 | `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
-| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
+| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, for the native runtime, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
+| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`) and the installed binary is the release the checkout pins. | `warn` when it does not answer, is not installed or is another version; never `fail`; `skip` for the container runtime |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
@@ -1778,6 +1783,56 @@ Two caveats worth knowing:
   copies of the model YAMLs under `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/`.
 - **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
+
+### Native LocalAI on Apple Silicon
+
+Docker Desktop's VM has no access to the Apple GPU, so LocalAI in its container runs on the CPU
+(in the default 8 GB VM it cannot even load a 7B model next to the stack). On an Apple Silicon
+Mac with Docker Desktop, LocalAI can run as a process on the Mac instead, on the GPU (Metal),
+with the same model list and the same [LiteLLM registration](#localai-models-in-litellm). The
+decision and the measurements are in
+[ADR 0012](docs/adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md).
+
+```bash
+tools/papaia-ctl setup -y --app-host=http://localhost --local-ai --localai-runtime=native
+tools/papaia-ctl start
+```
+
+Interactively, `setup` asks on such a Mac (default *native*). What changes with `native`:
+
+- No `localai` container runs and no LocalAI image is pulled. The init job still downloads
+  the models, into `<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>/models`.
+- `start` installs the LocalAI release that `src/ai/localai/docker-compose.yml` pins into
+  that directory (`bin/`), after checking it against the release's published checksum, and
+  writes `run-localai` next to it. It prints how to start LocalAI; run that script in a
+  terminal and keep the terminal open. The first start downloads the Metal backend (internet
+  access needed). After an upgrade that moves the pin, `start` installs the new binary and asks
+  you to restart LocalAI.
+- The first switch to `native` seeds `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt` with
+  Qwen2.5-7B-Instruct (Q5_K_M, 5.4 GB, about 58 tokens/s on an M4 Max) and `nomic-embed-text`.
+  An existing overlay list is left alone. The first download of 5.4 GB can take an hour or
+  more.
+- LocalAI listens on `127.0.0.1:<LOCALAI_EXT_PORT>` only, and its web UI is at
+  `http://localhost:<LOCALAI_EXT_PORT>` on the Mac. There is no login: the macOS build of
+  LocalAI has no user database, so `LOCALAI_API_KEY` (which has admin rights in LocalAI) is the
+  only protection. LiteLLM reaches it at `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`.
+- `doctor` reports the process as `localai_native`; `status` no longer lists a missing
+  `localai` container.
+- The models are not in the backup; `start` downloads them again after a restore.
+- `setup --localai-runtime=container` followed by `start` brings the container back and
+  removes the override. The seeded model list stays, and models in the old `localai-models`
+  volume are not moved in either direction.
+
+Until LocalAI is managed by launchd, `stop`, `upgrade` and `uninstall` do not stop the
+process: stop it in its terminal.
+
+**Other servers on the host.** Any OpenAI-compatible server on the Mac (LM Studio,
+`mlx_lm.server`, Ollama) can serve papAIa the same way, by hand: add an entry to the LiteLLM
+overlay with `api_base: http://host.docker.internal:<port>/v1`. Such a server is outside
+`papaia-ctl` (`start`, `stop`, `status`, `doctor`, `backup`) and outside the login; LiteLLM's
+keys and teams are its access control. On Docker Engine, where `host.docker.internal` does not
+resolve in the LiteLLM container, use the gateway address of `papaia-net`
+(`docker network inspect papaia-net --format '{{(index .IPAM.Config 0).Gateway}}'`).
 
 ### Distributed installations
 

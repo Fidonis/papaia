@@ -848,3 +848,20 @@ def test_the_wizard_places_web_search_with_librechat():
         link_port=7443,
     )
     assert errors(topo) == []
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# LocalAI runtime (ADR 0012)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_a_native_localai_is_refused_in_a_distributed_installation():
+    topo = two_nodes(**topology.preset_placement("dmz-split", "edge"))
+    found = errors(topo, env={"LOCALAI_RUNTIME": "native"})
+    assert any("LOCALAI_RUNTIME=native" in e for e in found)
+    container = errors(topo, env={"LOCALAI_RUNTIME": "container"})
+    assert not any("LOCALAI_RUNTIME" in e for e in container)
+
+
+def test_the_runtime_override_belongs_to_the_core():
+    assert "docker-compose.localai-runtime.override.yml" in topology.CORE_OVERRIDES

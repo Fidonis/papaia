@@ -187,6 +187,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # memory
         PASS,  # cpu
         SKIP,  # gpu: LocalAI is not enabled
+        SKIP,  # localai_native: LocalAI runs in its container
         PASS,  # ports
         SKIP,  # dns: only local hostnames configured
         PASS,  # time_sync
@@ -208,6 +209,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "memory",
         "cpu",
         "gpu",
+        "localai_native",
         "ports",
         "dns",
         "time_sync",
@@ -2140,3 +2142,82 @@ def test_smtp_report_validates_and_holds_no_secret(stack):
     document = doctor.to_json(report)
     assert not list(VALIDATOR.iter_errors(json.loads(document)))
     assert UPSTREAM_PASSWORD not in document
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# localai_native (ADR 0012)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def native_localai(stack, tmp_path: Path, *, installed: str | None = "1") -> Path:
+    """LocalAI with the native runtime; the stack's pin is `example/image:1`."""
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai",
+        LOCALAI_RUNTIME="native",
+        PAPAIA_WORKSPACE_DIR=str(tmp_path / "workspace"),
+        LOCALAI_EXT_PORT="8200",
+    )
+    home = tmp_path / "workspace" / "localai" / "papaia"
+    if installed:
+        (home / "bin").mkdir(parents=True)
+        (home / "bin" / f"local-ai-{installed}").write_bytes(b"binary")
+    return home
+
+
+def native_result(stack, ready: bool, *, in_container: bool = False) -> doctor.CheckResult:
+    asked: list[str] = []
+
+    def localai_ready(url: str) -> bool:
+        asked.append(url)
+        return ready
+
+    report = run_doctor(
+        stack, localai_ready=localai_ready, in_container=lambda: in_container
+    )
+    found = result(report, "localai_native")
+    found.details["asked"] = asked
+    return found
+
+
+def test_localai_native_is_skipped_for_the_container_runtime(stack):
+    enable_localai(stack)
+    assert result(run_doctor(stack), "localai_native").status == SKIP
+
+
+def test_localai_native_passes_when_the_pinned_binary_answers(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True)
+    assert found.status == PASS
+    assert found.summary == "LocalAI 1 answers on http://127.0.0.1:8200/readyz"
+    assert found.details["asked"] == ["http://127.0.0.1:8200/readyz"]
+
+
+def test_a_native_localai_that_does_not_run_is_a_warning_with_the_script(stack, tmp_path):
+    home = native_localai(stack, tmp_path)
+    found = native_result(stack, ready=False)
+    assert found.status == WARN
+    assert str(home / "run-localai") in found.summary
+
+
+def test_a_missing_or_outdated_binary_is_a_warning(stack, tmp_path):
+    native_localai(stack, tmp_path, installed=None)
+    assert "not installed yet" in native_result(stack, ready=False).summary
+    (tmp_path / "workspace" / "localai" / "papaia" / "bin").mkdir(parents=True)
+    (tmp_path / "workspace" / "localai" / "papaia" / "bin" / "local-ai-0").write_bytes(b"x")
+    found = native_result(stack, ready=True)
+    assert found.status == WARN
+    assert "this release pins 1" in found.summary
+
+
+def test_inside_a_container_the_native_localai_is_probed_through_the_host(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True, in_container=True)
+    assert found.details["asked"] == ["http://host.docker.internal:8200/readyz"]
+
+
+def test_the_gpu_check_skips_a_native_localai_without_a_variant(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = result(run_doctor(stack, localai_ready=lambda url: True), "gpu")
+    assert found.status == SKIP
+    assert "variant" not in found.details
