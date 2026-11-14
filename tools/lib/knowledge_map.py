@@ -26,10 +26,12 @@ lints.yaml. The map documents — it does not enforce.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -51,6 +53,9 @@ GOVERNANCE_REL_PATH = "overlay/knowledge-map/governance.yaml"
 # The merged chat-client configuration the inventory reads. render_core
 # renders the map AFTER the layered merge, so this file already holds every
 # MCP server of the core, the active profiles, add-ons and the overlay.
+# The gold set of evaluation questions — the only operator file the map
+# service mounts (governance.yaml and the overrides stay on the host).
+GOLDSET_REL_PATH = "overlay/knowledge-map/goldset.yaml"
 LIBRECHAT_CONFIG_REL_PATH = "ai/librechat/librechat.yaml"
 LIBRECHAT_ENV_REL_PATH = "ai/librechat/.env"
 LINTS_FILE = "lints.yaml"
@@ -461,6 +466,7 @@ def collect_sources(
     inventory_warnings = _add_inventory(config_dir, entries)
 
     override_warnings: list[str] = list(inventory_warnings)
+    overridden_fields: dict[str, set[str]] = {}
     overrides_path = config_dir / OVERRIDES_REL_PATH
     if overrides_path.is_file():
         overrides = _load_yaml(overrides_path)
@@ -511,8 +517,82 @@ def collect_sources(
             _validate_entry(merged, f"{OVERRIDES_REL_PATH}:{source_id}")
             merged.setdefault("provenance", {})["overridden"] = True
             entries[source_id] = merged
+            overridden_fields[source_id] = set(override)
 
+    _inherit_inventory_roles(entries, overridden_fields)
     return entries, override_warnings + _collision_warnings(entries)
+
+
+def _is_inventoried(entry: dict) -> bool:
+    return str((entry.get("provenance") or {}).get("declared_by", "")).startswith("inventory:")
+
+
+def _role_list(value) -> list[str]:
+    return [str(r) for r in value] if isinstance(value, list) else []
+
+
+def _paths_into(entries: dict[str, dict]) -> dict[str, list[tuple[str, list[str]]]]:
+    """Server name -> (declared entry id, roles seeing that entry over the
+    path) for every mcp/rag path of a declared source or reference. The roles
+    are the entry's plus the path's own; empty means open."""
+    into: dict[str, list[tuple[str, list[str]]]] = {}
+    for entry_id, entry in entries.items():
+        if _is_inventoried(entry) or entry.get("kind", "source") not in ("source", "reference"):
+            continue
+        entry_roles = _role_list(entry.get("required_roles"))
+        for path in _entry_paths(entry):
+            if path.get("via", "mcp") in ("mcp", "rag") and path.get("target"):
+                roles = entry_roles + [
+                    r for r in _role_list(path.get("required_roles")) if r not in entry_roles
+                ]
+                into.setdefault(str(path["target"]), []).append((entry_id, roles))
+    return into
+
+
+def _union_roles(grants: list[list[str]]) -> list[str]:
+    """Visible to everyone who may see any of the grants; one open grant (no
+    roles) opens the result."""
+    if not grants or any(not roles for roles in grants):
+        return []
+    return sorted({role for roles in grants for role in roles})
+
+
+def _inherit_inventory_roles(
+    entries: dict[str, dict], overridden_fields: dict[str, set[str]]
+) -> None:
+    """Inventory must not undo hidden sources: a server entry that IS the
+    access path of a role-restricted source, or an agent reaching only such
+    sources, would otherwise reveal them to everyone. Each inventoried entry
+    inherits the union of the roles that may see what it reaches (open as
+    soon as one of them is open); an operator override of the field wins.
+    Undeclared servers reach nothing declared and stay open."""
+    into = _paths_into(entries)
+    for entry_id, entry in entries.items():
+        if not _is_inventoried(entry):
+            continue
+        kept = overridden_fields.get(entry_id, set())
+        if entry.get("kind") == "mcp":
+            paths = _entry_paths(entry)
+            server = str(paths[0].get("target")) if paths else ""
+            grants = into.get(server, [])
+            if not grants:
+                continue
+            if "required_roles" not in kept:
+                entry["required_roles"] = _union_roles([roles for _, roles in grants])
+            if "on_denied" not in kept:
+                # Acknowledging the server is fine only when every source
+                # behind it may be acknowledged.
+                acknowledge = all(
+                    entries[e].get("on_denied", "hidden") == "acknowledge" for e, _ in grants
+                )
+                entry["on_denied"] = "acknowledge" if acknowledge else "hidden"
+        elif entry.get("kind") == "agent" and "required_roles" not in kept:
+            grants = [
+                roles
+                for server in entry.get("uses") or []
+                for _, roles in into.get(str(server), [])
+            ]
+            entry["required_roles"] = _union_roles(grants)
 
 
 
@@ -777,6 +857,7 @@ GOVERNANCE_FINDINGS = (
     "unclassified_model_in_use",
     "confidential_in_free_chat",
     "mcp_static_credentials",
+    "a2a_external",
 )
 # Live checks of the management interface against the model gateway; an
 # exception in governance.yaml may name them too.
@@ -799,6 +880,8 @@ DEFAULT_GOVERNANCE_POLICY: dict = {
 }
 
 _SENSITIVE_PERSONAL_DATA = ("special", "criminal")
+# Host suffixes of names that resolve only inside an installation's network.
+_INTERNAL_SUFFIXES = (".local", ".internal", ".lan", ".home.arpa", ".localhost")
 _RECORDED_PERSONAL_DATA = ("ordinary", "special", "criminal")
 
 # field -> checker kind; see _check_field.
@@ -816,6 +899,7 @@ _EXCEPTION_FIELDS = {
     "expires": "date",
     "reason": "str",
     "risk_ref": "str",
+    "accepted_by_role": "str",
 }
 _EXCEPTION_REQUIRED = ("finding", "subject", "expires")
 _POLICY_KEYS = tuple(DEFAULT_GOVERNANCE_POLICY)
@@ -996,6 +1080,31 @@ def _model_name(entry: dict) -> str | None:
     return str(model) if model else None
 
 
+def _is_internal_host(host: str) -> bool:
+    """Private, loopback or link-local addresses, bare service names and the
+    usual internal suffixes count as internal; everything else leaves the
+    installation."""
+    host = host.strip("[]").lower()
+    if not host:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host or host.endswith(_INTERNAL_SUFFIXES)
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def _a2a_hosts(entry: dict) -> list[str]:
+    hosts = []
+    for path in _entry_paths(entry):
+        if path.get("via") != "a2a" or not path.get("target"):
+            continue
+        target = str(path["target"])
+        parsed = urlparse(target if "://" in target else f"//{target}")
+        hosts.append(parsed.hostname or target)
+    return hosts
+
+
 class _GovernanceView:
     """Effective governance values per entry, as the findings evaluate them."""
 
@@ -1042,25 +1151,93 @@ class _GovernanceView:
         pd_tiers = self.policy["personal_data_tiers"].get(personal_data)
         return [t for t in allowed if pd_tiers is None or t in pd_tiers]
 
+    def allows(self, tier: str, entry_id: str) -> bool:
+        allowed = self.allowed_tiers(self.classification(entry_id), self.personal_data(entry_id))
+        return tier in allowed
+
     def sensitive(self, entry_id: str) -> bool:
         return (
             _rank(self.classification(entry_id)) >= _rank("confidential")
             or self.personal_data(entry_id) in _SENSITIVE_PERSONAL_DATA
         )
 
-    def _reached_by_server(self) -> dict[str, list[str]]:
-        """MCP server name -> ids of the entries reachable over it.
-        Inventoried server entries count only when the operator classified
-        them; otherwise the declared sources behind the server speak."""
-        reach: dict[str, set[str]] = {}
+    def undeclared_server(self, entry_id: str) -> bool:
+        entry = self.entries[entry_id]
+        return entry.get("kind") == "mcp" and bool(entry.get("undeclared"))
+
+    def _reached_by_server(self) -> dict[str, list[tuple[str, str]]]:
+        """MCP server name -> (entry id, via) of the entries reachable over it.
+        Declared sources speak for the server they sit behind; the server's
+        own entry counts when nothing declared describes it (undeclared,
+        evaluated fail-closed) or when the operator has a record for it."""
+        reach: dict[str, set[tuple[str, str]]] = {}
         for entry_id, entry in self.entries.items():
             kind = entry.get("kind", "source")
-            if kind == "agent" or (kind == "mcp" and entry_id not in self.gov["sources"]):
+            if kind == "agent":
+                continue
+            if (
+                kind == "mcp"
+                and entry_id not in self.gov["sources"]
+                and not entry.get("undeclared")
+            ):
                 continue
             for path in _entry_paths(entry):
-                if path.get("via", "mcp") in ("mcp", "rag") and path.get("target"):
-                    reach.setdefault(str(path["target"]), set()).add(entry_id)
-        return {server: sorted(ids) for server, ids in reach.items()}
+                via = path.get("via", "mcp")
+                if via in ("mcp", "rag") and path.get("target"):
+                    reach.setdefault(str(path["target"]), set()).add((entry_id, via))
+        return {server: sorted(pairs) for server, pairs in reach.items()}
+
+    def entries_behind(self, server: str) -> list[str]:
+        return sorted({entry_id for entry_id, _ in self.reach.get(server, [])})
+
+    def agent_model(self, entry: dict) -> dict | None:
+        model = entry.get("model")
+        if isinstance(model, dict) and model.get("name"):
+            return {"provider": model.get("provider"), "name": str(model["name"])}
+        if isinstance(model, str) and model:
+            return {"provider": None, "name": model}
+        return None
+
+    def agent_rows(self, entry: dict, tier: str | None) -> list[dict]:
+        pairs = sorted({
+            pair for server in entry.get("uses") or [] for pair in self.reach.get(str(server), [])
+        })
+        return [
+            {
+                "entry": entry_id,
+                "classification": self.classification(entry_id),
+                "personal_data": self.personal_data(entry_id),
+                "via": via,
+                "allowed": None if tier is None else self.allows(tier, entry_id),
+            }
+            for entry_id, via in pairs
+        ]
+
+    def agents(self) -> dict[str, dict]:
+        """Per agent: its model, the model's tier and what it reaches — the
+        table the management view shows instead of recomputing it."""
+        table = {}
+        for entry_id in sorted(self.entries):
+            entry = self.entries[entry_id]
+            if entry.get("kind") != "agent":
+                continue
+            model = self.agent_model(entry)
+            tier = self.tier(model["name"]) if model else None
+            rows = self.agent_rows(entry, tier)
+            if model is None:
+                result = "not_assessable"
+            elif model["name"] not in self.gov["models"] or not all(r["allowed"] for r in rows):
+                result = "attention"
+            else:
+                result = "ok"
+            table[entry_id] = {
+                "model": model,
+                "tier": tier,
+                "tier_declared": bool(model and model["name"] in self.gov["models"]),
+                "result": result,
+                "reached": rows,
+            }
+        return table
 
 
 def governance_lint(
@@ -1070,17 +1247,22 @@ def governance_lint(
     view = _GovernanceView(entries, governance)
     findings: list[dict] = []
 
-    def add(severity: str, code: str, target: str | None, message: str, fix: str) -> None:
-        findings.append(_finding(severity, code, target, message, "governance", fix))
+    def add(
+        severity: str, code: str, target: str | None, message: str, fix: str, params: dict
+    ) -> None:
+        finding = _finding(severity, code, target, message, "governance", fix)
+        finding["params"] = params
+        findings.append(finding)
 
     for key in governance["unknown_keys"]:
         add("low", "governance_unknown_key", key,
             f"{GOVERNANCE_REL_PATH}: unknown key {key!r} ignored",
-            f"remove {key!r} from {GOVERNANCE_REL_PATH}")
+            f"remove {key!r} from {GOVERNANCE_REL_PATH}", {"key": key})
     for entry_id in sorted(set(governance["sources"]) - set(entries)):
         add("low", "governance_unknown_entry", entry_id,
             f"{GOVERNANCE_REL_PATH} describes {entry_id!r}, which is not on the map",
-            f"remove sources.{entry_id} from {GOVERNANCE_REL_PATH} or fix the id")
+            f"remove sources.{entry_id} from {GOVERNANCE_REL_PATH} or fix the id",
+            {"entry": entry_id})
 
     _classification_findings(view, findings, add)
     for entry_id in sorted(entries):
@@ -1088,34 +1270,48 @@ def governance_lint(
     _rag_findings(view, add)
     _server_findings(view, add)
     _agent_findings(view, add)
+    _model_findings(view, add)
+    _a2a_findings(view, add)
     return _apply_exceptions(findings, governance["exceptions"], today)
 
 
 def _classification_findings(view: _GovernanceView, findings: list[dict], add) -> None:
     open_ids = [
         entry_id for entry_id in sorted(view.entries)
-        if view.entries[entry_id].get("kind", "source") in ("source", "reference")
+        if (
+            view.entries[entry_id].get("kind", "source") in ("source", "reference")
+            or view.undeclared_server(entry_id)
+        )
         and not view.record(entry_id).get("classification")
     ]
-    if open_ids:
-        # One bundled reminder instead of one finding per entry.
-        proposed = [i for i in open_ids if view.proposal(i).get("classification")]
-        add("medium", "classification_open", None,
-            f"{len(open_ids)} entries not yet classified"
-            + (f", {len(proposed)} with an add-on proposal" if proposed else ""),
-            "confirm the add-on proposals or set a classification in "
-            f"{GOVERNANCE_REL_PATH} for: {', '.join(open_ids)}")
-        findings[-1]["subjects"] = open_ids
+    if not open_ids:
+        return
+    # One bundled reminder instead of one finding per entry.
+    proposed = [i for i in open_ids if view.proposal(i).get("classification")]
+    add("medium", "classification_open", None,
+        f"{len(open_ids)} entries not yet classified"
+        + (f", {len(proposed)} with an add-on proposal" if proposed else ""),
+        "confirm the add-on proposals or set a classification in "
+        f"{GOVERNANCE_REL_PATH} for: {', '.join(open_ids)}",
+        {"count": len(open_ids), "proposed_count": len(proposed), "entries": open_ids})
+    findings[-1]["subjects"] = open_ids
 
 
 def _entry_findings(view: _GovernanceView, entry_id: str, add) -> None:
     entry = view.entries[entry_id]
-    if entry.get("kind", "source") not in ("source", "reference"):
-        return
     record = view.record(entry_id)
-    proposal = view.proposal(entry_id)
     name = entry.get("system") or entry_id
     pd = view.personal_data(entry_id)
+    pd_fix = f"set sources.{entry_id}.personal_data in {GOVERNANCE_REL_PATH}"
+    if view.undeclared_server(entry_id):
+        if pd == "unknown":
+            add("medium", "personal_data_unknown", entry_id,
+                f"{name} is connected but undeclared; whether it reaches personal data "
+                f"is not documented", pd_fix, {"entry": entry_id, "rag": False})
+        return
+    if entry.get("kind", "source") not in ("source", "reference"):
+        return
+    proposal = view.proposal(entry_id)
     cls = view.classification(entry_id)
 
     operator_class = record.get("classification")
@@ -1125,13 +1321,15 @@ def _entry_findings(view: _GovernanceView, entry_id: str, add) -> None:
             f"{name}: classified {operator_class!r}, below the add-on's "
             f"suggestion {proposed_class!r}",
             f"set sources.{entry_id}.classification to {proposed_class} in "
-            f"{GOVERNANCE_REL_PATH}, or record an exception with the reason")
+            f"{GOVERNANCE_REL_PATH}, or record an exception with the reason",
+            {"entry": entry_id, "classification": operator_class,
+             "proposed": proposed_class})
     if pd == "unknown":
         has_rag = _has_rag_path(entry)
         add("high" if has_rag else "medium", "personal_data_unknown", entry_id,
             f"{name}: whether it holds personal data is not documented"
             + (" (its content is copied into the vector index)" if has_rag else ""),
-            f"set sources.{entry_id}.personal_data in {GOVERNANCE_REL_PATH}")
+            pd_fix, {"entry": entry_id, "rag": has_rag})
     # Record-of-processing references are checked only once the operator uses
     # them at all; an installation that keeps its record elsewhere stays quiet.
     if any(r.get("ropa_ref") for r in view.gov["sources"].values()) and not record.get(
@@ -1141,13 +1339,16 @@ def _entry_findings(view: _GovernanceView, entry_id: str, add) -> None:
         if record.get("personal_data") in _RECORDED_PERSONAL_DATA:
             add("high", "personal_data_without_ropa", entry_id,
                 f"{name} holds {pd} personal data but has no record-of-processing "
-                f"reference", fix)
+                f"reference", fix,
+                {"entry": entry_id, "personal_data": pd, "proposed": False})
         elif not record.get("personal_data") and (
             proposal.get("personal_data") in _RECORDED_PERSONAL_DATA
         ):
             add("medium", "personal_data_without_ropa", entry_id,
                 f"{name}: the add-on suggests {proposal['personal_data']} personal "
-                f"data; no record-of-processing reference", fix)
+                f"data; no record-of-processing reference", fix,
+                {"entry": entry_id, "personal_data": proposal["personal_data"],
+                 "proposed": True})
 
     if view.open_roles(entry.get("required_roles")):
         restrict = (
@@ -1160,21 +1361,22 @@ def _entry_findings(view: _GovernanceView, entry_id: str, add) -> None:
                 + (", not yet classified" if not operator_class else "")
                 + ") is visible without required roles or to a broad role",
                 restrict + (", or classify it if it is less sensitive"
-                            if not operator_class else ""))
+                            if not operator_class else ""),
+                {"entry": entry_id, "classification": cls,
+                 "classified": bool(operator_class)})
         if pd in _SENSITIVE_PERSONAL_DATA:
             add("high", "special_data_broad_access", entry_id,
                 f"{name} holds {pd} personal data and is visible without required "
-                f"roles or to a broad role", restrict)
+                f"roles or to a broad role", restrict,
+                {"entry": entry_id, "personal_data": pd})
 
 
 def _rag_findings(view: _GovernanceView, add) -> None:
     embedding = view.policy["embedding_model"]
-    rag_entries = []
     for entry_id in sorted(view.entries):
         entry = view.entries[entry_id]
         if not _has_rag_path(entry):
             continue
-        rag_entries.append(entry_id)
         name = entry.get("system") or entry_id
         cls = view.classification(entry_id)
         pd = view.personal_data(entry_id)
@@ -1182,15 +1384,16 @@ def _rag_findings(view: _GovernanceView, add) -> None:
             f"take {entry_id} out of the vector index, or restrict its collection "
             f"to the roles of the source and re-ingest after deletions"
         )
+        params = {"entry": entry_id, "classification": cls, "personal_data": pd}
         if cls == "strictly_confidential" or pd in _SENSITIVE_PERSONAL_DATA:
             add("high", "rag_copy_sensitive", entry_id,
                 f"{name}: the vector index holds a copy of {cls}"
                 f"{' / ' + pd + ' personal data' if pd in _SENSITIVE_PERSONAL_DATA else ''} "
-                f"content that bypasses the source's rights and deletions", keep_out)
+                f"content that bypasses the source's rights and deletions", keep_out, params)
         elif cls == "confidential":
             add("medium", "rag_copy_sensitive", entry_id,
                 f"{name}: the vector index holds a copy of confidential content that "
-                f"bypasses the source's rights and deletions", keep_out)
+                f"bypasses the source's rights and deletions", keep_out, params)
         if embedding:
             tier = view.tier(embedding)
             allowed = view.allowed_tiers(cls, pd)
@@ -1200,12 +1403,8 @@ def _rag_findings(view: _GovernanceView, add) -> None:
                     f"allowed for {cls} content"
                     + (f" with {pd} personal data" if pd != "unknown" else ""),
                     f"set policy.embedding_model to a model of tier {allowed or ['none']}, "
-                    f"or take {entry_id} out of the vector index")
-    if rag_entries and embedding and embedding not in view.gov["models"]:
-        add("high", "unclassified_model_in_use", f"model:{embedding}",
-            f"embedding model {embedding!r} has no tier (counted as third_country); "
-            f"used for {', '.join(rag_entries)}",
-            f"add models.{embedding}: {{tier: <tier>}} to {GOVERNANCE_REL_PATH}")
+                    f"or take {entry_id} out of the vector index",
+                    {**params, "model": embedding, "tier": tier, "allowed_tiers": allowed})
 
 
 def _server_findings(view: _GovernanceView, add) -> None:
@@ -1215,7 +1414,7 @@ def _server_findings(view: _GovernanceView, add) -> None:
             continue
         paths = _entry_paths(entry)
         server = str(paths[0].get("target")) if paths else ""
-        reached = view.reach.get(server, [])
+        reached = view.entries_behind(server)
         name = entry.get("system") or server
         if entry.get("chat_menu", True) is not False:
             sensitive = [e for e in reached if view.sensitive(e)]
@@ -1224,7 +1423,8 @@ def _server_findings(view: _GovernanceView, add) -> None:
                     f"{name} reaches {', '.join(sensitive)} and can be selected in "
                     f"free chat with any model",
                     f"set chatMenu: false for {server} in librechat.yaml and use it "
-                    f"through agents whose model the policy allows")
+                    f"through agents whose model the policy allows",
+                    {"entry": entry_id, "server": server, "entries": sensitive})
         if entry.get("static_credentials"):
             exposed = [
                 e for e in reached
@@ -1236,74 +1436,108 @@ def _server_findings(view: _GovernanceView, add) -> None:
                     f"{name} uses a shared credential to reach {', '.join(exposed)}; "
                     f"the target system no longer sees which user asks",
                     f"switch the {server} MCP server to the user's token "
-                    f"({{{{LIBRECHAT_OPENID_ACCESS_TOKEN}}}}) instead of a shared credential")
+                    f"({{{{LIBRECHAT_OPENID_ACCESS_TOKEN}}}}) instead of a shared credential",
+                    {"entry": entry_id, "server": server, "entries": exposed})
 
 
 def _agent_findings(view: _GovernanceView, add) -> None:
-    unlisted: dict[str, list[str]] = {}
+    for entry_id, agent in view.agents().items():
+        model = agent["model"]
+        blocked = sorted({r["entry"] for r in agent["reached"] if r["allowed"] is False})
+        if not model or not blocked:
+            continue
+        allowed = sorted(
+            set(MODEL_TIERS).intersection(*(
+                view.allowed_tiers(view.classification(e), view.personal_data(e))
+                for e in blocked
+            )),
+            key=MODEL_TIERS.index,
+        )
+        add("high", "agent_model_policy", entry_id,
+            f"{view.entries[entry_id].get('system') or entry_id} uses model "
+            f"{model['name']!r} (tier {agent['tier']}), which the policy does not "
+            f"allow for {', '.join(blocked)}",
+            f"switch {entry_id} to a model of tier {allowed or ['none']} and "
+            f"restrict its LiteLLM team/key to such models",
+            {"agent": entry_id, "model": model["name"], "tier": agent["tier"],
+             "entries": blocked, "allowed_tiers": allowed})
+
+
+def _model_findings(view: _GovernanceView, add) -> None:
+    """One finding per model without a tier, naming every use of it."""
+    usage: dict[str, dict[str, list[str]]] = {}
+    for entry_id, agent in view.agents().items():
+        if agent["model"]:
+            usage.setdefault(agent["model"]["name"], {"agents": [], "rag": []})[
+                "agents"
+            ].append(entry_id)
+    embedding = view.policy["embedding_model"]
+    rag_entries = [e for e in sorted(view.entries) if _has_rag_path(view.entries[e])]
+    if embedding and rag_entries:
+        usage.setdefault(embedding, {"agents": [], "rag": []})["rag"] = rag_entries
+    for model, used in sorted(usage.items()):
+        if model in view.gov["models"]:
+            continue
+        uses = []
+        if used["rag"]:
+            uses.append(f"embedding for {', '.join(used['rag'])}")
+        if used["agents"]:
+            uses.append(f"used by {', '.join(used['agents'])}")
+        add("high", "unclassified_model_in_use", model,
+            f"model {model!r} has no tier (counted as third_country); {'; '.join(uses)}",
+            f"add models.{model}: {{tier: <tier>}} to {GOVERNANCE_REL_PATH}",
+            {"model": model, "agents": used["agents"], "embedding_for": used["rag"]})
+
+
+def _a2a_findings(view: _GovernanceView, add) -> None:
     for entry_id in sorted(view.entries):
-        entry = view.entries[entry_id]
-        if entry.get("kind") != "agent":
+        if entry_id in view.gov["sources"]:
             continue
-        model = _model_name(entry)
-        if not model:
-            continue
-        if model not in view.gov["models"]:
-            unlisted.setdefault(model, []).append(entry_id)
-        reached = sorted({
-            e for server in entry.get("uses") or [] for e in view.reach.get(str(server), [])
-        })
-        tier = view.tier(model)
-        blocked = [
-            e for e in reached
-            if tier not in view.allowed_tiers(view.classification(e), view.personal_data(e))
-        ]
-        if blocked:
-            allowed = sorted(
-                set(MODEL_TIERS).intersection(*(
-                    view.allowed_tiers(view.classification(e), view.personal_data(e))
-                    for e in blocked
-                )),
-                key=MODEL_TIERS.index,
-            )
-            add("high", "agent_model_policy", entry_id,
-                f"{entry.get('system') or entry_id} uses model {model!r} (tier {tier}), "
-                f"which the policy does not allow for {', '.join(blocked)}",
-                f"switch {entry_id} to a model of tier {allowed or ['none']} and "
-                f"restrict its LiteLLM team/key to such models")
-    for model, agents in sorted(unlisted.items()):
-        add("high", "unclassified_model_in_use", f"model:{model}",
-            f"model {model!r} has no tier (counted as third_country); used by "
-            f"{', '.join(agents)}",
-            f"add models.{model}: {{tier: <tier>}} to {GOVERNANCE_REL_PATH}")
+        external = sorted({h for h in _a2a_hosts(view.entries[entry_id])
+                           if not _is_internal_host(h)})
+        for host in external:
+            add("medium", "a2a_external", entry_id,
+                f"{view.entries[entry_id].get('system') or entry_id} delegates to the "
+                f"external agent at {host}; what it receives is not documented",
+                f"check what {host} receives and under which contract, then record "
+                f"sources.{entry_id} (classification, personal_data) in "
+                f"{GOVERNANCE_REL_PATH}",
+                {"entry": entry_id, "host": host})
 
 
 def _apply_exceptions(findings: list[dict], exceptions: list[dict], today: date) -> list[dict]:
-    """An active exception marks its finding as accepted risk (it stays in the
-    list, flagged); an expired one lets the finding return unmarked and adds
-    `exception_expired` so the acceptance gets renewed or removed."""
+    """An active exception (until and including its `expires` day) marks its
+    finding as accepted risk — it stays in the list, flagged. From the day
+    after, the finding returns unmarked and `exception_expired` asks for the
+    acceptance to be renewed or removed."""
     result = list(findings)
     active = {}
     for exc in exceptions:
         key = (exc["finding"], exc["subject"])
-        if today < exc["expires"]:
+        if today <= exc["expires"]:
             active[key] = exc
-        else:
-            result.append(_finding(
-                "medium", "exception_expired", exc["subject"],
-                f"the accepted exception for {exc['finding']} on {exc['subject']} "
-                f"expired on {exc['expires'].isoformat()}",
-                "governance",
-                f"fix the {exc['finding']} finding, or renew the exception in "
-                f"{GOVERNANCE_REL_PATH} with a new expires date",
-            ))
+            continue
+        finding = _finding(
+            "medium", "exception_expired", exc["subject"],
+            f"the accepted exception for {exc['finding']} on {exc['subject']} "
+            f"expired on {exc['expires'].isoformat()}",
+            "governance",
+            f"fix the {exc['finding']} finding, or renew the exception in "
+            f"{GOVERNANCE_REL_PATH} with a new expires date",
+        )
+        finding["params"] = {
+            "finding": exc["finding"], "subject": exc["subject"],
+            "expires": exc["expires"].isoformat(),
+        }
+        result.append(finding)
     for finding in result:
         exc = active.get((finding["code"], finding["target"]))
         if exc:
             finding["exception"] = {
                 key: (value.isoformat() if isinstance(value, date) else value)
                 for key, value in exc.items()
-                if key in ("expires", "reason", "risk_ref") and value is not None
+                if key in ("expires", "reason", "risk_ref", "accepted_by_role")
+                and value is not None
             }
     return result
 
@@ -1337,9 +1571,13 @@ def render(
     # Snapshot BEFORE writing: the mass-prune guard compares against the map
     # as it was, not as this render leaves it.
     existing_before = {f.name for f in manifest_dir.glob("*.yaml")}
-    # The service mounts the operator directory; create it so the bind mount
-    # does not make Docker create it root-owned.
+    # The operator directory holds the files the management interface edits;
+    # of them the service mounts only the gold set. Create both so the bind
+    # mount never makes Docker create a root-owned directory in its place.
     common.ensure_dir(config_dir / "overlay" / MAP_DIR)
+    goldset = config_dir / GOLDSET_REL_PATH
+    if not goldset.is_file():
+        common.atomic_write(goldset, "questions: []\n")
 
     index_sources = []
     for source_id in sorted(entries):
@@ -1418,13 +1656,13 @@ def render(
                     for source_id in sorted(entries)
                     if isinstance(entries[source_id].get("governance_proposal"), dict)
                 },
-                # The model each inventoried agent runs on, for the management
-                # view's model policy table; never in a manifest.
-                "agent_models": {
-                    source_id: entries[source_id]["model"]
-                    for source_id in sorted(entries)
-                    if isinstance(entries[source_id].get("model"), dict)
-                },
+                # Computed here so the management view displays instead of
+                # re-implementing the rules: the effective policy (defaults
+                # filled in), which codes an exception may name, and per
+                # agent its model, tier and what it reaches.
+                "policy": governance["policy"],
+                "exceptable": list(_EXCEPTABLE_FINDINGS),
+                "agents": _GovernanceView(entries, governance).agents(),
             },
             sort_keys=False,
             allow_unicode=True,

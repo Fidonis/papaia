@@ -31,9 +31,10 @@ policy:                                   # defaults shown
   broad_roles: [user]                     # roles that mean "practically everyone"
   embedding_model: nomic-embed-text       # the model the rag paths embed with
 
-exceptions:                               # accepted risk, always time-boxed
+exceptions:                               # accepted risk through the expires day
   - finding: agent_model_policy
     subject: agent.offer-assistant
     expires: 2027-02-01
     reason: "Pilot until the local model is sized"   # optional
+    accepted_by_role: "Management"      # optional
     risk_ref: "RISK-12"                  # optional: entry in your risk register or wiki

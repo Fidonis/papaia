@@ -63,10 +63,11 @@ services:
       # overrides, never in the container.
       - ${PAPAIA_CONFIG_DIR}/knowledge-map:/map:ro
       - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
-      # Operator-maintained knowledge-map files (declarations, overrides, the
-      # gold set); read-only — the management interface edits them on the
-      # host and re-renders.
-      - ${PAPAIA_CONFIG_DIR}/overlay/knowledge-map:/overlay:ro
+      # Only the gold set of the operator files; declarations, overrides and
+      # governance metadata stay on the host (the renderer reads them, the
+      # rendered map carries what the service needs). The renderer creates
+      # an empty gold set so Docker never makes a directory here.
+      - ${PAPAIA_CONFIG_DIR}/overlay/knowledge-map/goldset.yaml:/overlay/goldset.yaml:ro
       # Routing telemetry (JSONL): raw material for the gold-set evaluation
       # and a later learned router. No caller identifiers (roles only as a
       # hash), but need texts are stored verbatim — treat as potentially

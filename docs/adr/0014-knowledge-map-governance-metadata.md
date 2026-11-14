@@ -48,8 +48,8 @@ Four constraints shape the design:
    `third_country_contracted`, `third_country`) and optional role, `policy`
    (allowed tiers per classification and per category of personal data,
    broad roles, the embedding model) and time-boxed `exceptions` (`finding`,
-   `subject`, `expires`, optional `reason` and `risk_ref` into the operator's
-   risk register). Nothing else: purposes, retention and review dates stay in
+   `subject`, `expires`, optional `reason`, `accepted_by_role` and `risk_ref`
+   into the operator's risk register). Nothing else: purposes, retention and review dates stay in
    the tools that already keep them. Shape errors refuse the render, unknown
    keys are low findings.
 2. **Overrides and declarations stay out.** A `governance` key in
@@ -79,10 +79,11 @@ Four constraints shape the design:
    everyone, undocumented personal data, record references missing once the
    operator uses them, classification below the proposal, and one bundled
    `classification_open` reminder instead of one finding per unclassified
-   entry. Every finding carries `origin: render`, a `category` and a concrete
-   `fix`; nothing is changed automatically. An active exception marks its
-   finding as accepted risk; after `expires` the finding returns together
-   with `exception_expired`.
+   entry, and external Agent2Agent targets nobody has documented. Every
+   finding carries `origin: render`, a `category` and a concrete `fix`;
+   nothing is changed automatically. An active exception marks its finding as
+   accepted risk through its `expires` day; from the day after, the finding
+   returns together with `exception_expired`.
 
 ## Consequences
 
@@ -97,9 +98,15 @@ Four constraints shape the design:
   professions bound by professional secrecy.
 - Fail-closed defaults make a fresh installation show its gaps on purpose;
   bundling the classification reminder keeps that to one finding.
-- The map server also mounts the operator directory and therefore can read
-  governance.yaml; it must not serve it (allowlist in its manifest
-  sanitising).
+- The map server mounts only the gold set of the operator directory, so it
+  never sees governance.yaml or the overrides; its manifest sanitising still
+  strips governance keys as a second line.
+- Inventoried server and agent entries inherit the roles of the sources they
+  reach, so the inventory cannot reveal a hidden source.
+- `lints.yaml` carries the effective policy, the codes an exception may name,
+  an agent table (model, tier, reached entries, result) and structured
+  `params` per finding, so the management view displays what the renderer
+  computed instead of re-implementing the rules.
 
 ## Alternatives considered
 

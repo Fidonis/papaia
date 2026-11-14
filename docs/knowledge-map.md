@@ -155,6 +155,15 @@ itself be sensitive. Sources whose existence is common knowledge can declare
 `on_denied: acknowledge` to surface as an explicit "exists, requires role X"
 stub instead of a confusing miss.
 
+Inventoried entries inherit visibility from what they reach, so a hidden
+source cannot leak through them: a server entry that is an access path of
+declared sources gets the union of those sources' `required_roles` (entry
+and path level) and stays `hidden` unless every one of them acknowledges; an
+agent entry gets the union over the sources it reaches through its servers.
+As soon as one of them is open (no roles), the inventoried entry is open too;
+an undeclared server reaches nothing declared and stays open. An explicit
+`required_roles` or `on_denied` override on the inventoried entry wins.
+
 Note the scope: the map gates *knowing about* a source. Using it is still
 enforced by that source's own MCP server (audience check, its own RBAC) — the
 map adds a discovery gate in front, it replaces nothing.
@@ -190,7 +199,7 @@ Enforcement lives elsewhere:
 | `sources` | Per entry id (any kind): `owner` (a role, not a person), `classification` (`public` < `internal` < `confidential` < `strictly_confidential`), `personal_data` (`none`, `ordinary`, `special`, `criminal`, `unknown`), optional `data_subjects`, optional `ropa_ref` |
 | `models` | Per LiteLLM model name: `tier` (`local`, `eu_hosted`, `third_country_contracted`, `third_country`), optional `role` |
 | `policy` | `allowed_tiers` per classification, `personal_data_tiers` for special and criminal data, `broad_roles` (roles that mean "practically everyone", default `[user]`), `embedding_model` (default `nomic-embed-text`) |
-| `exceptions` | Accepted risk: `finding`, `subject`, `expires` (required), optional `reason` and `risk_ref` (a pointer into your risk register or wiki) |
+| `exceptions` | Accepted risk: `finding`, `subject`, `expires` (required), optional `reason`, `accepted_by_role` and `risk_ref` (a pointer into your risk register or wiki) |
 
 Purposes, retention, review dates and similar records belong in the tools
 that already keep them (records of processing, risk register, wiki);
@@ -245,18 +254,63 @@ findings, each with an action level and a concrete `fix`:
 | `rag_copy_sensitive` | high (strictly confidential, special, criminal), medium (confidential) | a vector-index copy bypasses the source's rights and deletions |
 | `embedding_model_policy` | high | the embedding model's tier is not allowed for a rag source's data |
 | `agent_model_policy` | high | an agent's model tier is not allowed for an entry it reaches over its servers |
-| `unclassified_model_in_use` | high | an agent or embedding model without a tier (subject `model:<name>`) |
+| `unclassified_model_in_use` | high | an agent or embedding model without a tier (subject: the model name; one finding per model) |
 | `confidential_in_free_chat` | medium | a server reaching confidential or special data is selectable in free chat |
 | `mcp_static_credentials` | high | a server with a shared credential reaches internal or personal data — the target system no longer sees the user |
+| `a2a_external` | medium | an Agent2Agent target outside the installation's network (not a private address, bare service name or internal suffix) and no record for that entry |
 | `governance_unknown_key` / `governance_unknown_entry` | low | an ignored key, or a record for an id not on the map |
 | `exception_expired` | medium | an exception passed its `expires` date |
 
-A server's reach is the declared entries whose access paths target it, plus
-the server's own entry once the operator has a record for it. An active
-exception keeps its finding in the list, marked with the `exception` it falls
-under; once expired, the finding returns unmarked together with
-`exception_expired`. The management interface adds its own live checks
-against the model gateway (`origin: manager`); exceptions may name those too.
+Undeclared servers are part of this: they count in `classification_open`
+and get `personal_data_unknown` (medium) until the operator records them,
+and for the checks they stand for themselves, fail-closed. A declared
+server's reach is the declared entries whose access paths target it, plus
+its own entry once the operator has a record for it.
+
+An exception is active through its `expires` day and keeps its finding in
+the list, marked with the `exception` it falls under; from the day after, the
+finding returns unmarked together with `exception_expired`. The management
+interface adds its own live checks against the model gateway
+(`origin: manager`); exceptions may name those too.
+
+### lints.yaml for the management view
+
+The renderer computes, the management view displays; no governance rule is
+implemented twice. Besides `generated_at`, `findings` and `warnings`,
+`lints.yaml` carries:
+
+| key | content |
+|---|---|
+| `proposals` | `{<entry id>: <governance_proposal>}` of the declarations |
+| `policy` | the effective policy, defaults filled in |
+| `exceptable` | the finding codes an exception may name (renderer and manager codes) |
+| `agents` | per agent `{model: {provider, name} or null, tier, tier_declared, result, reached}`; `result` is `ok`, `attention` (a reached entry the tier does not allow, or a model without a declared tier) or `not_assessable` (no model, e.g. an Agent2Agent agent — never `ok`); `reached` lists `{entry, classification, personal_data, via, allowed}` with the effective values the checks used (`allowed` is null without a model) |
+
+Each finding has `severity`, `code`, `target`, `message`, `origin: render`
+and `category` (`quality` or `governance`). Governance findings add a `fix`
+and `params` — the structured values of `message` and `fix`, so the
+management view can phrase them in its own language — and, under an active
+exception, `exception: {expires, reason?, accepted_by_role?, risk_ref?}`.
+`classification_open` has no target and lists its entries in `subjects`.
+
+| code | `target` | `params` keys |
+|---|---|---|
+| `classification_open` | null | `count`, `proposed_count`, `entries` |
+| `classification_downgraded` | entry id | `entry`, `classification`, `proposed` |
+| `personal_data_unknown` | entry id | `entry`, `rag` |
+| `personal_data_without_ropa` | entry id | `entry`, `personal_data`, `proposed` |
+| `open_confidential` | entry id | `entry`, `classification`, `classified` |
+| `special_data_broad_access` | entry id | `entry`, `personal_data` |
+| `rag_copy_sensitive` | entry id | `entry`, `classification`, `personal_data` |
+| `embedding_model_policy` | entry id | `entry`, `classification`, `personal_data`, `model`, `tier`, `allowed_tiers` |
+| `agent_model_policy` | agent id | `agent`, `model`, `tier`, `entries`, `allowed_tiers` |
+| `unclassified_model_in_use` | model name | `model`, `agents`, `embedding_for` |
+| `confidential_in_free_chat` | server entry id | `entry`, `server`, `entries` |
+| `mcp_static_credentials` | server entry id | `entry`, `server`, `entries` |
+| `a2a_external` | entry id | `entry`, `host` |
+| `governance_unknown_key` | key path | `key` |
+| `governance_unknown_entry` | entry id | `entry` |
+| `exception_expired` | the exception's subject | `finding`, `subject`, `expires` |
 
 ### Wording
 
@@ -290,7 +344,10 @@ everything.
 Calibrate both against a gold set of real questions with expected sources; the
 `papaia-knowledge-map` repository ships the format and an evaluation runner.
 Keep the gold set in `overlay/knowledge-map/goldset.yaml`; the service reads
-it for evaluation runs and to counter-check refinement suggestions.
+it for evaluation runs and to counter-check refinement suggestions. It is the
+only operator file the service mounts — declarations, overrides and
+governance metadata stay on the host. The render creates an empty gold set
+(`questions: []`) when there is none.
 
 ## Refinement and telemetry
 
@@ -301,12 +358,31 @@ declarations for undeclared servers, gold questions). Nothing is applied
 automatically: an administrator accepts a suggestion on the management page,
 which writes it as an override. Suggestions need support from several
 distinct role profiles, are masked and screened, capped per source and
-checked against the gold set. It carries no caller identifiers (the
-role set is stored only as a hash), but the distilled need texts are stored
-verbatim and routinely derive from user questions — treat the volume as
-personal data: `KM_TELEMETRY_RETENTION_DAYS` (default 30) deletes older
-records, `KM_LEARNING_MODE=off` keeps no need texts at all, and the volume
-belongs in the record of processing activities. For professions bound by
-professional secrecy (in Germany § 203 StGB: tax advisers, lawyers, doctors)
-`KM_LEARNING_MODE=off` is recommended; keep need texts verbatim (`full`) only
-where a works agreement covers it.
+checked against the gold set. It carries no caller identifiers (the role
+set is stored only as a hash). What happens to the distilled need texts,
+which routinely derive from user questions, follows `KM_LEARNING_MODE`:
+
+- `off` — no need texts are kept, only counts;
+- `aggregate` (default) — need texts are masked when they are written and
+  shown only aggregated (pseudonymised, aggregated — not anonymised);
+- `full` — need texts are kept verbatim.
+
+Treat the volume as personal data in every mode but `off`:
+`KM_TELEMETRY_RETENTION_DAYS` (default 30) deletes older records, and the
+volume belongs in the record of processing activities. For professions bound
+by professional secrecy (in Germany § 203 StGB: tax advisers, lawyers,
+doctors) `off` is recommended.
+
+Where employee representation applies (in Germany the works council), the
+telemetry is a technical facility that can observe how people work; settle
+these points before enabling it:
+
+- **Purpose limitation** — the data improves routing and nothing else; no
+  evaluation of individual users or teams.
+- **Access** — name who may open the management page's usage view (the
+  `papaia-admin` holders), and keep that list short.
+- **Minimum group size** — suggestions and unmatched needs appear only once
+  several distinct role profiles share them (the server's minimum, default
+  3), so no single person's questions surface.
+- **Retention** — at most 30 days.
+- **`full`** — only with the works council's consent, e.g. a works agreement.

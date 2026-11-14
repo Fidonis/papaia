@@ -43,9 +43,14 @@ def test_compose_ships_one_service_on_the_profile():
     assert audiences == [AUDIENCE, "${KM_EXTRA_AUDIENCES:-}"]
 
 
-def test_compose_mounts_the_operator_directory_read_only():
+def test_compose_mounts_only_the_gold_set_of_the_operator_files():
+    """governance.yaml and the overrides are not the service's business: of
+    the operator directory only the gold set is mounted, read-only."""
     service = _compose()["services"]["knowledge-map-mcp"]
-    assert "${PAPAIA_CONFIG_DIR}/overlay/knowledge-map:/overlay:ro" in service["volumes"]
+    overlay_mounts = [v for v in service["volumes"] if "/overlay" in v]
+    assert overlay_mounts == [
+        "${PAPAIA_CONFIG_DIR}/overlay/knowledge-map/goldset.yaml:/overlay/goldset.yaml:ro"
+    ]
     assert service["environment"]["KM_GOLDSET_PATH"] == "/overlay/goldset.yaml"
     assert service["environment"]["KM_ADMIN_TOKEN"] == "${KM_ADMIN_TOKEN}"
 
