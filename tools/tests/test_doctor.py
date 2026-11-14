@@ -123,6 +123,13 @@ def enable_localai(stack, variant: str | None = None) -> None:
     set_env(stack, **values)
 
 
+def enable_voice(stack, variant: str | None = None) -> None:
+    values = {"COMPOSE_PROFILES": f"{PROFILES},voice"}
+    if variant is not None:
+        values["VOICE_TTS_IMAGE_VARIANT"] = variant
+    set_env(stack, **values)
+
+
 def fake_dev(tmp_path: Path, *, kfd: bool = False, render_node: bool = False) -> Path:
     """A stand-in for /dev with the device nodes a GPU host would have."""
     dev = tmp_path / "dev"
@@ -1017,6 +1024,96 @@ def test_gpu_notes_whether_the_generated_override_exists(stack):
     check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
 
     assert check.details["override_present"] is True
+
+
+def test_gpu_probes_the_voice_variant_when_localai_does_not(stack):
+    enable_voice(stack, "nvidia")
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.status == PASS
+    assert check.details["variant"] == "nvidia (voice)"
+
+
+def test_gpu_skips_for_a_cpu_voice_variant(stack):
+    enable_voice(stack, "cpu")
+
+    check = result(run_doctor(stack), "gpu")
+
+    assert check.status == SKIP
+
+
+def test_gpu_notes_whether_the_voice_override_exists(stack):
+    enable_voice(stack, "nvidia")
+    override = stack["config"] / "overrides" / "docker-compose.voice-gpu.override.yml"
+    override.parent.mkdir(exist_ok=True)
+    override.write_text("services: {}\n", encoding="utf-8")
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.details["override_present"] is True
+
+
+def test_gpu_voice_is_not_measurable_from_a_container(stack):
+    # Unlike LocalAI there is no container guaranteed to carry the vendor tools.
+    enable_voice(stack, "nvidia")
+
+    check = result(run_doctor(stack, docker=nvidia_docker(), in_container=lambda: True), "gpu")
+
+    assert check.status == SKIP
+
+
+def test_gpu_probes_both_engines_across_vendors(stack, tmp_path):
+    # LocalAI on CUDA proves nothing about the TTS engine's ROCm demand: the
+    # missing /dev/kfd must fail the check although nvidia-smi is happy.
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai,voice",
+        LOCALAI_IMAGE_VARIANT="nvidia-cuda-12",
+        VOICE_TTS_IMAGE_VARIANT="hipblas",
+    )
+
+    check = result(run_doctor(stack, docker=nvidia_docker(), dev_root=fake_dev(tmp_path)), "gpu")
+
+    assert check.status == FAIL
+    assert "the voice TTS engine cannot start" in check.summary
+    assert check.details["other_accelerator"]["variant"] == "nvidia-cuda-12"
+
+
+def test_gpu_collapses_matching_vendor_demands_into_one_probe(stack):
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai,voice",
+        LOCALAI_IMAGE_VARIANT="nvidia-cuda-12",
+        VOICE_TTS_IMAGE_VARIANT="nvidia",
+    )
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.status == PASS
+    assert "other_accelerator" not in check.details
+
+
+def test_gpu_voice_fails_below_the_cuda_floor_of_the_tts_image(stack):
+    # The banner names the highest CUDA the driver supports; below the image's
+    # floor the NVIDIA runtime refuses the container, so doctor must say so.
+    enable_voice(stack, "nvidia")
+    banner = "| NVIDIA-SMI 550.120   Driver Version: 550.120   CUDA Version: 12.4 |"
+
+    check = result(run_doctor(stack, docker=nvidia_docker(smi=banner)), "gpu")
+
+    assert check.status == FAIL
+    assert "12.8" in check.summary
+    assert check.details["cuda_version"] == "12.4"
+
+
+def test_gpu_failures_name_the_voice_engine(stack, tmp_path):
+    enable_voice(stack, "hipblas")
+
+    check = result(run_doctor(stack, dev_root=fake_dev(tmp_path)), "gpu")
+
+    assert check.status == FAIL
+    assert "the voice TTS engine cannot start" in check.summary
 
 
 @pytest.mark.parametrize(

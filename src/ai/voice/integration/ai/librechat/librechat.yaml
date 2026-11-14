@@ -1,0 +1,66 @@
+# LibreChat speech panel of the voice profile. render_core merges this fragment
+# into ai/librechat/librechat.yaml only while the `voice` profile is active, so
+# a stack without the engines keeps the browser-only speech settings.
+#
+# Both engines are addressed through LiteLLM (models voice-stt / voice-tts from
+# the litellm fragment of this module), so the one key LibreChat already holds
+# covers speech too, and the same routes work for callers outside LibreChat.
+#
+# speechTab values are first-login defaults: a user's own choices (stored in
+# the browser) win afterwards, and every setting remains changeable under
+# Settings → Speech. The microphone itself needs a secure context — HTTPS or
+# literally `localhost` — or the browser never offers it.
+speech:
+  speechTab:
+    speechToText:
+      engineSTT: "external"
+      # Pins transcription to German, which is markedly more reliable for the
+      # short utterances of a chat than autodetect. English-speaking users
+      # switch the language (or clear it for autodetect) in Settings → Speech.
+      languageSTT: "de-DE"
+      autoTranscribeAudio: true
+      # Send right after the recording stops; recording already stops on
+      # silence, so a further delay only feels sluggish.
+      autoSendText: 0
+    textToSpeech:
+      # "browser" by default: the CPU build of the TTS engine synthesizes
+      # slower than real time, and LibreChat silently stops a playback stream
+      # that stalls for 15 s — spoken replies would cut out mid-sentence. The
+      # engine and the voice-tts route below stay wired up; a user on a host
+      # with enough CPU headroom (or on a GPU image, `setup --voice-variant`)
+      # switches to "external" under Settings → Speech.
+      engineTTS: "browser"
+      # LibreChat's own default. On, it reads EVERY finished reply aloud,
+      # typed conversations included — and with the browser engine the German
+      # reference voice below does not exist, so the browser substitutes its
+      # first local voice, which need not speak German. Users who want the
+      # hands-free loop switch it on under Settings → Speech.
+      automaticPlayback: false
+      # Takes effect when a user switches to the external engine. Must name an
+      # entry of tts.openai.voices below, or LibreChat picks a random voice
+      # per user.
+      voice: "Karlsson.wav"
+  stt:
+    # LibreChat refuses private upstream addresses unless they are listed here
+    # (host:port, exactly as addressed).
+    allowedAddresses:
+      - "litellm:4000"
+    openai:
+      url: "http://litellm:4000/v1/audio/transcriptions"
+      apiKey: "${LITELLM_API_KEY}"
+      model: "voice-stt"
+  tts:
+    allowedAddresses:
+      - "litellm:4000"
+    openai:
+      url: "http://litellm:4000/v1/audio/speech"
+      apiKey: "${LITELLM_API_KEY}"
+      model: "voice-tts"
+      # Server-side voice filenames of the TTS engine. The German clips the
+      # module mounts come first (the engine clones the reference voice,
+      # accent included); Emily is the English sample shipped in the image.
+      # Keep speechTab.textToSpeech.voice in this list.
+      voices:
+        - "Karlsson.wav"
+        - "Hokuspokus.wav"
+        - "Emily.wav"

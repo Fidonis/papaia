@@ -333,6 +333,29 @@ def test_localai_on_the_cpu_needs_no_hardware():
     assert errors(topo, env=env) == []
 
 
+VOICE_PROFILES = [*ALL_PROFILES, "voice"]
+
+
+def test_voice_tts_on_a_node_without_the_gpu_is_refused():
+    topo = two_nodes(voice="edge")
+    topo.nodes["edge"] = Node("edge", address="10.0.1.10", gpu="none")
+    env = {"VOICE_TTS_IMAGE_VARIANT": "nvidia"}
+    assert any("has gpu: none" in e for e in errors(topo, profiles=VOICE_PROFILES, env=env))
+
+
+def test_voice_tts_on_a_node_with_unknown_hardware_is_a_warning():
+    env = {"VOICE_TTS_IMAGE_VARIANT": "hipblas"}
+    found = warnings(two_nodes(voice="edge"), profiles=VOICE_PROFILES, env=env)
+    assert any("not recorded" in w for w in found)
+
+
+def test_voice_tts_on_the_cpu_needs_no_hardware():
+    env = {"VOICE_TTS_IMAGE_VARIANT": "cpu"}
+    topo = two_nodes(voice="edge")
+    topo.nodes["edge"] = Node("edge", address="10.0.1.10", gpu="none")
+    assert errors(topo, profiles=VOICE_PROFILES, env=env) == []
+
+
 def test_the_link_port_must_not_collide_with_a_published_port():
     env = {"LIBRECHAT_EXT_PORT": "7443", "HOST_IP": "0.0.0.0"}
     topo = two_nodes(**topology.preset_placement("dmz-split", "edge"))
