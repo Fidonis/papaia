@@ -100,3 +100,17 @@ def test_embedding_key_is_aliased_from_the_litellm_master_key():
 def test_root_compose_includes_the_module():
     root = yaml.safe_load((REPO / "src/docker-compose.yml").read_text(encoding="utf-8"))
     assert {"path": "./ai/knowledge-map/docker-compose.yml"} in root["include"]
+
+
+def test_governance_example_loads_without_unknown_keys(tmp_path):
+    from lib import knowledge_map
+
+    target = tmp_path / knowledge_map.GOVERNANCE_REL_PATH
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        (KM_DIR / "governance.yaml.example").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    governance = knowledge_map.load_governance(tmp_path)
+    assert governance["unknown_keys"] == []
+    assert governance["models"]["nomic-embed-text"]["tier"] == "local"
+    assert governance["exceptions"][0]["risk_ref"] == "RISK-12"

@@ -1,0 +1,39 @@
+# Example: governance metadata for the knowledge map (ADR 0014).
+# Copy to $PAPAIA_CONFIG_DIR/overlay/knowledge-map/governance.yaml and adapt.
+# Every key is optional. The file feeds the policy findings in
+# knowledge-map/lints.yaml; it does not enforce anything — access is enforced
+# by the target systems (user tokens), model use by LiteLLM teams/access
+# groups and the agents' model bindings. Of all of this only `classification`
+# and `personal_data` reach the map, as handling labels. Name roles, not
+# persons.
+
+sources:                                  # keyed by map entry id (any kind)
+  wiki.main:
+    owner: "Service team lead"
+    classification: internal             # public | internal | confidential | strictly_confidential
+    personal_data: ordinary              # none | ordinary | special | criminal | unknown
+    data_subjects: [employees]           # employees applicants customers suppliers patients minors other
+    ropa_ref: "RoPA-012"                 # optional; once any entry has one, entries with personal data need one
+
+models:                                   # keyed by LiteLLM model_name; unlisted = third_country
+  qwen2.5-1.5b-instruct: {tier: local}   # local | eu_hosted | third_country_contracted | third_country
+  nomic-embed-text: {tier: local, role: embedding}
+
+policy:                                   # defaults shown
+  allowed_tiers:
+    public: [local, eu_hosted, third_country_contracted, third_country]
+    internal: [local, eu_hosted, third_country_contracted]
+    confidential: [local, eu_hosted]
+    strictly_confidential: [local]
+  personal_data_tiers:
+    special: [local]
+    criminal: [local]
+  broad_roles: [user]                     # roles that mean "practically everyone"
+  embedding_model: nomic-embed-text       # the model the rag paths embed with
+
+exceptions:                               # accepted risk, always time-boxed
+  - finding: agent_model_policy
+    subject: agent.offer-assistant
+    expires: 2027-02-01
+    reason: "Pilot until the local model is sized"   # optional
+    risk_ref: "RISK-12"                  # optional: entry in your risk register or wiki

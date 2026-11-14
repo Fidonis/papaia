@@ -8,7 +8,7 @@ never reaches a rendered map.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -674,3 +674,475 @@ def test_render_creates_the_operator_directory(workspace):
     repo, _, config = workspace
     knowledge_map.render(config, repo, set(), [], now=NOW)
     assert (config / "overlay/knowledge-map").is_dir()
+
+
+# ---- governance metadata and policy findings (ADR 0014) ----
+
+TODAY = date(2026, 11, 14)
+
+
+def _write_governance(config: Path, data) -> None:
+    path = config / knowledge_map.GOVERNANCE_REL_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = data if isinstance(data, str) else yaml.safe_dump(data)
+    path.write_text(text, encoding="utf-8")
+
+
+def _render_lints(workspace_tuple, addons=None, today=TODAY) -> list[dict]:
+    repo, _, config = workspace_tuple
+    knowledge_map.render(config, repo, set(), addons or [], now=NOW, today=today)
+    return yaml.safe_load((config / "knowledge-map/lints.yaml").read_text())["findings"]
+
+
+def _codes(findings: list[dict]) -> dict[tuple[str, str | None], dict]:
+    return {(f["code"], f["target"]): f for f in findings}
+
+
+def _manifest(config: Path, entry_id: str) -> dict:
+    return yaml.safe_load(
+        (config / f"knowledge-map/manifests/{entry_id}.yaml").read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize(
+    "bad, match",
+    [
+        ({"sources": {"wiki.main": {"classification": "secret"}}}, "classification"),
+        ({"sources": {"wiki.main": {"personal_data": "maybe"}}}, "personal_data"),
+        ({"sources": {"wiki.main": {"data_subjects": ["aliens"]}}}, "data_subjects"),
+        ({"sources": {"wiki.main": {"owner": ["a", "b"]}}}, "must be a string"),
+        ({"sources": ["wiki.main"]}, "keyed by entry id"),
+        ({"models": {"m": {"role": "embedding"}}}, "needs a tier"),
+        ({"models": {"m": {"tier": "moon"}}}, "tier"),
+        ({"policy": {"allowed_tiers": {"secret": ["local"]}}}, "unknown key"),
+        ({"policy": {"personal_data_tiers": {"special": ["moon"]}}}, "unknown value"),
+        ({"exceptions": [{"finding": "agent_model_policy", "subject": "agent.x"}]}, "missing"),
+        ({"exceptions": [{"finding": "no_such_finding", "subject": "x",
+                          "expires": "2027-01-01"}]}, "finding"),
+        ({"exceptions": [{"finding": "classification_open", "subject": "x",
+                          "expires": "2027-01-01"}]}, "finding"),
+        ({"exceptions": [{"finding": "agent_model_policy", "subject": "x",
+                          "expires": "soon"}]}, "not a date"),
+        ("- a list", "expected a mapping"),
+    ],
+)
+def test_malformed_governance_file_is_a_named_error(workspace, bad, match):
+    repo, _, config = workspace
+    _write_governance(config, bad)
+    with pytest.raises(KnowledgeMapError, match=match) as info:
+        knowledge_map.render(config, repo, set(), [], now=NOW, today=TODAY)
+    assert knowledge_map.GOVERNANCE_REL_PATH in str(info.value)
+
+
+def test_unknown_and_removed_governance_keys_are_low_findings(workspace):
+    """Fields of the earlier, larger schema (system block, purpose, review
+    dates, per-path classification) are ignored with a low finding."""
+    repo, _, config = workspace
+    _write_operator(config, [_source("files.protocols", kind="reference", location="NAS")])
+    _write_governance(config, {
+        "system": {"ai_act_risk_class": "minimal"},
+        "sources": {"files.protocols": {"classification": "internal", "purpose": "x",
+                                        "reviewed_at": "2026-01-01"},
+                    "ghost.entry": {"classification": "public"}},
+        "models": {"m": {"tier": "local", "dpa_ref": "x"}},
+    })
+    found = _codes(_render_lints(workspace))
+    unknown = {t for (c, t) in found if c == "governance_unknown_key"}
+    assert unknown == {
+        "system", "sources.files.protocols.purpose", "sources.files.protocols.reviewed_at",
+        "models.m.dpa_ref",
+    }
+    assert {found[("governance_unknown_key", t)]["severity"] for t in unknown} == {"low"}
+    assert ("governance_unknown_entry", "ghost.entry") in found
+
+
+def test_governance_key_in_overrides_is_refused(workspace):
+    repo, _, config = workspace
+    _write_operator(config, [_source("wiki.main")])
+    path = config / knowledge_map.OVERRIDES_REL_PATH
+    path.write_text(yaml.safe_dump({"sources": {}, "governance": {}}), encoding="utf-8")
+    with pytest.raises(KnowledgeMapError, match="governance fields live in"):
+        knowledge_map.collect_sources(repo, config, set(), [])
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"classification": "public"},
+        {"handling": {"classification": "public"}},
+        {"governance_proposal": {"classification": "public"}},
+    ],
+)
+def test_overrides_cannot_set_governance_fields(workspace, override):
+    repo, _, config = workspace
+    _write_operator(config, [_source("wiki.main")])
+    path = config / knowledge_map.OVERRIDES_REL_PATH
+    path.write_text(yaml.safe_dump({"sources": {"wiki.main": override}}), encoding="utf-8")
+    with pytest.raises(KnowledgeMapError, match=knowledge_map.GOVERNANCE_REL_PATH):
+        knowledge_map.collect_sources(repo, config, set(), [])
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"classification": "public"},
+        {"personal_data": "none"},
+        {"governance_proposal": {"classification": "top_secret"}},
+        {"governance_proposal": {"personal_data": "lots"}},
+        {"governance_proposal": {"data_subjects": ["aliens"]}},
+        {"governance_proposal": {"owner": "me"}},
+        {"governance_proposal": "internal"},
+    ],
+)
+def test_declarations_may_only_propose_valid_governance(workspace, bad):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [_source("wiki.main", **bad)])
+    with pytest.raises(KnowledgeMapError):
+        knowledge_map.collect_sources(repo, config, set(), _addon_layer(repo, addon))
+
+
+def test_operator_declarations_accept_a_proposal(workspace):
+    repo, _, config = workspace
+    _write_operator(config, [_source(
+        "wiki.main",
+        governance_proposal={"classification": "internal", "personal_data": "ordinary",
+                             "data_subjects": ["employees"]},
+    )])
+    entries, _ = knowledge_map.collect_sources(repo, config, set(), [])
+    assert entries["wiki.main"]["governance_proposal"]["classification"] == "internal"
+
+
+def test_inventory_keeps_agent_model_and_server_flags_out_of_the_manifests(workspace):
+    repo, _, config = workspace
+    agents = config / "ai/librechat/agents"
+    agents.mkdir(parents=True)
+    (agents / "a.yaml").write_text(yaml.safe_dump({
+        "id": "offer", "name": "Offers", "provider": "Private-LLM",
+        "model": "qwen2.5-1.5b-instruct", "mcpServers": ["CRM"],
+    }), encoding="utf-8")
+    _write_librechat(config, {
+        "CRM": {"headers": {"Authorization": "Bearer s3cr3t-value"}, "chatMenu": False},
+        "Wiki": {"headers": {"Authorization": "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"}},
+        "Erp": {"headers": {"X-Api-Key": "${ERP_KEY}"}},
+        "Tickets": {"headers": {"X-Auth-Token": "{{TICKET_TOKEN}}"},
+                    "customUserVars": {"TICKET_TOKEN": {"title": "Your token"}}},
+        "Dms": {"apiKey": {"source": "admin", "authorization_type": "bearer",
+                           "key": "dms-shared"}},
+        "Calendar": {"apiKey": {"source": "user", "authorization_type": "bearer"}},
+        "Plain": {"headers": {"Accept": "application/json"}},
+    }, agents_dir="./agents")
+    entries, _ = knowledge_map.collect_sources(repo, config, set(), [])
+    assert entries["agent.offer"]["model"] == {
+        "provider": "Private-LLM", "name": "qwen2.5-1.5b-instruct",
+    }
+    flags = {i: entries[i]["static_credentials"] for i in entries if i.startswith("mcp.")}
+    assert flags == {
+        "mcp.crm": True, "mcp.wiki": False, "mcp.erp": True, "mcp.tickets": False,
+        "mcp.dms": True, "mcp.calendar": False, "mcp.plain": False,
+    }
+    assert entries["mcp.crm"]["chat_menu"] is False
+    assert entries["mcp.wiki"]["chat_menu"] is True
+
+    knowledge_map.render(config, repo, set(), [], now=NOW, today=TODAY)
+    for entry_id in ("agent.offer", "mcp.crm", "mcp.wiki"):
+        manifest = _manifest(config, entry_id)
+        for key in ("model", "chat_menu", "static_credentials"):
+            assert key not in manifest, (entry_id, key)
+    lints = yaml.safe_load((config / "knowledge-map/lints.yaml").read_text(encoding="utf-8"))
+    assert lints["agent_models"] == {
+        "agent.offer": {"provider": "Private-LLM", "name": "qwen2.5-1.5b-instruct"},
+    }
+    rendered = "".join(
+        p.read_text(encoding="utf-8") for p in (config / "knowledge-map").rglob("*.yaml")
+    )
+    assert "s3cr3t-value" not in rendered
+    assert "dms-shared" not in rendered
+
+
+def test_manifests_carry_only_the_confirmed_handling(workspace):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [
+        _source("wiki.main", governance_proposal={"classification": "internal",
+                                                  "personal_data": "none"}),
+        _source("crm.main"),
+    ])
+    _write_governance(config, {"sources": {"crm.main": {
+        "classification": "confidential", "personal_data": "ordinary",
+        "owner": "Sales lead", "ropa_ref": "VVT-7", "data_subjects": ["customers"],
+    }}})
+    layer = _addon_layer(repo, addon)
+    knowledge_map.render(config, repo, set(), layer, now=NOW, today=TODAY)
+
+    wiki = _manifest(config, "wiki.main")
+    # a proposal is never a confirmed label
+    assert wiki["handling"] == {"classification": "unclassified", "personal_data": "unknown"}
+    assert "governance_proposal" not in wiki
+    crm = _manifest(config, "crm.main")
+    assert crm["handling"] == {"classification": "confidential", "personal_data": "ordinary"}
+    rendered = (config / "knowledge-map/manifests/crm.main.yaml").read_text() + (
+        config / "knowledge-map/index.yaml"
+    ).read_text()
+    for private in ("VVT-7", "Sales lead", "customers"):
+        assert private not in rendered
+    index = yaml.safe_load((config / "knowledge-map/index.yaml").read_text())
+    assert all("handling" not in s for s in index["sources"])
+
+    lints = yaml.safe_load((config / "knowledge-map/lints.yaml").read_text())
+    assert lints["proposals"] == {
+        "wiki.main": {"classification": "internal", "personal_data": "none"},
+    }
+
+
+def test_a_proposal_does_not_change_the_content_hash(workspace):
+    repo, addon, config = workspace
+    layer = _addon_layer(repo, addon)
+    _write_addon_manifest(addon, [_source("wiki.main")])
+    knowledge_map.render(config, repo, set(), layer, now=NOW, today=TODAY)
+    first = _manifest(config, "wiki.main")["content_hash"]
+    _write_addon_manifest(addon, [_source(
+        "wiki.main", governance_proposal={"classification": "internal"})])
+    knowledge_map.render(config, repo, set(), layer, now=NOW, today=TODAY)
+    assert _manifest(config, "wiki.main")["content_hash"] == first
+
+
+def test_every_governance_finding_carries_origin_category_and_fix(workspace):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [_source("wiki.main", access=[
+        {"via": "rag", "target": "Qdrant"}])])
+    findings = _render_lints(workspace, _addon_layer(repo, addon))
+    assert {f["origin"] for f in findings} == {"render"}
+    governance = [f for f in findings if f["category"] == "governance"]
+    assert governance
+    assert all(isinstance(f["fix"], str) and f["fix"] for f in governance)
+    quality = [f for f in findings if f["category"] == "quality"]
+    assert quality and all("fix" not in f for f in quality)
+
+
+def test_unclassified_entries_are_bundled_into_one_finding(workspace):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [
+        _source("wiki.main", required_roles=["service"]),
+        _source("dms.main", required_roles=["service"],
+                governance_proposal={"classification": "internal"}),
+        _source("crm.main", required_roles=["service"]),
+    ])
+    _write_governance(config, {"sources": {"crm.main": {"classification": "internal"}}})
+    findings = _render_lints(workspace, _addon_layer(repo, addon))
+    bundled = [f for f in findings if f["code"] == "classification_open"]
+    assert len(bundled) == 1
+    assert bundled[0]["severity"] == "medium"
+    assert bundled[0]["target"] is None
+    assert bundled[0]["subjects"] == ["dms.main", "wiki.main"]
+    assert "2 entries not yet classified, 1 with an add-on proposal" in bundled[0]["message"]
+    codes = {f["code"] for f in findings}
+    for removed in ("missing_classification", "classification_unconfirmed", "missing_owner",
+                    "review_overdue", "rag_without_retention", "system_assessment_missing",
+                    "high_risk_purpose_hint"):
+        assert removed not in codes
+
+
+@pytest.mark.parametrize(
+    "proposal, expected",
+    [
+        (None, "confidential"),
+        ("public", "internal"),  # a self-declared public cannot go below internal
+        ("internal", "internal"),
+        ("strictly_confidential", "strictly_confidential"),
+    ],
+)
+def test_effective_class_of_an_unclassified_entry(workspace, proposal, expected):
+    repo, addon, config = workspace
+    extra = {"governance_proposal": {"classification": proposal}} if proposal else {}
+    _write_addon_manifest(addon, [_source("wiki.main", **extra)])
+    entries, _ = knowledge_map.collect_sources(repo, config, set(), _addon_layer(repo, addon))
+    view = knowledge_map._GovernanceView(entries, knowledge_map.load_governance(config))
+    assert view.classification("wiki.main") == expected
+
+
+def test_unclassified_open_rag_source(workspace):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [
+        _source("wiki.main", access=[{"via": "rag", "target": "Qdrant"}]),
+    ])
+    found = _codes(_render_lints(workspace, _addon_layer(repo, addon)))
+    # unclassified without proposal counts as confidential, and nothing restricts it
+    assert found[("open_confidential", "wiki.main")]["severity"] == "high"
+    assert "overrides.yaml" in found[("open_confidential", "wiki.main")]["fix"]
+    assert found[("personal_data_unknown", "wiki.main")]["severity"] == "high"
+    assert found[("rag_copy_sensitive", "wiki.main")]["severity"] == "medium"
+    # the default embedding model is not classified: fail-closed third_country
+    assert found[("embedding_model_policy", "wiki.main")]["severity"] == "high"
+    assert found[("unclassified_model_in_use", "model:nomic-embed-text")]["severity"] == "high"
+
+
+def test_a_documented_source_produces_no_governance_findings(workspace):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [_source(
+        "wiki.main", required_roles=["service"],
+        access=[{"via": "rag", "target": "Qdrant"}],
+        governance_proposal={"classification": "internal"},
+    )])
+    _write_governance(config, {
+        "sources": {"wiki.main": {
+            "owner": "Service lead", "classification": "internal", "personal_data": "none",
+        }},
+        "models": {"nomic-embed-text": {"tier": "local", "role": "embedding"}},
+    })
+    findings = _render_lints(workspace, _addon_layer(repo, addon))
+    assert [f for f in findings if f["category"] == "governance"] == []
+
+
+def test_classification_below_the_proposal(workspace):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [_source(
+        "hr.files", required_roles=["hr"],
+        governance_proposal={"classification": "strictly_confidential"})])
+    _write_governance(config, {"sources": {"hr.files": {"classification": "internal"}}})
+    found = _codes(_render_lints(workspace, _addon_layer(repo, addon)))
+    finding = found[("classification_downgraded", "hr.files")]
+    assert finding["severity"] == "high"
+    assert "strictly_confidential" in finding["fix"]
+
+
+def test_personal_data_findings(workspace):
+    repo, _, config = workspace
+    _write_operator(config, [
+        _source("hr.files", required_roles=["user"],
+                access=[{"via": "rag", "target": "Qdrant"}]),
+    ])
+    _write_governance(config, {
+        "sources": {"hr.files": {"classification": "internal", "personal_data": "special"}},
+        "models": {"nomic-embed-text": {"tier": "eu_hosted"}},
+    })
+    found = _codes(_render_lints(workspace))
+    # `user` is a broad role: practically everyone sees special categories
+    assert found[("special_data_broad_access", "hr.files")]["severity"] == "high"
+    assert found[("rag_copy_sensitive", "hr.files")]["severity"] == "high"
+    # special data allows only local models, the embedding model is eu_hosted
+    embedding = found[("embedding_model_policy", "hr.files")]
+    assert embedding["severity"] == "high"
+    assert "['local']" in embedding["fix"]
+    assert ("open_confidential", "hr.files") not in found  # internal is not confidential
+    # nobody uses ropa_ref in this installation: the check stays silent
+    assert ("personal_data_without_ropa", "hr.files") not in found
+
+
+def test_ropa_check_starts_once_any_entry_uses_a_reference(workspace):
+    repo, addon, config = workspace
+    _write_addon_manifest(addon, [
+        _source("hr.files", required_roles=["hr"]),
+        _source("crm.main", required_roles=["sales"],
+                governance_proposal={"personal_data": "ordinary"}),
+        _source("dms.main", required_roles=["sales"]),
+    ])
+    _write_governance(config, {"sources": {
+        "hr.files": {"classification": "confidential", "personal_data": "special"},
+        "dms.main": {"classification": "internal", "personal_data": "ordinary",
+                     "ropa_ref": "VVT-1"},
+    }})
+    found = _codes(_render_lints(workspace, _addon_layer(repo, addon)))
+    assert found[("personal_data_without_ropa", "hr.files")]["severity"] == "high"
+    assert found[("personal_data_without_ropa", "crm.main")]["severity"] == "medium"
+    assert ("personal_data_without_ropa", "dms.main") not in found
+
+
+def _agent_setup(config: Path, model: str, servers: dict) -> None:
+    agents = config / "ai/librechat/agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / "a.yaml").write_text(yaml.safe_dump({
+        "id": "angebot", "name": "Offers", "provider": "LiteLLM", "model": model,
+        "mcpServers": ["KnowledgeMap", *servers],
+    }), encoding="utf-8")
+    _write_librechat(config, servers, agents_dir="./agents")
+
+
+def test_agent_model_policy(workspace):
+    repo, _, config = workspace
+    _write_operator(config, [
+        _source("crm.main", required_roles=["sales"],
+                access=[{"via": "mcp", "target": "CRM"}]),
+        _source("news.main", required_roles=["sales"],
+                access=[{"via": "mcp", "target": "News"}]),
+    ])
+    _agent_setup(config, "cloud-chat", {"CRM": {"chatMenu": False}, "News": {"chatMenu": False}})
+    _write_governance(config, {
+        "sources": {"crm.main": {"classification": "confidential"},
+                    "news.main": {"classification": "internal"}},
+        "models": {"cloud-chat": {"tier": "third_country_contracted"}},
+    })
+    found = _codes(_render_lints(workspace))
+    finding = found[("agent_model_policy", "agent.angebot")]
+    assert "crm.main" in finding["message"] and "news.main" not in finding["message"]
+    assert "LiteLLM team/key" in finding["fix"]
+    assert "['local', 'eu_hosted']" in finding["fix"]
+    assert ("unclassified_model_in_use", "model:cloud-chat") not in found
+
+
+def test_an_unlisted_agent_model_is_third_country(workspace):
+    repo, _, config = workspace
+    _write_operator(config, [_source("crm.main", required_roles=["sales"],
+                                     access=[{"via": "mcp", "target": "CRM"}])])
+    _agent_setup(config, "mystery-model", {"CRM": {"chatMenu": False}})
+    _write_governance(config, {"sources": {"crm.main": {"classification": "internal"}}})
+    found = _codes(_render_lints(workspace))
+    assert found[("unclassified_model_in_use", "model:mystery-model")]["severity"] == "high"
+    assert "third_country" in found[("agent_model_policy", "agent.angebot")]["message"]
+
+
+def test_server_findings(workspace):
+    repo, _, config = workspace
+    _write_operator(config, [
+        _source("crm.main", required_roles=["sales"], access=[{"via": "mcp", "target": "CRM"}]),
+        _source("news.main", required_roles=["sales"],
+                access=[{"via": "mcp", "target": "News"}]),
+    ])
+    _write_librechat(config, {
+        "CRM": {"headers": {"Authorization": "Bearer shared"}},
+        "News": {"headers": {"Authorization": "Bearer shared"}, "chatMenu": True},
+    })
+    _write_governance(config, {"sources": {
+        "crm.main": {"classification": "confidential"},
+        "news.main": {"classification": "public", "personal_data": "none"},
+    }})
+    found = _codes(_render_lints(workspace))
+    free_chat = found[("confidential_in_free_chat", "mcp.crm")]
+    assert free_chat["severity"] == "medium"
+    assert "chatMenu: false for CRM" in free_chat["fix"]
+    static = found[("mcp_static_credentials", "mcp.crm")]
+    assert static["severity"] == "high"
+    assert "user's token" in static["fix"]
+    assert ("confidential_in_free_chat", "mcp.news") not in found
+    assert ("mcp_static_credentials", "mcp.news") not in found
+
+
+def test_exceptions_mark_and_expire(workspace):
+    repo, _, config = workspace
+    _write_operator(config, [_source("wiki.main", access=[{"via": "mcp", "target": "W"}])])
+    _write_librechat(config, {"W": {}})
+    _write_governance(config, {
+        "sources": {"wiki.main": {"classification": "confidential", "personal_data": "none"}},
+        "exceptions": [{"finding": "open_confidential", "subject": "wiki.main",
+                        "expires": "2027-02-01", "risk_ref": "RISK-12"}],
+    })
+    found = _codes(_render_lints(workspace))
+    assert found[("open_confidential", "wiki.main")]["exception"] == {
+        "expires": "2027-02-01", "risk_ref": "RISK-12",
+    }
+    assert ("exception_expired", "wiki.main") not in found
+
+    found = _codes(_render_lints(workspace, today=date(2027, 2, 1)))
+    assert "exception" not in found[("open_confidential", "wiki.main")]
+    expired = found[("exception_expired", "wiki.main")]
+    assert expired["severity"] == "medium"
+    assert "open_confidential" in expired["message"]
+    assert expired["fix"]
+
+
+def test_exceptions_may_name_manager_findings(workspace):
+    repo, _, config = workspace
+    _write_governance(config, {"exceptions": [
+        {"finding": "model_tier_contradiction", "subject": "model:x",
+         "expires": "2027-01-01", "reason": "lab host"},
+    ]})
+    findings = _render_lints(workspace)
+    assert not [f for f in findings if f["code"] == "exception_expired"]

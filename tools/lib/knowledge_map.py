@@ -17,6 +17,10 @@ Validation here is the intake control of the map: entries are model-facing
 text, so free-text fields are scanned for instruction-injection patterns and
 a hit refuses the render. Softer findings (two sources sharing a topic
 without mutual delimitation) are returned as warnings.
+
+Governance metadata (ADR 0014) comes from a separate operator file; only the
+effective handling enums reach a manifest, the rest feeds policy findings in
+lints.yaml. The map documents — it does not enforce.
 """
 
 from __future__ import annotations
@@ -39,6 +43,11 @@ OVERRIDES_REL_PATH = "overlay/knowledge-map/overrides.yaml"
 # (kind: reference), Agent2Agent agents. Overrides still cannot create entries;
 # declarations can.
 SOURCES_REL_PATH = "overlay/knowledge-map/sources.yaml"
+# Operator governance metadata (ADR 0014): classification, personal data,
+# model tiers, policy and accepted exceptions. Kept apart from overrides.yaml
+# because it is not model-facing: only the effective `handling` enums reach a
+# manifest, everything else feeds the governance findings in lints.yaml.
+GOVERNANCE_REL_PATH = "overlay/knowledge-map/governance.yaml"
 # The merged chat-client configuration the inventory reads. render_core
 # renders the map AFTER the layered merge, so this file already holds every
 # MCP server of the core, the active profiles, add-ons and the overlay.
@@ -67,6 +76,29 @@ TTL_DAYS = 7
 MODULE_KNOWLEDGE: dict[str, str] = {"rag": "src/ai/rag"}
 
 _VALID_ON_DENIED = ("hidden", "acknowledge")
+
+# ---- governance vocabulary (ADR 0014) ----
+# Ordered from least to most restrictive; the order is the comparison.
+CLASSIFICATIONS = ("public", "internal", "confidential", "strictly_confidential")
+# The handling label of an entry the operator has not classified.
+UNCLASSIFIED = "unclassified"
+PERSONAL_DATA = ("none", "ordinary", "special", "criminal", "unknown")
+DATA_SUBJECTS = (
+    "employees", "applicants", "customers", "suppliers", "patients", "minors", "other",
+)
+# Ordered from least to most exposed; a model not listed counts as the last.
+MODEL_TIERS = ("local", "eu_hosted", "third_country_contracted", "third_country")
+# Keys a declaration or override must not carry: the operator sets governance
+# values in governance.yaml, the renderer writes `handling` itself. A
+# declaration may only *propose* through `governance_proposal`.
+_RESERVED_GOVERNANCE_KEYS = (
+    "governance", "handling", "classification", "personal_data", "data_subjects",
+)
+_PROPOSAL_KEYS = ("classification", "personal_data", "data_subjects")
+# Entry keys the governance checks read but no manifest carries: the add-on
+# proposal and the inventory facts (free-chat selectability, shared
+# credentials, an agent's model).
+_INTERNAL_KEYS = ("governance_proposal", "chat_menu", "static_credentials", "model")
 
 # A source id becomes the manifest file name, so its shape is a security
 # boundary: dot-separated lowercase segments only. Anything else (slashes,
@@ -187,7 +219,50 @@ def _validate_entry(entry: dict, origin: str) -> None:
         )
     _validate_shape(entry, origin, source_id)
     _validate_kind_and_access(entry, origin, source_id)
+    _validate_governance_proposal(entry, origin, source_id)
     _scan_for_injection(entry, origin)
+
+
+def _validate_governance_proposal(entry: dict, origin: str, source_id: str) -> None:
+    """Declarations may suggest a classification, never set one: the operator
+    decides in governance.yaml, and a proposal alone is never effective."""
+    for key in _RESERVED_GOVERNANCE_KEYS:
+        if key in entry:
+            raise KnowledgeMapError(
+                f"{origin}: source {source_id!r} sets {key!r} — governance fields "
+                f"live in {GOVERNANCE_REL_PATH}; a declaration may only suggest "
+                f"values through 'governance_proposal'"
+            )
+    proposal = entry.get("governance_proposal")
+    if proposal is None:
+        return
+    where = f"{origin}: source {source_id!r}: governance_proposal"
+    if not isinstance(proposal, dict):
+        raise KnowledgeMapError(f"{where} must be a mapping")
+    unknown = sorted(set(proposal) - set(_PROPOSAL_KEYS))
+    if unknown:
+        raise KnowledgeMapError(
+            f"{where} has unknown key(s) {unknown} (expected {list(_PROPOSAL_KEYS)})"
+        )
+    _check_enum(proposal.get("classification"), CLASSIFICATIONS, f"{where}.classification")
+    _check_enum(proposal.get("personal_data"), PERSONAL_DATA, f"{where}.personal_data")
+    _check_enum_list(proposal.get("data_subjects"), DATA_SUBJECTS, f"{where}.data_subjects")
+
+
+def _check_enum(value, allowed: tuple, where: str) -> None:
+    if value is not None and value not in allowed:
+        raise KnowledgeMapError(
+            f"{where}: unknown value {value!r} (expected one of {list(allowed)})"
+        )
+
+
+def _check_enum_list(value, allowed: tuple, where: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise KnowledgeMapError(f"{where} must be a list")
+    for item in value:
+        _check_enum(item, allowed, where)
 
 
 def _validate_kind_and_access(entry: dict, origin: str, source_id: str) -> None:
@@ -285,7 +360,9 @@ def _content_hash(entry: dict) -> str:
     """Hash over the declaration itself (ADR 0012) — provenance is metadata
     about where it came from, so e.g. an add-on version bump alone must not
     churn every consumer's centroid cache."""
-    declaration = {k: v for k, v in entry.items() if k != "provenance"}
+    declaration = {
+        k: v for k, v in entry.items() if k != "provenance" and k not in _INTERNAL_KEYS
+    }
     canonical = json.dumps(declaration, sort_keys=True, ensure_ascii=False, default=str)
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -394,6 +471,11 @@ def collect_sources(
                 f"{OVERRIDES_REL_PATH}: expected a mapping of the form "
                 f"'sources: {{<id>: {{<field>: <value>}}}}'"
             )
+        if "governance" in overrides:
+            raise KnowledgeMapError(
+                f"{OVERRIDES_REL_PATH}: governance fields live in "
+                f"{GOVERNANCE_REL_PATH}, not in the overrides"
+            )
         for source_id, override in (overrides.get("sources") or {}).items():
             if source_id not in entries:
                 # A warning, not an error: a typo or a left-behind override
@@ -410,6 +492,12 @@ def collect_sources(
             if not isinstance(override, dict):
                 raise KnowledgeMapError(
                     f"{OVERRIDES_REL_PATH}: override for {source_id!r} must be a mapping"
+                )
+            if "governance_proposal" in override:
+                raise KnowledgeMapError(
+                    f"{OVERRIDES_REL_PATH}: override for {source_id!r} sets "
+                    f"'governance_proposal' — proposals come from the declaration; "
+                    f"the operator's values live in {GOVERNANCE_REL_PATH}"
                 )
             if "id" in override and str(override["id"]) != source_id:
                 # The id is the entry's identity AND its manifest file name;
@@ -504,6 +592,42 @@ def _inventory_entry(entry: dict, entries: dict[str, dict], origin: str) -> str 
     return None
 
 
+_CREDENTIAL_HEADER_RE = re.compile(r"authorization|api[-_]?key|token", re.IGNORECASE)
+_PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+
+
+def _is_static_value(value, user_vars: set[str]) -> bool:
+    """A credential value shared by every user of the server: not empty and
+    not resolved per user (a `{{LIBRECHAT_...}}` placeholder, or a
+    `{{VAR}}` the server declares under customUserVars)."""
+    text = str(value or "").strip()
+    if not text or "{{LIBRECHAT_" in text:
+        return False
+    return not any(name in user_vars for name in _PLACEHOLDER_RE.findall(text))
+
+
+def _has_static_credentials(cfg: dict) -> bool:
+    """Does the server authenticate with a credential that is the same for
+    every caller? Then the target system no longer sees who asks."""
+    user_vars = cfg.get("customUserVars")
+    user_vars = set(user_vars) if isinstance(user_vars, dict) else set()
+    headers = cfg.get("headers")
+    if isinstance(headers, dict):
+        for key, value in headers.items():
+            if _CREDENTIAL_HEADER_RE.search(str(key)) and _is_static_value(value, user_vars):
+                return True
+    api_key = cfg.get("apiKey")
+    if isinstance(api_key, dict):
+        # LibreChat: source "user" means every user enters an own key.
+        if api_key.get("source", "admin") != "user" and _is_static_value(
+            api_key.get("key"), user_vars
+        ):
+            return True
+    elif isinstance(api_key, str) and _is_static_value(api_key, user_vars):
+        return True
+    return False
+
+
 def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
     """Every connected MCP server and every provisioned chat agent becomes an
     entry, so the map knows everything a caller could reach — otherwise its
@@ -522,6 +646,10 @@ def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
             "coverage": description[:500],
             "undeclared": name not in declared,
             "access": [{"via": "mcp", "target": name}],
+            # Selectable in free chat with any model unless chatMenu: false.
+            "chat_menu": cfg.get("chatMenu", True) is not False,
+            # Only whether a shared credential is configured — never its value.
+            "static_credentials": _has_static_credentials(cfg),
         }
         warning = _inventory_entry(entry, entries, "inventory:librechat")
         if warning:
@@ -546,6 +674,11 @@ def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
                 "uses": uses,
                 "access": [],
             }
+            if data.get("model"):
+                entry["model"] = {
+                    "provider": str(data.get("provider") or "") or None,
+                    "name": str(data["model"]),
+                }
             warning = _inventory_entry(entry, entries, "inventory:librechat-agents")
             if warning:
                 warnings.append(warning)
@@ -558,9 +691,7 @@ def lint(entries: dict[str, dict], servers: dict[str, dict] | None) -> list[dict
     findings: list[dict] = []
 
     def add(severity: str, code: str, target: str | None, message: str) -> None:
-        findings.append(
-            {"severity": severity, "code": code, "target": target, "message": message}
-        )
+        findings.append(_finding(severity, code, target, message, "quality"))
 
     ids = set(entries)
     for source_id in sorted(entries):
@@ -601,20 +732,600 @@ def lint(entries: dict[str, dict], servers: dict[str, dict] | None) -> list[dict
         add("medium", "shared_topic_undelimited", None, warning.removeprefix("knowledge map: "))
     return findings
 
+
+def _finding(
+    severity: str,
+    code: str,
+    target: str | None,
+    message: str,
+    category: str,
+    fix: str | None = None,
+) -> dict:
+    """One lints.yaml finding. `origin` tells the management view which
+    component produced it (the manager adds its own live checks); governance
+    findings carry a concrete `fix` — the map never changes anything itself."""
+    finding = {
+        "severity": severity,
+        "code": code,
+        "target": target,
+        "message": message,
+        "origin": "render",
+        "category": category,
+    }
+    if fix is not None:
+        finding["fix"] = fix
+    return finding
+
+
+# ---- governance metadata and policy findings (ADR 0014) ----
+#
+# The map documents; it does not enforce. Data access is enforced by the
+# target systems (with the user's token), model use by LiteLLM teams/keys and
+# the agents' model bindings. These findings name where the wiring and the
+# operator's declared handling disagree, each with a concrete fix.
+
+GOVERNANCE_FINDINGS = (
+    "classification_open",
+    "classification_downgraded",
+    "personal_data_unknown",
+    "personal_data_without_ropa",
+    "open_confidential",
+    "special_data_broad_access",
+    "rag_copy_sensitive",
+    "embedding_model_policy",
+    "agent_model_policy",
+    "unclassified_model_in_use",
+    "confidential_in_free_chat",
+    "mcp_static_credentials",
+)
+# Live checks of the management interface against the model gateway; an
+# exception in governance.yaml may name them too.
+MANAGER_FINDINGS = ("model_tier_contradiction", "unclassified_model")
+# The bundled classification reminder has no single subject to accept.
+_EXCEPTABLE_FINDINGS = tuple(
+    code for code in GOVERNANCE_FINDINGS + MANAGER_FINDINGS if code != "classification_open"
+)
+
+DEFAULT_GOVERNANCE_POLICY: dict = {
+    "allowed_tiers": {
+        "public": ["local", "eu_hosted", "third_country_contracted", "third_country"],
+        "internal": ["local", "eu_hosted", "third_country_contracted"],
+        "confidential": ["local", "eu_hosted"],
+        "strictly_confidential": ["local"],
+    },
+    "personal_data_tiers": {"special": ["local"], "criminal": ["local"]},
+    "broad_roles": ["user"],
+    "embedding_model": "nomic-embed-text",
+}
+
+_SENSITIVE_PERSONAL_DATA = ("special", "criminal")
+_RECORDED_PERSONAL_DATA = ("ordinary", "special", "criminal")
+
+# field -> checker kind; see _check_field.
+_SOURCE_FIELDS = {
+    "owner": "str",
+    "classification": ("enum", CLASSIFICATIONS),
+    "personal_data": ("enum", PERSONAL_DATA),
+    "data_subjects": ("enum_list", DATA_SUBJECTS),
+    "ropa_ref": "str",
+}
+_MODEL_FIELDS = {"tier": ("enum", MODEL_TIERS), "role": "str"}
+_EXCEPTION_FIELDS = {
+    "finding": ("enum", _EXCEPTABLE_FINDINGS),
+    "subject": "str",
+    "expires": "date",
+    "reason": "str",
+    "risk_ref": "str",
+}
+_EXCEPTION_REQUIRED = ("finding", "subject", "expires")
+_POLICY_KEYS = tuple(DEFAULT_GOVERNANCE_POLICY)
+_GOVERNANCE_TOP_KEYS = ("sources", "models", "policy", "exceptions")
+
+
+def _gov_error(where: str, message: str) -> KnowledgeMapError:
+    return KnowledgeMapError(f"{GOVERNANCE_REL_PATH}: {where}: {message}")
+
+
+def _as_date(value, where: str) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise _gov_error(where, f"{value!r} is not a date (YYYY-MM-DD)") from None
+
+
+def _check_field(value, kind, where: str):
+    """Validate one governance value and return its normalised form; a null
+    value means 'not set' and is returned as None."""
+    if value is None:
+        return None
+    if kind == "str":
+        if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+            raise _gov_error(where, "must be a string")
+        return str(value)
+    if kind == "date":
+        return _as_date(value, where)
+    if kind == "list_str":
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise _gov_error(where, "must be a list of strings")
+        return list(value)
+    if kind[0] == "enum":
+        if value not in kind[1]:
+            raise _gov_error(where, f"unknown value {value!r} (expected one of {list(kind[1])})")
+        return value
+    # enum_list
+    if not isinstance(value, list):
+        raise _gov_error(where, "must be a list")
+    for item in value:
+        if item not in kind[1]:
+            raise _gov_error(where, f"unknown value {item!r} (expected one of {list(kind[1])})")
+    return list(value)
+
+
+def _check_record(record, fields: dict, where: str, unknown: list[str]) -> dict:
+    if not isinstance(record, dict):
+        raise _gov_error(where, "must be a mapping")
+    result = {}
+    for key, value in record.items():
+        if key not in fields:
+            unknown.append(f"{where}.{key}")
+            continue
+        result[key] = _check_field(value, fields[key], f"{where}.{key}")
+    return result
+
+
+def load_governance(config_dir: Path) -> dict:
+    """The operator's governance.yaml, validated and with the policy defaults
+    filled in. Shape errors are render errors; unknown keys are collected in
+    `unknown_keys` and reported as low findings (forward compatibility)."""
+    path = config_dir / GOVERNANCE_REL_PATH
+    data = _load_yaml(path) if path.is_file() else {}
+    if not isinstance(data, dict):
+        raise _gov_error("<root>", f"expected a mapping, got {type(data).__name__}")
+    unknown: list[str] = [key for key in data if key not in _GOVERNANCE_TOP_KEYS]
+
+    sources_raw = data.get("sources") or {}
+    if not isinstance(sources_raw, dict):
+        raise _gov_error("sources", "must be a mapping keyed by entry id")
+    sources = {
+        str(key): _check_record(value or {}, _SOURCE_FIELDS, f"sources.{key}", unknown)
+        for key, value in sources_raw.items()
+    }
+
+    models_raw = data.get("models") or {}
+    if not isinstance(models_raw, dict):
+        raise _gov_error("models", "must be a mapping keyed by model name")
+    models = {}
+    for name, value in models_raw.items():
+        record = _check_record(value or {}, _MODEL_FIELDS, f"models.{name}", unknown)
+        if not record.get("tier"):
+            raise _gov_error(f"models.{name}", f"needs a tier (one of {list(MODEL_TIERS)})")
+        models[str(name)] = record
+
+    policy = _load_policy(data.get("policy"), unknown)
+
+    exceptions_raw = data.get("exceptions") or []
+    if not isinstance(exceptions_raw, list):
+        raise _gov_error("exceptions", "must be a list")
+    exceptions = []
+    for index, value in enumerate(exceptions_raw):
+        where = f"exceptions[{index}]"
+        record = _check_record(value, _EXCEPTION_FIELDS, where, unknown)
+        missing = [key for key in _EXCEPTION_REQUIRED if not record.get(key)]
+        if missing:
+            # Accepted risk is always time-boxed and always about one thing.
+            raise _gov_error(where, f"missing {missing} — every exception names "
+                             f"the finding, its subject and an expiry date")
+        exceptions.append(record)
+
+    return {
+        "sources": sources,
+        "models": models,
+        "policy": policy,
+        "exceptions": exceptions,
+        "unknown_keys": unknown,
+    }
+
+
+def _load_policy(raw, unknown: list[str]) -> dict:
+    policy = json.loads(json.dumps(DEFAULT_GOVERNANCE_POLICY))
+    if raw is None:
+        return policy
+    if not isinstance(raw, dict):
+        raise _gov_error("policy", "must be a mapping")
+    for key, value in raw.items():
+        where = f"policy.{key}"
+        if key not in _POLICY_KEYS:
+            unknown.append(where)
+            continue
+        if key in ("allowed_tiers", "personal_data_tiers"):
+            allowed_keys = CLASSIFICATIONS if key == "allowed_tiers" else PERSONAL_DATA
+            if not isinstance(value, dict):
+                raise _gov_error(where, "must be a mapping")
+            for sub, tiers in value.items():
+                if sub not in allowed_keys:
+                    raise _gov_error(
+                        f"{where}.{sub}", f"unknown key (expected one of {list(allowed_keys)})"
+                    )
+                policy[key][sub] = _check_field(
+                    tiers, ("enum_list", MODEL_TIERS), f"{where}.{sub}"
+                ) or []
+        elif key == "broad_roles":
+            policy[key] = _check_field(value, "list_str", where) or []
+        else:  # embedding_model
+            policy[key] = _check_field(value, "str", where)
+    return policy
+
+
+def effective_handling(entry_id: str, governance: dict) -> dict:
+    """What a manifest may say about an entry: enum values only, and only
+    what the operator confirmed."""
+    record = governance["sources"].get(entry_id) or {}
+    return {
+        "classification": record.get("classification") or UNCLASSIFIED,
+        "personal_data": record.get("personal_data") or "unknown",
+    }
+
+
+def _rank(classification: str) -> int:
+    return CLASSIFICATIONS.index(classification)
+
+
+def _entry_paths(entry: dict) -> list[dict]:
+    """The entry's access paths, the v0.1 single-path fields included."""
+    access = entry.get("access")
+    paths = [p for p in access if isinstance(p, dict)] if isinstance(access, list) else []
+    if isinstance(access, dict) and access.get("mcp_server"):
+        paths.append({"via": "mcp", "target": access["mcp_server"]})
+    if entry.get("mcp_server"):
+        paths.append({"via": "mcp", "target": entry["mcp_server"]})
+    return paths
+
+
+def _has_rag_path(entry: dict) -> bool:
+    return any(p.get("via") == "rag" for p in _entry_paths(entry))
+
+
+def _model_name(entry: dict) -> str | None:
+    model = entry.get("model")
+    if isinstance(model, dict):
+        model = model.get("name")
+    return str(model) if model else None
+
+
+class _GovernanceView:
+    """Effective governance values per entry, as the findings evaluate them."""
+
+    def __init__(self, entries: dict[str, dict], governance: dict):
+        self.entries = entries
+        self.gov = governance
+        self.policy = governance["policy"]
+        self.broad = set(self.policy["broad_roles"])
+        self.reach = self._reached_by_server()
+
+    def record(self, entry_id: str) -> dict:
+        return self.gov["sources"].get(entry_id) or {}
+
+    def proposal(self, entry_id: str) -> dict:
+        proposal = self.entries[entry_id].get("governance_proposal")
+        return proposal if isinstance(proposal, dict) else {}
+
+    def classification(self, entry_id: str) -> str:
+        """The class the checks use. The operator's value wins; an
+        unconfirmed proposal counts but never below internal, so an add-on
+        cannot declare itself public; nothing at all counts as confidential."""
+        operator = self.record(entry_id).get("classification")
+        if operator:
+            return operator
+        proposed = self.proposal(entry_id).get("classification")
+        if proposed:
+            return CLASSIFICATIONS[max(_rank(proposed), _rank("internal"))]
+        return "confidential"
+
+    def personal_data(self, entry_id: str) -> str:
+        return self.record(entry_id).get("personal_data") or "unknown"
+
+    def open_roles(self, roles) -> bool:
+        """Practically everyone can see it: no roles, or a broad role."""
+        roles = [str(r) for r in roles or []]
+        return not roles or any(r in self.broad for r in roles)
+
+    def tier(self, model: str) -> str:
+        # Fail-closed: a model nobody classified counts as the most exposed.
+        return (self.gov["models"].get(model) or {}).get("tier") or MODEL_TIERS[-1]
+
+    def allowed_tiers(self, classification: str, personal_data: str) -> list[str]:
+        allowed = self.policy["allowed_tiers"].get(classification, [])
+        pd_tiers = self.policy["personal_data_tiers"].get(personal_data)
+        return [t for t in allowed if pd_tiers is None or t in pd_tiers]
+
+    def sensitive(self, entry_id: str) -> bool:
+        return (
+            _rank(self.classification(entry_id)) >= _rank("confidential")
+            or self.personal_data(entry_id) in _SENSITIVE_PERSONAL_DATA
+        )
+
+    def _reached_by_server(self) -> dict[str, list[str]]:
+        """MCP server name -> ids of the entries reachable over it.
+        Inventoried server entries count only when the operator classified
+        them; otherwise the declared sources behind the server speak."""
+        reach: dict[str, set[str]] = {}
+        for entry_id, entry in self.entries.items():
+            kind = entry.get("kind", "source")
+            if kind == "agent" or (kind == "mcp" and entry_id not in self.gov["sources"]):
+                continue
+            for path in _entry_paths(entry):
+                if path.get("via", "mcp") in ("mcp", "rag") and path.get("target"):
+                    reach.setdefault(str(path["target"]), set()).add(entry_id)
+        return {server: sorted(ids) for server, ids in reach.items()}
+
+
+def governance_lint(
+    entries: dict[str, dict], governance: dict, today: date
+) -> list[dict]:
+    """Governance findings for lints.yaml, exceptions applied."""
+    view = _GovernanceView(entries, governance)
+    findings: list[dict] = []
+
+    def add(severity: str, code: str, target: str | None, message: str, fix: str) -> None:
+        findings.append(_finding(severity, code, target, message, "governance", fix))
+
+    for key in governance["unknown_keys"]:
+        add("low", "governance_unknown_key", key,
+            f"{GOVERNANCE_REL_PATH}: unknown key {key!r} ignored",
+            f"remove {key!r} from {GOVERNANCE_REL_PATH}")
+    for entry_id in sorted(set(governance["sources"]) - set(entries)):
+        add("low", "governance_unknown_entry", entry_id,
+            f"{GOVERNANCE_REL_PATH} describes {entry_id!r}, which is not on the map",
+            f"remove sources.{entry_id} from {GOVERNANCE_REL_PATH} or fix the id")
+
+    _classification_findings(view, findings, add)
+    for entry_id in sorted(entries):
+        _entry_findings(view, entry_id, add)
+    _rag_findings(view, add)
+    _server_findings(view, add)
+    _agent_findings(view, add)
+    return _apply_exceptions(findings, governance["exceptions"], today)
+
+
+def _classification_findings(view: _GovernanceView, findings: list[dict], add) -> None:
+    open_ids = [
+        entry_id for entry_id in sorted(view.entries)
+        if view.entries[entry_id].get("kind", "source") in ("source", "reference")
+        and not view.record(entry_id).get("classification")
+    ]
+    if open_ids:
+        # One bundled reminder instead of one finding per entry.
+        proposed = [i for i in open_ids if view.proposal(i).get("classification")]
+        add("medium", "classification_open", None,
+            f"{len(open_ids)} entries not yet classified"
+            + (f", {len(proposed)} with an add-on proposal" if proposed else ""),
+            "confirm the add-on proposals or set a classification in "
+            f"{GOVERNANCE_REL_PATH} for: {', '.join(open_ids)}")
+        findings[-1]["subjects"] = open_ids
+
+
+def _entry_findings(view: _GovernanceView, entry_id: str, add) -> None:
+    entry = view.entries[entry_id]
+    if entry.get("kind", "source") not in ("source", "reference"):
+        return
+    record = view.record(entry_id)
+    proposal = view.proposal(entry_id)
+    name = entry.get("system") or entry_id
+    pd = view.personal_data(entry_id)
+    cls = view.classification(entry_id)
+
+    operator_class = record.get("classification")
+    proposed_class = proposal.get("classification")
+    if operator_class and proposed_class and _rank(operator_class) < _rank(proposed_class):
+        add("high", "classification_downgraded", entry_id,
+            f"{name}: classified {operator_class!r}, below the add-on's "
+            f"suggestion {proposed_class!r}",
+            f"set sources.{entry_id}.classification to {proposed_class} in "
+            f"{GOVERNANCE_REL_PATH}, or record an exception with the reason")
+    if pd == "unknown":
+        has_rag = _has_rag_path(entry)
+        add("high" if has_rag else "medium", "personal_data_unknown", entry_id,
+            f"{name}: whether it holds personal data is not documented"
+            + (" (its content is copied into the vector index)" if has_rag else ""),
+            f"set sources.{entry_id}.personal_data in {GOVERNANCE_REL_PATH}")
+    # Record-of-processing references are checked only once the operator uses
+    # them at all; an installation that keeps its record elsewhere stays quiet.
+    if any(r.get("ropa_ref") for r in view.gov["sources"].values()) and not record.get(
+        "ropa_ref"
+    ):
+        fix = f"set sources.{entry_id}.ropa_ref in {GOVERNANCE_REL_PATH}"
+        if record.get("personal_data") in _RECORDED_PERSONAL_DATA:
+            add("high", "personal_data_without_ropa", entry_id,
+                f"{name} holds {pd} personal data but has no record-of-processing "
+                f"reference", fix)
+        elif not record.get("personal_data") and (
+            proposal.get("personal_data") in _RECORDED_PERSONAL_DATA
+        ):
+            add("medium", "personal_data_without_ropa", entry_id,
+                f"{name}: the add-on suggests {proposal['personal_data']} personal "
+                f"data; no record-of-processing reference", fix)
+
+    if view.open_roles(entry.get("required_roles")):
+        restrict = (
+            f"set required_roles for {entry_id} in overrides.yaml to the roles "
+            f"that need it"
+        )
+        if _rank(cls) >= _rank("confidential"):
+            add("high", "open_confidential", entry_id,
+                f"{name} ({cls}"
+                + (", not yet classified" if not operator_class else "")
+                + ") is visible without required roles or to a broad role",
+                restrict + (", or classify it if it is less sensitive"
+                            if not operator_class else ""))
+        if pd in _SENSITIVE_PERSONAL_DATA:
+            add("high", "special_data_broad_access", entry_id,
+                f"{name} holds {pd} personal data and is visible without required "
+                f"roles or to a broad role", restrict)
+
+
+def _rag_findings(view: _GovernanceView, add) -> None:
+    embedding = view.policy["embedding_model"]
+    rag_entries = []
+    for entry_id in sorted(view.entries):
+        entry = view.entries[entry_id]
+        if not _has_rag_path(entry):
+            continue
+        rag_entries.append(entry_id)
+        name = entry.get("system") or entry_id
+        cls = view.classification(entry_id)
+        pd = view.personal_data(entry_id)
+        keep_out = (
+            f"take {entry_id} out of the vector index, or restrict its collection "
+            f"to the roles of the source and re-ingest after deletions"
+        )
+        if cls == "strictly_confidential" or pd in _SENSITIVE_PERSONAL_DATA:
+            add("high", "rag_copy_sensitive", entry_id,
+                f"{name}: the vector index holds a copy of {cls}"
+                f"{' / ' + pd + ' personal data' if pd in _SENSITIVE_PERSONAL_DATA else ''} "
+                f"content that bypasses the source's rights and deletions", keep_out)
+        elif cls == "confidential":
+            add("medium", "rag_copy_sensitive", entry_id,
+                f"{name}: the vector index holds a copy of confidential content that "
+                f"bypasses the source's rights and deletions", keep_out)
+        if embedding:
+            tier = view.tier(embedding)
+            allowed = view.allowed_tiers(cls, pd)
+            if tier not in allowed:
+                add("high", "embedding_model_policy", entry_id,
+                    f"{name}: the embedding model {embedding!r} (tier {tier}) is not "
+                    f"allowed for {cls} content"
+                    + (f" with {pd} personal data" if pd != "unknown" else ""),
+                    f"set policy.embedding_model to a model of tier {allowed or ['none']}, "
+                    f"or take {entry_id} out of the vector index")
+    if rag_entries and embedding and embedding not in view.gov["models"]:
+        add("high", "unclassified_model_in_use", f"model:{embedding}",
+            f"embedding model {embedding!r} has no tier (counted as third_country); "
+            f"used for {', '.join(rag_entries)}",
+            f"add models.{embedding}: {{tier: <tier>}} to {GOVERNANCE_REL_PATH}")
+
+
+def _server_findings(view: _GovernanceView, add) -> None:
+    for entry_id in sorted(view.entries):
+        entry = view.entries[entry_id]
+        if entry.get("kind") != "mcp":
+            continue
+        paths = _entry_paths(entry)
+        server = str(paths[0].get("target")) if paths else ""
+        reached = view.reach.get(server, [])
+        name = entry.get("system") or server
+        if entry.get("chat_menu", True) is not False:
+            sensitive = [e for e in reached if view.sensitive(e)]
+            if sensitive:
+                add("medium", "confidential_in_free_chat", entry_id,
+                    f"{name} reaches {', '.join(sensitive)} and can be selected in "
+                    f"free chat with any model",
+                    f"set chatMenu: false for {server} in librechat.yaml and use it "
+                    f"through agents whose model the policy allows")
+        if entry.get("static_credentials"):
+            exposed = [
+                e for e in reached
+                if _rank(view.classification(e)) >= _rank("internal")
+                or view.personal_data(e) != "none"
+            ]
+            if exposed:
+                add("high", "mcp_static_credentials", entry_id,
+                    f"{name} uses a shared credential to reach {', '.join(exposed)}; "
+                    f"the target system no longer sees which user asks",
+                    f"switch the {server} MCP server to the user's token "
+                    f"({{{{LIBRECHAT_OPENID_ACCESS_TOKEN}}}}) instead of a shared credential")
+
+
+def _agent_findings(view: _GovernanceView, add) -> None:
+    unlisted: dict[str, list[str]] = {}
+    for entry_id in sorted(view.entries):
+        entry = view.entries[entry_id]
+        if entry.get("kind") != "agent":
+            continue
+        model = _model_name(entry)
+        if not model:
+            continue
+        if model not in view.gov["models"]:
+            unlisted.setdefault(model, []).append(entry_id)
+        reached = sorted({
+            e for server in entry.get("uses") or [] for e in view.reach.get(str(server), [])
+        })
+        tier = view.tier(model)
+        blocked = [
+            e for e in reached
+            if tier not in view.allowed_tiers(view.classification(e), view.personal_data(e))
+        ]
+        if blocked:
+            allowed = sorted(
+                set(MODEL_TIERS).intersection(*(
+                    view.allowed_tiers(view.classification(e), view.personal_data(e))
+                    for e in blocked
+                )),
+                key=MODEL_TIERS.index,
+            )
+            add("high", "agent_model_policy", entry_id,
+                f"{entry.get('system') or entry_id} uses model {model!r} (tier {tier}), "
+                f"which the policy does not allow for {', '.join(blocked)}",
+                f"switch {entry_id} to a model of tier {allowed or ['none']} and "
+                f"restrict its LiteLLM team/key to such models")
+    for model, agents in sorted(unlisted.items()):
+        add("high", "unclassified_model_in_use", f"model:{model}",
+            f"model {model!r} has no tier (counted as third_country); used by "
+            f"{', '.join(agents)}",
+            f"add models.{model}: {{tier: <tier>}} to {GOVERNANCE_REL_PATH}")
+
+
+def _apply_exceptions(findings: list[dict], exceptions: list[dict], today: date) -> list[dict]:
+    """An active exception marks its finding as accepted risk (it stays in the
+    list, flagged); an expired one lets the finding return unmarked and adds
+    `exception_expired` so the acceptance gets renewed or removed."""
+    result = list(findings)
+    active = {}
+    for exc in exceptions:
+        key = (exc["finding"], exc["subject"])
+        if today < exc["expires"]:
+            active[key] = exc
+        else:
+            result.append(_finding(
+                "medium", "exception_expired", exc["subject"],
+                f"the accepted exception for {exc['finding']} on {exc['subject']} "
+                f"expired on {exc['expires'].isoformat()}",
+                "governance",
+                f"fix the {exc['finding']} finding, or renew the exception in "
+                f"{GOVERNANCE_REL_PATH} with a new expires date",
+            ))
+    for finding in result:
+        exc = active.get((finding["code"], finding["target"]))
+        if exc:
+            finding["exception"] = {
+                key: (value.isoformat() if isinstance(value, date) else value)
+                for key, value in exc.items()
+                if key in ("expires", "reason", "risk_ref") and value is not None
+            }
+    return result
+
+
 def render(
     config_dir: Path,
     repo_root: Path,
     active_profiles: set[str],
     active_addons: list[dict],
     now: datetime | None = None,
+    today: date | None = None,
 ) -> list[str]:
     """Write index.yaml and manifests/, prune removed sources, return warnings.
 
     Runs only while the knowledge-map profile is active (the caller gates), so
-    a lean installation renders nothing new."""
+    a lean installation renders nothing new. `today` dates the governance
+    exception expiry check (injectable for tests)."""
     entries, warnings = collect_sources(
         repo_root, config_dir, active_profiles, active_addons
     )
+    governance = load_governance(config_dir)
+    today = today if today is not None else date.today()
 
     stamp = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     generated_at = stamp.isoformat()
@@ -633,6 +1344,12 @@ def render(
     index_sources = []
     for source_id in sorted(entries):
         entry = dict(entries[source_id])
+        # Manifests are model-facing: of the governance data only the
+        # effective handling enums travel — never proposals, owners or
+        # references, nor the inventory facts the checks use (ADR 0014).
+        for key in _INTERNAL_KEYS:
+            entry.pop(key, None)
+        entry["handling"] = effective_handling(source_id, governance)
         entry["content_hash"] = _content_hash(entries[source_id])
         entry["generated_at"] = generated_at
         entry["valid_until"] = valid_until
@@ -691,8 +1408,23 @@ def render(
         yaml.safe_dump(
             {
                 "generated_at": generated_at,
-                "findings": lint(entries, librechat_servers(config_dir)),
+                "findings": lint(entries, librechat_servers(config_dir))
+                + governance_lint(entries, governance, today),
                 "warnings": warnings,
+                # Add-on suggestions for the management view ("suggested by
+                # add-on"); never effective and never in a manifest.
+                "proposals": {
+                    source_id: entries[source_id]["governance_proposal"]
+                    for source_id in sorted(entries)
+                    if isinstance(entries[source_id].get("governance_proposal"), dict)
+                },
+                # The model each inventoried agent runs on, for the management
+                # view's model policy table; never in a manifest.
+                "agent_models": {
+                    source_id: entries[source_id]["model"]
+                    for source_id in sorted(entries)
+                    if isinstance(entries[source_id].get("model"), dict)
+                },
             },
             sort_keys=False,
             allow_unicode=True,

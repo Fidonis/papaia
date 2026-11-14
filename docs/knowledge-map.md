@@ -23,7 +23,9 @@ with the user's token. How another assistant integrates is described in the
 
 Design decisions and their rationale: [ADR 0011](adr/0011-knowledge-map-as-optional-core-profile.md)
 (profile) and [ADR 0012](adr/0012-knowledge-manifest-key-and-map-format.md)
-(declaration format). Server internals: the `papaia-knowledge-map` repository.
+(declaration format), [ADR 0013](adr/0013-knowledge-map-inventory-kinds-and-access-paths.md)
+(inventory and access paths) and [ADR 0014](adr/0014-knowledge-map-governance-metadata.md)
+(governance metadata). Server internals: the `papaia-knowledge-map` repository.
 
 ## Enabling
 
@@ -115,7 +117,8 @@ each saying what it is `best_for`; a path may narrow visibility with its own
 Each render writes `knowledge-map/lints.yaml` with what weakens the map —
 undeclared servers, paths to servers that are not connected, dangling
 references, sources without negative knowledge or examples, undelimited
-shared topics — shown on the management page. A render that would remove
+shared topics — plus the governance findings described below, all shown
+on the management page. A render that would remove
 more than half of a map with at least four entries keeps the old manifests
 and warns; render again to confirm an intended removal.
 
@@ -155,6 +158,113 @@ stub instead of a confusing miss.
 Note the scope: the map gates *knowing about* a source. Using it is still
 enforced by that source's own MCP server (audience check, its own RBAC) — the
 map adds a discovery gate in front, it replaces nothing.
+
+## Governance metadata
+
+The map is where three facts meet that no single system sees together: how
+sensitive a source is, how widely it is visible, and which model tier an
+agent or the vector index sends its content to. The operator documents the
+first and the model tiers in
+`$PAPAIA_CONFIG_DIR/overlay/knowledge-map/governance.yaml` (optional; an
+annotated example ships as `src/ai/knowledge-map/governance.yaml.example`);
+each render checks the wiring against it. Design and rationale:
+[ADR 0014](adr/0014-knowledge-map-governance-metadata.md).
+
+**The map does not enforce.** The findings point at configuration to change;
+the map blocks no request, protects no data and changes nothing on its own.
+Enforcement lives elsewhere:
+
+- **Data access** — in the target systems. Connect MCP servers with the
+  user's token (`{{LIBRECHAT_OPENID_ACCESS_TOKEN}}`), not a shared key, so the
+  target system still decides per user.
+- **Model use** — in LiteLLM: give each agent its own team or key and restrict
+  it to the models (model access groups) its data allows.
+- **Free chat** — set `chatMenu: false` on every MCP server that reaches
+  confidential data, so it is only usable through agents with a vetted model
+  instead of in free chat with any model.
+
+### The file
+
+| Block | Content |
+|---|---|
+| `sources` | Per entry id (any kind): `owner` (a role, not a person), `classification` (`public` < `internal` < `confidential` < `strictly_confidential`), `personal_data` (`none`, `ordinary`, `special`, `criminal`, `unknown`), optional `data_subjects`, optional `ropa_ref` |
+| `models` | Per LiteLLM model name: `tier` (`local`, `eu_hosted`, `third_country_contracted`, `third_country`), optional `role` |
+| `policy` | `allowed_tiers` per classification, `personal_data_tiers` for special and criminal data, `broad_roles` (roles that mean "practically everyone", default `[user]`), `embedding_model` (default `nomic-embed-text`) |
+| `exceptions` | Accepted risk: `finding`, `subject`, `expires` (required), optional `reason` and `risk_ref` (a pointer into your risk register or wiki) |
+
+Purposes, retention, review dates and similar records belong in the tools
+that already keep them (records of processing, risk register, wiki);
+`ropa_ref` and `risk_ref` link there. Unknown keys are ignored with a low
+finding; a malformed value refuses the render.
+
+Evaluation is fail-closed. For the checks, an entry the operator has not
+classified counts as its add-on's proposal, but never below `internal` (an
+add-on cannot declare itself public); without a proposal it counts as
+`confidential`. Personal data defaults to `unknown`; a model not listed under
+`models` counts as `third_country`.
+
+Governance values belong to this file only. `overrides.yaml` with a
+`governance` key, or a declaration/override that sets `classification`,
+`personal_data`, `data_subjects`, `handling` or `governance` directly, refuses
+the render. An add-on (or an operator declaration) may *suggest* values,
+which the operator confirms:
+
+```yaml
+knowledge:
+  sources:
+    - id: wiki.main
+      governance_proposal: {classification: internal, personal_data: ordinary, data_subjects: [employees]}
+```
+
+### What reaches the map
+
+Each manifest carries only `handling: {classification, personal_data}` with
+the values the operator confirmed (`unclassified` / `unknown` otherwise) — an
+informational label for answers, not an instruction and not a protection.
+Owners, references, proposals and the policy never reach a manifest or the
+index. For its checks the inventory also notes an agent's model and, per
+server, whether it is selectable in free chat and whether a header named
+`Authorization` or containing `api-key`/`token`, or an admin `apiKey`, holds a
+credential that is the same for every user (no `{{LIBRECHAT_...}}` placeholder
+and no `customUserVars` variable). These facts stay in the renderer and
+`lints.yaml`; the credential value itself is never read.
+
+### Policy findings
+
+Each render adds governance findings to `lints.yaml`, next to the quality
+findings, each with an action level and a concrete `fix`:
+
+| code | level | when |
+|---|---|---|
+| `classification_open` | medium | one bundled finding: N entries not yet classified (listed in `subjects`) |
+| `classification_downgraded` | high | operator classification below the add-on's proposal |
+| `personal_data_unknown` | medium; high with a rag path | personal data not documented |
+| `personal_data_without_ropa` | high if set by the operator, medium if only proposed | personal data without `ropa_ref` — only once any entry uses `ropa_ref` |
+| `open_confidential` | high | a confidential (or effectively confidential) entry is visible without roles or to a broad role |
+| `special_data_broad_access` | high | special/criminal data visible without roles or to a broad role |
+| `rag_copy_sensitive` | high (strictly confidential, special, criminal), medium (confidential) | a vector-index copy bypasses the source's rights and deletions |
+| `embedding_model_policy` | high | the embedding model's tier is not allowed for a rag source's data |
+| `agent_model_policy` | high | an agent's model tier is not allowed for an entry it reaches over its servers |
+| `unclassified_model_in_use` | high | an agent or embedding model without a tier (subject `model:<name>`) |
+| `confidential_in_free_chat` | medium | a server reaching confidential or special data is selectable in free chat |
+| `mcp_static_credentials` | high | a server with a shared credential reaches internal or personal data — the target system no longer sees the user |
+| `governance_unknown_key` / `governance_unknown_entry` | low | an ignored key, or a record for an id not on the map |
+| `exception_expired` | medium | an exception passed its `expires` date |
+
+A server's reach is the declared entries whose access paths target it, plus
+the server's own entry once the operator has a record for it. An active
+exception keeps its finding in the list, marked with the `exception` it falls
+under; once expired, the finding returns unmarked together with
+`exception_expired`. The management interface adds its own live checks
+against the model gateway (`origin: manager`); exceptions may name those too.
+
+### Wording
+
+Findings support documentation duties such as the record of processing
+activities or an asset inventory; they are no legal assessment. Speak of
+"policy findings" and "action needed (high/medium/low)"; never describe an
+installation as compliant, a rule as enforced, or a finding as a violation,
+and call aggregated telemetry "pseudonymised, aggregated", not anonymised.
 
 ## Routing behaviour and calibration
 
@@ -196,4 +306,7 @@ role set is stored only as a hash), but the distilled need texts are stored
 verbatim and routinely derive from user questions — treat the volume as
 personal data: `KM_TELEMETRY_RETENTION_DAYS` (default 30) deletes older
 records, `KM_LEARNING_MODE=off` keeps no need texts at all, and the volume
-belongs in the record of processing activities.
+belongs in the record of processing activities. For professions bound by
+professional secrecy (in Germany § 203 StGB: tax advisers, lawyers, doctors)
+`KM_LEARNING_MODE=off` is recommended; keep need texts verbatim (`full`) only
+where a works agreement covers it.

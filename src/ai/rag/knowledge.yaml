@@ -28,6 +28,9 @@ sources:
         best_for: "semantic search across the ingested documents"
         freshness: "as of the last ingest run"
     required_roles: []
+    # What is indexed is the operator's choice, so personal data stays
+    # unknown until the operator says otherwise.
+    governance_proposal: {classification: internal, personal_data: unknown}
     # The qdrant add-on declares the same docs.search capability; when both
     # are active the core module owns the topic, so routing between the two
     # near-identical entries is decided instead of guessed.

@@ -36,6 +36,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0011](./0011-knowledge-map-as-optional-core-profile.md) | Ship the knowledge map as an optional core profile with a role-trimmed MCP directory server | Proposed | 2026-11-13 |
 | [0012](./0012-knowledge-manifest-key-and-map-format.md) | Collect knowledge declarations through a `knowledge:` manifest key and render a flat, stamped map | Proposed | 2026-11-13 |
 | [0013](./0013-knowledge-map-inventory-kinds-and-access-paths.md) | Inventory every reachable server and agent, and give sources several access paths | Proposed | 2026-11-14 |
+| [0014](./0014-knowledge-map-governance-metadata.md) | Keep governance metadata in a separate operator file and report model policy findings | Proposed | 2026-11-14 |
 
 ## References
 
