@@ -10,7 +10,16 @@ served to the chat layer by `knowledge-map-mcp` as three tools:
 |---|---|
 | `find_knowledge_source(need, domain?, k?)` | Rank the sources for a distilled information need: match grades, reasoning, access hints, freshness — or a calibrated abstention. |
 | `describe_source(source_id)` | One source's full manifest. |
-| `list_topics()` | Compact role-trimmed index of all usable sources. |
+| `list_topics()` | Compact role-trimmed index of all usable sources and agents. |
+| `plan_lookup(needs)` | Route the parts of a multi-subject question at once. |
+| `find_agent(task)` | Agents to delegate a whole task to. |
+| `report_outcome(need, source_id, outcome)` | Feedback after using a source; feeds the refinement suggestions. |
+
+The server also offers the resource `knowledge-map://index` (the compact
+index for a system prompt), the prompt `navigator` (the working rules), and
+the same functions as REST under `/api/v1/` for callers without MCP — always
+with the user's token. How another assistant integrates is described in the
+`papaia-knowledge-map` repository.
 
 Design decisions and their rationale: [ADR 0011](adr/0011-knowledge-map-as-optional-core-profile.md)
 (profile) and [ADR 0012](adr/0012-knowledge-manifest-key-and-map-format.md)
@@ -36,16 +45,41 @@ seam (`LIBRECHAT_AGENTS_DIR`).
 
 ## Where map entries come from
 
-Nothing on the map is hand-maintained in place. Entries are declared by the
-software that provides the source and rendered on every `setup`, `start` and
-`addon` operation:
+Nothing on the map is hand-maintained in place. Entries are rendered on every
+`setup`, `start` and `addon` operation from:
 
-- **Add-ons** declare sources under the `knowledge:` key of `papaia-app.yaml`
-  (addon_api 4; the schema is in `docs/architecture.md` §6.2).
-- **Core modules** declare the same structure in `<module>/knowledge.yaml`
-  (e.g. `src/ai/rag/knowledge.yaml`), collected while their profile is active.
-- **Operators** augment generated entries in
-  `$PAPAIA_CONFIG_DIR/overlay/knowledge-map/overrides.yaml`:
+- **Add-ons** — the `knowledge:` key of `papaia-app.yaml` (addon_api 4; the
+  schema is in `docs/architecture.md` §6.2).
+- **Core modules** — `<module>/knowledge.yaml` (e.g. `src/ai/rag/knowledge.yaml`),
+  collected while their profile is active.
+- **Inventory** — every MCP server in the merged LibreChat configuration
+  becomes an entry of kind `mcp`, every agent file in `LIBRECHAT_AGENTS_DIR`
+  one of kind `agent`. A server that no declared source reaches is marked
+  *undeclared*: the map then knows it exists, so it never claims that
+  information is unavailable while such a server is connected.
+- **Operator declarations** — `$PAPAIA_CONFIG_DIR/overlay/knowledge-map/sources.yaml`
+  in the add-on schema, for the operator's own servers, places without any
+  connector and Agent2Agent agents:
+
+  ```yaml
+  sources:
+    - id: files.protocols
+      kind: reference                 # no tool reaches it
+      system: "File share"
+      coverage: "Signed maintenance protocols, logbooks (PDF)"
+      location: "Nextcloud, folder 04_Anlagen"
+      topics: [{ id: files.protocols, label: "Maintenance protocols" }]
+    - id: agent.partner-stock
+      kind: agent
+      system: "Supplier stock agent"
+      coverage: "Checks stock and delivery dates at the supplier"
+      access:
+        - { via: a2a, target: "https://partner.example.org/.well-known/agent-card.json",
+            skills: [check_stock] }
+  ```
+
+- **Operator overrides** — `overlay/knowledge-map/overrides.yaml` augments
+  entries (including inventoried ones, e.g. to restrict a server to a role):
 
   ```yaml
   sources:
@@ -54,19 +88,44 @@ software that provides the source and rendered on every `setup`, `start` and
       # Lists REPLACE the declared value: repeat the declared items you want
       # to keep (check manifests/wiki.main.yaml), then add your own.
       not_covered:
-        - { what: "customer contracts", instead: paperless.docs }
+        - { what: "customer contacts", instead: crm.main }
   ```
 
-  Overrides merge per source id on top of the declaration: mappings merge
-  key-wise, scalars and lists are replaced wholesale (replacement is what
-  lets an operator remove a wrong declared item). Overrides cannot
-  introduce new sources; an override for a source that no longer exists
-  (e.g. after an add-on removal) is ignored with a render warning.
+  Overrides merge per entry id on top of the declaration: mappings merge
+  key-wise, scalars and lists are replaced wholesale. They cannot create
+  entries; an override for an entry that no longer exists is ignored with a
+  render warning.
+
+### Entry kinds and access paths
+
+| kind | What | Found by |
+|---|---|---|
+| `source` | Where information lives (default) | `find_knowledge_source` |
+| `reference` | A place no tool reaches; answers name the `location` | `find_knowledge_source` |
+| `mcp` | A connected MCP server (inventory) | only while *undeclared*, as an unverified hint |
+| `agent` | A delegation target | `find_agent` |
+
+A source lists every way to reach it under `access`, e.g. the wiki live over
+its MCP server and as a snapshot in the vector index — one entry, two paths,
+each saying what it is `best_for`; a path may narrow visibility with its own
+`required_roles`.
+
+### Checks and safety nets
+
+Each render writes `knowledge-map/lints.yaml` with what weakens the map —
+undeclared servers, paths to servers that are not connected, dangling
+references, sources without negative knowledge or examples, undelimited
+shared topics — shown on the management page. A render that would remove
+more than half of a map with at least four entries keeps the old manifests
+and warns; render again to confirm an intended removal.
 
 Installing an add-on adds its entries, removing it prunes them — the map
 cannot disagree with what is deployed. Each rendered manifest carries a
 content hash, its generation time and a 7-day `valid_until`; consumers serve
-expired entries **marked as stale**, never silently.
+expired entries **marked as stale**, never silently. MCP servers created
+inside LibreChat at runtime are stored in its database, not its
+configuration, and stay invisible to the map — keep their creation to
+administrators.
 
 ## Writing good entries
 
@@ -120,8 +179,21 @@ everything.
 
 Calibrate both against a gold set of real questions with expected sources; the
 `papaia-knowledge-map` repository ships the format and an evaluation runner.
-Routing telemetry (JSONL) accumulates in the `knowledge-map-telemetry` volume
-as the raw material for that gold set. It carries no caller identifiers (the
+Keep the gold set in `overlay/knowledge-map/goldset.yaml`; the service reads
+it for evaluation runs and to counter-check refinement suggestions.
+
+## Refinement and telemetry
+
+Routing telemetry (JSONL) accumulates in the `knowledge-map-telemetry` volume.
+From it and from `report_outcome` feedback the service derives refinement
+**suggestions** (example questions, delimitations, source-of-truth decisions,
+declarations for undeclared servers, gold questions). Nothing is applied
+automatically: an administrator accepts a suggestion on the management page,
+which writes it as an override. Suggestions need support from several
+distinct role profiles, are masked and screened, capped per source and
+checked against the gold set. It carries no caller identifiers (the
 role set is stored only as a hash), but the distilled need texts are stored
 verbatim and routinely derive from user questions — treat the volume as
-potentially containing personal data and include it in retention planning.
+personal data: `KM_TELEMETRY_RETENTION_DAYS` (default 30) deletes older
+records, `KM_LEARNING_MODE=off` keeps no need texts at all, and the volume
+belongs in the record of processing activities.

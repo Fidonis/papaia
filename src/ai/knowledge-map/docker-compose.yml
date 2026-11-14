@@ -22,13 +22,17 @@
 services:
 
   knowledge-map-mcp:
-    image: ghcr.io/fidonis/papaia-knowledge-map:0.1.0
+    image: ghcr.io/fidonis/papaia-knowledge-map:0.2.0
     restart: unless-stopped
     environment:
       OIDC_ISSUER_URL:     ${OIDC_ISSUER}
-      # Audience and port are fixed here because the realm template and the
-      # LibreChat MCP fragment depend on them.
-      OIDC_AUDIENCE:       mcp-knowledge-map
+      # The own audience and the port are fixed here because the realm
+      # template and the LibreChat MCP fragment depend on them. Further
+      # resource servers whose users' tokens should be accepted (a team
+      # assistant) are appended from KM_EXTRA_AUDIENCES; the server ignores
+      # the empty item when none are set.
+      OIDC_AUDIENCE:       mcp-knowledge-map,${KM_EXTRA_AUDIENCES:-}
+      OIDC_ALLOWED_AZP:    ${KM_ALLOWED_AZP:-}
       OIDC_JWKS_CACHE_TTL: ${KM_OIDC_JWKS_CACHE_TTL:-3600}
       KM_MAP_DIR:          /map
       KM_TELEMETRY_DIR:    /telemetry
@@ -39,6 +43,12 @@ services:
       KM_ABSTENTION_THRESHOLD: ${KM_ABSTENTION_THRESHOLD:-0.25}
       KM_LEXICAL_ABSTENTION_THRESHOLD: ${KM_LEXICAL_ABSTENTION_THRESHOLD:-0.2}
       KM_AMBIGUITY_MARGIN:     ${KM_AMBIGUITY_MARGIN:-0.05}
+      KM_ROUTE_UNDECLARED:     ${KM_ROUTE_UNDECLARED:-true}
+      KM_TELEMETRY_RETENTION_DAYS: ${KM_TELEMETRY_RETENTION_DAYS:-30}
+      KM_LEARNING_MODE:        ${KM_LEARNING_MODE:-aggregate}
+      # Admin API for the management interface; generated during setup.
+      KM_ADMIN_TOKEN:          ${KM_ADMIN_TOKEN}
+      KM_GOLDSET_PATH:         /overlay/goldset.yaml
       MCP_HOST:            0.0.0.0
       MCP_PORT:            "8200"
       MCP_PATH:            /mcp
@@ -53,6 +63,10 @@ services:
       # overrides, never in the container.
       - ${PAPAIA_CONFIG_DIR}/knowledge-map:/map:ro
       - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
+      # Operator-maintained knowledge-map files (declarations, overrides, the
+      # gold set); read-only — the management interface edits them on the
+      # host and re-renders.
+      - ${PAPAIA_CONFIG_DIR}/overlay/knowledge-map:/overlay:ro
       # Routing telemetry (JSONL): raw material for the gold-set evaluation
       # and a later learned router. No caller identifiers (roles only as a
       # hash), but need texts are stored verbatim — treat as potentially

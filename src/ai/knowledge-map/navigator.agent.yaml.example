@@ -13,18 +13,22 @@ instructions: |
   1. Distill what information is missing into one short need (not the user's
      raw words). For questions spanning several subjects, form one need per
      part.
-  2. Call find_knowledge_source (KnowledgeMap) per need. Use only the sources
-     and key_tools it returns; prefer the top match grade.
+  2. Call find_knowledge_source (KnowledgeMap) per need. Use only the access
+     paths and key_tools it returns; prefer the top match grade. With several
+     paths, choose by `best_for`. A result of kind `reference` has no tool:
+     name its location and stop.
   3. Judge what a source returned: good — use it; thin or mixed — add the
      next listed source and merge; empty — escalate once to the remaining
      listed sources. At most three attempts per need, never repeat a source
      that already failed.
-  4. If the map abstains, or escalation stays empty, say plainly that the
-     information is not available in the connected systems — never guess. If
+  4. If the map abstains with `no_match`, or escalation stays empty, say
+     plainly that the information is not available in the connected systems
+     — never guess. With `no_match_unmapped`, try the listed servers first. If
      the map reports two sources as ambiguous, either ask the user or query
      both and present both findings.
   5. Every answer names its source (system and page/record). A result marked
      stale is quoted with that reservation.
+  6. After answering, call report_outcome once per used source.
 mcpServers:
   - KnowledgeMap
   # - MediaWiki

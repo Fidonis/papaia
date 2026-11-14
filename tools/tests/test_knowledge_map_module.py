@@ -37,7 +37,17 @@ def test_compose_ships_one_service_on_the_profile():
     services = _compose()["services"]
     assert set(services) == {"knowledge-map-mcp"}
     assert services["knowledge-map-mcp"]["profiles"] == ["knowledge-map"]
-    assert services["knowledge-map-mcp"]["environment"]["OIDC_AUDIENCE"] == AUDIENCE
+    # The own audience comes first and is fixed (the realm template and the
+    # LibreChat fragment depend on it); operator extras may only follow.
+    audiences = services["knowledge-map-mcp"]["environment"]["OIDC_AUDIENCE"].split(",")
+    assert audiences == [AUDIENCE, "${KM_EXTRA_AUDIENCES:-}"]
+
+
+def test_compose_mounts_the_operator_directory_read_only():
+    service = _compose()["services"]["knowledge-map-mcp"]
+    assert "${PAPAIA_CONFIG_DIR}/overlay/knowledge-map:/overlay:ro" in service["volumes"]
+    assert service["environment"]["KM_GOLDSET_PATH"] == "/overlay/goldset.yaml"
+    assert service["environment"]["KM_ADMIN_TOKEN"] == "${KM_ADMIN_TOKEN}"
 
 
 def test_realm_template_ships_the_resource_server_and_mapper():

@@ -16,7 +16,7 @@
     "tree": {
       ".env": "c31b5e72a392f47a0b55d8f02db83693c080f7526200cde099125203e6c3c19c",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
-      "ai/knowledge-map/.env": "798039219ea639ffa591e850adce5a100b9445016bab920dd340008f3b793fcb",
+      "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "49a538a2e47ac7b287a460e540f1287a5d951c2f9d6da5ecf0371e201306ce90",
       "ai/librechat/librechat.yaml": "c2afe87b726b91333e9852af8188bb25f1200a18d930f91659d5384a52eb665b",
       "ai/litellm/.env": "92fd1540ba41e77bafc1445c32d94b4f4de89dfd0e3e67b4d42c4a2f6b05311f",
@@ -63,7 +63,7 @@
     "tree": {
       ".env": "becc64c6f583eec5f54ed24e0a94de3c943e9f9d65725de1006acdcb2d84f785",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
-      "ai/knowledge-map/.env": "798039219ea639ffa591e850adce5a100b9445016bab920dd340008f3b793fcb",
+      "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "4ea092dcf6bb0493af434ab28acff431ba10fcf8aee89cb0b68a69b3f45d9adc",
       "ai/librechat/librechat.yaml": "c2afe87b726b91333e9852af8188bb25f1200a18d930f91659d5384a52eb665b",
       "ai/litellm/.env": "bea58a3d9f8f879d19d41f88c3bb93714e6754ba5c50d1a5062b0882dba91002",
@@ -113,7 +113,7 @@
     "tree": {
       ".env": "f08f83372b88a0b37634bb8ae165c6798735699cabe37ef515dcdd7c5572c47b",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
-      "ai/knowledge-map/.env": "798039219ea639ffa591e850adce5a100b9445016bab920dd340008f3b793fcb",
+      "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "f73aeb7ac7d4c388ad92e5b6d00c5442a79d14b43bd6b4f202314d03136b3650",
       "ai/librechat/librechat.yaml": "5370fe4259dd51c2c4be947360c2c22e7ef80fc6d81b82bc764da43104c7d53d",
       "ai/litellm/.env": "c9775bd5e8429dd83fe1530ef803a59c6814825f3103cc3e30971b19c1d8218f",

@@ -244,14 +244,16 @@ install_notes:                     # optional: further numbered steps in the che
 
 knowledge:                         # optional (addon_api 4): the knowledge sources
   sources:                         # this add-on contributes to the knowledge-map
-    - id: <name>.<source>          # profile — see ADR 0012 and docs/knowledge-map.md
-      system: "<human name>"       # for the full field reference. Rendered only
-      mcp_server: <name>           # while the knowledge-map profile is active;
-      coverage: "<what is here>"   # older cores ignore the key.
-      not_covered:
-        - { what: "<content class>", instead: <other-source-id> }
+    - id: <name>.<source>          # profile — see ADR 0012/0013 and
+      system: "<human name>"       # docs/knowledge-map.md for the full field
+      coverage: "<what is here>"   # reference. Rendered only while the
+      not_covered:                 # knowledge-map profile is active; older
+        - { what: "<content class>", instead: <other-source-id> }  # cores ignore it.
       example_queries: ["..."]
       required_roles: [user]
+      access:                      # one entry per way to reach the source
+        - { via: mcp, target: <name>, key_tools: [...], best_for: "..." }
+        - { via: rag, target: Qdrant, collection: <name>, best_for: "..." }
 ```
 
 #### `.env.example` value markers
