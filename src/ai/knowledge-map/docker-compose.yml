@@ -1,0 +1,95 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Knowledge map · knowledge-map-mcp
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OPTIONAL — activate with profile `knowledge-map`:
+#   COMPOSE_PROFILES=...,knowledge-map
+#
+# One service forms the module (label `de.fidonis.module: papaia-knowledge-map`):
+#
+#   knowledge-map-mcp   OIDC-secured MCP directory of the installation's
+#                       knowledge sources (ADR 0011/0012). Answers WHERE
+#                       knowledge lives, trimmed to the caller's realm roles —
+#                       references only, never content.
+#
+# The map itself is rendered by the platform into
+# $PAPAIA_CONFIG_DIR/knowledge-map/ from the `knowledge:` declarations of
+# active add-ons and core modules; this container only reads it. Routing
+# embeddings go through LiteLLM, so they stay local on local-first
+# installations; without a configured embedding model the server falls back to
+# a lexical scorer and keeps working.
+services:
+
+  knowledge-map-mcp:
+    image: ghcr.io/fidonis/papaia-knowledge-map:0.2.0
+    restart: unless-stopped
+    environment:
+      OIDC_ISSUER_URL:     ${OIDC_ISSUER}
+      # The own audience and the port are fixed here because the realm
+      # template and the LibreChat MCP fragment depend on them. Further
+      # resource servers whose users' tokens should be accepted (a team
+      # assistant) are appended from KM_EXTRA_AUDIENCES; the server ignores
+      # the empty item when none are set.
+      OIDC_AUDIENCE:       mcp-knowledge-map,${KM_EXTRA_AUDIENCES:-}
+      OIDC_ALLOWED_AZP:    ${KM_ALLOWED_AZP:-}
+      OIDC_JWKS_CACHE_TTL: ${KM_OIDC_JWKS_CACHE_TTL:-3600}
+      KM_MAP_DIR:          /map
+      KM_TELEMETRY_DIR:    /telemetry
+      KM_EMBEDDING_API_URL: http://litellm:4000/v1
+      # Synced from LITELLM_MASTER_KEY during setup; do not edit manually.
+      KM_EMBEDDING_API_KEY: ${KM_EMBEDDING_API_KEY}
+      KM_EMBEDDING_MODEL:   ${KM_EMBEDDING_MODEL:-nomic-embed-text}
+      KM_ABSTENTION_THRESHOLD: ${KM_ABSTENTION_THRESHOLD:-0.25}
+      KM_LEXICAL_ABSTENTION_THRESHOLD: ${KM_LEXICAL_ABSTENTION_THRESHOLD:-0.2}
+      KM_AMBIGUITY_MARGIN:     ${KM_AMBIGUITY_MARGIN:-0.05}
+      KM_ROUTE_UNDECLARED:     ${KM_ROUTE_UNDECLARED:-true}
+      KM_TELEMETRY_RETENTION_DAYS: ${KM_TELEMETRY_RETENTION_DAYS:-30}
+      KM_LEARNING_MODE:        ${KM_LEARNING_MODE:-aggregate}
+      # Admin API for the management interface; generated during setup.
+      KM_ADMIN_TOKEN:          ${KM_ADMIN_TOKEN}
+      KM_GOLDSET_PATH:         /overlay/goldset.yaml
+      MCP_HOST:            0.0.0.0
+      MCP_PORT:            "8200"
+      MCP_PATH:            /mcp
+      LOG_LEVEL:           ${KM_LOG_LEVEL:-INFO}
+      # Trust the local CA cert generated at setup. Cleared to "" via
+      # docker-compose.ssl-cert.override.yml when AUTH_PROVIDER=external_oidc.
+      SSL_CERT_FILE:       /certs/local-ca.crt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # The rendered map; read-only — manual knowledge belongs in the overlay
+      # overrides, never in the container.
+      - ${PAPAIA_CONFIG_DIR}/knowledge-map:/map:ro
+      - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
+      # Only the gold set of the operator files; declarations, overrides and
+      # governance metadata stay on the host (the renderer reads them, the
+      # rendered map carries what the service needs). The renderer creates
+      # an empty gold set so Docker never makes a directory here.
+      - ${PAPAIA_CONFIG_DIR}/overlay/knowledge-map/goldset.yaml:/overlay/goldset.yaml:ro
+      # Routing telemetry (JSONL): raw material for the gold-set evaluation
+      # and a later learned router. No caller identifiers (roles only as a
+      # hash), but need texts are stored verbatim — treat as potentially
+      # personal data.
+      - knowledge-map-telemetry:/telemetry
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8200/health',timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - papaia-net
+    security_opt: [no-new-privileges:true]
+    labels:
+      de.fidonis.module: papaia-knowledge-map
+      de.fidonis.role:   mcp-server
+    profiles: [knowledge-map]
+
+volumes:
+  knowledge-map-telemetry:

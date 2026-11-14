@@ -139,6 +139,9 @@ def test_ssl_cert_override_covers_every_rag_service_that_mounts_the_ca(config_di
     services = yaml.safe_load(out_path.read_text(encoding="utf-8"))["services"]
     assert services["qdrant-mcp"]["environment"]["SSL_CERT_FILE"] == ""
     assert services["qdrant-ingest"]["environment"]["SSL_CERT_FILE"] == ""
+    # knowledge-map-mcp mounts the same CA cert; without the cleared variable
+    # the module's httpx client crash-loops on the absent file.
+    assert services["knowledge-map-mcp"]["environment"]["SSL_CERT_FILE"] == ""
 
 
 def test_generate_ssl_cert_override_removes_file_for_internal_keycloak(config_dir, repo_root):

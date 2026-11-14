@@ -33,6 +33,10 @@ See [`0000-template.md`](./0000-template.md).
 | [0008](./0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md) | Upgrade add-ons by repointing the registration to a new directory, not by replacing files | Accepted | 2026-10-25 |
 | [0009](./0009-place-services-on-nodes-with-a-topology-block.md) | Describe a distributed installation with a topology block and place it per service | Proposed | 2026-10-30 |
 | [0010](./0010-connect-nodes-through-ssh-and-an-mtls-link.md) | Run node commands through an SSH forced command and connect services through an mTLS link gateway | Proposed | 2026-10-30 |
+| [0011](./0011-knowledge-map-as-optional-core-profile.md) | Ship the knowledge map as an optional core profile with a role-trimmed MCP directory server | Proposed | 2026-11-13 |
+| [0012](./0012-knowledge-manifest-key-and-map-format.md) | Collect knowledge declarations through a `knowledge:` manifest key and render a flat, stamped map | Proposed | 2026-11-13 |
+| [0013](./0013-knowledge-map-inventory-kinds-and-access-paths.md) | Inventory every reachable server and agent, and give sources several access paths | Proposed | 2026-11-14 |
+| [0014](./0014-knowledge-map-governance-metadata.md) | Keep governance metadata in a separate operator file and report model policy findings | Proposed | 2026-11-14 |
 
 ## References
 

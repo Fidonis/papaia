@@ -131,9 +131,10 @@ The mappers that produce those audiences ship with the addon, not with the core:
 addon's `integration/keycloak/` fragments contribute both its own client JSON and an
 audience mapper added to the **`librechat`** client. `papaia-ctl addon install`
 registers them additively; the core realm template stays free of addon references.
-The one exception is the RAG system (profile `rag`), a core module: the realm
-template carries its audience mappers `mcp-qdrant-audience` and
-`mcp-qdrant-ingest-audience` on the `librechat` client.
+The exceptions are the core modules: the realm template carries the audience
+mappers of the RAG system (profile `rag`: `mcp-qdrant-audience`,
+`mcp-qdrant-ingest-audience`) and of the knowledge map (profile
+`knowledge-map`: `mcp-knowledge-map-audience`) on the `librechat` client.
 
 Where the MCP server is not a login client, the addon registers it as a resource
 server (no flows, no secret) so that the `included.client.audience` reference in the
@@ -321,6 +322,13 @@ settings mirror the bundled realm (`src/infra/keycloak/realm-import/papaia-realm
 
 All clients need a **realm-roles protocol mapper** (type: User Realm Role, claim name `roles`,
 multivalued, included in ID token, Access token, and userinfo).
+
+Active MCP profiles additionally need their **resource-server clients** (no
+login flows) plus an **audience mapper** for each on the `librechat` client's
+access tokens, mirroring the bundled realm: `mcp-qdrant` and
+`mcp-qdrant-ingest` for the `rag` profile, `mcp-knowledge-map` for the
+`knowledge-map` profile. `papaia-ctl setup` prints the profile-specific
+checklist.
 
 The `oauth2-proxy` client additionally needs a **second** copy of that same
 mapper with claim name `groups` instead of `roles` — oauth2-proxy's generic

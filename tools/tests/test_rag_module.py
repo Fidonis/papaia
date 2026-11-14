@@ -164,7 +164,10 @@ def test_realm_template_ships_the_rag_clients_roles_and_mappers():
         for m in clients["librechat"]["protocolMappers"]
         if m["protocolMapper"] == "oidc-audience-mapper"
     }
-    assert audiences == {"mcp-qdrant", "mcp-qdrant-ingest"}
+    # Pinned exactly: every audience mapper on the librechat client belongs to
+    # a known resource server — an unexplained extra audience would widen what
+    # a LibreChat token can reach.
+    assert audiences == {"mcp-qdrant", "mcp-qdrant-ingest", "mcp-knowledge-map"}
 
 
 def test_the_removed_ingest_web_interface_leaves_nothing_behind():

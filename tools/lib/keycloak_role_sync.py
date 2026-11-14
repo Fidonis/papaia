@@ -58,6 +58,7 @@ _MIGRATION_TARGET_ROLE = "papaia-admin"
 # this sync, and only once the profile is enabled.
 PROFILE_CLIENTS: dict[str, tuple[str, ...]] = {
     "rag": ("mcp-qdrant", "mcp-qdrant-ingest"),
+    "knowledge-map": ("mcp-knowledge-map",),
 }
 
 
