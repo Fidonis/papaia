@@ -238,6 +238,25 @@ def test_the_command_exits_1_for_an_unknown_user(config, monkeypatch, capsys):
     assert "no user with the e-mail address" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("--email=not-an-address",), "is not an e-mail address"),
+        (("--email=a@example.org", "--before=2026-13-01"), "--before must be a date"),
+        (("--email=a@example.org", "--before=15.11.2026", "--dry-run"), "--before must be a date"),
+    ],
+)
+def test_the_command_exits_2_for_a_malformed_address_or_date(
+    config, monkeypatch, capsys, args, message
+):
+    docker = FakeDocker(exec_stdout=_result(email="a@example.org", dry_run=False))
+    monkeypatch.setattr(librechat_history, "run_with_input", docker)
+
+    assert cli.main(_cli(config, *args)) == 2
+    assert message in capsys.readouterr().err
+    assert docker.calls == []
+
+
 def test_the_command_exits_1_when_files_stayed_in_storage(config, monkeypatch):
     docker = FakeDocker(
         exec_stdout=_result(email="a@example.org", dry_run=False, files_failed=["f-1"]), rc=1

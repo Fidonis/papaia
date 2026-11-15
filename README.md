@@ -751,7 +751,7 @@ releases. Run it while the user is not chatting; a reply that is still being wri
 leave a message behind. In a distributed installation, run it on the node that runs
 LibreChat. Exit status 0 on success, 1 when the user is unknown, LibreChat is not running,
 or a file could not be removed from storage (its record is kept and named), 2 for wrong
-arguments, 3 when the confirmation is declined.
+arguments (also an address or a date that is not one), 3 when the confirmation is declined.
 
 ### `addon`
 

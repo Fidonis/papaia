@@ -927,8 +927,16 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_librechat_clear_history(args: argparse.Namespace) -> int:
-    """Count (`--dry-run`) or remove one user's LibreChat history. Exit 1 on every
-    failure, also when some files could not be removed from storage."""
+    """Count (`--dry-run`) or remove one user's LibreChat history. Exit 2 for an
+    address or date that is not one, 1 on every other failure, also when some files
+    could not be removed from storage."""
+    try:
+        librechat_history.validate_email(args.email)
+        if args.before is not None:
+            librechat_history.validate_before(args.before)
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     try:
         result = librechat_history.clear_history(
             Path(args.repo_root),
