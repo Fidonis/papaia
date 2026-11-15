@@ -1740,15 +1740,25 @@ mkdir -p "$PAPAIA_CONFIG_DIR/overlay/ai/localai"
 cp src/ai/localai/models.txt "$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt"
 # uncomment e.g. the Qwen2.5-1.5B and nomic-embed-text lines, then
 tools/papaia-ctl start
+docker restart papaia-litellm-1   # the container name of your project
 ```
+
+`start` renders the new `model_list`, but LiteLLM reads its configuration only when it starts,
+and a running LiteLLM is not recreated for a changed configuration file. Restart it after every
+change of the list (and after any other edit of the LiteLLM overlay), as above; until then it
+lists the models it had.
 
 The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
 `<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
-`$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` and its URL in the overlay `models.txt`. An entry
-of the LiteLLM overlay with the same `model_name` replaces the generated one.
+`$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` and its URL in the overlay `models.txt`. Only
+the `*.yaml` files at the top of that directory are used, as the init job copies nothing else;
+other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `context_size`,
+`threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
+An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
 
 LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
-copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. The
+copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. A key
+you change in `ai/localai/.env` reaches LiteLLM only on the next `setup`. The
 generated entries name only the variable (`os.environ/LOCALAI_API_KEY`), never the key. A request
 with this key has admin rights in LocalAI (it can install and delete models), so keep it out of
 other clients.
