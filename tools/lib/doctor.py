@@ -1231,6 +1231,15 @@ def check_localai_native(ctx: Context) -> CheckResult:
             " run 'papaia-ctl start'",
             details,
         )
+    if ready:
+        # Not through launchd, so not papaia-ctl's: it would keep the port at the next start.
+        return CheckResult(
+            name,
+            WARN,
+            f"the stack is stopped, but LocalAI answers on {url} without the launchd job"
+            f" {label} (started by hand?): stop that process before 'papaia-ctl start'",
+            details,
+        )
     return CheckResult(name, SKIP, "the stack is stopped, and LocalAI with it", details)
 
 

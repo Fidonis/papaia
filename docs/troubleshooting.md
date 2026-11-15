@@ -173,6 +173,18 @@ launchctl print "gui/$(id -u)/de.fidonis.papaia.<project>.localai"
   port and re-run `setup` and `start`.
 - **Models in LiteLLM answer 404 or connection refused**: LiteLLM reaches the process at
   `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`, which only Docker Desktop resolves.
+- **Models in LiteLLM answer 401**: LocalAI still runs with an older `LOCALAI_API_KEY`. Run
+  `tools/papaia-ctl start`, which restarts the job when the key changed.
+- **"the stack is stopped, but LocalAI answers … without the launchd job"**: a LocalAI that
+  `papaia-ctl` did not start (by hand, or a job of another tool) holds the port. Stop that
+  process before the next `start`.
+- **`logs/localai.log` keeps growing**: launchd does not rotate it. Empty it in place, which
+  works while the job runs (do not delete or move it then, or LocalAI keeps writing to the
+  unlinked file until the next restart):
+
+  ```bash
+  : > "$PAPAIA_WORKSPACE_DIR/localai/<project>/logs/localai.log"
+  ```
 
 ### LocalAI comes back after a reboot although the stack is stopped
 

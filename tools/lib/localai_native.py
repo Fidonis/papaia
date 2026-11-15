@@ -10,6 +10,7 @@ Everything lives below one directory per installation, `localai_home`:
     <PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>/
         bin/local-ai-<version>   the verified binary of the pinned release
         run-localai              the start script (mode 0700, no key inside)
+        run-localai.key-sha256   the sha256 of the key the job was last started with
         models/                  model files and YAMLs (bind-mounted into the init job)
         backends/                the Metal backend LocalAI downloads on its first start
         data/, configuration/    LocalAI's own state (written into its working directory)
@@ -216,6 +217,14 @@ class InstallResult:
     replaced: str | None = None
     # True when the start script changed (a new port, a new binary path).
     script_changed: bool = False
+    # True when LOCALAI_API_KEY changed since the last install step (`setup --force`, a
+    # restore): the process reads the key once, when it starts.
+    key_changed: bool = False
+
+    @property
+    def restart(self) -> bool:
+        """Whether a running job has to be restarted to pick up what changed."""
+        return self.changed or self.script_changed or self.key_changed
 
 
 def _expected_sha256(text: str, version: str) -> str:
@@ -281,7 +290,8 @@ def _remove_other_binaries(home: Path, *, keep: Path) -> None:
 
 def run_script(home: Path, binary: Path, config_dir: Path, listen_port: str) -> str:
     """The start script. It reads the key from the LocalAI `.env` each time it runs, so
-    the key is in no file but the two `.env` files, and a changed key needs no new script.
+    the key is in no file but the two `.env` files, and a changed key needs no new script
+    (only a restart, see write_key_fingerprint).
 
     No LOCALAI_AUTH: the darwin binary is built without the SQLite user database and does
     not start with it. The key alone protects /v1, /api and /metrics; /readyz is open.
@@ -320,6 +330,40 @@ def write_run_script(home: Path, binary: Path, config_dir: Path, listen_port: st
     return changed
 
 
+def fingerprint_path(home: Path) -> Path:
+    return home / "run-localai.key-sha256"
+
+
+def key_fingerprint(config_dir: Path) -> str:
+    """The sha256 of LOCALAI_API_KEY in the LocalAI `.env`, as the start script reads it
+    (the last line wins, the value as written). Never the key itself: it stays in the two
+    `.env` files only."""
+    value = ""
+    try:
+        text = (config_dir / "ai" / "localai" / ".env").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    for line in text.splitlines():
+        if line.startswith("LOCALAI_API_KEY="):
+            value = line[len("LOCALAI_API_KEY=") :]
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def write_key_fingerprint(home: Path, config_dir: Path) -> bool:
+    """Store the fingerprint of the key next to the start script; True when it changed.
+
+    The script reads the key once, when LocalAI starts, so a new key (`setup --force`, a
+    restore of another installation's configuration) needs a restart of a running job,
+    although the script itself stays the same. A missing file counts as a change: a job
+    started before the fingerprint existed is restarted once."""
+    path = fingerprint_path(home)
+    content = key_fingerprint(config_dir) + "\n"
+    changed = _read_text(path) != content
+    if changed:
+        common.atomic_write_private(path, content)
+    return changed
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
@@ -338,8 +382,15 @@ def install_for(
         common.ensure_dir(home / sub)
     binary, changed, replaced = install(home, version, opener=opener)
     script_changed = write_run_script(home, binary, config_dir, port(root))
+    key_changed = write_key_fingerprint(home, config_dir)
     return InstallResult(
-        version, binary, script_path(home), changed, replaced, script_changed=script_changed
+        version,
+        binary,
+        script_path(home),
+        changed,
+        replaced,
+        script_changed=script_changed,
+        key_changed=key_changed,
     )
 
 
@@ -429,8 +480,6 @@ READY_TIMEOUT_SECONDS = 60
 THROTTLE_SECONDS = 10
 LAUNCHCTL_TIMEOUT_SECONDS = 60
 UNLOAD_WAIT_SECONDS = 10
-# `launchctl print` of a service that is not loaded: "Could not find service".
-_NOT_LOADED = 113
 _LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
@@ -694,7 +743,7 @@ def uninstall(
     when nothing else is left in it. Returns what was removed."""
     stop_job(job_label, run=run, uid=uid, sleep=sleep)
     removed: list[Path] = []
-    for path in (plist, script_path(home)):
+    for path in (plist, script_path(home), fingerprint_path(home)):
         if path.is_file():
             path.unlink()
             removed.append(path)

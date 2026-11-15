@@ -115,8 +115,9 @@ the next `start`; `upgrade` swaps the binary through its `stop` and `start`; `un
 removes the job (`--clean-up` also the models). LocalAI logs to
 `$PAPAIA_WORKSPACE_DIR/localai/<project>/logs/localai.log`, and
 `launchctl print gui/$(id -u)/de.fidonis.papaia.<project>.localai` shows the job.
-`doctor` reports both as `localai_native`. Keep the workspace outside `~/Documents`,
-`~/Desktop` and `~/Downloads`: macOS may deny a launchd job access there, and `setup` warns.
+`doctor` reports both as `localai_native`. Keep the workspace and `--config-dir` outside
+`~/Documents`, `~/Desktop` and `~/Downloads`: macOS may deny a launchd job access there, and
+`setup` warns. Going back with `setup --localai-runtime=container` removes the job.
 Details, the limits and the way back to the container are in the README under
 [Native LocalAI on Apple Silicon](../README.md#native-localai-on-apple-silicon), the decision
 in [ADR 0012](adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md).

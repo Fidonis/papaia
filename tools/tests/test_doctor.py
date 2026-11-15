@@ -2309,6 +2309,17 @@ def test_a_job_that_is_not_loaded_with_the_stack_stopped_is_skipped(stack, tmp_p
     assert "stack is stopped" in found.summary
 
 
+def test_a_localai_that_answers_without_its_job_while_the_stack_is_stopped_is_a_warning(
+    stack, tmp_path
+):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_NOT_LOADED, stack_runs=False)
+    found = native_result(stack, ready=True, launchd=True, docker=docker)
+    assert found.status == WARN
+    assert "the stack is stopped, but LocalAI answers" in found.summary
+    assert "and LocalAI with it" not in found.summary
+
+
 def test_without_launchctl_the_probe_alone_decides(stack, tmp_path):
     native_localai(stack, tmp_path)
     found = native_result(stack, ready=True, launchd=True, docker=launchd_docker(

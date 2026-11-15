@@ -1817,7 +1817,9 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   the terminal is closed. The first start downloads the Metal backend (internet access
   needed) and can take longer than 60 s: `start` then says so, with the log path, and LocalAI
   keeps starting in the background. After an upgrade that moves the pin, `start` installs the
-  new binary and restarts the job.
+  new binary and restarts the job. LocalAI reads `LOCALAI_API_KEY` once, when it starts, so
+  `start` also restarts the job when the key changed (`setup --force`, a restore); it keeps
+  a sha256 fingerprint of the key in `run-localai.key-sha256` for that, never the key.
 - `stop` unloads and disables the job, so LocalAI stays off after a logout or a restart of
   the Mac until the next `start`. launchd restarts LocalAI when it crashes (not after a clean
   exit), at most every 10 s. `stop --clean-up --volumes --profiles=localai` also deletes
@@ -1828,8 +1830,9 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   `launchctl print gui/$(id -u)/de.fidonis.papaia.<COMPOSE_PROJECT_NAME>.localai` shows the
   job's state, its process and its last exit code.
 - macOS may deny a launchd job access to `~/Documents`, `~/Desktop` and `~/Downloads`.
-  `setup` warns when the LocalAI directory lies below one of them; keep the workspace (the
-  directory that holds the `papaia` checkout) elsewhere.
+  `setup` warns when the LocalAI directory or the configuration directory (the job reads the
+  key from `$PAPAIA_CONFIG_DIR/ai/localai/.env`) lies below one of them; keep the workspace
+  (the directory that holds the `papaia` checkout) and `--config-dir` elsewhere.
 - The first switch to `native` seeds `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt` with
   Qwen2.5-7B-Instruct (Q5_K_M, 5.4 GB, about 58 tokens/s on an M4 Max) and `nomic-embed-text`.
   An existing overlay list is left alone. The first download of 5.4 GB can take an hour or
@@ -1842,8 +1845,12 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   lists a missing `localai` container.
 - The models are not in the backup; `start` downloads them again after a restore.
 - `setup --localai-runtime=container` followed by `start` brings the container back and
-  removes the override. The seeded model list stays, and models in the old `localai-models`
-  volume are not moved in either direction.
+  removes the override. `setup` unloads and disables the launchd job and removes its plist,
+  so the job neither keeps `LOCALAI_EXT_PORT` nor comes back at the next login; where
+  `setup` cannot reach launchd (papaia-manager), the next `start` on the Mac does it before
+  the container starts. `bin/`, `run-localai` and the models stay for a later switch back
+  (`uninstall` removes them). The seeded model list stays, and models in the old
+  `localai-models` volume are not moved in either direction.
 
 When papaia-manager runs `start` or `stop` from its container, only the Compose part runs:
 the launchd job belongs to the user logged in on the Mac, and the manager skips it with a

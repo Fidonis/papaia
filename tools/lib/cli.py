@@ -312,6 +312,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"ERROR: {runtime_problem}", file=sys.stderr)
         return 3
     _warn_protected_localai_home(config_dir)
+    stored_root = common.parse_env_file(config_dir / ".env")
+    if not _native_wanted(stored_root):
+        # After a switch back to the container a job left from the native runtime would
+        # hold the port until the next `stop` (quiet when there is none).
+        _retire_native_job(stored_root)
     if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE and (
         runtime_before != localai_native.NATIVE
     ):
@@ -381,14 +386,23 @@ def _warn_protected_localai_home(config_dir: Path) -> None:
     except localai_native.InstallError:
         return
     folder = localai_native.protected_folder(home)
-    if folder is None:
-        return
-    print(
-        f"WARNING: the native LocalAI keeps its files in {home}, below {folder}. macOS may"
-        " deny its launchd job access to ~/Documents, ~/Desktop and ~/Downloads; a"
-        " workspace outside these folders avoids that.",
-        file=sys.stderr,
-    )
+    if folder is not None:
+        print(
+            f"WARNING: the native LocalAI keeps its files in {home}, below {folder}. macOS"
+            " may deny its launchd job access to ~/Documents, ~/Desktop and ~/Downloads; a"
+            " workspace outside these folders avoids that.",
+            file=sys.stderr,
+        )
+    # The start script also reads the key from $PAPAIA_CONFIG_DIR/ai/localai/.env.
+    folder = localai_native.protected_folder(config_dir.resolve())
+    if folder is not None:
+        print(
+            f"WARNING: the configuration directory {config_dir} lies below {folder}. The"
+            " launchd job of the native LocalAI reads its key from there, and macOS may deny"
+            " it access to ~/Documents, ~/Desktop and ~/Downloads; a --config-dir outside"
+            " these folders avoids that.",
+            file=sys.stderr,
+        )
 
 
 def cmd_localai_native_install(args: argparse.Namespace) -> int:
@@ -396,9 +410,10 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
     shell (LOCALAI_NATIVE = off | skipped | installed | unchanged), messages on stderr."""
     config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
     root = common.parse_env_file(config_dir / ".env")
-    if localai_native.runtime(root) != localai_native.NATIVE or "localai" not in (
-        common.cluster_profiles(root)
-    ):
+    if not _native_wanted(root):
+        # Before `docker compose up`: a job left from the native runtime would keep the
+        # port the container publishes.
+        _retire_native_job(root)
         print("LOCALAI_NATIVE=off")
         return 0
     supported, why = localai_native.host_supported()
@@ -415,9 +430,57 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
     print(f"LOCALAI_NATIVE_VERSION={result.version}")
     print(f"LOCALAI_NATIVE_REPLACED={result.replaced or ''}")
     print(f"LOCALAI_NATIVE_SCRIPT={result.script}")
-    # A running job has to be restarted to pick up a new binary or start script.
-    print(f"LOCALAI_NATIVE_RESTART={1 if result.changed or result.script_changed else 0}")
+    # A running job has to be restarted to pick up a new binary, start script or key.
+    print(f"LOCALAI_NATIVE_RESTART={1 if result.restart else 0}")
     return 0
+
+
+def _native_wanted(root: dict[str, str]) -> bool:
+    """Whether this installation runs the native LocalAI: the runtime and the profile."""
+    return localai_native.runtime(root) == localai_native.NATIVE and "localai" in (
+        common.cluster_profiles(root)
+    )
+
+
+def _retire_native_job(root: dict[str, str]) -> bool:
+    """Unload and disable a launchd job the native LocalAI no longer needs, and remove its
+    plist, so it neither keeps LOCALAI_EXT_PORT nor comes back at the next login. For
+    `start` and `setup` after the runtime went back to the container (or LocalAI was
+    switched off); `stop` handles the same case through localai-native-stop. Messages on
+    stderr, so the KEY=VALUE output of the install step stays clean. False when a job is
+    left behind."""
+    try:
+        label = localai_native.label_for(root)
+    except localai_native.LaunchdError:
+        return True
+    plist = localai_native.plist_path(label)
+    if not plist.is_file():
+        return True
+    available, why = localai_native.launchd_host()
+    if not available:
+        print(
+            f"WARNING: the launchd job of the native LocalAI ({plist}) is still installed and"
+            f" cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        localai_native.stop_job(label)
+    except localai_native.LaunchdError as exc:
+        print(
+            f"WARNING: native LocalAI: {exc}. Its job may still hold port"
+            f" {localai_native.port(root)}; run 'papaia-ctl stop' and check with"
+            " 'papaia-ctl doctor'.",
+            file=sys.stderr,
+        )
+        return False
+    plist.unlink(missing_ok=True)
+    print(
+        f"Removed the launchd job of the native LocalAI ({label}): LocalAI runs in its"
+        " container now.",
+        file=sys.stderr,
+    )
+    return True
 
 
 def _native_job(config_dir: Path) -> tuple[dict[str, str], Path, str] | None:
@@ -435,9 +498,8 @@ def cmd_localai_native_start(args: argparse.Namespace) -> int:
     wait for /readyz. A timeout warns with the log path; exit 1 when launchctl fails."""
     config_dir = Path(args.config_dir)
     root = common.parse_env_file(config_dir / ".env")
-    if localai_native.runtime(root) != localai_native.NATIVE or "localai" not in (
-        common.cluster_profiles(root)
-    ):
+    if not _native_wanted(root):
+        _retire_native_job(root)
         return 0
     supported, why = localai_native.host_supported()
     if not supported:
