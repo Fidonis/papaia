@@ -131,6 +131,32 @@ tools/papaia-ctl setup --no-local-ai
 tools/papaia-ctl start
 ```
 
+### The native LocalAI on a Mac does not answer
+
+With `LOCALAI_RUNTIME=native`, LocalAI is a process on the Mac, not a container, and
+`tools/papaia-ctl doctor` says in `localai_native` whether it answers:
+
+- **It is not running.** Start the script `start` printed,
+  `$PAPAIA_WORKSPACE_DIR/localai/<project>/run-localai`, in a terminal and keep it open.
+- **"LOCALAI_API_KEY is missing"** from the script: run `tools/papaia-ctl start`, which fills
+  the key into `$PAPAIA_CONFIG_DIR/ai/localai/.env`.
+- **"is installed, this release pins"**: run `tools/papaia-ctl start` to install the pinned
+  binary, then stop LocalAI in its terminal and run the script again.
+- **The download of the binary failed or its checksum did not match**: `start` says so and
+  installs nothing. Check the network and run `start` again; a checksum mismatch that
+  persists means the file served is not the published one.
+- **The first start hangs**: LocalAI downloads its Metal backend on the first start, which
+  needs internet access. The models come from the init job (`docker logs` of
+  `localai-model-init`); a 5.4 GB model can take an hour or more.
+- **The port is busy**: another process listens on `LOCALAI_EXT_PORT`. Stop it, or change the
+  port and re-run `setup` and `start`.
+- **Models in LiteLLM answer 404 or connection refused**: LiteLLM reaches the process at
+  `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`, which only Docker Desktop resolves.
+- **"native LocalAI skipped"** from `start`, or `setup` warning that `LOCALAI_RUNTIME=native`
+  is stored: this host cannot run the native process (no Apple Silicon Mac, another Docker
+  engine, or Docker Desktop not running). Start Docker Desktop, or go back to the container
+  with `tools/papaia-ctl setup --localai-runtime=container` and `tools/papaia-ctl start`.
+
 ### LocalAI ignores the GPU
 
 Check that the accelerator variant is actually set — `LOCALAI_IMAGE_VARIANT` in
