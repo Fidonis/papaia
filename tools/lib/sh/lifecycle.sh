@@ -499,14 +499,22 @@ _remove_config_dir() {
 
     physical="$(cd "$dir" 2>/dev/null && pwd -P)" || physical=""
     case "$physical" in
-        ""|/)
+        "")
             error "Could not delete $dir completely; refusing to clean it up through a container."
             error "Remove it by hand: sudo rm -rf '$dir'"
             return 1
             ;;
+        /)
+            error "$dir is the root directory; refusing to delete what is left in it."
+            return 1
+            ;;
     esac
-    if [ -n "${HOME:-}" ] && [ "$physical" = "$(cd "$HOME" 2>/dev/null && pwd -P)" ]; then
-        error "$dir is the home directory; refusing to delete what is left in it."
+    if _contains_path "$physical" "${HOME:-}"; then
+        error "$dir is or contains the home directory; refusing to delete what is left in it."
+        return 1
+    fi
+    if _contains_path "$physical" "${REPO_ROOT:-}"; then
+        error "$dir is or contains the papaia checkout; refusing to delete what is left in it."
         return 1
     fi
 
@@ -522,6 +530,17 @@ _remove_config_dir() {
         return 1
     fi
     return 0
+}
+
+# True when the physical path of $2 is $1 or lies below it. An empty or unresolvable $2
+# contains nothing.
+_contains_path() {
+    local outer="$1" inner
+    [ -n "$2" ] || return 1
+    inner="$(cd "$2" 2>/dev/null && pwd -P)" || return 1
+    [ "$inner" = "$outer" ] && return 0
+    case "$inner" in "$outer"/*) return 0 ;; esac
+    return 1
 }
 
 _require_setup_done() {
