@@ -109,6 +109,54 @@ def test_keycloak_checklist_silent_when_nothing_to_do(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
+def _litellm_lists(config_dir, *names: str) -> None:
+    path = config_dir / "ai" / "litellm" / "config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entries = "".join(
+        f"  - model_name: {n}\n    litellm_params:\n      model: openai/{n}\n" for n in names
+    )
+    path.write_text("model_list:\n" + entries if names else "model_list: []\n", encoding="utf-8")
+
+
+def _rag_tree(embedding_model: str | None = None) -> dict:
+    tree: dict = {"": {"COMPOSE_PROFILES": "librechat,rag,manager"}, "ai/librechat": {}}
+    if embedding_model is not None:
+        tree["ai/librechat"]["RAG_EMBEDDINGS_MODEL"] = embedding_model
+    return tree
+
+
+def test_the_rag_hint_asks_for_the_embedding_model_while_litellm_does_not_list_it(
+    tmp_path, capsys
+):
+    _litellm_lists(tmp_path, "qwen2.5-1.5b-instruct")
+    reporting.print_rag_next_steps(tmp_path, _rag_tree())
+
+    out = capsys.readouterr().out
+    assert "1. Add the embedding model 'nomic-embed-text' to LiteLLM" in out
+    assert "3. Manage connections" in out
+
+
+def test_the_rag_hint_leaves_the_embedding_step_out_once_it_is_registered(tmp_path, capsys):
+    _litellm_lists(tmp_path, "nomic-embed-text")
+    reporting.print_rag_next_steps(tmp_path, _rag_tree())
+
+    out = capsys.readouterr().out
+    assert "embedding model" not in out
+    assert "1. Give the people who run ingestion" in out
+    assert "2. Manage connections" in out
+
+
+def test_the_rag_hint_follows_the_configured_embedding_model(tmp_path, capsys):
+    _litellm_lists(tmp_path, "nomic-embed-text")
+    reporting.print_rag_next_steps(tmp_path, _rag_tree("bge-m3"))
+    assert "Add the embedding model 'bge-m3' to LiteLLM" in capsys.readouterr().out
+
+
+def test_the_rag_hint_asks_when_there_is_no_rendered_litellm_configuration(tmp_path, capsys):
+    reporting.print_rag_next_steps(tmp_path, _rag_tree())
+    assert "Add the embedding model 'nomic-embed-text'" in capsys.readouterr().out
+
+
 def test_keycloak_checklist_leaves_managed_clients_to_start(tmp_path, capsys):
     addon_path = tmp_path / "addon"
     addon_path.mkdir()

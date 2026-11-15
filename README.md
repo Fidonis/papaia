@@ -297,6 +297,8 @@ papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
+papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
+                     [--config-dir=PATH]
 papaia-ctl topology  <show [--json]|validate|firewall [--format=table|json|csv]>
                      [--config-dir=PATH]
 papaia-ctl node      <add|list|check|remove|join-bundle|renew-link|sync> [OPTIONS]
@@ -561,6 +563,13 @@ Stops and removes all core containers, then **permanently deletes the config dir
 Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
 Docker volumes. `--addons` stops and removes active add-on containers first.
 
+Some data below the config directory is written by containers as root (the Nginx Proxy Manager
+database and certificates in `infra/nginx/nginx-data/`, for one). What the operator cannot
+delete is deleted through a short-lived `alpine:3` container that mounts the directory. If that
+fails too, `uninstall` exits 1 and names the directory and the `sudo rm -rf` that removes it.
+It never does this for `/` or for a directory that is or contains the home directory or the
+papaia checkout.
+
 ### `backup`
 
 ```bash
@@ -703,6 +712,53 @@ and touches no other node. A whole restore stops every node, puts the controller
 configuration back, hands every node its bundle and release, writes back each node's data and
 starts the installation. A restore point taken of a single host is refused in a distributed
 installation, and the other way round. `--restart-clean` is not available there.
+
+### `librechat clear-history`
+
+```bash
+tools/papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y] \
+                                         [--config-dir=PATH]
+```
+
+Removes one LibreChat user's history before an account is used again: a training or test
+account, or the account of someone who left. It removes the user's conversations with their
+sub-threads, their messages, their shared links and the tool call records of those
+conversations, and the user's files (records and stored files). Without `--before` that is
+every file of the user, including files in "My files" that were never attached to a chat;
+with `--before`, only the files of the conversations that go. The account, its sign-in, its
+MCP connections, its agents and prompts, its avatar, the files an agent uses, and everything
+the stack provisions stay.
+
+Two kinds of data also stay, and matter on a shared or training account:
+
+- **Memories.** When memory extraction is switched on in an overlay, the user's memory
+  entries stay and the next person on the account sees them. Remove them in LibreChat's
+  memory settings before the account is handed on.
+- **Agent checkpoints** of runs paused for a tool approval or a question to the user. LibreChat
+  removes them together with its run queue, which this command cannot reach from outside the
+  server process. They expire after 24 hours on their own.
+
+The counts list sub-threads under conversations (`4 (including 2 sub-threads)`), so they can be
+higher than the number of chats the user sees.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `<email>` | _(required)_ | E-mail address of the LibreChat user. An unknown address is an error |
+| `--before=YYYY-MM-DD` | _(everything)_ | Only conversations last updated before that day (00:00 UTC), with their sub-threads, messages, files and shared links. A sub-thread goes with its conversation, never on its own date. An empty value is an error |
+| `--dry-run` | off | Print what would be removed, per kind, and change nothing |
+| `-y` / `--yes` | _(prompt)_ | Skip the confirmation. Without a terminal, `-y` is required |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Without `-y` the counts are shown first and the deletion waits for a `y`. **The deletion
+cannot be undone** except by restoring a backup; `restore --only=module:librechat` brings back the data of every LibreChat user, not of one.
+
+The command needs the running stack: it runs inside the LibreChat container, through
+LibreChat's own data and file-storage code, so it follows LibreChat's layout across
+releases. Run it while the user is not chatting; a reply that is still being written can
+leave a message behind. In a distributed installation, run it on the node that runs
+LibreChat. Exit status 0 on success, 1 when the user is unknown, LibreChat is not running,
+or a file could not be removed from storage (its record is kept and named), 2 for wrong
+arguments (also an address or a date that is not one), 3 when the confirmation is declined.
 
 ### `addon`
 
@@ -1628,8 +1684,11 @@ external OIDC provider, create the same objects there yourself.
 
 **First steps after the first start**
 
-1. Add an embedding model to LiteLLM. The core ships no models, so nothing can be embedded or
-   searched before that.
+1. Make the embedding model available in LiteLLM under the name in `RAG_EMBEDDINGS_MODEL`
+   (default `nomic-embed-text`). With LocalAI, activate its line in the LocalAI `models.txt`
+   ([LocalAI models in LiteLLM](#localai-models-in-litellm)); otherwise add a model in LiteLLM.
+   Nothing can be embedded or searched before that. `setup` leaves this step out when the
+   rendered LiteLLM configuration already lists the model.
 2. Give the people who run ingestion through the MCP tools the `qdrant-ingest-operator` realm
    role. Without it the ingester's MCP tools reject them. `qdrant-admin` is a break-glass role
    for the MCP server's access rules; both are included in `papaia-admin`.
@@ -1720,6 +1779,52 @@ The relay's one volume (`smtp-relay-queue`) belongs to the module `smtp-relay`, 
 backup` includes it and `restore --only=module:smtp-relay` restores it. The password is in the
 configuration backup in plain text, like the other secrets. The design and its limits are in
 [ADR 0007](docs/adr/0007-outbound-mail-through-an-internal-relay.md).
+
+### LocalAI models in LiteLLM
+
+LiteLLM is LocalAI's only API client. While the `localai` profile is on, every render adds the
+LocalAI models to LiteLLM's `model_list`: a model is registered under its YAML `name` when a model
+YAML in `ai/localai/models/` points (`parameters.model`) at the file of an active line in
+`ai/localai/models.txt`. A YAML with `embeddings: true` is registered as an embedding model. The
+shipped list has every line commented out, so nothing is registered and downloaded until you
+activate lines.
+
+Change the list through an overlay copy, not the rendered file, which every render overwrites:
+
+```bash
+mkdir -p "$PAPAIA_CONFIG_DIR/overlay/ai/localai"
+cp src/ai/localai/models.txt "$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt"
+# uncomment e.g. the Qwen2.5-1.5B and nomic-embed-text lines, then
+tools/papaia-ctl start
+docker restart papaia-litellm-1   # the container name of your project
+```
+
+`start` renders the new `model_list`, but LiteLLM reads its configuration only when it starts,
+and a running LiteLLM is not recreated for a changed configuration file. Restart it after every
+change of the list (and after any other edit of the LiteLLM overlay), as above; until then it
+lists the models it had.
+
+The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
+`<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
+`$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` and its URL in the overlay `models.txt`. Only
+the `*.yaml` files at the top of that directory are used, as the init job copies nothing else;
+other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `context_size`,
+`threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
+An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
+
+LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
+copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. A key
+you change in `ai/localai/.env` reaches LiteLLM only on the next `setup`. The
+generated entries name only the variable (`os.environ/LOCALAI_API_KEY`), never the key. A request
+with this key has admin rights in LocalAI (it can install and delete models), so keep it out of
+other clients.
+
+A model downloads to `<file>.part` and is renamed when it is complete, so an interrupted
+download is fetched again on the next `start`.
+
+> **Upgrading:** if you registered a LocalAI model in the LiteLLM Admin UI under one of the
+> generated names (`store_model_in_db: true`), LiteLLM now has two deployments for that name and
+> splits the traffic between them. Delete the Admin UI entry.
 
 ### Voice (local speech)
 
@@ -1834,8 +1939,8 @@ like CPU ones. The image swap and the device passthrough live in a generated
 
 Two caveats worth knowing:
 
-- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in the model
-  YAMLs under `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in overlay
+  copies of the model YAMLs under `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/`.
 - **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
 

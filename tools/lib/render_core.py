@@ -5,6 +5,7 @@ Renders the effective core configuration into $PAPAIA_CONFIG_DIR:
     repo base (src/<target>)
       + active-profile fragments (src/<module>/integration/<target>, PROFILE_FRAGMENTS)
       + active-addon fragments (addons/<name>/integration/<target>)
+      + generated fragments (the LocalAI models in LiteLLM's model_list)
       + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>)
       --render--> $PAPAIA_CONFIG_DIR/<target>
 
@@ -24,10 +25,11 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, deployment, smtp
+from . import common, deployment, keycloak_role_sync, smtp
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -54,6 +56,14 @@ _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 # layer.
 PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag", "voice": "src/ai/voice"}
 
+# LiteLLM's configuration, which takes the generated model_list of the LocalAI models.
+LITELLM_CONFIG = "ai/litellm/config.yaml"
+LOCALAI_PROFILE = "localai"
+LOCALAI_MODELS_FILE = "ai/localai/models.txt"
+LOCALAI_MODELS_DIR = "ai/localai/models"
+# LiteLLM resolves `os.environ/...` itself, so the key is never written into the file.
+LOCALAI_API_KEY_REF = "os.environ/LOCALAI_API_KEY"
+
 
 class RenderError(Exception):
     """A user-facing rendering failure (e.g. an unresolved realm placeholder).
@@ -64,6 +74,105 @@ class RenderError(Exception):
         super().__init__(message)
         self.line = line
         self.column = column
+
+
+def _localai_api_base(config_dir: Path) -> str:
+    """Where LiteLLM reaches LocalAI's OpenAI-compatible API."""
+    return "http://localai:8080/v1"
+
+
+def _active_model_files(models_text: str) -> set[str]:
+    """The file names models.txt downloads: the last path segment of every active line, as
+    the init job derives them."""
+    names = set()
+    for line in models_text.splitlines():
+        url = line.strip()
+        if url and not url.startswith("#"):
+            names.add(url.rsplit("/", 1)[-1])
+    return names
+
+
+def _localai_model_files(directory: Path) -> list[Path]:
+    """The model YAMLs in `directory` that the init job copies: top-level `*.yaml` files,
+    without dotfiles (the shell glob skips them; pathlib's does not)."""
+    if not directory.is_dir():
+        return []
+    return sorted(
+        p for p in directory.glob("*.yaml") if p.is_file() and not p.name.startswith(".")
+    )
+
+
+def _localai_model_configs(
+    repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> list[dict]:
+    """The effective LocalAI model YAMLs: the shipped ones with their overlay, and those that
+    exist only in the overlay. Only the top-level `*.yaml`, which is all the init job copies
+    (`cp /models-config/configs/*.yaml`), so a `.yml` is never registered without reaching
+    LocalAI."""
+    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
+    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
+    names = {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
+    configs = []
+    for name in sorted(names):
+        rel_path = f"{LOCALAI_MODELS_DIR}/{name}"
+        text = _effective_text(rel_path, repo_root, config_dir, active_addons)
+        if text is None:
+            text = _overlay_only_text(rel_path, config_dir)
+        data = yaml.safe_load(text)
+        if isinstance(data, dict):
+            configs.append(data)
+    return configs
+
+
+def _localai_models(
+    repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> list[dict] | None:
+    """The LiteLLM entries of the LocalAI models that models.txt downloads, sorted by name, or
+    None while the localai profile is off.
+
+    Built from the effective models.txt (with its overlay), not from the rendered file on
+    disk: `render` writes LiteLLM's configuration first, and a preview must not depend on
+    a render having run. A model is registered when its YAML's `parameters.model` is the
+    file name of an active line."""
+    root_env = common.parse_env_file(config_dir / ".env")
+    if LOCALAI_PROFILE not in common.cluster_profiles(root_env):
+        return None
+    text = _effective_text(LOCALAI_MODELS_FILE, repo_root, config_dir, active_addons)
+    if text is None:
+        return None
+    files = _active_model_files(text)
+    api_base = _localai_api_base(config_dir)
+    entries = []
+    for model in _localai_model_configs(repo_root, config_dir, active_addons):
+        name = model.get("name")
+        params = model.get("parameters")
+        if not isinstance(name, str) or not name or not isinstance(params, dict):
+            continue
+        if params.get("model") not in files:
+            continue
+        entry: dict = {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"openai/{name}",
+                "api_base": api_base,
+                "api_key": LOCALAI_API_KEY_REF,
+            },
+        }
+        if model.get("embeddings") is True:
+            entry["model_info"] = {"mode": "embedding"}
+        entries.append(entry)
+    return sorted(entries, key=lambda e: e["model_name"])
+
+
+def _without_overridden(generated: list[dict], overlay) -> list[dict]:
+    """The generated entries whose model_name the overlay does not list itself.
+
+    A list merge appends, so an overlay entry with the same name would otherwise sit next
+    to the generated one and LiteLLM would route the name to either."""
+    if not isinstance(overlay, dict) or not isinstance(overlay.get("model_list"), list):
+        return generated
+    names = {e.get("model_name") for e in overlay["model_list"] if isinstance(e, dict)}
+    return [e for e in generated if e["model_name"] not in names]
 
 
 def _profile_layers(config_dir: Path) -> list[dict]:
@@ -307,12 +416,20 @@ def _effective_text(
             if frag_path.is_file():
                 label = f"{addon['path']}/integration/{rel_path}"
                 merged = _merge_layer(merged, _load_structured(frag_path, label), label)
+        layer = None
         if overlay_text is _ON_DISK:
             if overlay_path.is_file():
                 layer = _load_structured(overlay_path, overlay_label)
-                merged = _merge_layer(merged, layer, overlay_label)
         elif overlay_text is not None:
             layer = _parse_structured(base_path.suffix, overlay_text, overlay_label)
+        if rel_path == LITELLM_CONFIG:
+            generated = _localai_models(repo_root, config_dir, active_addons)
+            if generated is not None:
+                generated = _without_overridden(generated, layer)
+                merged = _merge_layer(
+                    merged, {"model_list": generated}, f"{LOCALAI_MODELS_FILE} (generated)"
+                )
+        if layer is not None:
             merged = _merge_layer(merged, layer, overlay_label)
         return _dump_structured(base_path.suffix, merged)
 
@@ -367,6 +484,19 @@ def preview(config_dir: Path, repo_root: Path, rel_path: str, overlay_text: str 
     }
 
 
+def _overlay_only_text(rel_path: str, config_dir: Path) -> str:
+    """The text of an overlay file the repository has no base for. A structured file that does
+    not parse is a RenderError that names it, as for every other layer."""
+    path = config_dir / "overlay" / rel_path
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise RenderError(f"overlay/{rel_path}: not a UTF-8 text file ({exc.reason})") from exc
+    if path.suffix in _STRUCTURED_SUFFIXES:
+        _parse_structured(path.suffix, text, f"overlay/{rel_path}")
+    return text
+
+
 def _render_dir(
     rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> None:
@@ -378,6 +508,52 @@ def _render_dir(
         if file_path.is_file():
             sub_rel = file_path.relative_to(src_root).as_posix()
             _render_file(sub_rel, repo_root, config_dir, active_addons)
+    # Files only the overlay has are rendered for the LocalAI models alone, and there only the
+    # model YAMLs the init job copies: an operator's own model. Every other overlay-only file
+    # (a Finder `.DS_Store`, a theme `logo.png`, ...) stays ignored, as it always was.
+    if rel_path != LOCALAI_MODELS_DIR:
+        return
+    overlay_root = config_dir / "overlay"
+    for file_path in _localai_model_files(overlay_root / rel_path):
+        sub_rel = file_path.relative_to(overlay_root).as_posix()
+        if not (src_root / sub_rel).is_file():
+            text = _overlay_only_text(sub_rel, config_dir)
+            common.atomic_write(config_dir / sub_rel, text)
+
+
+# Browser-facing URLs in the root .env. A stored URL counts even while its service is off:
+# disabling HSTS where it was not needed costs less than a service the browser cannot reach.
+_BROWSER_URL_KEYS = (
+    "PAPAIA_HOST",
+    "MANAGER_PUBLIC_URL",
+    "LITELLM_PUBLIC_URL",
+    "LOCALAI_PUBLIC_URL",
+    "QDRANT_PUBLIC_URL",
+    "NPM_ADMIN_HOST",
+)
+
+
+def _auth_host_shares_a_plain_http_hostname(env: dict[str, str], domain_server: str) -> bool:
+    """True when a plain-http browser URL is on the auth host's hostname or a subdomain of it.
+
+    HSTS applies to a hostname on every port, and Keycloak's default header carries
+    includeSubDomains, so after a single Keycloak visit the browser upgrades those http
+    URLs to https for a year. The local defaults put papaia-manager, LiteLLM, LocalAI and
+    Qdrant on the auth host's hostname; a deployment whose plain-http services live on
+    hostnames of their own is unaffected.
+    """
+    auth_hostname = urlsplit(env.get("AUTH_HOST", "")).hostname
+    if not auth_hostname:
+        return False
+    browser_urls = [env.get(key, "") for key in _BROWSER_URL_KEYS]
+    browser_urls.append(domain_server)
+    for url in browser_urls:
+        if not url.startswith("http://"):
+            continue
+        hostname = urlsplit(url).hostname or ""
+        if hostname == auth_hostname or hostname.endswith("." + auth_hostname):
+            return True
+    return False
 
 
 def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
@@ -397,6 +573,7 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     resolved = re.sub(r"\$\{env\.([^}]+)\}", replace, template)
     realm = json.loads(resolved)  # validate the substitution didn't break the JSON
 
+    changed = False
     # The mail relay is optional, so its block cannot sit in the template: a
     # placeholder substitution cannot leave an object out. The relay needs no
     # login, which is also why no secret is baked in here. While the profile is off
@@ -406,6 +583,24 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
         realm["smtpServer"] = smtp.realm_smtp_server(relay)
         # A reset link is only worth offering where it can be delivered.
         realm["resetPasswordAllowed"] = True
+        changed = True
+
+    # On a hostname shared with plain-http services, the papaia realm must not send
+    # Keycloak's default HSTS header (see _auth_host_shares_a_plain_http_hostname).
+    # max-age=0 instead of an empty header: a papaia-realm response then also clears
+    # an entry the browser learned before. Only this header is set; Keycloak keeps its
+    # defaults for every browser header the realm does not name. An existing realm
+    # gets the value from keycloak_role_sync, since --import-realm skips it.
+    domain_server = common.parse_env_file(config_dir / "ai/librechat/.env").get(
+        "DOMAIN_SERVER", ""
+    )
+    if _auth_host_shares_a_plain_http_hostname(env, domain_server):
+        realm["browserSecurityHeaders"] = {
+            "strictTransportSecurity": keycloak_role_sync.NO_HSTS
+        }
+        changed = True
+
+    if changed:
         resolved = json.dumps(realm, indent=2, ensure_ascii=False) + "\n"
 
     out_dir = config_dir / "infra/keycloak/realm-import"
