@@ -881,7 +881,10 @@ DEFAULT_GOVERNANCE_POLICY: dict = {
 
 _SENSITIVE_PERSONAL_DATA = ("special", "criminal")
 # Host suffixes of names that resolve only inside an installation's network.
-_INTERNAL_SUFFIXES = (".local", ".internal", ".lan", ".home.arpa", ".localhost")
+# The same list as the manager's model check (papaia-manager, knowledge_map_governance).
+_INTERNAL_SUFFIXES = (
+    ".local", ".internal", ".lan", ".home.arpa", ".localdomain", ".localhost"
+)
 _RECORDED_PERSONAL_DATA = ("ordinary", "special", "criminal")
 
 # field -> checker kind; see _check_field.

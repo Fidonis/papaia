@@ -1253,6 +1253,8 @@ def test_undeclared_servers_are_not_silent(workspace):
         ("http://10.1.2.3:8000/card.json", False),
         ("http://stock-agent:8000/card.json", False),
         ("https://agent.corp.internal/card.json", False),
+        ("http://agent.localdomain/card.json", False),
+        ("http://agent.localhost:8000/card.json", False),
         ("partner.example.org", True),
     ],
 )
