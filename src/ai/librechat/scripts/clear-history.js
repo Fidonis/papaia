@@ -14,7 +14,11 @@
 // the account, its sign-in, its MCP connections, its agents and prompts, its
 // avatar, and every file an agent uses as a resource. With --before, only the
 // conversations last updated before that day (00:00 UTC) go, together with
-// their messages, tool calls, shared links and files.
+// their sub-threads, messages, tool calls, shared links and files.
+//
+// Not removed: the user's memories, and the agent checkpoints of paused runs.
+// LibreChat removes checkpoints together with its generation queue, which only
+// the server process holds; they expire after 24 hours on their own.
 //
 // LibreChat logs to stdout as well, so the result is the last line starting
 // with RESULT_MARKER, followed by one JSON object. Exit 0 on success, 3 for an
@@ -33,6 +37,10 @@ const RESULT_MARKER = 'PAPAIA_RESULT ';
 // Files of these contexts are not part of a conversation: the user's avatar,
 // files uploaded to an agent or an assistant, and skill files.
 const KEPT_CONTEXTS = ['avatar', 'agents', 'assistants', 'skill_file'];
+
+// LibreChat's own filter for the conversations a user sees (v0.8.8
+// getHumanConversationFilter): sub-threads carry a subagentThread record.
+const HUMAN = { subagentThread: { $exists: false } };
 
 function parseArgs(argv) {
   const args = { email: '', before: null, dryRun: false };
@@ -80,15 +88,19 @@ async function agentFileIds(Agent) {
 
 // What goes: the conversations in scope and their sub-threads, and the
 // filters for everything that hangs off them. Without --before that is all of
-// the user's history, exactly as "Delete all chats" sees it.
+// the user's history, exactly as "Delete all chats" sees it. With --before the
+// roots are the user's own conversations only: a sub-thread is a record of its
+// parent's run and goes with that parent, whatever its own date says.
 async function selection(models, uid, before) {
   const { Conversation, Message, File, Agent } = models;
   const scoped = before != null;
-  const roots = await Conversation.find(scoped ? { user: uid, updatedAt: { $lt: before } } : { user: uid })
+  const rootFilter = scoped ? { updatedAt: { $lt: before }, ...HUMAN } : {};
+  const roots = await Conversation.find({ user: uid, ...rootFilter })
     .select('conversationId')
     .lean();
   const rootIds = roots.map((c) => c.conversationId);
   let conversationIds = rootIds;
+  let subThreads = 0;
   if (scoped && rootIds.length > 0) {
     const threads = await Conversation.find({
       user: uid,
@@ -97,6 +109,9 @@ async function selection(models, uid, before) {
       .select('conversationId')
       .lean();
     conversationIds = [...new Set([...rootIds, ...threads.map((c) => c.conversationId)])];
+    subThreads = conversationIds.length - rootIds.length;
+  } else if (!scoped) {
+    subThreads = await Conversation.countDocuments({ user: uid, subagentThread: { $exists: true } });
   }
 
   const byConversation = scoped ? { user: uid, conversationId: { $in: conversationIds } } : { user: uid };
@@ -120,7 +135,7 @@ async function selection(models, uid, before) {
   const kept = await agentFileIds(Agent);
   const files = (await File.find(fileFilter).lean()).filter((file) => !kept.has(file.file_id));
 
-  return { scoped, rootFilter: scoped ? { updatedAt: { $lt: before } } : {}, conversationIds, byConversation, files };
+  return { scoped, rootFilter, conversationIds, subThreads, byConversation, files };
 }
 
 async function counts(models, sel) {
@@ -135,6 +150,7 @@ async function counts(models, sel) {
   ]);
   return {
     conversations,
+    sub_threads: sel.subThreads,
     messages,
     files: sel.files.length,
     shared_links: sharedLinks,
@@ -184,6 +200,7 @@ async function clear(models, user, sel) {
 
   return {
     conversations: convos.deletedCount || 0,
+    sub_threads: sel.subThreads,
     messages,
     files: files.deleted,
     shared_links: linkResult.deletedCount || 0,

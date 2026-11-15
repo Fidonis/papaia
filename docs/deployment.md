@@ -158,7 +158,8 @@ tools/papaia-ctl librechat clear-history trainee@example.org --before=2026-06-01
 ```
 
 Resets a shared, training or test account before its next use: conversations, messages, their
-files and shared links go; the account, its agents, prompts and MCP connections stay. It needs the
+files and shared links go; the account, its agents, prompts and MCP connections stay, and so do
+its memories. It needs the
 running stack and cannot be undone except by restoring a backup, which brings back the data of
 every user. See the [README](../README.md#librechat-clear-history) for the details.
 

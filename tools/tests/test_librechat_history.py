@@ -164,7 +164,7 @@ def test_a_value_that_is_not_an_email_address_never_reaches_docker(config, email
     assert docker.calls == []
 
 
-@pytest.mark.parametrize("before", ["2026-13-01", "01.06.2026", "2026-6-1", "yesterday"])
+@pytest.mark.parametrize("before", ["", "2026-13-01", "01.06.2026", "2026-6-1", "yesterday"])
 def test_a_before_that_is_not_a_date_never_reaches_docker(config, before):
     docker = FakeDocker()
 
@@ -189,6 +189,22 @@ def test_the_dry_run_summary_lists_every_kind_and_says_nothing_changed():
     for label in ("conversations", "messages", "files", "shared links", "tool call records"):
         assert label in text
     assert "Nothing was changed" in text
+
+
+def test_the_conversations_name_the_sub_threads_they_include():
+    text = librechat_history.format_result(
+        {"email": "a@example.org", "dry_run": True, "conversations": 4, "sub_threads": 2}
+    )
+
+    assert "conversations      4 (including 2 sub-threads)" in text
+
+
+def test_without_sub_threads_the_conversations_are_a_plain_count():
+    text = librechat_history.format_result(
+        {"email": "a@example.org", "dry_run": True, "conversations": 2, "sub_threads": 0}
+    )
+
+    assert "conversations      2\n" in text
 
 
 def test_files_that_stayed_in_storage_are_named():
@@ -244,6 +260,15 @@ def test_the_script_keeps_the_files_that_are_not_part_of_a_conversation():
 
     assert "const KEPT_CONTEXTS = ['avatar', 'agents', 'assistants', 'skill_file'];" in text
     assert librechat_history.RESULT_MARKER in text
+
+
+def test_before_selects_only_the_users_own_conversations_as_roots():
+    # A sub-thread keeps its own older date while its parent goes on; it must go with
+    # the parent, never on its own (deleteConvos walks the sub-threads of each root).
+    text = SCRIPT.read_text(encoding="utf-8")
+
+    assert "const HUMAN = { subagentThread: { $exists: false } };" in text
+    assert "const rootFilter = scoped ? { updatedAt: { $lt: before }, ...HUMAN } : {};" in text
 
 
 # -- the shell command -----------------------------------------------------------------------
@@ -350,6 +375,8 @@ def test_an_unknown_user_stops_before_the_question():
         (("clear-history",), "Usage: papaia-ctl librechat clear-history"),
         (("clear-history", "a@example.org", "b@example.org"), "takes one e-mail address"),
         (("clear-history", "a@example.org", "--all"), "Unknown option"),
+        (("clear-history", "a@example.org", "--before=", "-y"), "given empty"),
+        (("clear-history", "a@example.org", "--before=", "--dry-run"), "given empty"),
         (("purge",), "Unknown librechat command"),
     ],
 )

@@ -211,7 +211,12 @@ def format_result(document: dict[str, Any], *, before: str | None = None) -> str
     )
     width = max(len(label) for _, label in KINDS)
     lines = [head]
-    lines.extend(f"  {label:<{width}}  {_count(document, key)}" for key, label in KINDS)
+    for key, label in KINDS:
+        line = f"  {label:<{width}}  {_count(document, key)}"
+        sub_threads = _count(document, "sub_threads")
+        if key == "conversations" and sub_threads:
+            line += f" (including {sub_threads} sub-thread{'s' if sub_threads != 1 else ''})"
+        lines.append(line)
     failed = document.get("files_failed")
     if isinstance(failed, list) and failed:
         lines.append(

@@ -692,16 +692,30 @@ tools/papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-ru
 ```
 
 Removes one LibreChat user's history before an account is used again: a training or test
-account, or the account of someone who left. It removes the user's conversations, their
-messages, the files that belong to them (records and stored files), their shared links and
-the tool call records of those conversations. The account, its sign-in, its MCP connections,
-its agents and prompts, its avatar, the files an agent uses, and everything the stack
-provisions stay.
+account, or the account of someone who left. It removes the user's conversations with their
+sub-threads, their messages, their shared links and the tool call records of those
+conversations, and the user's files (records and stored files). Without `--before` that is
+every file of the user, including files in "My files" that were never attached to a chat;
+with `--before`, only the files of the conversations that go. The account, its sign-in, its
+MCP connections, its agents and prompts, its avatar, the files an agent uses, and everything
+the stack provisions stay.
+
+Two kinds of data also stay, and matter on a shared or training account:
+
+- **Memories.** When memory extraction is switched on in an overlay, the user's memory
+  entries stay and the next person on the account sees them. Remove them in LibreChat's
+  memory settings before the account is handed on.
+- **Agent checkpoints** of runs paused for a tool approval or a question to the user. LibreChat
+  removes them together with its run queue, which this command cannot reach from outside the
+  server process. They expire after 24 hours on their own.
+
+The counts list sub-threads under conversations (`4 (including 2 sub-threads)`), so they can be
+higher than the number of chats the user sees.
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `<email>` | _(required)_ | E-mail address of the LibreChat user. An unknown address is an error |
-| `--before=YYYY-MM-DD` | _(everything)_ | Only conversations last updated before that day (00:00 UTC), with their messages, files and shared links |
+| `--before=YYYY-MM-DD` | _(everything)_ | Only conversations last updated before that day (00:00 UTC), with their sub-threads, messages, files and shared links. A sub-thread goes with its conversation, never on its own date. An empty value is an error |
 | `--dry-run` | off | Print what would be removed, per kind, and change nothing |
 | `-y` / `--yes` | _(prompt)_ | Skip the confirmation. Without a terminal, `-y` is required |
 | `--config-dir=PATH` | `../papaia-config` | Config directory location |

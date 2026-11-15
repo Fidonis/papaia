@@ -18,11 +18,12 @@ cmd_librechat() {
 # and prompts stay. Without -y the counts are shown first and the deletion needs a
 # "y"; without a terminal, -y is required.
 cmd_librechat_clear_history() {
-    local config_dir="$DEFAULT_CONFIG_DIR" email="" before="" dry_run=false assume_yes=false
+    local config_dir="$DEFAULT_CONFIG_DIR" email="" before="" before_given=false dry_run=false
+    local assume_yes=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
-            --before=*) before="${1#*=}" ;;
+            --before=*) before="${1#*=}"; before_given=true ;;
             --dry-run) dry_run=true ;;
             -y|--yes) assume_yes=true ;;
             -h|--help) usage; exit 0 ;;
@@ -43,6 +44,11 @@ cmd_librechat_clear_history() {
     fi
     # shellcheck disable=SC2034  # read by py_cli
     CONFIG_DIR="$config_dir"
+    if [ "$before_given" = true ] && [ -z "$before" ]; then
+        # An unset variable in --before="$CUTOFF" must not turn into "everything".
+        error "--before needs a date as YYYY-MM-DD; it was given empty."
+        exit 2
+    fi
     _require_setup_done
 
     local -a args=(--email="$email")
