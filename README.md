@@ -1928,7 +1928,9 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   keeps starting in the background. After an upgrade that moves the pin, `start` installs the
   new binary and restarts the job. LocalAI reads `LOCALAI_API_KEY` once, when it starts, so
   `start` also restarts the job when the key changed (`setup --force`, a restore); it keeps
-  a sha256 fingerprint of the key in `run-localai.key-sha256` for that, never the key.
+  a sha256 fingerprint of the key in `run-localai.key-sha256` for that, never the key. A
+  restart that is due stays noted in `run-localai.restart-pending` until launchd has done
+  it, so a `start` that ends early (a failed `docker compose up`) does not lose it.
 - `stop` unloads and disables the job, so LocalAI stays off after a logout or a restart of
   the Mac until the next `start`. launchd restarts LocalAI when it crashes (not after a clean
   exit), at most every 10 s. `stop --clean-up --volumes --profiles=localai` also deletes

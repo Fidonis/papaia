@@ -236,7 +236,7 @@ cmd_start() {
 
 # What the native LocalAI step of `start` did (LOCALAI_NATIVE = off | skipped | installed |
 # unchanged | failed), the pinned version, and whether a running job has to be
-# restarted (a new binary or start script). Set by _localai_native_install.
+# restarted (a new binary, start script or key). Set by _localai_native_install.
 LOCALAI_NATIVE="off"
 LOCALAI_NATIVE_VERSION=""
 LOCALAI_NATIVE_REPLACED=""

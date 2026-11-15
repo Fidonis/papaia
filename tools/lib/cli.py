@@ -459,7 +459,8 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
     print(f"LOCALAI_NATIVE_VERSION={result.version}")
     print(f"LOCALAI_NATIVE_REPLACED={result.replaced or ''}")
     print(f"LOCALAI_NATIVE_SCRIPT={result.script}")
-    # A running job has to be restarted to pick up a new binary, start script or key.
+    # A running job has to be restarted to pick up a new binary, start script or key, also
+    # when an earlier `start` ended before it got to the restart.
     print(f"LOCALAI_NATIVE_RESTART={1 if result.restart else 0}")
     return 0
 

@@ -266,6 +266,8 @@ def test_a_changed_key_is_noticed_through_its_fingerprint(tmp_path, repo_root):
     home = tmp_path / "workspace" / "localai" / "papaia"
     first = localai_native.install_for(config, repo_root, opener=opener)
     assert first.key_changed and first.restart
+    # What a successful start does once launchd has (re)started the process.
+    localai_native.clear_restart_pending(home)
 
     again = localai_native.install_for(config, repo_root, opener=opener)
     assert not (again.changed or again.script_changed or again.key_changed)
@@ -709,6 +711,49 @@ def test_a_new_binary_restarts_the_running_job(tmp_path):
     assert fake.verbs() == [f"enable {TARGET}", f"kickstart -k {TARGET}"]
 
 
+def test_a_pending_restart_is_carried_out_and_then_cleared(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    localai_native.mark_restart_pending(home)
+    fake.calls.clear()
+
+    # No restart flag: the marker of an earlier install step is enough.
+    result = _start(home, plist, fake)
+    assert result.action == "restarted"
+    assert fake.verbs() == [f"enable {TARGET}", f"kickstart -k {TARGET}"]
+    assert not localai_native.restart_pending(home)
+
+    fake.calls.clear()
+    assert _start(home, plist, fake).action == "running"
+    assert fake.verbs() == [f"enable {TARGET}"]
+
+
+def test_a_failed_restart_stays_pending(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    localai_native.mark_restart_pending(home)
+    fake.fail = {"kickstart": CommandResult(1, "", "kickstart failed\n")}
+
+    with pytest.raises(localai_native.LaunchdError, match="kickstart"):
+        _start(home, plist, fake)
+    assert localai_native.restart_pending(home)
+
+    fake.fail = {}
+    assert _start(home, plist, fake).action == "restarted"
+    assert not localai_native.restart_pending(home)
+
+
+def test_a_bootstrap_clears_a_pending_restart(tmp_path):
+    home, plist = _job_home(tmp_path)
+    localai_native.mark_restart_pending(home)
+
+    # Not loaded (after `stop`, or the first start): the new process reads everything anew.
+    assert _start(home, plist, FakeLaunchctl()).action == "loaded"
+    assert not localai_native.restart_pending(home)
+
+
 def test_a_loaded_job_that_exited_is_started_again(tmp_path):
     home, plist = _job_home(tmp_path)
     fake = FakeLaunchctl()
@@ -1069,6 +1114,7 @@ def test_uninstall_command_removes_the_job(native_install, monkeypatch, capsys, 
     assert not plist.exists()
     assert not (home / "bin").exists() and not (home / "run-localai").exists()
     assert not localai_native.fingerprint_path(home).exists()
+    assert not localai_native.restart_marker_path(home).exists()
     assert (home / "models").is_dir() is not purge
     assert home.exists() is not purge
 
@@ -1116,6 +1162,72 @@ def test_a_new_key_restarts_the_running_job(native_install, monkeypatch, capsys)
             data = path.read_bytes()
             assert old_key.encode() not in data, path
             assert new_key.encode() not in data, path
+
+
+def _install_lines(argv, capsys) -> dict[str, str]:
+    assert _cli(argv, "localai-native-install") == 0
+    return dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+
+
+def _start_as_lifecycle(argv, lines, capsys) -> None:
+    """localai-native-start the way lifecycle.sh calls it after `docker compose up`."""
+    flags = ["--restart"] if lines["LOCALAI_NATIVE_RESTART"] == "1" else []
+    assert _cli(argv, "localai-native-start", *flags) == 0
+    capsys.readouterr()
+
+
+def test_a_new_key_restarts_the_job_after_a_start_that_ended_early(
+    native_install, monkeypatch, capsys
+):
+    argv, home = native_install
+    env_file = Path(argv[-1]) / "ai" / "localai" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("LOCALAI_API_KEY=sk-local-first-value-0123456789\n", encoding="utf-8")
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    _start_as_lifecycle(argv, _install_lines(argv, capsys), capsys)
+    assert fake.loaded and fake.running
+
+    env_file.write_text("LOCALAI_API_KEY=sk-local-rotated-value-0123456789\n", encoding="utf-8")
+    assert _install_lines(argv, capsys)["LOCALAI_NATIVE_RESTART"] == "1"
+    # `docker compose up` fails here: papaia-ctl ends (set -e) before localai-native-start.
+
+    lines = _install_lines(argv, capsys)
+    assert (lines["LOCALAI_NATIVE"], lines["LOCALAI_NATIVE_RESTART"]) == ("unchanged", "1")
+    fake.calls.clear()
+    _start_as_lifecycle(argv, lines, capsys)
+    target = f"gui/{os.getuid()}/{LABEL}"
+    assert fake.verbs() == [f"enable {target}", f"kickstart -k {target}"]
+
+    # Done once: the next start leaves the job alone.
+    lines = _install_lines(argv, capsys)
+    assert lines["LOCALAI_NATIVE_RESTART"] == "0"
+    fake.calls.clear()
+    _start_as_lifecycle(argv, lines, capsys)
+    assert fake.verbs() == [f"enable {target}"]
+
+
+def test_a_new_binary_restarts_the_job_after_a_start_that_ended_early(
+    native_install, monkeypatch, capsys
+):
+    argv, home = native_install
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    _start_as_lifecycle(argv, _install_lines(argv, capsys), capsys)
+
+    # The pinned binary is missing (a moved pin): the install step puts it in place.
+    for binary in (home / "bin").iterdir():
+        binary.unlink()
+    lines = _install_lines(argv, capsys)
+    assert (lines["LOCALAI_NATIVE"], lines["LOCALAI_NATIVE_RESTART"]) == ("installed", "1")
+    # `docker compose up` fails here.
+
+    lines = _install_lines(argv, capsys)
+    assert (lines["LOCALAI_NATIVE"], lines["LOCALAI_NATIVE_RESTART"]) == ("unchanged", "1")
+    fake.calls.clear()
+    _start_as_lifecycle(argv, lines, capsys)
+    assert fake.verbs()[-1] == f"kickstart -k gui/{os.getuid()}/{LABEL}"
+    assert not localai_native.restart_pending(home)
 
 
 def test_switching_back_to_the_container_removes_the_job(

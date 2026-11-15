@@ -11,7 +11,10 @@ Everything lives below one directory per installation, `localai_home`:
         bin/local-ai-<version>   the verified binary of the pinned release
         run-localai              the start script (mode 0700, no key inside)
         run-localai.key-sha256   the sha256 of the key the job was last started with
-        models/                  model files and YAMLs (bind-mounted into the init job)
+        run-localai.restart-pending
+                                 a restart of the job is due (a new binary, start script
+                                 or key) that no `start` has carried out yet
+        models/                model files and YAMLs (bind-mounted into the init job)
         backends/                the Metal backend LocalAI downloads on its first start
         data/, configuration/    LocalAI's own state (written into its working directory)
         logs/localai.log         stdout and stderr of the launchd job
@@ -237,11 +240,14 @@ class InstallResult:
     # True when LOCALAI_API_KEY changed since the last install step (`setup --force`, a
     # restore): the process reads the key once, when it starts.
     key_changed: bool = False
+    # True when an earlier install step asked for a restart that has not happened yet (a
+    # `start` that ended before `localai-native-start`, e.g. at a failed `docker compose up`).
+    pending: bool = False
 
     @property
     def restart(self) -> bool:
         """Whether a running job has to be restarted to pick up what changed."""
-        return self.changed or self.script_changed or self.key_changed
+        return self.changed or self.script_changed or self.key_changed or self.pending
 
 
 def _expected_sha256(text: str, version: str) -> str:
@@ -387,6 +393,27 @@ def write_key_fingerprint(home: Path, config_dir: Path) -> bool:
     return changed
 
 
+def restart_marker_path(home: Path) -> Path:
+    return home / "run-localai.restart-pending"
+
+
+def restart_pending(home: Path) -> bool:
+    """Whether a restart of the job is due that no `start` has carried out yet."""
+    return restart_marker_path(home).is_file()
+
+
+def mark_restart_pending(home: Path) -> None:
+    """Remember that the job has to be restarted. The install step puts the new binary,
+    script and key fingerprint in place before `docker compose up`, the restart follows
+    after it: without the marker a `start` that ends in between would lose the restart,
+    since the next install step finds everything already in place."""
+    common.atomic_write_private(restart_marker_path(home), "pending\n")
+
+
+def clear_restart_pending(home: Path) -> None:
+    restart_marker_path(home).unlink(missing_ok=True)
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
@@ -407,9 +434,12 @@ def install_for(
     version = pinned_version(repo_root)
     for sub in ("models", "backends"):
         common.ensure_dir(home / sub)
+    pending = restart_pending(home)
     binary, changed, replaced = install(home, version, opener=opener, announce=announce)
     script_changed = write_run_script(home, binary, config_dir, port(root))
     key_changed = write_key_fingerprint(home, config_dir)
+    if changed or script_changed or key_changed:
+        mark_restart_pending(home)
     return InstallResult(
         version,
         binary,
@@ -418,6 +448,7 @@ def install_for(
         replaced,
         script_changed=script_changed,
         key_changed=key_changed,
+        pending=pending,
     )
 
 
@@ -700,9 +731,12 @@ def start_job(
     sleep: Callable[[float], None] = time.sleep,
 ) -> StartResult:
     """Enable the job, write its plist and load it; restart it when `restart` (a new
-    binary or start script). A changed plist is only read by a new bootstrap, so a loaded
-    job with a changed plist is unloaded first."""
+    binary, start script or key) or when an earlier restart is still pending. A changed
+    plist is only read by a new bootstrap, so a loaded job with a changed plist is unloaded
+    first. The pending marker goes once launchd has started a new process; a failing
+    launchctl call keeps it for the next `start`."""
     run = _runner(run)
+    restart = restart or restart_pending(home)
     common.ensure_dir(log_path(home).parent)
     plist_changed = write_plist(plist, plist_document(job_label, home))
     target = service_target(job_label, uid)
@@ -714,9 +748,11 @@ def start_job(
         loaded = False
     if not loaded:
         _must(run, "bootstrap", domain(uid), str(plist))
+        clear_restart_pending(home)
         return StartResult("loaded", plist, log_path(home))
     if restart:
         _must(run, "kickstart", "-k", target)
+        clear_restart_pending(home)
         return StartResult("restarted", plist, log_path(home))
     if not state(job_label, run=run, uid=uid).running:
         _must(run, "kickstart", target)
@@ -770,7 +806,7 @@ def uninstall(
     when nothing else is left in it. Returns what was removed."""
     stop_job(job_label, run=run, uid=uid, sleep=sleep)
     removed: list[Path] = []
-    for path in (plist, script_path(home), fingerprint_path(home)):
+    for path in (plist, script_path(home), fingerprint_path(home), restart_marker_path(home)):
         if path.is_file():
             path.unlink()
             removed.append(path)
