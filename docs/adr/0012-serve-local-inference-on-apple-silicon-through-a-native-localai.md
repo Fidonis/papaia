@@ -69,7 +69,9 @@ container. A sticky root setting `LOCALAI_RUNTIME` (`container`, the default, or
 set by `papaia-ctl setup --localai-runtime=…`, selects it; setup asks on such a Mac only and
 refuses `native` elsewhere, naming a Docker that does not answer as such. `container` is
 accepted on every host, so a configuration restored elsewhere can always go back; an
-interactive setup on such a host switches a stored `native` back to `container` and says why.
+interactive setup on a host that can never run `native` switches a stored `native` back to
+`container` and says why, and on a Mac whose Docker does not answer it asks, keeping `native`
+by default.
 A distributed installation refuses `native`.
 
 - **Compose.** The services `localai` and `localai-model-init` stay declared (the add-on

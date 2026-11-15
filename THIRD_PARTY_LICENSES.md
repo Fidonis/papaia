@@ -42,7 +42,7 @@ their images there; the table below covers the Core only.
 | `curlimages/curl` | 8.16.0 (voice) / latest (localai) | MIT | `ai/localai`, `ai/voice` | model-init helpers |
 | `ghcr.io/fidonis/jina-reranker-api` | 0.1.3 | Apache-2.0 | `ai/jinaai` | Fidonis-maintained wrapper; Jina AI reranker base is Apache-2.0 |
 | `qdrant/qdrant` | v1.19.0 | Apache-2.0 | `ai/rag` | vector database |
-| `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.1 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
+| `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.2 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
 | `ghcr.io/fidonis/qdrant-ingest` | 1.0.1 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service |
 | `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
 | `ghcr.io/speaches-ai/speaches` | 0.8.3-cpu (digest-pinned) | MIT | `ai/voice` | speech-to-text (profile `voice`); the image bundles piper-tts, phonemizer and espeak-ng (GPL-3.0) plus Ubuntu's ffmpeg build (GPL), used as network service; the shipped default model `deepdml/faster-whisper-large-v3-turbo-ct2` is MIT |

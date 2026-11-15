@@ -201,7 +201,7 @@ cmd_setup() {
         exit 2
     fi
     # Without a terminal there is nobody to ask, and setup -y changes nothing unasked; the
-    # interactive setup below switches back to the container itself.
+    # interactive setup below asks, or switches back to the container where native can never run.
     if [ -z "$localai_runtime" ] && [ -n "$native_why_not" ] && [ "${local_ai:-${LOCAL_AI_STICKY:-}}" = "true" ] \
         && { [ "$non_interactive" -eq 1 ] || [ "$env_only" -eq 1 ] || ! is_tty; }; then
         warn "LOCALAI_RUNTIME=native is stored, but $native_why_not; nothing starts LocalAI on this host."
@@ -285,7 +285,8 @@ cmd_setup() {
             if [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] \
                 && [ -n "$native_why_not" ]; then
                 warn "  LocalAI runtime   = native (Apple GPU), not available here: $native_why_not"
-                reconfigure_default="Y"
+                # A Docker that does not answer is no reason to leave native.
+                [ "$native_why_not" != "$_NATIVE_DOCKER_SILENT" ] && reconfigure_default="Y"
             elif [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
                 info "  LocalAI runtime   = native (Apple GPU)"
             elif [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_VARIANT_STICKY:-}" ]; then
@@ -465,9 +466,15 @@ cmd_setup() {
             esac
         fi
         # Asked before the URL: the native process has a fixed one and no image variant.
-        # Off such a Mac a stored `native` is not kept silently: nothing would start LocalAI.
+        # Where native can never run (no Apple Silicon Mac, another engine) a stored `native`
+        # is not kept silently: nothing would start LocalAI. A Docker that does not answer
+        # only asks, with native as the default.
         if [ "$local_ai" = "true" ] && [ -z "$localai_runtime" ]; then
-            if [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] && [ -n "$native_why_not" ]; then
+            if [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] \
+                && [ "$native_why_not" = "$_NATIVE_DOCKER_SILENT" ]; then
+                _localai_native_docker_silent
+                localai_runtime="$(_prompt_localai_runtime)"
+            elif [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] && [ -n "$native_why_not" ]; then
                 _localai_native_left_behind "$native_why_not"
                 localai_runtime="container"
             elif [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] || _native_localai_host; then
@@ -868,6 +875,8 @@ _prompt_manager() {
 # Why LocalAI cannot run natively here, or nothing when it can: an Apple Silicon Mac whose
 # Docker is Docker Desktop (LiteLLM reaches the process at host.docker.internal). ADR 0012.
 # A Docker that does not answer is named as such, since starting Docker Desktop fixes it.
+_NATIVE_DOCKER_SILENT="Docker does not answer; start Docker Desktop and run setup again"
+
 _native_localai_why_not() {
     local system machine engine
     system="$(uname -s)"
@@ -878,7 +887,7 @@ _native_localai_why_not() {
     fi
     engine="$(_docker_engine_name)"
     if [ -z "$engine" ]; then
-        echo "Docker does not answer; start Docker Desktop and run setup again"
+        echo "$_NATIVE_DOCKER_SILENT"
     elif [ "$engine" != "Docker Desktop" ]; then
         echo "Docker here is '$engine', not Docker Desktop"
     fi
@@ -894,6 +903,14 @@ _localai_native_left_behind() {
     warn "LocalAI was set to run natively, but $1."
     warn "Switching LocalAI back to its container. On an Apple Silicon Mac with Docker Desktop running,"
     warn "  'papaia-ctl setup --localai-runtime=native' selects the native runtime again."
+}
+
+# A stored LOCALAI_RUNTIME=native on an Apple Silicon Mac whose Docker does not answer:
+# Docker Desktop is most likely only stopped, and the CPU container may not fit next to the
+# seeded models, so the operator decides, with native as the default.
+_localai_native_docker_silent() {
+    warn "LocalAI runs natively here, but Docker does not answer. Start Docker Desktop before"
+    warn "  'papaia-ctl start'; choose the container only to run LocalAI on the CPU."
 }
 
 # Asks where LocalAI runs on an Apple Silicon Mac; prints "native" or "container".

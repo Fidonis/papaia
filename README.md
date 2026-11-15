@@ -300,6 +300,8 @@ papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
+papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
+                     [--config-dir=PATH]
 papaia-ctl topology  <show [--json]|validate|firewall [--format=table|json|csv]>
                      [--config-dir=PATH]
 papaia-ctl node      <add|list|check|remove|join-bundle|renew-link|sync> [OPTIONS]
@@ -571,6 +573,13 @@ Stops and removes all core containers, then **permanently deletes the config dir
 Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
 Docker volumes. `--addons` stops and removes active add-on containers first.
 
+Some data below the config directory is written by containers as root (the Nginx Proxy Manager
+database and certificates in `infra/nginx/nginx-data/`, for one). What the operator cannot
+delete is deleted through a short-lived `alpine:3` container that mounts the directory. If that
+fails too, `uninstall` exits 1 and names the directory and the `sudo rm -rf` that removes it.
+It never does this for `/` or for a directory that is or contains the home directory or the
+papaia checkout.
+
 ### `backup`
 
 ```bash
@@ -713,6 +722,53 @@ and touches no other node. A whole restore stops every node, puts the controller
 configuration back, hands every node its bundle and release, writes back each node's data and
 starts the installation. A restore point taken of a single host is refused in a distributed
 installation, and the other way round. `--restart-clean` is not available there.
+
+### `librechat clear-history`
+
+```bash
+tools/papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y] \
+                                         [--config-dir=PATH]
+```
+
+Removes one LibreChat user's history before an account is used again: a training or test
+account, or the account of someone who left. It removes the user's conversations with their
+sub-threads, their messages, their shared links and the tool call records of those
+conversations, and the user's files (records and stored files). Without `--before` that is
+every file of the user, including files in "My files" that were never attached to a chat;
+with `--before`, only the files of the conversations that go. The account, its sign-in, its
+MCP connections, its agents and prompts, its avatar, the files an agent uses, and everything
+the stack provisions stay.
+
+Two kinds of data also stay, and matter on a shared or training account:
+
+- **Memories.** When memory extraction is switched on in an overlay, the user's memory
+  entries stay and the next person on the account sees them. Remove them in LibreChat's
+  memory settings before the account is handed on.
+- **Agent checkpoints** of runs paused for a tool approval or a question to the user. LibreChat
+  removes them together with its run queue, which this command cannot reach from outside the
+  server process. They expire after 24 hours on their own.
+
+The counts list sub-threads under conversations (`4 (including 2 sub-threads)`), so they can be
+higher than the number of chats the user sees.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `<email>` | _(required)_ | E-mail address of the LibreChat user. An unknown address is an error |
+| `--before=YYYY-MM-DD` | _(everything)_ | Only conversations last updated before that day (00:00 UTC), with their sub-threads, messages, files and shared links. A sub-thread goes with its conversation, never on its own date. An empty value is an error |
+| `--dry-run` | off | Print what would be removed, per kind, and change nothing |
+| `-y` / `--yes` | _(prompt)_ | Skip the confirmation. Without a terminal, `-y` is required |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Without `-y` the counts are shown first and the deletion waits for a `y`. **The deletion
+cannot be undone** except by restoring a backup; `restore --only=module:librechat` brings back the data of every LibreChat user, not of one.
+
+The command needs the running stack: it runs inside the LibreChat container, through
+LibreChat's own data and file-storage code, so it follows LibreChat's layout across
+releases. Run it while the user is not chatting; a reply that is still being written can
+leave a message behind. In a distributed installation, run it on the node that runs
+LibreChat. Exit status 0 on success, 1 when the user is unknown, LibreChat is not running,
+or a file could not be removed from storage (its record is kept and named), 2 for wrong
+arguments (also an address or a date that is not one), 3 when the confirmation is declined.
 
 ### `addon`
 
@@ -1962,12 +2018,13 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   running and with a configuration restored on another machine. `setup` unloads and disables
   the launchd job and removes its plist, so the job neither keeps `LOCALAI_EXT_PORT` nor comes
   back at the next login; where `setup` cannot reach launchd (papaia-manager), the next
-  `start` on the Mac does it before the container starts. `bin/`, `run-localai` and the models stay for a later switch back
-  (`uninstall` removes them). The seeded model list stays, and models in the old
-  `localai-models` volume are not moved in either direction.
-- An interactive `setup` on a host that cannot run the native process (no Apple Silicon, another
-  Docker engine, or Docker Desktop not running) switches a stored `native` back to `container`
-  and says why; `setup -y` keeps it and warns.
+  `start` on the Mac does it before the container starts. `bin/`, `run-localai` and the
+  models stay for a later switch back (`uninstall` removes them). The seeded model list
+  stays, and models in the old `localai-models` volume are not moved in either direction.
+- An interactive `setup` on a host that can never run the native process (no Apple Silicon or
+  another Docker engine) switches a stored `native` back to `container` and says why. On a Mac
+  whose Docker Desktop does not answer it asks instead, with `native` as the default. `setup -y`
+  keeps `native` in both cases and warns.
 
 When papaia-manager runs `start` or `stop` from its container, only the Compose part runs:
 the launchd job belongs to the user logged in on the Mac, and the manager skips it with a

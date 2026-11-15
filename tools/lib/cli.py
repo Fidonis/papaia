@@ -39,6 +39,7 @@ from . import (
     gen_override,
     gpu_detect,
     keycloak_role_sync,
+    librechat_history,
     localai_native,
     migrations,
     modules,
@@ -195,6 +196,20 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return requested_topology
 
     fresh_init = not (config_dir / ".env").is_file()
+    # The native LocalAI lives below the workspace. Checked before the config directory is
+    # seeded or anything is written, so a refused run leaves neither LOCALAI_RUNTIME=native
+    # in the root .env nor, on a fresh config directory, template files a later setup would
+    # take for an existing installation. It needs only the requested or stored runtime, the
+    # stored PAPAIA_WORKSPACE_DIR and the checkout name.
+    stored_root = {} if fresh_init else common.parse_env_file(config_dir / ".env")
+    wanted_runtime = args.localai_runtime or localai_native.runtime(stored_root)
+    if wanted_runtime == localai_native.NATIVE:
+        workspace = envtree.stamp_workspace_dir({"": dict(stored_root)}, repo_root)
+        try:
+            localai_native.localai_home(workspace[""])
+        except localai_native.InstallError as exc:
+            print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
+            return 3
     envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
@@ -308,14 +323,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
-    # The native LocalAI lives below the workspace. Checked before anything is written, so
-    # a refused run does not leave LOCALAI_RUNTIME=native behind in the root .env.
-    if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE:
-        try:
-            localai_native.localai_home(tree.get("", {}))
-        except localai_native.InstallError as exc:
-            print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
-            return 3
     # After stamp_workspace_dir: the derived default is <workspace>/backup.
     tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
@@ -467,7 +474,7 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
 
 def _announce_install(version: str) -> None:
     # stderr: stdout carries the KEY=VALUE lines the shell reads. The download is about
-    # 150 MB and `start` would otherwise look stuck while it runs.
+    # 200 MB and `start` would otherwise look stuck while it runs.
     print(f"Installing LocalAI {version} for the Apple GPU...", file=sys.stderr, flush=True)
 
 
@@ -1250,6 +1257,32 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_librechat_clear_history(args: argparse.Namespace) -> int:
+    """Count (`--dry-run`) or remove one user's LibreChat history. Exit 2 for an
+    address or date that is not one, 1 on every other failure, also when some files
+    could not be removed from storage."""
+    try:
+        librechat_history.validate_email(args.email)
+        if args.before is not None:
+            librechat_history.validate_before(args.before)
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    try:
+        result = librechat_history.clear_history(
+            Path(args.repo_root),
+            Path(args.config_dir),
+            args.email,
+            before=args.before,
+            dry_run=args.dry_run,
+        )
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(librechat_history.format_result(result, before=args.before))
+    return 1 if result.get("files_failed") else 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
@@ -1786,6 +1819,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--skip", action="append", default=None)
     p_doctor.add_argument("--json", action="store_true")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_clear = sub.add_parser("librechat-clear-history")
+    p_clear.add_argument("--email", required=True)
+    p_clear.add_argument("--before", default=None)
+    p_clear.add_argument("--dry-run", action="store_true")
+    p_clear.set_defaults(func=cmd_librechat_clear_history)
 
     return parser
 
