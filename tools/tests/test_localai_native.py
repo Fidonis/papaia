@@ -492,3 +492,39 @@ def test_a_refused_native_setup_leaves_the_root_env_as_it_was(repo_root, config_
     assert (config_dir / ".env").read_bytes() == before
     assert common.parse_env_file(config_dir / ".env").get("LOCALAI_RUNTIME", "") != "native"
     assert not (config_dir / "overlay" / "ai" / "localai" / "models.txt").exists()
+
+
+def test_a_refused_first_native_setup_writes_nothing(repo_root, config_dir, capsys):
+    # A fresh config directory: the refusal comes before it is seeded, so the next setup
+    # does not take template files for an existing installation.
+    config_dir.mkdir()
+    assert _setup(repo_root, config_dir, "--localai-runtime=native") == 3
+    assert "Nothing was changed." in capsys.readouterr().err
+    assert list(config_dir.iterdir()) == []
+
+
+def test_a_refused_first_native_setup_does_not_create_the_config_dir(repo_root, config_dir):
+    assert _setup(repo_root, config_dir, "--localai-runtime=native") == 3
+    assert not config_dir.exists()
+
+
+def test_a_stored_workspace_lets_native_through_in_any_checkout(repo_root, config_dir, tmp_path):
+    assert _setup(repo_root, config_dir) == 0
+    env = config_dir / ".env"
+    workspace = tmp_path / "elsewhere"
+    text = env.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if not ln.startswith("PAPAIA_WORKSPACE_DIR=")]
+    env.write_text("\n".join([*lines, f"PAPAIA_WORKSPACE_DIR={workspace}"]) + "\n")
+    assert _setup(repo_root, config_dir, "--localai-runtime=native") == 0
+    assert common.parse_env_file(env)["LOCALAI_RUNTIME"] == "native"
+
+
+def test_a_stored_native_without_a_workspace_is_refused_before_seeding(
+    repo_root, config_dir, capsys
+):
+    # Only the root .env is there; the stored runtime alone triggers the check.
+    config_dir.mkdir()
+    (config_dir / ".env").write_text("LOCALAI_RUNTIME=native\n", encoding="utf-8")
+    assert _setup(repo_root, config_dir) == 3
+    assert "Nothing was changed." in capsys.readouterr().err
+    assert sorted(p.name for p in config_dir.iterdir()) == [".env"]

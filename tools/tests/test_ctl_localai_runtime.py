@@ -144,10 +144,17 @@ _STORED_NATIVE = (
 
 
 def _setup_on(
-    system: str, machine: str, engine: str | None, args: str, *, interactive: bool = False
+    system: str,
+    machine: str,
+    engine: str | None,
+    args: str,
+    *,
+    interactive: bool = False,
+    stubs: str = "",
 ) -> subprocess.CompletedProcess:
     """cmd_setup with a stored native configuration, up to the call into Python, which
-    prints the LocalAI arguments it would get and ends the run."""
+    prints the LocalAI arguments it would get and ends the run. `stubs` replaces shell
+    functions after the library is sourced."""
     tty = "is_tty() { return 0; }\n_installation_exists() { return 0; }\n" if interactive else ""
     return _bash(
         _setup_lib(system, machine, engine)
@@ -155,6 +162,7 @@ def _setup_on(
         + "_run_setup_py() { printf 'SETUP_PY local_ai=%s url=%s args=%s\\n'"
         + ' "${13}" "${12}" "${SETUP_LOCALAI_ARGS[*]-}"; exit 0; }\n'
         + tty
+        + stubs
         + f'DEFAULT_CONFIG_DIR="/nonexistent"; cmd_setup {args}\n',
         "\n" * 100,
     )
@@ -166,6 +174,8 @@ _OFF_THE_GATE = [
     ("Darwin", "arm64", "OrbStack"),
     ("Darwin", "arm64", None),
 ]
+# Hosts that can never run the native process, unlike a Mac whose Docker only does not answer.
+_NEVER_NATIVE = _OFF_THE_GATE[:-1]
 
 
 @pytest.mark.parametrize("system, machine, engine", _OFF_THE_GATE)
@@ -181,7 +191,7 @@ def test_the_container_flag_on_a_qualifying_mac():
     assert "args=--localai-runtime=container" in done.stdout
 
 
-@pytest.mark.parametrize("system, machine, engine", _OFF_THE_GATE)
+@pytest.mark.parametrize("system, machine, engine", _NEVER_NATIVE)
 def test_interactive_setup_switches_a_stored_native_back_to_the_container(
     system, machine, engine
 ):
@@ -195,9 +205,30 @@ def test_interactive_setup_switches_a_stored_native_back_to_the_container(
     assert "url=https://papaia.example.com:8080" in done.stdout
 
 
-def test_interactive_setup_names_a_docker_that_does_not_answer():
+def test_interactive_setup_asks_when_docker_does_not_answer_and_keeps_native():
     done = _setup_on("Darwin", "arm64", None, "--local-ai", interactive=True)
-    assert "but Docker does not answer; start Docker Desktop" in done.stderr
+    assert done.returncode == 0, done.stderr
+    assert "LocalAI runs natively here, but Docker does not answer" in done.stderr
+    assert "Start Docker Desktop" in done.stderr
+    assert "LocalAI on this Mac" in done.stderr
+    assert "1) Native     — run LocalAI as a process on the Apple GPU (Metal) (default)" in (
+        done.stderr
+    )
+    assert "Switching LocalAI back" not in done.stderr
+    assert "args=--localai-runtime=native" in done.stdout
+    assert "Public URL of LocalAI" not in done.stderr
+
+
+def test_interactive_setup_when_docker_does_not_answer_can_choose_the_container():
+    done = _setup_on(
+        "Darwin", "arm64", None, "--local-ai", interactive=True,
+        stubs="_prompt_localai_runtime() { echo container; }\n",
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    assert "Switching LocalAI back" not in done.stderr
+    assert "args=--localai-runtime=container" in done.stdout
+    assert "Public URL of LocalAI" in done.stderr
+    assert "url=https://papaia.example.com:8080" in done.stdout
 
 
 def test_interactive_setup_on_a_qualifying_mac_asks_and_keeps_native():
@@ -341,9 +372,22 @@ def test_the_container_runtime_and_an_unsupported_host_see_nothing(tmp_path, sta
     assert "py_cli localai-native-probe" not in done.stderr
 
 
-def test_a_bare_rerun_flags_the_stored_native_and_reconfigures_by_default():
-    done = _setup_on("Linux", "x86_64", "Ubuntu", "", interactive=True)
+@pytest.mark.parametrize("system, machine, engine", _NEVER_NATIVE)
+def test_a_bare_rerun_flags_the_stored_native_and_reconfigures_by_default(
+    system, machine, engine
+):
+    done = _setup_on(system, machine, engine, "", interactive=True)
     assert done.returncode == 0, done.stderr
     assert "LocalAI runtime   = native (Apple GPU), not available here" in done.stderr
     # An empty answer to "Reconfigure?" goes on to the questions (default yes here).
     assert "args=--localai-runtime=container" in done.stdout
+
+
+def test_a_bare_rerun_where_docker_does_not_answer_re_renders_by_default():
+    done = _setup_on("Darwin", "arm64", None, "", interactive=True)
+    assert done.returncode == 0, done.stderr
+    assert "not available here: Docker does not answer" in done.stderr
+    # An empty answer to "Reconfigure?" re-renders the stored configuration (default no).
+    assert "SETUP_PY" in done.stdout
+    assert "--localai-runtime" not in done.stdout
+    assert "LocalAI on this Mac" not in done.stderr

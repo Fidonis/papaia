@@ -1990,9 +1990,10 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   removes the override. It works on any host, also on a Mac whose Docker Desktop is not
   running and with a configuration restored on another machine. The seeded model list stays,
   and models in the old `localai-models` volume are not moved in either direction.
-- An interactive `setup` on a host that cannot run the native process (no Apple Silicon, another
-  Docker engine, or Docker Desktop not running) switches a stored `native` back to `container`
-  and says why; `setup -y` keeps it and warns.
+- An interactive `setup` on a host that can never run the native process (no Apple Silicon or
+  another Docker engine) switches a stored `native` back to `container` and says why. On a Mac
+  whose Docker Desktop does not answer it asks instead, with `native` as the default. `setup -y`
+  keeps `native` in both cases and warns.
 
 Until LocalAI is managed by launchd, `stop`, `upgrade` and `uninstall` do not stop the
 process: stop it in its terminal. `uninstall --clean-up` also leaves
