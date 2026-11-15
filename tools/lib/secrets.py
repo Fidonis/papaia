@@ -29,6 +29,9 @@ SECRET_ALIASES: dict[tuple[str, str], list[tuple[str, str]]] = {
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
     ("ai/localai", "LOCALAI_API_KEY"): [("ai/litellm", "LOCALAI_API_KEY")],
+    # LiteLLM holds the voice routes, so it signs its STT requests with the
+    # engine's key (the TTS engine has no auth of its own; see ADR 0011).
+    ("ai/voice", "VOICE_API_KEY"): [("ai/litellm", "VOICE_API_KEY")],
 }
 
 # Written to consumer secrets whose canonical lives in a skipped directory

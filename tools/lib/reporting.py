@@ -168,14 +168,22 @@ def print_keycloak_checklist(
     keycloak_cfg = integration.get("keycloak") or {}
     # Clients named under `client_secrets` are created by `start` (keycloak_role_sync);
     # the others remain a manual import.
-    managed = [c["path"] for c in keycloak_role_sync.managed_clients(manifest)]
+    managed_entries = keycloak_role_sync.managed_clients(manifest)
+    managed = [c["path"] for c in managed_entries]
     clients = [c for c in keycloak_cfg.get("clients") or [] if c not in managed]
     mappers = keycloak_cfg.get("client_mappers") or {}
     replace_secret_cfg = manifest.get("env_replace_secrets") or {}
 
     bundle_env = config_dir / "addons" / name / ".env"
     bundle_vals = common.parse_env_file(bundle_env)
-    replace_keys = [k for k, v in bundle_vals.items() if v.startswith("REPLACE_WITH_")]
+    # A managed client's secret may still carry the placeholder of a manual import (the
+    # form an older core needs); `addon start` generates it, so nothing is entered by hand.
+    managed_keys = {c["secret_env"] for c in managed_entries}
+    replace_keys = [
+        k
+        for k, v in bundle_vals.items()
+        if v.startswith("REPLACE_WITH_") and k not in managed_keys
+    ]
 
     notes = manifest.get("install_notes") or []
     # Written by hand in the manifest: a single step as a plain string is a list of one,
@@ -185,7 +193,10 @@ def print_keycloak_checklist(
 
     if managed:
         print()
-        print(f"Addon '{name}' — Keycloak clients created by 'papaia-ctl start':")
+        print(
+            f"Addon '{name}' — Keycloak clients created by 'papaia-ctl start' or "
+            "'papaia-ctl addon start' (their secrets are generated):"
+        )
         for rel in managed:
             print(f"   {addon_path / rel}")
 

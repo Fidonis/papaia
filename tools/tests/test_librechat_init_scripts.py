@@ -122,10 +122,62 @@ def test_an_operator_agent_with_an_addon_id_wins_and_survives_the_addon(
     assert _by_id(state, "agent_docs")["_id"] == first["_id"]
 
 
+def test_a_broken_operator_copy_keeps_the_agent_from_the_addon(data: Path, db: Path) -> None:
+    _write(data / "addon-agents" / "paperless__docs.yaml", _agent("docs", "From the add-on"))
+    _write(data / "agents" / "docs.yaml", _agent("docs", "From the operator"))
+    first = _by_id(_run("agents-init.js", data, db), "agent_docs")
+
+    _write(data / "agents" / "docs.yaml", "{not json")
+    state = _run("agents-init.js", data, db)
+    agent = _by_id(state, "agent_docs")
+    assert agent["name"] == "From the operator"
+    assert "papaia_managed_by" not in agent
+    assert "an operator file failed" in state["log"]
+
+    # Removing the add-on while the copy is broken deletes nothing.
+    (data / "addon-agents" / "paperless__docs.yaml").unlink()
+    state = _run("agents-init.js", data, db)
+    assert _by_id(state, "agent_docs")["_id"] == first["_id"]
+
+    _write(data / "agents" / "docs.yaml", _agent("docs", "From the operator"))
+    state = _run("agents-init.js", data, db)
+    assert _by_id(state, "agent_docs")["_id"] == first["_id"]
+
+
+def test_an_addon_agent_created_again_gets_a_new_document(data: Path, db: Path) -> None:
+    _write(data / "addon-agents" / "paperless__docs.yaml", _agent("docs"))
+    first = _by_id(_run("agents-init.js", data, db), "agent_docs")
+    (data / "addon-agents" / "paperless__docs.yaml").unlink()
+    _run("agents-init.js", data, db)
+
+    _write(data / "addon-agents" / "paperless__docs.yaml", _agent("docs"))
+    again = _by_id(_run("agents-init.js", data, db), "agent_docs")
+
+    assert again["_id"] != first["_id"]
+
+
+def test_a_removed_addon_agent_loses_acl_entries_of_every_type(data: Path, db: Path) -> None:
+    _write(data / "addon-agents" / "paperless__docs.yaml", _agent("docs"))
+    agent = _by_id(_run("agents-init.js", data, db), "agent_docs")
+    state = json.loads(db.read_text(encoding="utf-8"))
+    state["aclentries"].append(
+        {"_id": "oid800", "resourceType": "remoteAgent", "resourceId": agent["_id"]}
+    )
+    db.write_text(json.dumps(state), encoding="utf-8")
+
+    (data / "addon-agents" / "paperless__docs.yaml").unlink()
+    state = _run("agents-init.js", data, db)
+
+    assert state["aclentries"] == []
+
+
 def test_a_stored_bare_numeric_id_is_removed_with_its_acl_entry(data: Path, db: Path) -> None:
     state = json.loads(db.read_text(encoding="utf-8"))
     state["agents"] = [{"_id": "oid10", "id": 42, "name": "old"}]
-    state["aclentries"] = [{"_id": "oid11", "resourceType": "agent", "resourceId": "oid10"}]
+    state["aclentries"] = [
+        {"_id": "oid11", "resourceType": "agent", "resourceId": "oid10"},
+        {"_id": "oid12", "resourceType": "remoteAgent", "resourceId": "oid10"},
+    ]
     db.write_text(json.dumps(state), encoding="utf-8")
     _write(data / "agents" / "old.yaml", _agent(42))
 
@@ -133,6 +185,33 @@ def test_a_stored_bare_numeric_id_is_removed_with_its_acl_entry(data: Path, db: 
 
     assert [a["id"] for a in state["agents"]] == ["agent_42"]
     assert all(e["resourceId"] != "oid10" for e in state["aclentries"])
+
+
+def test_an_empty_tools_list_with_mcp_servers_means_every_server_tool(
+    data: Path, db: Path
+) -> None:
+    doc = {**_agent("docs"), "mcpServers": ["Paperless", "Wiki"], "tools": []}
+    _write(data / "agents" / "docs.yaml", doc)
+
+    state = _run("agents-init.js", data, db)
+
+    agent = _by_id(state, "agent_docs")
+    assert agent["tools"] == ["sys__all__sys_mcp_Paperless", "sys__all__sys_mcp_Wiki"]
+    assert agent["mcpServers"] == ["Paperless", "Wiki"]
+
+
+def test_a_named_tool_selection_and_an_agent_without_servers_stay_as_written(
+    data: Path, db: Path
+) -> None:
+    picked = {**_agent("picked"), "mcpServers": ["Paperless"]}
+    picked["tools"] = ["list_documents_mcp_Paperless"]
+    _write(data / "agents" / "picked.yaml", picked)
+    _write(data / "agents" / "plain.yaml", {**_agent("plain"), "tools": []})
+
+    state = _run("agents-init.js", data, db)
+
+    assert _by_id(state, "agent_picked")["tools"] == ["list_documents_mcp_Paperless"]
+    assert _by_id(state, "agent_plain")["tools"] == []
 
 
 def test_a_broken_addon_file_removes_nothing(data: Path, db: Path) -> None:

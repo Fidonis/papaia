@@ -491,6 +491,62 @@ def test_an_overlay_only_model_yaml_is_rendered_and_registered(repo_root, config
     assert _model_names(config_dir) == ["my-model"]
 
 
+_NOT_UTF8 = b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00\xff\xfe\x89PNG\r\n\x1a\n"
+
+
+def test_a_binary_file_in_the_localai_models_overlay_is_ignored(repo_root, config_dir):
+    """A Finder `.DS_Store` and any other file the init job does not copy stay out of the
+    render and the model list, as before overlay-only files were rendered at all."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    models = config_dir / "overlay" / "ai" / "localai" / "models"
+    models.mkdir(parents=True)
+    (models / ".DS_Store").write_bytes(_NOT_UTF8)
+    (models / "notes.bin").write_bytes(_NOT_UTF8)
+    (models / ".hidden.yaml").write_text("name: hidden\nparameters:\n  model: h.gguf\n")
+    (models / "my-model.yml").write_text("name: my-model\nparameters:\n  model: m.gguf\n")
+    _localai_overlay(
+        config_dir,
+        "models.txt",
+        "https://example.org/files/h.gguf\nhttps://example.org/files/m.gguf\n",
+    )
+    render_core.render(config_dir, repo_root)
+
+    rendered = config_dir / "ai" / "localai" / "models"
+    for name in (".DS_Store", "notes.bin", ".hidden.yaml", "my-model.yml"):
+        assert not (rendered / name).exists(), name
+    assert (rendered / "stub.yaml").is_file()
+    assert _model_names(config_dir) == []
+
+
+def test_a_binary_file_in_a_theme_overlay_is_ignored(repo_root, config_dir):
+    theme = repo_root / "src" / "infra" / "keycloak" / "themes" / "papaia" / "login"
+    theme.mkdir(parents=True)
+    (theme / "theme.properties").write_text("parent=keycloak\n", encoding="utf-8")
+    _setup_minimal(repo_root, config_dir)
+    overlay = config_dir / "overlay" / "infra" / "keycloak" / "themes" / "papaia"
+    (overlay / "login" / "resources" / "img").mkdir(parents=True)
+    (overlay / "login" / "resources" / "img" / "logo.png").write_bytes(_NOT_UTF8)
+    (overlay / ".DS_Store").write_bytes(_NOT_UTF8)
+    render_core.render(config_dir, repo_root)
+
+    rendered = config_dir / "infra" / "keycloak" / "themes" / "papaia"
+    assert (rendered / "login" / "theme.properties").read_text() == "parent=keycloak\n"
+    assert not (rendered / "login" / "resources" / "img" / "logo.png").exists()
+    assert not (rendered / ".DS_Store").exists()
+
+
+def test_an_overlay_only_model_yaml_that_is_not_utf8_is_named(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    models = config_dir / "overlay" / "ai" / "localai" / "models"
+    models.mkdir(parents=True)
+    (models / "broken.yaml").write_bytes(_NOT_UTF8)
+    with pytest.raises(render_core.RenderError, match="overlay/ai/localai/models/broken.yaml"):
+        render_core.render(config_dir, repo_root)
+
+
 def test_an_overlay_only_model_yaml_that_does_not_parse_is_named(repo_root, config_dir):
     _install_localai(repo_root, "")
     _setup_minimal(repo_root, config_dir)
@@ -555,6 +611,64 @@ def test_every_shipped_model_yaml_matches_a_line_of_the_shipped_list():
         model = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert path.name == f"{model['name']}.yaml"
         assert model["parameters"]["model"] in files, path.name
+
+
+# LocalAI reads these as top-level keys of a model config and silently ignores them under
+# `parameters` (it then runs with its own defaults, e.g. a 4096 context and f16 off).
+_LOCALAI_TOP_LEVEL_KEYS = ("context_size", "f16", "threads")
+
+
+def test_the_shipped_model_yamls_keep_the_runtime_keys_at_the_top_level():
+    for path in sorted((REAL_REPO / "src" / "ai" / "localai" / "models").glob("*.yaml")):
+        model = yaml.safe_load(path.read_text(encoding="utf-8"))
+        misplaced = [k for k in _LOCALAI_TOP_LEVEL_KEYS if k in model["parameters"]]
+        assert misplaced == [], f"{path.name}: {misplaced} belong at the top level"
+        assert "context_size" in model, path.name
+
+
+def _install_voice_module(repo_root):
+    """The real voice module's fragments and its TTS config base, not stand-ins,
+    so the test breaks when they drift from the render layering."""
+    shutil.copytree(
+        REAL_REPO / "src" / "ai" / "voice" / "integration",
+        repo_root / "src" / "ai" / "voice" / "integration",
+    )
+    shutil.copy(
+        REAL_REPO / "src" / "ai" / "voice" / "chatterbox.yaml",
+        repo_root / "src" / "ai" / "voice" / "chatterbox.yaml",
+    )
+
+
+def test_render_merges_the_voice_fragments_only_while_the_profile_is_active(
+    repo_root, config_dir
+):
+    _install_voice_module(repo_root)
+    _setup_minimal(repo_root, config_dir)
+
+    _set_profiles(config_dir, "keycloak,librechat,litellm,voice")
+    render_core.render(config_dir, repo_root)
+
+    speech = _rendered_librechat(config_dir)["speech"]
+    assert speech["stt"]["openai"]["url"] == "http://litellm:4000/v1/audio/transcriptions"
+    assert speech["tts"]["openai"]["voices"] == ["Karlsson.wav", "Hokuspokus.wav", "Emily.wav"]
+    litellm = yaml.safe_load(
+        (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    )
+    names = [entry["model_name"] for entry in litellm["model_list"]]
+    assert names == ["voice-stt", "voice-tts"], "fragment entries must append to the base list"
+    tts_config = yaml.safe_load(
+        (config_dir / "ai/voice/chatterbox.yaml").read_text(encoding="utf-8")
+    )
+    assert tts_config["generation_defaults"]["language"] == "de"
+
+    _set_profiles(config_dir, "keycloak,librechat,litellm")
+    render_core.render(config_dir, repo_root)
+
+    assert "speech" not in _rendered_librechat(config_dir)
+    litellm = yaml.safe_load(
+        (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    )
+    assert litellm["model_list"] == []
 
 
 # ── LibreChat agents and prompts of add-ons ───────────────────────────────────

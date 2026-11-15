@@ -14,7 +14,13 @@ litellm_settings:
   drop_params: true              # ignore unknown/unsupported params silently
   num_retries: 2
   request_timeout: 600
-  callbacks: ["prometheus"]     # expose /metrics for Prometheus scraping
+  # prometheus exposes /metrics for scraping. papaia_hooks (mounted next to
+  # this file) hides deployments marked `model_info: {discoverable: false}`
+  # from the model listings for every key — LiteLLM's own flag spares admin
+  # keys, and the key LibreChat holds is the master key, so non-chat routes
+  # (the voice profile's audio routes) would otherwise show up as selectable
+  # chat models. Hidden routes stay fully callable.
+  callbacks: ["prometheus", "papaia_hooks.papaia_listing_filter"]
 
 router_settings:
   routing_strategy: least-busy  # prefer least-loaded model replica

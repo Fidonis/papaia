@@ -52,6 +52,10 @@
                 "type": ["string", "null"],
                 "description": "What a change_me key gets without an answer: the core value named by default_from_core, else the manifest's default."
               },
+              "managed": {
+                "description": "A replace_secret key of a client named under client_secrets: papaia-ctl generates it and creates the client, so nothing is copied in. Absent in plans of earlier versions.",
+                "type": "boolean"
+              },
               "label": { "type": ["string", "null"] }
             }
           }

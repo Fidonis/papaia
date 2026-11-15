@@ -1,4 +1,4 @@
-"""The optional modules (LocalAI, web search, the RAG system, the mail relay): what each owns.
+"""The optional modules (LocalAI, web search, RAG, the mail relay, voice): what each owns.
 
 Switching a module off removes its containers and keeps everything else (`stop --clean-up`,
 then `setup --no-<module>`). Two things can follow, and they are separate on purpose:
@@ -122,6 +122,14 @@ MODULES: dict[str, ModuleSpec] = {
         profile="smtp",
         env_dirs=("infra/smtp-relay",),
         files=("infra/smtp-relay/upstream-password",),
+    ),
+    "voice": ModuleSpec(
+        name="voice",
+        profile="voice",
+        env_dirs=("ai/voice",),
+        # The accelerator choice lives in the root .env (like LOCALAI_IMAGE_VARIANT),
+        # so a module reset must restore it to the template's cpu default too.
+        root_keys=("VOICE_TTS_IMAGE_VARIANT",),
     ),
 }
 

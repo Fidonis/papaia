@@ -16,7 +16,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-firecrawl:
-    image: ghcr.io/firecrawl/firecrawl-mcp-server@sha256:77f1a6f861c8a644684cf8c10000b18c5d73d6549763bf8df0994a5649e5efce
+    image: ghcr.io/firecrawl/firecrawl-mcp-server@sha256:d9015c8ced7fc4c7186e8c07d8cae206803252c381992534f05e4e15242f2164
     # Upstream publishes this image for linux/amd64 only. Pinning the platform lets an
     # arm64 host run it emulated (Rosetta on Docker Desktop, QEMU/binfmt on Linux arm64)
     # instead of failing the pull. Drop it once a multi-arch image exists.
