@@ -40,6 +40,7 @@ BASE_RENDER_TARGETS: list[str] = [
     "ai/litellm/prometheus.yml",
     "ai/localai/models.txt",
     "ai/localai/models",
+    "ai/voice/chatterbox.yaml",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
     "infra/keycloak/themes/papaia",
@@ -52,7 +53,7 @@ _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 # profile is active -- a stack without the RAG system must not list its MCP
 # servers in LibreChat. The fragments sit between the repo base and the add-on
 # layer.
-PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag"}
+PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag", "voice": "src/ai/voice"}
 
 # LiteLLM's configuration, which takes the generated model_list of the LocalAI models.
 LITELLM_CONFIG = "ai/litellm/config.yaml"
