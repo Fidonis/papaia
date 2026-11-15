@@ -26,6 +26,8 @@
 // directory or the UI are never deleted. An operator file with the id of an
 // add-on agent wins: the add-on file is skipped with a warning and the stored
 // agent loses its add-on mark, so it survives the removal of the add-on.
+// While an operator file fails, its id is unknown: add-on files then leave
+// every stored agent without the add-on mark alone, and nothing is removed.
 //
 // Silent if the directories are empty or missing (default behaviour for
 // deployments that don't opt in via LIBRECHAT_AGENTS_DIR). Non-fatal:
@@ -85,7 +87,10 @@ const TAKEN = Symbol('taken');
 
 // Upserts one agent file. Returns the stored agent id, null when the file is
 // skipped, or TAKEN when an add-on file collides with an operator agent.
-async function upsertAgent(db, dir, file, managedBy, taken) {
+// `guarded` is set while an operator file failed: an add-on file then does not
+// take over a stored agent that has no add-on mark, since that agent may be the
+// failed file's.
+async function upsertAgent(db, dir, file, managedBy, taken, guarded) {
   const agents = db.collection('agents');
   const raw = fs.readFileSync(path.join(dir, file), 'utf8');
   const doc = yaml.load(raw);
@@ -103,11 +108,29 @@ async function upsertAgent(db, dir, file, managedBy, taken) {
     warn(`${file}: ${agentId} is provided by the operator directory — the add-on file is skipped`);
     return TAKEN;
   }
+  if (managedBy && guarded) {
+    const existing = await agents.findOne({ id: agentId }, { projection: { papaia_managed_by: 1 } });
+    if (existing && existing.papaia_managed_by === undefined) {
+      warn(`${file}: ${agentId} is stored without an add-on mark and an operator file failed — the add-on file is skipped`);
+      return TAKEN;
+    }
+  }
 
   const authorId = await resolveAuthorId(db.collection('users'), doc);
   if (!authorId) {
     warn(`${file}: no LibreChat user available to own the agent — skip`);
     return null;
+  }
+
+  // LibreChat equips a stored agent from `tools` alone; `mcpServers` adds no
+  // tools by itself. An empty list next to MCP servers therefore means every
+  // tool of those servers, so the per-server wildcard key is derived. A
+  // non-empty list is stored as written: single keys (<tool>_mcp_<server>)
+  // keep the tool prompt small, which small local models need.
+  const mcpServers = Array.isArray(doc.mcpServers) ? doc.mcpServers : [];
+  let tools = Array.isArray(doc.tools) ? doc.tools : [];
+  if (tools.length === 0 && mcpServers.length > 0) {
+    tools = mcpServers.map((server) => `sys__all__sys_mcp_${server}`);
   }
 
   const update = {
@@ -117,9 +140,9 @@ async function upsertAgent(db, dir, file, managedBy, taken) {
     provider: doc.provider,
     model: doc.model,
     instructions: doc.instructions ?? '',
-    mcpServers: Array.isArray(doc.mcpServers) ? doc.mcpServers : [],
+    mcpServers,
     model_parameters: doc.model_parameters ?? {},
-    tools: Array.isArray(doc.tools) ? doc.tools : [],
+    tools,
     // Re-stamp the author on every run so a re-imported agent stays
     // owned by the right user even if the user document was rebuilt.
     author: authorId,
@@ -150,9 +173,8 @@ async function upsertAgent(db, dir, file, managedBy, taken) {
   if (agentId !== doc.id) {
     const stale = await agents.findOneAndDelete({ id: doc.id });
     if (stale) {
-      await db
-        .collection('aclentries')
-        .deleteMany({ resourceType: 'agent', resourceId: stale._id });
+      // Every entry on the document, whatever its resource type.
+      await db.collection('aclentries').deleteMany({ resourceId: stale._id });
       log(`removed ${doc.id}, stored without the agent_ prefix`);
     }
   }
@@ -199,10 +221,7 @@ async function removeTombstones(db, keep) {
   const objectIds = gone.map((a) => a._id);
   const ids = gone.map((a) => a.id);
   await agents.deleteMany({ _id: { $in: objectIds } });
-  await db.collection('aclentries').deleteMany({
-    resourceType: 'agent',
-    resourceId: { $in: objectIds },
-  });
+  await db.collection('aclentries').deleteMany({ resourceId: { $in: objectIds } });
   await db.collection('projects').updateMany({}, { $pull: { agentIds: { $in: ids } } });
   log(`removed ${ids.join(', ')} (add-on no longer provides them)`);
 }
@@ -224,6 +243,8 @@ async function main() {
 
     let upserted = 0;
     let failed = 0;
+    // A failed operator file may provide the id of a stored agent: see `guarded`.
+    let operatorFailed = operatorFiles === null;
     // Ids the operator directory provides; an add-on file cannot take them over.
     const taken = new Set();
     for (const file of operatorFiles || []) {
@@ -233,10 +254,12 @@ async function main() {
           taken.add(agentId);
           upserted += 1;
         } else {
+          operatorFailed = true;
           failed += 1;
         }
       } catch (err) {
         warn(`${file}: ${err.message}`);
+        operatorFailed = true;
         failed += 1;
       }
     }
@@ -247,7 +270,7 @@ async function main() {
     for (const file of addonFiles || []) {
       const managedBy = file.includes('__') ? file.split('__')[0] : null;
       try {
-        const agentId = await upsertAgent(db, ADDON_AGENTS_DIR, file, managedBy, taken);
+        const agentId = await upsertAgent(db, ADDON_AGENTS_DIR, file, managedBy, taken, operatorFailed);
         if (agentId === TAKEN) continue;
         if (agentId) {
           keep.push(agentId);
@@ -263,8 +286,8 @@ async function main() {
       }
     }
     // A file that failed may still own a stored agent: remove nothing then.
-    if (addonFailed) {
-      warn('an add-on agent failed — skipping the removal of stale add-on agents');
+    if (addonFailed || operatorFailed) {
+      warn('an agent file failed — skipping the removal of stale add-on agents');
     } else {
       await removeTombstones(db, keep);
     }

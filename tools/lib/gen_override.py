@@ -338,6 +338,68 @@ def generate_localai_gpu_override(
     )
 
 
+_VOICE_COMPOSE = "src/ai/voice/docker-compose.yml"
+
+# voice variant id -> gpu_detect variant whose Compose device fragment applies.
+# The voice catalogue is shorter than LocalAI's because upstream publishes
+# fewer accelerator builds (see the x-papaia-voice-tts-gpu-images mapping).
+_VOICE_VARIANT_FRAGMENT = {
+    "nvidia": gpu_detect.NVIDIA_CUDA_12,
+    "hipblas": gpu_detect.HIPBLAS,
+}
+
+
+def _voice_gpu_images(repo_root: Path) -> dict[str, str]:
+    """The accelerator image per voice variant, pinned in the voice compose file.
+
+    Read back on every render for the same reason as _localai_base_image: a
+    release that bumps the pins must carry through without a stale image
+    surviving in the generated override."""
+    try:
+        doc = yaml.safe_load((repo_root / _VOICE_COMPOSE).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    images = doc.get("x-papaia-voice-tts-gpu-images")
+    if not isinstance(images, dict):
+        return {}
+    return {k: v for k, v in images.items() if isinstance(v, str)}
+
+
+def generate_voice_gpu_override(
+    config_dir: Path,
+    repo_root: Path,
+    variant: str,
+    dev_root: Path = Path("/dev"),
+) -> None:
+    """Write or remove the voice TTS accelerator override.
+
+    CPU is the image pinned in the voice compose file, so it needs no override
+    at all -- the file is removed instead, which is also what makes switching
+    a host back from GPU to CPU actually take effect."""
+    out_path = config_dir / "overrides" / "docker-compose.voice-gpu.override.yml"
+
+    # cpu (and anything unknown) short-circuits before the compose file is
+    # parsed, like the LocalAI counterpart above.
+    fragment_variant = _VOICE_VARIANT_FRAGMENT.get(variant) if variant else None
+    if fragment_variant is None:
+        out_path.unlink(missing_ok=True)
+        return
+    image = _voice_gpu_images(repo_root).get(variant)
+    if image is None:
+        out_path.unlink(missing_ok=True)
+        return
+
+    # The accelerator images are published for linux/amd64, same as the CPU
+    # build, so the platform pin of the base service stays correct.
+    service: dict = {"image": image}
+    service.update(gpu_detect.compose_fragment(fragment_variant, dev_root))
+
+    override = {"services": {"chatterbox": service}}
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+
+
 def generate_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:
     """Write or remove the SSL_CERT_FILE override for external OIDC.
 

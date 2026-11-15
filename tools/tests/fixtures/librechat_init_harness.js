@@ -6,7 +6,9 @@
 // <data-root> replaces /app/api/data, so the script reads the test's agent and prompt
 // files. The database starts from <state.json> (collection name -> documents) and is
 // written back there when the script exits. js-yaml is replaced by JSON.parse, so the
-// test files are written as JSON, which is YAML too.
+// test files are written as JSON, which is YAML too. The counter for new `_id`s is kept
+// in the state file under `__nextId`, so a document deleted in one run and created again
+// in a later one gets a new `_id`, as in MongoDB.
 
 'use strict';
 
@@ -16,7 +18,8 @@ const Module = require('module');
 const [script, dataRoot, statePath] = process.argv.slice(2);
 const APP_DATA = '/app/api/data';
 const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-let nextId = 1;
+let nextId = state.__nextId || 1;
+delete state.__nextId;
 for (const docs of Object.values(state)) {
   for (const doc of docs) {
     const n = Number(String(doc._id).replace(/^oid/, ''));
@@ -172,7 +175,7 @@ Module._load = function stubbed(request, ...rest) {
 
 const exit = process.exit;
 process.exit = (code) => {
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  fs.writeFileSync(statePath, JSON.stringify({ ...state, __nextId: nextId }, null, 2));
   exit(code);
 };
 process.env.MONGO_URI = 'mongodb://stand-in';
