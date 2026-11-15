@@ -55,9 +55,10 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
+| Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
 
-`localai`, `manager`, `librechat-websearch`, `rag` and `smtp` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`). When LocalAI is enabled, setup also asks
+`localai`, `manager`, `librechat-websearch`, `rag`, `smtp` and `voice` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
 The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
@@ -296,6 +297,8 @@ papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
+papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
+                     [--config-dir=PATH]
 papaia-ctl topology  <show [--json]|validate|firewall [--format=table|json|csv]>
                      [--config-dir=PATH]
 papaia-ctl node      <add|list|check|remove|join-bundle|renew-link|sync> [OPTIONS]
@@ -342,6 +345,8 @@ tools/papaia-ctl setup [OPTIONS]
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
 | `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
+| `--voice` / `--no-voice` | _(prompted, default off)_ | Toggle the `voice` profile (the local [speech engines](#voice-local-speech)) |
+| `--voice-variant=cpu\|nvidia\|hipblas\|auto` | _(prompted while voice is on)_ | Which image the TTS engine runs on; `auto` probes the host like the LocalAI image choice |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
 | `--smtp-security=MODE` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (no encryption and no login) |
@@ -558,6 +563,13 @@ Stops and removes all core containers, then **permanently deletes the config dir
 Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
 Docker volumes. `--addons` stops and removes active add-on containers first.
 
+Some data below the config directory is written by containers as root (the Nginx Proxy Manager
+database and certificates in `infra/nginx/nginx-data/`, for one). What the operator cannot
+delete is deleted through a short-lived `alpine:3` container that mounts the directory. If that
+fails too, `uninstall` exits 1 and names the directory and the `sudo rm -rf` that removes it.
+It never does this for `/` or for a directory that is or contains the home directory or the
+papaia checkout.
+
 ### `backup`
 
 ```bash
@@ -700,6 +712,53 @@ and touches no other node. A whole restore stops every node, puts the controller
 configuration back, hands every node its bundle and release, writes back each node's data and
 starts the installation. A restore point taken of a single host is refused in a distributed
 installation, and the other way round. `--restart-clean` is not available there.
+
+### `librechat clear-history`
+
+```bash
+tools/papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y] \
+                                         [--config-dir=PATH]
+```
+
+Removes one LibreChat user's history before an account is used again: a training or test
+account, or the account of someone who left. It removes the user's conversations with their
+sub-threads, their messages, their shared links and the tool call records of those
+conversations, and the user's files (records and stored files). Without `--before` that is
+every file of the user, including files in "My files" that were never attached to a chat;
+with `--before`, only the files of the conversations that go. The account, its sign-in, its
+MCP connections, its agents and prompts, its avatar, the files an agent uses, and everything
+the stack provisions stay.
+
+Two kinds of data also stay, and matter on a shared or training account:
+
+- **Memories.** When memory extraction is switched on in an overlay, the user's memory
+  entries stay and the next person on the account sees them. Remove them in LibreChat's
+  memory settings before the account is handed on.
+- **Agent checkpoints** of runs paused for a tool approval or a question to the user. LibreChat
+  removes them together with its run queue, which this command cannot reach from outside the
+  server process. They expire after 24 hours on their own.
+
+The counts list sub-threads under conversations (`4 (including 2 sub-threads)`), so they can be
+higher than the number of chats the user sees.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `<email>` | _(required)_ | E-mail address of the LibreChat user. An unknown address is an error |
+| `--before=YYYY-MM-DD` | _(everything)_ | Only conversations last updated before that day (00:00 UTC), with their sub-threads, messages, files and shared links. A sub-thread goes with its conversation, never on its own date. An empty value is an error |
+| `--dry-run` | off | Print what would be removed, per kind, and change nothing |
+| `-y` / `--yes` | _(prompt)_ | Skip the confirmation. Without a terminal, `-y` is required |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Without `-y` the counts are shown first and the deletion waits for a `y`. **The deletion
+cannot be undone** except by restoring a backup; `restore --only=module:librechat` brings back the data of every LibreChat user, not of one.
+
+The command needs the running stack: it runs inside the LibreChat container, through
+LibreChat's own data and file-storage code, so it follows LibreChat's layout across
+releases. Run it while the user is not chatting; a reply that is still being written can
+leave a message behind. In a distributed installation, run it on the node that runs
+LibreChat. Exit status 0 on success, 1 when the user is unknown, LibreChat is not running,
+or a file could not be removed from storage (its record is kept and named), 2 for wrong
+arguments (also an address or a date that is not one), 3 when the confirmation is declined.
 
 ### `addon`
 
@@ -1625,8 +1684,11 @@ external OIDC provider, create the same objects there yourself.
 
 **First steps after the first start**
 
-1. Add an embedding model to LiteLLM. The core ships no models, so nothing can be embedded or
-   searched before that.
+1. Make the embedding model available in LiteLLM under the name in `RAG_EMBEDDINGS_MODEL`
+   (default `nomic-embed-text`). With LocalAI, activate its line in the LocalAI `models.txt`
+   ([LocalAI models in LiteLLM](#localai-models-in-litellm)); otherwise add a model in LiteLLM.
+   Nothing can be embedded or searched before that. `setup` leaves this step out when the
+   rendered LiteLLM configuration already lists the model.
 2. Give the people who run ingestion through the MCP tools the `qdrant-ingest-operator` realm
    role. Without it the ingester's MCP tools reject them. `qdrant-admin` is a break-glass role
    for the MCP server's access rules; both are included in `papaia-admin`.
@@ -1718,6 +1780,129 @@ backup` includes it and `restore --only=module:smtp-relay` restores it. The pass
 configuration backup in plain text, like the other secrets. The design and its limits are in
 [ADR 0007](docs/adr/0007-outbound-mail-through-an-internal-relay.md).
 
+### LocalAI models in LiteLLM
+
+LiteLLM is LocalAI's only API client. While the `localai` profile is on, every render adds the
+LocalAI models to LiteLLM's `model_list`: a model is registered under its YAML `name` when a model
+YAML in `ai/localai/models/` points (`parameters.model`) at the file of an active line in
+`ai/localai/models.txt`. A YAML with `embeddings: true` is registered as an embedding model. The
+shipped list has every line commented out, so nothing is registered and downloaded until you
+activate lines.
+
+Change the list through an overlay copy, not the rendered file, which every render overwrites:
+
+```bash
+mkdir -p "$PAPAIA_CONFIG_DIR/overlay/ai/localai"
+cp src/ai/localai/models.txt "$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt"
+# uncomment e.g. the Qwen2.5-1.5B and nomic-embed-text lines, then
+tools/papaia-ctl start
+docker restart papaia-litellm-1   # the container name of your project
+```
+
+`start` renders the new `model_list`, but LiteLLM reads its configuration only when it starts,
+and a running LiteLLM is not recreated for a changed configuration file. Restart it after every
+change of the list (and after any other edit of the LiteLLM overlay), as above; until then it
+lists the models it had.
+
+The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
+`<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
+`$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` and its URL in the overlay `models.txt`. Only
+the `*.yaml` files at the top of that directory are used, as the init job copies nothing else;
+other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `context_size`,
+`threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
+An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
+
+LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
+copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. A key
+you change in `ai/localai/.env` reaches LiteLLM only on the next `setup`. The
+generated entries name only the variable (`os.environ/LOCALAI_API_KEY`), never the key. A request
+with this key has admin rights in LocalAI (it can install and delete models), so keep it out of
+other clients.
+
+A model downloads to `<file>.part` and is renamed when it is complete, so an interrupted
+download is fetched again on the next `start`.
+
+> **Upgrading:** if you registered a LocalAI model in the LiteLLM Admin UI under one of the
+> generated names (`store_model_in_db: true`), LiteLLM now has two deployments for that name and
+> splits the traffic between them. Delete the Admin UI entry.
+
+### Voice (local speech)
+
+The `voice` profile adds two internal services: `speaches`, a Whisper server for speech-to-text,
+and `chatterbox`, a Chatterbox Multilingual server for text-to-speech. Neither publishes a host
+port. LiteLLM fronts both as the models `voice-stt` and `voice-tts`, so any holder of a LiteLLM
+key can call `/v1/audio/transcriptions` and `/v1/audio/speech` on the LiteLLM endpoint — an
+automation, an agent, your own web app — with spend tracking attached, and LibreChat's speech
+panel goes through the same routes. Audio is processed on your host; nothing reaches a cloud
+service.
+
+What you get once it is on: a microphone button next to LibreChat's message box, spoken replies,
+and transcription of uploaded audio files. Defaults are tuned for German (`languageSTT: de-DE`);
+each user can change language, voice and engines under **Settings → Speech**. A semi-automatic
+voice conversation works with one keypress per turn (Shift+Alt+L starts the recording; it stops
+on silence, sends, and the reply plays back automatically). Spoken replies use the browser's own
+voice by default — the local TTS engine is wired up but **opt-in per user** (switch
+**Settings → Speech → Text-to-speech engine** to `External`), because on CPU it synthesizes
+slower than real time and LibreChat cuts off a playback stream that stalls 15 s. On a host with
+an NVIDIA or AMD GPU, install the accelerator image instead (`--voice-variant`, prompted during
+setup) — then the local voice is fast enough for live playback and worth making the per-account
+default. Calls through the `voice-tts` LiteLLM route are not affected by the playback timeout —
+generating audio files from an automation just takes its time.
+
+**Enable it** with `papaia-ctl setup`: the wizard asks whether to install the voice engines.
+Non-interactively:
+
+```bash
+tools/papaia-ctl setup -y --voice
+```
+
+**Requirements and first start.** The TTS model stays resident once loaded — plan roughly
+**6 GB of RAM on top** of the stack's baseline (the container is capped by `VOICE_TTS_MEM_LIMIT`,
+default 8g). On the first start the models are downloaded from huggingface.co into named volumes
+(~1.6 GB Whisper, installed by the one-shot `speaches-model-init` container; ~3.2 GB Chatterbox,
+fetched by the server itself — it answers requests only once that is done); later starts are
+offline. An interrupted download is resumed on the next start. For an air-gapped installation,
+run the first start on a connected network or copy a populated
+`speaches-hf-cache` / `chatterbox-hf-cache` volume over. On a CPU-only host, speech-to-text is
+fast enough for dictation; text-to-speech lags behind real time, which is why spoken replies
+default to the browser engine (see above). With `--voice-variant=nvidia` (CUDA) or `--voice-variant=hipblas`
+(ROCm) the TTS engine runs on the GPU through a generated override in
+`$PAPAIA_CONFIG_DIR/overrides/` — the same mechanism as the LocalAI accelerator images, with the
+same host prerequisites (driver plus, for NVIDIA, the Container Toolkit). Both engines process
+one request at a time; they are sized for a handful of users speaking occasionally, not for
+parallel transcription jobs.
+
+**The microphone needs a secure context.** Browsers only expose recording on HTTPS pages or on
+literally `localhost` — on `http://host.docker.internal:8000` or a plain-HTTP LAN address the
+microphone button reports a permission error. Use the HTTPS route of your reverse proxy (or
+`http://localhost:<port>` on the host itself).
+
+**Models and voices.** The transcription model (`deepdml/faster-whisper-large-v3-turbo-ct2`, MIT)
+is named twice: `VOICE_STT_MODEL` in `ai/voice/.env` tells the init container what to install,
+and the LiteLLM route sends the same id per request. Swapping the model (for example for a
+German fine-tune, or `Systran/faster-whisper-small` on tight memory) means: set
+`VOICE_STT_MODEL`, add a route for the new id under a **new** model name through the LiteLLM
+overlay (`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml` — `model_list` entries merge
+additively, so an overlay entry reusing the name `voice-stt` would be load-balanced against
+the shipped route, not replace it), and point `speech.stt.openai.model` at the new name
+through the LibreChat overlay. The TTS server is configured through
+`ai/voice/chatterbox.yaml` (same overlay mechanism). The TTS engine clones whatever reference
+voice a request names — accent included — so the module ships two public-domain German
+audiobook voices (default `Karlsson.wav`, see `src/ai/voice/voices/README.md` for sources and
+how to add your own); the English samples inside the image remain selectable. The engine
+watermarks its audio output (Resemble Perth), which makes generated speech identifiable as such.
+
+**Operator note (GDPR).** Voice recordings are personal data. Recorded audio is transcribed and
+discarded, but the **transcripts become ordinary chat messages**: they are stored in LibreChat's
+MongoDB and indexed by Meilisearch like anything a user types. Add the voice feature to your
+records of processing activities and inform your users. Note also that the browser speech
+engines (`Browser` STT/TTS in the user settings) use whatever the browser provides — on many
+platforms that is a cloud service of the browser vendor, not a local engine.
+
+The engines' volumes hold only re-downloadable model caches; `papaia-ctl backup` includes them
+like every named volume. The design, the engine choice and its trade-offs are in
+[ADR 0011](docs/adr/0011-local-voice-as-an-optional-core-profile.md).
+
 ### GPU acceleration for LocalAI
 
 LocalAI is pinned to the CPU image by default. Upstream publishes one image per accelerator
@@ -1754,8 +1939,8 @@ like CPU ones. The image swap and the device passthrough live in a generated
 
 Two caveats worth knowing:
 
-- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in the model
-  YAMLs under `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in overlay
+  copies of the model YAMLs under `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/`.
 - **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
 

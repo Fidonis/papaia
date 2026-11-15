@@ -12,7 +12,16 @@ import pytest
 import yaml
 from install_helpers import REPO, Installation, run_cli
 
-from lib import cli, common, deployment, envtree, keycloak_role_sync, npm_provision, topology
+from lib import (
+    cli,
+    common,
+    deployment,
+    envtree,
+    keycloak_role_sync,
+    npm_provision,
+    secrets,
+    topology,
+)
 from lib.topology import Node, Topology
 
 # Every service switched on, public URLs on subdomains: what a distributed installation
@@ -333,6 +342,29 @@ def test_localai_on_the_cpu_needs_no_hardware():
     assert errors(topo, env=env) == []
 
 
+VOICE_PROFILES = [*ALL_PROFILES, "voice"]
+
+
+def test_voice_tts_on_a_node_without_the_gpu_is_refused():
+    topo = two_nodes(voice="edge")
+    topo.nodes["edge"] = Node("edge", address="10.0.1.10", gpu="none")
+    env = {"VOICE_TTS_IMAGE_VARIANT": "nvidia"}
+    assert any("has gpu: none" in e for e in errors(topo, profiles=VOICE_PROFILES, env=env))
+
+
+def test_voice_tts_on_a_node_with_unknown_hardware_is_a_warning():
+    env = {"VOICE_TTS_IMAGE_VARIANT": "hipblas"}
+    found = warnings(two_nodes(voice="edge"), profiles=VOICE_PROFILES, env=env)
+    assert any("not recorded" in w for w in found)
+
+
+def test_voice_tts_on_the_cpu_needs_no_hardware():
+    env = {"VOICE_TTS_IMAGE_VARIANT": "cpu"}
+    topo = two_nodes(voice="edge")
+    topo.nodes["edge"] = Node("edge", address="10.0.1.10", gpu="none")
+    assert errors(topo, profiles=VOICE_PROFILES, env=env) == []
+
+
 def test_the_link_port_must_not_collide_with_a_published_port():
     env = {"LIBRECHAT_EXT_PORT": "7443", "HOST_IP": "0.0.0.0"}
     topo = two_nodes(**topology.preset_placement("dmz-split", "edge"))
@@ -570,6 +602,14 @@ def test_no_bundle_contains_a_secret_of_another_node(full: Installation, preset:
             d for s in topo.services_on(node, active) for d in topology.CATALOGUE[s].env_dirs
         }
         own = {v for d in own_dirs for v in by_dir.get(d, set())}
+        # A secret that setup copies into one of the node's own files is one its services
+        # use (LiteLLM sends LocalAI's key), wherever the service that owns it runs.
+        tree = envtree.load_config_dir_tree(full.config, full.repo)
+        own |= {
+            tree.get(canon_dir, {}).get(canon_key, "")
+            for (canon_dir, canon_key), aliases in secrets.SECRET_ALIASES.items()
+            if any(alias_dir in own_dirs for alias_dir, _ in aliases)
+        } - {""}
         referenced = topology.referenced_variables(
             topology.services_of(full.repo, topo.services_on(node, active))
         )

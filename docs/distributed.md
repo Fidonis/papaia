@@ -27,6 +27,7 @@ system. Every other node is reached over SSH and holds only what its own service
 | `librechat` | LibreChat, MongoDB, Meilisearch, the vector database, the RAG API | anywhere |
 | `websearch` | SearXNG, Firecrawl, MCP-Firecrawl, the Jina reranker | with `librechat` |
 | `localai` | LocalAI and its model download | on a node with the GPU its image needs |
+| `voice` | the speech engines (STT, TTS, model init) | anywhere; a GPU TTS image on a node with that GPU |
 | `rag` | Qdrant, its MCP server, the ingester, Tika | on the controller |
 | `smtp` | the mail relay | anywhere (best with `keycloak`) |
 | `manager` | papaia-manager | on the controller |

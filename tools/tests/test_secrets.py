@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from lib import common, envtree, secrets
+
+REAL_REPO = Path(__file__).resolve().parents[2]
 
 
 def test_generate_missing_secrets_is_sticky(repo_root):
@@ -246,3 +250,42 @@ def test_generate_missing_secrets_ignores_keys_without_generate_marker(repo_root
 
     assert tree["ai/librechat"]["EXTERNAL_API_KEY"] == ""
     assert tree["ai/librechat"]["STATIC_TOKEN"] == "keep-me"
+
+
+def test_generate_missing_secrets_shares_the_localai_key_with_litellm(repo_root):
+    """LiteLLM sends LocalAI's key; the shipped seeds mark it on the LocalAI side only."""
+    real = REAL_REPO / "src"
+    assert "LOCALAI_API_KEY=GENERATE_LOCALAI_API_KEY\n" in (
+        real / "ai/localai/.env.example"
+    ).read_text(encoding="utf-8")
+    assert "LOCALAI_API_KEY=\n" in (real / "ai/litellm/.env.example").read_text(encoding="utf-8")
+    seed = {
+        "ai/localai": {"LOCALAI_API_KEY": "GENERATE_LOCALAI_API_KEY"},
+        "ai/litellm": {"LOCALAI_API_KEY": ""},
+    }
+    tree = {"ai/localai": dict(seed["ai/localai"]), "ai/litellm": dict(seed["ai/litellm"])}
+    secrets.generate_missing_secrets(tree, seed)
+
+    key = tree["ai/localai"]["LOCALAI_API_KEY"]
+    assert key and not key.startswith("GENERATE_")
+    assert tree["ai/litellm"]["LOCALAI_API_KEY"] == key
+
+    # An existing installation: the key is sticky, and LiteLLM's copy follows it.
+    tree["ai/litellm"]["LOCALAI_API_KEY"] = ""
+    secrets.generate_missing_secrets(tree, seed)
+    assert tree["ai/localai"]["LOCALAI_API_KEY"] == key
+    assert tree["ai/litellm"]["LOCALAI_API_KEY"] == key
+
+
+def test_sync_env_gives_an_existing_installation_the_localai_key_on_both_sides(tmp_path):
+    for rel in ("ai/localai", "ai/litellm"):
+        (tmp_path / rel).mkdir(parents=True)
+        (tmp_path / rel / ".env").write_text("LOG_LEVEL=info\n", encoding="utf-8")
+
+    added = envtree.sync_new_env_keys(tmp_path, REAL_REPO)
+
+    assert "LOCALAI_API_KEY" in added["ai/localai"] and "LOCALAI_API_KEY" in added["ai/litellm"]
+    localai = common.parse_env_file(tmp_path / "ai/localai/.env")["LOCALAI_API_KEY"]
+    litellm = common.parse_env_file(tmp_path / "ai/litellm/.env")["LOCALAI_API_KEY"]
+    assert localai and not common.is_placeholder(localai)
+    assert litellm == localai

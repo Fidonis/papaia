@@ -312,7 +312,7 @@ _provisioning_step() {
 
 # The profiles of the optional modules. `stop --volumes` deletes data, so it is limited to
 # these: the always-on services (Keycloak, LibreChat, LiteLLM ...) and the manager keep theirs.
-_VOLUME_DELETE_PROFILES="localai librechat-websearch rag smtp"
+_VOLUME_DELETE_PROFILES="localai librechat-websearch rag smtp voice"
 
 _require_deletable_profiles() {
     local profiles="$1" profile allowed
@@ -480,9 +480,80 @@ cmd_uninstall() {
 
     if [ -d "$CONFIG_DIR" ]; then
         info "Deleting $CONFIG_DIR..."
-        rm -rf "$CONFIG_DIR"
+        if ! _remove_config_dir "$CONFIG_DIR"; then
+            exit 1
+        fi
     fi
     success "uninstall complete."
+}
+
+# Deletes the configuration directory. Containers write some of their bind-mounted data as
+# root (Nginx Proxy Manager's `infra/nginx/nginx-data/`, for one), which a non-root
+# operator cannot delete. What is left after the first attempt is deleted the way it was
+# written: by a short-lived container that mounts the directory. If that is not possible
+# either, the leftover path and the command that removes it are named.
+_remove_config_dir() {
+    local dir="$1" physical
+    rm -rf "$dir" 2>/dev/null || true
+    [ -e "$dir" ] || return 0
+
+    physical="$(_physical_path "$dir")" || physical=""
+    case "$physical" in
+        "")
+            error "Could not delete $dir completely; refusing to clean it up through a container."
+            error "Remove it by hand: sudo rm -rf '$dir'"
+            return 1
+            ;;
+        /)
+            error "$dir is the root directory; refusing to delete what is left in it."
+            return 1
+            ;;
+    esac
+    if _contains_path "$physical" "${HOME:-}"; then
+        error "$dir is or contains the home directory; refusing to delete what is left in it."
+        return 1
+    fi
+    if _contains_path "$physical" "${REPO_ROOT:-}"; then
+        error "$dir is or contains the papaia checkout; refusing to delete what is left in it."
+        return 1
+    fi
+
+    info "Some files in $dir belong to root (written by containers); deleting them through a container..."
+    if command -v docker >/dev/null 2>&1 \
+        && _docker_run --network none -v "$(_docker_hostpath "$physical"):/target" \
+            "$BACKUP_IMAGE" find /target -mindepth 1 -delete; then
+        rm -rf "$dir" 2>/dev/null || true
+    fi
+    if [ -e "$dir" ]; then
+        error "Could not delete $dir completely."
+        error "Remove what is left with: sudo rm -rf '$dir'"
+        return 1
+    fi
+    return 0
+}
+
+# True when the physical path of $2 is $1 (a path from _physical_path) or lies below it.
+# An empty or unresolvable $2 contains nothing.
+_contains_path() {
+    local outer="$1" inner
+    [ -n "$2" ] || return 1
+    inner="$(_physical_path "$2")" || return 1
+    [ "$inner" = "$outer" ] && return 0
+    case "$inner" in "$outer"/*) return 0 ;; esac
+    return 1
+}
+
+# Prints the physical path of directory $1. `pwd -P` keeps a leading `//` (POSIX leaves
+# its meaning to the system), while Linux and Docker read it as `/`: without collapsing
+# it, `//` or `//home` would slip past the guards above and still be mounted as `/` or
+# `/home`.
+_physical_path() {
+    local path
+    path="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    while [ "${path#//}" != "$path" ]; do
+        path="${path#/}"
+    done
+    printf '%s' "$path"
 }
 
 _require_setup_done() {

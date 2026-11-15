@@ -489,3 +489,68 @@ def test_join_override_skips_a_target_without_app_network(
 
     assert not _join_override(config_dir, "joiner").exists()
     assert "declares no networks.app_network" in capsys.readouterr().err
+
+
+# ── voice TTS accelerator override ───────────────────────────────────────────
+
+
+def _voice_override(config_dir: Path) -> Path:
+    return config_dir / "overrides" / "docker-compose.voice-gpu.override.yml"
+
+
+def test_voice_gpu_override_reads_the_pinned_image_back(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_voice_gpu_override(config_dir, repo_root, "nvidia")
+
+    override = yaml.safe_load(_voice_override(config_dir).read_text(encoding="utf-8"))
+    chatterbox = override["services"]["chatterbox"]
+    # The fixture's fake pin — proof the image is read back from the compose
+    # file's x-papaia-voice-tts-gpu-images mapping, never stored elsewhere.
+    assert chatterbox["image"].startswith("example/tts:v9.9.9-cu@sha256:")
+    device = chatterbox["deploy"]["resources"]["reservations"]["devices"][0]
+    assert device["driver"] == "nvidia"
+
+
+def test_voice_gpu_override_hipblas_passes_kfd(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_voice_gpu_override(config_dir, repo_root, "hipblas")
+
+    chatterbox = yaml.safe_load(_voice_override(config_dir).read_text(encoding="utf-8"))[
+        "services"
+    ]["chatterbox"]
+    assert chatterbox["image"].startswith("example/tts:v9.9.9-rocm@sha256:")
+    assert chatterbox["devices"] == ["/dev/dri:/dev/dri", "/dev/kfd:/dev/kfd"]
+    assert chatterbox["group_add"] == ["video"]
+
+
+def test_voice_gpu_override_removed_for_cpu_and_unset(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_voice_gpu_override(config_dir, repo_root, "nvidia")
+    assert _voice_override(config_dir).is_file()
+
+    # Switching a host back to CPU has to take the override away again.
+    gen_override.generate_voice_gpu_override(config_dir, repo_root, "cpu")
+    assert not _voice_override(config_dir).exists()
+
+    gen_override.generate_voice_gpu_override(config_dir, repo_root, "nvidia")
+    gen_override.generate_voice_gpu_override(config_dir, repo_root, "")
+    assert not _voice_override(config_dir).exists()
+
+
+def test_voice_gpu_override_ignores_unknown_variant(config_dir, repo_root):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_voice_gpu_override(config_dir, repo_root, "vulkan")
+    assert not _voice_override(config_dir).exists()
+
+
+def test_voice_gpu_override_skipped_when_mapping_is_missing(config_dir, repo_root, tmp_path):
+    # A repo without the x- mapping (or without the compose file at all) must
+    # not produce an override pointing at an unknown image.
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    bare_repo = tmp_path / "bare-repo"
+    (bare_repo / "src" / "ai" / "voice").mkdir(parents=True)
+    (bare_repo / "src" / "ai" / "voice" / "docker-compose.yml").write_text(
+        "services:\n  chatterbox:\n    image: example/tts:v9.9.9-cpu\n", encoding="utf-8"
+    )
+    gen_override.generate_voice_gpu_override(config_dir, bare_repo, "nvidia")
+    assert not _voice_override(config_dir).exists()

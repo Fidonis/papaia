@@ -39,6 +39,7 @@ from . import (
     gen_override,
     gpu_detect,
     keycloak_role_sync,
+    librechat_history,
     migrations,
     modules,
     nodes,
@@ -58,6 +59,22 @@ def _tristate(value: str | None) -> bool | None:
     if value is None:
         return None
     return value == "true"
+
+
+def _apply_voice_gpu_override(config_dir: Path, repo_root: Path, tree: dict) -> None:
+    """Write or remove the voice TTS accelerator override for this tree.
+
+    The variant only materializes while the voice profile is active: a host that never
+    runs the TTS engine must not carry a stray accelerator override (an empty variant
+    removes the file)."""
+    root = tree.get("", {})
+    # Stripped like render_core parses the same value, so a hand-edited
+    # profile list with spaces cannot activate the fragments while this
+    # helper deletes the override.
+    active = "voice" in {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",")}
+    gen_override.generate_voice_gpu_override(
+        config_dir, repo_root, root.get("VOICE_TTS_IMAGE_VARIANT", "") if active else ""
+    )
 
 
 def cmd_defaults(args: argparse.Namespace) -> int:
@@ -207,6 +224,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_voice=_tristate(args.enable_voice),
+        voice_variant=args.voice_variant or None,
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
         smtp_port=args.smtp_port,
@@ -246,6 +265,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
+        tree = resolve.resolve_voice(tree, setup_args)
+        tree = resolve.resolve_voice_variant(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -303,6 +324,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -350,6 +372,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
     print("Rendered.")
@@ -903,6 +926,32 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_librechat_clear_history(args: argparse.Namespace) -> int:
+    """Count (`--dry-run`) or remove one user's LibreChat history. Exit 2 for an
+    address or date that is not one, 1 on every other failure, also when some files
+    could not be removed from storage."""
+    try:
+        librechat_history.validate_email(args.email)
+        if args.before is not None:
+            librechat_history.validate_before(args.before)
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    try:
+        result = librechat_history.clear_history(
+            Path(args.repo_root),
+            Path(args.config_dir),
+            args.email,
+            before=args.before,
+            dry_run=args.dry_run,
+        )
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(librechat_history.format_result(result, before=args.before))
+    return 1 if result.get("files_failed") else 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
@@ -1130,6 +1179,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
+    p_setup.add_argument("--voice-variant", choices=["cpu", "nvidia", "hipblas"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)
@@ -1416,6 +1467,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--skip", action="append", default=None)
     p_doctor.add_argument("--json", action="store_true")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_clear = sub.add_parser("librechat-clear-history")
+    p_clear.add_argument("--email", required=True)
+    p_clear.add_argument("--before", default=None)
+    p_clear.add_argument("--dry-run", action="store_true")
+    p_clear.set_defaults(func=cmd_librechat_clear_history)
 
     return parser
 
