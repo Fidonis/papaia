@@ -165,6 +165,7 @@ SECRET_ALIASES = {
         ("ai/rag", "QI_EMBEDDING_API_KEY"),
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
+    ("ai/localai", "LOCALAI_API_KEY"): [("ai/litellm", "LOCALAI_API_KEY")],
     ("ai/voice", "VOICE_API_KEY"): [("ai/litellm", "VOICE_API_KEY")],
 }
 
