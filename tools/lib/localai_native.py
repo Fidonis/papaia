@@ -47,8 +47,9 @@ _BINARY_PREFIX = "local-ai-"
 
 # What `setup` puts into the overlay model list when the runtime becomes native: one chat
 # model and the embedding model RAG_EMBEDDINGS_MODEL names. Qwen2.5-7B (Q5_K_M, 5.4 GB)
-# because it runs at about 58 tokens/s on Metal and fits a 16 GB Mac next to the stack
-# (ADR 0012); the 1.5B line of the shipped list stays available for smaller machines.
+# because it runs at about 58 tokens/s on Metal (measured on a 128 GB Mac); whether it fits
+# a 16 GB Mac next to the stack is not measured yet (ADR 0012). The 1.5B line of the
+# shipped list stays available for smaller machines.
 NATIVE_DEFAULT_MODELS = (
     "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/"
     "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
@@ -86,6 +87,14 @@ def stored_runtime(config_dir: Path) -> str:
     return runtime(common.parse_env_file(config_dir / ".env"))
 
 
+# Setup derives PAPAIA_WORKSPACE_DIR only for a checkout named `papaia`; a rerun of setup
+# does not help in another one, so the message does not suggest it.
+WORKSPACE_UNSET = (
+    "PAPAIA_WORKSPACE_DIR is not set. The native LocalAI keeps its files below it; setup"
+    " derives it from a checkout named 'papaia', otherwise set it in the root .env"
+)
+
+
 def localai_home(root_env: dict[str, str]) -> Path:
     """`<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>`: derived, not a setting.
 
@@ -98,7 +107,7 @@ def localai_home(root_env: dict[str, str]) -> Path:
         or common.is_placeholder(workspace)
         or workspace == envtree._WORKSPACE_DIR_PLACEHOLDER
     ):
-        raise InstallError("PAPAIA_WORKSPACE_DIR is not set; run 'papaia-ctl setup' first")
+        raise InstallError(WORKSPACE_UNSET)
     project = root_env.get("COMPOSE_PROJECT_NAME", "").strip() or status.DEFAULT_PROJECT
     return Path(workspace) / "localai" / project
 
@@ -147,14 +156,22 @@ def script_path(home: Path) -> Path:
     return home / "run-localai"
 
 
+def _version_key(version: str) -> tuple[tuple[int, int | str], ...]:
+    """Sort key of a release tag: numeric parts as numbers, so v4.10.0 > v4.7.1. LocalAI
+    tags are plain vX.Y.Z; a part that is not a number sorts after the numbers of its place
+    so the comparison never mixes types."""
+    parts = version.lstrip("vV").replace("-", ".").split(".")
+    return tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts)
+
+
 def installed_version(home: Path) -> str | None:
-    """The version of the newest binary in `bin/`, or None."""
-    found = sorted(
+    """The version of the newest binary in `bin/` by version number, or None."""
+    found = [
         p.name[len(_BINARY_PREFIX) :]
         for p in (home / "bin").glob(f"{_BINARY_PREFIX}*")
         if p.is_file() and not p.name.endswith(".part")
-    )
-    return found[-1] if found else None
+    ]
+    return max(found, key=_version_key) if found else None
 
 
 # ── host ────────────────────────────────────────────────────────────────────
@@ -214,20 +231,26 @@ def _expected_sha256(text: str, version: str) -> str:
 
 
 def install(
-    home: Path, version: str, *, opener: Opener | None = None
+    home: Path,
+    version: str,
+    *,
+    opener: Opener | None = None,
+    announce: Callable[[str], None] | None = None,
 ) -> tuple[Path, bool, str | None]:
     """Put the verified binary of `version` at `bin/local-ai-<version>`.
 
     Download to a temporary file next to the target, compare its sha256 with the release's
     checksum file, make it executable and rename it into place. Binaries of other versions
-    are removed afterwards. A present binary of this version is kept (idempotent). Returns
-    (path, changed, replaced version)."""
+    are removed afterwards. A present binary of this version is kept (idempotent). Before a
+    download, `announce` gets the version. Returns (path, changed, replaced version)."""
     opener = opener or _open
     target = binary_path(home, version)
     before = installed_version(home)
     if target.is_file():
         _remove_other_binaries(home, keep=target)
         return target, False, None
+    if announce is not None:
+        announce(version)
     try:
         with opener(checksums_url(version)) as response:
             expected = _expected_sha256(response.read().decode("utf-8", "replace"), version)
@@ -302,7 +325,11 @@ def write_run_script(home: Path, binary: Path, config_dir: Path, listen_port: st
 
 
 def install_for(
-    config_dir: Path, repo_root: Path, *, opener: Opener | None = None
+    config_dir: Path,
+    repo_root: Path,
+    *,
+    opener: Opener | None = None,
+    announce: Callable[[str], None] | None = None,
 ) -> InstallResult:
     """The `start` step: binary, start script and the models directory of this installation."""
     root = common.parse_env_file(config_dir / ".env")
@@ -310,7 +337,7 @@ def install_for(
     version = pinned_version(repo_root)
     for sub in ("models", "backends"):
         common.ensure_dir(home / sub)
-    binary, changed, replaced = install(home, version, opener=opener)
+    binary, changed, replaced = install(home, version, opener=opener, announce=announce)
     script = write_run_script(home, binary, config_dir, port(root))
     return InstallResult(version, binary, script, changed, replaced)
 

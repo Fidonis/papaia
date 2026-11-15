@@ -152,6 +152,10 @@ With `LOCALAI_RUNTIME=native`, LocalAI is a process on the Mac, not a container,
   port and re-run `setup` and `start`.
 - **Models in LiteLLM answer 404 or connection refused**: LiteLLM reaches the process at
   `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`, which only Docker Desktop resolves.
+- **"native LocalAI skipped"** from `start`, or `setup` warning that `LOCALAI_RUNTIME=native`
+  is stored: this host cannot run the native process (no Apple Silicon Mac, another Docker
+  engine, or Docker Desktop not running). Start Docker Desktop, or go back to the container
+  with `tools/papaia-ctl setup --localai-runtime=container` and `tools/papaia-ctl start`.
 
 ### LocalAI ignores the GPU
 

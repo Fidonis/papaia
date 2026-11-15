@@ -27,14 +27,18 @@ def _bash(script: str, answer: str = "") -> subprocess.CompletedProcess:
     )  # fmt: skip
 
 
-def _host(system: str, machine: str, engine: str) -> str:
+def _host(system: str, machine: str, engine: str | None) -> str:
+    """engine None: Docker does not answer (Docker Desktop not running)."""
+    docker = "docker() { return 1; }\n" if engine is None else f'docker() {{ echo "{engine}"; }}\n'
     return (
         f'uname() {{ case "${{1:-}}" in -m) echo "{machine}" ;; *) echo "{system}" ;; esac; }}\n'
-        f'docker() {{ echo "{engine}"; }}\n'
+        + docker
     )
 
 
-def _setup_lib(system: str = "Darwin", machine: str = "arm64", engine: str = "Docker Desktop"):
+def _setup_lib(
+    system: str = "Darwin", machine: str = "arm64", engine: str | None = "Docker Desktop"
+):
     return (
         "set -euo pipefail\n"
         f'source "{SH_LIB / "log.sh"}"; source "{SH_LIB / "prompt.sh"}"\n'
@@ -53,6 +57,7 @@ def _setup_lib(system: str = "Darwin", machine: str = "arm64", engine: str = "Do
         ("Darwin", "x86_64", "Docker Desktop", False),
         ("Linux", "aarch64", "Docker Desktop", False),
         ("Linux", "x86_64", "Ubuntu 24.04 LTS", False),
+        ("Darwin", "arm64", None, False),
     ],
 )
 def test_only_an_apple_silicon_mac_with_docker_desktop_runs_localai_natively(
@@ -111,10 +116,110 @@ def _setup_with_flag(system: str, machine: str, engine: str, flag: str):
     [("Linux", "x86_64", "Ubuntu"), ("Darwin", "x86_64", "Docker Desktop"),
      ("Darwin", "arm64", "Colima")],
 )  # fmt: skip
-def test_the_flag_is_refused_where_localai_cannot_run_natively(system, machine, engine):
+def test_native_is_refused_where_localai_cannot_run_natively(system, machine, engine):
     done = _setup_with_flag(system, machine, engine, "--localai-runtime=native")
     assert done.returncode == 2
-    assert "--localai-runtime is for an Apple Silicon Mac with Docker Desktop" in done.stderr
+    assert "--localai-runtime=native needs an Apple Silicon Mac with Docker Desktop" in done.stderr
+
+
+@pytest.mark.parametrize(
+    "system, machine, engine, why",
+    [("Linux", "x86_64", "Ubuntu", "this host is Linux/x86_64, not an Apple Silicon Mac"),
+     ("Darwin", "arm64", "Colima", "Docker here is 'Colima', not Docker Desktop"),
+     ("Darwin", "arm64", None, "Docker does not answer; start Docker Desktop")],
+)  # fmt: skip
+def test_the_refusal_says_why(system, machine, engine, why):
+    done = _setup_with_flag(system, machine, engine, "--localai-runtime=native")
+    assert done.returncode == 2
+    assert why in done.stderr
+
+
+# ── a stored `native` on a host that cannot run it ──────────────────────────
+
+_STORED_NATIVE = (
+    "LOCALAI_RUNTIME_STICKY=native\\nLOCAL_AI_STICKY=true\\nCONFIG_SEEDED=true\\n"
+    "APP_HOST_STICKY=https://papaia.example.com\\nLOCALAI_HOST_STICKY=http://localhost:8080\\n"
+    "AUTH_HOST_DERIVED=https://papaia.example.com:8443\\n"
+)
+
+
+def _setup_on(
+    system: str, machine: str, engine: str | None, args: str, *, interactive: bool = False
+) -> subprocess.CompletedProcess:
+    """cmd_setup with a stored native configuration, up to the call into Python, which
+    prints the LocalAI arguments it would get and ends the run."""
+    tty = "is_tty() { return 0; }\n_installation_exists() { return 0; }\n" if interactive else ""
+    return _bash(
+        _setup_lib(system, machine, engine)
+        + f"py_cli() {{ case \"$1\" in defaults) printf '{_STORED_NATIVE}' ;; esac; }}\n"
+        + "_run_setup_py() { printf 'SETUP_PY local_ai=%s url=%s args=%s\\n'"
+        + ' "${13}" "${12}" "${SETUP_LOCALAI_ARGS[*]-}"; exit 0; }\n'
+        + tty
+        + f'DEFAULT_CONFIG_DIR="/nonexistent"; cmd_setup {args}\n',
+        "\n" * 100,
+    )
+
+
+_OFF_THE_GATE = [
+    ("Linux", "x86_64", "Ubuntu 24.04 LTS"),
+    ("Linux", "aarch64", "Docker Desktop"),
+    ("Darwin", "arm64", "OrbStack"),
+    ("Darwin", "arm64", None),
+]
+
+
+@pytest.mark.parametrize("system, machine, engine", _OFF_THE_GATE)
+def test_the_way_back_to_the_container_is_accepted_everywhere(system, machine, engine):
+    done = _setup_on(system, machine, engine, "-y --localai-runtime=container")
+    assert done.returncode == 0, done.stderr
+    assert "args=--localai-runtime=container" in done.stdout
+
+
+def test_the_container_flag_on_a_qualifying_mac():
+    done = _setup_on("Darwin", "arm64", "Docker Desktop", "-y --localai-runtime=container")
+    assert done.returncode == 0, done.stderr
+    assert "args=--localai-runtime=container" in done.stdout
+
+
+@pytest.mark.parametrize("system, machine, engine", _OFF_THE_GATE)
+def test_interactive_setup_switches_a_stored_native_back_to_the_container(
+    system, machine, engine
+):
+    done = _setup_on(system, machine, engine, "--local-ai", interactive=True)
+    assert done.returncode == 0, done.stderr
+    assert "LocalAI was set to run natively, but" in done.stderr
+    assert "Switching LocalAI back to its container" in done.stderr
+    assert "args=--localai-runtime=container" in done.stdout
+    # The URL question is asked again, with the container's URL and not the native one.
+    assert "Public URL of LocalAI" in done.stderr
+    assert "url=https://papaia.example.com:8080" in done.stdout
+
+
+def test_interactive_setup_names_a_docker_that_does_not_answer():
+    done = _setup_on("Darwin", "arm64", None, "--local-ai", interactive=True)
+    assert "but Docker does not answer; start Docker Desktop" in done.stderr
+
+
+def test_interactive_setup_on_a_qualifying_mac_asks_and_keeps_native():
+    done = _setup_on("Darwin", "arm64", "Docker Desktop", "--local-ai", interactive=True)
+    assert done.returncode == 0, done.stderr
+    assert "LocalAI on this Mac" in done.stderr
+    assert "args=--localai-runtime=native" in done.stdout
+    assert "Switching LocalAI back" not in done.stderr
+
+
+def test_a_non_interactive_setup_warns_about_a_stored_native_it_keeps():
+    done = _setup_on("Linux", "x86_64", "Ubuntu", "-y")
+    assert done.returncode == 0, done.stderr
+    assert "LOCALAI_RUNTIME=native is stored, but this host is Linux/x86_64" in done.stderr
+    assert "'papaia-ctl setup --localai-runtime=container'" in done.stderr
+    assert "args=" in done.stdout and "--localai-runtime" not in done.stdout
+
+
+def test_the_stored_native_is_not_mentioned_on_a_qualifying_mac():
+    done = _setup_on("Darwin", "arm64", "Docker Desktop", "-y")
+    assert done.returncode == 0, done.stderr
+    assert "LOCALAI_RUNTIME=native is stored" not in done.stderr
 
 
 def test_an_unknown_runtime_is_refused():
@@ -234,3 +339,11 @@ def test_the_container_runtime_and_an_unsupported_host_see_nothing(tmp_path, sta
     assert done.returncode == 0, done.stderr
     assert "LocalAI" not in done.stdout
     assert "py_cli localai-native-probe" not in done.stderr
+
+
+def test_a_bare_rerun_flags_the_stored_native_and_reconfigures_by_default():
+    done = _setup_on("Linux", "x86_64", "Ubuntu", "", interactive=True)
+    assert done.returncode == 0, done.stderr
+    assert "LocalAI runtime   = native (Apple GPU), not available here" in done.stderr
+    # An empty answer to "Reconfigure?" goes on to the questions (default yes here).
+    assert "args=--localai-runtime=container" in done.stdout

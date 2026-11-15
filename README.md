@@ -324,7 +324,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
-| `--localai-runtime=container\|native` | _(prompted on an Apple Silicon Mac with Docker Desktop, default `native` there; `container` elsewhere)_ | Where LocalAI runs: in its container, or as a process on the Apple GPU ([Native LocalAI on Apple Silicon](#native-localai-on-apple-silicon)). Refused with exit 2 on any other host |
+| `--localai-runtime=container\|native` | _(prompted on an Apple Silicon Mac with Docker Desktop, default `native` there; `container` elsewhere)_ | Where LocalAI runs: in its container, or as a process on the Apple GPU ([Native LocalAI on Apple Silicon](#native-localai-on-apple-silicon)). `native` is refused with exit 2 on any other host (and while Docker Desktop is not running); `container` is accepted everywhere |
 | `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
@@ -1810,7 +1810,9 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   you to restart LocalAI.
 - The first switch to `native` seeds `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt` with
   Qwen2.5-7B-Instruct (Q5_K_M, 5.4 GB, about 58 tokens/s on an M4 Max) and `nomic-embed-text`.
-  An existing overlay list is left alone. The first download of 5.4 GB can take an hour or
+  Whether the 7B model runs without swapping on a 16 GB Mac next to the stack is not measured
+  yet; on a small Mac, activate the 1.5B line of the list instead. An existing overlay list is
+  left alone. The first download of 5.4 GB can take an hour or
   more.
 - LocalAI listens on `127.0.0.1:<LOCALAI_EXT_PORT>` only, and its web UI is at
   `http://localhost:<LOCALAI_EXT_PORT>` on the Mac. There is no login: the macOS build of
@@ -1820,11 +1822,17 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   `localai` container.
 - The models are not in the backup; `start` downloads them again after a restore.
 - `setup --localai-runtime=container` followed by `start` brings the container back and
-  removes the override. The seeded model list stays, and models in the old `localai-models`
-  volume are not moved in either direction.
+  removes the override. It works on any host, also on a Mac whose Docker Desktop is not
+  running and with a configuration restored on another machine. The seeded model list stays,
+  and models in the old `localai-models` volume are not moved in either direction.
+- An interactive `setup` on a host that cannot run the native process (no Apple Silicon, another
+  Docker engine, or Docker Desktop not running) switches a stored `native` back to `container`
+  and says why; `setup -y` keeps it and warns.
 
 Until LocalAI is managed by launchd, `stop`, `upgrade` and `uninstall` do not stop the
-process: stop it in its terminal.
+process: stop it in its terminal. `uninstall --clean-up` also leaves
+`<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>` behind, with the binary and the models
+(more than 5 GB with the seeded list); delete that directory by hand after stopping LocalAI.
 
 **Other servers on the host.** Any OpenAI-compatible server on the Mac (LM Studio,
 `mlx_lm.server`, Ollama) can serve papAIa the same way, by hand: add an entry to the LiteLLM

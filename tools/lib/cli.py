@@ -288,6 +288,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
+    # The native LocalAI lives below the workspace. Checked before anything is written, so
+    # a refused run does not leave LOCALAI_RUNTIME=native behind in the root .env.
+    if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE:
+        try:
+            localai_native.localai_home(tree.get("", {}))
+        except localai_native.InstallError as exc:
+            print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
+            return 3
     # After stamp_workspace_dir: the derived default is <workspace>/backup.
     tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
@@ -360,11 +368,7 @@ def _localai_runtime_override(config_dir: Path) -> str | None:
         try:
             home = localai_native.localai_home(root)
         except localai_native.InstallError as exc:
-            problem = (
-                f"LOCALAI_RUNTIME=native: {exc}. The native LocalAI keeps its files below"
-                " PAPAIA_WORKSPACE_DIR, which setup derives from a checkout named 'papaia'"
-                " (or set it in the root .env)"
-            )
+            problem = f"LOCALAI_RUNTIME=native: {exc}"
     gen_override.generate_localai_runtime_override(config_dir, runtime, home)
     return problem
 
@@ -381,11 +385,15 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
         return 0
     supported, why = localai_native.host_supported()
     if not supported:
-        print(f"WARNING: native LocalAI skipped: {why}", file=sys.stderr)
+        print(
+            f"WARNING: native LocalAI skipped: {why}. 'papaia-ctl setup"
+            " --localai-runtime=container' runs LocalAI in its container here.",
+            file=sys.stderr,
+        )
         print("LOCALAI_NATIVE=skipped")
         return 0
     try:
-        result = localai_native.install_for(config_dir, repo_root)
+        result = localai_native.install_for(config_dir, repo_root, announce=_announce_install)
     except localai_native.InstallError as exc:
         print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
         return 1
@@ -394,6 +402,12 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
     print(f"LOCALAI_NATIVE_REPLACED={result.replaced or ''}")
     print(f"LOCALAI_NATIVE_SCRIPT={result.script}")
     return 0
+
+
+def _announce_install(version: str) -> None:
+    # stderr: stdout carries the KEY=VALUE lines the shell reads. The download is about
+    # 150 MB and `start` would otherwise look stuck while it runs.
+    print(f"Installing LocalAI {version} for the Apple GPU...", file=sys.stderr, flush=True)
 
 
 def cmd_localai_native_probe(args: argparse.Namespace) -> int:

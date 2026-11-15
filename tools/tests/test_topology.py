@@ -859,6 +859,8 @@ def test_a_native_localai_is_refused_in_a_distributed_installation():
     topo = two_nodes(**topology.preset_placement("dmz-split", "edge"))
     found = errors(topo, env={"LOCALAI_RUNTIME": "native"})
     assert any("LOCALAI_RUNTIME=native" in e for e in found)
+    # The command it recommends is one setup accepts on any host (test_ctl_localai_runtime).
+    assert any("'papaia-ctl setup --localai-runtime=container'" in e for e in found)
     container = errors(topo, env={"LOCALAI_RUNTIME": "container"})
     assert not any("LOCALAI_RUNTIME" in e for e in container)
 

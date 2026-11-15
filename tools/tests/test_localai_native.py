@@ -332,6 +332,31 @@ def test_installed_version_ignores_partial_downloads(tmp_path):
     assert os.access(home / "bin", os.W_OK)
 
 
+def test_installed_version_compares_version_numbers(tmp_path):
+    home = tmp_path / "home"
+    (home / "bin").mkdir(parents=True)
+    for version in ("v4.7.1", "v4.10.0", "v4.9.12"):
+        (home / "bin" / f"local-ai-{version}").write_bytes(b"x")
+    assert localai_native.installed_version(home) == "v4.10.0"
+
+
+@pytest.mark.parametrize(
+    "older, newer",
+    [("v4.7.1", "v4.10.0"), ("v4.9.9", "v4.12.1"), ("v4.12.1", "v5.0.0"), ("v4.12", "v4.12.1")],
+)  # fmt: skip
+def test_versions_sort_by_number(older, newer):
+    assert localai_native._version_key(older) < localai_native._version_key(newer)
+
+
+def test_a_download_is_announced_and_a_rerun_is_not(tmp_path):
+    announced: list[str] = []
+    home = tmp_path / "home"
+    localai_native.install(home, VERSION, opener=FakeOpener(), announce=announced.append)
+    assert announced == [VERSION]
+    localai_native.install(home, VERSION, opener=FakeOpener(), announce=announced.append)
+    assert announced == [VERSION]
+
+
 # ── setup and render ────────────────────────────────────────────────────────
 
 
@@ -411,6 +436,7 @@ def test_install_command_skips_an_unsupported_host(papaia_repo, config_dir, caps
     out = capsys.readouterr()
     assert out.out == "LOCALAI_NATIVE=skipped\n"
     assert "native LocalAI skipped: not a Mac" in out.err
+    assert "'papaia-ctl setup --localai-runtime=container'" in out.err
 
 
 def test_install_command_reports_an_install(papaia_repo, config_dir, capsys, monkeypatch):
@@ -422,14 +448,18 @@ def test_install_command_reports_an_install(papaia_repo, config_dir, capsys, mon
     monkeypatch.setattr(localai_native, "_open", FakeOpener())
     argv = ["--repo-root", str(papaia_repo), "--config-dir", str(config_dir)]
     assert cli.main([*argv, "localai-native-install"]) == 0
-    lines = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    out = capsys.readouterr()
+    lines = dict(line.split("=", 1) for line in out.out.splitlines())
+    assert f"Installing LocalAI {VERSION} for the Apple GPU..." in out.err
     assert lines["LOCALAI_NATIVE"] == "installed"
     assert lines["LOCALAI_NATIVE_VERSION"] == VERSION
     assert lines["LOCALAI_NATIVE_SCRIPT"].endswith("/run-localai")
 
     monkeypatch.setattr(localai_native, "_open", FakeOpener(fail=AssertionError("no download")))
     assert cli.main([*argv, "localai-native-install"]) == 0
-    assert "LOCALAI_NATIVE=unchanged" in capsys.readouterr().out
+    out = capsys.readouterr()
+    assert "LOCALAI_NATIVE=unchanged" in out.out
+    assert "Installing LocalAI" not in out.err
 
 
 def test_install_command_fails_on_a_bad_download(papaia_repo, config_dir, capsys, monkeypatch):
@@ -447,5 +477,18 @@ def test_install_command_fails_on_a_bad_download(papaia_repo, config_dir, capsys
 def test_setup_refuses_native_without_a_workspace(repo_root, config_dir, capsys):
     # The fixture checkout is not named `papaia`, so no workspace is derived.
     assert _setup(repo_root, config_dir, "--localai-runtime=native") == 3
-    assert "LOCALAI_RUNTIME=native: PAPAIA_WORKSPACE_DIR is not set" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "LOCALAI_RUNTIME=native: PAPAIA_WORKSPACE_DIR is not set" in err
+    assert "run 'papaia-ctl setup' first" not in err
     assert not (config_dir / "overrides" / "docker-compose.localai-runtime.override.yml").exists()
+
+
+def test_a_refused_native_setup_leaves_the_root_env_as_it_was(repo_root, config_dir, capsys):
+    assert _setup(repo_root, config_dir) == 0
+    before = (config_dir / ".env").read_bytes()
+    capsys.readouterr()
+    assert _setup(repo_root, config_dir, "--localai-runtime=native") == 3
+    assert "Nothing was changed." in capsys.readouterr().err
+    assert (config_dir / ".env").read_bytes() == before
+    assert common.parse_env_file(config_dir / ".env").get("LOCALAI_RUNTIME", "") != "native"
+    assert not (config_dir / "overlay" / "ai" / "localai" / "models.txt").exists()

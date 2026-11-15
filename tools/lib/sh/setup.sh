@@ -165,10 +165,24 @@ cmd_setup() {
 
     load_defaults
 
-    # The native runtime exists on an Apple Silicon Mac with Docker Desktop only.
-    if [ -n "$localai_runtime" ] && ! _native_localai_host; then
-        error "--localai-runtime is for an Apple Silicon Mac with Docker Desktop; on this host LocalAI runs in its container."
+    # The native runtime exists on an Apple Silicon Mac with Docker Desktop only. The way
+    # back, --localai-runtime=container, is accepted everywhere: a configuration restored
+    # on another host, or a Mac whose Docker Desktop is not running, must be able to leave
+    # `native` without editing the root .env.
+    local native_why_not=""
+    if [ "$localai_runtime" = "native" ] || [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
+        native_why_not="$(_native_localai_why_not)"
+    fi
+    if [ "$localai_runtime" = "native" ] && [ -n "$native_why_not" ]; then
+        error "--localai-runtime=native needs an Apple Silicon Mac with Docker Desktop: $native_why_not."
         exit 2
+    fi
+    # Without a terminal there is nobody to ask, and setup -y changes nothing unasked; the
+    # interactive setup below switches back to the container itself.
+    if [ -z "$localai_runtime" ] && [ -n "$native_why_not" ] && [ "${local_ai:-${LOCAL_AI_STICKY:-}}" = "true" ] \
+        && { [ "$non_interactive" -eq 1 ] || [ "$env_only" -eq 1 ] || ! is_tty; }; then
+        warn "LOCALAI_RUNTIME=native is stored, but $native_why_not; nothing starts LocalAI on this host."
+        warn "  'papaia-ctl setup --localai-runtime=container' runs LocalAI in its container again."
     fi
 
     # Resolved here rather than in Python so the CLI contract downstream only
@@ -202,6 +216,8 @@ cmd_setup() {
     # re-prompting for values that were already resolved on a prior run.
     if [ "$orig_argc" -eq 0 ] && [ "$CONFIG_SEEDED" = "true" ] && is_tty && [ "$non_interactive" -eq 0 ]; then
         info "Existing setup detected in $CONFIG_DIR"
+        # Yes when the stored configuration cannot run here as it is.
+        local reconfigure_default="N"
         info "  Server URL        = $APP_HOST_STICKY"
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "external_oidc" ]; then
             info "  Identity provider = external OIDC"
@@ -230,7 +246,11 @@ cmd_setup() {
             info "  Local AI          = $_lai_label"
             [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_HOST_STICKY:-}" ] && \
                 info "  LocalAI URL       = $LOCALAI_HOST_STICKY"
-            if [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
+            if [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] \
+                && [ -n "$native_why_not" ]; then
+                warn "  LocalAI runtime   = native (Apple GPU), not available here: $native_why_not"
+                reconfigure_default="Y"
+            elif [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
                 info "  LocalAI runtime   = native (Apple GPU)"
             elif [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_VARIANT_STICKY:-}" ]; then
                 info "  LocalAI Image     = $LOCALAI_VARIANT_STICKY"
@@ -257,7 +277,7 @@ cmd_setup() {
             [ "$SMTP_STICKY" = "true" ] && [ -n "${SMTP_HOST_STICKY:-}" ] && \
                 info "  Mail server       = $SMTP_HOST_STICKY (sender ${SMTP_FROM_STICKY:-unset})"
         fi
-        if ! confirm "Reconfigure?" "N"; then
+        if ! confirm "Reconfigure?" "$reconfigure_default"; then
             info "Reusing existing configuration; re-rendering only."
             if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" "" "" ""; then
                 error "setup failed."
@@ -402,12 +422,20 @@ cmd_setup() {
             esac
         fi
         # Asked before the URL: the native process has a fixed one and no image variant.
-        if [ "$local_ai" = "true" ] && [ -z "$localai_runtime" ] && _native_localai_host; then
-            localai_runtime="$(_prompt_localai_runtime)"
+        # Off such a Mac a stored `native` is not kept silently: nothing would start LocalAI.
+        if [ "$local_ai" = "true" ] && [ -z "$localai_runtime" ]; then
+            if [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] && [ -n "$native_why_not" ]; then
+                _localai_native_left_behind "$native_why_not"
+                localai_runtime="container"
+            elif [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] || _native_localai_host; then
+                localai_runtime="$(_prompt_localai_runtime)"
+            fi
         fi
         local effective_runtime="${localai_runtime:-${LOCALAI_RUNTIME_STICKY:-container}}"
         if [ "$local_ai" = "true" ] && [ -z "$localai_host" ] && [ "$effective_runtime" != "native" ]; then
             local localai_default="${LOCALAI_HOST_STICKY:-}"
+            # The stored URL of the native process (localhost) is no URL for the container.
+            [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] && localai_default=""
             [ -z "$localai_default" ] && localai_default="$(_derive_localai_default "$app_host")"
             localai_host="$(prompt_field "Public URL of LocalAI" \
                 "Where browsers and LiteLLM reach LocalAI." \
@@ -761,11 +789,35 @@ _prompt_manager() {
     esac
 }
 
-# Whether LocalAI can run natively here: an Apple Silicon Mac whose Docker is Docker
-# Desktop (LiteLLM reaches the process at host.docker.internal). ADR 0012.
+# Why LocalAI cannot run natively here, or nothing when it can: an Apple Silicon Mac whose
+# Docker is Docker Desktop (LiteLLM reaches the process at host.docker.internal). ADR 0012.
+# A Docker that does not answer is named as such, since starting Docker Desktop fixes it.
+_native_localai_why_not() {
+    local system machine engine
+    system="$(uname -s)"
+    machine="$(uname -m)"
+    if [ "$system" != "Darwin" ] || [ "$machine" != "arm64" ]; then
+        echo "this host is $system/$machine, not an Apple Silicon Mac"
+        return 0
+    fi
+    engine="$(_docker_engine_name)"
+    if [ -z "$engine" ]; then
+        echo "Docker does not answer; start Docker Desktop and run setup again"
+    elif [ "$engine" != "Docker Desktop" ]; then
+        echo "Docker here is '$engine', not Docker Desktop"
+    fi
+}
+
 _native_localai_host() {
-    [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] \
-        && [ "$(_docker_engine_name)" = "Docker Desktop" ]
+    [ -z "$(_native_localai_why_not)" ]
+}
+
+# A stored LOCALAI_RUNTIME=native on a host that cannot run it: back to the container, and
+# say why, so the operator can return with --localai-runtime=native where it works.
+_localai_native_left_behind() {
+    warn "LocalAI was set to run natively, but $1."
+    warn "Switching LocalAI back to its container. On an Apple Silicon Mac with Docker Desktop running,"
+    warn "  'papaia-ctl setup --localai-runtime=native' selects the native runtime again."
 }
 
 # Asks where LocalAI runs on an Apple Silicon Mac; prints "native" or "container".
