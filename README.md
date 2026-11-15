@@ -565,6 +565,13 @@ Stops and removes all core containers, then **permanently deletes the config dir
 Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
 Docker volumes. `--addons` stops and removes active add-on containers first.
 
+Some data below the config directory is written by containers as root (the Nginx Proxy Manager
+database and certificates in `infra/nginx/nginx-data/`, for one). What the operator cannot
+delete is deleted through a short-lived `alpine:3` container that mounts the directory. If that
+fails too, `uninstall` exits 1 and names the directory and the `sudo rm -rf` that removes it.
+It never does this for `/` or for a directory that is or contains the home directory or the
+papaia checkout.
+
 ### `backup`
 
 ```bash
