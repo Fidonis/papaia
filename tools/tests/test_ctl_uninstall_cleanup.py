@@ -150,8 +150,11 @@ def test_a_failing_container_names_the_path_and_the_command(tmp_path):
     assert len(calls) == 1
 
 
-def test_the_root_directory_is_never_handed_to_a_container(tmp_path):
-    result, calls = _run(tmp_path, "rm() { return 0; }; _remove_config_dir /")
+@pytest.mark.parametrize(
+    "root", ["/", "//", "//tmp/.."], ids=["slash", "double-slash", "double-slash-dotdot"]
+)
+def test_the_root_directory_is_never_handed_to_a_container(tmp_path, root):
+    result, calls = _run(tmp_path, f"rm() {{ return 0; }}; _remove_config_dir '{root}'")
 
     assert result.returncode == 1
     assert "is the root directory; refusing" in result.stderr
@@ -175,6 +178,26 @@ def test_a_directory_with_the_home_directory_in_it_is_never_handed_to_a_containe
     assert "sudo rm" not in result.stderr
     assert calls == []
     assert (config / "infra" / "nginx" / "nginx-data" / "database.sqlite").exists()
+
+
+@pytest.mark.parametrize(
+    ("config_prefix", "home_prefix"), [("/", ""), ("", "/")], ids=["config", "home"]
+)
+def test_a_leading_double_slash_does_not_hide_the_home_directory(
+    tmp_path, config_prefix, home_prefix
+):
+    # `pwd -P` keeps a leading `//`, which Docker mounts as `/`.
+    config = _config(tmp_path, root_owned=True)
+
+    result, calls = _run(
+        tmp_path,
+        f"HOME='{home_prefix}{config}'; rm() {{ return 0; }}; "
+        f"_remove_config_dir '{config_prefix}{config}'",
+    )
+
+    assert result.returncode == 1
+    assert "contains the home directory; refusing" in result.stderr
+    assert calls == []
 
 
 def test_a_directory_with_the_checkout_in_it_is_never_handed_to_a_container(tmp_path):

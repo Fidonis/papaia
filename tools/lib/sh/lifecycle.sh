@@ -497,7 +497,7 @@ _remove_config_dir() {
     rm -rf "$dir" 2>/dev/null || true
     [ -e "$dir" ] || return 0
 
-    physical="$(cd "$dir" 2>/dev/null && pwd -P)" || physical=""
+    physical="$(_physical_path "$dir")" || physical=""
     case "$physical" in
         "")
             error "Could not delete $dir completely; refusing to clean it up through a container."
@@ -532,15 +532,28 @@ _remove_config_dir() {
     return 0
 }
 
-# True when the physical path of $2 is $1 or lies below it. An empty or unresolvable $2
-# contains nothing.
+# True when the physical path of $2 is $1 (a path from _physical_path) or lies below it.
+# An empty or unresolvable $2 contains nothing.
 _contains_path() {
     local outer="$1" inner
     [ -n "$2" ] || return 1
-    inner="$(cd "$2" 2>/dev/null && pwd -P)" || return 1
+    inner="$(_physical_path "$2")" || return 1
     [ "$inner" = "$outer" ] && return 0
     case "$inner" in "$outer"/*) return 0 ;; esac
     return 1
+}
+
+# Prints the physical path of directory $1. `pwd -P` keeps a leading `//` (POSIX leaves
+# its meaning to the system), while Linux and Docker read it as `/`: without collapsing
+# it, `//` or `//home` would slip past the guards above and still be mounted as `/` or
+# `/home`.
+_physical_path() {
+    local path
+    path="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    while [ "${path#//}" != "$path" ]; do
+        path="${path#/}"
+    done
+    printf '%s' "$path"
 }
 
 _require_setup_done() {
