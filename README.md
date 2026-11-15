@@ -563,6 +563,13 @@ Stops and removes all core containers, then **permanently deletes the config dir
 Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
 Docker volumes. `--addons` stops and removes active add-on containers first.
 
+Some data below the config directory is written by containers as root (the Nginx Proxy Manager
+database and certificates in `infra/nginx/nginx-data/`, for one). What the operator cannot
+delete is deleted through a short-lived `alpine:3` container that mounts the directory. If that
+fails too, `uninstall` exits 1 and names the directory and the `sudo rm -rf` that removes it.
+It never does this for `/` or for a directory that is or contains the home directory or the
+papaia checkout.
+
 ### `backup`
 
 ```bash
@@ -1677,8 +1684,11 @@ external OIDC provider, create the same objects there yourself.
 
 **First steps after the first start**
 
-1. Add an embedding model to LiteLLM. The core ships no models, so nothing can be embedded or
-   searched before that.
+1. Make the embedding model available in LiteLLM under the name in `RAG_EMBEDDINGS_MODEL`
+   (default `nomic-embed-text`). With LocalAI, activate its line in the LocalAI `models.txt`
+   ([LocalAI models in LiteLLM](#localai-models-in-litellm)); otherwise add a model in LiteLLM.
+   Nothing can be embedded or searched before that. `setup` leaves this step out when the
+   rendered LiteLLM configuration already lists the model.
 2. Give the people who run ingestion through the MCP tools the `qdrant-ingest-operator` realm
    role. Without it the ingester's MCP tools reject them. `qdrant-admin` is a break-glass role
    for the MCP server's access rules; both are included in `papaia-admin`.
@@ -1769,6 +1779,52 @@ The relay's one volume (`smtp-relay-queue`) belongs to the module `smtp-relay`, 
 backup` includes it and `restore --only=module:smtp-relay` restores it. The password is in the
 configuration backup in plain text, like the other secrets. The design and its limits are in
 [ADR 0007](docs/adr/0007-outbound-mail-through-an-internal-relay.md).
+
+### LocalAI models in LiteLLM
+
+LiteLLM is LocalAI's only API client. While the `localai` profile is on, every render adds the
+LocalAI models to LiteLLM's `model_list`: a model is registered under its YAML `name` when a model
+YAML in `ai/localai/models/` points (`parameters.model`) at the file of an active line in
+`ai/localai/models.txt`. A YAML with `embeddings: true` is registered as an embedding model. The
+shipped list has every line commented out, so nothing is registered and downloaded until you
+activate lines.
+
+Change the list through an overlay copy, not the rendered file, which every render overwrites:
+
+```bash
+mkdir -p "$PAPAIA_CONFIG_DIR/overlay/ai/localai"
+cp src/ai/localai/models.txt "$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt"
+# uncomment e.g. the Qwen2.5-1.5B and nomic-embed-text lines, then
+tools/papaia-ctl start
+docker restart papaia-litellm-1   # the container name of your project
+```
+
+`start` renders the new `model_list`, but LiteLLM reads its configuration only when it starts,
+and a running LiteLLM is not recreated for a changed configuration file. Restart it after every
+change of the list (and after any other edit of the LiteLLM overlay), as above; until then it
+lists the models it had.
+
+The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
+`<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
+`$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` and its URL in the overlay `models.txt`. Only
+the `*.yaml` files at the top of that directory are used, as the init job copies nothing else;
+other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `context_size`,
+`threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
+An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
+
+LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
+copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. A key
+you change in `ai/localai/.env` reaches LiteLLM only on the next `setup`. The
+generated entries name only the variable (`os.environ/LOCALAI_API_KEY`), never the key. A request
+with this key has admin rights in LocalAI (it can install and delete models), so keep it out of
+other clients.
+
+A model downloads to `<file>.part` and is renamed when it is complete, so an interrupted
+download is fetched again on the next `start`.
+
+> **Upgrading:** if you registered a LocalAI model in the LiteLLM Admin UI under one of the
+> generated names (`store_model_in_db: true`), LiteLLM now has two deployments for that name and
+> splits the traffic between them. Delete the Admin UI entry.
 
 ### Voice (local speech)
 
@@ -1883,8 +1939,8 @@ like CPU ones. The image swap and the device passthrough live in a generated
 
 Two caveats worth knowing:
 
-- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in the model
-  YAMLs under `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in overlay
+  copies of the model YAMLs under `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/`.
 - **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
 

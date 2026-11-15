@@ -36,8 +36,17 @@ services:
           if test -f "/models/$$filename"; then
             echo "[model-init] $$filename already exists — skipped"
           else
+            # Download next to the target and rename on success, so an
+            # interrupted download never passes for a finished model.
+            rm -f "/models/$$filename.part"
             echo "[model-init] Downloading $$filename ..."
-            curl -fL -o "/models/$$filename" "$$url" && echo "[model-init] $$filename done" || echo "[model-init] $$filename FAILED" >&2
+            if curl -fL -o "/models/$$filename.part" "$$url" \
+              && mv "/models/$$filename.part" "/models/$$filename"; then
+              echo "[model-init] $$filename done"
+            else
+              rm -f "/models/$$filename.part"
+              echo "[model-init] $$filename FAILED" >&2
+            fi
           fi
         done
     networks:
