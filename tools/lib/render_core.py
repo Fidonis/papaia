@@ -40,6 +40,7 @@ BASE_RENDER_TARGETS: list[str] = [
     "ai/litellm/prometheus.yml",
     "ai/localai/models.txt",
     "ai/localai/models",
+    "ai/voice/chatterbox.yaml",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
     "infra/keycloak/themes/papaia",
@@ -52,7 +53,7 @@ _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 # profile is active -- a stack without the RAG system must not list its MCP
 # servers in LibreChat. The fragments sit between the repo base and the add-on
 # layer.
-PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag"}
+PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag", "voice": "src/ai/voice"}
 
 # LiteLLM's configuration, which takes the generated model_list of the LocalAI models.
 LITELLM_CONFIG = "ai/litellm/config.yaml"
@@ -94,14 +95,26 @@ def _active_model_files(models_text: str) -> set[str]:
     return names
 
 
+def _localai_model_files(directory: Path) -> list[Path]:
+    """The model YAMLs in `directory` that the init job copies: top-level `*.yaml` files,
+    without dotfiles (the shell glob skips them; pathlib's does not)."""
+    if not directory.is_dir():
+        return []
+    return sorted(
+        p for p in directory.glob("*.yaml") if p.is_file() and not p.name.startswith(".")
+    )
+
+
 def _localai_model_configs(
     repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> list[dict]:
     """The effective LocalAI model YAMLs: the shipped ones with their overlay, and those that
-    exist only in the overlay. Only the top level, which is all the init job copies."""
+    exist only in the overlay. Only the top-level `*.yaml`, which is all the init job copies
+    (`cp /models-config/configs/*.yaml`), so a `.yml` is never registered without reaching
+    LocalAI."""
     shipped = repo_root / "src" / LOCALAI_MODELS_DIR
     overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
-    names = {p.name for d in (shipped, overlay) if d.is_dir() for p in d.glob("*.y*ml")}
+    names = {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
     configs = []
     for name in sorted(names):
         rel_path = f"{LOCALAI_MODELS_DIR}/{name}"
@@ -478,7 +491,10 @@ def _overlay_only_text(rel_path: str, config_dir: Path) -> str:
     """The text of an overlay file the repository has no base for. A structured file that does
     not parse is a RenderError that names it, as for every other layer."""
     path = config_dir / "overlay" / rel_path
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise RenderError(f"overlay/{rel_path}: not a UTF-8 text file ({exc.reason})") from exc
     if path.suffix in _STRUCTURED_SUFFIXES:
         _parse_structured(path.suffix, text, f"overlay/{rel_path}")
     return text
@@ -495,16 +511,17 @@ def _render_dir(
         if file_path.is_file():
             sub_rel = file_path.relative_to(src_root).as_posix()
             _render_file(sub_rel, repo_root, config_dir, active_addons)
-    # Files only the overlay has, such as an operator's own LocalAI model YAML, are rendered
-    # as they are.
-    overlay_dir = config_dir / "overlay" / rel_path
-    if overlay_dir.is_dir():
-        overlay_root = config_dir / "overlay"
-        for file_path in sorted(overlay_dir.rglob("*")):
-            sub_rel = file_path.relative_to(overlay_root).as_posix()
-            if file_path.is_file() and not (src_root / sub_rel).is_file():
-                text = _overlay_only_text(sub_rel, config_dir)
-                common.atomic_write(config_dir / sub_rel, text)
+    # Files only the overlay has are rendered for the LocalAI models alone, and there only the
+    # model YAMLs the init job copies: an operator's own model. Every other overlay-only file
+    # (a Finder `.DS_Store`, a theme `logo.png`, ...) stays ignored, as it always was.
+    if rel_path != LOCALAI_MODELS_DIR:
+        return
+    overlay_root = config_dir / "overlay"
+    for file_path in _localai_model_files(overlay_root / rel_path):
+        sub_rel = file_path.relative_to(overlay_root).as_posix()
+        if not (src_root / sub_rel).is_file():
+            text = _overlay_only_text(sub_rel, config_dir)
+            common.atomic_write(config_dir / sub_rel, text)
 
 
 def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:

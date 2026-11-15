@@ -32,7 +32,18 @@ load_defaults() { _load_kv defaults; }
 # LocalAI accelerator detection (LOCALAI_VARIANT_NVIDIA, ..._LABEL, ..._WARN,
 # LOCALAI_VARIANT_RECOMMENDED). Loaded lazily: it forks nvidia-smi and docker,
 # so it must not run on every setup invocation the way load_defaults does.
-load_localai_variants() { _load_kv localai-variants; }
+load_localai_variants() {
+    # The GPU probe is a user-visible multi-second wait and its result cannot
+    # change within one setup run, so one probe serves every caller (the
+    # LocalAI prompt, the voice prompt, and both --*-variant=auto paths).
+    # Callers in a $(...) subshell inherit the parent's cache but cannot fill
+    # it — cmd_setup therefore probes in the parent before those prompts. The
+    # message goes to stderr so a subshell's captured stdout stays clean.
+    [[ -n "${LOCALAI_VARIANTS_LOADED:-}" ]] && return 0
+    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    _load_kv localai-variants
+    LOCALAI_VARIANTS_LOADED=1
+}
 
 cmd_setup() {
     local orig_argc=$#
@@ -41,7 +52,7 @@ cmd_setup() {
     local qdrant_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
-    local web_search="" local_ai="" localai_variant="" localai_runtime="" manager="" rag="" reranker_model="" backup_dir=""
+    local web_search="" local_ai="" localai_variant="" localai_runtime="" manager="" rag="" voice="" voice_variant="" reranker_model="" backup_dir=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
@@ -110,6 +121,16 @@ cmd_setup() {
                         ;;
                 esac
                 ;;
+            --voice-variant=*)
+                voice_variant="${1#*=}"
+                case "$voice_variant" in
+                    cpu|nvidia|hipblas|auto) : ;;
+                    *)
+                        error "Invalid --voice-variant value: '$voice_variant' (must be 'cpu', 'nvidia', 'hipblas', or 'auto')"
+                        exit 2
+                        ;;
+                esac
+                ;;
             --litellm-host=*) litellm_host="${1#*=}" ;;
             --manager) manager="true" ;;
             --no-manager) manager="false" ;;
@@ -117,6 +138,8 @@ cmd_setup() {
             --rag) rag="true" ;;
             --no-rag) rag="false" ;;
             --qdrant-host=*) qdrant_host="${1#*=}" ;;
+            --voice) voice="true" ;;
+            --no-voice) voice="false" ;;
             --smtp) smtp="true" ;;
             --no-smtp) smtp="false" ;;
             --smtp-host=*) smtp_host="${1#*=}" ;;
@@ -165,19 +188,46 @@ cmd_setup() {
 
     load_defaults
 
-    # The native runtime exists on an Apple Silicon Mac with Docker Desktop only.
-    if [ -n "$localai_runtime" ] && ! _native_localai_host; then
-        error "--localai-runtime is for an Apple Silicon Mac with Docker Desktop; on this host LocalAI runs in its container."
+    # The native runtime exists on an Apple Silicon Mac with Docker Desktop only. The way
+    # back, --localai-runtime=container, is accepted everywhere: a configuration restored
+    # on another host, or a Mac whose Docker Desktop is not running, must be able to leave
+    # `native` without editing the root .env.
+    local native_why_not=""
+    if [ "$localai_runtime" = "native" ] || [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
+        native_why_not="$(_native_localai_why_not)"
+    fi
+    if [ "$localai_runtime" = "native" ] && [ -n "$native_why_not" ]; then
+        error "--localai-runtime=native needs an Apple Silicon Mac with Docker Desktop: $native_why_not."
         exit 2
+    fi
+    # Without a terminal there is nobody to ask, and setup -y changes nothing unasked; the
+    # interactive setup below switches back to the container itself.
+    if [ -z "$localai_runtime" ] && [ -n "$native_why_not" ] && [ "${local_ai:-${LOCAL_AI_STICKY:-}}" = "true" ] \
+        && { [ "$non_interactive" -eq 1 ] || [ "$env_only" -eq 1 ] || ! is_tty; }; then
+        warn "LOCALAI_RUNTIME=native is stored, but $native_why_not; nothing starts LocalAI on this host."
+        warn "  'papaia-ctl setup --localai-runtime=container' runs LocalAI in its container again."
     fi
 
     # Resolved here rather than in Python so the CLI contract downstream only
     # ever carries a concrete variant, and so the probe stays opt-in.
     if [ "$localai_variant" = "auto" ]; then
-        info "Detecting available GPU accelerators, this can take a few seconds..."
         load_localai_variants
         localai_variant="${LOCALAI_VARIANT_RECOMMENDED:-cpu}"
         info "Detected LocalAI image variant: $localai_variant"
+    fi
+    if [ "$voice_variant" = "auto" ]; then
+        # The probe is pointless on a host that will not run the TTS engine:
+        # resolve `auto` only when voice is (or stays) enabled, and let an
+        # interactive enable fall through to the variant prompt instead.
+        local voice_effective="${voice:-${VOICE_STICKY:-false}}"
+        if [ "$voice_effective" = "true" ]; then
+            load_localai_variants
+            voice_variant="${VOICE_VARIANT_RECOMMENDED:-cpu}"
+            [ -n "${VOICE_VARIANT_NVIDIA_WARN:-}" ] && warn "$VOICE_VARIANT_NVIDIA_WARN"
+            info "Detected voice TTS image variant: $voice_variant"
+        else
+            voice_variant=""
+        fi
     fi
 
     if [ "$env_only" -eq 1 ]; then
@@ -202,6 +252,8 @@ cmd_setup() {
     # re-prompting for values that were already resolved on a prior run.
     if [ "$orig_argc" -eq 0 ] && [ "$CONFIG_SEEDED" = "true" ] && is_tty && [ "$non_interactive" -eq 0 ]; then
         info "Existing setup detected in $CONFIG_DIR"
+        # Yes when the stored configuration cannot run here as it is.
+        local reconfigure_default="N"
         info "  Server URL        = $APP_HOST_STICKY"
         if [ "${AUTH_PROVIDER_STICKY:-internal_keycloak}" = "external_oidc" ]; then
             info "  Identity provider = external OIDC"
@@ -230,7 +282,11 @@ cmd_setup() {
             info "  Local AI          = $_lai_label"
             [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_HOST_STICKY:-}" ] && \
                 info "  LocalAI URL       = $LOCALAI_HOST_STICKY"
-            if [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
+            if [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] \
+                && [ -n "$native_why_not" ]; then
+                warn "  LocalAI runtime   = native (Apple GPU), not available here: $native_why_not"
+                reconfigure_default="Y"
+            elif [ "$LOCAL_AI_STICKY" = "true" ] && [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ]; then
                 info "  LocalAI runtime   = native (Apple GPU)"
             elif [ "$LOCAL_AI_STICKY" = "true" ] && [ -n "${LOCALAI_VARIANT_STICKY:-}" ]; then
                 info "  LocalAI Image     = $LOCALAI_VARIANT_STICKY"
@@ -250,6 +306,13 @@ cmd_setup() {
             [ "$RAG_STICKY" = "true" ] && [ -n "${QDRANT_HOST_STICKY:-}" ] && \
                 info "  Qdrant URL        = $QDRANT_HOST_STICKY"
         fi
+        if [ -n "${VOICE_STICKY:-}" ]; then
+            local _voice_label="disabled"
+            [ "$VOICE_STICKY" = "true" ] && _voice_label="enabled"
+            info "  Voice (STT/TTS)   = $_voice_label"
+            [ "$VOICE_STICKY" = "true" ] && [ -n "${VOICE_VARIANT_STICKY:-}" ] && \
+                info "  Voice TTS Image   = $VOICE_VARIANT_STICKY"
+        fi
         if [ -n "${SMTP_STICKY:-}" ]; then
             local _smtp_label="disabled"
             [ "$SMTP_STICKY" = "true" ] && _smtp_label="enabled"
@@ -257,7 +320,7 @@ cmd_setup() {
             [ "$SMTP_STICKY" = "true" ] && [ -n "${SMTP_HOST_STICKY:-}" ] && \
                 info "  Mail server       = $SMTP_HOST_STICKY (sender ${SMTP_FROM_STICKY:-unset})"
         fi
-        if ! confirm "Reconfigure?" "N"; then
+        if ! confirm "Reconfigure?" "$reconfigure_default"; then
             info "Reusing existing configuration; re-rendering only."
             if ! _run_setup_py "$env_name" "" "" "" "" "$host_ip" 0 "" "" "" "" "" "" "" "" "" "" "" "" "$backup_dir" "" "" ""; then
                 error "setup failed."
@@ -402,18 +465,30 @@ cmd_setup() {
             esac
         fi
         # Asked before the URL: the native process has a fixed one and no image variant.
-        if [ "$local_ai" = "true" ] && [ -z "$localai_runtime" ] && _native_localai_host; then
-            localai_runtime="$(_prompt_localai_runtime)"
+        # Off such a Mac a stored `native` is not kept silently: nothing would start LocalAI.
+        if [ "$local_ai" = "true" ] && [ -z "$localai_runtime" ]; then
+            if [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] && [ -n "$native_why_not" ]; then
+                _localai_native_left_behind "$native_why_not"
+                localai_runtime="container"
+            elif [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] || _native_localai_host; then
+                localai_runtime="$(_prompt_localai_runtime)"
+            fi
         fi
         local effective_runtime="${localai_runtime:-${LOCALAI_RUNTIME_STICKY:-container}}"
         if [ "$local_ai" = "true" ] && [ -z "$localai_host" ] && [ "$effective_runtime" != "native" ]; then
             local localai_default="${LOCALAI_HOST_STICKY:-}"
+            # The stored URL of the native process (localhost) is no URL for the container.
+            [ "${LOCALAI_RUNTIME_STICKY:-}" = "native" ] && localai_default=""
             [ -z "$localai_default" ] && localai_default="$(_derive_localai_default "$app_host")"
             localai_host="$(prompt_field "Public URL of LocalAI" \
                 "Where browsers and LiteLLM reach LocalAI." \
                 "LOCALAI_PUBLIC_URL" "$localai_default")"
         fi
         if [ "$local_ai" = "true" ] && [ -z "$localai_variant" ] && [ "$effective_runtime" != "native" ]; then
+            # Probed in the parent shell: the prompt's $(...) subshell inherits
+            # the result, and a later voice prompt reuses it instead of probing
+            # again (the cache flag cannot escape a subshell).
+            load_localai_variants
             localai_variant="$(_prompt_localai_variant)"
         fi
         if [ -z "$manager" ]; then
@@ -451,6 +526,29 @@ cmd_setup() {
             qdrant_host="$(prompt_field "Public URL of the Qdrant database" \
                 "Where browsers reach Qdrant (REST API; the dashboard is under /dashboard)." \
                 "QDRANT_PUBLIC_URL" "$qdrant_default")"
+        fi
+        if [ -z "$voice" ]; then
+            # Off for a fresh install: the engines add several GB of RAM and model
+            # downloads. A previous opt-in stays the default so a re-run does not flip it.
+            local voice_default="2"
+            [ "${VOICE_STICKY:-}" = "true" ] && voice_default="1"
+            printf '\n%sInstall Voice (speech-to-text and text-to-speech)%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — run local STT and TTS engines, wired into LibreChat and LiteLLM\n' >&2
+            printf '  2) No   — skip the voice engines (default)\n' >&2
+            local voice_choice
+            voice_choice="$(prompt_with_default "  Choose" "$voice_default")"
+            case "$voice_choice" in
+                1|[Yy]|[Yy]es|YES) voice="true" ;;
+                2|[Nn]|[Nn]o|NO)   voice="false" ;;
+                *)
+                    warn "Unrecognized choice '$voice_choice'; defaulting to disabled."
+                    voice="false"
+                    ;;
+            esac
+        fi
+        if [ "$voice" = "true" ] && [ -z "$voice_variant" ]; then
+            load_localai_variants
+            voice_variant="$(_prompt_voice_variant)"
         fi
         if [ -z "$smtp" ]; then
             # Off for a fresh install: the relay needs a mail server only the operator
@@ -531,8 +629,16 @@ cmd_setup() {
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
     [ -n "$localai_runtime" ] && SETUP_LOCALAI_ARGS+=(--localai-runtime="$localai_runtime")
+    # A variant is a property of the enabled profile: when voice ends up off
+    # (an explicit --no-voice, a No at the prompt, or an untouched sticky
+    # opt-out), no probed or flagged variant may be stored as a choice.
+    local voice_final="${voice:-${VOICE_STICKY:-false}}"
+    if [ "$voice_final" != "true" ] && [ -n "$voice_variant" ]; then
+        warn "--voice-variant is ignored while the voice profile is disabled."
+        voice_variant=""
+    fi
     local setup_rc=0
-    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" || setup_rc=$?
+    _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$voice" "$voice_variant" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
     if [ "$setup_rc" -eq 4 ]; then
         # SETUP_REFUSED: a request that does not fit this installation (a topology for an
@@ -567,7 +673,7 @@ _installation_exists() {
 _prompt_topology() {
     printf '\n%sWhere does papAIa run?%s\n' "$CYAN" "$NC" >&2
     printf '  1) On this machine (default)\n' >&2
-    printf '  2) On two machines (experimental) — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
+    printf '  2) On two machines — e.g. ingress, identity and the LLM gateway on an edge node in a DMZ\n' >&2
     printf '     (for more machines, pass --node per machine or --topology-file to setup)\n' >&2
     local choice
     choice="$(prompt_with_default "  Choose" "1")"
@@ -618,8 +724,6 @@ _prompt_topology() {
 _setup_distributed() {
     local non_interactive="$1"
     py_cli topology-project >/dev/null
-    warn "The distributed mode is experimental: it has not yet been checked on real machines"
-    warn "  (docs/distributed-validation.md). Evaluate it before you run it in production."
     info "Topology:"
     py_cli topology-show
     info "Connections between the nodes (open these in the firewalls; papaia-ctl does not):"
@@ -761,11 +865,35 @@ _prompt_manager() {
     esac
 }
 
-# Whether LocalAI can run natively here: an Apple Silicon Mac whose Docker is Docker
-# Desktop (LiteLLM reaches the process at host.docker.internal). ADR 0012.
+# Why LocalAI cannot run natively here, or nothing when it can: an Apple Silicon Mac whose
+# Docker is Docker Desktop (LiteLLM reaches the process at host.docker.internal). ADR 0012.
+# A Docker that does not answer is named as such, since starting Docker Desktop fixes it.
+_native_localai_why_not() {
+    local system machine engine
+    system="$(uname -s)"
+    machine="$(uname -m)"
+    if [ "$system" != "Darwin" ] || [ "$machine" != "arm64" ]; then
+        echo "this host is $system/$machine, not an Apple Silicon Mac"
+        return 0
+    fi
+    engine="$(_docker_engine_name)"
+    if [ -z "$engine" ]; then
+        echo "Docker does not answer; start Docker Desktop and run setup again"
+    elif [ "$engine" != "Docker Desktop" ]; then
+        echo "Docker here is '$engine', not Docker Desktop"
+    fi
+}
+
 _native_localai_host() {
-    [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] \
-        && [ "$(_docker_engine_name)" = "Docker Desktop" ]
+    [ -z "$(_native_localai_why_not)" ]
+}
+
+# A stored LOCALAI_RUNTIME=native on a host that cannot run it: back to the container, and
+# say why, so the operator can return with --localai-runtime=native where it works.
+_localai_native_left_behind() {
+    warn "LocalAI was set to run natively, but $1."
+    warn "Switching LocalAI back to its container. On an Apple Silicon Mac with Docker Desktop running,"
+    warn "  'papaia-ctl setup --localai-runtime=native' selects the native runtime again."
 }
 
 # Asks where LocalAI runs on an Apple Silicon Mac; prints "native" or "container".
@@ -792,10 +920,10 @@ _prompt_localai_runtime() {
 # Asks which LocalAI accelerator image to install. Everything the operator sees
 # goes to stderr; only the chosen variant id reaches stdout.
 _prompt_localai_variant() {
-    # Announced before the probe, not after: it shells out to nvidia-smi and
-    # docker info, which takes long enough on a cold host to look like a hang.
     printf '\n%sLocalAI Image%s\n' "$CYAN" "$NC" >&2
-    printf '  Detecting available GPU accelerators, this can take a few seconds ...\n' >&2
+    # Normally a no-op: cmd_setup probes in the parent shell before this
+    # subshell, so the flag survives for the voice prompt. The call stays as
+    # the safety net for a caller that did not.
     load_localai_variants
 
     local default_slot
@@ -854,6 +982,63 @@ _prompt_localai_variant() {
     printf '%s' "$variant"
 }
 
+# Asks which image the voice TTS engine should run on. The catalogue is
+# shorter than LocalAI's -- upstream publishes only CUDA-12.8 and ROCm
+# accelerator builds of the pinned commit. Everything the operator sees goes
+# to stderr; only the chosen variant id reaches stdout.
+_prompt_voice_variant() {
+    printf '\n%sVoice TTS Image%s\n' "$CYAN" "$NC" >&2
+    # Normally a no-op; see _prompt_localai_variant.
+    load_localai_variants
+
+    # The sticky choice wins; otherwise the detection recommendation decides
+    # (VOICE_VARIANT_RECOMMENDED, the value --voice-variant=auto resolves to;
+    # it already applies the CUDA floor of the nvidia image).
+    local default_variant="${VOICE_VARIANT_STICKY:-}"
+    [ -n "$default_variant" ] || default_variant="${VOICE_VARIANT_RECOMMENDED:-cpu}"
+    local default_slot
+    case "$default_variant" in
+        nvidia)  default_slot="1" ;;
+        hipblas) default_slot="2" ;;
+        *)       default_slot="3" ;;
+    esac
+
+    printf '\n  On the CPU the TTS engine is slower than real time, so spoken replies in\n' >&2
+    printf '  LibreChat default to the browser voice. A GPU makes the local voice fast\n' >&2
+    printf '  enough for live playback. The GPU images need the matching host\n' >&2
+    printf '  prerequisites in place already (NVIDIA: driver + Container Toolkit;\n' >&2
+    printf '  AMD: ROCm kernel driver); the stack does not install them.\n\n' >&2
+
+    # The voice-specific warning (the CUDA floor of the TTS image) outranks
+    # the generic toolkit warning when both would apply.
+    _localai_variant_option 1 "NVIDIA GPU (CUDA)" \
+        "${LOCALAI_VARIANT_NVIDIA:-}" "${LOCALAI_VARIANT_NVIDIA_LABEL:-}" \
+        "${VOICE_VARIANT_NVIDIA_WARN:-${LOCALAI_VARIANT_NVIDIA_WARN:-}}"
+    _localai_variant_option 2 "AMD GPU (ROCm)" \
+        "${LOCALAI_VARIANT_AMD:-}" "${LOCALAI_VARIANT_AMD_LABEL:-}" "${LOCALAI_VARIANT_AMD_WARN:-}"
+    _localai_variant_option 3 "CPU only" \
+        "${LOCALAI_VARIANT_CPU:-cpu}" "${LOCALAI_VARIANT_CPU_LABEL:-runs on any hardware}" ""
+
+    local choice variant
+    choice="$(prompt_with_default "  Choose" "$default_slot")"
+    case "$choice" in
+        1|nvidia)
+            variant="nvidia"
+            [ -z "${LOCALAI_VARIANT_NVIDIA:-}" ] && _localai_variant_unverified "An NVIDIA GPU"
+            ;;
+        2|amd|hipblas)
+            variant="hipblas"
+            [ -z "${LOCALAI_VARIANT_AMD:-}" ] && _localai_variant_unverified "An AMD GPU with ROCm"
+            ;;
+        3|cpu) variant="cpu" ;;
+        *)
+            warn "Unrecognized choice '$choice'; defaulting to the CPU image."
+            variant="cpu"
+            ;;
+    esac
+    printf '%s' "$variant"
+}
+
 _derive_manager_default() {
     # Best-effort bash-side prefill for the papaia-manager URL prompt; the
     # authoritative derivation lives in resolve.derive_manager_url_default.
@@ -888,7 +1073,7 @@ _run_setup_py() {
     local env_name="$1" app_host="$2" auth_host="$3" external_rp="$4" allow_direct="$5" host_ip="$6" force="$7"
     local auth_provider="$8" oidc_issuer="$9" librechat_host="${10}" web_search="${11}"
     local localai_host="${12}" local_ai="${13}" reranker_model="${14}" reverse_proxy_provider="${15:-}" npm_admin_host="${16:-}" manager_host="${17:-}" manager="${18:-}" litellm_host="${19:-}" backup_dir="${20:-}" localai_variant="${21:-}"
-    local rag="${22:-}" qdrant_host="${23:-}"
+    local rag="${22:-}" qdrant_host="${23:-}" voice="${24:-}" voice_variant="${25:-}"
     local -a extra=()
     [ -n "$app_host" ] && extra+=(--app-host="$app_host")
     [ -n "$auth_host" ] && extra+=(--auth-host="$auth_host")
@@ -907,6 +1092,8 @@ _run_setup_py() {
     [ -n "$localai_variant" ] && extra+=(--localai-variant="$localai_variant")
     [ -n "$manager" ] && extra+=(--enable-manager="$manager")
     [ -n "$rag" ] && extra+=(--enable-rag="$rag")
+    [ -n "$voice" ] && extra+=(--enable-voice="$voice")
+    [ -n "$voice_variant" ] && extra+=(--voice-variant="$voice_variant")
     [ -n "$reranker_model" ] && extra+=(--reranker-model="$reranker_model")
     [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
     [ -n "$host_ip" ] && extra+=(--host-ip="$host_ip")

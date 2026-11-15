@@ -29,8 +29,8 @@ catalogue maps `llama-cpp` to Metal on darwin/arm64. Run as a host process, it u
 Apple GPU with the same engine, the same model list and the same LiteLLM registration
 (Fidonis/papaia#365) as the container on Linux.
 
-Measured on an M4 Max (128 GB, macOS 27.2) with Docker Desktop 29.8.2 and Compose 5.6.0, the
-Docker VM at 8 GB, LocalAI v4.7.1 (Fidonis/papaia#366):
+Measured on an M4 Max (128 GB, macOS 27.2) with Docker Desktop (Docker Engine 29.8.2) and
+Compose 5.6.0, the Docker VM at 8 GB, LocalAI v4.7.1 (Fidonis/papaia#366):
 
 | | native (Metal) | CPU container in the VM |
 |---|---|---|
@@ -49,12 +49,28 @@ Also checked on that Mac:
   `/v1`, `/api` and `/metrics`, and `/readyz` needs no key;
 - LocalAI writes `data/` and `configuration/` into its working directory.
 
+All of these findings and numbers are from **LocalAI v4.7.1**. The native runtime installs the
+release that the `localai` image pins, which has since moved to v4.12.1. A re-check with that
+release on a Mac is pending: checksum and signature, the first start with the Metal backend,
+chat and embeddings through LiteLLM, the behaviour with `LOCALAI_AUTH=true` and the key on
+`/v1`, `/api`, `/metrics` and `/readyz`, where `data/` and `configuration/` are written, and the
+upgrade from an installed v4.7.1. Until then the list above describes v4.7.1 only, and any
+difference found updates it.
+
+The 16 GB baseline is **not measured**. The numbers come from a 128 GB Mac, and generation
+speed scales with memory bandwidth, so a base Mac is slower by an unknown factor. With the
+Docker VM at 8 GB, a 16 GB Mac has about 8 GB left for macOS and the native process; the 5.4 GB
+of Qwen2.5-7B-Instruct Q5_K_M plus its KV cache are tight there.
+
 ## Decision
 
 On an Apple Silicon Mac with Docker Desktop, LocalAI can run as a host process instead of a
 container. A sticky root setting `LOCALAI_RUNTIME` (`container`, the default, or `native`),
 set by `papaia-ctl setup --localai-runtime=…`, selects it; setup asks on such a Mac only and
-refuses the flag elsewhere. A distributed installation refuses `native`.
+refuses `native` elsewhere, naming a Docker that does not answer as such. `container` is
+accepted on every host, so a configuration restored elsewhere can always go back; an
+interactive setup on such a host switches a stored `native` back to `container` and says why.
+A distributed installation refuses `native`.
 
 - **Compose.** The services `localai` and `localai-model-init` stay declared (the add-on
   contract pins them). A generated override sets `pull_policy: never` and `replicas: 0` on
@@ -78,8 +94,11 @@ refuses the flag elsewhere. A distributed installation refuses `native`.
   Docker Desktop resolves in every container.
 - **Models.** When the runtime changes to `native`, setup seeds the overlay `models.txt` once
   with an active chat model and `nomic-embed-text`. The chat model is Qwen2.5-7B-Instruct
-  Q5_K_M: 58 tokens/s on Metal is fast enough for a chat, and its 5.4 GB fit a 16 GB Mac
-  next to the stack. The 1.5B model stays in the list for smaller machines.
+  Q5_K_M: 58 tokens/s on Metal (128 GB M4 Max) is fast enough for a chat. Whether its 5.4 GB
+  fit a 16 GB Mac next to the stack is not measured (see above); the measurement comment on
+  Fidonis/papaia#366 suggests Q4_K_M (about 4.7 GB) or Qwen2.5-3B-Instruct for that baseline
+  if a 16 GB Mac swaps, which a run on such a Mac has to settle before this default is final.
+  The 1.5B model stays in the list for smaller machines.
 - **status and doctor** do not expect a `localai` container for `native`. A new doctor check,
   `localai_native`, probes `/readyz`, compares the installed binary with the pin and, on the
   Mac, reads the launchd job's state; it is `warn` at most.

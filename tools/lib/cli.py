@@ -61,6 +61,22 @@ def _tristate(value: str | None) -> bool | None:
     return value == "true"
 
 
+def _apply_voice_gpu_override(config_dir: Path, repo_root: Path, tree: dict) -> None:
+    """Write or remove the voice TTS accelerator override for this tree.
+
+    The variant only materializes while the voice profile is active: a host that never
+    runs the TTS engine must not carry a stray accelerator override (an empty variant
+    removes the file)."""
+    root = tree.get("", {})
+    # Stripped like render_core parses the same value, so a hand-edited
+    # profile list with spaces cannot activate the fragments while this
+    # helper deletes the override.
+    active = "voice" in {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",")}
+    gen_override.generate_voice_gpu_override(
+        config_dir, repo_root, root.get("VOICE_TTS_IMAGE_VARIANT", "") if active else ""
+    )
+
+
 def cmd_defaults(args: argparse.Namespace) -> int:
     """Print sticky/derived values as shell-safe KEY=VALUE lines, one per
     line, so the bash dispatcher can read them without a JSON parser."""
@@ -210,6 +226,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_runtime=args.localai_runtime or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_voice=_tristate(args.enable_voice),
+        voice_variant=args.voice_variant or None,
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
         smtp_port=args.smtp_port,
@@ -250,6 +268,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
+        tree = resolve.resolve_voice(tree, setup_args)
+        tree = resolve.resolve_voice_variant(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -288,6 +308,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
+    # The native LocalAI lives below the workspace. Checked before anything is written, so
+    # a refused run does not leave LOCALAI_RUNTIME=native behind in the root .env.
+    if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE:
+        try:
+            localai_native.localai_home(tree.get("", {}))
+        except localai_native.InstallError as exc:
+            print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
+            return 3
     # After stamp_workspace_dir: the derived default is <workspace>/backup.
     tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
@@ -325,6 +353,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print(f"Seeded the LocalAI model list for the native runtime: {seeded}")
             # The render above ran before the list existed.
             render_core.render(config_dir, repo_root)
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -366,11 +395,7 @@ def _localai_runtime_override(config_dir: Path) -> str | None:
         try:
             home = localai_native.localai_home(root)
         except localai_native.InstallError as exc:
-            problem = (
-                f"LOCALAI_RUNTIME=native: {exc}. The native LocalAI keeps its files below"
-                " PAPAIA_WORKSPACE_DIR, which setup derives from a checkout named 'papaia'"
-                " (or set it in the root .env)"
-            )
+            problem = f"LOCALAI_RUNTIME=native: {exc}"
     gen_override.generate_localai_runtime_override(config_dir, runtime, home)
     return problem
 
@@ -418,11 +443,15 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
         return 0
     supported, why = localai_native.host_supported()
     if not supported:
-        print(f"WARNING: native LocalAI skipped: {why}", file=sys.stderr)
+        print(
+            f"WARNING: native LocalAI skipped: {why}. 'papaia-ctl setup"
+            " --localai-runtime=container' runs LocalAI in its container here.",
+            file=sys.stderr,
+        )
         print("LOCALAI_NATIVE=skipped")
         return 0
     try:
-        result = localai_native.install_for(config_dir, repo_root)
+        result = localai_native.install_for(config_dir, repo_root, announce=_announce_install)
     except localai_native.InstallError as exc:
         print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
         return 1
@@ -433,6 +462,12 @@ def cmd_localai_native_install(args: argparse.Namespace) -> int:
     # A running job has to be restarted to pick up a new binary, start script or key.
     print(f"LOCALAI_NATIVE_RESTART={1 if result.restart else 0}")
     return 0
+
+
+def _announce_install(version: str) -> None:
+    # stderr: stdout carries the KEY=VALUE lines the shell reads. The download is about
+    # 150 MB and `start` would otherwise look stuck while it runs.
+    print(f"Installing LocalAI {version} for the Apple GPU...", file=sys.stderr, flush=True)
 
 
 def _native_wanted(root: dict[str, str]) -> bool:
@@ -659,6 +694,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     runtime_problem = _localai_runtime_override(config_dir)
     if runtime_problem:
         print(f"WARNING: {runtime_problem}", file=sys.stderr)
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
     print("Rendered.")
@@ -1461,6 +1497,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-runtime", choices=list(localai_native.RUNTIMES), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
+    p_setup.add_argument("--voice-variant", choices=["cpu", "nvidia", "hipblas"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)

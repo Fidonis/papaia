@@ -1,8 +1,8 @@
 # Running papAIa on several machines
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](#limits) that hold by design.
 
 papAIa normally runs on one host. A **distributed installation** spreads the core services
 over several machines (nodes). Use it when ingress, identity and the LLM gateway have to sit on
@@ -27,6 +27,7 @@ system. Every other node is reached over SSH and holds only what its own service
 | `librechat` | LibreChat, MongoDB, Meilisearch, the vector database, the RAG API | anywhere |
 | `websearch` | SearXNG, Firecrawl, MCP-Firecrawl, the Jina reranker | with `librechat` |
 | `localai` | LocalAI and its model download | on a node with the GPU its image needs |
+| `voice` | the speech engines (STT, TTS, model init) | anywhere; a GPU TTS image on a node with that GPU |
 | `rag` | Qdrant, its MCP server, the ingester, Tika | on the controller |
 | `smtp` | the mail relay | anywhere (best with `keycloak`) |
 | `manager` | papaia-manager | on the controller |
@@ -140,6 +141,11 @@ This lists every connection between the nodes. For `dmz-split`:
 
 Plus 80 and 443 from the users to the proxy's node. papaia never changes a firewall; open
 exactly these. `doctor` names a missing rule when a link cannot be reached.
+
+The link port is published by Docker, so its packets are DNATed before routing and traverse
+the host's *forward* chain, never its input chain. Enforce the rules above where forwarded
+traffic is filtered (an nftables forward chain, or iptables' `DOCKER-USER`); an input-only
+rule set -- plain `ufw` among them -- does not apply to the link port at all.
 
 ## Daily operations
 

@@ -186,6 +186,11 @@ launchctl print "gui/$(id -u)/de.fidonis.papaia.<project>.localai"
   : > "$PAPAIA_WORKSPACE_DIR/localai/<project>/logs/localai.log"
   ```
 
+- **"native LocalAI skipped"** from `start`, or `setup` warning that `LOCALAI_RUNTIME=native`
+  is stored: this host cannot run the native process (no Apple Silicon Mac, another Docker
+  engine, or Docker Desktop not running). Start Docker Desktop, or go back to the container
+  with `tools/papaia-ctl setup --localai-runtime=container` and `tools/papaia-ctl start`.
+
 ### LocalAI comes back after a reboot although the stack is stopped
 
 The native LocalAI of a Mac is a launchd job with `RunAtLoad`: launchd starts it at every
