@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from lib import common, localai_native
+from lib.status import CommandResult
 
 BINARY = b"\x7fELF-not-really-a-local-ai-binary" * 64
 VERSION = "v9.9.9"  # the pin of the fixture repo's LocalAI compose file
@@ -198,7 +199,8 @@ def test_the_script_is_private_and_holds_no_key(tmp_path):
     config = _config_with_key(tmp_path)
     home = tmp_path / "home"
     binary = home / "bin" / "local-ai-v9.9.9"
-    path = localai_native.write_run_script(home, binary, config, "8200")
+    assert localai_native.write_run_script(home, binary, config, "8200") is True
+    path = localai_native.script_path(home)
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o700
     text = path.read_text(encoding="utf-8")
@@ -218,7 +220,8 @@ def test_the_script_reads_the_key_when_it_runs_and_starts_in_the_home(tmp_path):
         '#!/bin/sh\necho "$1|$LOCALAI_API_KEY|$LOCALAI_ADDRESS|$LOCALAI_MODELS_PATH|$(pwd -P)"\n'
     )
     binary.chmod(0o755)
-    path = localai_native.write_run_script(home, binary, config, "8200")
+    localai_native.write_run_script(home, binary, config, "8200")
+    path = localai_native.script_path(home)
 
     done = subprocess.run([str(path)], capture_output=True, text=True, check=True)
     command, key, address, models, cwd = done.stdout.strip().split("|")
@@ -232,6 +235,15 @@ def test_the_script_reads_the_key_when_it_runs_and_starts_in_the_home(tmp_path):
     assert "LOCALAI_API_KEY is missing" in missing.stderr
 
 
+def test_the_script_reports_whether_it_changed(tmp_path):
+    config = _config_with_key(tmp_path)
+    home = tmp_path / "home"
+    binary = home / "bin" / "local-ai-v9.9.9"
+    assert localai_native.write_run_script(home, binary, config, "8200") is True
+    assert localai_native.write_run_script(home, binary, config, "8200") is False
+    assert localai_native.write_run_script(home, binary, config, "8300") is True
+
+
 def test_install_for_prepares_the_home_of_the_installation(tmp_path, repo_root):
     config = _config_with_key(tmp_path)
     (config / ".env").write_text(
@@ -239,10 +251,45 @@ def test_install_for_prepares_the_home_of_the_installation(tmp_path, repo_root):
     )
     result = localai_native.install_for(config, repo_root, opener=FakeOpener())
     home = tmp_path / "workspace" / "localai" / "papaia"
-    assert result.version == VERSION and result.changed
+    assert result.version == VERSION and result.changed and result.script_changed
     assert result.script == home / "run-localai"
     assert (home / "models").is_dir() and (home / "backends").is_dir()
     assert localai_native.installed_version(home) == VERSION
+
+
+def test_a_changed_key_is_noticed_through_its_fingerprint(tmp_path, repo_root):
+    config = _config_with_key(tmp_path, "sk-local-first-value")
+    (config / ".env").write_text(
+        "\n".join(f"{k}={v}" for k, v in _root(tmp_path).items()) + "\n", encoding="utf-8"
+    )
+    opener = FakeOpener()
+    home = tmp_path / "workspace" / "localai" / "papaia"
+    first = localai_native.install_for(config, repo_root, opener=opener)
+    assert first.key_changed and first.restart
+    # What a successful start does once launchd has (re)started the process.
+    localai_native.clear_restart_pending(home)
+
+    again = localai_native.install_for(config, repo_root, opener=opener)
+    assert not (again.changed or again.script_changed or again.key_changed)
+    assert not again.restart
+
+    (config / "ai" / "localai" / ".env").write_text(
+        "LOCALAI_API_KEY=sk-local-second-value\n", encoding="utf-8"
+    )
+    rotated = localai_native.install_for(config, repo_root, opener=opener)
+    assert rotated.key_changed and rotated.restart
+    assert not (rotated.changed or rotated.script_changed)
+
+    fingerprint = localai_native.fingerprint_path(home)
+    assert stat.S_IMODE(fingerprint.stat().st_mode) == 0o600
+    assert fingerprint.read_text(encoding="utf-8") == (
+        hashlib.sha256(b"sk-local-second-value").hexdigest() + "\n"
+    )
+    for path in home.rglob("*"):
+        if path.is_file():
+            data = path.read_bytes()
+            assert b"sk-local-first-value" not in data, path
+            assert b"sk-local-second-value" not in data, path
 
 
 # ── host ────────────────────────────────────────────────────────────────────
@@ -528,3 +575,789 @@ def test_a_stored_native_without_a_workspace_is_refused_before_seeding(
     assert _setup(repo_root, config_dir) == 3
     assert "Nothing was changed." in capsys.readouterr().err
     assert sorted(p.name for p in config_dir.iterdir()) == [".env"]
+
+
+# ── launchd ─────────────────────────────────────────────────────────────────
+
+LAUNCHCTL_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "launchctl"
+# What `launchctl print` says on macOS for a job that is not loaded (exit 113).
+NOT_LOADED = (
+    'Bad request.\nCould not find service "de.fidonis.papaia.papaia.localai" in domain for'
+    " user gui: 501\n"
+)
+LABEL = "de.fidonis.papaia.papaia.localai"
+UID = 501
+TARGET = f"gui/{UID}/{LABEL}"
+
+
+class FakeLaunchctl:
+    """launchd of one user, as far as `launchctl` shows it: answers print from the recorded
+    output, refuses to bootstrap a disabled job, records every call."""
+
+    def __init__(self, *, loaded=False, running=True, disabled=False, fail=None):
+        self.loaded = loaded
+        self.running = running
+        self.disabled = disabled
+        # {verb: CommandResult} for a call that fails.
+        self.fail = fail or {}
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd, timeout):
+        cmd = list(cmd)
+        assert cmd[0] == "launchctl", cmd
+        self.calls.append(cmd[1:])
+        verb = cmd[1]
+        if verb in self.fail:
+            return self.fail[verb]
+        if verb == "print":
+            if not self.loaded:
+                return CommandResult(113, "", NOT_LOADED)
+            name = "print-running.txt" if self.running else "print-crashed.txt"
+            return CommandResult(0, (LAUNCHCTL_FIXTURES / name).read_text(encoding="utf-8"), "")
+        if verb == "enable":
+            self.disabled = False
+        elif verb == "disable":
+            self.disabled = True
+        elif verb == "bootstrap":
+            if self.disabled:
+                return CommandResult(5, "", "Bootstrap failed: 5: Input/output error\n")
+            if self.loaded:
+                return CommandResult(5, "", "Bootstrap failed: 5: Input/output error\n")
+            self.loaded = self.running = True
+        elif verb == "kickstart":
+            if not self.loaded:
+                return CommandResult(113, "", NOT_LOADED)
+            self.running = True
+        elif verb == "bootout":
+            if not self.loaded:
+                return CommandResult(3, "", "Boot-out failed: 3: No such process\n")
+            self.loaded = self.running = False
+        else:
+            raise AssertionError(f"unexpected launchctl call: {cmd}")
+        return CommandResult(0, "", "")
+
+    def verbs(self) -> list[str]:
+        return [" ".join(call) for call in self.calls if call[0] != "print"]
+
+
+def _job_home(tmp_path: Path) -> tuple[Path, Path]:
+    home = tmp_path / "workspace" / "localai" / "papaia"
+    (home / "bin").mkdir(parents=True)
+    (home / "bin" / f"local-ai-{VERSION}").write_bytes(b"binary")
+    (home / "run-localai").write_text("#!/bin/sh\n", encoding="utf-8")
+    for sub in ("models", "backends", "data", "configuration"):
+        (home / sub).mkdir()
+    (home / "models" / "qwen.gguf").write_bytes(b"model")
+    return home, tmp_path / "LaunchAgents" / f"{LABEL}.plist"
+
+
+def _start(home, plist, fake, **kwargs):
+    return localai_native.start_job(
+        home, LABEL, plist, run=fake, uid=UID, sleep=lambda s: None, **kwargs
+    )
+
+
+def test_the_label_and_the_plist_are_per_installation(tmp_path):
+    assert localai_native.label("papaia") == LABEL
+    assert localai_native.label_for({"COMPOSE_PROJECT_NAME": "papaia-two"}) == (
+        "de.fidonis.papaia.papaia-two.localai"
+    )
+    assert localai_native.label_for({}) == LABEL
+    assert localai_native.plist_path(LABEL, user_home=tmp_path) == (
+        tmp_path / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+    )
+    with pytest.raises(localai_native.LaunchdError):
+        localai_native.label("../evil")
+
+
+def test_the_plist_runs_the_script_and_holds_no_key(tmp_path):
+    import plistlib
+
+    config = _config_with_key(tmp_path)
+    home, plist = _job_home(tmp_path)
+    localai_native.write_run_script(home, home / "bin" / f"local-ai-{VERSION}", config, "8200")
+    assert localai_native.write_plist(plist, localai_native.plist_document(LABEL, home))
+
+    text = plist.read_text(encoding="utf-8")
+    assert "sk-local-test-value" not in text and "LOCALAI_API_KEY" not in text
+    document = plistlib.loads(plist.read_bytes())
+    assert document["Label"] == LABEL
+    assert document["ProgramArguments"] == [str(home / "run-localai")]
+    assert document["RunAtLoad"] is True
+    assert document["KeepAlive"] == {"SuccessfulExit": False}
+    assert document["ThrottleInterval"] == 10
+    assert document["StandardOutPath"] == str(home / "logs" / "localai.log")
+    assert document["StandardErrorPath"] == document["StandardOutPath"]
+    assert "EnvironmentVariables" not in document
+    # The same document again is no change.
+    assert not localai_native.write_plist(plist, localai_native.plist_document(LABEL, home))
+
+
+def test_the_state_is_read_from_launchctl_print():
+    running = localai_native.state(LABEL, run=FakeLaunchctl(loaded=True), uid=UID)
+    assert running == localai_native.JobState(True, "running", 70027, "(never exited)")
+    assert running.running
+
+    crashed = localai_native.state(LABEL, run=FakeLaunchctl(loaded=True, running=False), uid=UID)
+    assert crashed.loaded and not crashed.running
+    assert (crashed.state, crashed.pid, crashed.last_exit) == ("not running", None, "1")
+
+    absent = localai_native.state(LABEL, run=FakeLaunchctl(), uid=UID)
+    assert absent == localai_native.JobState(loaded=False)
+
+
+def test_the_nested_blocks_of_print_do_not_override_the_job_state():
+    text = (LAUNCHCTL_FIXTURES / "print-running.txt").read_text(encoding="utf-8")
+    # The coalition blocks further down say `state = active`.
+    assert "\t\tstate = active" in text
+    assert localai_native.parse_print(text).state == "running"
+
+
+def test_a_first_start_enables_and_loads_the_job(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    result = _start(home, plist, fake, restart=True)
+
+    assert result.action == "loaded"
+    assert fake.verbs() == [f"enable {TARGET}", f"bootstrap gui/{UID} {plist}"]
+    assert plist.is_file()
+    assert (home / "logs").is_dir(), "launchd opens the log but does not create its directory"
+    assert result.log == home / "logs" / "localai.log"
+
+
+def test_a_running_job_with_nothing_new_is_left_alone(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    fake.calls.clear()
+
+    result = _start(home, plist, fake)
+    assert result.action == "running"
+    assert fake.verbs() == [f"enable {TARGET}"]
+
+
+def test_a_new_binary_restarts_the_running_job(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    fake.calls.clear()
+
+    result = _start(home, plist, fake, restart=True)
+    assert result.action == "restarted"
+    assert fake.verbs() == [f"enable {TARGET}", f"kickstart -k {TARGET}"]
+
+
+def test_a_pending_restart_is_carried_out_and_then_cleared(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    localai_native.mark_restart_pending(home)
+    fake.calls.clear()
+
+    # No restart flag: the marker of an earlier install step is enough.
+    result = _start(home, plist, fake)
+    assert result.action == "restarted"
+    assert fake.verbs() == [f"enable {TARGET}", f"kickstart -k {TARGET}"]
+    assert not localai_native.restart_pending(home)
+
+    fake.calls.clear()
+    assert _start(home, plist, fake).action == "running"
+    assert fake.verbs() == [f"enable {TARGET}"]
+
+
+def test_a_failed_restart_stays_pending(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    localai_native.mark_restart_pending(home)
+    fake.fail = {"kickstart": CommandResult(1, "", "kickstart failed\n")}
+
+    with pytest.raises(localai_native.LaunchdError, match="kickstart"):
+        _start(home, plist, fake)
+    assert localai_native.restart_pending(home)
+
+    fake.fail = {}
+    assert _start(home, plist, fake).action == "restarted"
+    assert not localai_native.restart_pending(home)
+
+
+def test_a_bootstrap_clears_a_pending_restart(tmp_path):
+    home, plist = _job_home(tmp_path)
+    localai_native.mark_restart_pending(home)
+
+    # Not loaded (after `stop`, or the first start): the new process reads everything anew.
+    assert _start(home, plist, FakeLaunchctl()).action == "loaded"
+    assert not localai_native.restart_pending(home)
+
+
+def test_a_loaded_job_that_exited_is_started_again(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    fake.running = False
+    fake.calls.clear()
+
+    assert _start(home, plist, fake).action == "started"
+    assert fake.verbs() == [f"enable {TARGET}", f"kickstart {TARGET}"]
+
+
+def test_a_changed_plist_is_loaded_anew(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    plist.write_text("<plist>an older version</plist>\n", encoding="utf-8")
+    fake.calls.clear()
+
+    assert _start(home, plist, fake).action == "loaded"
+    assert fake.verbs() == [
+        f"enable {TARGET}",
+        f"bootout {TARGET}",
+        f"bootstrap gui/{UID} {plist}",
+    ]
+
+
+def test_a_stopped_job_is_enabled_before_it_is_loaded(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    localai_native.stop_job(LABEL, run=fake, uid=UID, sleep=lambda s: None)
+    assert fake.disabled and not fake.loaded
+
+    assert _start(home, plist, fake).action == "loaded"
+    assert fake.loaded and not fake.disabled
+
+
+def test_a_failed_bootstrap_says_what_launchctl_said(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl(
+        fail={"bootstrap": CommandResult(5, "", "Bootstrap failed: 5: Input/output error\n")}
+    )
+    with pytest.raises(localai_native.LaunchdError, match="bootstrap .* Input/output error"):
+        _start(home, plist, fake)
+
+
+def test_a_missing_launchctl_is_an_error(tmp_path):
+    home, plist = _job_home(tmp_path)
+
+    def missing(cmd, timeout):
+        return CommandResult(127, "", "launchctl: command not found")
+
+    with pytest.raises(localai_native.LaunchdError, match="not found"):
+        _start(home, plist, missing)
+
+
+def test_launchctl_goes_through_the_status_runner(tmp_path, monkeypatch):
+    from lib import status
+
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    monkeypatch.setattr(status, "run_command", fake)
+    localai_native.start_job(home, LABEL, plist, uid=UID)
+    assert fake.verbs()[-1].startswith("bootstrap")
+
+
+def test_stop_unloads_and_disables_the_job(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+    fake.calls.clear()
+
+    assert localai_native.stop_job(LABEL, run=fake, uid=UID, sleep=lambda s: None) is True
+    assert fake.verbs() == [f"bootout {TARGET}", f"disable {TARGET}"]
+    assert not fake.loaded and fake.disabled
+
+
+def test_stopping_a_job_that_is_not_loaded_only_disables_it():
+    fake = FakeLaunchctl()
+    assert localai_native.stop_job(LABEL, run=fake, uid=UID, sleep=lambda s: None) is False
+    assert fake.verbs() == [f"disable {TARGET}"]
+
+
+def test_a_job_that_went_away_during_bootout_is_no_error():
+    class Racing(FakeLaunchctl):
+        def __call__(self, cmd, timeout):
+            if cmd[1] == "bootout":
+                self.calls.append(list(cmd[1:]))
+                self.loaded = False
+                return CommandResult(3, "", "Boot-out failed: 3: No such process\n")
+            return super().__call__(cmd, timeout)
+
+    fake = Racing(loaded=True)
+    assert localai_native.stop_job(LABEL, run=fake, uid=UID, sleep=lambda s: None) is True
+    assert fake.disabled
+
+
+def test_a_job_that_does_not_unload_is_an_error():
+    fake = FakeLaunchctl(loaded=True, fail={"bootout": CommandResult(0, "", "")})
+    with pytest.raises(localai_native.LaunchdError, match="still loaded"):
+        localai_native.stop_job(LABEL, run=fake, uid=UID, sleep=lambda s: None)
+
+
+def test_readiness_is_awaited_and_times_out():
+    now = [0.0]
+    asked: list[str] = []
+
+    def never(url):
+        asked.append(url)
+        return False
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    url = "http://127.0.0.1:8200/readyz"
+    assert not localai_native.wait_ready(url, 60, ready=never, sleep=sleep, clock=lambda: now[0])
+    assert now[0] == 60 and len(asked) == 61
+
+    answers = iter([False, False, True])
+    assert localai_native.wait_ready(
+        url, 60, ready=lambda u: next(answers), sleep=sleep, clock=lambda: now[0]
+    )
+
+
+def test_uninstall_keeps_the_models(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+
+    removed = localai_native.uninstall(home, LABEL, plist, run=fake, uid=UID, sleep=lambda s: None)
+    assert not fake.loaded and fake.disabled
+    assert set(removed) == {plist, home / "run-localai", home / "bin"}
+    assert (home / "models" / "qwen.gguf").is_file()
+    assert (home / "backends").is_dir() and (home / "logs").is_dir()
+
+
+def test_uninstall_with_purge_removes_the_directory(tmp_path):
+    home, plist = _job_home(tmp_path)
+    fake = FakeLaunchctl()
+    _start(home, plist, fake)
+
+    localai_native.uninstall(
+        home, LABEL, plist, purge=True, run=fake, uid=UID, sleep=lambda s: None
+    )
+    assert not plist.exists()
+    assert not home.exists()
+    assert not home.parent.exists(), "the empty localai/ directory goes too"
+    assert (tmp_path / "workspace").is_dir()
+
+
+def test_uninstall_with_purge_leaves_files_it_does_not_know(tmp_path):
+    home, plist = _job_home(tmp_path)
+    (home / "notes.txt").write_text("mine\n", encoding="utf-8")
+    localai_native.uninstall(
+        home, LABEL, plist, purge=True, run=FakeLaunchctl(), uid=UID, sleep=lambda s: None
+    )
+    assert (home / "notes.txt").is_file()
+    assert not (home / "models").exists()
+
+
+def test_purge_data_deletes_models_and_backends_only(tmp_path):
+    home, _ = _job_home(tmp_path)
+    assert localai_native.purge_data(home) == [home / "models", home / "backends"]
+    assert (home / "bin").is_dir() and (home / "data").is_dir()
+    assert localai_native.purge_data(home) == []
+
+
+@pytest.mark.parametrize(
+    "below, folder",
+    [("Documents", "~/Documents"), ("Desktop", "~/Desktop"), ("Downloads", "~/Downloads"),
+     ("papaia-workspace", None)],
+)  # fmt: skip
+def test_the_protected_folders_are_recognised(tmp_path, below, folder):
+    home = tmp_path / below / "work" / "localai" / "papaia"
+    assert localai_native.protected_folder(home, user_home=tmp_path) == folder
+
+
+def test_launchd_is_only_at_hand_on_a_mac_outside_a_container(monkeypatch):
+    monkeypatch.undo()  # the real launchd_host, not the guard from conftest
+    monkeypatch.setattr(common, "in_container", lambda: False)
+    assert localai_native.launchd_host(system="Darwin") == (True, "")
+    assert not localai_native.launchd_host(system="Linux")[0]
+    monkeypatch.setattr(common, "in_container", lambda: True)
+    available, why = localai_native.launchd_host(system="Darwin")
+    assert not available and "inside a container" in why
+
+
+# ── the launchd commands ────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def native_install(papaia_repo, config_dir, tmp_path, monkeypatch, capsys):
+    """A native installation after `start`'s install step, with HOME in tmp_path."""
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    assert _setup(papaia_repo, config_dir, "--localai-runtime=native") == 0
+    monkeypatch.setattr(localai_native, "host_supported", lambda: (True, ""))
+    monkeypatch.setattr(localai_native, "launchd_host", lambda: (True, ""))
+    monkeypatch.setattr(localai_native, "_open", FakeOpener())
+    argv = ["--repo-root", str(papaia_repo), "--config-dir", str(config_dir)]
+    from lib import cli
+
+    assert cli.main([*argv, "localai-native-install"]) == 0
+    capsys.readouterr()
+    home = localai_native.localai_home(common.parse_env_file(config_dir / ".env"))
+    return argv, home
+
+
+def _cli(argv, *args):
+    from lib import cli
+
+    return cli.main([*argv, *args])
+
+
+def test_start_command_loads_the_job_and_waits_for_readyz(native_install, monkeypatch, capsys):
+    from lib import status
+
+    argv, home = native_install
+    fake = FakeLaunchctl()
+    monkeypatch.setattr(status, "run_command", fake)
+    asked: list[str] = []
+    monkeypatch.setattr(
+        localai_native, "wait_ready", lambda url, timeout: asked.append(url) or True
+    )
+
+    assert _cli(argv, "localai-native-start") == 0
+    out = capsys.readouterr().out
+    assert fake.loaded
+    assert f"log: {home / 'logs' / 'localai.log'}" in out
+    assert asked and asked[0].endswith("/readyz") and "127.0.0.1" in asked[0]
+    plist = localai_native.plist_path(LABEL)
+    assert plist.is_relative_to(Path(os.environ["HOME"]))
+
+
+def test_start_command_warns_on_a_readiness_timeout(native_install, monkeypatch, capsys):
+    from lib import status
+
+    argv, home = native_install
+    monkeypatch.setattr(status, "run_command", FakeLaunchctl())
+    monkeypatch.setattr(localai_native, "probe", lambda url, opener=None: False)
+
+    assert _cli(argv, "localai-native-start", "--wait=0") == 0
+    err = capsys.readouterr().err
+    assert "does not answer" in err
+    assert str(home / "logs" / "localai.log") in err
+    assert "launchctl print gui/" in err
+
+
+def test_start_command_fails_when_launchctl_does(native_install, monkeypatch, capsys):
+    from lib import status
+
+    argv, _ = native_install
+    fail = {"bootstrap": CommandResult(5, "", "Bootstrap failed: 5: Input/output error\n")}
+    monkeypatch.setattr(status, "run_command", FakeLaunchctl(fail=fail))
+    assert _cli(argv, "localai-native-start", "--wait=0") == 1
+    assert "Input/output error" in capsys.readouterr().err
+
+
+def test_start_command_skips_a_container_or_an_unsupported_host(
+    native_install, monkeypatch, capsys
+):
+    from lib import status
+
+    argv, _ = native_install
+    monkeypatch.setattr(
+        localai_native, "host_supported", lambda: (False, "papaia-ctl runs inside a container")
+    )
+    fake = FakeLaunchctl()
+    monkeypatch.setattr(status, "run_command", fake)
+    assert _cli(argv, "localai-native-start") == 0
+    assert "not started: papaia-ctl runs inside a container" in capsys.readouterr().err
+    assert fake.calls == []
+
+
+def test_stop_command_unloads_the_job(native_install, monkeypatch, capsys):
+    from lib import status
+
+    argv, home = native_install
+    fake = FakeLaunchctl(loaded=True)
+    monkeypatch.setattr(status, "run_command", fake)
+    assert _cli(argv, "localai-native-stop") == 0
+    assert "Stopped the native LocalAI" in capsys.readouterr().out
+    target = f"gui/{os.getuid()}/{LABEL}"
+    assert fake.verbs() == [f"bootout {target}", f"disable {target}"]
+    assert (home / "models").is_dir()
+
+
+def test_stop_command_with_purge_deletes_the_models(native_install, monkeypatch, capsys):
+    from lib import status
+
+    argv, home = native_install
+    monkeypatch.setattr(status, "run_command", FakeLaunchctl(loaded=True))
+    assert _cli(argv, "localai-native-stop", "--purge-models") == 0
+    assert not (home / "models").exists() and not (home / "backends").exists()
+    assert (home / "bin").is_dir()
+
+
+def test_stop_command_in_a_container_warns_and_still_deletes_the_models(
+    native_install, monkeypatch, capsys
+):
+    from lib import status
+
+    argv, home = native_install
+    monkeypatch.setattr(
+        localai_native, "launchd_host", lambda: (False, "papaia-ctl runs inside a container")
+    )
+    fake = FakeLaunchctl()
+    monkeypatch.setattr(status, "run_command", fake)
+    assert _cli(argv, "localai-native-stop", "--purge-models") == 0
+    assert "not stopped: papaia-ctl runs inside a container" in capsys.readouterr().err
+    assert fake.calls == []
+    # The workspace is mounted into the manager at the same path.
+    assert not (home / "models").exists()
+
+
+def test_stop_command_is_silent_for_the_container_runtime(
+    papaia_repo, config_dir, tmp_path, monkeypatch, capsys
+):
+    from lib import status
+
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    assert _setup(papaia_repo, config_dir) == 0
+    capsys.readouterr()
+    fake = FakeLaunchctl()
+    monkeypatch.setattr(status, "run_command", fake)
+    argv = ["--repo-root", str(papaia_repo), "--config-dir", str(config_dir)]
+    assert _cli(argv, "localai-native-stop") == 0
+    assert _cli(argv, "localai-native-uninstall", "--purge") == 0
+    assert fake.calls == []
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""
+
+
+def test_state_command_prints_the_job(native_install, monkeypatch, capsys):
+    from lib import status
+
+    argv, _ = native_install
+    monkeypatch.setattr(status, "run_command", FakeLaunchctl(loaded=True))
+    assert _cli(argv, "localai-native-state") == 0
+    lines = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    assert lines["LABEL"] == LABEL
+    assert (lines["LOADED"], lines["STATE"], lines["PID"]) == ("yes", "running", "70027")
+
+
+@pytest.mark.parametrize("purge", [False, True])
+def test_uninstall_command_removes_the_job(native_install, monkeypatch, capsys, purge):
+    from lib import status
+
+    argv, home = native_install
+    fake = FakeLaunchctl()
+    monkeypatch.setattr(status, "run_command", fake)
+    monkeypatch.setattr(localai_native, "wait_ready", lambda url, timeout: True)
+    assert _cli(argv, "localai-native-start") == 0
+    plist = localai_native.plist_path(LABEL)
+    assert plist.is_file()
+
+    assert _cli(argv, "localai-native-uninstall", *(["--purge"] if purge else [])) == 0
+    assert not fake.loaded
+    assert not plist.exists()
+    assert not (home / "bin").exists() and not (home / "run-localai").exists()
+    assert not localai_native.fingerprint_path(home).exists()
+    assert not localai_native.restart_marker_path(home).exists()
+    assert (home / "models").is_dir() is not purge
+    assert home.exists() is not purge
+
+
+def _fake_on(monkeypatch, fake):
+    from lib import status
+
+    monkeypatch.setattr(status, "run_command", fake)
+    monkeypatch.setattr(localai_native, "wait_ready", lambda url, timeout: True)
+
+
+def test_a_new_key_restarts_the_running_job(native_install, monkeypatch, capsys):
+    argv, home = native_install
+    env_file = Path(argv[-1]) / "ai" / "localai" / ".env"
+    old_key, new_key = "sk-local-first-value-0123456789", "sk-local-rotated-value-0123456789"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text(f"LOCALAI_API_KEY={old_key}\n", encoding="utf-8")
+    assert _cli(argv, "localai-native-install") == 0
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    assert _cli(argv, "localai-native-start") == 0
+    assert fake.loaded and fake.running
+    capsys.readouterr()
+
+    assert _cli(argv, "localai-native-install") == 0
+    lines = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    assert lines["LOCALAI_NATIVE_RESTART"] == "0"
+
+    # What `setup --force` or a restore does: a new key in the LocalAI .env.
+    env_file.write_text(f"LOCALAI_API_KEY={new_key}\n", encoding="utf-8")
+
+    assert _cli(argv, "localai-native-install") == 0
+    lines = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    assert (lines["LOCALAI_NATIVE"], lines["LOCALAI_NATIVE_RESTART"]) == ("unchanged", "1")
+
+    fake.calls.clear()
+    assert _cli(argv, "localai-native-start", "--restart") == 0
+    target = f"gui/{os.getuid()}/{LABEL}"
+    assert fake.verbs() == [f"enable {target}", f"kickstart -k {target}"]
+
+    # Neither key is in a file papaia-ctl wrote for the native LocalAI or for launchd.
+    user_home = Path(os.environ["HOME"])
+    for path in [*home.rglob("*"), *user_home.rglob("*")]:
+        if path.is_file():
+            data = path.read_bytes()
+            assert old_key.encode() not in data, path
+            assert new_key.encode() not in data, path
+
+
+def _install_lines(argv, capsys) -> dict[str, str]:
+    assert _cli(argv, "localai-native-install") == 0
+    return dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+
+
+def _start_as_lifecycle(argv, lines, capsys) -> None:
+    """localai-native-start the way lifecycle.sh calls it after `docker compose up`."""
+    flags = ["--restart"] if lines["LOCALAI_NATIVE_RESTART"] == "1" else []
+    assert _cli(argv, "localai-native-start", *flags) == 0
+    capsys.readouterr()
+
+
+def test_a_new_key_restarts_the_job_after_a_start_that_ended_early(
+    native_install, monkeypatch, capsys
+):
+    argv, home = native_install
+    env_file = Path(argv[-1]) / "ai" / "localai" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("LOCALAI_API_KEY=sk-local-first-value-0123456789\n", encoding="utf-8")
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    _start_as_lifecycle(argv, _install_lines(argv, capsys), capsys)
+    assert fake.loaded and fake.running
+
+    env_file.write_text("LOCALAI_API_KEY=sk-local-rotated-value-0123456789\n", encoding="utf-8")
+    assert _install_lines(argv, capsys)["LOCALAI_NATIVE_RESTART"] == "1"
+    # `docker compose up` fails here: papaia-ctl ends (set -e) before localai-native-start.
+
+    lines = _install_lines(argv, capsys)
+    assert (lines["LOCALAI_NATIVE"], lines["LOCALAI_NATIVE_RESTART"]) == ("unchanged", "1")
+    fake.calls.clear()
+    _start_as_lifecycle(argv, lines, capsys)
+    target = f"gui/{os.getuid()}/{LABEL}"
+    assert fake.verbs() == [f"enable {target}", f"kickstart -k {target}"]
+
+    # Done once: the next start leaves the job alone.
+    lines = _install_lines(argv, capsys)
+    assert lines["LOCALAI_NATIVE_RESTART"] == "0"
+    fake.calls.clear()
+    _start_as_lifecycle(argv, lines, capsys)
+    assert fake.verbs() == [f"enable {target}"]
+
+
+def test_a_new_binary_restarts_the_job_after_a_start_that_ended_early(
+    native_install, monkeypatch, capsys
+):
+    argv, home = native_install
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    _start_as_lifecycle(argv, _install_lines(argv, capsys), capsys)
+
+    # The pinned binary is missing (a moved pin): the install step puts it in place.
+    for binary in (home / "bin").iterdir():
+        binary.unlink()
+    lines = _install_lines(argv, capsys)
+    assert (lines["LOCALAI_NATIVE"], lines["LOCALAI_NATIVE_RESTART"]) == ("installed", "1")
+    # `docker compose up` fails here.
+
+    lines = _install_lines(argv, capsys)
+    assert (lines["LOCALAI_NATIVE"], lines["LOCALAI_NATIVE_RESTART"]) == ("unchanged", "1")
+    fake.calls.clear()
+    _start_as_lifecycle(argv, lines, capsys)
+    assert fake.verbs()[-1] == f"kickstart -k gui/{os.getuid()}/{LABEL}"
+    assert not localai_native.restart_pending(home)
+
+
+def test_switching_back_to_the_container_removes_the_job(
+    native_install, papaia_repo, config_dir, monkeypatch, capsys
+):
+    argv, home = native_install
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    assert _cli(argv, "localai-native-start") == 0
+    plist = localai_native.plist_path(LABEL)
+    assert fake.loaded and plist.is_file()
+
+    assert _setup(papaia_repo, config_dir, "--localai-runtime=container") == 0
+    assert "Removed the launchd job of the native LocalAI" in capsys.readouterr().err
+    target = f"gui/{os.getuid()}/{LABEL}"
+    assert fake.verbs()[-2:] == [f"bootout {target}", f"disable {target}"]
+    assert not fake.loaded and fake.disabled
+    assert not plist.exists()
+    # The models stay for a later switch back to native.
+    assert (home / "models").is_dir()
+
+    # start: nothing left to do, and no launchctl call.
+    fake.calls.clear()
+    assert _cli(argv, "localai-native-install") == 0
+    assert capsys.readouterr().out == "LOCALAI_NATIVE=off\n"
+    assert _cli(argv, "localai-native-start") == 0
+    assert fake.calls == []
+
+
+def test_start_removes_a_job_that_setup_could_not_reach(
+    native_install, papaia_repo, config_dir, monkeypatch, capsys
+):
+    argv, _ = native_install
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    assert _cli(argv, "localai-native-start") == 0
+    plist = localai_native.plist_path(LABEL)
+
+    # setup from papaia-manager's container: no launchd at hand there.
+    monkeypatch.setattr(
+        localai_native, "launchd_host", lambda: (False, "papaia-ctl runs inside a container")
+    )
+    assert _setup(papaia_repo, config_dir, "--localai-runtime=container") == 0
+    assert "cannot be removed here" in capsys.readouterr().err
+    assert fake.loaded and plist.is_file()
+
+    # The next start on the Mac, before docker compose up.
+    monkeypatch.setattr(localai_native, "launchd_host", lambda: (True, ""))
+    assert _cli(argv, "localai-native-install") == 0
+    out = capsys.readouterr()
+    assert out.out == "LOCALAI_NATIVE=off\n"
+    assert "Removed the launchd job" in out.err
+    assert not fake.loaded and fake.disabled
+    assert not plist.exists()
+
+
+def test_setup_warns_when_the_home_is_in_a_protected_folder(tmp_path, monkeypatch, capsys):
+    from lib import cli
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / ".env").write_text(
+        f"LOCALAI_RUNTIME=native\nPAPAIA_WORKSPACE_DIR={tmp_path / 'Documents' / 'work'}\n",
+        encoding="utf-8",
+    )
+    cli._warn_protected_localai_home(config)
+    err = capsys.readouterr().err
+    assert "below ~/Documents" in err and "macOS may deny" in err
+
+    (config / ".env").write_text(
+        f"LOCALAI_RUNTIME=native\nPAPAIA_WORKSPACE_DIR={tmp_path / 'work'}\n", encoding="utf-8"
+    )
+    cli._warn_protected_localai_home(config)
+    assert capsys.readouterr().err == ""
+
+
+def test_setup_warns_when_the_config_dir_is_in_a_protected_folder(tmp_path, monkeypatch, capsys):
+    from lib import cli
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = tmp_path / "Desktop" / "papaia-config"
+    config.mkdir(parents=True)
+    (config / ".env").write_text(
+        f"LOCALAI_RUNTIME=native\nPAPAIA_WORKSPACE_DIR={tmp_path / 'work'}\n", encoding="utf-8"
+    )
+    cli._warn_protected_localai_home(config)
+    err = capsys.readouterr().err
+    assert "configuration directory" in err and "below ~/Desktop" in err
+    assert "keeps its files in" not in err
+
+    (config / ".env").write_text(
+        f"LOCALAI_RUNTIME=container\nPAPAIA_WORKSPACE_DIR={tmp_path / 'work'}\n",
+        encoding="utf-8",
+    )
+    cli._warn_protected_localai_home(config)
+    assert capsys.readouterr().err == ""

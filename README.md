@@ -482,6 +482,10 @@ the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`); the alwa
 the manager keep their data, and any other profile is refused before anything runs. A volume that
 a service of another profile still mounts is left in place by Compose.
 
+With a [native LocalAI](#native-localai-on-apple-silicon), `stop` also unloads and disables its
+launchd job first (unless `--profiles` leaves `localai` out), and `--volumes` with the `localai`
+profile also deletes its `models/` and `backends/` directories.
+
 papaia-manager's Settings > Modules tab switches the optional modules on and off with these
 pieces and offers to delete a module's data and settings when it switches one off. It uses two
 internal commands of the core's Python entry point (`python3 -m lib.cli --repo-root R
@@ -491,7 +495,9 @@ switched on (the public URL of LocalAI and of Qdrant: the `setup` option that ta
 the default derived from the stack's host and whether the question is still open), as JSON, and
 writes nothing; `module-purge
 --module=NAME [--data] [--config]` removes the module's named volumes (by name, from the compose
-files' own table of who mounts what) and/or puts its settings back to what the release ships (its
+files' own table of who mounts what; for a native LocalAI its `models/` and `backends/`
+directories instead, listed under `directories` by `module-info`) and/or puts its settings back
+to what the release ships (its
 `.env` files and the public URL kept in the root `.env`, plus the files it keeps outside them:
 the mail relay's password, the RAG catalog). A question is open when its stored URL is empty, a
 placeholder or the one the release ships, which is what the reset leaves, so a front end can ask it
@@ -976,7 +982,7 @@ raw values behind its summary in `details`.
 | `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
 | `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
 | `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, for the native runtime, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
-| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`) and the installed binary is the release the checkout pins. | `warn` when it does not answer, is not installed or is another version; never `fail`; `skip` for the container runtime |
+| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`), the installed binary is the release the checkout pins and, on the Mac, the state of its launchd job (`launchctl print`). | `warn` when it does not answer, is not installed or is another version, when the job is loaded but LocalAI does not answer, or when the job is not loaded although the stack runs; never `fail`; `skip` for the container runtime and while the stack and the job are both stopped |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
@@ -1969,10 +1975,31 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   the models, into `<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>/models`.
 - `start` installs the LocalAI release that `src/ai/localai/docker-compose.yml` pins into
   that directory (`bin/`), after checking it against the release's published checksum, and
-  writes `run-localai` next to it. It prints how to start LocalAI; run that script in a
-  terminal and keep the terminal open. The first start downloads the Metal backend (internet
-  access needed). After an upgrade that moves the pin, `start` installs the new binary and asks
-  you to restart LocalAI.
+  writes `run-localai` next to it. After `docker compose up` it runs that script as a
+  launchd job of the logged-in user (a LaunchAgent,
+  `~/Library/LaunchAgents/de.fidonis.papaia.<COMPOSE_PROJECT_NAME>.localai.plist`) and waits
+  up to 60 s for `/readyz`. Nothing is left to start by hand, and LocalAI keeps running after
+  the terminal is closed. The first start downloads the Metal backend (internet access
+  needed) and can take longer than 60 s: `start` then says so, with the log path, and LocalAI
+  keeps starting in the background. After an upgrade that moves the pin, `start` installs the
+  new binary and restarts the job. LocalAI reads `LOCALAI_API_KEY` once, when it starts, so
+  `start` also restarts the job when the key changed (`setup --force`, a restore); it keeps
+  a sha256 fingerprint of the key in `run-localai.key-sha256` for that, never the key. A
+  restart that is due stays noted in `run-localai.restart-pending` until launchd has done
+  it, so a `start` that ends early (a failed `docker compose up`) does not lose it.
+- `stop` unloads and disables the job, so LocalAI stays off after a logout or a restart of
+  the Mac until the next `start`. launchd restarts LocalAI when it crashes (not after a clean
+  exit), at most every 10 s. `stop --clean-up --volumes --profiles=localai` also deletes
+  `models/` and `backends/`; `uninstall` removes the job, the plist, `run-localai` and
+  `bin/`, and `uninstall --clean-up` the whole LocalAI directory.
+- LocalAI writes its output to
+  `<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>/logs/localai.log`.
+  `launchctl print gui/$(id -u)/de.fidonis.papaia.<COMPOSE_PROJECT_NAME>.localai` shows the
+  job's state, its process and its last exit code.
+- macOS may deny a launchd job access to `~/Documents`, `~/Desktop` and `~/Downloads`.
+  `setup` warns when the LocalAI directory or the configuration directory (the job reads the
+  key from `$PAPAIA_CONFIG_DIR/ai/localai/.env`) lies below one of them; keep the workspace
+  (the directory that holds the `papaia` checkout) and `--config-dir` elsewhere.
 - The first switch to `native` seeds `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt` with
   Qwen2.5-7B-Instruct (Q5_K_M, 5.4 GB, about 58 tokens/s on an M4 Max) and `nomic-embed-text`.
   Whether the 7B model runs without swapping on a 16 GB Mac next to the stack is not measured
@@ -1983,22 +2010,25 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   `http://localhost:<LOCALAI_EXT_PORT>` on the Mac. There is no login: the macOS build of
   LocalAI has no user database, so `LOCALAI_API_KEY` (which has admin rights in LocalAI) is the
   only protection. LiteLLM reaches it at `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`.
-- `doctor` reports the process as `localai_native`; `status` no longer lists a missing
-  `localai` container.
+- `doctor` reports the process and its launchd job as `localai_native`; `status` no longer
+  lists a missing `localai` container.
 - The models are not in the backup; `start` downloads them again after a restore.
 - `setup --localai-runtime=container` followed by `start` brings the container back and
   removes the override. It works on any host, also on a Mac whose Docker Desktop is not
-  running and with a configuration restored on another machine. The seeded model list stays,
-  and models in the old `localai-models` volume are not moved in either direction.
+  running and with a configuration restored on another machine. `setup` unloads and disables
+  the launchd job and removes its plist, so the job neither keeps `LOCALAI_EXT_PORT` nor comes
+  back at the next login; where `setup` cannot reach launchd (papaia-manager), the next
+  `start` on the Mac does it before the container starts. `bin/`, `run-localai` and the
+  models stay for a later switch back (`uninstall` removes them). The seeded model list
+  stays, and models in the old `localai-models` volume are not moved in either direction.
 - An interactive `setup` on a host that can never run the native process (no Apple Silicon or
   another Docker engine) switches a stored `native` back to `container` and says why. On a Mac
   whose Docker Desktop does not answer it asks instead, with `native` as the default. `setup -y`
   keeps `native` in both cases and warns.
 
-Until LocalAI is managed by launchd, `stop`, `upgrade` and `uninstall` do not stop the
-process: stop it in its terminal. `uninstall --clean-up` also leaves
-`<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>` behind, with the binary and the models
-(more than 5 GB with the seeded list); delete that directory by hand after stopping LocalAI.
+When papaia-manager runs `start` or `stop` from its container, only the Compose part runs:
+the launchd job belongs to the user logged in on the Mac, and the manager skips it with a
+warning. Run `tools/papaia-ctl start` or `stop` on the Mac for LocalAI.
 
 **Other servers on the host.** Any OpenAI-compatible server on the Mac (LM Studio,
 `mlx_lm.server`, Ollama) can serve papAIa the same way, by hand: add an entry to the LiteLLM
