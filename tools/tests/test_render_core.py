@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
 from lib import common, envtree, render_core, resolve, secrets
@@ -333,6 +334,81 @@ def test_render_switching_the_relay_off_restores_the_plain_realm(repo_root, conf
     assert _realm_file(config_dir).read_bytes() == plain
 
 
+# ── Keycloak's HSTS header on a shared local hostname ─────────────────────────
+
+
+def test_render_disables_hsts_while_plain_http_services_share_the_auth_hostname(
+    repo_root, config_dir
+):
+    # The local defaults: LibreChat and papaia-manager on http://host.docker.internal,
+    # Keycloak on https://host.docker.internal:8110 — the same hostname.
+    _setup_minimal(repo_root, config_dir)
+
+    render_core.render(config_dir, repo_root)
+
+    realm = json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+    # max-age=0, not an empty header: it also clears what a browser already learned.
+    assert realm["browserSecurityHeaders"] == {"strictTransportSecurity": "max-age=0"}
+
+
+def test_render_keeps_keycloak_hsts_on_a_hostname_of_its_own(repo_root, config_dir):
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    seed = envtree.load_seed_tree(repo_root)
+    tree = secrets.generate_missing_secrets(tree, seed)
+    args = resolve.SetupArgs(
+        config_dir=config_dir,
+        app_host="http://localhost",
+        auth_host="https://host.docker.internal:8110",
+        non_interactive=True,
+    )
+    tree = resolve.resolve_hostnames(tree, args)
+    tree = resolve.resolve_multi_env(tree, args)
+    tree = resolve.resolve_reverse_proxy(tree, args)
+    envtree.persist_tree(tree, config_dir, repo_root)
+
+    render_core.render(config_dir, repo_root)
+
+    realm = json.loads(_realm_file(config_dir).read_text(encoding="utf-8"))
+    assert "browserSecurityHeaders" not in realm
+
+
+_LOCAL_AUTH = "https://host.docker.internal:8110"
+_LOCAL_HTTP = "http://host.docker.internal"
+
+
+@pytest.mark.parametrize(
+    ("env", "domain_server", "shared"),
+    [
+        # The local default: the app host itself shares the hostname.
+        ({"PAPAIA_HOST": _LOCAL_HTTP}, "", True),
+        # One plain-http service on the auth hostname is enough.
+        ({"MANAGER_PUBLIC_URL": f"{_LOCAL_HTTP}:8120"}, "", True),
+        ({"LITELLM_PUBLIC_URL": f"{_LOCAL_HTTP}:8200"}, "", True),
+        ({"LOCALAI_PUBLIC_URL": f"{_LOCAL_HTTP}:8080"}, "", True),
+        ({"QDRANT_PUBLIC_URL": f"{_LOCAL_HTTP}:6333"}, "", True),
+        ({"NPM_ADMIN_HOST": f"{_LOCAL_HTTP}:8100"}, "", True),
+        ({}, f"{_LOCAL_HTTP}:8000", True),
+        # includeSubDomains: a service on a subdomain of the auth hostname is upgraded too.
+        (
+            {"AUTH_HOST": "https://papaia.test:8110", "PAPAIA_HOST": "http://chat.papaia.test"},
+            "",
+            True,
+        ),
+        # https on the same hostname is not upgraded, so it is no reason to drop HSTS.
+        ({"PAPAIA_HOST": "https://host.docker.internal"}, "", False),
+        # Hostnames of their own: the #301 workaround and a public setup.
+        ({"PAPAIA_HOST": "http://localhost"}, "http://localhost:8000", False),
+        ({"AUTH_HOST": "https://auth.papaia.test", "PAPAIA_HOST": "http://papaia.test"}, "", False),
+        # No auth host, nothing to compare with.
+        ({"AUTH_HOST": "", "PAPAIA_HOST": _LOCAL_HTTP}, "", False),
+    ],
+)
+def test_auth_host_shares_a_plain_http_hostname(env, domain_server, shared):
+    env = {"AUTH_HOST": _LOCAL_AUTH, **env}
+    assert render_core._auth_host_shares_a_plain_http_hostname(env, domain_server) is shared
+
+
 def test_render_ships_the_login_theme_and_the_overlay_replaces_a_file(repo_root, config_dir):
     shutil.copytree(
         REAL_REPO / "src/infra/keycloak/themes", repo_root / "src/infra/keycloak/themes"
@@ -363,3 +439,461 @@ def test_the_realm_template_themes_the_login_clients_but_not_the_realm():
             assert theme == "papaia", client["clientId"]
         else:
             assert theme is None, client["clientId"]
+
+
+# -- LocalAI: the generated model_list in LiteLLM ---------------------------------------------
+
+_LOCALAI_MODELS = (
+    "# a comment\n"
+    "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/"
+    "qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
+    "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/"
+    "nomic-embed-text-v1.5.Q8_0.gguf\n"
+)
+
+
+def _install_localai(repo_root, models: str = _LOCALAI_MODELS) -> None:
+    """The real model YAMLs next to the fixture's stub, and `models` as the shipped list."""
+    target = repo_root / "src" / "ai" / "localai"
+    for path in (REAL_REPO / "src" / "ai" / "localai" / "models").glob("*.yaml"):
+        shutil.copy(path, target / "models" / path.name)
+    (target / "models.txt").write_text(models, encoding="utf-8")
+
+
+def _rendered_litellm(config_dir):
+    return yaml.safe_load((config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8"))
+
+
+def _model_names(config_dir) -> list[str]:
+    return [e["model_name"] for e in _rendered_litellm(config_dir).get("model_list") or []]
+
+
+def _localai_overlay(config_dir, rel: str, text: str) -> None:
+    path = config_dir / "overlay" / "ai" / "localai" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_the_localai_models_are_registered_while_the_profile_is_active(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    render_core.render(config_dir, repo_root)
+
+    assert _rendered_litellm(config_dir)["model_list"] == [
+        {
+            "model_name": "nomic-embed-text",
+            "litellm_params": {
+                "model": "openai/nomic-embed-text",
+                "api_base": "http://localai:8080/v1",
+                "api_key": "os.environ/LOCALAI_API_KEY",
+            },
+            "model_info": {"mode": "embedding"},
+        },
+        {
+            "model_name": "qwen2.5-1.5b-instruct",
+            "litellm_params": {
+                "model": "openai/qwen2.5-1.5b-instruct",
+                "api_base": "http://localai:8080/v1",
+                "api_key": "os.environ/LOCALAI_API_KEY",
+            },
+        },
+    ]
+
+
+def test_with_the_localai_profile_off_litellm_renders_as_the_base(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm")
+    render_core.render(config_dir, repo_root)
+    base = (repo_root / "src/ai/litellm/config.yaml").read_text(encoding="utf-8")
+    rendered = (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    assert yaml.safe_load(rendered) == yaml.safe_load(base)
+
+
+def test_only_models_whose_file_is_downloaded_are_registered(repo_root, config_dir):
+    _install_localai(repo_root, "# https://example.org/qwen2.5-1.5b-instruct-q4_k_m.gguf\n")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == []
+
+
+def test_the_models_overlay_drives_the_list_and_a_removed_line_is_gone(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    _localai_overlay(config_dir, "models.txt", _LOCALAI_MODELS)
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == ["nomic-embed-text", "qwen2.5-1.5b-instruct"]
+
+    _localai_overlay(config_dir, "models.txt", _LOCALAI_MODELS.splitlines(True)[-1])
+    render_core.render(config_dir, repo_root)
+    assert _model_names(config_dir) == ["nomic-embed-text"]
+
+
+def test_an_overlay_entry_with_the_same_name_replaces_the_generated_one(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    overlay = config_dir / "overlay" / "ai" / "litellm" / "config.yaml"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text(
+        "model_list:\n"
+        "  - model_name: qwen2.5-1.5b-instruct\n"
+        "    litellm_params:\n"
+        "      model: openai/gpt-4o-mini\n"
+        "      api_key: os.environ/OPENAI_API_KEY\n"
+    )
+    render_core.render(config_dir, repo_root)
+
+    entries = _rendered_litellm(config_dir)["model_list"]
+    assert [e["model_name"] for e in entries] == ["nomic-embed-text", "qwen2.5-1.5b-instruct"]
+    assert entries[1]["litellm_params"]["model"] == "openai/gpt-4o-mini"
+
+
+def test_an_overlay_only_model_yaml_is_rendered_and_registered(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    own = "name: my-model\nbackend: llama-cpp\nparameters:\n  model: my-model.gguf\n"
+    _localai_overlay(config_dir, "models/my-model.yaml", own)
+    _localai_overlay(config_dir, "models.txt", "https://example.org/files/my-model.gguf\n")
+    render_core.render(config_dir, repo_root)
+
+    assert (config_dir / "ai/localai/models/my-model.yaml").read_text(encoding="utf-8") == own
+    assert (config_dir / "ai/localai/models/stub.yaml").is_file()
+    assert _model_names(config_dir) == ["my-model"]
+
+
+_NOT_UTF8 = b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00\xff\xfe\x89PNG\r\n\x1a\n"
+
+
+def test_a_binary_file_in_the_localai_models_overlay_is_ignored(repo_root, config_dir):
+    """A Finder `.DS_Store` and any other file the init job does not copy stay out of the
+    render and the model list, as before overlay-only files were rendered at all."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    models = config_dir / "overlay" / "ai" / "localai" / "models"
+    models.mkdir(parents=True)
+    (models / ".DS_Store").write_bytes(_NOT_UTF8)
+    (models / "notes.bin").write_bytes(_NOT_UTF8)
+    (models / ".hidden.yaml").write_text("name: hidden\nparameters:\n  model: h.gguf\n")
+    (models / "my-model.yml").write_text("name: my-model\nparameters:\n  model: m.gguf\n")
+    _localai_overlay(
+        config_dir,
+        "models.txt",
+        "https://example.org/files/h.gguf\nhttps://example.org/files/m.gguf\n",
+    )
+    render_core.render(config_dir, repo_root)
+
+    rendered = config_dir / "ai" / "localai" / "models"
+    for name in (".DS_Store", "notes.bin", ".hidden.yaml", "my-model.yml"):
+        assert not (rendered / name).exists(), name
+    assert (rendered / "stub.yaml").is_file()
+    assert _model_names(config_dir) == []
+
+
+def test_a_binary_file_in_a_theme_overlay_is_ignored(repo_root, config_dir):
+    theme = repo_root / "src" / "infra" / "keycloak" / "themes" / "papaia" / "login"
+    theme.mkdir(parents=True)
+    (theme / "theme.properties").write_text("parent=keycloak\n", encoding="utf-8")
+    _setup_minimal(repo_root, config_dir)
+    overlay = config_dir / "overlay" / "infra" / "keycloak" / "themes" / "papaia"
+    (overlay / "login" / "resources" / "img").mkdir(parents=True)
+    (overlay / "login" / "resources" / "img" / "logo.png").write_bytes(_NOT_UTF8)
+    (overlay / ".DS_Store").write_bytes(_NOT_UTF8)
+    render_core.render(config_dir, repo_root)
+
+    rendered = config_dir / "infra" / "keycloak" / "themes" / "papaia"
+    assert (rendered / "login" / "theme.properties").read_text() == "parent=keycloak\n"
+    assert not (rendered / "login" / "resources" / "img" / "logo.png").exists()
+    assert not (rendered / ".DS_Store").exists()
+
+
+def test_an_overlay_only_model_yaml_that_is_not_utf8_is_named(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    models = config_dir / "overlay" / "ai" / "localai" / "models"
+    models.mkdir(parents=True)
+    (models / "broken.yaml").write_bytes(_NOT_UTF8)
+    with pytest.raises(render_core.RenderError, match="overlay/ai/localai/models/broken.yaml"):
+        render_core.render(config_dir, repo_root)
+
+
+def test_an_overlay_only_model_yaml_that_does_not_parse_is_named(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _localai_overlay(config_dir, "models/broken.yaml", "name: [unclosed\n")
+    with pytest.raises(render_core.RenderError, match="overlay/ai/localai/models/broken.yaml"):
+        render_core.render(config_dir, repo_root)
+
+
+def test_the_localai_key_is_named_but_never_written(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    key = "localai-key-must-not-be-rendered"
+    for rel in ("ai/localai", "ai/litellm"):
+        env = config_dir / rel / ".env"
+        env.parent.mkdir(parents=True, exist_ok=True)
+        with env.open("a", encoding="utf-8") as handle:
+            handle.write(f"LOCALAI_API_KEY={key}\n")
+    render_core.render(config_dir, repo_root)
+
+    rendered = (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    assert "os.environ/LOCALAI_API_KEY" in rendered
+    assert key not in rendered
+    result = render_core.preview(config_dir, repo_root, "ai/litellm/config.yaml", "")
+    assert key not in result["current"] + result["preview"]
+
+
+def test_the_preview_of_litellm_shows_the_generated_models_before_any_render(
+    repo_root, config_dir
+):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    assert not (config_dir / "ai/litellm/config.yaml").exists()
+
+    draft = (
+        "model_list:\n  - model_name: nomic-embed-text\n    litellm_params:\n"
+        "      model: openai/x\n"
+    )
+    result = render_core.preview(config_dir, repo_root, "ai/litellm/config.yaml", draft)
+    assert "openai/qwen2.5-1.5b-instruct" in result["current"]
+    preview = yaml.safe_load(result["preview"])
+    assert [e["model_name"] for e in preview["model_list"]] == [
+        "qwen2.5-1.5b-instruct",
+        "nomic-embed-text",
+    ]
+    assert preview["model_list"][1]["litellm_params"]["model"] == "openai/x"
+
+
+def test_every_shipped_model_yaml_matches_a_line_of_the_shipped_list():
+    """Each YAML is named after its `name` (LocalAI loads it under that file name on the first
+    request) and points at a file the list downloads once its line is active."""
+    localai = REAL_REPO / "src" / "ai" / "localai"
+    files = {
+        line.lstrip("# ").strip().rsplit("/", 1)[-1]
+        for line in (localai / "models.txt").read_text(encoding="utf-8").splitlines()
+        if line.lstrip("# ").startswith("https://")
+    }
+    yamls = sorted((localai / "models").glob("*.yaml"))
+    assert len(yamls) == len(files) == 5
+    for path in yamls:
+        model = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert path.name == f"{model['name']}.yaml"
+        assert model["parameters"]["model"] in files, path.name
+
+
+# LocalAI reads these as top-level keys of a model config and silently ignores them under
+# `parameters` (it then runs with its own defaults, e.g. a 4096 context and f16 off).
+_LOCALAI_TOP_LEVEL_KEYS = ("context_size", "f16", "threads")
+
+
+def test_the_shipped_model_yamls_keep_the_runtime_keys_at_the_top_level():
+    for path in sorted((REAL_REPO / "src" / "ai" / "localai" / "models").glob("*.yaml")):
+        model = yaml.safe_load(path.read_text(encoding="utf-8"))
+        misplaced = [k for k in _LOCALAI_TOP_LEVEL_KEYS if k in model["parameters"]]
+        assert misplaced == [], f"{path.name}: {misplaced} belong at the top level"
+        assert "context_size" in model, path.name
+
+
+def _install_voice_module(repo_root):
+    """The real voice module's fragments and its TTS config base, not stand-ins,
+    so the test breaks when they drift from the render layering."""
+    shutil.copytree(
+        REAL_REPO / "src" / "ai" / "voice" / "integration",
+        repo_root / "src" / "ai" / "voice" / "integration",
+    )
+    shutil.copy(
+        REAL_REPO / "src" / "ai" / "voice" / "chatterbox.yaml",
+        repo_root / "src" / "ai" / "voice" / "chatterbox.yaml",
+    )
+
+
+def test_render_merges_the_voice_fragments_only_while_the_profile_is_active(
+    repo_root, config_dir
+):
+    _install_voice_module(repo_root)
+    _setup_minimal(repo_root, config_dir)
+
+    _set_profiles(config_dir, "keycloak,librechat,litellm,voice")
+    render_core.render(config_dir, repo_root)
+
+    speech = _rendered_librechat(config_dir)["speech"]
+    assert speech["stt"]["openai"]["url"] == "http://litellm:4000/v1/audio/transcriptions"
+    assert speech["tts"]["openai"]["voices"] == ["Karlsson.wav", "Hokuspokus.wav", "Emily.wav"]
+    litellm = yaml.safe_load(
+        (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    )
+    names = [entry["model_name"] for entry in litellm["model_list"]]
+    assert names == ["voice-stt", "voice-tts"], "fragment entries must append to the base list"
+    tts_config = yaml.safe_load(
+        (config_dir / "ai/voice/chatterbox.yaml").read_text(encoding="utf-8")
+    )
+    assert tts_config["generation_defaults"]["language"] == "de"
+
+    _set_profiles(config_dir, "keycloak,librechat,litellm")
+    render_core.render(config_dir, repo_root)
+
+    assert "speech" not in _rendered_librechat(config_dir)
+    litellm = yaml.safe_load(
+        (config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8")
+    )
+    assert litellm["model_list"] == []
+
+
+# ── LibreChat agents and prompts of add-ons ───────────────────────────────────
+
+
+def _librechat_addon(repo_root: Path, config_dir: Path, *, active: bool = True) -> Path:
+    """The paperless fixture (which adds the PaperlessMCP server) plus one agent and
+    one prompt, registered in deployment.yaml."""
+    addon = repo_root / "addons" / "papaia-addon-paperless"
+    shutil.copytree(FIXTURES_DIR / "addon-paperless", addon)
+    content = addon / "integration" / "ai" / "librechat"
+    (content / "agents").mkdir(parents=True)
+    (content / "agents" / "assistant.yaml").write_text(
+        "id: agent_docs\nname: Docs\nprovider: Private-LLM\nmodel: m\n"
+        "mcpServers: [PaperlessMCP]\n",
+        encoding="utf-8",
+    )
+    (content / "prompts").mkdir()
+    (content / "prompts" / "summary.md").write_text(
+        "---\nname: Summary\ncategory: Docs\ncommand: summary\noneliner: Sum up\n---\nSum up.\n",
+        encoding="utf-8",
+    )
+    deployment_path = config_dir / "deployment.yaml"
+    manifest = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    manifest["addons"] = [
+        {"name": "paperless", "path": "addons/papaia-addon-paperless", "active": active}
+    ]
+    deployment_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return addon
+
+
+def _override(config_dir: Path) -> dict | None:
+    path = config_dir / render_core.LIBRECHAT_ADDON_OVERRIDE
+    return yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def test_render_mounts_addon_agents_and_prompts(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    _librechat_addon(repo_root, config_dir)
+
+    render_core.render(config_dir, repo_root)
+
+    agents = config_dir / "ai/librechat/addon-agents"
+    prompts = config_dir / "ai/librechat/addon-prompts"
+    assert [p.name for p in agents.iterdir()] == ["paperless__assistant.yaml"]
+    assert [p.name for p in prompts.iterdir()] == ["paperless__summary.md"]
+    librechat = _override(config_dir)["services"]["librechat"]
+    assert {v["target"]: v["source"] for v in librechat["volumes"]} == {
+        "/app/api/data/addon-agents": str(agents),
+        "/app/api/data/addon-prompts": str(prompts),
+    }
+    assert all(v["read_only"] for v in librechat["volumes"])
+    assert len(librechat["labels"]["org.papaia.addon-content"]) == 16
+
+
+def test_changed_content_changes_the_label(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    before = _override(config_dir)["services"]["librechat"]["labels"]
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir)["services"]["librechat"]["labels"] == before
+
+    prompt = addon / "integration/ai/librechat/prompts/summary.md"
+    prompt.write_text(prompt.read_text(encoding="utf-8") + "More.\n", encoding="utf-8")
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir)["services"]["librechat"]["labels"] != before
+
+
+def test_an_inactive_addon_removes_content_and_override(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    _librechat_addon(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir) is not None
+
+    deployment_path = config_dir / "deployment.yaml"
+    manifest = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    manifest["addons"][0]["active"] = False
+    deployment_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    render_core.render(config_dir, repo_root)
+
+    assert _override(config_dir) is None
+    assert not (config_dir / "ai/librechat/addon-agents").exists()
+
+
+def test_an_agent_with_an_unknown_mcp_server_is_skipped(repo_root, config_dir, capsys):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    agent = addon / "integration/ai/librechat/agents/assistant.yaml"
+    agent.write_text(agent.read_text(encoding="utf-8").replace("PaperlessMCP", "NoSuchMCP"))
+
+    render_core.render(config_dir, repo_root)
+
+    assert not (config_dir / "ai/librechat/addon-agents").exists()
+    assert "NoSuchMCP" in capsys.readouterr().err
+    # The prompt still renders, so the override stays.
+    volumes = _override(config_dir)["services"]["librechat"]["volumes"]
+    assert [v["target"] for v in volumes] == ["/app/api/data/addon-prompts"]
+
+
+@pytest.mark.parametrize(
+    "servers",
+    ["mcpServers: PaperlessMCP", "mcpServers: [{name: PaperlessMCP}]", "mcpServers: [1]"],
+)
+def test_an_agent_whose_mcp_servers_are_not_names_is_skipped(
+    repo_root, config_dir, capsys, servers
+):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    agent = addon / "integration/ai/librechat/agents/assistant.yaml"
+    agent.write_text(
+        agent.read_text(encoding="utf-8").replace("mcpServers: [PaperlessMCP]", servers)
+    )
+
+    render_core.render(config_dir, repo_root)
+
+    assert not (config_dir / "ai/librechat/addon-agents").exists()
+    assert "not a list of server names" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("kind", ["agents/assistant.yaml", "prompts/summary.md"])
+def test_a_file_that_is_not_utf8_is_skipped(repo_root, config_dir, capsys, kind):
+    _setup_minimal(repo_root, config_dir)
+    addon = _librechat_addon(repo_root, config_dir)
+    (addon / "integration/ai/librechat" / kind).write_bytes(b"name: \xff\xfe\n")
+
+    render_core.render(config_dir, repo_root)
+
+    assert "cannot be read" in capsys.readouterr().err
+    rendered = list((config_dir / "ai/librechat").glob("addon-*/*"))
+    assert len(rendered) == 1
+    assert Path(kind).name not in rendered[0].name
+
+
+def test_no_addon_content_writes_no_override(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    assert _override(config_dir) is None
+
+
+def test_a_native_localai_is_registered_at_the_host(repo_root, config_dir):
+    """LOCALAI_RUNTIME=native: LiteLLM's container reaches the process on the Mac."""
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    env = config_dir / ".env"
+    env.write_text(
+        env.read_text(encoding="utf-8") + "LOCALAI_RUNTIME=native\nLOCALAI_EXT_PORT=8201\n",
+        encoding="utf-8",
+    )
+    render_core.render(config_dir, repo_root)
+    bases = {e["litellm_params"]["api_base"] for e in _rendered_litellm(config_dir)["model_list"]}
+    assert bases == {"http://host.docker.internal:8201/v1"}

@@ -79,6 +79,8 @@ next to it, even when it has an inline `:-` default.
 | `*_EXT_PORT` | External port allocation — kept together to stay collision-free |
 | `LOCALAI_PUBLIC_URL` | Browser-facing LocalAI URL, derived by setup |
 | `LOCALAI_IMAGE_VARIANT` | LocalAI accelerator image chosen during setup (`cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`); drives the generated GPU override |
+| `LOCALAI_RUNTIME` | Where LocalAI runs: `container` (default) or `native`, a process on an Apple Silicon Mac with Docker Desktop (ADR 0012); drives the generated runtime override |
+| `VOICE_TTS_IMAGE_VARIANT` | Voice TTS accelerator image chosen during setup (`cpu`, `nvidia`, `hipblas`; set via `setup --voice-variant`); drives the generated GPU override, which only materializes while the `voice` profile is active — the image pins live in `src/ai/voice/docker-compose.yml` |
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |
 | `MANAGER_EXT_PORT` | External port the manager (profile `manager`) is published on |
 | `MANAGER_PUBLIC_URL` | Browser-facing papaia-manager URL, derived by setup — interpolated as `MANAGER_HOST` in `src/manager/docker-compose.yml` |
@@ -130,6 +132,29 @@ must not be set in this file.
 | `QI_LOCAL_MOUNT`, `QI_TIKA_HEAP` | Document directory for local sources and the Tika heap, interpolated in the compose file |
 | `QI_*` | Every other ingester setting (scheduling, extraction, embedding batches, metrics) is read straight from this file; the list is in the `qdrant-ingest` repository's `docs/operations.md` |
 
+## Voice variables
+
+`src/ai/voice/.env` (profile `voice`). All services take their values only through
+`environment:` interpolation (path 1), so a profile switched on by hand before `setup` has
+run still starts — but not usably: `VOICE_API_KEY` has no inline default, and with an empty
+key the STT engine treats the empty string as the required bearer key and refuses every
+request (the TTS engine never authenticates at all, see ADR 0011). The STT healthcheck fails
+on the missing key on purpose — an engine that can serve nobody must show up as unhealthy,
+not as fine — so run `setup` to seed the key. The TTS server is configured through the
+rendered `ai/voice/chatterbox.yaml`, not through variables, and the accelerator image choice
+(`VOICE_TTS_IMAGE_VARIANT`) lives in the root `.env` above, not here.
+
+| Variable | Purpose |
+|---|---|
+| `VOICE_API_KEY` | Bearer key the STT engine requires on every request (generated); synced to `ai/litellm/.env`, where the LiteLLM route reads it as `os.environ/VOICE_API_KEY` |
+| `VOICE_STT_MODEL` | The faster-whisper model the init container installs, commented out with its default. Must stay equal to the id the LiteLLM route `voice-stt` sends (overlay on `ai/litellm/config.yaml`) |
+| `VOICE_STT_COMPUTE_TYPE` | faster-whisper quantization, commented out with its default `int8` |
+| `VOICE_STT_CPU_THREADS` | CPU threads for transcription; `0` (default) uses all cores — cap it on a host that shares cores with LLM inference |
+| `VOICE_STT_MODEL_TTL` | Seconds an idle model stays loaded (default 300; `-1` never unloads) |
+| `VOICE_STT_LOG_LEVEL` | One of debug, info, warning, error (default `info`) |
+| `VOICE_STT_HEALTHCHECK_START_PERIOD`, `VOICE_TTS_HEALTHCHECK_START_PERIOD` | Grace periods before the containers count as unhealthy; raise the TTS one on a slow line (first start downloads ~3.2 GB) |
+| `VOICE_TTS_MEM_LIMIT` | Hard memory ceiling of the TTS container (default `8g`); the loaded model stays resident at ~4-6 GB |
+
 ## Mail relay variables
 
 `src/infra/smtp-relay/.env` (profile `smtp`), written by `papaia-ctl setup --smtp` and kept on
@@ -170,8 +195,38 @@ operator-supplied.
 
 A later `setup` or `upgrade` without `--auth-host` keeps the stored `AUTH_HOST`, and with
 it the token issuer. The exception is a value that only matches what setup derived from the
-previous `PAPAIA_HOST`: it follows a changed `--app-host`. After changing `KEYCLOAK_EXT_PORT`
-on a local host, pass `--auth-host` with the new port.
+previous `PAPAIA_HOST`: it follows a changed `--app-host` (or a new answer to the prompt).
+For a local host the match ignores the scheme, since older releases derived those as
+`http`; a domain name must match with its scheme. A value stored while an external OIDC
+provider was in use is not kept either: switching back to the bundled Keycloak derives it
+again. The interactive prompt pre-fills by the same rules. After changing
+`KEYCLOAK_EXT_PORT` on a local host, pass `--auth-host` with the new port.
+
+When a plain-http browser URL (`PAPAIA_HOST`, `MANAGER_PUBLIC_URL`,
+`LITELLM_PUBLIC_URL`, `LOCALAI_PUBLIC_URL`, `QDRANT_PUBLIC_URL`, `NPM_ADMIN_HOST` or
+LibreChat's `DOMAIN_SERVER`) is on the `AUTH_HOST` hostname or a subdomain of it — the
+local default: papaia-manager, LiteLLM, LocalAI and Qdrant on `http://host.docker.internal`,
+Keycloak on `https://host.docker.internal:8110` — the papaia realm sets Keycloak's
+`Strict-Transport-Security` header to `max-age=0`. HSTS applies to a hostname on every
+port, and Keycloak's default (one year, `includeSubDomains`) would make the browser
+upgrade those http URLs to https. `papaia-ctl start` applies the value to an existing
+realm too, as long as the realm still has Keycloak's default header, and restores the
+default once the hostnames no longer overlap. A deployment whose plain-http services
+live on hostnames of their own keeps Keycloak's default HSTS.
+
+This covers responses of the papaia realm only. Keycloak sends its default header on
+responses outside a realm — the static files under `/resources/` that every login page
+loads, `/`, and the admin console of the `master` realm — and that cannot be configured.
+Each Keycloak page visit therefore pins the hostname again; the next papaia-realm
+response clears it, in practice the redirect back to the app after a completed login.
+After an aborted login or a visit to the admin console, the browser upgrades the
+http services on that hostname until then. To clear it, complete a login (LibreChat
+is on `http://localhost:8000` by default and is not affected), or remove the entry in
+the browser (Chrome: `chrome://net-internals/#hsts`, *Delete domain security
+policies*). Serving the plain-http services on a hostname of their own avoids the
+problem completely, e.g. `--manager-host=http://localhost:8120
+--litellm-host=http://localhost:8200` on a new setup (an existing realm keeps the
+redirect URIs it was imported with).
 
 See `tools/lib/resolve.py` for the exact derivation logic, or run
 `tools/papaia-ctl setup --help` for the flag reference.

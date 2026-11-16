@@ -29,7 +29,10 @@ COMPOSE_FILE="@REPO@/src/docker-compose.yml"
 error() { echo "ERROR: $*" >&2; }
 info() { :; }
 success() { echo "OK $*"; }
+warn() { :; }
 usage() { echo USAGE; }
+# The native LocalAI hook of `stop` is covered by test_ctl_localai_launchd.py.
+py_cli() { :; }
 _addon_compose_all() { echo "addons $*" >> "@LOG@"; }
 docker() {
     echo "docker COMPOSE_PROFILES=${COMPOSE_PROFILES:-} $*" >> "@LOG@"

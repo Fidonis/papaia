@@ -21,9 +21,21 @@ is changed: the core `.env` is canonical for that secret, and a client left over
 from an earlier add-on install would otherwise refuse the service that signs in
 with the generated one.
 
+Add-on clients (addon_api 4): a client an active add-on lists under
+`integration.keycloak.clients` and names under `client_secrets` with its
+`secret_env` is created from its export when the realm lacks it, with the
+secret from the add-on's `.env` (and `rootUrl` from `root_url_env` when set).
+An existing client gets only its secret aligned, as for core clients. Other
+clients stay a manual import. `addon start` runs the same step for its add-on.
+
 The realm's mail server follows the optional `smtp` profile: while the mail relay is on
 and configured, an existing realm without a mail server gets the relay (and the
 reset-password link); a mail server the operator configured is never overwritten.
+
+The realm's HSTS header follows the rendered realm as well: while the auth hostname is
+shared with a plain-http browser URL, the template sets it to `max-age=0`, and an existing
+realm still on Keycloak's default gets that value; once the hostnames no longer overlap,
+`max-age=0` goes back to Keycloak's default. A value the operator chose is never touched.
 
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
@@ -45,7 +57,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import common, smtp
+from . import common, deployment, smtp
 from .envtree import EnvTree
 
 _KEYCLOAK_NODE = "infra/keycloak"
@@ -88,8 +100,8 @@ def _published_host(root: dict[str, str]) -> str:
     """The address Keycloak's port is published on, as a URL host.
 
     `--host-ip` binds the published ports to one address; `localhost` then refuses
-    the connection, so the sync has to dial that address instead. Compose needs an
-    IPv6 address in brackets already, and a URL does too."""
+    the connection, so the sync has to dial that address instead. Compose accepts an
+    IPv6 address with or without brackets; a URL needs them."""
     host_ip = root.get("HOST_IP", "").strip()
     if host_ip in _ANY_ADDRESS:
         return "localhost"
@@ -130,15 +142,27 @@ def _tls_server_name(base_url: str) -> str | None:
 
 
 class _ServerNameContext(ssl.SSLContext):
-    """An SSLContext that verifies every connection against one fixed server name."""
+    """An SSLContext that verifies every connection against one fixed server name.
+
+    It takes the verify flags of `ssl.create_default_context()`, which the `localhost`
+    path uses, so both are as strict (from Python 3.13 on, that adds X.509 strict and
+    partial-chain checks)."""
 
     def __new__(cls, server_name: str):
         self = super().__new__(cls, ssl.PROTOCOL_TLS_CLIENT)
         self.server_name = server_name
+        self.verify_flags = ssl.create_default_context().verify_flags
         return self
 
     def wrap_socket(self, sock, *args, server_hostname=None, **kwargs):
         return super().wrap_socket(sock, *args, server_hostname=self.server_name, **kwargs)
+
+
+def _admin_connection(root: dict[str, str], config_dir: Path) -> tuple[str, ssl.SSLContext]:
+    """The Admin API base URL and the TLS context for it. One place for both, so every
+    caller verifies a `HOST_IP` connection by the certificate's name, as `sync_roles` does."""
+    base_url = _admin_base_url(root)
+    return base_url, _ssl_context(config_dir, _tls_server_name(base_url))
 
 
 def _ssl_context(config_dir: Path, server_name: str | None = None) -> ssl.SSLContext:
@@ -398,6 +422,158 @@ def _sync_clients(base_url, ctx, token, realm_def: dict, wanted: set[str]) -> tu
     return created, updated
 
 
+# A short probe: `addon start` and `addon upgrade` run while Keycloak is up as a rule, and
+# a Keycloak that is down is left to `start` and `keycloak-role-sync`.
+ADDON_CLIENTS_WAIT_SECONDS = 5
+
+
+def _unset(value: str) -> bool:
+    """A secret that is still a placeholder of the .env templates."""
+    return common.is_placeholder(value) or value.startswith(("CHANGE_ME", "REPLACE_WITH_"))
+
+
+def managed_clients(manifest: dict) -> list[dict]:
+    """The clients an add-on manifest hands to the sync: every entry of
+    `integration.keycloak.client_secrets` (`<path>: {secret_env, root_url_env}`) whose path
+    is listed under `clients`. Each comes back as {path, secret_env, root_url_env}.
+
+    A separate key rather than a new form of `clients` entries: a core that predates it
+    ignores the key and keeps showing the manual import for the same paths."""
+    cfg = (manifest.get("integration") or {}).get("keycloak") or {}
+    if not isinstance(cfg, dict):
+        return []
+    clients = cfg.get("clients") if isinstance(cfg.get("clients"), list) else []
+    secrets = cfg.get("client_secrets") if isinstance(cfg.get("client_secrets"), dict) else {}
+    entries = []
+    for path, spec in secrets.items():
+        if path not in clients or not isinstance(spec, dict):
+            continue
+        secret_env, root_url_env = spec.get("secret_env"), spec.get("root_url_env")
+        if not isinstance(secret_env, str) or not secret_env:
+            continue
+        entries.append(
+            {
+                "path": path,
+                "secret_env": secret_env,
+                "root_url_env": root_url_env if isinstance(root_url_env, str) else None,
+            }
+        )
+    return entries
+
+
+def fill_client_secrets(manifest: dict, env_path: Path, name: str) -> list[str]:
+    """Generate the secrets of the managed clients that are still a placeholder in the
+    add-on's bundle `.env` at `env_path`, and return their keys.
+
+    Such a value is the placeholder of a manual import that never happened (an install
+    from before the add-on named the client under `client_secrets`): no login has worked
+    with it, so a generated secret replaces it. Callers run this before the `.env` is
+    materialized into the checkout, so the add-on's containers get the same value the
+    client is created with. Needs no Keycloak."""
+    env = common.parse_env_file(env_path)
+    generated: dict[str, str] = {}
+    for entry in managed_clients(manifest):
+        key = entry["secret_env"]
+        if key in env and key not in generated and _unset(_compose_value(env[key])):
+            generated[key] = common.generate_secret(key)
+    if generated:
+        common.write_env_file(env_path, generated)
+        for key in generated:
+            print(f"  {key} of add-on {name} generated", flush=True)
+    return list(generated)
+
+
+def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = None) -> list[dict]:
+    """Client representations for the managed clients of the active add-ons (all of them,
+    or those in `names`), each with the secret from the add-on's `.env`.
+
+    A client whose export cannot be read, or whose secret is not generated yet, is left out
+    with a warning: the next run picks it up once it is in place."""
+    clients: list[dict] = []
+    for addon in deployment.active_addons(deployment.load(config_dir)):
+        name = addon.get("name")
+        if not name or (names is not None and name not in names):
+            continue
+        addon_path = deployment.resolve_addon_path(addon, repo_root)
+        manifest, _ = deployment.load_addon_manifest(addon_path)
+        entries = managed_clients(manifest or {})
+        if not entries:
+            continue
+        env_path = config_dir / "addons" / name / ".env"
+        env = common.parse_env_file(env_path)
+        for entry in entries:
+            export = addon_path / entry["path"]
+            try:
+                client = json.loads(export.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                print(f"  client of add-on {name} skipped: {export}: {exc}", file=sys.stderr)
+                continue
+            if entry["secret_env"] not in env:
+                print(
+                    f"  client {client.get('clientId')} of add-on {name} skipped: "
+                    f"{entry['secret_env']} is not in its .env",
+                    file=sys.stderr,
+                )
+                continue
+            if fill_client_secrets(manifest or {}, env_path, name):
+                # Here the add-on's checkout copy of the .env still has the placeholder,
+                # and so do its running containers.
+                print(
+                    f"  run 'papaia-ctl addon start {name}' so the add-on uses it",
+                    flush=True,
+                )
+                env = common.parse_env_file(env_path)
+            secret = _compose_value(env.get(entry["secret_env"], ""))
+            # An export carries the id of the realm it came from; Keycloak assigns a new one.
+            client.pop("id", None)
+            client["clientAuthenticatorType"] = "client-secret"
+            client["secret"] = secret
+            root_url = _compose_value(env.get(entry["root_url_env"] or "", ""))
+            if root_url and not root_url.startswith("CHANGE_ME"):
+                client["rootUrl"] = root_url
+            clients.append(client)
+    return clients
+
+
+def sync_addon_clients(
+    tree: EnvTree,
+    config_dir: Path,
+    repo_root: Path,
+    names: set[str] | None = None,
+    *,
+    wait: int = ADDON_CLIENTS_WAIT_SECONDS,
+) -> bool:
+    """Create or align the managed Keycloak clients of the active add-ons (or those in
+    `names`) on their own, as `addon start` and `addon upgrade` do. Same rules as the realm
+    sync; True when there was nothing to do or everything went through.
+
+    Waits only `wait` seconds for Keycloak: a Keycloak that is down (a cold start) is not
+    waited for, `papaia-ctl start` and `keycloak-role-sync` create the clients later."""
+    root = tree.get("", {})
+    if root.get("AUTH_PROVIDER", "internal_keycloak") != "internal_keycloak":
+        return True
+    clients = addon_clients(config_dir, repo_root, names)
+    if not clients:
+        return True
+    keycloak = tree.get(_KEYCLOAK_NODE, {})
+    admin_password = _compose_value(keycloak.get("KC_ADMIN_PASSWORD", ""))
+    if not admin_password or admin_password.startswith("GENERATE_"):
+        print("Keycloak clients skipped: KC_ADMIN_PASSWORD is not set.", file=sys.stderr)
+        return False
+    base_url, ctx = _admin_connection(root, config_dir)
+    try:
+        _wait_for_keycloak(base_url, ctx, timeout=wait)
+        token = _get_admin_token(base_url, ctx, admin_password)
+        created, updated = _sync_clients(
+            base_url, ctx, token, {"clients": clients}, {c["clientId"] for c in clients}
+        )
+    except (TimeoutError, urllib.error.HTTPError, OSError) as exc:
+        print(f"Keycloak clients skipped: {exc}", file=sys.stderr, flush=True)
+        return False
+    print(f"Keycloak add-on clients: {created} created, {updated} secret(s) updated.", flush=True)
+    return True
+
+
 def _sync_login_theme(base_url, ctx, token, realm_def: dict) -> int:
     """Give the existing clients the login theme the rendered template names for them.
 
@@ -532,6 +708,58 @@ def _sync_smtp(base_url, ctx, token, realm_def: dict) -> str:
     return "updated"
 
 
+# Keycloak's default HSTS header (BrowserSecurityHeaders) and the value the rendered realm
+# sets while plain-http services share the auth hostname (render_core.bake_realm_secrets).
+KEYCLOAK_DEFAULT_HSTS = "max-age=31536000; includeSubDomains"
+NO_HSTS = "max-age=0"
+
+
+def _sync_hsts(base_url, ctx, token, realm_def: dict) -> str:
+    """Make the live realm's Strict-Transport-Security header follow the rendered one.
+
+    `--import-realm` skips an existing realm, so without this an upgraded installation
+    would keep Keycloak's default header. Returns what happened:
+
+      set        the rendered realm asks for max-age=0 and the live realm still had
+                 Keycloak's default (or no value, which Keycloak serves as the default)
+      restored   the rendered realm no longer asks for max-age=0 while the live realm still
+                 has it: the hostnames no longer overlap, so Keycloak's default comes back
+      kept       the live realm has a value of its own; never overwritten
+      unchanged  nothing to do
+
+    The whole header map is sent back, because a realm update replaces it as a whole.
+    """
+    desired = (realm_def.get("browserSecurityHeaders") or {}).get("strictTransportSecurity")
+    live = _api(base_url, ctx, token, "GET", "") or {}
+    headers = dict(live.get("browserSecurityHeaders") or {})
+    current = headers.get("strictTransportSecurity") or KEYCLOAK_DEFAULT_HSTS
+
+    if desired == NO_HSTS:
+        if current == NO_HSTS:
+            return "unchanged"
+        if current != KEYCLOAK_DEFAULT_HSTS:
+            print(
+                f"Keycloak realm sends its own Strict-Transport-Security header ('{current}');"
+                " left unchanged. Plain-http services share the auth hostname, so a browser"
+                " may upgrade them to https: set the header to 'max-age=0' in the realm"
+                " settings (Realm settings > Security defenses), or serve those services on"
+                " a hostname of their own.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return "kept"
+        result, value = "set", NO_HSTS
+    else:
+        if current != NO_HSTS:
+            return "unchanged"
+        result, value = "restored", KEYCLOAK_DEFAULT_HSTS
+
+    headers["strictTransportSecurity"] = value
+    _api(base_url, ctx, token, "PUT", "", {"browserSecurityHeaders": headers})
+    print(f"  Strict-Transport-Security {result}: {value}", flush=True)
+    return result
+
+
 def _migrate_legacy_admins(base_url, ctx, token, existing_roles: dict[str, dict]) -> int:
     if _LEGACY_ADMIN_ROLE not in existing_roles or _MIGRATION_TARGET_ROLE not in existing_roles:
         return 0
@@ -553,7 +781,7 @@ def _migrate_legacy_admins(base_url, ctx, token, existing_roles: dict[str, dict]
     return migrated
 
 
-def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
+def sync_roles(tree: EnvTree, config_dir: Path, repo_root: Path | None = None) -> bool:
     """Reconcile realm roles/composites/protocol-mappers and run the
     admin -> papaia-admin migration. No-op when AUTH_PROVIDER is not
     'internal_keycloak' — an external OIDC provider is the operator's own
@@ -581,8 +809,7 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         return False
     realm_def = json.loads(realm_json_path.read_text(encoding="utf-8"))
 
-    base_url = _admin_base_url(root)
-    ctx = _ssl_context(config_dir, _tls_server_name(base_url))
+    base_url, ctx = _admin_connection(root, config_dir)
 
     print("Waiting for Keycloak to become ready...", flush=True)
     try:
@@ -611,9 +838,17 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         clients_created, secrets_updated = _sync_clients(
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
+        if repo_root is not None:
+            extra = addon_clients(config_dir, repo_root)
+            created, updated = _sync_clients(
+                base_url, ctx, token, {"clients": extra}, {c["clientId"] for c in extra}
+            )
+            clients_created += created
+            secrets_updated += updated
         themes_set = _sync_login_theme(base_url, ctx, token, realm_def)
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
         _sync_smtp(base_url, ctx, token, realm_def)
+        _sync_hsts(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
     except urllib.error.HTTPError as exc:
         print(

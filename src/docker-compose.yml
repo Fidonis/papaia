@@ -27,6 +27,7 @@ include:
   - path: ./ai/jinaai/docker-compose.yml
   - path: ./ai/rag/docker-compose.yml
   - path: ./ai/knowledge-map/docker-compose.yml
+  - path: ./ai/voice/docker-compose.yml
 
 networks:
   papaia-net:

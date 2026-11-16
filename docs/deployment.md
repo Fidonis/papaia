@@ -104,6 +104,27 @@ The volume is prefixed with `COMPOSE_PROJECT_NAME`, so a stack created with `--e
 > This wipes every user, client secret, and role created through the Keycloak admin UI. Back
 > them up first if they matter.
 
+### Local inference on an Apple Silicon Mac
+
+With Docker Desktop on an Apple Silicon Mac, LocalAI can run as a process on the Apple GPU
+instead of a CPU-only container (`setup --localai-runtime=native`). `start` installs the
+pinned LocalAI release below `$PAPAIA_WORKSPACE_DIR/localai/<project>` and runs it as a
+launchd job of the logged-in user (`de.fidonis.papaia.<project>.localai`); there is no
+manual step. `stop` unloads and disables the job, so LocalAI stays off after a restart until
+the next `start`; `upgrade` swaps the binary through its `stop` and `start`; `uninstall`
+removes the job (`--clean-up` also the models). LocalAI logs to
+`$PAPAIA_WORKSPACE_DIR/localai/<project>/logs/localai.log`, and
+`launchctl print gui/$(id -u)/de.fidonis.papaia.<project>.localai` shows the job.
+`doctor` reports both as `localai_native`. Keep the workspace and `--config-dir` outside
+`~/Documents`, `~/Desktop` and `~/Downloads`: macOS may deny a launchd job access there, and
+`setup` warns. Going back with `setup --localai-runtime=container` removes the job.
+Details, the limits and the way back to the container are in the README under
+[Native LocalAI on Apple Silicon](../README.md#native-localai-on-apple-silicon), the decision
+in [ADR 0012](adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md).
+
+Migration: an existing Mac installation stays on `container`. Switching to `native` does not
+move the models of the `localai-models` volume; the init job downloads them again.
+
 ### Health check and diagnostics
 
 ```bash
@@ -115,7 +136,8 @@ tools/papaia-ctl doctor --skip=dns,certs # on a host without internet access
 
 Both are read-only. `status` is cheap and also available as `--json`; `doctor` is the check
 to run before `setup` and `upgrade`, or whenever something seems wrong. Besides Docker, disk,
-ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant,
+ports and certificates it reports host memory, CPU load, the GPU of a LocalAI GPU variant
+or the native LocalAI of a Mac,
 clock synchronization, what Docker's data takes and, with the mail relay on, whether the mail
 server answers and how many messages wait in the relay's queue. The check list, the thresholds and the JSON formats are documented in the
 README, under
@@ -148,6 +170,20 @@ its scope); bring it back with `restore-scoped --only=...`. See the
 `$PAPAIA_CONFIG_DIR` is the single source of truth for all generated state — secrets, rendered
 configs, the Keycloak realm, and `deployment.yaml`. Backing up that directory plus the named
 Docker volumes captures the entire installation, which is exactly what `papaia-ctl backup` does.
+
+### Clearing a LibreChat user's history
+
+```bash
+tools/papaia-ctl librechat clear-history trainee@example.org --dry-run      # counts only
+tools/papaia-ctl librechat clear-history trainee@example.org                # asks, then deletes
+tools/papaia-ctl librechat clear-history trainee@example.org --before=2026-06-01 -y
+```
+
+Resets a shared, training or test account before its next use: conversations, messages, their
+files and shared links go; the account, its agents, prompts and MCP connections stay, and so do
+its memories. It needs the
+running stack and cannot be undone except by restoring a backup, which brings back the data of
+every user. See the [README](../README.md#librechat-clear-history) for the details.
 
 ## Server deployment
 

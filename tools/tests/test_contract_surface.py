@@ -46,6 +46,22 @@ _SURFACE_CHANGED = (
 # attach it declare `requires.addon_api: 3`, and an older core reports them
 # incompatible instead of failing on an unknown service.
 #
+# Gen 4 (additive): `requires.addons` names other add-ons an add-on builds on;
+# install, start, upgrade and `addon check` refuse it while one of them is not
+# active or too old. `networks.join_addons` lets listed services of an add-on
+# join a required add-on's network. `exports` lists bundle keys an add-on lets
+# others read, and `env_prompts.<key>.default_from_addon` fills a prompt from one.
+# `actions` declares maintenance actions that `papaia-ctl addon run` executes.
+# Manifests without these keys are unchanged, so `min` stays 1; add-ons that
+# use them declare `requires.addon_api: 4`, and an older core reports
+# them incompatible instead of ignoring the requirement.
+#
+# Gen 5 (additive): the voice profile's engines `speaches` and `chatterbox` are
+# core services an add-on may list under `networks.attach`, and
+# `ai/voice/chatterbox.yaml` is a render target add-ons may layer fragments
+# onto. Nothing existing changed, so `min` stays 1; add-ons that attach the
+# engines or layer that target declare `requires.addon_api: 5`.
+#
 # Gen 6 (additive): the `knowledge` manifest key (ADR 0014) lets an add-on declare
 # the knowledge sources it contributes to the knowledge-map profile (ADR 0013).
 # Older cores ignore the key, so `min` stays 1; add-ons that declare it include 6
@@ -57,6 +73,7 @@ ADDON_API_WINDOW = (1, 6)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
+    "chatterbox": ["voice"],
     "firecrawl": ["librechat-websearch"],
     "firecrawl-nuq-postgres": ["librechat-websearch"],
     "firecrawl-playwright-service": ["librechat-websearch"],
@@ -87,6 +104,8 @@ ATTACHABLE_SERVICES = {
     "qdrant-mcp": ["rag"],
     "searxng": ["librechat-websearch"],
     "smtp-relay": ["smtp"],
+    "speaches": ["voice"],
+    "speaches-model-init": ["voice"],
 }
 
 # Seam 2: render targets addons may layer integration fragments onto.
@@ -102,6 +121,7 @@ BASE_RENDER_TARGETS = [
     "ai/litellm/prometheus.yml",
     "ai/localai/models.txt",
     "ai/localai/models",
+    "ai/voice/chatterbox.yaml",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
     "infra/keycloak/themes/papaia",
@@ -121,13 +141,18 @@ MANIFEST_KEYS = [
     "components",
     "networks.app_network",
     "networks.attach",
+    "networks.join_addons",
     "local_ca_env",
     "env_prompts",
+    "env_prompts.<key>.default_from_addon",
+    "exports",
+    "actions",
     "env_replace_secrets",
     "integration.keycloak.clients",
     "integration.keycloak.client_mappers",
     "integration.<service> (fragment paths)",
     "requires.addon_api",
+    "requires.addons",
     "papaia_compat",
     # Display only: printed after the core's own steps in the install checklist. An older
     # core ignores the key and an add-on has nothing to gate on, so no ADDON_API bump.
@@ -153,6 +178,8 @@ SECRET_ALIASES = {
         ("ai/knowledge-map", "KM_EMBEDDING_API_KEY"),
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
+    ("ai/localai", "LOCALAI_API_KEY"): [("ai/litellm", "LOCALAI_API_KEY")],
+    ("ai/voice", "VOICE_API_KEY"): [("ai/litellm", "VOICE_API_KEY")],
 }
 
 
@@ -168,6 +195,18 @@ def test_attachable_services_match_snapshot():
     assert services == ATTACHABLE_SERVICES, _SURFACE_CHANGED
 
 
+# Seam 2b (addon_api 4): directories under <addon>/integration/ an add-on drops
+# LibreChat agents and prompts into, and where they are rendered.
+LIBRECHAT_ADDON_CONTENT = {
+    "agents": ("addon-agents", (".yaml", ".yml")),
+    "prompts": ("addon-prompts", (".md", ".markdown")),
+}
+
+
+def test_librechat_addon_content_matches_snapshot():
+    assert render_core.LIBRECHAT_ADDON_CONTENT == LIBRECHAT_ADDON_CONTENT, _SURFACE_CHANGED
+
+
 def test_base_render_targets_match_snapshot():
     assert render_core.BASE_RENDER_TARGETS == BASE_RENDER_TARGETS, _SURFACE_CHANGED
 
@@ -180,4 +219,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 15, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 20, _SURFACE_CHANGED

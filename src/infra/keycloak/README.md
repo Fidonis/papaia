@@ -192,7 +192,10 @@ are synced into an already-imported realm automatically on every
 already exists is left as it is (the `qdrant-ingest-ui` client of an older install is
 no longer used and can be deleted). The sync also grants
 `papaia-admin` to every account that already held the old flat `admin` role,
-without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
+without removing `admin` itself. The realm's `Strict-Transport-Security` header is
+set to `max-age=0` while plain-http services share the auth hostname, and back to
+Keycloak's default once they no longer do; a value set by hand is left alone (see
+`docs/configuration.md`). Run `papaia-ctl keycloak-role-sync` directly
 to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).
 
 **Mail server.** The template carries no `smtpServer`. While the `smtp` profile is on and
@@ -228,18 +231,20 @@ OIDC provider this does not apply.
 | `admin` | `admin` | papaia-admin, user, localai-access |
 | `testuser` | `testuser` | user, finance, librechat-user (no `localai-access` — cannot log in to LocalAI via SSO) |
 
-### Linux Host Note
+### Host Note
 
 `host.docker.internal` is used so that both the browser and Docker containers reach
 Keycloak at the same URL, keeping the OIDC `iss` claim consistent.
 
-On **Linux**, add the entry manually before starting:
+On **Linux** and **macOS**, add the entry manually before starting. Docker Desktop on
+macOS resolves the name inside containers but not on the Mac itself, where the browser
+runs; `setup` prints this command there when the entry is missing:
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 ```
 
-On macOS and Windows (Docker Desktop) it resolves out-of-the-box.
+On Windows, Docker Desktop adds the entry itself.
 
 ---
 

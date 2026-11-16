@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, envtree, secrets, smtp
+import yaml
+
+from . import common, envtree, keycloak_role_sync, secrets, smtp
 
 
 def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:
@@ -88,6 +90,20 @@ def _active_profiles(root: dict[str, str]) -> set[str]:
     return {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
 
 
+def _registered_models(config_dir: Path) -> set[str]:
+    """The model names the rendered LiteLLM configuration lists (the generated LocalAI
+    entries and those of an overlay); models added in the Admin UI are not known here."""
+    path = config_dir / "ai" / "litellm" / "config.yaml"
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return set()
+    entries = data.get("model_list") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return set()
+    return {e["model_name"] for e in entries if isinstance(e, dict) and "model_name" in e}
+
+
 def print_rag_next_steps(config_dir: Path, tree: envtree.EnvTree) -> None:
     """Print the steps that remain by hand after the RAG system was switched on.
 
@@ -95,19 +111,42 @@ def print_rag_next_steps(config_dir: Path, tree: envtree.EnvTree) -> None:
     managed in papaia-manager, which creates the connection `default` to the integrated
     Qdrant itself, so setup seeds nothing and no secret is printed."""
     root = tree.get("", {})
+    steps = []
+    embedding_model = tree.get("ai/librechat", {}).get("RAG_EMBEDDINGS_MODEL") or "nomic-embed-text"
+    if embedding_model not in _registered_models(config_dir):
+        steps.append(
+            [
+                f"Add the embedding model '{embedding_model}' to LiteLLM (or activate its line",
+                "in the LocalAI models.txt). Nothing can be embedded or searched before that.",
+            ]
+        )
+    steps.append(
+        [
+            "Give the people who run ingestion through the MCP tools the realm role",
+            "'qdrant-ingest-operator'.",
+        ]
+    )
+    if "manager" in _active_profiles(root):
+        steps.append(
+            [
+                "Manage connections, collections and ingest jobs in papaia-manager (menu RAG,",
+                "administrators only). It creates the connection 'default' to http://qdrant:6333.",
+            ]
+        )
+    else:
+        steps.append(
+            [
+                "Connections, collections and ingest jobs are managed in papaia-manager,",
+                "which is not enabled. Switch it on with 'papaia-ctl setup --manager', or",
+                f"edit the catalog files in {config_dir / 'ai' / 'rag' / 'catalog'} by hand.",
+            ]
+        )
     print()
     print("RAG system enabled — after 'papaia-ctl start':")
-    print("  1. Add an embedding model to LiteLLM. The core ships no models, so nothing can")
-    print("     be embedded or searched before that.")
-    print("  2. Give the people who run ingestion through the MCP tools the realm role")
-    print("     'qdrant-ingest-operator'.")
-    if "manager" in _active_profiles(root):
-        print("  3. Manage connections, collections and ingest jobs in papaia-manager (menu RAG,")
-        print("     administrators only). It creates the connection 'default' to http://qdrant:6333.")
-    else:
-        print("  3. Connections, collections and ingest jobs are managed in papaia-manager,")
-        print("     which is not enabled. Switch it on with 'papaia-ctl setup --manager', or")
-        print(f"     edit the catalog files in {config_dir / 'ai' / 'rag' / 'catalog'} by hand.")
+    for number, lines in enumerate(steps, start=1):
+        print(f"  {number}. {lines[0]}")
+        for line in lines[1:]:
+            print(f"     {line}")
     print("See README 'RAG system' for details.")
 
 
@@ -136,19 +175,39 @@ def print_keycloak_checklist(
 ) -> None:
     integration = manifest.get("integration") or {}
     keycloak_cfg = integration.get("keycloak") or {}
-    clients = keycloak_cfg.get("clients") or []
+    # Clients named under `client_secrets` are created by `start` (keycloak_role_sync);
+    # the others remain a manual import.
+    managed_entries = keycloak_role_sync.managed_clients(manifest)
+    managed = [c["path"] for c in managed_entries]
+    clients = [c for c in keycloak_cfg.get("clients") or [] if c not in managed]
     mappers = keycloak_cfg.get("client_mappers") or {}
     replace_secret_cfg = manifest.get("env_replace_secrets") or {}
 
     bundle_env = config_dir / "addons" / name / ".env"
     bundle_vals = common.parse_env_file(bundle_env)
-    replace_keys = [k for k, v in bundle_vals.items() if v.startswith("REPLACE_WITH_")]
+    # A managed client's secret may still carry the placeholder of a manual import (the
+    # form an older core needs); `addon start` generates it, so nothing is entered by hand.
+    managed_keys = {c["secret_env"] for c in managed_entries}
+    replace_keys = [
+        k
+        for k, v in bundle_vals.items()
+        if v.startswith("REPLACE_WITH_") and k not in managed_keys
+    ]
 
     notes = manifest.get("install_notes") or []
     # Written by hand in the manifest: a single step as a plain string is a list of one,
     # not one step per character.
     if isinstance(notes, str):
         notes = [notes]
+
+    if managed:
+        print()
+        print(
+            f"Addon '{name}' — Keycloak clients created by 'papaia-ctl start' or "
+            "'papaia-ctl addon start' (their secrets are generated):"
+        )
+        for rel in managed:
+            print(f"   {addon_path / rel}")
 
     if not clients and not mappers and not replace_keys and not notes:
         return

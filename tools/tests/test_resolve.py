@@ -181,6 +181,44 @@ def test_resolve_hostnames_seed_auth_host_is_not_sticky_after_external_oidc(repo
     assert tree["infra/keycloak"]["KC_HOSTNAME"] == "https://auth.chat.example.org"
 
 
+def test_resolve_hostnames_fqdn_auth_host_with_another_scheme_is_chosen(repo_root):
+    # For a domain name the derivation keeps the app host's scheme, so a value with
+    # another scheme was chosen and stays.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["PAPAIA_HOST"] = "http://chat.example.org"
+    tree[""]["AUTH_HOST"] = "https://auth.chat.example.org"
+    args = resolve.SetupArgs(config_dir=repo_root, non_interactive=True, fresh_init=False)
+    tree = resolve.resolve_hostnames(tree, args)
+    assert tree[""]["AUTH_HOST"] == "https://auth.chat.example.org"
+
+
+@pytest.mark.parametrize(
+    ("stored", "provider", "app_host", "expected"),
+    [
+        # chosen
+        ("https://auth.example.org", "internal_keycloak", "https://chat.example.org",
+         "https://auth.example.org"),
+        ("https://auth.chat.example.org", "internal_keycloak", "http://chat.example.org",
+         "https://auth.chat.example.org"),
+        ("https://host.docker.internal:9110", "internal_keycloak",
+         "http://host.docker.internal", "https://host.docker.internal:9110"),
+        # the stored app host's derivation, with or without the old local scheme
+        ("https://auth.chat.example.org", "internal_keycloak", "https://chat.example.org", ""),
+        ("http://host.docker.internal:8110", "internal_keycloak",
+         "http://host.docker.internal", ""),
+        ("https://127.0.0.1:8110", "internal_keycloak", "http://127.0.0.1", ""),
+        # stored under another provider, nothing stored, a placeholder
+        ("https://auth.example.org", "external_oidc", "https://chat.example.org", ""),
+        ("", "internal_keycloak", "https://chat.example.org", ""),
+        ("GENERATE_AUTH_HOST", "internal_keycloak", "https://chat.example.org", ""),
+    ],
+)
+def test_sticky_auth_host(stored, provider, app_host, expected):
+    assert resolve.sticky_auth_host(
+        stored, prior_provider=provider, stored_app_host=app_host, keycloak_ext_port="8110"
+    ) == expected
+
+
 def test_a_run_without_flags_keeps_the_stored_auth_host(tmp_path):
     # What `upgrade` does through `setup --env-only`: no --auth-host on the second run.
     inst = Installation(tmp_path, [])
@@ -1085,3 +1123,55 @@ def test_resolve_localai_variant_can_switch_back_to_cpu(repo_root):
     args = resolve.SetupArgs(config_dir=repo_root, localai_variant="cpu")
     tree = resolve.resolve_localai_variant(tree, args)
     assert tree[""]["LOCALAI_IMAGE_VARIANT"] == "cpu"
+
+
+# ── LocalAI runtime (ADR 0012) ──────────────────────────────────────────────
+
+
+def _runtime_tree(runtime: str = "", url: str = "https://papaia.example.com:8080") -> dict:
+    root = {
+        "PAPAIA_HOST": "https://papaia.example.com",
+        "LOCALAI_EXT_PORT": "8080",
+        "LOCALAI_PUBLIC_URL": url,
+    }
+    if runtime:
+        root["LOCALAI_RUNTIME"] = runtime
+    return {"": root}
+
+
+def test_native_stores_the_runtime_and_the_url_on_the_mac(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path, localai_runtime="native")
+    root = resolve.resolve_localai_runtime(_runtime_tree(), args)[""]
+    assert root["LOCALAI_RUNTIME"] == "native"
+    assert root["LOCALAI_PUBLIC_URL"] == "http://localhost:8080"
+
+
+def test_a_sticky_native_runtime_keeps_its_url(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path)
+    tree = _runtime_tree("native", url="https://papaia.example.com:8080")
+    root = resolve.resolve_localai_runtime(tree, args)[""]
+    assert root["LOCALAI_PUBLIC_URL"] == "http://localhost:8080"
+
+
+def test_back_to_the_container_derives_the_url_again(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path, localai_runtime="container")
+    tree = _runtime_tree("native", "http://localhost:8080")
+    root = resolve.resolve_localai_runtime(tree, args)[""]
+    assert root["LOCALAI_RUNTIME"] == "container"
+    assert root["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
+
+
+def test_back_to_the_container_keeps_a_url_the_operator_gives(tmp_path):
+    args = resolve.SetupArgs(
+        config_dir=tmp_path, localai_runtime="container", localai_host="https://ai.example.com"
+    )
+    tree = _runtime_tree("native", "https://ai.example.com")
+    root = resolve.resolve_localai_runtime(tree, args)[""]
+    assert root["LOCALAI_PUBLIC_URL"] == "https://ai.example.com"
+
+
+def test_without_the_flag_the_container_runtime_is_untouched(tmp_path):
+    args = resolve.SetupArgs(config_dir=tmp_path)
+    root = resolve.resolve_localai_runtime(_runtime_tree(), args)[""]
+    assert "LOCALAI_RUNTIME" not in root
+    assert root["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"

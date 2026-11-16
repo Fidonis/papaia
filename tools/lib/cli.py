@@ -39,6 +39,8 @@ from . import (
     gen_override,
     gpu_detect,
     keycloak_role_sync,
+    librechat_history,
+    localai_native,
     migrations,
     modules,
     nodes,
@@ -60,12 +62,34 @@ def _tristate(value: str | None) -> bool | None:
     return value == "true"
 
 
+def _apply_voice_gpu_override(config_dir: Path, repo_root: Path, tree: dict) -> None:
+    """Write or remove the voice TTS accelerator override for this tree.
+
+    The variant only materializes while the voice profile is active: a host that never
+    runs the TTS engine must not carry a stray accelerator override (an empty variant
+    removes the file)."""
+    root = tree.get("", {})
+    # Stripped like render_core parses the same value, so a hand-edited
+    # profile list with spaces cannot activate the fragments while this
+    # helper deletes the override.
+    active = "voice" in {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",")}
+    gen_override.generate_voice_gpu_override(
+        config_dir, repo_root, root.get("VOICE_TTS_IMAGE_VARIANT", "") if active else ""
+    )
+
+
 def cmd_defaults(args: argparse.Namespace) -> int:
     """Print sticky/derived values as shell-safe KEY=VALUE lines, one per
     line, so the bash dispatcher can read them without a JSON parser."""
     out = defaults.compute_defaults(Path(args.config_dir), Path(args.repo_root))
     for key, value in out.items():
         print(f"{key}={value}")
+    return 0
+
+
+def cmd_derive_auth_host(args: argparse.Namespace) -> int:
+    """Print the Keycloak URL setup derives for an app host, for the interactive prompt."""
+    print(resolve.derive_auth_host_default(args.app_host, args.keycloak_ext_port))
     return 0
 
 
@@ -172,9 +196,24 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return requested_topology
 
     fresh_init = not (config_dir / ".env").is_file()
+    # The native LocalAI lives below the workspace. Checked before the config directory is
+    # seeded or anything is written, so a refused run leaves neither LOCALAI_RUNTIME=native
+    # in the root .env nor, on a fresh config directory, template files a later setup would
+    # take for an existing installation. It needs only the requested or stored runtime, the
+    # stored PAPAIA_WORKSPACE_DIR and the checkout name.
+    stored_root = {} if fresh_init else common.parse_env_file(config_dir / ".env")
+    wanted_runtime = args.localai_runtime or localai_native.runtime(stored_root)
+    if wanted_runtime == localai_native.NATIVE:
+        workspace = envtree.stamp_workspace_dir({"": dict(stored_root)}, repo_root)
+        try:
+            localai_native.localai_home(workspace[""])
+        except localai_native.InstallError as exc:
+            print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
+            return 3
     envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    runtime_before = localai_native.runtime(tree.get("", {})) if not fresh_init else ""
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     # Taken out of the environment so nothing started later inherits it. An empty
@@ -199,8 +238,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
         enable_web_search=_tristate(args.enable_web_search),
         enable_local_ai=_tristate(args.enable_local_ai),
         localai_variant=args.localai_variant or None,
+        localai_runtime=args.localai_runtime or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_voice=_tristate(args.enable_voice),
+        voice_variant=args.voice_variant or None,
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
         smtp_port=args.smtp_port,
@@ -237,9 +279,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_web_search(tree, setup_args)
         tree = resolve.resolve_local_ai(tree, setup_args)
         tree = resolve.resolve_localai_variant(tree, setup_args)
+        tree = resolve.resolve_localai_runtime(tree, setup_args)
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
+        tree = resolve.resolve_voice(tree, setup_args)
+        tree = resolve.resolve_voice_variant(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -293,9 +338,29 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    runtime_problem = _localai_runtime_override(config_dir)
+    if runtime_problem:
+        print(f"ERROR: {runtime_problem}", file=sys.stderr)
+        return 3
+    _warn_protected_localai_home(config_dir)
+    stored_root = common.parse_env_file(config_dir / ".env")
+    if not _native_wanted(stored_root):
+        # After a switch back to the container a job left from the native runtime would
+        # hold the port until the next `stop` (quiet when there is none).
+        _retire_native_job(stored_root)
+    if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE and (
+        runtime_before != localai_native.NATIVE
+    ):
+        seeded = localai_native.seed_models(config_dir, repo_root)
+        if seeded is not None:
+            print(f"Seeded the LocalAI model list for the native runtime: {seeded}")
+            # The render above ran before the list existed.
+            render_core.render(config_dir, repo_root)
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -327,6 +392,297 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _localai_runtime_override(config_dir: Path) -> str | None:
+    """Write or remove the runtime override; the reason when `native` cannot be set up."""
+    root = common.parse_env_file(config_dir / ".env")
+    runtime = localai_native.runtime(root)
+    problem = None
+    home = None
+    if runtime == localai_native.NATIVE:
+        try:
+            home = localai_native.localai_home(root)
+        except localai_native.InstallError as exc:
+            problem = f"LOCALAI_RUNTIME=native: {exc}"
+    gen_override.generate_localai_runtime_override(config_dir, runtime, home)
+    return problem
+
+
+def _warn_protected_localai_home(config_dir: Path) -> None:
+    """The native LocalAI runs as a launchd job, which macOS may deny access to the folders
+    it guards. Only a warning: whether access is denied depends on the Mac's settings."""
+    root = common.parse_env_file(config_dir / ".env")
+    if localai_native.runtime(root) != localai_native.NATIVE:
+        return
+    try:
+        home = localai_native.localai_home(root)
+    except localai_native.InstallError:
+        return
+    folder = localai_native.protected_folder(home)
+    if folder is not None:
+        print(
+            f"WARNING: the native LocalAI keeps its files in {home}, below {folder}. macOS"
+            " may deny its launchd job access to ~/Documents, ~/Desktop and ~/Downloads; a"
+            " workspace outside these folders avoids that.",
+            file=sys.stderr,
+        )
+    # The start script also reads the key from $PAPAIA_CONFIG_DIR/ai/localai/.env.
+    folder = localai_native.protected_folder(config_dir.resolve())
+    if folder is not None:
+        print(
+            f"WARNING: the configuration directory {config_dir} lies below {folder}. The"
+            " launchd job of the native LocalAI reads its key from there, and macOS may deny"
+            " it access to ~/Documents, ~/Desktop and ~/Downloads; a --config-dir outside"
+            " these folders avoids that.",
+            file=sys.stderr,
+        )
+
+
+def cmd_localai_native_install(args: argparse.Namespace) -> int:
+    """The `start` step of the native LocalAI runtime. KEY=VALUE lines on stdout for the
+    shell (LOCALAI_NATIVE = off | skipped | installed | unchanged), messages on stderr."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    root = common.parse_env_file(config_dir / ".env")
+    if not _native_wanted(root):
+        # Before `docker compose up`: a job left from the native runtime would keep the
+        # port the container publishes.
+        _retire_native_job(root)
+        print("LOCALAI_NATIVE=off")
+        return 0
+    supported, why = localai_native.host_supported()
+    if not supported:
+        print(
+            f"WARNING: native LocalAI skipped: {why}. 'papaia-ctl setup"
+            " --localai-runtime=container' runs LocalAI in its container here.",
+            file=sys.stderr,
+        )
+        print("LOCALAI_NATIVE=skipped")
+        return 0
+    try:
+        result = localai_native.install_for(config_dir, repo_root, announce=_announce_install)
+    except localai_native.InstallError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    print(f"LOCALAI_NATIVE={'installed' if result.changed else 'unchanged'}")
+    print(f"LOCALAI_NATIVE_VERSION={result.version}")
+    print(f"LOCALAI_NATIVE_REPLACED={result.replaced or ''}")
+    print(f"LOCALAI_NATIVE_SCRIPT={result.script}")
+    # A running job has to be restarted to pick up a new binary, start script or key, also
+    # when an earlier `start` ended before it got to the restart.
+    print(f"LOCALAI_NATIVE_RESTART={1 if result.restart else 0}")
+    return 0
+
+
+def _announce_install(version: str) -> None:
+    # stderr: stdout carries the KEY=VALUE lines the shell reads. The download is about
+    # 200 MB and `start` would otherwise look stuck while it runs.
+    print(f"Installing LocalAI {version} for the Apple GPU...", file=sys.stderr, flush=True)
+
+
+def _native_wanted(root: dict[str, str]) -> bool:
+    """Whether this installation runs the native LocalAI: the runtime and the profile."""
+    return localai_native.runtime(root) == localai_native.NATIVE and "localai" in (
+        common.cluster_profiles(root)
+    )
+
+
+def _retire_native_job(root: dict[str, str]) -> bool:
+    """Unload and disable a launchd job the native LocalAI no longer needs, and remove its
+    plist, so it neither keeps LOCALAI_EXT_PORT nor comes back at the next login. For
+    `start` and `setup` after the runtime went back to the container (or LocalAI was
+    switched off); `stop` handles the same case through localai-native-stop. Messages on
+    stderr, so the KEY=VALUE output of the install step stays clean. False when a job is
+    left behind."""
+    try:
+        label = localai_native.label_for(root)
+    except localai_native.LaunchdError:
+        return True
+    plist = localai_native.plist_path(label)
+    if not plist.is_file():
+        return True
+    available, why = localai_native.launchd_host()
+    if not available:
+        print(
+            f"WARNING: the launchd job of the native LocalAI ({plist}) is still installed and"
+            f" cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        localai_native.stop_job(label)
+    except localai_native.LaunchdError as exc:
+        print(
+            f"WARNING: native LocalAI: {exc}. Its job may still hold port"
+            f" {localai_native.port(root)}; run 'papaia-ctl stop' and check with"
+            " 'papaia-ctl doctor'.",
+            file=sys.stderr,
+        )
+        return False
+    plist.unlink(missing_ok=True)
+    print(
+        f"Removed the launchd job of the native LocalAI ({label}): LocalAI runs in its"
+        " container now.",
+        file=sys.stderr,
+    )
+    return True
+
+
+def _native_job(config_dir: Path) -> tuple[dict[str, str], Path, str] | None:
+    """(root env, home, label) of the native LocalAI, or None when it has no home."""
+    root = common.parse_env_file(config_dir / ".env")
+    try:
+        return root, localai_native.localai_home(root), localai_native.label_for(root)
+    except (localai_native.InstallError, localai_native.LaunchdError) as exc:
+        print(f"WARNING: native LocalAI: {exc}", file=sys.stderr)
+        return None
+
+
+def cmd_localai_native_start(args: argparse.Namespace) -> int:
+    """The `start` step after `docker compose up`: load (or restart) the launchd job and
+    wait for /readyz. A timeout warns with the log path; exit 1 when launchctl fails."""
+    config_dir = Path(args.config_dir)
+    root = common.parse_env_file(config_dir / ".env")
+    if not _native_wanted(root):
+        _retire_native_job(root)
+        return 0
+    supported, why = localai_native.host_supported()
+    if not supported:
+        print(f"WARNING: native LocalAI not started: {why}", file=sys.stderr)
+        return 0
+    job = _native_job(config_dir)
+    if job is None:
+        return 1
+    root, home, label = job
+    if not localai_native.script_path(home).is_file():
+        print(
+            "ERROR: native LocalAI: the start script is missing; run 'papaia-ctl start' again",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = localai_native.start_job(
+            home, label, localai_native.plist_path(label), restart=args.restart
+        )
+    except localai_native.LaunchdError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    words = {
+        "loaded": "LocalAI starts through launchd",
+        "restarted": "LocalAI restarts through launchd",
+        "started": "LocalAI starts through launchd",
+        "running": "LocalAI runs through launchd",
+    }
+    print(f"{words[result.action]} ({label}); log: {result.log}")
+    url = localai_native.probe_url(root, inside_container=False)
+    timeout = args.wait if args.wait is not None else localai_native.READY_TIMEOUT_SECONDS
+    if localai_native.wait_ready(url, timeout):
+        print(f"LocalAI answers on {url}")
+        return 0
+    print(
+        f"WARNING: LocalAI does not answer on {url} after {timeout:g} s. It keeps starting in"
+        " the background (the first start downloads the Metal backend). Log: "
+        f"{result.log}; state: launchctl print {localai_native.service_target(label)}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _launchd_or_skip(root: dict[str, str], verb: str) -> bool:
+    """Whether a stop or uninstall can reach launchd; says why not for the native runtime."""
+    available, why = localai_native.launchd_host()
+    if not available:
+        if localai_native.runtime(root) == localai_native.NATIVE:
+            print(f"WARNING: native LocalAI not {verb}: {why}", file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_localai_native_stop(args: argparse.Namespace) -> int:
+    """Unload and disable the launchd job (before the Compose part of `stop`). With
+    --purge-models also delete the models and backends. Quiet when there is no job."""
+    config_dir = Path(args.config_dir)
+    root = common.parse_env_file(config_dir / ".env")
+    try:
+        label = localai_native.label_for(root)
+    except localai_native.LaunchdError as exc:
+        print(f"WARNING: native LocalAI: {exc}", file=sys.stderr)
+        return 0
+    plist = localai_native.plist_path(label)
+    native = localai_native.runtime(root) == localai_native.NATIVE
+    if not native and not plist.is_file():
+        return 0
+    status_code = 0
+    if _launchd_or_skip(root, "stopped"):
+        try:
+            if localai_native.stop_job(label):
+                print(f"Stopped the native LocalAI ({label})")
+        except localai_native.LaunchdError as exc:
+            print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+            status_code = 1
+    if args.purge_models and native:
+        job = _native_job(config_dir)
+        if job is not None:
+            for path in localai_native.purge_data(job[1]):
+                print(f"Deleted {path}")
+    return status_code
+
+
+def cmd_localai_native_state(args: argparse.Namespace) -> int:
+    """KEY=VALUE lines: the launchd job of this installation. Exit 3 off a Mac."""
+    root = common.parse_env_file(Path(args.config_dir) / ".env")
+    available, why = localai_native.launchd_host()
+    if not available:
+        print(f"ERROR: {why}", file=sys.stderr)
+        return 3
+    try:
+        label = localai_native.label_for(root)
+        job = localai_native.state(label)
+    except localai_native.LaunchdError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    print(f"LABEL={label}")
+    print(f"PLIST={localai_native.plist_path(label)}")
+    print(f"LOADED={'yes' if job.loaded else 'no'}")
+    print(f"STATE={job.state or ''}")
+    print(f"PID={job.pid or ''}")
+    print(f"LAST_EXIT={job.last_exit or ''}")
+    return 0
+
+
+def cmd_localai_native_uninstall(args: argparse.Namespace) -> int:
+    """Stop the job and remove the plist, the script and the binary; with --purge also the
+    models, backends, logs and the directory (`uninstall --clean-up`)."""
+    config_dir = Path(args.config_dir)
+    root = common.parse_env_file(config_dir / ".env")
+    try:
+        label = localai_native.label_for(root)
+    except localai_native.LaunchdError as exc:
+        print(f"WARNING: native LocalAI: {exc}", file=sys.stderr)
+        return 0
+    plist = localai_native.plist_path(label)
+    try:
+        home = localai_native.localai_home(root)
+    except localai_native.InstallError:
+        home = None
+    if localai_native.runtime(root) != localai_native.NATIVE and not plist.is_file():
+        if home is None or not home.is_dir():
+            return 0
+    if not _launchd_or_skip(root, "removed"):
+        return 0
+    try:
+        if home is None:
+            # No home to clean up; the job and its plist still go.
+            localai_native.stop_job(label)
+            plist.unlink(missing_ok=True)
+            return 0
+        removed = localai_native.uninstall(home, label, plist, purge=args.purge)
+    except localai_native.LaunchdError as exc:
+        print(f"ERROR: native LocalAI: {exc}", file=sys.stderr)
+        return 1
+    for path in removed:
+        print(f"Removed {path}")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -336,12 +692,17 @@ def cmd_render(args: argparse.Namespace) -> int:
     auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
     gen_override.generate_ssl_cert_override(config_dir, auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, auth_provider, repo_root)
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
     # Also regenerated here, not just in cmd_setup: `papaia-ctl start` renders
     # before bringing the stack up, so a stale override would otherwise survive
     # both an upgrade and a variant change.
     gen_override.generate_localai_gpu_override(
         config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
     )
+    runtime_problem = _localai_runtime_override(config_dir)
+    if runtime_problem:
+        print(f"WARNING: {runtime_problem}", file=sys.stderr)
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
     print("Rendered.")
@@ -516,7 +877,8 @@ def cmd_module_purge(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
     for name in removed:
-        print(f"removed volume {name}")
+        # A native LocalAI keeps its data in directories, named by absolute path.
+        print(f"removed {'directory' if name.startswith('/') else 'volume'} {name}")
     for item in touched:
         print(f"reset {item}")
     return 0
@@ -557,7 +919,7 @@ def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    if not keycloak_role_sync.sync_roles(tree, config_dir):
+    if not keycloak_role_sync.sync_roles(tree, config_dir, repo_root):
         return 1
     return 0
 
@@ -895,6 +1257,32 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_librechat_clear_history(args: argparse.Namespace) -> int:
+    """Count (`--dry-run`) or remove one user's LibreChat history. Exit 2 for an
+    address or date that is not one, 1 on every other failure, also when some files
+    could not be removed from storage."""
+    try:
+        librechat_history.validate_email(args.email)
+        if args.before is not None:
+            librechat_history.validate_before(args.before)
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    try:
+        result = librechat_history.clear_history(
+            Path(args.repo_root),
+            Path(args.config_dir),
+            args.email,
+            before=args.before,
+            dry_run=args.dry_run,
+        )
+    except librechat_history.ClearHistoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(librechat_history.format_result(result, before=args.before))
+    return 1 if result.get("files_failed") else 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
@@ -1088,8 +1476,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_defaults = sub.add_parser("defaults")
     p_defaults.set_defaults(func=cmd_defaults)
 
+    p_derive_auth = sub.add_parser("derive-auth-host")
+    p_derive_auth.add_argument("app_host")
+    p_derive_auth.add_argument("keycloak_ext_port")
+    p_derive_auth.set_defaults(func=cmd_derive_auth_host)
+
     p_localai_variants = sub.add_parser("localai-variants")
     p_localai_variants.set_defaults(func=cmd_localai_variants)
+
+    p_native_install = sub.add_parser("localai-native-install")
+    p_native_install.set_defaults(func=cmd_localai_native_install)
+
+    p_native_start = sub.add_parser("localai-native-start")
+    p_native_start.add_argument("--restart", action="store_true")
+    # Seconds to wait for /readyz; the default is READY_TIMEOUT_SECONDS.
+    p_native_start.add_argument("--wait", type=float, default=None)
+    p_native_start.set_defaults(func=cmd_localai_native_start)
+
+    p_native_stop = sub.add_parser("localai-native-stop")
+    p_native_stop.add_argument("--purge-models", action="store_true")
+    p_native_stop.set_defaults(func=cmd_localai_native_stop)
+
+    p_native_state = sub.add_parser("localai-native-state")
+    p_native_state.set_defaults(func=cmd_localai_native_state)
+
+    p_native_uninstall = sub.add_parser("localai-native-uninstall")
+    p_native_uninstall.add_argument("--purge", action="store_true")
+    p_native_uninstall.set_defaults(func=cmd_localai_native_uninstall)
 
     p_setup = sub.add_parser("setup")
     p_setup.add_argument("--env", default="papaia")
@@ -1115,8 +1528,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-web-search", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-local-ai", choices=["true", "false"], default=None)
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
+    p_setup.add_argument("--localai-runtime", choices=list(localai_native.RUNTIMES), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
+    p_setup.add_argument("--voice-variant", choices=["cpu", "nvidia", "hipblas"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)
@@ -1237,6 +1653,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_start = sub.add_parser("addon-start")
     p_addon_start.add_argument("--name", required=True)
     p_addon_start.add_argument("--force", action="store_true")
+    # `start` creates the Keycloak clients after `up`; this only fills in their secrets.
+    p_addon_start.add_argument("--no-keycloak", action="store_true")
     p_addon_start.set_defaults(func=cli_addon.cmd_addon_start)
 
     p_addon_check = sub.add_parser("addon-check")
@@ -1283,6 +1701,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_list = sub.add_parser("addon-list")
     p_addon_list.add_argument("--json", action="store_true")
     p_addon_list.set_defaults(func=cli_addon.cmd_addon_list)
+
+    p_addon_action = sub.add_parser("addon-action")
+    p_addon_action.add_argument("--name", required=True)
+    p_addon_action.add_argument("--action", required=True)
+    p_addon_action.set_defaults(func=cli_addon.cmd_addon_action)
+
+    p_addon_actions = sub.add_parser("addon-actions")
+    p_addon_actions.add_argument("--name", required=True)
+    p_addon_actions.add_argument("--json", action="store_true")
+    p_addon_actions.set_defaults(func=cli_addon.cmd_addon_actions)
+
+    p_addon_dependents = sub.add_parser("addon-dependents")
+    p_addon_dependents.add_argument("--name", required=True)
+    p_addon_dependents.add_argument("--force", action="store_true")
+    p_addon_dependents.set_defaults(func=cli_addon.cmd_addon_dependents)
 
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)
@@ -1386,6 +1819,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--skip", action="append", default=None)
     p_doctor.add_argument("--json", action="store_true")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_clear = sub.add_parser("librechat-clear-history")
+    p_clear.add_argument("--email", required=True)
+    p_clear.add_argument("--before", default=None)
+    p_clear.add_argument("--dry-run", action="store_true")
+    p_clear.set_defaults(func=cmd_librechat_clear_history)
 
     return parser
 

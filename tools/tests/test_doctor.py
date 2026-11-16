@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -57,6 +58,8 @@ def probes(**overrides) -> Probes:
         "kernel_clock_synchronized": lambda: True,
         "smtp_probe": lambda *args: smtp.ProbeResult(True, "ok", login="ok"),
         "dev_root": Path("/papaia-test-has-no-devices"),
+        # Not a Mac unless a test says so, wherever the suite runs.
+        "launchd_host": lambda: False,
     }
     values.update(overrides)
     return Probes(**values)
@@ -120,6 +123,13 @@ def enable_localai(stack, variant: str | None = None) -> None:
     values = {"COMPOSE_PROFILES": f"{PROFILES},localai"}
     if variant is not None:
         values["LOCALAI_IMAGE_VARIANT"] = variant
+    set_env(stack, **values)
+
+
+def enable_voice(stack, variant: str | None = None) -> None:
+    values = {"COMPOSE_PROFILES": f"{PROFILES},voice"}
+    if variant is not None:
+        values["VOICE_TTS_IMAGE_VARIANT"] = variant
     set_env(stack, **values)
 
 
@@ -187,6 +197,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # memory
         PASS,  # cpu
         SKIP,  # gpu: LocalAI is not enabled
+        SKIP,  # localai_native: LocalAI runs in its container
         PASS,  # ports
         SKIP,  # dns: only local hostnames configured
         PASS,  # time_sync
@@ -208,6 +219,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "memory",
         "cpu",
         "gpu",
+        "localai_native",
         "ports",
         "dns",
         "time_sync",
@@ -1017,6 +1029,96 @@ def test_gpu_notes_whether_the_generated_override_exists(stack):
     check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
 
     assert check.details["override_present"] is True
+
+
+def test_gpu_probes_the_voice_variant_when_localai_does_not(stack):
+    enable_voice(stack, "nvidia")
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.status == PASS
+    assert check.details["variant"] == "nvidia (voice)"
+
+
+def test_gpu_skips_for_a_cpu_voice_variant(stack):
+    enable_voice(stack, "cpu")
+
+    check = result(run_doctor(stack), "gpu")
+
+    assert check.status == SKIP
+
+
+def test_gpu_notes_whether_the_voice_override_exists(stack):
+    enable_voice(stack, "nvidia")
+    override = stack["config"] / "overrides" / "docker-compose.voice-gpu.override.yml"
+    override.parent.mkdir(exist_ok=True)
+    override.write_text("services: {}\n", encoding="utf-8")
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.details["override_present"] is True
+
+
+def test_gpu_voice_is_not_measurable_from_a_container(stack):
+    # Unlike LocalAI there is no container guaranteed to carry the vendor tools.
+    enable_voice(stack, "nvidia")
+
+    check = result(run_doctor(stack, docker=nvidia_docker(), in_container=lambda: True), "gpu")
+
+    assert check.status == SKIP
+
+
+def test_gpu_probes_both_engines_across_vendors(stack, tmp_path):
+    # LocalAI on CUDA proves nothing about the TTS engine's ROCm demand: the
+    # missing /dev/kfd must fail the check although nvidia-smi is happy.
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai,voice",
+        LOCALAI_IMAGE_VARIANT="nvidia-cuda-12",
+        VOICE_TTS_IMAGE_VARIANT="hipblas",
+    )
+
+    check = result(run_doctor(stack, docker=nvidia_docker(), dev_root=fake_dev(tmp_path)), "gpu")
+
+    assert check.status == FAIL
+    assert "the voice TTS engine cannot start" in check.summary
+    assert check.details["other_accelerator"]["variant"] == "nvidia-cuda-12"
+
+
+def test_gpu_collapses_matching_vendor_demands_into_one_probe(stack):
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai,voice",
+        LOCALAI_IMAGE_VARIANT="nvidia-cuda-12",
+        VOICE_TTS_IMAGE_VARIANT="nvidia",
+    )
+
+    check = result(run_doctor(stack, docker=nvidia_docker()), "gpu")
+
+    assert check.status == PASS
+    assert "other_accelerator" not in check.details
+
+
+def test_gpu_voice_fails_below_the_cuda_floor_of_the_tts_image(stack):
+    # The banner names the highest CUDA the driver supports; below the image's
+    # floor the NVIDIA runtime refuses the container, so doctor must say so.
+    enable_voice(stack, "nvidia")
+    banner = "| NVIDIA-SMI 550.120   Driver Version: 550.120   CUDA Version: 12.4 |"
+
+    check = result(run_doctor(stack, docker=nvidia_docker(smi=banner)), "gpu")
+
+    assert check.status == FAIL
+    assert "12.8" in check.summary
+    assert check.details["cuda_version"] == "12.4"
+
+
+def test_gpu_failures_name_the_voice_engine(stack, tmp_path):
+    enable_voice(stack, "hipblas")
+
+    check = result(run_doctor(stack, dev_root=fake_dev(tmp_path)), "gpu")
+
+    assert check.status == FAIL
+    assert "the voice TTS engine cannot start" in check.summary
 
 
 @pytest.mark.parametrize(
@@ -2140,3 +2242,204 @@ def test_smtp_report_validates_and_holds_no_secret(stack):
     document = doctor.to_json(report)
     assert not list(VALIDATOR.iter_errors(json.loads(document)))
     assert UPSTREAM_PASSWORD not in document
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# localai_native (ADR 0012)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def native_localai(stack, tmp_path: Path, *, installed: str | None = "1") -> Path:
+    """LocalAI with the native runtime; the stack's pin is `example/image:1`."""
+    set_env(
+        stack,
+        COMPOSE_PROFILES=f"{PROFILES},localai",
+        LOCALAI_RUNTIME="native",
+        PAPAIA_WORKSPACE_DIR=str(tmp_path / "workspace"),
+        LOCALAI_EXT_PORT="8200",
+    )
+    home = tmp_path / "workspace" / "localai" / "papaia"
+    if installed:
+        (home / "bin").mkdir(parents=True)
+        (home / "bin" / f"local-ai-{installed}").write_bytes(b"binary")
+    return home
+
+
+def native_result(
+    stack,
+    ready: bool,
+    *,
+    in_container: bool = False,
+    launchd: bool = False,
+    docker: FakeDocker | None = None,
+) -> doctor.CheckResult:
+    asked: list[str] = []
+
+    def localai_ready(url: str) -> bool:
+        asked.append(url)
+        return ready
+
+    report = run_doctor(
+        stack,
+        docker=docker,
+        localai_ready=localai_ready,
+        in_container=lambda: in_container,
+        launchd_host=lambda: launchd,
+    )
+    found = result(report, "localai_native")
+    found.details["asked"] = asked
+    return found
+
+
+def test_localai_native_is_skipped_for_the_container_runtime(stack):
+    enable_localai(stack)
+    assert result(run_doctor(stack), "localai_native").status == SKIP
+
+
+def test_localai_native_passes_when_the_pinned_binary_answers(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True)
+    assert found.status == PASS
+    assert found.summary == "LocalAI 1 answers on http://127.0.0.1:8200/readyz"
+    assert found.details["asked"] == ["http://127.0.0.1:8200/readyz"]
+
+
+def test_a_native_localai_that_does_not_run_is_a_warning_with_the_log(stack, tmp_path):
+    home = native_localai(stack, tmp_path)
+    found = native_result(stack, ready=False)
+    assert found.status == WARN
+    assert "run 'papaia-ctl start'" in found.summary
+    assert str(home / "logs" / "localai.log") in found.summary
+
+
+def test_a_missing_or_outdated_binary_is_a_warning(stack, tmp_path):
+    native_localai(stack, tmp_path, installed=None)
+    assert "not installed yet" in native_result(stack, ready=False).summary
+    (tmp_path / "workspace" / "localai" / "papaia" / "bin").mkdir(parents=True)
+    (tmp_path / "workspace" / "localai" / "papaia" / "bin" / "local-ai-0").write_bytes(b"x")
+    found = native_result(stack, ready=True)
+    assert found.status == WARN
+    assert "this release pins 1: run 'papaia-ctl start'" in found.summary
+
+
+def test_inside_a_container_the_native_localai_is_probed_through_the_host(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True, in_container=True)
+    assert found.details["asked"] == ["http://host.docker.internal:8200/readyz"]
+
+
+def test_the_gpu_check_skips_a_native_localai_without_a_variant(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = result(run_doctor(stack, localai_ready=lambda url: True), "gpu")
+    assert found.status == SKIP
+    assert "variant" not in found.details
+
+
+# The launchd job on the Mac, from recorded `launchctl print` output.
+LAUNCHCTL_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "launchctl"
+JOB_RUNNING = CommandResult(
+    0, (LAUNCHCTL_FIXTURES / "print-running.txt").read_text(encoding="utf-8"), ""
+)
+JOB_CRASHED = CommandResult(
+    0, (LAUNCHCTL_FIXTURES / "print-crashed.txt").read_text(encoding="utf-8"), ""
+)
+JOB_NOT_LOADED = CommandResult(
+    113,
+    "",
+    'Bad request.\nCould not find service "de.fidonis.papaia.papaia.localai" in domain for'
+    " user gui: 501\n",
+)
+
+
+def launchd_docker(job: CommandResult, *, stack_runs: bool = True) -> FakeDocker:
+    ps = healthy_core() + healthy_addon() if stack_runs else []
+    return FakeDocker(ps, tools={"launchctl": job})
+
+
+def test_a_running_launchd_job_that_answers_passes(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_RUNNING)
+    found = native_result(stack, ready=True, launchd=True, docker=docker)
+    assert found.status == PASS
+    assert "de.fidonis.papaia.papaia.localai" in found.summary
+    assert found.details["launchd"] == {
+        "label": "de.fidonis.papaia.papaia.localai",
+        "loaded": True,
+        "state": "running",
+        "pid": 70027,
+        "last_exit": "(never exited)",
+    }
+    printed = [c for c in docker.calls if c[0] == "launchctl"]
+    target = f"gui/{os.getuid()}/de.fidonis.papaia.papaia.localai"
+    assert printed == [["launchctl", "print", target]]
+
+
+@pytest.mark.parametrize("job", [JOB_RUNNING, JOB_CRASHED])
+def test_a_loaded_job_without_an_answer_is_a_warning(stack, tmp_path, job):
+    home = native_localai(stack, tmp_path)
+    found = native_result(stack, ready=False, launchd=True, docker=launchd_docker(job))
+    assert found.status == WARN
+    assert "is loaded" in found.summary and "does not answer" in found.summary
+    assert str(home / "logs" / "localai.log") in found.summary
+
+
+def test_a_job_that_is_not_loaded_while_the_stack_runs_is_a_warning(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=False, launchd=True, docker=launchd_docker(JOB_NOT_LOADED))
+    assert found.status == WARN
+    assert "not loaded although the stack runs" in found.summary
+    assert found.details["launchd"]["loaded"] is False
+
+
+def test_a_localai_started_by_hand_is_a_warning_too(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True, launchd=True, docker=launchd_docker(JOB_NOT_LOADED))
+    assert found.status == WARN
+    assert "not through launchd" in found.summary
+
+
+def test_a_job_that_is_not_loaded_with_the_stack_stopped_is_skipped(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_NOT_LOADED, stack_runs=False)
+    found = native_result(stack, ready=False, launchd=True, docker=docker)
+    assert found.status == SKIP
+    assert "stack is stopped" in found.summary
+
+
+def test_a_localai_that_answers_without_its_job_while_the_stack_is_stopped_is_a_warning(
+    stack, tmp_path
+):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_NOT_LOADED, stack_runs=False)
+    found = native_result(stack, ready=True, launchd=True, docker=docker)
+    assert found.status == WARN
+    assert "the stack is stopped, but LocalAI answers" in found.summary
+    assert "and LocalAI with it" not in found.summary
+
+
+def test_without_launchctl_the_probe_alone_decides(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    found = native_result(stack, ready=True, launchd=True, docker=launchd_docker(
+        CommandResult(127, "", "launchctl: command not found")))  # fmt: skip
+    assert found.status == PASS
+    assert "launchd" not in found.details
+
+
+def test_in_a_container_launchctl_is_not_asked(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    docker = launchd_docker(JOB_RUNNING)
+    found = native_result(stack, ready=False, in_container=True, launchd=True, docker=docker)
+    assert found.status == WARN
+    assert "on the Mac" in found.summary
+    assert not [c for c in docker.calls if c[0] == "launchctl"]
+
+
+def test_the_doctor_json_with_a_launchd_job_matches_the_schema(stack, tmp_path):
+    native_localai(stack, tmp_path)
+    report = run_doctor(
+        stack,
+        docker=launchd_docker(JOB_RUNNING),
+        localai_ready=lambda url: True,
+        launchd_host=lambda: True,
+    )
+    assert not list(VALIDATOR.iter_errors(json.loads(doctor.to_json(report))))
