@@ -9,7 +9,7 @@
 # One service forms the module (label `de.fidonis.module: papaia-knowledge-map`):
 #
 #   knowledge-map-mcp   OIDC-secured MCP directory of the installation's
-#                       knowledge sources (ADR 0011/0012). Answers WHERE
+#                       knowledge sources (ADR 0013/0014). Answers WHERE
 #                       knowledge lives, trimmed to the caller's realm roles —
 #                       references only, never content.
 #

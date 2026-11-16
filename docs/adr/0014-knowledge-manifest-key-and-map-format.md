@@ -1,5 +1,5 @@
 ---
-adr: 0012
+adr: 0014
 title: Declare knowledge sources through a knowledge manifest key
 status: Proposed
 date: 2026-11-13
@@ -13,11 +13,11 @@ supersedes: null
 superseded_by: null
 ---
 
-# 0012. Declare knowledge sources through a `knowledge:` manifest key
+# 0014. Declare knowledge sources through a `knowledge:` manifest key
 
 ## Context
 
-The knowledge-map profile (ADR 0011) needs a declarative way for add-ons and
+The knowledge-map profile (ADR 0013) needs a declarative way for add-ons and
 core modules to describe the knowledge sources they contribute: what lives
 there, what explicitly does **not**, how to reach it, and who may see it. The
 declaration must be additive to the existing manifest contract, must reference
@@ -39,8 +39,8 @@ Add-ons declare sources under a new optional top-level `knowledge:` key in
 `papaia-app.yaml`; core modules declare the same structure in a `knowledge.yaml`
 file in their module directory (e.g. `src/ai/rag/knowledge.yaml`), merged only
 while their profile is active. Manifest readers ignore unknown keys, so the key
-is backward-compatible; add-ons that use it declare `requires.addon_api: 4`
-(or a list including 4).
+is backward-compatible; add-ons that use it declare `requires.addon_api: 6`
+(or a list including 6).
 
 ```yaml
 knowledge:
@@ -116,5 +116,5 @@ topic without mutual `not_covered`/`source_of_truth_for` delimitation.
 
 ## References
 
-- ADR 0011 (knowledge map as an optional core profile)
+- ADR 0013 (knowledge map as an optional core profile)
 - ADR 0002 (compatibility gating — additive bump rules)

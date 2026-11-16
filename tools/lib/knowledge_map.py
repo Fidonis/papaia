@@ -1,6 +1,6 @@
 """Renders the knowledge map from module and add-on declarations.
 
-The map (ADR 0011/0012) tells the LLM layer WHERE knowledge lives: one entry
+The map (ADR 0013/0014) tells the LLM layer WHERE knowledge lives: one entry
 per source, contributed by the software that provides it — core modules
 through a `knowledge.yaml` in their module directory, add-ons through the
 `knowledge:` key of `papaia-app.yaml`. Because the declarations travel with
@@ -18,7 +18,7 @@ text, so free-text fields are scanned for instruction-injection patterns and
 a hit refuses the render. Softer findings (two sources sharing a topic
 without mutual delimitation) are returned as warnings.
 
-Governance metadata (ADR 0014) comes from a separate operator file; only the
+Governance metadata (ADR 0016) comes from a separate operator file; only the
 effective handling enums reach a manifest, the rest feeds policy findings in
 lints.yaml. The map documents — it does not enforce.
 """
@@ -45,7 +45,7 @@ OVERRIDES_REL_PATH = "overlay/knowledge-map/overrides.yaml"
 # (kind: reference), Agent2Agent agents. Overrides still cannot create entries;
 # declarations can.
 SOURCES_REL_PATH = "overlay/knowledge-map/sources.yaml"
-# Operator governance metadata (ADR 0014): classification, personal data,
+# Operator governance metadata (ADR 0016): classification, personal data,
 # model tiers, policy and accepted exceptions. Kept apart from overrides.yaml
 # because it is not model-facing: only the effective `handling` enums reach a
 # manifest, everything else feeds the governance findings in lints.yaml.
@@ -82,7 +82,7 @@ MODULE_KNOWLEDGE: dict[str, str] = {"rag": "src/ai/rag"}
 
 _VALID_ON_DENIED = ("hidden", "acknowledge")
 
-# ---- governance vocabulary (ADR 0014) ----
+# ---- governance vocabulary (ADR 0016) ----
 # Ordered from least to most restrictive; the order is the comparison.
 CLASSIFICATIONS = ("public", "internal", "confidential", "strictly_confidential")
 # The handling label of an entry the operator has not classified.
@@ -362,7 +362,7 @@ def _collision_warnings(entries: dict[str, dict]) -> list[str]:
 
 
 def _content_hash(entry: dict) -> str:
-    """Hash over the declaration itself (ADR 0012) — provenance is metadata
+    """Hash over the declaration itself (ADR 0014) — provenance is metadata
     about where it came from, so e.g. an add-on version bump alone must not
     churn every consumer's centroid cache."""
     declaration = {
@@ -837,7 +837,7 @@ def _finding(
     return finding
 
 
-# ---- governance metadata and policy findings (ADR 0014) ----
+# ---- governance metadata and policy findings (ADR 0016) ----
 #
 # The map documents; it does not enforce. Data access is enforced by the
 # target systems (with the user's token), model use by LiteLLM teams/keys and
@@ -1587,7 +1587,7 @@ def render(
         entry = dict(entries[source_id])
         # Manifests are model-facing: of the governance data only the
         # effective handling enums travel — never proposals, owners or
-        # references, nor the inventory facts the checks use (ADR 0014).
+        # references, nor the inventory facts the checks use (ADR 0016).
         for key in _INTERNAL_KEYS:
             entry.pop(key, None)
         entry["handling"] = effective_handling(source_id, governance)

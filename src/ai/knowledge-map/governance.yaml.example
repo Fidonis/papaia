@@ -1,4 +1,4 @@
-# Example: governance metadata for the knowledge map (ADR 0014).
+# Example: governance metadata for the knowledge map (ADR 0016).
 # Copy to $PAPAIA_CONFIG_DIR/overlay/knowledge-map/governance.yaml and adapt.
 # Every key is optional. The file feeds the policy findings in
 # knowledge-map/lints.yaml; it does not enforce anything — access is enforced

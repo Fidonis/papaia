@@ -1,5 +1,5 @@
 ---
-adr: 0011
+adr: 0013
 title: Ship the knowledge map as an optional core profile
 status: Proposed
 date: 2026-11-13
@@ -14,7 +14,7 @@ supersedes: null
 superseded_by: null
 ---
 
-# 0011. Ship the knowledge map as an optional core profile
+# 0013. Ship the knowledge map as an optional core profile
 
 ## Context
 
@@ -47,7 +47,7 @@ the core render pipeline.
 
 Ship the knowledge map as an **optional core profile `knowledge-map`**:
 
-1. **A render step** aggregates `knowledge:` declarations (ADR 0012) from all
+1. **A render step** aggregates `knowledge:` declarations (ADR 0014) from all
    active add-ons and core modules into map files under
    `$PAPAIA_CONFIG_DIR/knowledge-map/` (an `index.yaml` plus one manifest per
    source). Like the realm-secret baking, this is a generated artifact with
@@ -76,7 +76,7 @@ the RAG module contributes its own map entry like any other module.
   generated from the same declarations that install the software — it cannot
   disagree with what is actually deployed. Negative knowledge ("not here, use
   X") finally has a machine-readable home.
-- **Negative**: `ADDON_API` moves 3 → 4 (additive; `min` stays 1), the
+- **Negative**: `ADDON_API` moves 5 → 6 (additive; `min` stays 1), the
   contract-surface snapshot and the golden single-node snapshot change, and
   the realm template grows a resource-server client — all reviewed in one PR.
 - **Neutral**: LibreChat currently loads configured MCP servers statically, so
@@ -98,4 +98,4 @@ the RAG module contributes its own map entry like any other module.
 ## References
 
 - ADR 0002 (compatibility gating), ADR 0004 (RAG as an optional core profile)
-- ADR 0012 (the `knowledge:` manifest key and map format)
+- ADR 0014 (the `knowledge:` manifest key and map format)

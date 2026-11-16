@@ -1,4 +1,4 @@
-# Knowledge-map declaration of the RAG module (ADR 0012). Collected only while
+# Knowledge-map declaration of the RAG module (ADR 0014). Collected only while
 # the rag profile is active. Collection-level entries (one per Qdrant
 # collection, from the manager's catalog) are a follow-up; this entry routes to
 # the vector search as a whole. A source whose content is ALSO ingested (the

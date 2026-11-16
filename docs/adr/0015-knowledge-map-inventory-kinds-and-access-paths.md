@@ -1,5 +1,5 @@
 ---
-adr: 0013
+adr: 0015
 title: Inventory every reachable server and agent, and give sources several access paths
 status: Proposed
 date: 2026-11-14
@@ -12,11 +12,11 @@ supersedes: null
 superseded_by: null
 ---
 
-# 0013. Inventory every reachable server and agent, and give sources several access paths
+# 0015. Inventory every reachable server and agent, and give sources several access paths
 
 ## Context
 
-The map of ADR 0011/0012 contains only what a `knowledge:` declaration
+The map of ADR 0013/0014 contains only what a `knowledge:` declaration
 brings along. Everything else a chat user can reach — MCP servers from core
 fragments, from the overlay, from add-ons without a declaration — is invisible
 to it. Its abstention ("not available in the connected systems") is then
@@ -46,7 +46,7 @@ Three further gaps showed in the first reference installation:
    `rag`, `a2a`, `none`), `target`, optional `key_tools`, `collection`,
    `skills`, `best_for`, `freshness`, `location` and its own
    `required_roles`. The v0.1 single-path fields remain readable. Both forms
-   belong to addon_api 4, which is not released yet; no further bump.
+   belong to addon_api 6, which is not released yet; no further bump.
 3. **Inventory.** On every render the platform reads the merged chat-client
    configuration and the provisioned agent files and adds one `mcp` entry per
    connected server (except the map's own) and one `agent` entry per agent. A
@@ -90,6 +90,6 @@ Three further gaps showed in the first reference installation:
 
 ## References
 
-- ADR 0011, ADR 0012
+- ADR 0013, ADR 0014
 - Model Context Protocol, tool annotations and server metadata
 - Agent2Agent protocol, Agent Card

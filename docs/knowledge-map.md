@@ -21,10 +21,10 @@ the same functions as REST under `/api/v1/` for callers without MCP — always
 with the user's token. How another assistant integrates is described in the
 `papaia-knowledge-map` repository.
 
-Design decisions and their rationale: [ADR 0011](adr/0011-knowledge-map-as-optional-core-profile.md)
-(profile) and [ADR 0012](adr/0012-knowledge-manifest-key-and-map-format.md)
-(declaration format), [ADR 0013](adr/0013-knowledge-map-inventory-kinds-and-access-paths.md)
-(inventory and access paths) and [ADR 0014](adr/0014-knowledge-map-governance-metadata.md)
+Design decisions and their rationale: [ADR 0013](adr/0013-knowledge-map-as-optional-core-profile.md)
+(profile) and [ADR 0014](adr/0014-knowledge-manifest-key-and-map-format.md)
+(declaration format), [ADR 0015](adr/0015-knowledge-map-inventory-kinds-and-access-paths.md)
+(inventory and access paths) and [ADR 0016](adr/0016-knowledge-map-governance-metadata.md)
 (governance metadata). Server internals: the `papaia-knowledge-map` repository.
 
 ## Enabling
@@ -50,7 +50,7 @@ seam (`LIBRECHAT_AGENTS_DIR`).
 Nothing on the map is hand-maintained in place. Entries are rendered on every
 `setup`, `start` and `addon` operation from:
 
-- **Add-ons** — the `knowledge:` key of `papaia-app.yaml` (addon_api 4; the
+- **Add-ons** — the `knowledge:` key of `papaia-app.yaml` (addon_api 6; the
   schema is in `docs/architecture.md` §6.2).
 - **Core modules** — `<module>/knowledge.yaml` (e.g. `src/ai/rag/knowledge.yaml`),
   collected while their profile is active.
@@ -177,7 +177,7 @@ first and the model tiers in
 `$PAPAIA_CONFIG_DIR/overlay/knowledge-map/governance.yaml` (optional; an
 annotated example ships as `src/ai/knowledge-map/governance.yaml.example`);
 each render checks the wiring against it. Design and rationale:
-[ADR 0014](adr/0014-knowledge-map-governance-metadata.md).
+[ADR 0016](adr/0016-knowledge-map-governance-metadata.md).
 
 **The map does not enforce.** The findings point at configuration to change;
 the map blocks no request, protects no data and changes nothing on its own.

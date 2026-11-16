@@ -476,7 +476,7 @@ def test_wrong_toplevel_shapes_are_named_errors(workspace):
 
 
 def test_content_hash_ignores_provenance(workspace):
-    """ADR 0012: the hash covers the declaration — an add-on version bump
+    """ADR 0014: the hash covers the declaration — an add-on version bump
     alone must not churn every consumer's centroid cache."""
     repo, addon, config = workspace
     _write_addon_manifest(addon, [_source("wiki.main")])
@@ -676,7 +676,7 @@ def test_render_creates_the_operator_directory(workspace):
     assert (config / "overlay/knowledge-map").is_dir()
 
 
-# ---- governance metadata and policy findings (ADR 0014) ----
+# ---- governance metadata and policy findings (ADR 0016) ----
 
 TODAY = date(2026, 11, 14)
 

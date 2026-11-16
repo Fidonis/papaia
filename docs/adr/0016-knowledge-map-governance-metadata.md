@@ -1,5 +1,5 @@
 ---
-adr: 0014
+adr: 0016
 title: Keep governance metadata in a separate operator file and report model policy findings
 status: Proposed
 date: 2026-11-14
@@ -13,11 +13,11 @@ supersedes: null
 superseded_by: null
 ---
 
-# 0014. Keep governance metadata in a separate operator file and report model policy findings
+# 0016. Keep governance metadata in a separate operator file and report model policy findings
 
 ## Context
 
-After ADR 0013 the map knows every source, server and agent an installation
+After ADR 0015 the map knows every source, server and agent an installation
 can reach. Operators asked the next question: *which* of these hold
 confidential or personal data, and which model may see their content? The
 map is the only place where three facts meet that no single system sees
@@ -125,6 +125,6 @@ Four constraints shape the design:
 
 ## References
 
-- ADR 0011, ADR 0012, ADR 0013
+- ADR 0013, ADR 0014, ADR 0015
 - Regulation (EU) 2016/679, Art. 9, 10, 30
 - ISO/IEC 27001:2022, Annex A 5.9, 5.12

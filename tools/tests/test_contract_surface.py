@@ -46,14 +46,14 @@ _SURFACE_CHANGED = (
 # attach it declare `requires.addon_api: 3`, and an older core reports them
 # incompatible instead of failing on an unknown service.
 #
-# Gen 4 (additive): the `knowledge` manifest key (ADR 0012) lets an add-on declare
-# the knowledge sources it contributes to the knowledge-map profile (ADR 0011).
-# Older cores ignore the key, so `min` stays 1; add-ons that declare it include 4
+# Gen 6 (additive): the `knowledge` manifest key (ADR 0014) lets an add-on declare
+# the knowledge sources it contributes to the knowledge-map profile (ADR 0013).
+# Older cores ignore the key, so `min` stays 1; add-ons that declare it include 6
 # in `requires.addon_api` to document the dependency. Note the gate's any-match
-# semantics: an add-on listing [2, 4] still installs on a gen-2/3 core (the 2
+# semantics: an add-on listing [2, 6] still installs on a gen-2..5 core (the 2
 # matches), which is wanted here because the key is additive — a core below
-# gen 4 simply renders no map entry for it.
-ADDON_API_WINDOW = (1, 4)
+# gen 6 simply renders no map entry for it.
+ADDON_API_WINDOW = (1, 6)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -132,8 +132,8 @@ MANIFEST_KEYS = [
     # Display only: printed after the core's own steps in the install checklist. An older
     # core ignores the key and an add-on has nothing to gate on, so no ADDON_API bump.
     "install_notes",
-    # Since addon_api 4: declares the knowledge sources an add-on contributes to the
-    # knowledge-map profile (ADR 0012). Read by knowledge_map.collect_sources.
+    # Since addon_api 6: declares the knowledge sources an add-on contributes to the
+    # knowledge-map profile (ADR 0014). Read by knowledge_map.collect_sources.
     "knowledge",
 ]
 
