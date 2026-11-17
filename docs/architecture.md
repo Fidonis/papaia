@@ -1290,14 +1290,17 @@ Settings has three tabs: *Manager* (the manager's own configuration), *Modules* 
 The last two keep no second source of truth; both drive the core.
 
 **Modules.** The tab is the one place in the manager that switches the optional modules
-(LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off.
+(LocalAI with its accelerator variant, web search, the RAG system, voice, the mail relay and the
+knowledge map) on and off.
 It stores the choice with the core's own `setup`, so validation, sticky values and generated
 secrets stay in one implementation, and starts the module's profile. Which volumes a module owns,
 what its settings consist of and which questions `setup` still needs answered when the module is
 switched on (the public URL of LocalAI and of Qdrant, the relay's mail server) come from the core's
 read-only `module-info`; deleting a module's data (its volumes) and/or its settings is the core's
 `module-purge`, offered only for a module that is switched off, with the module's name typed back
-as confirmation. Both are internal commands of the core's Python entry point, not `papaia-ctl`
+as confirmation. The files an operator wrote by hand for a module (the knowledge map's
+declarations, governance records and gold set) are neither data nor settings: they go only when
+`module-purge --operator-files` asks for them, a separate choice that is off by default. Both are internal commands of the core's Python entry point, not `papaia-ctl`
 verbs, and the manager passes them typed options only: one module, never `--force`, `--env` or any
 other part of the configuration. A core without them (before 1.6.0) still switches LocalAI and web
 search and switches modules off keeping everything.

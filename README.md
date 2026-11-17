@@ -56,9 +56,10 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
 | Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
+| Knowledge map | `knowledge-map` | — | An OIDC-secured MCP directory of the installation's knowledge sources: tells the chat where knowledge lives, trimmed to the caller's roles. Internal-only — see [docs/knowledge-map.md](docs/knowledge-map.md). |
 
-`localai`, `manager`, `librechat-websearch`, `rag`, `smtp` and `voice` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`). When LocalAI is enabled, setup also asks
+`localai`, `manager`, `librechat-websearch`, `rag`, `smtp`, `voice` and `knowledge-map` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`, `--knowledge-map`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
 The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
@@ -351,6 +352,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
 | `--voice` / `--no-voice` | _(prompted, default off)_ | Toggle the `voice` profile (the local [speech engines](#voice-local-speech)) |
 | `--voice-variant=cpu\|nvidia\|hipblas\|auto` | _(prompted while voice is on)_ | Which image the TTS engine runs on; `auto` probes the host like the LocalAI image choice |
+| `--knowledge-map` / `--no-knowledge-map` | _(prompted, default off)_ | Toggle the `knowledge-map` profile (the [knowledge map](docs/knowledge-map.md)); switching it on also generates its secrets on an installation set up before the module existed |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
 | `--smtp-security=MODE` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (no encryption and no login) |
@@ -478,7 +480,7 @@ link gateways last). `--node=NAME` stops one node; `--volumes` is not available 
 `--volumes` (only together with `--clean-up` and `--profiles`) also deletes the data of those
 profiles: `docker compose down --volumes` removes the named volumes of their services and the
 anonymous volumes of their containers (a Redis or Postgres image declares one). It is limited to
-the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`); the always-on services and
+the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`, `voice`, `knowledge-map`); the always-on services and
 the manager keep their data, and any other profile is refused before anything runs. A volume that
 a service of another profile still mounts is left in place by Compose.
 
@@ -494,12 +496,15 @@ they exist, what its settings consist of and the questions `setup` asks when the
 switched on (the public URL of LocalAI and of Qdrant: the `setup` option that takes the answer,
 the default derived from the stack's host and whether the question is still open), as JSON, and
 writes nothing; `module-purge
---module=NAME [--data] [--config]` removes the module's named volumes (by name, from the compose
+--module=NAME [--data] [--config] [--operator-files]` removes the module's named volumes (by name, from the compose
 files' own table of who mounts what; for a native LocalAI its `models/` and `backends/`
 directories instead, listed under `directories` by `module-info`) and/or puts its settings back
 to what the release ships (its
 `.env` files and the public URL kept in the root `.env`, plus the files it keeps outside them:
-the mail relay's password, the RAG catalog). A question is open when its stored URL is empty, a
+the mail relay's password, the RAG catalog, the rendered knowledge map). `--operator-files`
+deletes what the operator wrote by hand for the module (the knowledge map's declarations,
+overrides, governance records and gold set, listed under `operator_files` by `module-info`)
+and the rendered map built from them; neither `--data` nor `--config` touches these files. A question is open when its stored URL is empty, a
 placeholder or the one the release ships, which is what the reset leaves, so a front end can ask it
 again before it switches the module on. A later `setup` run derives the URL from the stack's host
 again and closes the question.
@@ -1298,7 +1303,7 @@ from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the pr
 | **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and a configurable retention period. Backups can run on a schedule (every day, on chosen days, every few hours or a cron expression, in a timezone of choice), run by a scheduler inside the manager, so the host needs no cron job or systemd timer. |
 | **Users** (`/users`) | The accounts and the realm roles of the bundled Keycloak, without the Admin Console, for the identity role `papaia-admin` only (see [Access control](#access-control)). Create an account with a temporary password or a mailed link, enable or disable it, change its roles, reset its password, and view and end its sessions. The *Roles* tab lists the realm roles, creates and changes them and deletes one after showing who holds it; the roles the stack ships stay as they are. The page acts with the signed-in account's own Keycloak rights, so it needs a core whose realm gives `papaia-admin` the user and role administration rights (1.6.0 or newer; [ADR 0006](docs/adr/0006-manage-accounts-with-the-signed-in-users-token.md)). It does not exist where the accounts live in an external identity provider. |
 | **Mail** (`/mail`) | Two tabs under *System*, for administrators. *Notifications* lets recipients (an email address or a webhook URL) choose which events they receive: a failed job, an overdue backup, a service that stopped or turned unhealthy, an available update and an expiring certificate; each event is reported once per occurrence and a webhook URL is never shown again after it is saved. *Mail Server* sets up the stack's outbound relay: the mail server behind it (host, connection security, port, login, write-only password, sender), a connection test that sends nothing, a test mail through the relay and the length of its queue. Saving is a queued job that runs the core's own `setup`; the relay itself needs the `smtp` profile ([Outbound mail](#outbound-mail), 1.6.0 or newer), and the page says so on an older core. |
-| **Settings** | The manager's own configuration in three tabs. *Manager*: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. *Modules*: the one place that switches the optional modules (LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off; it asks what `papaia-ctl setup` asks where an answer is missing, and switching one off asks whether to keep its data and settings, delete the data, or delete both (the module's name has to be typed to delete). *Overlay*: edits the customer [overlay](#configuration--render-lifecycle) files for LibreChat, LiteLLM and SearXNG with a syntax check while typing, the effective result as a diff and **Apply** as a queued job that recreates the services reading the file; the previous version of every file is kept (the latest 20) and restored from a *Versions* tab. Switching on the RAG system and the mail relay, deleting a module's data or settings and the effective-result diff need a core with the module operations and `render-preview` (1.6.0 or newer); an older core still switches LocalAI and web search and switches modules off, keeping everything. |
+| **Settings** | The manager's own configuration in three tabs. *Manager*: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. *Modules*: the one place that switches the optional modules (LocalAI with its accelerator variant, web search, the RAG system, voice, the mail relay and the knowledge map) on and off; it asks what `papaia-ctl setup` asks where an answer is missing, and switching one off asks whether to keep its data and settings, delete the data, or delete both (the module's name has to be typed to delete); for the knowledge map a separate choice, off by default, also deletes the operator files. *Overlay*: edits the customer [overlay](#configuration--render-lifecycle) files for LibreChat, LiteLLM and SearXNG with a syntax check while typing, the effective result as a diff and **Apply** as a queued job that recreates the services reading the file; the previous version of every file is kept (the latest 20) and restored from a *Versions* tab. Switching on the RAG system and the mail relay, deleting a module's data or settings and the effective-result diff need a core with the module operations and `render-preview` (1.6.0 or newer); an older core still switches LocalAI and web search and switches modules off, keeping everything. |
 | **Language** | The interface is in English and German. Every account chooses *Automatic*, *English* or *Deutsch* in the account menu at the bottom of the sidebar; the choice is stored on the server by the account's OIDC subject (`preferences.yaml`, part of a backup), so it is the same on every computer. *Automatic* follows the browser's language and falls back to `MANAGER_DEFAULT_LOCALE` in `src/manager/.env` (English unless set). Log lines, the audit log, job logs and the emails and webhooks of notifications stay in English. |
 
 ### Catalogues
