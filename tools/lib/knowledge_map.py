@@ -14,9 +14,12 @@ merge cannot express. Operator knowledge joins as the last layer through
 augment generated entries, they never fork them.
 
 Validation here is the intake control of the map: entries are model-facing
-text, so free-text fields are scanned for instruction-injection patterns and
-a hit refuses the render. Softer findings (two sources sharing a topic
-without mutual delimitation) are returned as warnings.
+text, so free-text fields are scanned for instruction-injection patterns. A
+hit keeps that entry off the map and is reported in lints.yaml; it does not
+stop the render, because the patterns are a heuristic and an optional
+profile must not block `start` for the whole installation. Softer findings
+(two sources sharing a topic without mutual delimitation) are returned as
+warnings.
 
 Governance metadata (ADR 0016) comes from a separate operator file; only the
 effective handling enums reach a manifest, the rest feeds policy findings in
@@ -58,6 +61,12 @@ GOVERNANCE_REL_PATH = "overlay/knowledge-map/governance.yaml"
 GOLDSET_REL_PATH = "overlay/knowledge-map/goldset.yaml"
 LIBRECHAT_CONFIG_REL_PATH = "ai/librechat/librechat.yaml"
 LIBRECHAT_ENV_REL_PATH = "ai/librechat/.env"
+# Where relative LIBRECHAT_AGENTS_DIR values point: Compose resolves the bind
+# mount against the directory of the LibreChat compose file in the checkout.
+LIBRECHAT_MODULE_REL_PATH = "src/ai/librechat"
+# Agents shipped by add-ons, as render_core writes them before the map is
+# rendered (render_core.LIBRECHAT_ADDON_CONTENT; a test keeps both in step).
+ADDON_AGENTS_REL_PATH = "ai/librechat/addon-agents"
 LINTS_FILE = "lints.yaml"
 
 # The map's own server is not a knowledge source.
@@ -110,10 +119,12 @@ _INTERNAL_KEYS = ("governance_proposal", "chat_menu", "static_credentials", "mod
 # leading dots, absolute paths) could escape the map directory on write.
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)*$")
 
-# Model-facing text is an injection surface. These patterns cover the known
+# Model-facing text is an injection surface. These patterns cover the common
 # attack shapes (hidden instruction blocks, instruction overrides, zero-width
-# smuggling); a hit is an error, not a warning — an attacker-shaped entry must
-# never reach a rendered map.
+# smuggling). They are a heuristic: a reworded instruction can pass and
+# ordinary wording can hit. A hit keeps the entry off the map (an
+# attacker-shaped entry must never reach a rendered map) and becomes a
+# finding in lints.yaml; it does not stop the render.
 _INJECTION_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"<\s*/?\s*(important|system|instructions?)\s*>", re.IGNORECASE),
     re.compile(
@@ -126,13 +137,18 @@ _INJECTION_PATTERNS: tuple[re.Pattern, ...] = (
     # ZWSP, word joiner, BOM. ZWNJ/ZWJ are deliberately NOT matched — they
     # are orthographically required in Persian/Indic text and part of every
     # composed emoji sequence.
-    re.compile("[​⁠﻿]"),
+    re.compile("[\u200b\u2060\ufeff]"),
     re.compile(r"<\|[a-z_]+\|>", re.IGNORECASE),
 )
 
 
 class KnowledgeMapError(Exception):
     """A declaration the map must not accept (duplicate id, injection, …)."""
+
+
+class InjectionPatternError(KnowledgeMapError):
+    """Model-facing text of one entry matches an injection pattern. Callers
+    keep that entry (or override) off the map and go on rendering the rest."""
 
 
 def _load_yaml(path: Path) -> dict:
@@ -199,10 +215,10 @@ def _scan_for_injection(entry: dict, origin: str) -> None:
     for field, text in _string_fields(entry):
         for pattern in _INJECTION_PATTERNS:
             if pattern.search(text):
-                raise KnowledgeMapError(
+                raise InjectionPatternError(
                     f"{origin}: field {field!r} of source "
                     f"{entry.get('id', '?')!r} matches an instruction-injection "
-                    f"pattern; refusing to render it into the map"
+                    f"pattern"
                 )
 
 
@@ -394,21 +410,37 @@ def collect_sources(
     config_dir: Path,
     active_profiles: set[str],
     active_addons: list[dict],
+    rejected: list[dict] | None = None,
 ) -> tuple[dict[str, dict], list[str]]:
     """All declared sources by id, plus soft warnings.
 
     Precedence per source id: module/add-on declaration, then the operator
     override. Two declarations claiming the same id are an error — identity
-    must stay unambiguous, silence would hide a squatting attempt."""
+    must stay unambiguous, silence would hide a squatting attempt.
+
+    A declaration or override whose text matches an injection pattern is left
+    out with a warning, and appended to `rejected` (id, origin, message) for
+    the lints, instead of stopping the render."""
     entries: dict[str, dict] = {}
     origins: dict[str, str] = {}
+    rejection_warnings: list[str] = []
+
+    def _reject(source_id: str, origin: str, message: str) -> None:
+        rejection_warnings.append(f"knowledge map: {message}")
+        if rejected is not None:
+            rejected.append({"id": source_id, "origin": origin, "message": message})
 
     def _add(sources: list, origin: str) -> None:
         for raw in sources or []:
             if not isinstance(raw, dict):
                 raise KnowledgeMapError(f"{origin}: knowledge source must be a mapping")
             entry = dict(raw)
-            _validate_entry(entry, origin)
+            try:
+                _validate_entry(entry, origin)
+            except InjectionPatternError as exc:
+                _reject(str(entry.get("id", "?")), origin,
+                        f"{exc}; the entry is left off the map")
+                continue
             source_id = str(entry["id"])
             if source_id in entries:
                 raise KnowledgeMapError(
@@ -463,7 +495,7 @@ def collect_sources(
             )
         _add(data.get("sources") or [], "operator")
 
-    inventory_warnings = _add_inventory(config_dir, entries)
+    inventory_warnings = _add_inventory(config_dir, repo_root, entries)
 
     override_warnings: list[str] = list(inventory_warnings)
     overridden_fields: dict[str, set[str]] = {}
@@ -514,13 +546,19 @@ def collect_sources(
                     f"not change the id (found {override['id']!r})"
                 )
             merged = _merge_override(entries[source_id], override)
-            _validate_entry(merged, f"{OVERRIDES_REL_PATH}:{source_id}")
+            where = f"{OVERRIDES_REL_PATH}:{source_id}"
+            try:
+                _validate_entry(merged, where)
+            except InjectionPatternError as exc:
+                # The declared entry stays as it was; only the override goes.
+                _reject(source_id, where, f"{exc}; the override is ignored")
+                continue
             merged.setdefault("provenance", {})["overridden"] = True
             entries[source_id] = merged
             overridden_fields[source_id] = set(override)
 
     _inherit_inventory_roles(entries, overridden_fields)
-    return entries, override_warnings + _collision_warnings(entries)
+    return entries, rejection_warnings + override_warnings + _collision_warnings(entries)
 
 
 def _is_inventoried(entry: dict) -> bool:
@@ -533,8 +571,9 @@ def _role_list(value) -> list[str]:
 
 def _paths_into(entries: dict[str, dict]) -> dict[str, list[tuple[str, list[str]]]]:
     """Server name -> (declared entry id, roles seeing that entry over the
-    path) for every mcp/rag path of a declared source or reference. The roles
-    are the entry's plus the path's own; empty means open."""
+    path) for every mcp/rag path of a declared source or reference. A path
+    narrows: where it names its own roles, those decide who reaches the
+    server over it; otherwise the entry's roles do. Empty means open."""
     into: dict[str, list[tuple[str, list[str]]]] = {}
     for entry_id, entry in entries.items():
         if _is_inventoried(entry) or entry.get("kind", "source") not in ("source", "reference"):
@@ -542,9 +581,7 @@ def _paths_into(entries: dict[str, dict]) -> dict[str, list[tuple[str, list[str]
         entry_roles = _role_list(entry.get("required_roles"))
         for path in _entry_paths(entry):
             if path.get("via", "mcp") in ("mcp", "rag") and path.get("target"):
-                roles = entry_roles + [
-                    r for r in _role_list(path.get("required_roles")) if r not in entry_roles
-                ]
+                roles = _role_list(path.get("required_roles")) or entry_roles
                 into.setdefault(str(path["target"]), []).append((entry_id, roles))
     return into
 
@@ -636,15 +673,29 @@ def librechat_servers(config_dir: Path) -> dict[str, dict] | None:
     return {str(k): v if isinstance(v, dict) else {} for k, v in servers.items()}
 
 
-def _agents_dir(config_dir: Path) -> Path | None:
+def _agents_dir(config_dir: Path, repo_root: Path) -> Path | None:
     env = common.parse_env_file(config_dir / LIBRECHAT_ENV_REL_PATH)
     raw = (env.get("LIBRECHAT_AGENTS_DIR") or "").strip()
     if not raw:
         return None
     path = Path(raw)
     # Relative paths resolve like the compose bind mount does: against the
-    # module directory that holds the compose file.
-    return path if path.is_absolute() else config_dir / "ai/librechat" / path
+    # directory of the LibreChat compose file in the checkout.
+    return path if path.is_absolute() else repo_root / LIBRECHAT_MODULE_REL_PATH / path
+
+
+def _inventory_id(prefix: str, name: str, entries: dict[str, dict]) -> str:
+    """`<prefix>.<slug>` for an inventoried entry. A declared entry with that
+    id wins (the caller warns). Another inventoried entry with the same slug
+    (`Docs Hub` and `docs-hub`) gets a numbered id instead of being dropped, so
+    the map still knows every connected server and agent."""
+    base = f"{prefix}.{_slug(name)}"
+    if base not in entries or not _is_inventoried(entries[base]):
+        return base
+    number = 2
+    while f"{base}-{number}" in entries:
+        number += 1
+    return f"{base}-{number}"
 
 
 def _inventory_entry(entry: dict, entries: dict[str, dict], origin: str) -> str | None:
@@ -708,10 +759,11 @@ def _has_static_credentials(cfg: dict) -> bool:
     return False
 
 
-def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
-    """Every connected MCP server and every provisioned chat agent becomes an
-    entry, so the map knows everything a caller could reach — otherwise its
-    'not available' would be a lie whenever an undeclared server exists."""
+def _add_inventory(config_dir: Path, repo_root: Path, entries: dict[str, dict]) -> list[str]:
+    """Every connected MCP server and every provisioned chat agent (from
+    LIBRECHAT_AGENTS_DIR and from add-ons) becomes an entry, so the map knows
+    everything a caller could reach — otherwise its 'not available' would be a
+    lie whenever an undeclared server exists."""
     warnings: list[str] = []
     servers = librechat_servers(config_dir)
     declared = _declared_targets(entries)
@@ -720,7 +772,7 @@ def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
             continue
         description = " ".join(str(cfg.get("description") or "").split())
         entry = {
-            "id": f"mcp.{_slug(name)}",
+            "id": _inventory_id("mcp", name, entries),
             "kind": "mcp",
             "system": str(cfg.get("title") or name),
             "coverage": description[:500],
@@ -735,8 +787,13 @@ def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
         if warning:
             warnings.append(warning)
 
-    agents_dir = _agents_dir(config_dir)
-    if agents_dir is not None and agents_dir.is_dir():
+    agent_dirs = (
+        (_agents_dir(config_dir, repo_root), "inventory:librechat-agents"),
+        (config_dir / ADDON_AGENTS_REL_PATH, "inventory:librechat-addon-agents"),
+    )
+    for agents_dir, origin in agent_dirs:
+        if agents_dir is None or not agents_dir.is_dir():
+            continue
         for path in sorted(agents_dir.glob("*.y*ml")):
             try:
                 data = _load_yaml(path)
@@ -747,7 +804,7 @@ def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
                 continue
             uses = [str(m) for m in data.get("mcpServers") or [] if str(m) != SELF_SERVER]
             entry = {
-                "id": f"agent.{_slug(str(data['id']))}",
+                "id": _inventory_id("agent", str(data["id"]), entries),
                 "kind": "agent",
                 "system": str(data.get("name") or data["id"]),
                 "coverage": " ".join(str(data.get("description") or "").split())[:500],
@@ -759,7 +816,7 @@ def _add_inventory(config_dir: Path, entries: dict[str, dict]) -> list[str]:
                     "provider": str(data.get("provider") or "") or None,
                     "name": str(data["model"]),
                 }
-            warning = _inventory_entry(entry, entries, "inventory:librechat-agents")
+            warning = _inventory_entry(entry, entries, origin)
             if warning:
                 warnings.append(warning)
     return warnings
@@ -1558,8 +1615,9 @@ def render(
     Runs only while the knowledge-map profile is active (the caller gates), so
     a lean installation renders nothing new. `today` dates the governance
     exception expiry check (injectable for tests)."""
+    rejected: list[dict] = []
     entries, warnings = collect_sources(
-        repo_root, config_dir, active_profiles, active_addons
+        repo_root, config_dir, active_profiles, active_addons, rejected=rejected
     )
     governance = load_governance(config_dir)
     today = today if today is not None else date.today()
@@ -1598,28 +1656,7 @@ def render(
             manifest_dir / f"{source_id}.yaml",
             yaml.safe_dump(entry, sort_keys=False, allow_unicode=True),
         )
-        first_hint = None
-        not_covered = entry.get("not_covered") or []
-        if not_covered and isinstance(not_covered[0], dict):
-            first_hint = {
-                "what": not_covered[0].get("what"),
-                "instead": not_covered[0].get("instead"),
-            }
-        index_sources.append(
-            {
-                # `or` instead of dict defaults: an explicit YAML null must
-                # not become None / the literal string "None" in the index.
-                "id": source_id,
-                "kind": entry.get("kind") or "source",
-                "system": entry.get("system") or source_id,
-                "coverage": str(entry.get("coverage") or "").split("\n")[0][:200],
-                "topics": [
-                    (t.get("label") or t.get("id") or "") if isinstance(t, dict) else t
-                    for t in entry.get("topics") or []
-                ],
-                "not_covered_hint": first_hint,
-            }
-        )
+        index_sources.append(_index_row(source_id, entry))
 
     # Prune manifests of sources no longer declared: a removed add-on must
     # take its map entry with it, or the map routes into a void. A render that
@@ -1635,10 +1672,17 @@ def render(
         warnings.append(
             f"knowledge map: this render would remove {len(vanished)} of "
             f"{len(existing_before)} entries — kept them; check the add-on and "
-            f"chat configuration. If the removal is intended, render again: an "
-            f"identical second render prunes."
+            f"chat configuration. If the removal is intended, render again (the "
+            f"next setup, start or addon command does): an identical result "
+            f"prunes."
         )
         _write_prune_marker(map_dir, vanished)
+        # The kept manifests stay servable, so the index lists them too.
+        for name in vanished:
+            kept = _read_manifest(manifest_dir / name)
+            if kept is not None:
+                index_sources.append(_index_row(name.removesuffix(".yaml"), kept))
+        index_sources.sort(key=lambda row: row["id"])
     else:
         for name in vanished:
             (manifest_dir / name).unlink(missing_ok=True)
@@ -1650,6 +1694,7 @@ def render(
             {
                 "generated_at": generated_at,
                 "findings": lint(entries, librechat_servers(config_dir))
+                + _rejection_findings(rejected)
                 + governance_lint(entries, governance, today),
                 "warnings": warnings,
                 # Add-on suggestions for the management view ("suggested by
@@ -1680,6 +1725,48 @@ def render(
         ),
     )
     return warnings
+
+
+def _index_row(source_id: str, entry: dict) -> dict:
+    """One compact index.yaml row of a manifest."""
+    first_hint = None
+    not_covered = entry.get("not_covered") or []
+    if not_covered and isinstance(not_covered[0], dict):
+        first_hint = {
+            "what": not_covered[0].get("what"),
+            "instead": not_covered[0].get("instead"),
+        }
+    return {
+        # `or` instead of dict defaults: an explicit YAML null must
+        # not become None / the literal string "None" in the index.
+        "id": source_id,
+        "kind": entry.get("kind") or "source",
+        "system": entry.get("system") or source_id,
+        "coverage": str(entry.get("coverage") or "").split("\n")[0][:200],
+        "topics": [
+            (t.get("label") or t.get("id") or "") if isinstance(t, dict) else t
+            for t in entry.get("topics") or []
+        ],
+        "not_covered_hint": first_hint,
+    }
+
+
+def _read_manifest(path: Path) -> dict | None:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _rejection_findings(rejected: list[dict]) -> list[dict]:
+    """Entries or overrides kept off the map because their text matched an
+    injection pattern. `high`: the map no longer knows that source, so its
+    answers about it can be wrong."""
+    return [
+        _finding("high", "injection_pattern", item["id"], item["message"], "quality")
+        for item in rejected
+    ]
 
 
 _PRUNE_MARKER = ".pending-prune"

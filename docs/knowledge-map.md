@@ -4,7 +4,7 @@ The knowledge map answers the question every multi-source assistant gets wrong
 first: **where** does the requested knowledge live? It is a small, generated
 directory of the installation's knowledge sources — what each system covers,
 what it explicitly does *not*, who may see it, and which MCP tools reach it —
-served to the chat layer by `knowledge-map-mcp` as three tools:
+served to the chat layer by `knowledge-map-mcp` through these tools:
 
 | Tool | Purpose |
 |---|---|
@@ -18,14 +18,15 @@ served to the chat layer by `knowledge-map-mcp` as three tools:
 The server also offers the resource `knowledge-map://index` (the compact
 index for a system prompt), the prompt `navigator` (the working rules), and
 the same functions as REST under `/api/v1/` for callers without MCP — always
-with the user's token. How another assistant integrates is described in the
-`papaia-knowledge-map` repository.
+with the user's access token, whose audience must be `mcp-knowledge-map` (or
+one of `KM_EXTRA_AUDIENCES`). Another assistant integrates the same way: an
+MCP client or REST caller that forwards the user's token.
 
 Design decisions and their rationale: [ADR 0013](adr/0013-knowledge-map-as-optional-core-profile.md)
 (profile) and [ADR 0014](adr/0014-knowledge-manifest-key-and-map-format.md)
 (declaration format), [ADR 0015](adr/0015-knowledge-map-inventory-kinds-and-access-paths.md)
 (inventory and access paths) and [ADR 0016](adr/0016-knowledge-map-governance-metadata.md)
-(governance metadata). Server internals: the `papaia-knowledge-map` repository.
+(governance metadata).
 
 ## Enabling
 
@@ -56,7 +57,9 @@ Nothing on the map is hand-maintained in place. Entries are rendered on every
   collected while their profile is active.
 - **Inventory** — every MCP server in the merged LibreChat configuration
   becomes an entry of kind `mcp`, every agent file in `LIBRECHAT_AGENTS_DIR`
-  one of kind `agent`. A server that no declared source reaches is marked
+  and every agent an add-on ships one of kind `agent`. Two servers or agents
+  whose names give the same id (`Docs Hub`, `docs-hub`) get numbered ids
+  (`mcp.docs-hub`, `mcp.docs-hub-2`). A server that no declared source reaches is marked
   *undeclared*: the map then knows it exists, so it never claims that
   information is unavailable while such a server is connected.
 - **Operator declarations** — `$PAPAIA_CONFIG_DIR/overlay/knowledge-map/sources.yaml`
@@ -118,9 +121,21 @@ Each render writes `knowledge-map/lints.yaml` with what weakens the map —
 undeclared servers, paths to servers that are not connected, dangling
 references, sources without negative knowledge or examples, undelimited
 shared topics — plus the governance findings described below, all shown
-on the management page. A render that would remove
-more than half of a map with at least four entries keeps the old manifests
-and warns; render again to confirm an intended removal.
+on the management page.
+
+Map entries are model-facing text, so every string of a declaration or
+override is scanned for instruction-injection patterns. The scan is a
+heuristic: it catches the common shapes, a reworded instruction can pass,
+and ordinary wording can hit. A hit keeps that entry (or that override) off
+the map and shows up as an `injection_pattern` finding; it does not stop
+`setup`, `start` or an `addon` command. Rephrase the text to bring the
+entry back.
+
+A render that would remove more than half of a map with at least four
+entries keeps the old manifests (and lists them in the index) and warns.
+The next render with the same result confirms the removal — and every
+`setup`, `start` and `addon` command renders, so check the warning before
+running the next one.
 
 Installing an add-on adds its entries, removing it prunes them — the map
 cannot disagree with what is deployed. Each rendered manifest carries a
@@ -157,8 +172,9 @@ stub instead of a confusing miss.
 
 Inventoried entries inherit visibility from what they reach, so a hidden
 source cannot leak through them: a server entry that is an access path of
-declared sources gets the union of those sources' `required_roles` (entry
-and path level) and stays `hidden` unless every one of them acknowledges; an
+declared sources gets the union of the roles that may use those paths — a
+path's own `required_roles` where it names any, otherwise its source's —
+and stays `hidden` unless every one of them acknowledges; an
 agent entry gets the union over the sources it reaches through its servers.
 As soon as one of them is open (no roles), the inventoried entry is open too;
 an undeclared server reaches nothing declared and stays open. An explicit
@@ -341,10 +357,25 @@ During an embedding outage the server keeps answering with a lexical fallback
 `KM_LEXICAL_ABSTENTION_THRESHOLD`) instead of erroring out or abstaining on
 everything.
 
-Calibrate both against a gold set of real questions with expected sources; the
-`papaia-knowledge-map` repository ships the format and an evaluation runner.
-Keep the gold set in `overlay/knowledge-map/goldset.yaml`; the service reads
-it for evaluation runs and to counter-check refinement suggestions. It is the
+Calibrate both against a gold set of real questions with expected sources:
+
+```yaml
+questions:
+  - q: "How does the on-call escalation work?"
+    kind: single          # exactly one correct source (scored as hit@k)
+    expect: [wiki.main]
+  - q: "Summarise customer Y: open tickets and unpaid invoices"
+    kind: multi           # all listed sources are needed
+    expect: [crm.main, erp.main]
+  - q: "What is the depreciation period for a heat pump?"
+    kind: abstention      # nothing mapped can answer; the map must abstain
+    expect: []
+```
+
+An item may also name the `roles` of the asking user. Keep the gold set in
+`overlay/knowledge-map/goldset.yaml`; the service reads it for evaluation
+runs, which the management page starts through the admin API
+(`KM_ADMIN_TOKEN`), and to counter-check refinement suggestions. It is the
 only operator file the service mounts — declarations, overrides and
 governance metadata stay on the host. The render creates an empty gold set
 (`questions: []`) when there is none.

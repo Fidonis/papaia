@@ -70,8 +70,9 @@ services:
       - ${PAPAIA_CONFIG_DIR}/overlay/knowledge-map/goldset.yaml:/overlay/goldset.yaml:ro
       # Routing telemetry (JSONL): raw material for the gold-set evaluation
       # and a later learned router. No caller identifiers (roles only as a
-      # hash), but need texts are stored verbatim — treat as potentially
-      # personal data.
+      # hash); need texts are kept as KM_LEARNING_MODE says (masked by
+      # default, verbatim with `full`) — treat as personal data unless the
+      # mode is `off`.
       - knowledge-map-telemetry:/telemetry
     healthcheck:
       test:

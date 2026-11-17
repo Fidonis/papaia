@@ -54,7 +54,8 @@ Ship the knowledge map as an **optional core profile `knowledge-map`**:
    its own render function, not a layered merge target in
    `BASE_RENDER_TARGETS`. Render-time validation covers the schema, id
    uniqueness, topic collisions without mutual delimitation, and an
-   instruction-injection scan over all free-text fields.
+   instruction-injection scan over all free-text fields; a hit keeps the
+   entry off the map and is reported, it does not stop the render.
 2. **A map MCP server** (`knowledge-map-mcp`, shipped as
    `ghcr.io/fidonis/papaia-knowledge-map`) exposes `find_knowledge_source`,
    `describe_source` and `list_topics` over streamable HTTP. Auth follows the

@@ -76,10 +76,12 @@ knowledge:
   overrides.yaml`, merged per source id as the last layer — manual knowledge
   augments generated entries, it never forks them.
 
-Render-time validation rejects duplicate ids, unknown `on_denied` values and
-instruction-injection patterns in free-text fields (a map entry is model-facing
-text and therefore an injection surface), and warns when two sources share a
-topic without mutual `not_covered`/`source_of_truth_for` delimitation.
+Render-time validation rejects duplicate ids and unknown `on_denied` values,
+keeps entries whose free text matches an instruction-injection pattern off the
+map (a map entry is model-facing text and therefore an injection surface; the
+patterns are a heuristic, so a hit is reported as a finding instead of stopping
+the render), and warns when two sources share a topic without mutual
+`not_covered`/`source_of_truth_for` delimitation.
 
 ### Semantics
 
