@@ -61,7 +61,15 @@ _SURFACE_CHANGED = (
 # `ai/voice/chatterbox.yaml` is a render target add-ons may layer fragments
 # onto. Nothing existing changed, so `min` stays 1; add-ons that attach the
 # engines or layer that target declare `requires.addon_api: 5`.
-ADDON_API_WINDOW = (1, 5)
+#
+# Gen 6 (additive): the `knowledge` manifest key (ADR 0014) lets an add-on declare
+# the knowledge sources it contributes to the knowledge-map profile (ADR 0013).
+# Older cores ignore the key, so `min` stays 1; add-ons that declare it include 6
+# in `requires.addon_api` to document the dependency. Note the gate's any-match
+# semantics: an add-on listing [2, 6] still installs on a gen-2..5 core (the 2
+# matches), which is wanted here because the key is additive — a core below
+# gen 6 simply renders no map entry for it.
+ADDON_API_WINDOW = (1, 6)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -73,6 +81,7 @@ ATTACHABLE_SERVICES = {
     "firecrawl-redis": ["librechat-websearch"],
     "jina-reranker-api": ["librechat-websearch"],
     "keycloak": ["keycloak"],
+    "knowledge-map-mcp": ["knowledge-map"],
     "keycloak-postgres": ["keycloak"],
     "librechat": ["librechat"],
     "librechat-meilisearch": ["librechat"],
@@ -148,6 +157,9 @@ MANIFEST_KEYS = [
     # Display only: printed after the core's own steps in the install checklist. An older
     # core ignores the key and an add-on has nothing to gate on, so no ADDON_API bump.
     "install_notes",
+    # Since addon_api 6: declares the knowledge sources an add-on contributes to the
+    # knowledge-map profile (ADR 0014). Read by knowledge_map.collect_sources.
+    "knowledge",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -163,6 +175,7 @@ SECRET_ALIASES = {
         ("ai/jinaai", "LITELLM_API_KEY"),
         ("ai/rag", "QDRANT_MCP_EMBEDDING_API_KEY"),
         ("ai/rag", "QI_EMBEDDING_API_KEY"),
+        ("ai/knowledge-map", "KM_EMBEDDING_API_KEY"),
     ],
     ("ai/jinaai", "JINAAI_RERANKER_API_KEY"): [("ai/librechat", "JINA_API_KEY")],
     ("ai/localai", "LOCALAI_API_KEY"): [("ai/litellm", "LOCALAI_API_KEY")],
@@ -206,4 +219,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 19, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 20, _SURFACE_CHANGED

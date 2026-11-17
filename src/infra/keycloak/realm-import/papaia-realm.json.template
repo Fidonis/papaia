@@ -184,6 +184,18 @@
             "access.token.claim": "true",
             "introspection.token.claim": "true"
           }
+        },
+        {
+          "name": "mcp-knowledge-map-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "mcp-knowledge-map",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
         }
       ]
     },
@@ -406,6 +418,19 @@
       "clientId": "mcp-qdrant-ingest",
       "name": "MCP Qdrant Ingest",
       "description": "OIDC resource server of qdrant-ingest (profile rag) — validates forwarded LibreChat user tokens; no login flows",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false
+    },
+    {
+      "clientId": "mcp-knowledge-map",
+      "name": "MCP Knowledge Map",
+      "description": "OIDC resource server of knowledge-map-mcp (profile knowledge-map) — validates forwarded LibreChat user tokens; no login flows",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,

@@ -194,6 +194,13 @@ CATALOGUE: dict[str, ServiceSpec] = {
             start_group=2,
         ),
         ServiceSpec(
+            "knowledge-map",
+            "Knowledge map",
+            ("knowledge-map",),
+            ("ai/knowledge-map",),
+            start_group=2,
+        ),
+        ServiceSpec(
             "smtp",
             "SMTP relay",
             ("smtp",),
@@ -212,9 +219,10 @@ CATALOGUE: dict[str, ServiceSpec] = {
 }
 
 # Services that must run where the configuration tree is: the manager mounts the whole
-# config dir and the Docker socket of the host that runs `papaia-ctl`, and the RAG
-# ingester keeps its catalogue and the operator's documents inside the config dir.
-CONTROLLER_ONLY = ("manager", "rag")
+# config dir and the Docker socket of the host that runs `papaia-ctl`, the RAG
+# ingester keeps its catalogue and the operator's documents inside the config dir,
+# and knowledge-map-mcp reads the rendered map from it.
+CONTROLLER_ONLY = ("manager", "rag", "knowledge-map")
 
 # The bundled reverse proxy. Its profile, not the `nginx` service, says whether it runs.
 PROXY_PROFILE = "nginx"

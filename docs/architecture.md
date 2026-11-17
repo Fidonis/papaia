@@ -100,6 +100,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
 | Mail | `smtp-relay`, a Postfix relay (opt-in, profile `smtp`) that holds the mail server's credentials once; Keycloak and the add-ons that attach it send through it without any — see [ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md) |
 | RAG | Qdrant, `qdrant-mcp-rbac` and `qdrant-ingest` (opt-in, profile `rag`) — retrieval is a capability of the chat layer that an installation either wants or does not; see [ADR 0004](adr/0004-rag-system-as-optional-core-profile.md) |
+| Knowledge map | `knowledge-map-mcp` (opt-in, profile `knowledge-map`) — a role-trimmed MCP directory of the installation's knowledge sources, rendered from the `knowledge:` declarations of active add-ons and core modules; see [ADR 0013](adr/0013-knowledge-map-as-optional-core-profile.md) / [ADR 0014](adr/0014-knowledge-manifest-key-and-map-format.md) / [ADR 0016](adr/0016-knowledge-map-governance-metadata.md) (governance metadata) and [docs/knowledge-map.md](knowledge-map.md) |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
 points** — no hard-wired application references. The Core is **self-sufficient**:
@@ -281,6 +282,23 @@ actions:                           # optional (addon_api 4): maintenance actions
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
   - "Set MW_SERVER in the add-on .env when the wiki is not on the default URL."
+
+knowledge:                         # optional (addon_api 6): the knowledge sources
+  sources:                         # this add-on contributes to the knowledge-map
+    - id: <name>.<source>          # profile — see ADR 0014/0015 and
+      system: "<human name>"       # docs/knowledge-map.md for the full field
+      coverage: "<what is here>"   # reference. Rendered only while the
+      not_covered:                 # knowledge-map profile is active; older
+        - { what: "<content class>", instead: <other-source-id> }  # cores ignore it.
+      example_queries: ["..."]
+      required_roles: [user]
+      access:                      # one entry per way to reach the source
+        - { via: mcp, target: <name>, key_tools: [...], best_for: "..." }
+        - { via: rag, target: Qdrant, collection: <name>, best_for: "..." }
+      governance_proposal:         # optional suggestion, never effective on its own;
+        classification: internal   # the operator decides in governance.yaml (ADR 0016)
+        personal_data: ordinary
+        data_subjects: [employees]
 ```
 
 #### `.env.example` value markers

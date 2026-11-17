@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import sys
@@ -29,7 +30,9 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, deployment, keycloak_role_sync, localai_native, smtp
+from . import common, deployment, keycloak_role_sync, knowledge_map, localai_native, smtp
+
+logger = logging.getLogger(__name__)
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -54,7 +57,11 @@ _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 # profile is active -- a stack without the RAG system must not list its MCP
 # servers in LibreChat. The fragments sit between the repo base and the add-on
 # layer.
-PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag", "voice": "src/ai/voice"}
+PROFILE_FRAGMENTS: dict[str, str] = {
+    "rag": "src/ai/rag",
+    "voice": "src/ai/voice",
+    "knowledge-map": "src/ai/knowledge-map",
+}
 
 # LiteLLM's configuration, which takes the generated model_list of the LocalAI models.
 LITELLM_CONFIG = "ai/litellm/config.yaml"
@@ -179,13 +186,16 @@ def _without_overridden(generated: list[dict], overlay) -> list[dict]:
     return [e for e in generated if e["model_name"] not in names]
 
 
-def _profile_layers(config_dir: Path) -> list[dict]:
-    """One add-on-shaped layer per active profile that ships fragments.
-
-    COMPOSE_PROFILES is read from the root .env, which is what compose itself
-    uses; deployment.yaml only mirrors it."""
+def _active_profiles(config_dir: Path) -> set[str]:
+    """COMPOSE_PROFILES is read from the root .env, which is what compose
+    itself uses; deployment.yaml only mirrors it."""
     raw = common.parse_env_file(config_dir / ".env").get("COMPOSE_PROFILES", "")
-    active = {p.strip() for p in raw.split(",") if p.strip()}
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _profile_layers(config_dir: Path) -> list[dict]:
+    """One add-on-shaped layer per active profile that ships fragments."""
+    active = _active_profiles(config_dir)
     return [{"path": path} for profile, path in PROFILE_FRAGMENTS.items() if profile in active]
 
 
@@ -206,6 +216,23 @@ def render(config_dir: Path, repo_root: Path) -> None:
 
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
+
+    # The knowledge map is a generated artifact like the baked realm, not a
+    # merge target; it is rendered only while its profile is active so a lean
+    # installation's output stays byte-identical.
+    profiles = _active_profiles(config_dir)
+    if "knowledge-map" in profiles:
+        try:
+            warnings = knowledge_map.render(
+                config_dir,
+                repo_root,
+                profiles,
+                deployment.active_addons(deployment.load(config_dir)),
+            )
+        except knowledge_map.KnowledgeMapError as exc:
+            raise RenderError(str(exc)) from exc
+        for warning in warnings:
+            logger.warning("%s", warning)
 
 
 # Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under

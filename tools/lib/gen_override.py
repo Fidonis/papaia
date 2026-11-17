@@ -218,6 +218,7 @@ _SSL_CERT_SERVICES = (
     "papaia-manager",
     "qdrant-mcp",
     "qdrant-ingest",
+    "knowledge-map-mcp",
 )
 
 
