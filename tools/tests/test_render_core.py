@@ -566,6 +566,60 @@ def test_an_overlay_only_model_yaml_is_rendered_and_registered(repo_root, config
     assert _model_names(config_dir) == ["my-model"]
 
 
+def test_a_model_yaml_removed_from_the_overlay_leaves_the_render(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    own = "name: my-model\nbackend: llama-cpp\nparameters:\n  model: my-model.gguf\n"
+    _localai_overlay(config_dir, "models/my-model.yaml", own)
+    _localai_overlay(config_dir, "models.txt", "https://example.org/files/my-model.gguf\n")
+    render_core.render(config_dir, repo_root)
+    rendered = config_dir / "ai" / "localai" / "models"
+    assert (rendered / "my-model.yaml").is_file()
+
+    (config_dir / "overlay" / "ai" / "localai" / "models" / "my-model.yaml").unlink()
+    render_core.render(config_dir, repo_root)
+
+    assert not (rendered / "my-model.yaml").exists()
+    shipped = {p.name for p in (repo_root / "src" / "ai" / "localai" / "models").glob("*.yaml")}
+    assert {p.name for p in rendered.glob("*.yaml")} == shipped
+    assert _model_names(config_dir) == []
+
+
+def test_an_overlay_copy_of_a_shipped_model_yaml_falls_back_to_the_shipped_one(
+    repo_root, config_dir
+):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    shipped = repo_root / "src" / "ai" / "localai" / "models" / "qwen2.5-1.5b-instruct.yaml"
+    _localai_overlay(config_dir, "models/qwen2.5-1.5b-instruct.yaml", "context_size: 4096\n")
+    render_core.render(config_dir, repo_root)
+    rendered = config_dir / "ai" / "localai" / "models" / "qwen2.5-1.5b-instruct.yaml"
+    assert yaml.safe_load(rendered.read_text())["context_size"] == 4096
+
+    (config_dir / "overlay" / "ai" / "localai" / "models" / "qwen2.5-1.5b-instruct.yaml").unlink()
+    render_core.render(config_dir, repo_root)
+
+    assert yaml.safe_load(rendered.read_text()) == yaml.safe_load(shipped.read_text())
+
+
+def test_only_model_yamls_are_removed_from_the_rendered_models(repo_root, config_dir):
+    """Files the init job never copies are not the render's to delete."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    rendered = config_dir / "ai" / "localai" / "models"
+    rendered.mkdir(parents=True)
+    for name in ("notes.txt", "model.gguf", "old.yml", ".hidden.yaml"):
+        (rendered / name).write_text("x", encoding="utf-8")
+    (rendered / "gone.yaml").write_text("name: gone\n", encoding="utf-8")
+    render_core.render(config_dir, repo_root)
+
+    assert not (rendered / "gone.yaml").exists()
+    for name in ("notes.txt", "model.gguf", "old.yml", ".hidden.yaml"):
+        assert (rendered / name).is_file(), name
+    assert (rendered / "stub.yaml").is_file()
+
+
 _NOT_UTF8 = b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00\xff\xfe\x89PNG\r\n\x1a\n"
 
 

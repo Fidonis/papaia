@@ -113,6 +113,13 @@ def _localai_model_files(directory: Path) -> list[Path]:
     )
 
 
+def _localai_model_names(repo_root: Path, config_dir: Path) -> set[str]:
+    """The names of the model YAMLs a render writes: shipped ones and overlay-only ones."""
+    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
+    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
+    return {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
+
+
 def _localai_model_configs(
     repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> list[dict]:
@@ -120,11 +127,8 @@ def _localai_model_configs(
     exist only in the overlay. Only the top-level `*.yaml`, which is all the init job copies
     (`cp /models-config/configs/*.yaml`), so a `.yml` is never registered without reaching
     LocalAI."""
-    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
-    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
-    names = {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
     configs = []
-    for name in sorted(names):
+    for name in sorted(_localai_model_names(repo_root, config_dir)):
         rel_path = f"{LOCALAI_MODELS_DIR}/{name}"
         text = _effective_text(rel_path, repo_root, config_dir, active_addons)
         if text is None:
@@ -550,6 +554,18 @@ def _render_dir(
         if not (src_root / sub_rel).is_file():
             text = _overlay_only_text(sub_rel, config_dir)
             common.atomic_write(config_dir / sub_rel, text)
+    _remove_stale_model_files(repo_root, config_dir)
+
+
+def _remove_stale_model_files(repo_root: Path, config_dir: Path) -> None:
+    """Delete the rendered model YAMLs that neither the repository nor the overlay has any
+    longer: an overlay-only model whose YAML was removed. The init job copies every YAML of
+    the rendered directory, so a leftover would keep the model in LocalAI."""
+    names = _localai_model_names(repo_root, config_dir)
+    for path in _localai_model_files(config_dir / LOCALAI_MODELS_DIR):
+        if path.name not in names:
+            path.unlink()
+            logger.info("removed %s/%s: no longer in the overlay", LOCALAI_MODELS_DIR, path.name)
 
 
 # Browser-facing URLs in the root .env. A stored URL counts even while its service is off:
