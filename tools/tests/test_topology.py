@@ -890,3 +890,8 @@ def test_a_native_localai_is_refused_in_a_distributed_installation():
 
 def test_the_runtime_override_belongs_to_the_core():
     assert "docker-compose.localai-runtime.override.yml" in topology.CORE_OVERRIDES
+
+
+def test_the_litellm_config_override_belongs_to_the_core():
+    """LiteLLM may run on another node; its label must travel with its configuration."""
+    assert "docker-compose.litellm-config.override.yml" in topology.CORE_OVERRIDES

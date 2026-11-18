@@ -1107,8 +1107,9 @@ Render targets: `ai/librechat/librechat.yaml` · `ai/litellm/config.yaml` +
 
 The same pass also bakes the Keycloak realm (substituting secrets into
 `realm-import/papaia-realm.json`) and regenerates the Compose overrides in `overrides/` — one
-per active add-on, attaching the core containers to that add-on's isolated bridge network.
-With no add-ons installed, no override files are produced.
+per active add-on, attaching the core containers to that add-on's isolated bridge network, and
+`docker-compose.litellm-config.override.yml`, which labels LiteLLM with a hash of its rendered
+configuration so that `start` recreates it when the configuration changes.
 
 **Directory layout of `$PAPAIA_CONFIG_DIR`** — it mirrors `src/`:
 
@@ -1807,13 +1808,13 @@ mkdir -p "$PAPAIA_CONFIG_DIR/overlay/ai/localai"
 cp src/ai/localai/models.txt "$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt"
 # uncomment e.g. the Qwen2.5-1.5B and nomic-embed-text lines, then
 tools/papaia-ctl start
-docker restart papaia-litellm-1   # the container name of your project
 ```
 
-`start` renders the new `model_list`, but LiteLLM reads its configuration only when it starts,
-and a running LiteLLM is not recreated for a changed configuration file. Restart it after every
-change of the list (and after any other edit of the LiteLLM overlay), as above; until then it
-lists the models it had.
+`start` renders the new `model_list`. LiteLLM reads its configuration only when it starts, so
+the rendered file's hash is a label of the `litellm` service
+(`overrides/docker-compose.litellm-config.override.yml`): `start` recreates LiteLLM whenever the
+configuration changed, after any other edit of the LiteLLM overlay too, and leaves it running
+when nothing changed.
 
 The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
 `<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
