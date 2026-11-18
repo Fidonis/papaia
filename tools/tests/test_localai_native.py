@@ -1277,7 +1277,9 @@ def test_switching_back_to_the_container_removes_the_job(
     assert fake.loaded and plist.is_file()
 
     assert _setup(papaia_repo, config_dir, "--localai-runtime=container") == 0
-    assert "Removed the launchd job of the native LocalAI" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Removed the launchd job of the native LocalAI" in err
+    assert "LocalAI runs in its container now" in err
     target = f"gui/{os.getuid()}/{LABEL}"
     assert fake.verbs()[-2:] == [f"bootout {target}", f"disable {target}"]
     assert not fake.loaded and fake.disabled
@@ -1318,6 +1320,92 @@ def test_start_removes_a_job_that_setup_could_not_reach(
     assert "Removed the launchd job" in out.err
     assert not fake.loaded and fake.disabled
     assert not plist.exists()
+
+
+def test_switching_localai_off_removes_the_job_and_says_so(
+    native_install, papaia_repo, config_dir, monkeypatch, capsys
+):
+    argv, _ = native_install
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    assert _cli(argv, "localai-native-start") == 0
+    capsys.readouterr()
+
+    assert _setup(papaia_repo, config_dir, "--enable-local-ai=false") == 0
+    err = capsys.readouterr().err
+    assert f"Removed the launchd job of the native LocalAI ({LABEL}): LocalAI is switched off." in (
+        err
+    )
+    assert "container" not in err
+    assert not fake.loaded and fake.disabled
+    assert not localai_native.plist_path(LABEL).exists()
+
+
+def _into_the_container(monkeypatch, tmp_path) -> None:
+    """papaia-manager's container: no launchd, and a home of its own without the plist."""
+    monkeypatch.setattr(common, "in_container", lambda: True)
+    monkeypatch.setattr(
+        localai_native, "launchd_host", lambda: (False, "papaia-ctl runs inside a container")
+    )
+    container_home = tmp_path / "container-home"
+    container_home.mkdir()
+    monkeypatch.setenv("HOME", str(container_home))
+
+
+@pytest.mark.parametrize(
+    "flag, reason",
+    [
+        ("--enable-local-ai=false", "LocalAI is switched off"),
+        ("--localai-runtime=container", "LocalAI runs in its container now"),
+    ],
+)
+def test_a_switch_from_a_container_warns_about_the_job_on_the_mac(
+    native_install, papaia_repo, config_dir, monkeypatch, capsys, tmp_path, flag, reason
+):
+    argv, _ = native_install
+    fake = FakeLaunchctl()
+    _fake_on(monkeypatch, fake)
+    assert _cli(argv, "localai-native-start") == 0
+    plist = localai_native.plist_path(LABEL)
+    capsys.readouterr()
+
+    _into_the_container(monkeypatch, tmp_path)
+    fake.calls.clear()
+    assert _setup(papaia_repo, config_dir, flag) == 0
+    err = capsys.readouterr().err
+    assert f"WARNING: {reason}, but the launchd job of the native LocalAI on the Mac" in err
+    assert "Run 'papaia-ctl stop' on the Mac" in err
+    assert "'papaia-ctl doctor'" in err
+    # Nothing was asked of launchctl, and the job on the Mac is untouched.
+    assert fake.calls == []
+    assert fake.loaded and plist.is_file()
+
+    # The switch warns once: a repeated setup and a start in the container stay quiet.
+    assert _setup(papaia_repo, config_dir, flag) == 0
+    assert "launchd job" not in capsys.readouterr().err
+    assert _cli(argv, "localai-native-install") == 0
+    out = capsys.readouterr()
+    assert out.out == "LOCALAI_NATIVE=off\n"
+    assert "launchd job" not in out.err
+
+    # Back on the Mac, start removes the job and names the reason.
+    monkeypatch.setattr(common, "in_container", lambda: False)
+    monkeypatch.setattr(localai_native, "launchd_host", lambda: (True, ""))
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    assert _cli(argv, "localai-native-install") == 0
+    assert f"Removed the launchd job of the native LocalAI ({LABEL}): {reason}." in (
+        capsys.readouterr().err
+    )
+    assert not fake.loaded and not plist.exists()
+
+
+def test_a_container_that_never_ran_native_says_nothing_about_launchd(
+    papaia_repo, config_dir, monkeypatch, capsys, tmp_path
+):
+    _into_the_container(monkeypatch, tmp_path)
+    assert _setup(papaia_repo, config_dir) == 0
+    assert _setup(papaia_repo, config_dir, "--enable-local-ai=false") == 0
+    assert "launchd" not in capsys.readouterr().err
 
 
 def test_setup_warns_when_the_home_is_in_a_protected_folder(tmp_path, monkeypatch, capsys):
