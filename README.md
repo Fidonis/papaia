@@ -1819,8 +1819,12 @@ The shipped YAMLs cover every line of the list. For a model of your own, put its
 `<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
 `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` and its URL in the overlay `models.txt`. Only
 the `*.yaml` files at the top of that directory are used, as the init job copies nothing else;
-other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `context_size`,
-`threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
+other files there (a `.yml`, a dotfile) are ignored. A YAML you delete from the overlay leaves
+the rendered directory on the next render, and the init job removes it from LocalAI's models
+directory on the next `start`: it records the YAMLs it installed in `.papaia-model-configs` there
+and removes nothing else, so the downloaded model file stays. Runtime settings such as
+`context_size`, `threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them
+under `parameters`.
 An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
 
 LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
