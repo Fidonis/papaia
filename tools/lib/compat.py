@@ -313,11 +313,14 @@ _ACTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 def addon_actions(manifest: dict) -> dict[str, dict]:
     """The `actions` block (addon_api 4) as {name: {service, args, description,
-    destructive}}.
+    destructive, on_uninstall}}.
 
     Each action names a service of the addon's own compose file and optional fixed
     string arguments; `destructive: true` asks callers such as papaia-manager to
-    confirm before running it. Raises ValueError for a malformed block."""
+    confirm before running it. `on_uninstall: true` (addon_api 7) marks the one
+    action `addon uninstall --clean-up` runs before the add-on's containers and
+    volumes go, so it can remove what the add-on wrote outside its own volumes.
+    Raises ValueError for a malformed block."""
     actions = manifest.get("actions")
     if actions is None:
         return {}
@@ -338,13 +341,32 @@ def addon_actions(manifest: dict) -> dict[str, dict]:
         destructive = spec.get("destructive", False)
         if not isinstance(destructive, bool):
             raise ValueError(f"actions.{name}.destructive must be true or false")
+        on_uninstall = spec.get("on_uninstall", False)
+        if not isinstance(on_uninstall, bool):
+            raise ValueError(f"actions.{name}.on_uninstall must be true or false")
         result[name] = {
             "service": spec["service"],
             "args": list(args),
             "description": description,
             "destructive": destructive,
+            "on_uninstall": on_uninstall,
         }
+    marked = [name for name, action in result.items() if action["on_uninstall"]]
+    if len(marked) > 1:
+        raise ValueError(
+            "actions: only one action may set on_uninstall, not "
+            + ", ".join(f"'{name}'" for name in marked)
+        )
     return result
+
+
+def uninstall_action(manifest: dict) -> tuple[str, dict] | None:
+    """The action `addon uninstall --clean-up` runs (`on_uninstall: true`) as
+    (name, action), or None. Raises ValueError for a malformed `actions` block."""
+    for name, action in addon_actions(manifest).items():
+        if action["on_uninstall"]:
+            return name, action
+    return None
 
 
 def required_addons(manifest: dict) -> list[tuple[str, str | None]]:

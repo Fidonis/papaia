@@ -416,10 +416,35 @@ def test_malformed_join_addons_is_a_manifest_error(join):
 def test_addon_actions_parses_and_defaults():
     actions = {"reset": {"service": "job", "args": ["--all"]}, "check": {"service": "job"}}
     manifest = {"actions": actions}
+    defaults = {"description": "", "destructive": False, "on_uninstall": False}
     assert compat.addon_actions(manifest) == {
-        "reset": {"service": "job", "args": ["--all"], "description": "", "destructive": False},
-        "check": {"service": "job", "args": [], "description": "", "destructive": False},
+        "reset": {"service": "job", "args": ["--all"], **defaults},
+        "check": {"service": "job", "args": [], **defaults},
     }
+
+
+def test_uninstall_action_is_the_one_marked_on_uninstall():
+    actions = {
+        "reset": {"service": "job"},
+        "purge": {"service": "job", "args": ["purge"], "on_uninstall": True},
+    }
+    name, action = compat.uninstall_action({"actions": actions})
+    assert name == "purge"
+    assert action["args"] == ["purge"]
+    assert action["on_uninstall"] is True
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {},
+        {"actions": {"reset": {"service": "job"}}},
+        {"actions": {"reset": {"service": "job", "on_uninstall": False}}},
+    ],
+)
+def test_without_a_marked_action_there_is_no_uninstall_action(manifest):
+    # Every manifest written before addon_api 7 lands here: nothing runs on uninstall.
+    assert compat.uninstall_action(manifest) is None
 
 
 @pytest.mark.parametrize(
@@ -431,6 +456,11 @@ def test_addon_actions_parses_and_defaults():
         {"reset": {"service": "job", "args": "x"}},
         {"reset": {"service": "job", "args": [1]}},
         {"reset": {"service": "job", "destructive": "yes"}},
+        {"purge": {"service": "job", "on_uninstall": "yes"}},
+        {
+            "purge": {"service": "job", "on_uninstall": True},
+            "wipe": {"service": "job", "on_uninstall": True},
+        },
     ],
 )
 def test_malformed_actions_are_a_manifest_error(actions):

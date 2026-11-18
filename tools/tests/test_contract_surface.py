@@ -69,7 +69,13 @@ _SURFACE_CHANGED = (
 # semantics: an add-on listing [2, 6] still installs on a gen-2..5 core (the 2
 # matches), which is wanted here because the key is additive — a core below
 # gen 6 simply renders no map entry for it.
-ADDON_API_WINDOW = (1, 6)
+#
+# Gen 7 (additive): `actions.<name>.on_uninstall: true` marks the one action
+# `addon uninstall --clean-up` runs before the add-on's containers and volumes are
+# removed, so an add-on can take back what it wrote into other add-ons. Older cores
+# ignore the key and uninstall without running it, so `min` stays 1; add-ons that
+# rely on it include 7 in `requires.addon_api`.
+ADDON_API_WINDOW = (1, 7)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -147,6 +153,8 @@ MANIFEST_KEYS = [
     "env_prompts.<key>.default_from_addon",
     "exports",
     "actions",
+    # Since addon_api 7: the action `addon uninstall --clean-up` runs first.
+    "actions.<name>.on_uninstall",
     "env_replace_secrets",
     "integration.keycloak.clients",
     "integration.keycloak.client_mappers",
@@ -219,4 +227,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 20, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 21, _SURFACE_CHANGED
