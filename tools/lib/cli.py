@@ -242,6 +242,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
         enable_voice=_tristate(args.enable_voice),
+        enable_knowledge_map=_tristate(args.enable_knowledge_map),
         voice_variant=args.voice_variant or None,
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
@@ -285,6 +286,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_rag(tree, setup_args)
         tree = resolve.resolve_voice(tree, setup_args)
         tree = resolve.resolve_voice_variant(tree, setup_args)
+        tree = resolve.resolve_knowledge_map(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -854,13 +856,18 @@ def cmd_module_info(args: argparse.Namespace) -> int:
 
 
 def cmd_module_purge(args: argparse.Namespace) -> int:
-    """Delete the data (volumes) and/or reset the settings of a module that is switched off.
+    """Delete the data (volumes), reset the settings and/or delete the operator files of a
+    module that is switched off.
 
-    Both are separate options. The settings of a module whose data depends on them (the RAG
-    system) are only deleted together with the data. Exit 3 when the request is refused or
-    a step fails, with an `ERROR:` line."""
-    if not (args.data or args.config):
-        print("ERROR: name what to delete: --data, --config or both", file=sys.stderr)
+    All three are separate options. The settings of a module whose data depends on them (the
+    RAG system) are only deleted together with the data. Operator files go only when
+    `--operator-files` asks for them. Exit 3 when the request is refused or a step fails, with
+    an `ERROR:` line."""
+    if not (args.data or args.config or args.operator_files):
+        print(
+            "ERROR: name what to delete: --data, --config, --operator-files or a combination",
+            file=sys.stderr,
+        )
         return 2
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -871,8 +878,14 @@ def cmd_module_purge(args: argparse.Namespace) -> int:
                 f"the settings of {module.name} can only be deleted together with its data"
                 " (--data): its stored credentials and grants depend on them"
             )
+        if args.operator_files and not module.operator_files:
+            # Checked before anything is deleted, so a refused request changes nothing.
+            raise modules.ModuleError(f"{module.name} keeps no operator files")
         removed = modules.purge_data(config_dir, repo_root, args.module) if args.data else []
         touched = modules.reset_config(config_dir, repo_root, args.module) if args.config else []
+        operator = (
+            modules.purge_operator_files(config_dir, args.module) if args.operator_files else []
+        )
     except modules.ModuleError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
@@ -881,6 +894,8 @@ def cmd_module_purge(args: argparse.Namespace) -> int:
         print(f"removed {'directory' if name.startswith('/') else 'volume'} {name}")
     for item in touched:
         print(f"reset {item}")
+    for item in operator:
+        print(f"removed file {item}")
     return 0
 
 
@@ -1533,6 +1548,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
     p_setup.add_argument("--voice-variant", choices=["cpu", "nvidia", "hipblas"], default=None)
+    p_setup.add_argument("--enable-knowledge-map", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)
@@ -1635,6 +1651,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_module_purge.add_argument("--module", required=True, choices=sorted(modules.MODULES))
     p_module_purge.add_argument("--data", action="store_true")
     p_module_purge.add_argument("--config", action="store_true")
+    p_module_purge.add_argument("--operator-files", action="store_true")
     p_module_purge.set_defaults(func=cmd_module_purge)
 
     p_preview = sub.add_parser("render-preview")

@@ -26,6 +26,13 @@ WEB_SEARCH = {"searxng_config", "searxng_data"}
 RAG = {"qdrant-storage", "qdrant-ingest-cache", "qdrant-ingest-state"}
 MAIL = {"smtp-relay-queue"}
 VOICE = {"speaches-hf-cache", "chatterbox-hf-cache"}
+KNOWLEDGE_MAP = {"knowledge-map-telemetry"}
+KM_OPERATOR_FILES = (
+    "overlay/knowledge-map/sources.yaml",
+    "overlay/knowledge-map/overrides.yaml",
+    "overlay/knowledge-map/governance.yaml",
+    "overlay/knowledge-map/goldset.yaml",
+)
 
 
 @pytest.fixture
@@ -109,6 +116,7 @@ def _all_volumes(keys: set[str], project: str = PROJECT) -> set[str]:
         ("rag", RAG),
         ("mail", MAIL),
         ("voice", VOICE),
+        ("knowledge-map", KNOWLEDGE_MAP),
     ],
 )
 def test_each_module_owns_exactly_its_volumes(name: str, keys: set[str]) -> None:
@@ -353,6 +361,90 @@ def test_resetting_the_mail_relay_removes_the_password_and_the_settings(
     assert not password_file.exists()
 
 
+def _write_operator_files(config: Path) -> None:
+    for rel in KM_OPERATOR_FILES:
+        path = config / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# the operator's own\n", encoding="utf-8")
+
+
+def test_resetting_the_knowledge_map_clears_the_rendered_map_but_not_the_operator_files(
+    real_repo, config_dir
+) -> None:
+    _setup(real_repo, config_dir, "--enable-knowledge-map=true")
+    before = _env(config_dir, "ai/knowledge-map")
+    assert (config_dir / "knowledge-map" / "index.yaml").is_file()
+    _write_operator_files(config_dir)
+    # Calibration the operator switched on by hand; the release ships it commented out.
+    env_path = config_dir / "ai" / "knowledge-map" / ".env"
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write("KM_ABSTENTION_THRESHOLD=0.4\n")
+    assert _env(config_dir, "ai/knowledge-map")["KM_ABSTENTION_THRESHOLD"] == "0.4"
+    _setup(real_repo, config_dir, "--enable-knowledge-map=false")
+
+    touched = modules.reset_config(config_dir, real_repo, "knowledge-map")
+
+    after = _env(config_dir, "ai/knowledge-map")
+    assert "KM_ABSTENTION_THRESHOLD" not in after
+    assert after["KM_ADMIN_TOKEN"] != before["KM_ADMIN_TOKEN"]
+    assert not after["KM_ADMIN_TOKEN"].startswith("GENERATE_")
+    # The embedding key is LiteLLM's master key again, not a fresh value of its own.
+    assert after["KM_EMBEDDING_API_KEY"] == _env(config_dir, "ai/litellm")["LITELLM_MASTER_KEY"]
+    assert "knowledge-map/index.yaml" in touched
+    map_dir = config_dir / "knowledge-map"
+    assert map_dir.is_dir() and list(map_dir.iterdir()) == []
+    for rel in KM_OPERATOR_FILES:
+        assert (config_dir / rel).read_text(encoding="utf-8") == "# the operator's own\n", rel
+
+
+def test_the_operator_files_go_only_on_their_own_request(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir, "--enable-knowledge-map=true")
+    _write_operator_files(config_dir)
+    (config_dir / "overlay" / "knowledge-map" / "notes.txt").write_text("keep", encoding="utf-8")
+    _setup(real_repo, config_dir, "--enable-knowledge-map=false")
+    settings = _bytes(config_dir, real_repo, "ai/knowledge-map/.env")
+
+    removed = modules.purge_operator_files(config_dir, "knowledge-map")
+
+    assert set(KM_OPERATOR_FILES) <= set(removed)
+    assert "knowledge-map/index.yaml" in removed
+    for rel in KM_OPERATOR_FILES:
+        assert not (config_dir / rel).exists(), rel
+    # Only the files the module names; anything else in the folder is not the module's.
+    assert (config_dir / "overlay" / "knowledge-map" / "notes.txt").read_text("utf-8") == "keep"
+    assert _bytes(config_dir, real_repo, "ai/knowledge-map/.env") == settings
+
+
+def test_the_operator_files_are_kept_while_the_knowledge_map_is_on(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir, "--enable-knowledge-map=true")
+    _write_operator_files(config_dir)
+
+    with pytest.raises(modules.ModuleError, match="still switched on"):
+        modules.purge_operator_files(config_dir, "knowledge-map")
+
+    for rel in KM_OPERATOR_FILES:
+        assert (config_dir / rel).is_file(), rel
+
+
+def test_a_module_without_operator_files_refuses_to_delete_any(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir)
+    with pytest.raises(modules.ModuleError, match="keeps no operator files"):
+        modules.purge_operator_files(config_dir, "voice")
+
+
+def test_info_names_the_operator_files_and_whether_they_exist(real_repo, config_dir) -> None:
+    _setup(real_repo, config_dir)
+    _write_operator_files(config_dir)
+    (config_dir / KM_OPERATOR_FILES[0]).unlink()
+
+    document = modules.info(config_dir, real_repo, "knowledge-map", runner=_Docker(set()))
+
+    assert document["operator_files"] == [
+        {"path": rel, "exists": rel != KM_OPERATOR_FILES[0]} for rel in KM_OPERATOR_FILES
+    ]
+    assert document["settings"]["files"] == ["knowledge-map/**"]
+
+
 def test_a_later_setup_does_not_bring_the_old_settings_back(real_repo, config_dir) -> None:
     _setup(real_repo, config_dir, "--enable-local-ai=true", "--localai-variant=intel")
     _setup(real_repo, config_dir, "--enable-local-ai=false")
@@ -477,12 +569,14 @@ def test_module_info_prints_one_json_document(real_repo, config_dir, capsys, mon
         "active",
         "directories",
         "module",
+        "operator_files",
         "profile",
         "questions",
         "settings",
         "settings_need_data",
         "volumes",
     ]
+    assert document["operator_files"] == []
     assert out.count("\n") == 1
 
 
@@ -539,6 +633,46 @@ def test_module_purge_refuses_a_module_that_is_on(
 
     assert code == 3
     assert "still switched on" in capsys.readouterr().err
+    assert docker.removed() == []
+
+
+def test_module_purge_deletes_operator_files_only_when_asked(
+    real_repo, config_dir, capsys, monkeypatch
+) -> None:
+    _setup(real_repo, config_dir)
+    _write_operator_files(config_dir)
+    docker = _Docker(_all_volumes(KNOWLEDGE_MAP))
+    monkeypatch.setattr(modules, "_docker", docker)
+
+    purge = ("module-purge", "--module=knowledge-map")
+    assert _cli(real_repo, config_dir, *purge, "--data", "--config") == 0
+    for rel in KM_OPERATOR_FILES:
+        assert (config_dir / rel).is_file(), rel
+    assert docker.volumes == set()
+    capsys.readouterr()
+
+    code = _cli(real_repo, config_dir, *purge, "--operator-files")
+
+    lines = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert {f"removed file {rel}" for rel in KM_OPERATOR_FILES} <= set(lines)
+    for rel in KM_OPERATOR_FILES:
+        assert not (config_dir / rel).exists(), rel
+
+
+def test_operator_files_of_a_module_without_any_refuse_the_whole_request(
+    real_repo, config_dir, capsys, monkeypatch
+) -> None:
+    _setup(real_repo, config_dir)
+    docker = _Docker(_all_volumes(VOICE))
+    monkeypatch.setattr(modules, "_docker", docker)
+
+    code = _cli(
+        real_repo, config_dir, "module-purge", "--module=voice", "--data", "--operator-files"
+    )
+
+    assert code == 3
+    assert "keeps no operator files" in capsys.readouterr().err
     assert docker.removed() == []
 
 

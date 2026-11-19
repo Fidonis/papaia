@@ -93,6 +93,9 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         ),
         "RAG_STICKY": (("true" if "rag" in profiles else "false") if config_seeded else ""),
         "VOICE_STICKY": (("true" if "voice" in profiles else "false") if config_seeded else ""),
+        "KNOWLEDGE_MAP_STICKY": (
+            ("true" if "knowledge-map" in profiles else "false") if config_seeded else ""
+        ),
         # Only a value chosen while the profile was on counts as a choice: the
         # template seeds cpu on every install, and that seed must not keep the
         # variant prompt from defaulting to the detection recommendation.

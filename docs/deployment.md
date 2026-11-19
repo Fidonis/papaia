@@ -48,9 +48,10 @@ To override the profile set for a single run without touching any file:
 tools/papaia-ctl start --profiles=keycloak,librechat,litellm
 ```
 
-The `localai`, `librechat-websearch`, `rag` and `smtp` profiles have dedicated setup flags
-(`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`, `--rag` / `--no-rag`,
-`--smtp` / `--no-smtp`), which also keep `deployment.yaml` in sync. Prefer those over
+The `localai`, `librechat-websearch`, `rag`, `smtp`, `voice` and `knowledge-map` profiles have
+dedicated setup flags (`--local-ai` / `--no-local-ai`, `--web-search` / `--no-web-search`,
+`--rag` / `--no-rag`, `--smtp` / `--no-smtp`, `--voice` / `--no-voice`,
+`--knowledge-map` / `--no-knowledge-map`), which also keep `deployment.yaml` in sync. Prefer those over
 hand-editing. `--smtp` needs the mail server, the sender address and, for a server with a
 login, the password in `PAPAIA_SMTP_PASSWORD`; see
 [Outbound mail](../README.md#outbound-mail).
