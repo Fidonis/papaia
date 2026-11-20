@@ -185,3 +185,19 @@ def test_the_manager_receives_the_link_to_the_area():
         "environment"
     ]
     assert env["MANAGER_PERSONAL_SETTINGS_URL"] == "${PERSONAL_SETTINGS_URL:-}"
+
+
+def test_the_area_follows_the_platform_profile_and_trusts_the_module_ca_folder():
+    """Module calls (contract "Transport"): no plain http under kritis, and the public CA
+    files of the modules lie next to the registry, mounted read-only."""
+    from pathlib import Path
+
+    import yaml
+
+    compose = Path(__file__).resolve().parents[2] / "src" / "infra" / "me" / "docker-compose.yml"
+    service = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]["me-web"]
+    env = service["environment"]
+    assert env["PAPAIA_SECURITY_PROFILE"] == "${PAPAIA_SECURITY_PROFILE:-standard}"
+    assert env["ME_MODULE_CA_DIR"] == "/registry/module-ca"
+    assert env["SSL_CERT_FILE"] == "/certs/local-ca.crt"
+    assert "${PAPAIA_CONFIG_DIR}/personal-settings:/registry:ro" in service["volumes"]

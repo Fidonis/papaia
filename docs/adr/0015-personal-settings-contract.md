@@ -133,6 +133,15 @@ is the single truth; the modules refer to it.
     `papaia-me`, `docs/messung-auth-time-token-austausch.md`): the standard token exchange
     keeps `auth_time`, and `prompt=login&max_age=0` renews it. No mapper and no `acr` level
     are needed; `acr` stays `"1"` and is not used.
+17. **Transport to the modules.** The area checks every https certificate against the
+    platform CA and the public CA files in `personal-settings/module-ca/<module>.pem`,
+    which a module with its own CA writes (Flow from its certificate setup). Plain http
+    is used only where declared and never under `PAPAIA_SECURITY_PROFILE=kritis`.
+    papaia Flow attaches `me-web` (`requires.addon_api: 4`).
+18. **Errors before a route's own checks carry contract codes as well** (`401
+    unauthorized`, `400 malformed_request`, and `409 conflict` for an `Idempotency-Key`
+    used for another request); a created item answers with `Location`; `display` is a
+    name, never an e-mail address, else `Person <first 8 characters of the id>`.
 
 ## Consequences
 
@@ -154,9 +163,8 @@ is the single truth; the modules refer to it.
 - **Negative**: a new add-on whose client comes from its own realm setup needs an entry
   in `ADDON_REALM_CLIENTS` before it can declare personal settings; a fragment is the
   way that needs no change of the core.
-- **Open**: papaia Flow must list `me-web` under `networks.attach` (generation 4) and
-  the area must trust the certificate of `flow-api` before the area reaches it in an
-  installation; neither is part of this change.
+- **Neutral**: the core has no platform-wide `PAPAIA_SECURITY_PROFILE` in its own
+  configuration yet; `me-web` reads it with the default `standard`.
 
 ## Alternatives considered
 

@@ -195,6 +195,17 @@ All bodies are JSON (`Content-Type: application/json`, UTF-8). Every response ca
 `Cache-Control: no-store`. Answers larger than 256 KiB, or slower than 2 s, are treated
 by the area as "module not reachable". Paths are relative to the module's service.
 
+**Transport.** The area calls `<scheme>://<service>:<port><base_path>` exactly as declared
+and never follows a redirect. With `scheme: https` it checks certificate and host name
+against the platform CA (`SSL_CERT_FILE` of `me-web`, `/certs/local-ca.crt`) and the
+public CA files modules place in `$PAPAIA_CONFIG_DIR/personal-settings/module-ca/`, one
+`<module>.pem` each, certificates only (mounted read-only at `/registry/module-ca/`). A
+module whose endpoint is signed by its own CA (Flow: `flow-api`) writes that file itself.
+`scheme: http` is used only as declared and never under the security profile `kritis`
+(`PAPAIA_SECURITY_PROFILE`; the area may set itself stricter, never laxer): there the
+module is shown as not reachable. An add-on whose service the area must reach lists
+`me-web` under `networks.attach` (`requires.addon_api: 4`).
+
 ### 3.1 Read all groups — `GET {base_path}`
 
 ```json
@@ -305,7 +316,8 @@ Only for groups with `kind: collection`.
   {"delegate": "4c0a…", "folder": "/purchasing", "until": "2026-12-31"}
   ```
 
-  Answer `201` with the item and a `Location` header. The module may require an
+  Answer `201` with the item and `Location: {base_path}/{group}/items/{id}` (a path; also
+  when an `Idempotency-Key` replays the first answer). The module may require an
   `Idempotency-Key` header (Flow does, for every writing operation); the area always sends
   one per rendered form, and a repeated request answers with the first item.
 - `POST {base_path}/{group}/items/{id}/{operation}` with header `If-Match: <item etag>`,
@@ -319,7 +331,7 @@ For every group with a field of type `person` the module answers which persons t
 may name there. The area offers nothing else: a person is never typed in.
 
 ```json
-{"persons": [{"id": "4c0a…", "display": "bernd.muster"}]}
+{"persons": [{"id": "4c0a…", "display": "Bernd Muster"}]}
 ```
 
 - `q` is at least 2 characters after trimming (else `400 malformed_request`) and at most
@@ -330,7 +342,10 @@ may name there. The area offers nothing else: a person is never typed in.
   (Flow, `deputies`: active persons of its directory, never the caller, the rules of
   delegation). The caller's own rights decide, never the request.
 - Each entry is exactly `{id, display}`: no e-mail address and no other attribute.
-  `display` is plain text of at most 80 characters.
+  `display` is plain text of at most 80 characters: the directory's display name, else
+  given and family name, never an e-mail address or a login name; without a name it is
+  `Person <first 8 characters of the id>`. The same `display` names a person in items
+  (`{id, display}`).
 - Rate-bounded per person: beyond the module's bound (at most 30 searches a minute is the
   default) it answers `429 {"code": "rate_limited"}` with `Retry-After`.
 - A group without a `person` field answers `404 unknown_group`.
@@ -346,13 +361,14 @@ and never interpreted.
 
 | Status | `code` | Meaning |
 |---|---|---|
-| `400` | `malformed_request` | not JSON, or not the shape above |
+| `400` | `malformed_request` | not JSON, or not the shape above; a required `Idempotency-Key` missing |
 | `401` | `unauthorized` | token missing, invalid or not for this audience |
 | `403` | `forbidden` | the person may not use this group or item |
 | `403` | `step_up_required` | sensitive group: a fresh sign-in is needed; `max_age` (s) names how fresh |
 | `405` | `not_allowed_now` | `PUT` on a collection group |
 | `404` | `unknown_group`, `unknown_item`, `unknown_operation` | |
 | `409` | `not_allowed_now` | the operation does not fit the item's state |
+| `409` | `conflict` | the `Idempotency-Key` was used for another request, or its first request still runs |
 | `412` | `stale` | the ETag in `If-Match` is not the current one; `etag` names the current one |
 | `428` | `precondition_required` | `If-Match` is missing |
 | `422` | `invalid` | values do not pass the module's checks; `errors` lists them |
@@ -360,8 +376,8 @@ and never interpreted.
 
 ```json
 {"code": "invalid",
- "errors": [{"pointer": "/values/digest", "code": "not_an_option"},
-            {"pointer": "/values/channels/1", "code": "duplicate"}]}
+ "errors": [{"pointer": "/digest", "code": "not_an_option"},
+            {"pointer": "/channels/1", "code": "duplicate"}]}
 ```
 
 `pointer` is a JSON Pointer (RFC 6901) into the plain request body (`/digest`,
