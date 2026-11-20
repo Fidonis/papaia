@@ -233,7 +233,14 @@ integration:
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/<name>.yaml   # optional
-  nginx:     integration/nginx/<name>.conf        # optional
+  nginx:     integration/nginx/<name>.conf        # optional; or, since addon_api 12,
+                                                  # a list of ingress entries:
+  # nginx:
+  #   - host_key: <name>           # a-z, 0-9, -; unique within the add-on
+  #     service: <compose service> # the add-on's service behind the host
+  #     port: 8080                 # 1..65535
+  #     websocket: false           # optional
+  #     max_body: 10m              # optional request-body limit
 
 env_prompts:                       # optional: metadata per .env.example key
   SOME_URL:
@@ -349,6 +356,47 @@ Only values that differ from the `.env.example` literal are written to the confi
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
+>
+> **Generation-gated keys.** From generation 7 on, a manifest key that needs a
+> newer core is never silently ignored: a manifest using `exposes` (7),
+> `personal_settings` (8), `pki` (11) or the ingress-entry list of
+> `integration.nginx` (12) is `INCOMPATIBLE` on a core whose window ends below
+> that generation, even when `requires.addon_api` lists an older generation
+> the core serves. The reason names every missing generation and its meaning,
+> for example against `papaia` v1.8.0 (window `[1..3]`):
+> `missing generations 4, …, 12; 12: add-on ingress integration.nginx (ADR 0023)`.
+> A key above the generations the manifest declares is a warning; malformed
+> ingress entries (unknown field, port outside 1..65535, duplicate `host_key`)
+> are a malformed manifest.
+
+#### Contract generations
+
+The `ADDON_API` file at the repository root states the window and the binding
+meaning of every generation; `tools/lib/compat.py` (`ADDON_API_GENERATIONS`)
+and the contract snapshot `tools/tests/test_contract_surface.py` carry the
+same table. All generations are additive, so `min` stays 1. The decision
+records for generations 7 to 12 use the numbers reserved in
+[`docs/adr/README.md`](adr/README.md).
+
+| Gen. | Meaning | ADR |
+|---|---|---|
+| 1 | Base contract: `networks.app_network`, `networks.attach`, `integration.<service>` fragments, Keycloak clients, `env_prompts`, `requires.addon_api` | 0002 |
+| 2 | `networks.app_network` may be the `${PAPAIA_PROJECT:-papaia}-<name>-net` template | — |
+| 3 | `smtp-relay` (profile `smtp`) attachable | 0007 |
+| 4 | `requires.addons`, `networks.join_addons`, `exports`, `env_prompts.<key>.default_from_addon`, `actions`, LibreChat agents and prompts, managed Keycloak clients | — |
+| 5 | `speaches` and `chatterbox` (profile `voice`) attachable, render target `ai/voice/chatterbox.yaml` | 0011 |
+| 6 | `knowledge:` | 0014 |
+| 7 | `exposes:` (also `exposes.yaml` of core profiles), rendering of `services.json` and `groups.json`, declared roles, exchange scopes `aud-<addon>`, service accounts, `models.needs`; `keycloak`, `litellm`, `papaia-audit`, `papaia-egress` attachable | 0017, 0018 |
+| 8 | `personal_settings:`; `me-web` and `prefs` attachable | 0020 |
+| 9 | `connections` attachable, registry client | 0021 |
+| 10 | Install-time approval hook: approval at install up to the highest declared class | 0017 (addendum) |
+| 11 | `pki:`, internal TLS under the `kritis` security profile | 0019, 0022 |
+| 12 | Add-on ingress `integration.nginx` | 0023 |
+
+This table fixes what each generation means. The rendering and runtime
+behaviour behind generations 7 to 12 arrive with their own changes; until a
+part is in place, the generation number already lets add-ons declare it and
+lets older cores refuse them.
 
 ### 6.3 Example A: `papaia-addon-paperless`
 

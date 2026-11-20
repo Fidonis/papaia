@@ -1,0 +1,22 @@
+# Fixture add-on built against contract generation 12: it publishes its web
+# interface through add-on ingress entries.
+name: gen12
+version: 1.0.0
+addon_repo: papaia-addon-gen12
+description: "Fixture add-on built against addon_api 12"
+
+requires:
+  # 12: add-on ingress `integration.nginx` (ADR 0023)
+  addon_api: [12]
+
+networks:
+  app_network: papaia-gen12-net
+  attach: [nginx-proxy-manager]
+
+integration:
+  nginx:
+    - host_key: gen12
+      service: gen12-web
+      port: 8080
+      websocket: true
+      max_body: 10m

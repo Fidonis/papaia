@@ -40,6 +40,25 @@ See [`0000-template.md`](./0000-template.md).
 | [0015](./0015-knowledge-map-inventory-kinds-and-access-paths.md) | Inventory every reachable server and agent, and give sources several access paths | Proposed | 2026-11-14 |
 | [0016](./0016-knowledge-map-governance-metadata.md) | Keep governance metadata in a separate operator file and report model policy findings | Proposed | 2026-11-14 |
 
+## Reserved numbers
+
+These numbers are reserved for the decisions behind the add-on contract generations 7 to 12
+(see the generation table in [`ADDON_API`](../../ADDON_API)). Each number is used once, for
+the topic below. When a record is written, its row moves from this table to the index.
+Records in other repositories cite these decisions with the repository name, for example
+`papaia ADR 0020`.
+
+| # | Topic | Generation |
+|---|---|---|
+| 0017 | Add-on contract generations 7 to 12 | 7, 10 (addendum) |
+| 0018 | Identity: roles, exchange scopes and service accounts | 7 |
+| 0019 | Internal PKI | 11 |
+| 0020 | Personal area | 8 |
+| 0021 | Connection registry | 9 |
+| 0022 | Security profile | 11 |
+| 0023 | Add-on ingress and delivery | 12 |
+| 0024 | Design source | – |
+
 ## References
 
 - Michael Nygard, *Documenting Architecture Decisions* (2011)

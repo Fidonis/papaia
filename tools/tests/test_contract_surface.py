@@ -69,7 +69,77 @@ _SURFACE_CHANGED = (
 # semantics: an add-on listing [2, 6] still installs on a gen-2..5 core (the 2
 # matches), which is wanted here because the key is additive — a core below
 # gen 6 simply renders no map entry for it.
-ADDON_API_WINDOW = (1, 6)
+#
+# Gen 7 to 12 (additive) are fixed together as one binding table (ADDON_API_GENERATIONS
+# below, mirrored in the comment table of the ADDON_API file). Each one adds a manifest
+# key or an attachable seam and nothing existing changes, so `min` stays 1. Unlike
+# gen 6, a manifest that uses a key of gen 7 or later is never silently accepted by a
+# core below that generation: `addon check` reports it INCOMPATIBLE and names the
+# missing generation, whatever `requires.addon_api` lists (GENERATION_FEATURES).
+#
+# Gen 7 (additive): `exposes:` (also `exposes.yaml` of core profiles), rendering of
+# `services.json` and `groups.json`, declared roles, exchange scopes `aud-<addon>`,
+# service accounts and `models.needs` inside `exposes`; `keycloak`, `litellm`,
+# `papaia-audit` and `papaia-egress` attachable. ADR 0017 (contract), 0018 (identity).
+#
+# Gen 8 (additive): `personal_settings:`; `me-web` and `prefs` attachable. ADR 0020.
+#
+# Gen 9 (additive): `connections` attachable with a registry client. ADR 0021.
+#
+# Gen 10 (additive): install-time approval hook -- approval at install up to the
+# highest declared class. ADR 0017 (addendum).
+#
+# Gen 11 (additive): `pki:` -- internal TLS under the `kritis` security profile.
+# ADR 0019 (PKI), 0022 (security profile).
+#
+# Gen 12 (additive): add-on ingress `integration.nginx` as a list of entries
+# `{host_key, service, port, websocket, max_body}`. The fragment path form of
+# `integration.nginx` stays generation 1. ADR 0023 (ingress and delivery).
+ADDON_API_WINDOW = (1, 12)
+
+# The binding meaning of every generation the core serves. Changing a line here is a
+# contract change, not a wording fix.
+ADDON_API_GENERATIONS = {
+    1: (
+        "base contract: `networks.app_network`, `networks.attach`, `integration.<service>`"
+        " fragments, Keycloak clients, `env_prompts`, `requires.addon_api`"
+    ),
+    2: "`networks.app_network` may be the `${PAPAIA_PROJECT:-papaia}-<name>-net` template",
+    3: "`smtp-relay` (profile `smtp`) attachable",
+    4: (
+        "`requires.addons`, `networks.join_addons`, `exports`,"
+        " `env_prompts.<key>.default_from_addon`, `actions`, LibreChat agents and prompts,"
+        " managed Keycloak clients"
+    ),
+    5: (
+        "`speaches` and `chatterbox` (profile `voice`) attachable, render target"
+        " `ai/voice/chatterbox.yaml`"
+    ),
+    6: "`knowledge:` (ADR 0014)",
+    7: (
+        "`exposes:` (also `exposes.yaml` of core profiles), rendering of `services.json` and"
+        " `groups.json`, declared roles, exchange scopes `aud-<addon>`, service accounts,"
+        " `models.needs`; `keycloak`, `litellm`, `papaia-audit`, `papaia-egress` attachable"
+        " (ADR 0017, 0018)"
+    ),
+    8: "`personal_settings:`; `me-web` and `prefs` attachable (ADR 0020)",
+    9: "`connections` attachable, registry client (ADR 0021)",
+    10: (
+        "install-time approval hook: approval at install up to the highest declared class"
+        " (ADR 0017 addendum)"
+    ),
+    11: "`pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)",
+    12: "add-on ingress `integration.nginx` (ADR 0023)",
+}
+
+# Manifest keys whose use requires a core of at least this generation.
+# `integration.nginx` counts only in its list form (ingress entries).
+GENERATION_FEATURES = {
+    "exposes": 7,
+    "personal_settings": 8,
+    "pki": 11,
+    "integration.nginx": 12,
+}
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -160,6 +230,12 @@ MANIFEST_KEYS = [
     # Since addon_api 6: declares the knowledge sources an add-on contributes to the
     # knowledge-map profile (ADR 0014). Read by knowledge_map.collect_sources.
     "knowledge",
+    # Since addon_api 7, 8, 11 and 12: read by compat.manifest_generation_features so that
+    # a core below the generation reports the add-on instead of ignoring the key.
+    "exposes",
+    "personal_settings",
+    "pki",
+    "integration.nginx (ingress entries)",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -185,6 +261,49 @@ SECRET_ALIASES = {
 
 def test_addon_api_window_matches_snapshot():
     assert compat.resolve_addon_api_window(REPO) == ADDON_API_WINDOW, _SURFACE_CHANGED
+
+
+def test_generation_table_matches_snapshot():
+    assert compat.ADDON_API_GENERATIONS == ADDON_API_GENERATIONS, _SURFACE_CHANGED
+
+
+def test_generation_table_covers_the_served_window():
+    minimum, current = ADDON_API_WINDOW
+    assert sorted(ADDON_API_GENERATIONS) == list(range(minimum, current + 1)), _SURFACE_CHANGED
+
+
+def _addon_api_file_table() -> dict[int, str]:
+    """The comment table of the ADDON_API file: `#   <n>  <meaning>` with the meaning
+    continued on indented comment lines."""
+    table: dict[int, str] = {}
+    number = None
+    in_table = False
+    for raw in (REPO / "ADDON_API").read_text(encoding="utf-8").splitlines():
+        if raw.startswith("# Generations"):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not raw.startswith("#") or raw.strip() == "#":
+            break
+        head = raw[1:].split(maxsplit=1)
+        if head and head[0].isdigit() and raw[1:].startswith("  "):
+            number = int(head[0])
+            table[number] = head[1].strip()
+        elif number is not None:
+            table[number] += " " + raw[1:].strip()
+    return table
+
+
+def test_addon_api_file_states_the_same_table():
+    # The file operators read and the table the tools enforce must not drift apart.
+    assert _addon_api_file_table() == ADDON_API_GENERATIONS, _SURFACE_CHANGED
+
+
+def test_generation_features_match_snapshot():
+    assert compat.GENERATION_FEATURES == GENERATION_FEATURES, _SURFACE_CHANGED
+    for generation in GENERATION_FEATURES.values():
+        assert generation in ADDON_API_GENERATIONS, _SURFACE_CHANGED
 
 
 def test_attachable_services_match_snapshot():
@@ -219,4 +338,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 20, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 24, _SURFACE_CHANGED

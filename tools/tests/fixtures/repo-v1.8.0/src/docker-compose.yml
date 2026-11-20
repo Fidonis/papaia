@@ -1,0 +1,9 @@
+# Update-target fixture standing in for papaia v1.8.0: the services the
+# generation-12 fixture add-on attaches to exist, so only the addon_api axis decides.
+services:
+  nginx-proxy-manager:
+    image: stub
+    profiles: [nginx]
+  librechat:
+    image: stub
+    profiles: [librechat]

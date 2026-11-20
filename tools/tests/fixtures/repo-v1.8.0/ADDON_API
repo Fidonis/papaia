@@ -1,0 +1,4 @@
+# Update-target fixture: the addon_api window of papaia v1.8.0, which predates
+# contract generations 4 to 12.
+current=3
+min=1

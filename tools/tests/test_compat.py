@@ -437,3 +437,141 @@ def test_malformed_actions_are_a_manifest_error(actions):
     result = compat.evaluate_addon("a", {"actions": actions}, _core())
     assert result.status == compat.STATUS_ERROR
     assert result.axis == "actions"
+
+
+# ── contract generations 7 to 12 ──────────────────────────────────────────────
+
+# The window `papaia@v1.8.0` serves.
+V1_8_0_WINDOW = (1, 3)
+
+_INGRESS_ENTRY = {"host_key": "flow", "service": "flow-web", "port": 8080}
+
+
+def test_generation_12_requirement_names_the_missing_generation():
+    result = compat.evaluate_addon(
+        "flow", {"requires": {"addon_api": [12]}}, _core(addon_api=V1_8_0_WINDOW)
+    )
+    assert result.status == compat.STATUS_INCOMPATIBLE
+    assert result.axis == "addon_api"
+    assert "missing generations 4, 5, 6, 7, 8, 9, 10, 11, 12" in result.reason
+    assert "12: add-on ingress `integration.nginx`" in result.reason
+
+
+def test_every_missing_generation_up_to_the_requirement_is_named():
+    result = compat.evaluate_addon(
+        "a", {"requires": {"addon_api": 9}}, _core(addon_api=(1, 6))
+    )
+    assert result.status == compat.STATUS_INCOMPATIBLE
+    assert "missing generations 7, 8, 9" in result.reason
+
+
+@pytest.mark.parametrize(
+    ("manifest", "generation"),
+    [
+        ({"exposes": [{"id": "x"}]}, 7),
+        ({"personal_settings": {"schema": "s"}}, 8),
+        ({"pki": {"server": True}}, 11),
+        ({"integration": {"nginx": [_INGRESS_ENTRY]}}, 12),
+    ],
+)
+def test_generation_feature_on_an_older_core_is_never_ignored(manifest, generation):
+    # Any-match on `requires.addon_api` would pass ([3, 12] contains 3); the key used still
+    # needs a core of its generation.
+    manifest = {"requires": {"addon_api": [3, 12]}, **manifest}
+    result = compat.evaluate_addon("a", manifest, _core(addon_api=V1_8_0_WINDOW))
+    assert result.status == compat.STATUS_INCOMPATIBLE
+    assert result.axis == "addon_api"
+    assert "missing generations 4," in result.reason
+    assert f"{generation}: {compat.ADDON_API_GENERATIONS[generation]}" in result.reason
+
+
+def test_generation_feature_without_addon_api_is_checked_against_the_window():
+    result = compat.evaluate_addon(
+        "a", {"papaia_compat": ">=0.8.0", "exposes": []}, _core(addon_api=(1, 6))
+    )
+    assert result.status == compat.STATUS_INCOMPATIBLE
+    assert "uses `exposes` (addon_api 7)" in result.reason
+    assert "missing generation 7;" in result.reason
+
+
+def test_generation_features_pass_on_a_core_that_serves_them():
+    manifest = {
+        "requires": {"addon_api": [12]},
+        "exposes": [],
+        "personal_settings": {},
+        "pki": {},
+        "integration": {"nginx": [_INGRESS_ENTRY]},
+    }
+    result = compat.evaluate_addon("a", manifest, _core(addon_api=(1, 12)))
+    assert result.status == compat.STATUS_OK
+    assert result.warnings == ()
+
+
+def test_feature_above_declared_generations_warns():
+    manifest = {"requires": {"addon_api": [6]}, "exposes": []}
+    result = compat.evaluate_addon("a", manifest, _core(addon_api=(1, 12)))
+    assert result.status == compat.STATUS_OK
+    assert any("`exposes` needs addon_api 7" in w for w in result.warnings)
+
+
+def test_feature_without_core_window_warns_instead_of_passing_silently():
+    result = compat.evaluate_addon(
+        "a", {"papaia_compat": ">=0.8.0", "pki": {}}, _core(addon_api=None)
+    )
+    assert result.status == compat.STATUS_OK
+    assert any("`pki` (addon_api 11) not checked" in w for w in result.warnings)
+
+
+def test_fragment_path_nginx_stays_generation_1():
+    manifest = {
+        "requires": {"addon_api": 1},
+        "integration": {"nginx": "integration/infra/nginx/app.conf"},
+    }
+    assert compat.manifest_generation_features(manifest) == []
+    result = compat.evaluate_addon("a", manifest, _core())
+    assert result.status == compat.STATUS_OK
+
+
+def test_manifest_generation_features_lists_used_keys():
+    manifest = {"exposes": [], "pki": {}, "integration": {"nginx": [_INGRESS_ENTRY]}}
+    assert compat.manifest_generation_features(manifest) == [
+        ("exposes", 7),
+        ("pki", 11),
+        ("integration.nginx", 12),
+    ]
+
+
+@pytest.mark.parametrize(
+    "nginx",
+    [
+        42,
+        [],
+        ["flow"],
+        [{"service": "flow-web", "port": 8080}],
+        [{**_INGRESS_ENTRY, "port": 0}],
+        [{**_INGRESS_ENTRY, "port": 65536}],
+        [{**_INGRESS_ENTRY, "port": True}],
+        [{**_INGRESS_ENTRY, "host_key": "Flow"}],
+        [{**_INGRESS_ENTRY, "service": "flow web"}],
+        [{**_INGRESS_ENTRY, "websocket": "yes"}],
+        [{**_INGRESS_ENTRY, "max_body": "lots"}],
+        [{**_INGRESS_ENTRY, "upstream": "http://elsewhere"}],
+        [_INGRESS_ENTRY, _INGRESS_ENTRY],
+    ],
+)
+def test_malformed_ingress_entries_are_a_manifest_error(nginx):
+    manifest = {"requires": {"addon_api": 12}, "integration": {"nginx": nginx}}
+    result = compat.evaluate_addon("a", manifest, _core(addon_api=(1, 12)))
+    assert result.status == compat.STATUS_ERROR
+    assert result.axis == "integration.nginx"
+
+
+def test_well_formed_ingress_entry_with_optional_fields_is_accepted():
+    entry = {**_INGRESS_ENTRY, "websocket": True, "max_body": "50m"}
+    manifest = {"requires": {"addon_api": 12}, "integration": {"nginx": [entry]}}
+    result = compat.evaluate_addon("a", manifest, _core(addon_api=(1, 12)))
+    assert result.status == compat.STATUS_OK
+
+
+def test_generation_table_reaches_the_current_generation():
+    assert sorted(compat.ADDON_API_GENERATIONS) == list(range(1, 13))

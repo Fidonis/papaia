@@ -24,6 +24,12 @@ happened (a core service rename) is detectable without any version number.
 `requires.addons` (addon_api 4) names other addons an addon builds on;
 `evaluate_required_addons` checks it against the addons active in a
 deployment.
+
+From generation 7 on, a manifest key of a generation is never silently
+ignored by an older core: `manifest_generation_features` lists the keys a
+manifest uses, and a core whose window ends below one of them reports the
+addon INCOMPATIBLE with the missing generation named, whatever
+`requires.addon_api` lists.
 """
 
 from __future__ import annotations
@@ -42,6 +48,55 @@ STATUS_OK = "OK"
 STATUS_INCOMPATIBLE = "INCOMPATIBLE"
 STATUS_UNKNOWN = "UNKNOWN"
 STATUS_ERROR = "ERROR"
+
+# The binding meaning of every contract generation (all additive, `min` stays 1).
+# The ADDON_API file carries the same table as a comment; the contract snapshot
+# (tools/tests/test_contract_surface.py) pins both.
+ADDON_API_GENERATIONS: dict[int, str] = {
+    1: (
+        "base contract: `networks.app_network`, `networks.attach`, `integration.<service>`"
+        " fragments, Keycloak clients, `env_prompts`, `requires.addon_api`"
+    ),
+    2: "`networks.app_network` may be the `${PAPAIA_PROJECT:-papaia}-<name>-net` template",
+    3: "`smtp-relay` (profile `smtp`) attachable",
+    4: (
+        "`requires.addons`, `networks.join_addons`, `exports`,"
+        " `env_prompts.<key>.default_from_addon`, `actions`, LibreChat agents and prompts,"
+        " managed Keycloak clients"
+    ),
+    5: (
+        "`speaches` and `chatterbox` (profile `voice`) attachable, render target"
+        " `ai/voice/chatterbox.yaml`"
+    ),
+    6: "`knowledge:` (ADR 0014)",
+    7: (
+        "`exposes:` (also `exposes.yaml` of core profiles), rendering of `services.json` and"
+        " `groups.json`, declared roles, exchange scopes `aud-<addon>`, service accounts,"
+        " `models.needs`; `keycloak`, `litellm`, `papaia-audit`, `papaia-egress` attachable"
+        " (ADR 0017, 0018)"
+    ),
+    8: "`personal_settings:`; `me-web` and `prefs` attachable (ADR 0020)",
+    9: "`connections` attachable, registry client (ADR 0021)",
+    10: (
+        "install-time approval hook: approval at install up to the highest declared class"
+        " (ADR 0017 addendum)"
+    ),
+    11: "`pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)",
+    12: "add-on ingress `integration.nginx` (ADR 0023)",
+}
+
+# Manifest keys that need a core of at least this generation. A core below it
+# would install the addon with the key unread, so the gate names the generation
+# instead. `integration.nginx` counts only in its list form (ingress entries);
+# the fragment-path form is generation 1.
+GENERATION_FEATURES: dict[str, int] = {
+    "exposes": 7,
+    "personal_settings": 8,
+    "pki": 11,
+    "integration.nginx": 12,
+}
+
+INGRESS_AXIS = "integration.nginx"
 
 MODE_ENFORCE = "enforce"
 MODE_WARN = "warn"
@@ -188,6 +243,83 @@ def _fmt_generations(generations: list[int]) -> str:
     return ",".join(str(g) for g in generations)
 
 
+def _missing_generations(window_current: int, needed: list[int]) -> str:
+    """'missing generation(s) <n, ...>; <n>: <meaning>' for the generations an addon
+    needs above the core's window. Generations are cumulative, so every one between
+    the window and the highest need is missing; the meaning is given for the
+    generations the addon names."""
+    top = max(needed)
+    missing = list(range(window_current + 1, top + 1))
+    label = "generation" if len(missing) == 1 else "generations"
+    meanings = "; ".join(
+        f"{generation}: {ADDON_API_GENERATIONS.get(generation, 'unknown to this core')}"
+        for generation in sorted({g for g in needed if g > window_current})
+    )
+    return f"missing {label} {', '.join(str(g) for g in missing)}; {meanings}"
+
+
+_HOST_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
+_SERVICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+_MAX_BODY_RE = re.compile(r"^[1-9][0-9]{0,5}[kmg]?$")
+_INGRESS_FIELDS = {"host_key", "service", "port", "websocket", "max_body"}
+
+
+def _validate_ingress_entries(entries: list) -> None:
+    """Shape of the generation-12 `integration.nginx` list. Raises ValueError."""
+    if not entries:
+        raise ValueError("integration.nginx must not be an empty list")
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        where = f"integration.nginx[{index}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{where} must be a mapping")
+        unknown = sorted(str(key) for key in set(entry) - _INGRESS_FIELDS)
+        if unknown:
+            raise ValueError(f"{where} has unknown field(s): {', '.join(unknown)}")
+        host_key = entry.get("host_key")
+        if not isinstance(host_key, str) or not _HOST_KEY_RE.match(host_key):
+            raise ValueError(f"{where}.host_key must match [a-z][a-z0-9-]*")
+        if host_key in seen:
+            raise ValueError(f"{where}.host_key '{host_key}' is declared twice")
+        seen.add(host_key)
+        service = entry.get("service")
+        if not isinstance(service, str) or not _SERVICE_RE.match(service):
+            raise ValueError(f"{where}.service must be a compose service name")
+        port = entry.get("port")
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError(f"{where}.port must be an integer from 1 to 65535")
+        if not isinstance(entry.get("websocket", False), bool):
+            raise ValueError(f"{where}.websocket must be true or false")
+        max_body = entry.get("max_body")
+        if max_body is not None and (
+            not isinstance(max_body, str) or not _MAX_BODY_RE.match(max_body)
+        ):
+            raise ValueError(f"{where}.max_body must be a size such as 10m")
+
+
+def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
+    """The generation-gated keys a manifest uses, as (key, generation) in
+    GENERATION_FEATURES order. Raises ValueError for a malformed
+    `integration.nginx`; the other keys are only detected here, their schema
+    is checked where they are rendered."""
+    used: list[tuple[str, int]] = []
+    for key in ("exposes", "personal_settings", "pki"):
+        if manifest.get(key) is not None:
+            used.append((key, GENERATION_FEATURES[key]))
+    integration = manifest.get("integration")
+    if integration is not None and not isinstance(integration, dict):
+        raise ValueError("integration: must be a mapping")
+    nginx = (integration or {}).get("nginx")
+    if isinstance(nginx, list):
+        _validate_ingress_entries(nginx)
+        used.append(("integration.nginx", GENERATION_FEATURES["integration.nginx"]))
+    elif nginx is not None and not isinstance(nginx, str):
+        raise ValueError(
+            "integration.nginx must be a fragment path or a list of ingress entries"
+        )
+    return used
+
+
 def evaluate_addon(
     name: str,
     manifest: object,
@@ -240,7 +372,8 @@ def evaluate_addon(
             else:
                 reason = (
                     f"core serves addon_api [{window_min}..{window_current}], addon is built"
-                    f" against {_fmt_generations(generations)}"
+                    f" against {_fmt_generations(generations)}; "
+                    + _missing_generations(window_current, generations)
                 )
     elif compat_range is not None and core.platform_version is not None:
         axis = "papaia_compat"
@@ -273,7 +406,40 @@ def evaluate_addon(
     except ValueError as exc:
         return CompatResult(name, STATUS_ERROR, axis="actions", reason=str(exc))
 
+    try:
+        features = manifest_generation_features(manifest)
+    except ValueError as exc:
+        return CompatResult(name, STATUS_ERROR, axis=INGRESS_AXIS, reason=str(exc))
+
     warnings: list[str] = []
+    if features and generations is not None:
+        for key, generation in features:
+            if generation > max(generations):
+                warnings.append(
+                    f"`{key}` needs addon_api {generation}, but requires.addon_api names"
+                    f" only {_fmt_generations(generations)}"
+                )
+    if features and core.addon_api is None:
+        warnings.extend(
+            f"core does not expose an addon_api window; `{key}` (addon_api {generation})"
+            " not checked"
+            for key, generation in features
+        )
+    elif features and status in (STATUS_OK, STATUS_UNKNOWN):
+        window_min, window_current = core.addon_api
+        beyond = [(key, generation) for key, generation in features if generation > window_current]
+        if beyond:
+            needed = [generation for _, generation in beyond]
+            status = STATUS_INCOMPATIBLE
+            axis = "addon_api"
+            requirement = sorted(set(needed))
+            core_value = [window_min, window_current]
+            uses = ", ".join(f"`{key}` (addon_api {generation})" for key, generation in beyond)
+            reason = (
+                f"addon uses {uses}; core serves addon_api [{window_min}..{window_current}]; "
+                + _missing_generations(window_current, needed)
+            )
+
     attach = (manifest.get("networks") or {}).get("attach") or []
     if attach and not isinstance(attach, list):
         return CompatResult(name, STATUS_ERROR, reason="networks.attach must be a list")

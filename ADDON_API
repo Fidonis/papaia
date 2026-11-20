@@ -8,5 +8,28 @@
 # Bump rules (see docs/adr/0002-addon-core-compatibility-gating.md):
 #   breaking seam change  -> current += 1 and min = current
 #   additive seam change  -> current += 1, min unchanged
-current=6
+#
+# Generations (all additive, so `min` stays 1). Binding meaning; the same table
+# is ADDON_API_GENERATIONS in tools/lib/compat.py and in the contract snapshot.
+#   1  base contract: `networks.app_network`, `networks.attach`, `integration.<service>`
+#      fragments, Keycloak clients, `env_prompts`, `requires.addon_api`
+#   2  `networks.app_network` may be the `${PAPAIA_PROJECT:-papaia}-<name>-net` template
+#   3  `smtp-relay` (profile `smtp`) attachable
+#   4  `requires.addons`, `networks.join_addons`, `exports`,
+#      `env_prompts.<key>.default_from_addon`, `actions`, LibreChat agents and prompts,
+#      managed Keycloak clients
+#   5  `speaches` and `chatterbox` (profile `voice`) attachable, render target
+#      `ai/voice/chatterbox.yaml`
+#   6  `knowledge:` (ADR 0014)
+#   7  `exposes:` (also `exposes.yaml` of core profiles), rendering of `services.json` and
+#      `groups.json`, declared roles, exchange scopes `aud-<addon>`, service accounts,
+#      `models.needs`; `keycloak`, `litellm`, `papaia-audit`, `papaia-egress` attachable
+#      (ADR 0017, 0018)
+#   8  `personal_settings:`; `me-web` and `prefs` attachable (ADR 0020)
+#   9  `connections` attachable, registry client (ADR 0021)
+#   10  install-time approval hook: approval at install up to the highest declared class
+#      (ADR 0017 addendum)
+#   11  `pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)
+#   12  add-on ingress `integration.nginx` (ADR 0023)
+current=12
 min=1

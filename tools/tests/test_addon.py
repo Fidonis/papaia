@@ -26,6 +26,9 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ADDON_PAPERLESS = FIXTURES_DIR / "addon-paperless"
 ADDON_INCOMPATIBLE = FIXTURES_DIR / "addon-incompatible"
 REPO_NEXT = FIXTURES_DIR / "repo-next"
+REPO_V1_8_0 = FIXTURES_DIR / "repo-v1.8.0"
+ADDON_GENERATION_12 = FIXTURES_DIR / "addon-generation-12"
+REAL_REPO = Path(__file__).resolve().parents[2]
 
 
 def _install_args(
@@ -778,6 +781,26 @@ def test_addon_check_target_core_detects_service_rename(repo_root, config_dir, c
     assert result == 2
     out = capsys.readouterr().out
     assert "core has no service 'nginx-proxy-manager'" in out
+
+
+def test_addon_check_target_core_v1_8_0_names_missing_generation_12(
+    repo_root, config_dir, capsys
+):
+    # The core under test serves the real window of this checkout.
+    shutil.copy(REAL_REPO / "ADDON_API", repo_root / "ADDON_API")
+    _setup(repo_root, config_dir)
+    install = _install_args(config_dir, repo_root, name="gen12", path=str(ADDON_GENERATION_12))
+    assert cmd_addon_install(install) == 0
+    assert cmd_addon_check(_check_args(config_dir, repo_root)) == 0
+    capsys.readouterr()
+
+    result = cmd_addon_check(_check_args(config_dir, repo_root, target_core=str(REPO_V1_8_0)))
+    assert result == 2
+    out = capsys.readouterr().out
+    assert "INCOMPATIBLE" in out
+    assert "[1..3]" in out
+    assert "missing generations 4, 5, 6, 7, 8, 9, 10, 11, 12" in out
+    assert "`integration.nginx`" in out
 
 
 def test_addon_check_json_shape(repo_root, config_dir, capsys):
