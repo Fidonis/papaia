@@ -37,6 +37,7 @@ cmd_addon_install() {
     [ "$force" -eq 1 ]      && extra+=(--force)
     [ -n "$node" ]          && extra+=(--node="$node")
     py_cli addon-install --name="$addon_name" ${extra[@]+"${extra[@]}"}
+    if declare -F _pki_sync >/dev/null; then _pki_sync || exit 3; fi
     success "addon install complete: $addon_name"
 }
 
@@ -199,6 +200,7 @@ cmd_addon_start() {
     # render. Gates on compatibility -- a non-zero exit (set -e) must
     # abort here, before _addon_compose_up brings containers up.
     py_cli addon-start --name="$addon_name" ${extra[@]+"${extra[@]}"}
+    if declare -F _pki_sync >/dev/null; then _pki_sync || exit 3; fi
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
     info "Starting addon $addon_name from $addon_path"
@@ -254,6 +256,9 @@ cmd_addon_remove() {
     CONFIG_DIR="$config_dir"
     _require_setup_done
     py_cli addon-remove --name="$addon_name"
+    if declare -F _pki_sync >/dev/null; then
+        _pki_sync || warn "The certificates of $addon_name stay until the next 'papaia-ctl pki renew'."
+    fi
     success "addon remove complete: $addon_name"
 }
 
@@ -602,5 +607,8 @@ cmd_addon_uninstall() {
         _addon_compose down "$addon_name" "$addon_path"
     fi
     py_cli addon-uninstall --name="$addon_name"
+    if declare -F _pki_sync >/dev/null; then
+        _pki_sync || warn "The certificates of $addon_name stay until the next 'papaia-ctl pki renew'."
+    fi
     success "addon uninstall complete: $addon_name"
 }

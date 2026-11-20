@@ -124,6 +124,8 @@ cmd_setup() {
             --smtp-from-name=*) smtp_from_name="${1#*=}" ;;
             --reranker-model=*) reranker_model="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
+            --pki) SETUP_PKI="true" ;;
+            --no-pki) SETUP_PKI="false" ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
@@ -197,6 +199,7 @@ cmd_setup() {
                 info "  NPM admin URL     = $NPM_ADMIN_HOST_STICKY"
         fi
         [ -n "${LIBRECHAT_HOST_STICKY:-}" ] && info "  LibreChat URL     = $LIBRECHAT_HOST_STICKY"
+        if declare -F _pki_summary >/dev/null; then _pki_summary; fi
         if [ -n "${WEB_SEARCH_STICKY:-}" ]; then
             local _ws_label="disabled"
             [ "$WEB_SEARCH_STICKY" = "true" ] && _ws_label="enabled"
@@ -440,6 +443,9 @@ cmd_setup() {
         if [ "$smtp" = "true" ]; then
             _prompt_smtp
         fi
+        if [ -z "${SETUP_PKI:-}" ] && declare -F _prompt_pki >/dev/null; then
+            SETUP_PKI="$(_prompt_pki)"
+        fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
@@ -511,6 +517,8 @@ cmd_setup() {
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
         _ensure_keycloak_certs
     fi
+
+    if declare -F _pki_setup >/dev/null; then _pki_setup || return 3; fi
     local mode
     mode="$(_topology_mode)" || return 3
     if [ "$mode" = "distributed" ]; then

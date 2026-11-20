@@ -29,6 +29,7 @@ from . import (
     backup,
     cli_addon,
     cli_node,
+    cli_pki,
     cluster,
     cluster_data,
     common,
@@ -1155,6 +1156,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_topology_project.set_defaults(func=cmd_topology_project)
 
     cli_node.add_parsers(sub)
+    cli_pki.add_parsers(sub)
 
     p_cluster_start = sub.add_parser("cluster-start")
     p_cluster_start.add_argument("--node", default=None)
