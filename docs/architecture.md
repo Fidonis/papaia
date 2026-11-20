@@ -335,13 +335,33 @@ applies to the manifest (name, version, path) apply to it too.
   keeps working (readers ignore unknown manifest keys). No `addon_api` step
   is needed; an add-on with the section still installs on a core without
   papaia Flow.
-- **A declaration is a proposal.** Flow reads the section from the add-on
-  directory it is given read-only (`FLOW_ADDON_DIR`). Nothing in it takes
-  effect until a second person approved it in Flow; a changed section is a
-  new proposal while the approved one stays in force.
-- **Removal.** When the add-on is uninstalled its link in Flow is suspended
-  and, after a grace time, retired. `papaia-ctl addon uninstall` should name
-  the workflows Flow lists as affected before it goes on.
+- **The core keeps the manifests.** `papaia-ctl addon install` and `addon
+  start` copy the add-on's `papaia-app.yaml` and the files below
+  `integration/flow/` (regular files only) to
+  `$PAPAIA_CONFIG_DIR/addon-manifests/<name>/`; nothing else, no `.env`, no
+  compose file. `addon remove` and `addon uninstall` delete the copy. Flow
+  mounts that directory read-only (`PAPAIA_FLOW_ADDON_DIR`) and never sees
+  an add-on's secrets.
+- **A declaration is a proposal.** Flow reads the section from that
+  directory. Nothing in it takes effect until it is approved in Flow; a
+  changed section is a new proposal while the approved one stays in force.
+- **Approval at install.** When papaia Flow is installed, `addon install`
+  waits until Flow shows the proposal of this version, prints what the link
+  may do (events, actions with identity, effect, data class and address) and
+  asks for a confirmation (`--approve-flow-link` without a terminal). It then
+  asks Flow to approve exactly that declaration (its digest and the add-on
+  version) with the person token of the installing Flow administrator
+  (`--flow-token-file=PATH` or `PAPAIA_FLOW_TOKEN`; the token is passed in
+  the environment of `docker exec`, never as an argument). Flow decides by
+  its own policy whether one administrator may approve: under the security
+  profile `standard` up to a data class ceiling and without actions that
+  leave the installation; under `kritis` never. Otherwise the declaration
+  stays a proposal for a second person, and the install reports why. Without
+  Flow, without a token, or when Flow is not reachable, the install still
+  completes and prints how to approve later. An upgrade (`addon install` of
+  an installed add-on) with a changed section is decided the same way again.
+- **Removal.** When the add-on is removed or uninstalled its link in Flow is
+  suspended and, after a grace time, retired.
 - **Paths** in the section (`data_schema`) are relative to the add-on
   directory and stay inside it.
 - **Secrets never appear in it.** The signing secret of the receiver and the
@@ -504,7 +524,7 @@ No Core changes required.
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
 | `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
-| `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
+| `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist → keep the manifest in `addon-manifests/` and, with papaia Flow installed, show and approve the `flow:` section on confirmation (`--approve-flow-link`, `--flow-token-file=`). **Starts nothing.** |
 | `papaia-ctl addon components [<name>] [--json]` | Read-only. List the software each registered add-on bundles (the manifest's `components`: name, version, role, image variable), with the tag the add-on's `.env` pins instead of the catalog's marked as overridden. |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |

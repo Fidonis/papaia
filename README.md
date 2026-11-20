@@ -667,7 +667,7 @@ installation, and the other way round. `--restart-clean` is not available there.
 
 ```bash
 tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--node=NAME] [--force] \
-  [--config-dir=PATH]
+  [--config-dir=PATH] [--approve-flow-link] [--flow-token-file=PATH]
 tools/papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
 tools/papaia-ctl addon upgrade   <name> --path=DIR [--dry-run [--json]] [--no-backup] \
   [--no-restart] [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
