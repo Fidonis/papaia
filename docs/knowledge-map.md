@@ -52,6 +52,12 @@ and its audience mapper on the `librechat` client; on an existing realm `start`
 creates the client once the profile is on. External OIDC providers need an
 equivalent audience claim (see `src/infra/keycloak/README.md`).
 
+papaia-manager (1.7.0 and newer) shows the map on its *AI map* page, for
+administrators: the graph, the entries, the findings, a routing test, usage and
+refinements, an editor for entries and operator files, and the governance
+records with their findings and a facts export (see the
+[papaia-manager section of the README](../README.md#papaia-manager)).
+
 ## Switching off
 
 `setup --no-knowledge-map` (or the Modules tab) removes the profile and keeps
