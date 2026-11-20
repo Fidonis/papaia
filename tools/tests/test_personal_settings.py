@@ -246,6 +246,9 @@ INVALID_FOR_BOTH = {
     ),
     "collection without operations": _mutate("groups.1.operations", _DROP),
     "operation with slash": _mutate("groups.1.operations", ["create", "end/now"]),
+    # Contract v1 knows create, end and renew; the personal area offers no other.
+    "operation outside v1": _mutate("groups.1.operations", ["create", "archive"]),
+    "operation twice": _mutate("groups.1.operations", ["end", "end"]),
     "collection with settings": _mutate("groups.1.settings", []),
     "key with upper case": _mutate("groups.0.settings.0.key", "Notify"),
 }
@@ -736,3 +739,9 @@ def test_the_manager_is_named_while_its_profile_is_on(tmp_path):
         "identity",
         "manager",
     ]
+
+
+def test_every_operation_of_contract_v1_is_rendered():
+    section = _mutate("groups.1.operations", ["create", "end", "renew"])(copy.deepcopy(_section()))
+    assert _schema_ok(section)
+    assert ps.OPERATIONS == ("create", "end", "renew")
