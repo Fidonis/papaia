@@ -5,6 +5,6 @@ mcpServers:
     url: http://mcp-firecrawl:3000/mcp
 mcpSettings:
   allowedDomains:
-    - "http://mcp-firecrawl:8080"
+    - "http://mcp-firecrawl:3000"
 webSearch:
   serpProvider: searxng
