@@ -29,6 +29,7 @@ their images there; the table below covers the Core only.
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.3 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
 | `boky/postfix` | 5.1.0-alpine | MIT | `infra/smtp-relay` | optional mail relay (profile `smtp`); the image bundles Postfix (IPL-1.0 or EPL-2.0), OpenDKIM and rsyslog (GPL-3.0-or-later among others), used as network service |
 | `haproxy` | 3.2.26-alpine | GPL-2.0 | `infra/link-gateway` | mTLS link gateway between the nodes of a distributed installation (profile `link-gateway`, not in the include list); its include files are LGPL-2.1; used as network service |
+| `alpine/openssl` | 3.5.8 | Apache-2.0 | `infra/pki` | one-shot certificate issuer of the internal CA (profile `pki`, not in the include list); OpenSSL is Apache-2.0, the Alpine base and its BusyBox shell are GPL-2.0; used as a command-line tool |
 | `ghcr.io/fidonis/papaia-manager` | 1.6.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
 | `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
 | `mongo` | 8.0.20 | SSPL | `ai/librechat` | used as network service |
