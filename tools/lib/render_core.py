@@ -19,12 +19,15 @@ the realm JSON before Keycloak ever sees the file.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 
 import yaml
 
-from . import common, deployment, smtp
+from . import common, deployment, personal_settings, smtp
+
+logger = logging.getLogger(__name__)
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -62,13 +65,16 @@ class RenderError(Exception):
         self.column = column
 
 
-def _profile_layers(config_dir: Path) -> list[dict]:
-    """One add-on-shaped layer per active profile that ships fragments.
-
-    COMPOSE_PROFILES is read from the root .env, which is what compose itself
-    uses; deployment.yaml only mirrors it."""
+def _active_profiles(config_dir: Path) -> set[str]:
+    """COMPOSE_PROFILES is read from the root .env, which is what compose
+    itself uses; deployment.yaml only mirrors it."""
     raw = common.parse_env_file(config_dir / ".env").get("COMPOSE_PROFILES", "")
-    active = {p.strip() for p in raw.split(",") if p.strip()}
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _profile_layers(config_dir: Path) -> list[dict]:
+    """One add-on-shaped layer per active profile that ships fragments."""
+    active = _active_profiles(config_dir)
     return [{"path": path} for profile, path in PROFILE_FRAGMENTS.items() if profile in active]
 
 
@@ -88,6 +94,23 @@ def render(config_dir: Path, repo_root: Path) -> None:
             _render_file(target, repo_root, config_dir, active_addons)
 
     bake_realm_secrets(repo_root, config_dir)
+
+    # The registry of personal settings is a generated artifact like the baked realm,
+    # not a merge target. Only the personal area reads it, so it is rendered only while
+    # that profile is on; a stack without it stays byte-identical.
+    profiles = _active_profiles(config_dir)
+    if "me" in profiles:
+        try:
+            warnings = personal_settings.render(
+                config_dir,
+                repo_root,
+                profiles,
+                deployment.active_addons(deployment.load(config_dir)),
+            )
+        except personal_settings.PersonalSettingsError as exc:
+            raise RenderError(str(exc)) from exc
+        for warning in warnings:
+            logger.warning("%s", warning)
 
 
 def _parse_structured(suffix: str, text: str, label: str):

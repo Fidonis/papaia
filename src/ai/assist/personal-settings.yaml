@@ -1,0 +1,171 @@
+# Personal settings of papaia Assist in the personal area (profile `me`).
+#
+# Structure and defaults only: assist-api stores and checks the values itself and answers
+# the module API of docs/personal-settings-contract.md under endpoint.base_path. Its own
+# page /settings stays and uses the same values. The core renders this file into
+# $PAPAIA_CONFIG_DIR/personal-settings/registry.yaml while the profiles `me` and `assist`
+# are both on (tools/lib/personal_settings.py).
+#
+# The base path is not /api/v1/me/settings: assist-api already answers there with its own
+# shape, and the contract routes are a layer next to it.
+personal_settings:
+  api: 1
+  module: assist
+  title: {de: "Assistenz", en: "Assistant"}
+  endpoint:
+    service: assist-api
+    scheme: http
+    port: 8080
+    base_path: /api/v1/me/personal-settings
+    audience: assist-api
+  data:
+    summary: /api/v1/me/data/summary
+    export: /api/v1/me/data/export
+    # The person deletes entries of the assistant's memory themselves.
+    erasure: self
+  groups:
+    - id: assistant
+      title: {de: "Ihre Assistenz", en: "Your assistant"}
+      description:
+        de: "Wie Ihre Assistenz heißt, spricht und Sie erreicht."
+        en: "What your assistant is called, how it speaks and how it reaches you."
+      data_class: personal
+      sensitive: false
+      settings:
+        - key: assistant_name
+          type: text
+          max_length: 24
+          title: {de: "Name der Assistenz", en: "Name of your assistant"}
+          hint:
+            de: "2 bis 24 Zeichen. Namen von Personen und Funktionen sind ausgeschlossen."
+            en: "2 to 24 characters. Names of persons and functions are not allowed."
+        - key: tone
+          type: choice
+          default: neutral
+          options:
+            - {value: neutral, title: {de: "Sachlich", en: "Neutral"}}
+            - {value: brief, title: {de: "Knapp", en: "Brief"}}
+            - {value: friendly, title: {de: "Freundlich", en: "Friendly"}}
+          title: {de: "Ton", en: "Tone"}
+        - key: contact
+          type: choice
+          default: chat
+          options:
+            - {value: chat, title: {de: "Im Chat", en: "In the chat"}}
+            - {value: mail, title: {de: "Per E-Mail", en: "By mail"}}
+            - {value: workplace, title: {de: "Am Arbeitsplatz", en: "At the workplace"}}
+          title: {de: "Kontaktweg", en: "How it reaches you"}
+        - key: proactivity
+          type: choice
+          default: on_request
+          options:
+            - {value: on_request, title: {de: "Nur auf Anfrage", en: "Only when asked"}}
+            - {value: daily_digest, title: {de: "Einmal täglich gesammelt", en: "Daily digest"}}
+            - {value: notify, title: {de: "Meldet sich von selbst", en: "Gets in touch itself"}}
+          title: {de: "Proaktivität", en: "Proactivity"}
+        - key: attentive_mode
+          type: boolean
+          default: false
+          title: {de: "Aufmerksamer Modus", en: "Attentive mode"}
+        - key: group_mode
+          type: choice
+          default: addressed_only
+          options:
+            - {value: addressed_only, title: {de: "Nur wenn angesprochen", en: "Only when addressed"}}
+            - {value: attentive, title: {de: "Bietet Hilfe an, wenn ihr Thema aufkommt", en: "Offers help when its topic comes up"}}
+          title: {de: "In Gruppenräumen", en: "In group rooms"}
+        - key: approval_path
+          type: choice
+          default: page
+          options:
+            - {value: page, title: {de: "Auf der Seite", en: "On the page"}}
+            - {value: chat, title: {de: "Im Chat", en: "In the chat"}}
+          title: {de: "Freigabeweg", en: "How you approve"}
+        - key: learning_mode
+          type: choice
+          default: ask
+          options:
+            - {value: "off", title: {de: "Aus", en: "Off"}}
+            - {value: ask, title: {de: "Fragt vorher, was sie sich merkt", en: "Asks before it remembers"}}
+            - {value: silent, title: {de: "Merkt sich Muster selbst, als abgeleitet markiert", en: "Notes patterns itself, marked as derived"}}
+          title: {de: "Lernen", en: "Learning"}
+    - id: disclosure
+      title: {de: "Auskunft an andere Assistenzen", en: "What other assistants learn"}
+      description:
+        de: "Was Assistenzen anderer Personen über Ihre Termine erfahren."
+        en: "What the assistants of other persons learn about your appointments."
+      data_class: personal
+      sensitive: true
+      settings:
+        - key: disclose_to_assistants
+          type: choice
+          default: free_busy
+          options:
+            - {value: none, title: {de: "Nichts", en: "Nothing"}}
+            - {value: free_busy, title: {de: "Nur frei oder belegt", en: "Free or busy only"}}
+            - {value: details, title: {de: "Einzelheiten", en: "Details"}}
+          title: {de: "Offenlegung", en: "Disclosure"}
+    - id: levels
+      title: {de: "Was Ihre Assistenz tun darf", en: "What your assistant may do"}
+      description:
+        de: "Je Art von Aktion. Angeboten wird nur, was die Organisation erlaubt."
+        en: "For each kind of action. Only what the organisation allows is offered."
+      data_class: personal
+      # Levels from "do and report" on act for the person; assist-api asks for a fresh
+      # sign-in before it stores them.
+      sensitive: true
+      settings:
+        - key: mail_mark
+          type: choice
+          options: &levels
+            - {value: "off", title: {de: "Aus", en: "Off"}}
+            - {value: propose, title: {de: "Vorschlagen", en: "Propose"}}
+            - {value: draft, title: {de: "Entwerfen", en: "Draft"}}
+            - {value: after_approval, title: {de: "Nach Freigabe", en: "After approval"}}
+            - {value: do_and_report, title: {de: "Tun und berichten", en: "Do and report"}}
+            - {value: on_its_own, title: {de: "Selbstständig", en: "On its own"}}
+          title: {de: "Mail markieren", en: "Mark mail"}
+        - key: mail_move
+          type: choice
+          options: *levels
+          title: {de: "Mail in meine Ordner verschieben", en: "Move mail to my folders"}
+        - key: mail_draft
+          type: choice
+          options: *levels
+          title: {de: "Antworten in meinem Postfach entwerfen", en: "Draft replies in my mailbox"}
+        - key: calendar_tentative
+          type: choice
+          options: *levels
+          title: {de: "Termine vorläufig eintragen", en: "Enter appointments tentatively"}
+        - key: task_create
+          type: choice
+          options: *levels
+          title: {de: "Aufgaben für mich anlegen", en: "Create tasks for me"}
+        - key: chat_reply
+          type: choice
+          options: *levels
+          title: {de: "In meinen eigenen Räumen antworten", en: "Reply in my own rooms"}
+        - key: wiki_edit
+          type: choice
+          options: *levels
+          title: {de: "Wiki-Seiten bearbeiten", en: "Edit wiki pages"}
+        - key: docs_edit
+          type: choice
+          options: *levels
+          title: {de: "Gemeinsame Dokumente bearbeiten", en: "Edit shared documents"}
+        - key: mail_send_external
+          type: choice
+          options: *levels
+          title: {de: "Mail nach außen senden", en: "Send mail outside the company"}
+        - key: mail_send_internal
+          type: choice
+          options: *levels
+          title: {de: "Mail innerhalb des Unternehmens senden", en: "Send mail inside the company"}
+        - key: calendar_invite
+          type: choice
+          options: *levels
+          title: {de: "Andere zu Terminen einladen", en: "Invite others to appointments"}
+        - key: workflow_start
+          type: choice
+          options: *levels
+          title: {de: "Abläufe starten", en: "Start workflows"}

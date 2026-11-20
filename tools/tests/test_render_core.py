@@ -363,3 +363,45 @@ def test_the_realm_template_themes_the_login_clients_but_not_the_realm():
             assert theme == "papaia", client["clientId"]
         else:
             assert theme is None, client["clientId"]
+
+
+def _install_module_declarations(repo_root):
+    """The real core modules' personal-settings declarations, not stand-ins."""
+    for rel in ("src/flow", "src/ai/assist"):
+        (repo_root / rel).mkdir(parents=True, exist_ok=True)
+        shutil.copy(REAL_REPO / rel / "personal-settings.yaml", repo_root / rel)
+
+
+def test_render_writes_no_personal_settings_registry_without_the_me_profile(
+    repo_root, config_dir
+):
+    _install_module_declarations(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "keycloak,librechat,flow")
+    render_core.render(config_dir, repo_root)
+    assert not (config_dir / "personal-settings").exists()
+
+
+def test_render_writes_the_registry_of_the_active_modules_while_me_is_on(repo_root, config_dir):
+    _install_module_declarations(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "keycloak,librechat,me,flow")
+    render_core.render(config_dir, repo_root)
+    registry = json.loads((config_dir / "personal-settings/registry.yaml").read_text("utf-8"))
+    assert [m["module"] for m in registry["modules"]] == ["flow"]
+
+
+def test_render_names_a_broken_personal_settings_declaration(repo_root, config_dir):
+    _install_module_declarations(repo_root)
+    flow = repo_root / "src/flow/personal-settings.yaml"
+    flow.write_text(
+        flow.read_text("utf-8").replace("module: flow", "module: Flow"), encoding="utf-8"
+    )
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "keycloak,me,flow")
+    try:
+        render_core.render(config_dir, repo_root)
+    except render_core.RenderError as exc:
+        assert "module:flow" in str(exc) and ".module" in str(exc)
+    else:
+        raise AssertionError("a broken declaration must stop the render")

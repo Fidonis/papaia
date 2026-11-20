@@ -1,0 +1,78 @@
+# Personal settings of papaia Flow in the personal area (profile `me`).
+#
+# Structure and defaults only: Flow stores and checks the values itself and answers the
+# module API of docs/personal-settings-contract.md under endpoint.base_path. The core
+# renders this file into $PAPAIA_CONFIG_DIR/personal-settings/registry.yaml while the
+# profiles `me` and `flow` are both on (tools/lib/personal_settings.py).
+personal_settings:
+  api: 1
+  module: flow
+  title: {de: "Abläufe", en: "Workflows"}
+  endpoint:
+    service: flow-api
+    scheme: https
+    port: 8444
+    base_path: /api/v1/me/settings
+    audience: flow
+  data:
+    summary: /api/v1/me/data/summary
+    export: /api/v1/me/data/export
+    # Runs of a workflow are records of the organisation; erasing them is decided by the
+    # data protection officer, not by the person alone.
+    erasure: request
+  groups:
+    - id: notifications
+      title: {de: "Benachrichtigungen", en: "Notifications"}
+      description:
+        de: "Wie und wann Abläufe Sie erreichen."
+        en: "How and when workflows reach you."
+      data_class: personal
+      sensitive: false
+      settings:
+        - key: channels
+          type: ordered_multi_choice
+          # Only the channels this installation has switched on; Flow names them.
+          options: runtime
+          title: {de: "Kanäle", en: "Channels"}
+          hint:
+            de: "Aufforderungen zum Handeln kommen immer an."
+            en: "Calls for action always reach you."
+        - key: mute_info
+          type: boolean
+          default: false
+          title: {de: "Hinweise zur Information nicht senden", en: "Do not send information notices"}
+        - key: quiet_hours
+          type: boolean
+          default: false
+          title: {de: "Ruhezeiten einhalten", en: "Respect quiet hours"}
+          hint:
+            de: "Die Arbeitszeit legt der Bereich des Ablaufs fest."
+            en: "The working hours are set by the area of the workflow."
+        - key: digest
+          type: choice
+          default: "off"
+          options:
+            - {value: "off", title: {de: "Einzeln", en: "One by one"}}
+            - {value: "daily", title: {de: "Einmal täglich gesammelt", en: "Daily digest"}}
+          title: {de: "Hinweise zur Information", en: "Information notices"}
+        - key: locale
+          type: choice
+          default: "de"
+          options:
+            - {value: "de", title: {de: "Deutsch", en: "German"}}
+            - {value: "en", title: {de: "Englisch", en: "English"}}
+          title: {de: "Sprache der Nachrichten", en: "Language of messages"}
+    - id: deputies
+      kind: collection
+      sensitive: true
+      title: {de: "Vertretung", en: "Deputy"}
+      description:
+        de: "Wer in Ihrer Abwesenheit für Sie entscheidet, höchstens 90 Tage."
+        en: "Who decides for you while you are away, for at most 90 days."
+      data_class: personal
+      item:
+        fields:
+          - {key: delegate, type: person, title: {de: "Vertreten durch", en: "Deputy"}}
+          - {key: folder, type: choice, options: runtime, title: {de: "Bereich", en: "Area"}}
+          - {key: until, type: date, max_days: 90, title: {de: "Bis", en: "Until"}}
+      operations: [create, end, renew]
