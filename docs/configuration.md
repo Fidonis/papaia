@@ -156,6 +156,17 @@ keeps it byte for byte. A non-interactive `setup` takes it from the environment 
 `PAPAIA_SMTP_PASSWORD`, which is not a stack variable and is removed from the process environment
 as soon as it has been read.
 
+## Internal CA variables
+
+Root `.env`, profile `pki` ([pki.md](pki.md)). None of them exists while the profile is off;
+they are not in the shipped `.env.example` and are kept under the papaia-ctl banner.
+
+| Variable | Purpose |
+|---|---|
+| `PAPAIA_PKI_DIR` | Where the internal certificates go (default `<PAPAIA_CONFIG_DIR>/pki`). Written by `setup --pki`, removed by `setup --no-pki`. Add-on compose files can mount `${PAPAIA_PKI_DIR}/<module>/<service>` |
+| `PAPAIA_PKI_MODE` | Optional. `issue` (default) or `external` for certificates issued outside papAIa |
+| `PAPAIA_PKI_LEAF_DAYS` | Optional. Lifetime of a leaf certificate, 1 to 90 days (default 90); renewed after two thirds |
+
 ## Where values come from
 
 `tools/papaia-ctl setup` derives or generates most variables; few are genuinely
