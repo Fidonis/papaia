@@ -195,6 +195,14 @@ INVALID_FOR_BOTH = {
     "relative base path": _mutate("endpoint.base_path", "api/me"),
     "dot segment in base path": _mutate("endpoint.base_path", "/api/../admin"),
     "trailing slash": _mutate("endpoint.base_path", "/api/me/"),
+    # The area reads the same rules; what it refuses the core must not render.
+    "tilde in base path": _mutate("endpoint.base_path", "/api/~me"),
+    "tilde in summary": _mutate("data.summary", "/~summary"),
+    "segment starting with a dot": _mutate("endpoint.base_path", "/.well-known/me"),
+    "dot in service name": _mutate("endpoint.service", "docs.api"),
+    "underscore in service name": _mutate("endpoint.service", "docs_api"),
+    "service name ending in a hyphen": _mutate("endpoint.service", "docs-"),
+    "service name of 64 characters": _mutate("endpoint.service", "a" * 64),
     "url as export": _mutate("data.export", "https://elsewhere.example/export"),
     "erasure unknown": _mutate("data.erasure", "always"),
     "no groups": _mutate("groups", []),
@@ -507,6 +515,73 @@ def test_an_audience_from_another_add_on_is_refused(tmp_path):
     docs = _write_addon(tmp_path, "docs", section, {"docs.json": "docs-api"})
     with pytest.raises(ps.PersonalSettingsError, match="other-api"):
         ps.collect(REPO, {"me"}, [other, docs])
+
+
+@pytest.mark.parametrize(
+    "claimed",
+    [
+        "assist-api",  # a core module's fixed audience
+        "papaia-manager",  # a client of the realm template
+        "papaia-me",  # the area itself
+        "librechat",
+        "account",  # clients Keycloak creates in every realm
+        "realm-management",
+        "admin-cli",
+    ],
+)
+def test_an_add_on_may_not_claim_a_core_client_through_its_own_fragment(tmp_path, claimed):
+    section = _section()
+    section["module"] = "evil"
+    section["endpoint"]["service"] = "evil-api"
+    section["endpoint"]["audience"] = claimed
+    evil = _write_addon(tmp_path, "evil", section, {"evil.json": claimed})
+    with pytest.raises(ps.PersonalSettingsError, match=f"'{claimed}'.*core"):
+        ps.collect(REPO, {"me", "assist", "manager"}, [evil])
+
+
+def test_an_add_on_may_not_claim_a_client_another_add_on_defines_too(tmp_path):
+    # `other` declares no personal settings; its client is still not `docs`' to name.
+    other = _write_addon(tmp_path, "other", None, {"other.json": "docs-api"})
+    docs = _write_addon(tmp_path, "docs", _section(), {"docs.json": "docs-api"})
+    with pytest.raises(ps.PersonalSettingsError, match="'docs-api'.*other"):
+        ps.collect(REPO, {"me"}, [other, docs])
+
+
+def test_two_add_ons_may_not_share_one_audience(tmp_path):
+    a = _section()
+    b = _section()
+    b["module"] = "evil"
+    b["endpoint"]["service"] = "evil-api"
+    docs = _write_addon(tmp_path, "docs", a, {"docs.json": "docs-api"})
+    evil = _write_addon(tmp_path, "evil", b, {"evil.json": "docs-api"})
+    with pytest.raises(ps.PersonalSettingsError, match="docs-api"):
+        ps.collect(REPO, {"me"}, [docs, evil])
+
+
+def test_the_registry_never_holds_one_audience_twice(tmp_path, monkeypatch):
+    # Even if two owners were let through, the registry refuses a shared audience.
+    monkeypatch.setitem(ps.MODULE_DECLARATIONS, "assist", ("src/ai/assist", "docs-api"))
+    docs = _write_addon(tmp_path, "docs", _section(), {"docs.json": "docs-api"})
+    with pytest.raises(ps.PersonalSettingsError, match="docs-api"):
+        ps.collect(REPO, {"me", "assist"}, [docs])
+
+
+def test_only_flow_owns_a_client_of_its_realm_setup():
+    assert ps.ADDON_REALM_CLIENTS == {"papaia-flow": ("flow",)}
+
+
+def test_flow_may_not_name_a_core_client_through_a_fragment(tmp_path):
+    section = _flow_section()
+    section["endpoint"]["audience"] = "papaia-manager"
+    flow = _write_addon(tmp_path, "papaia-flow", section, {"m.json": "papaia-manager"})
+    with pytest.raises(ps.PersonalSettingsError, match="'papaia-manager'.*core"):
+        ps.collect(REPO, {"me", "manager"}, [flow])
+
+
+def test_the_core_clients_come_from_the_realm_template_and_the_modules():
+    core = ps.core_clients(REPO)
+    assert {"librechat", "papaia-manager", "papaia-me", "assist-api", "account"} <= core
+    assert "flow" not in core
 
 
 def test_two_declarations_of_one_module_are_refused(tmp_path):
