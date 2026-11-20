@@ -219,6 +219,29 @@ def test_install_with_flow_asks_flow_with_the_token_from_the_file(
     )
     assert args.func(args) == 0
     assert tokens == ["person-token"]
+    # Without a terminal and without the digest that was shown, nothing is approved.
+    assert fake.approvals == []
+    assert "names no declaration" in capsys.readouterr().out
+
+    fake.approvals.clear()
+    manifest = yaml.safe_load((_addon(tmp_path) / "papaia-app.yaml").read_text(encoding="utf-8"))
+    shown = flow_link.section_digest(manifest)
+    args = cli.build_parser().parse_args(
+        [
+            "--config-dir",
+            str(config_dir),
+            "--repo-root",
+            str(repo_root),
+            "addon-install",
+            "--name=paperless",
+            f"--path={_addon(tmp_path)}",
+            "--approve-flow-link",
+            f"--flow-token-file={token_file}",
+            f"--expect-flow-digest={shown}",
+            "--expect-addon-version=1.0.0",
+        ]
+    )
+    assert args.func(args) == 0
     assert fake.approvals == [("paperless", DIGEST, "1.0.0", flow_link.REASON)]
     assert "approved at install" in capsys.readouterr().out
 
@@ -226,9 +249,30 @@ def test_install_with_flow_asks_flow_with_the_token_from_the_file(
 # ── the link at installation ────────────────────────────────────────────────
 
 
+def _shown(**changes: Any) -> dict[str, Any]:
+    """The digest and version a caller that showed the section passes."""
+    manifest = {"name": "paperless", "version": "1.0.0", "flow": FLOW_SECTION}
+    return {
+        "expect_digest": flow_link.section_digest(manifest),
+        "expect_version": "1.0.0",
+    } | changes
+
+
+def test_the_section_digest_is_canonical_json_of_the_section():
+    import hashlib
+    import json
+
+    manifest = {"name": "paperless", "version": "1.0.0", "flow": FLOW_SECTION}
+    canonical = json.dumps(
+        FLOW_SECTION, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    assert flow_link.section_digest(manifest) == "sha256:" + hashlib.sha256(canonical).hexdigest()
+    assert flow_link.section_digest({"name": "paperless"}) is None
+
+
 def test_a_confirmed_summary_is_approved_by_its_digest_and_version():
     fake = FakeFlow([None, _proposal(version="0.9.0"), _proposal()])
-    outcome, text = _link(fake, approve=True)
+    outcome, text = _link(fake, approve=True, **_shown())
     assert outcome == "approved"
     assert fake.approvals == [("paperless", DIGEST, "1.0.0", flow_link.REASON)]
     # What the operator is shown before anything is approved.
@@ -275,7 +319,7 @@ def test_a_declaration_above_the_policy_stays_a_proposal():
         "widened": ["data_class:get-document"],
     }
     fake = FakeFlow([_proposal()], answer)
-    outcome, text = _link(fake, approve=True)
+    outcome, text = _link(fake, approve=True, **_shown())
     assert outcome == "proposal"
     assert "second person" in text
     assert "data_class:get-document" in text
@@ -296,8 +340,43 @@ def test_a_declaration_above_the_policy_stays_a_proposal():
 )
 def test_nothing_is_approved_without_a_proposal_of_this_version(shown, outcome):
     fake = FakeFlow(shown)
-    assert _link(fake, approve=True)[0] == outcome
+    assert _link(fake, approve=True, **_shown())[0] == outcome
     assert fake.approvals == []
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        {"expect_digest": "sha256:" + "0" * 64},
+        {"expect_version": "0.9.0"},
+        {"expect_digest": None},
+        {"expect_version": None},
+    ],
+    ids=["other-digest", "other-version", "no-digest", "no-version"],
+)
+def test_an_approval_without_a_terminal_names_what_was_shown(expected):
+    """A caller that showed the section elsewhere names it by its digest and
+    the add-on's version; any other manifest is not approved, and without a
+    terminal an approval that names nothing is not taken either."""
+    fake = FakeFlow([_proposal()])
+    outcome, text = _link(fake, approve=True, **_shown(**expected))
+    assert (outcome, fake.approvals) == ("error", [])
+    assert "WARNING: Flow link of paperless not approved:" in text
+    assert "flow link approve paperless --at-install" in text
+
+
+def test_a_version_flow_shows_other_than_the_one_named_is_not_approved():
+    fake = FakeFlow([_proposal(version="1.0.0")])
+    manifest = {"version": "1.0.1"}
+    outcome, _ = _link(fake, approve=True, manifest=manifest, wait_s=0.0, **_shown())
+    assert (outcome, fake.approvals) == ("error", [])
+
+
+def test_an_operator_at_a_terminal_approves_without_naming_the_digest():
+    fake = FakeFlow([_proposal()])
+    outcome, _ = _link(fake, approve=True, ask=lambda _q: "n")
+    assert outcome == "approved"
+    assert fake.approvals == [("paperless", DIGEST, "1.0.0", flow_link.REASON)]
 
 
 def test_without_a_section_a_token_or_a_reachable_module():
@@ -311,7 +390,7 @@ def test_without_a_section_a_token_or_a_reachable_module():
         def approve(self, addon: str, digest: str, version: str, reason: str) -> dict:
             raise flow_link.FlowError("FLOW-API-CONFLICT")
 
-    outcome, text = _link(Broken([_proposal()]), approve=True)
+    outcome, text = _link(Broken([_proposal()]), approve=True, **_shown())
     assert outcome == "error"
     assert "FLOW-API-CONFLICT" in text
 
