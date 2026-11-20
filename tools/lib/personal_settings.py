@@ -167,9 +167,10 @@ _OPTION_RE = re.compile(r"^[a-z0-9/][a-z0-9_./-]{0,254}$")
 # The integer range JSON numbers keep exactly.
 _INT_LIMIT = 2**53 - 1
 _OPERATION_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+# A DNS label: the area dials the service by this name, and it refuses anything else.
+_SERVICE_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _AUDIENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
-_PATH_RE = re.compile(r"^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$")
+_PATH_RE = re.compile(r"^(/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$")
 _CLOCK_RE = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
 # Text a person reads on the area's pages. The area escapes everything it shows; these
