@@ -28,8 +28,8 @@ reset-password link); a mail server the operator configured is never overwritten
 Token exchange with exactly one audience: while the profile `me` is on, `papaia-me` gets
 one optional scope `aud-<audience>` per module of the personal-settings registry; while
 the profile `manager` is on, `papaia-manager` gets `aud-flow` (approving a Flow link). Per
-audience a client policy refuses a token exchange that asks for that scope together with
-another of them (docs/personal-settings-contract.md, ADR 0015). The sync owns the
+audience a client policy refuses a token exchange, a sign-in (authorization code) or a
+refresh that asks for that scope together with another of them (docs/personal-settings-contract.md, ADR 0015). The sync owns the
 objects with its prefixes and prunes the ones no longer wanted; scopes are never deleted.
 
 It also migrates every current holder of the legacy `admin` role onto the new
@@ -73,6 +73,9 @@ AUDIENCE_SCOPE_PREFIX = "aud-"
 ONE_AUDIENCE_PREFIX = "papaia-one-audience-"
 ONE_AUDIENCE_PROFILE = "papaia-one-audience-reject"
 _TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+# A client that may ask for the audience scopes may also ask for two of them at sign-in
+# and keep them over a refresh; the policies hold those grants to one audience as well.
+_ONE_AUDIENCE_GRANTS = (_TOKEN_EXCHANGE_GRANT, "authorization_code", "refresh_token")
 _REGISTRY_REL = Path("personal-settings") / "registry.yaml"
 # Same pattern as the contract's schema; anything else in the registry is ignored here.
 _AUDIENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
@@ -639,7 +642,7 @@ def _one_audience_policies(audiences: list[str]) -> list[dict]:
                 "conditions": [
                     {
                         "condition": "grant-type",
-                        "configuration": {"grant_types": [_TOKEN_EXCHANGE_GRANT]},
+                        "configuration": {"grant_types": list(_ONE_AUDIENCE_GRANTS)},
                     },
                     {
                         "condition": "client-scopes",
