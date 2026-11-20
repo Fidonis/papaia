@@ -14,7 +14,7 @@
     ],
     "status_json": "9db224a1f82790406c7bdb1c1372d5d79d7845c9a5c1f18dbdf7a754a3dde0f4",
     "tree": {
-      ".env": "8ce92edf9c52f3be3e404b6bde88867142f8ca6f2b94ae4f9d3fb5e39500d9ef",
+      ".env": "650a1853c4c7f185ab70708dcf6f0a785ab703c5beaa019bc9fbcbb801eb179c",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/librechat/.env": "49a538a2e47ac7b287a460e540f1287a5d951c2f9d6da5ecf0371e201306ce90",
       "ai/librechat/librechat.yaml": "c2afe87b726b91333e9852af8188bb25f1200a18d930f91659d5384a52eb665b",
@@ -61,7 +61,7 @@
     ],
     "status_json": "0c9b5957a7bdad6937dea86e536151bb0ff5ac86ceaa7951393872bf87ec8c77",
     "tree": {
-      ".env": "27e440a1131e228c26a1530235d4d8b5fa42bc1b54d186f5bca0d77305077114",
+      ".env": "5a783c05211a7fca12fe1aee05d817b2d6018cbb08a80a6247d9b033cf33a3e1",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/librechat/.env": "4ea092dcf6bb0493af434ab28acff431ba10fcf8aee89cb0b68a69b3f45d9adc",
       "ai/librechat/librechat.yaml": "c2afe87b726b91333e9852af8188bb25f1200a18d930f91659d5384a52eb665b",
@@ -111,7 +111,7 @@
     ],
     "status_json": "d8876cba63fe5d147f8b4c4c15d92cfa269af22e0ea898971cec9cf4d0c2a333",
     "tree": {
-      ".env": "d37b62e5af99d446a77f0efd3395797277e9f74b447254ed0365aa74c8199cfa",
+      ".env": "58a2d1d29faab57ba0309f02265838cfd7fac6785ad31df9665b9822bc2fd727",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/librechat/.env": "f73aeb7ac7d4c388ad92e5b6d00c5442a79d14b43bd6b4f202314d03136b3650",
       "ai/librechat/librechat.yaml": "5370fe4259dd51c2c4be947360c2c22e7ef80fc6d81b82bc764da43104c7d53d",
