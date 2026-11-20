@@ -218,6 +218,43 @@ integration:
   librechat: integration/librechat/<name>.yaml   # optional
   nginx:     integration/nginx/<name>.conf        # optional
 
+flow:                              # optional: what the add-on offers to papaia Flow.
+  api: 1                           # Read by Flow only; the core passes it through.
+  source: urn:papaia:addon:<name>  # Must name this add-on.
+  events:                          # Things that happen in the application.
+    - name: <thing>.<happened>     # Type name of the event, e.g. document.added
+      version: 1
+      title: {de: "<Titel>", en: "<Title>"}
+      delivery: webhook            # The application calls Flow's receiver
+      auth: hmac                   # with a body signed with the link's secret
+      format: plain                # plain | cloudevents
+      map:                         # plain only: expressions over input.body and
+        id: "string(input.body.id)"    # input.headers that give the event its id,
+        subject: "string(input.body.id)"  # optional subject and time, and its data
+        data: {id: "input.body.id"}
+      data_schema: integration/flow/schemas/<thing>.v1.json   # or inline
+      data_class_hint: internal    # optional: public | internal | confidential |
+                                   # personal | special
+  actions:                         # Things a workflow may ask the application to do.
+    - name: <verb_object>
+      version: 1
+      title: {de: "<Titel>", en: "<Title>"}
+      via: tools                   # tools (a tool of the add-on's tool server) | rest
+      server: <tool server>        # via: tools
+      tool: <tool name>
+      # via: rest instead: base_url, method, path
+      identity: person             # person: the token of the person the run acts
+                                   # for is exchanged for `audience`; service: one
+                                   # key of the application, only in service steps
+      audience: <client id>
+      effect: read                 # read | write | send
+      retry: safe                  # safe | idempotent_with_key | at_most_once
+                                   # (default: at_most_once)
+      input_schema: {type: object}
+      output_schema: {type: object}
+      data_class_max: internal     # optional: highest data class the action accepts
+      timeout: 30s                 # optional
+
 env_prompts:                       # optional: metadata per .env.example key
   SOME_URL:
     label: "Human-readable label"  # default: KEY_NAME title-cased
@@ -285,6 +322,34 @@ Only values that differ from the `.env.example` literal are written to the confi
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
+
+#### The `flow:` section
+
+The optional section `flow:` declares what an add-on offers to the workflow
+module papaia Flow: **events** that start or wake a workflow and **actions** a
+workflow may call. The core does not interpret it. It is part of the manifest
+so that one file describes the add-on, and so that the checks every reader
+applies to the manifest (name, version, path) apply to it too.
+
+- **Readers ignore it.** A core or manager that does not know the section
+  keeps working (readers ignore unknown manifest keys). No `addon_api` step
+  is needed; an add-on with the section still installs on a core without
+  papaia Flow.
+- **A declaration is a proposal.** Flow reads the section from the add-on
+  directory it is given read-only (`FLOW_ADDON_DIR`). Nothing in it takes
+  effect until a second person approved it in Flow; a changed section is a
+  new proposal while the approved one stays in force.
+- **Removal.** When the add-on is uninstalled its link in Flow is suspended
+  and, after a grace time, retired. `papaia-ctl addon uninstall` should name
+  the workflows Flow lists as affected before it goes on.
+- **Paths** in the section (`data_schema`) are relative to the add-on
+  directory and stay inside it.
+- **Secrets never appear in it.** The signing secret of the receiver and the
+  key of a `service` action are set in Flow, not in the manifest.
+
+The schema of the section ships with papaia Flow (`link.v1.schema.json`); Flow
+validates the section when it reads the add-on directory. The core does not
+validate it.
 
 ### 6.3 Example A: `papaia-addon-paperless`
 
