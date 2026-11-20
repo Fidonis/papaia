@@ -51,6 +51,7 @@ from . import (
     secrets,
     stack_network,
     status,
+    suite,
     topology,
     upgrade,
 )
@@ -816,6 +817,71 @@ def cmd_topology_node_of(args: argparse.Namespace) -> int:
 
 def cmd_topology_project(args: argparse.Namespace) -> int:
     return _project_bundles(Path(args.config_dir), Path(args.repo_root))
+
+
+def cmd_suite_verify(args: argparse.Namespace) -> int:
+    """Verify a suite bill of materials: signature against a trusted release key,
+    then structure, counts, scope and suite. Read-only; exit 0 when it can be
+    trusted, else 2.
+
+    Without --key or --fingerprint the release key pinned in this checkout
+    (compat/release-key.pub) is the anchor; the key inside the file is never
+    trusted on its own. Without --suite an older file signed with the same key
+    also passes; the command warns and reports `suite_bound: false`."""
+    if not args.bom:
+        print("ERROR: --bom=FILE is required.", file=sys.stderr)
+        return 2
+    signature = Path(args.signature or f"{args.bom}.sig")
+    key_path = Path(args.key) if args.key else None
+    if key_path is None and args.fingerprint is None:
+        pinned = Path(args.repo_root) / suite.RELEASE_KEY_PATH
+        if not pinned.is_file():
+            print(
+                f"ERROR: no trust anchor: {suite.RELEASE_KEY_PATH} is not in this checkout; "
+                "pass --key=FILE or --fingerprint=sha256:HEX.",
+                file=sys.stderr,
+            )
+            return 2
+        key_path = pinned
+    try:
+        doc = suite.verify_bom(
+            Path(args.bom),
+            signature,
+            key_path=key_path,
+            fingerprint=args.fingerprint,
+            require_scope=args.scope,
+            expected_suite=args.suite,
+        )
+    except suite.SuiteError as exc:
+        print(f"ERROR: {args.bom}: {exc}", file=sys.stderr)
+        return 2
+    summary = {
+        "verified": True,
+        "suite": doc["suite"],
+        "suite_bound": args.suite is not None,
+        "scope": doc["scope"],
+        "fingerprint": doc["signing_key"]["fingerprint"],
+        "contract_generation": doc["contract_generation"],
+        "repos": [
+            {"name": r["name"], "role": r["role"], "version": r["version"], "commit": r["commit"]}
+            for r in doc["repos"]
+        ],
+        "totals": doc["totals"],
+    }
+    if args.suite is None:
+        print(
+            f"WARNING: suite not bound: an older bill of materials signed with the same key "
+            f"also passes; pass --suite={doc['suite']} to refuse any other suite.",
+            file=sys.stderr,
+        )
+    if args.json:
+        print(json.dumps(summary))
+        return 0
+    print(f"Suite {doc['suite']} ({doc['scope']}): signature OK, key {summary['fingerprint']}")
+    for repo in summary["repos"]:
+        print(f"  {repo['name']:<24} {repo['role']:<9} {repo['version']:<12} {repo['commit']}")
+    print(f"  containers: {doc['totals']['containers']}, images: {doc['totals']['images']}")
+    return 0
 
 
 def cmd_render_preview(args: argparse.Namespace) -> int:
@@ -1682,6 +1748,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_check.add_argument("--json", action="store_true")
     p_addon_check.add_argument("--force", action="store_true")
     p_addon_check.set_defaults(func=cli_addon.cmd_addon_check)
+
+    p_suite_verify = sub.add_parser("suite-verify")
+    p_suite_verify.add_argument("--bom", default=None)
+    p_suite_verify.add_argument("--signature", default=None)
+    p_suite_verify.add_argument("--key", default=None)
+    p_suite_verify.add_argument("--fingerprint", default=None)
+    p_suite_verify.add_argument("--suite", default=None)
+    p_suite_verify.add_argument("--scope", choices=suite.SCOPES, default="delivery")
+    p_suite_verify.add_argument("--json", action="store_true")
+    p_suite_verify.set_defaults(func=cmd_suite_verify)
 
     p_addon_components = sub.add_parser("addon-components")
     p_addon_components.add_argument("--name", default=None)

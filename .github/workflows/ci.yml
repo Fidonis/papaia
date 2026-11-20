@@ -56,6 +56,8 @@ jobs:
       # The golden snapshot compares `docker compose config` only on the Compose release it
       # was recorded with; in CI a missing or different Compose fails instead of skipping.
       PAPAIA_REQUIRE_GOLDEN_COMPOSE: "1"
+      # The suite signature tests need openssl; in CI its absence fails instead of skipping.
+      PAPAIA_REQUIRE_OPENSSL: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3

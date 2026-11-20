@@ -27,6 +27,7 @@ from . import (
     render_core,
     reporting,
     semver,
+    suite,
     topology,
 )
 
@@ -501,7 +502,10 @@ def cmd_addon_check(args: argparse.Namespace) -> int:
     ADDON_API, and the compose services from there -- a service rename in
     the target is detected before the switch. `--target-version` /
     `--target-addon-api` are manual fallbacks when no candidate checkout is
-    at hand; each evaluates only the axis it actually knows about."""
+    at hand; each evaluates only the axis it actually knows about.
+
+    When the core ships a suite matrix (compat/suite.yaml), every add-on the
+    matrix names must have a version of the core's suite or the one before it."""
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
 
@@ -546,6 +550,19 @@ def cmd_addon_check(args: argparse.Namespace) -> int:
         return 2
 
     results = evaluate_active_addons(deployed, repo_root, core)
+
+    # The suite matrix of the core being judged: a candidate brings its own.
+    try:
+        matrix = suite.load_matrix(Path(args.target_core) if args.target_core else repo_root)
+    except suite.SuiteError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if matrix is not None:
+        versions = active_addon_versions(deployed, repo_root)
+        results = [
+            suite.evaluate_matrix(r, versions.get(r.name), matrix, core.platform_version)
+            for r in results
+        ]
 
     mode = compat.resolve_mode(deployed)
     exit_code = compat.gate(results, mode=mode, force=args.force)

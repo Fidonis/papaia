@@ -471,3 +471,25 @@ _run_migration() {
     fi
     py_cli upgrade-record --migration-id="$id" --duration="$((SECONDS - started))"
 }
+
+# Verifies a signed suite bill of materials (docs/compatibility.md). Read-only and
+# independent of an installation, so it needs no setup.
+cmd_suite_verify() {
+    local -a extra=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --bom=*) extra+=(--bom="${1#*=}") ;;
+            --signature=*) extra+=(--signature="${1#*=}") ;;
+            --key=*) extra+=(--key="${1#*=}") ;;
+            --fingerprint=*) extra+=(--fingerprint="${1#*=}") ;;
+            --suite=*) extra+=(--suite="${1#*=}") ;;
+            --scope=*) extra+=(--scope="${1#*=}") ;;
+            --json) extra+=(--json) ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for suite verify: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$DEFAULT_CONFIG_DIR"
+    py_cli suite-verify ${extra[@]+"${extra[@]}"}
+}

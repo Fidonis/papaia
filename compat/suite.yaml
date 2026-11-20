@@ -1,0 +1,41 @@
+# Compatibility matrix: core x manager x modules, one row per suite.
+#
+# Read by `papaia-ctl addon check` (tools/lib/suite.py): an active add-on named
+# under `components` must have a version inside its cell of the core's suite or
+# of the suite before it. Ranges use the papaia-ctl grammar (comma = AND).
+# `addon_api` is the add-on contract window the suite's core serves; the newest
+# row always equals ADDON_API. docs/compatibility.md shows the same table and
+# must be updated together with this file.
+schema: papaia.compat-matrix/1
+components:
+  - manager
+  - papaia-me
+  - papaia-studio
+  - papaia-data
+  - papaia-flow
+  - papaia-assist
+  - paperless
+suites:
+  - suite: 1.9.0
+    status: released
+    core: ">=1.9.0,<1.10.0"
+    addon_api:
+      min: 1
+      current: 6
+    versions:
+      manager: ">=1.7.0,<1.8.0"
+      paperless: ">=2.0.0,<3.0.0"
+  - suite: 1.10.0
+    status: candidate
+    core: ">=1.10.0,<1.11.0"
+    addon_api:
+      min: 1
+      current: 12
+    versions:
+      manager: ">=1.8.0,<1.9.0"
+      papaia-me: ">=0.1.0,<0.2.0"
+      papaia-studio: ">=0.2.0,<0.3.0"
+      papaia-data: ">=0.1.0,<0.2.0"
+      papaia-flow: ">=0.1.0,<0.2.0"
+      papaia-assist: ">=0.1.0,<0.2.0"
+      paperless: ">=2.0.0,<3.0.0"

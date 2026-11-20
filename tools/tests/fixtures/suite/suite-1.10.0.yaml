@@ -1,0 +1,111 @@
+schema: papaia.suite-bom/1
+suite: 1.10.0
+scope: delivery
+created: '2026-11-20T10:00:00Z'
+contract_generation:
+  min: 1
+  current: 7
+signing_key:
+  algorithm: ecdsa-p256-sha256
+  fingerprint: sha256:c557384b8f3c7d20d048ea1c636cd7c1bb6b7d18f2bd189e45dbc8a3025f4aef
+  public_key: |
+    -----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9JelCExxcNGp6g7r0kHjHAvLXgoP
+    +yrUJVq2Z5VtpW8k/PsusIX1G/mdS6eS+C02M8+pZ+F69A2GaT6WIGZ7ZA==
+    -----END PUBLIC KEY-----
+repos:
+  - name: papaia
+    role: core
+    version: 1.10.0
+    tag: v1.10.0
+    commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    containers: 1
+    images:
+      - name: ghcr.io/fidonis/papaia-core
+        tag: 1.0.0
+        digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        license: Apache-2.0
+        license_class: P
+        sbom_digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        delivery: shipped
+  - name: papaia-manager
+    role: manager
+    version: 1.8.0
+    tag: v1.8.0
+    commit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    containers: 1
+    images:
+      - name: ghcr.io/fidonis/manager
+        tag: 1.0.0
+        digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+        license: Apache-2.0
+        license_class: P
+        sbom_digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        delivery: shipped
+  - name: papaia-flow
+    role: module
+    version: 0.1.0
+    tag: v0.1.0
+    commit: cccccccccccccccccccccccccccccccccccccccc
+    containers: 1
+    images:
+      - name: ghcr.io/fidonis/flow
+        tag: 1.0.0
+        digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+        license: Apache-2.0
+        license_class: P
+        sbom_digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        delivery: shipped
+  - name: papaia-addons
+    role: addon
+    version: 1.4.0
+    tag: v1.4.0
+    commit: dddddddddddddddddddddddddddddddddddddddd
+    containers: 1
+    images:
+      - name: ghcr.io/fidonis/addon
+        tag: 1.0.0
+        digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+        license: Apache-2.0
+        license_class: P
+        sbom_digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        delivery: shipped
+  - name: qdrant-mcp-rbac
+    role: mcp
+    version: 0.5.0
+    tag: v0.5.0
+    commit: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    containers: 1
+    images:
+      - name: ghcr.io/fidonis/qmcp
+        tag: 1.0.0
+        digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
+        license: Apache-2.0
+        license_class: P
+        sbom_digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        delivery: shipped
+  - name: paperless-mcp-rbac
+    role: mcp
+    version: 0.2.0
+    tag: v0.2.0
+    commit: '6666666666666666666666666666666666666666'
+    containers: 1
+    images:
+      - name: ghcr.io/fidonis/pmcp
+        tag: 1.0.0
+        digest: sha256:6666666666666666666666666666666666666666666666666666666666666666
+        license: Apache-2.0
+        license_class: P
+        sbom_digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        delivery: shipped
+  - name: papaia-kit
+    role: kit
+    version: 0.1.0
+    tag: v0.1.0
+    commit: '9999999999999999999999999999999999999999'
+    containers: 0
+    images: []
+    snapshot_sha256: '8888888888888888888888888888888888888888888888888888888888888888'
+totals:
+  containers: 6
+  images: 6

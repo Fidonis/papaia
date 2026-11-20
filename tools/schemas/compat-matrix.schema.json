@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "papaia-compat-matrix.schema.json",
+  "title": "papaia compatibility matrix (compat/suite.yaml)",
+  "description": "One row per suite: the core versions it covers, the add-on contract window and the version range of each component. Ranges use the papaia-ctl constraint grammar (comma = AND). `papaia-ctl addon check` evaluates it; it also enforces ascending, distinct suite rows and that each cell names a listed component.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "components", "suites"],
+  "properties": {
+    "schema": {"const": "papaia.compat-matrix/1"},
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}
+    },
+    "suites": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["suite", "status", "core", "addon_api", "versions"],
+        "properties": {
+          "suite": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$"},
+          "status": {"enum": ["released", "candidate"]},
+          "core": {"$ref": "#/$defs/range"},
+          "addon_api": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["min", "current"],
+            "properties": {
+              "min": {"type": "integer", "minimum": 0},
+              "current": {"type": "integer", "minimum": 0}
+            }
+          },
+          "versions": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {"$ref": "#/$defs/range"}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "range": {"type": "string", "minLength": 1, "maxLength": 128}
+  }
+}

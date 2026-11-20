@@ -86,6 +86,9 @@
 #   papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
 #   papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
+#   papaia-ctl suite verify  --bom=FILE [--signature=FILE] [--json]
+#                            [--key=FILE | --fingerprint=sha256:HEX]
+#                            [--suite=VERSION] [--scope=delivery|test]
 #   papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
 #                              [--config-dir=PATH]
 #   papaia-ctl help
@@ -102,7 +105,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,98p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -218,6 +221,13 @@ case "$cmd" in
             uninstall) cmd_addon_uninstall "$@" ;;
             run)       cmd_addon_run "$@" ;;
             *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, upgrade, rollback, list, check, components, stop, remove, uninstall, run."; exit 2 ;;
+        esac
+        ;;
+    suite)
+        sub="${1:-}"; shift || true
+        case "$sub" in
+            verify)    cmd_suite_verify "$@" ;;
+            *) error "Unknown 'suite' subcommand: '${sub:-<none>}'. Valid: verify."; exit 2 ;;
         esac
         ;;
     help|-h|--help) usage ;;
