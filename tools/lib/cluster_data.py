@@ -219,7 +219,10 @@ def _stream_args(artifact: backup.Artifact) -> list[str]:
 
 def _archive_config_dir(cluster: Cluster, snapshot: Path, archive: str) -> bool:
     """The controller's configuration directory, through a throwaway container as on one
-    host: files the services wrote belong to their users, not to this one."""
+    host: files the services wrote belong to their users, not to this one. The key of the
+    test stack's hosted model is never archived."""
+    from . import hosted_model
+
     done = subprocess.run(
         [
             "docker",
@@ -233,6 +236,7 @@ def _archive_config_dir(cluster: Cluster, snapshot: Path, archive: str) -> bool:
             "tar",
             "czf",
             f"/backup/{archive}",
+            f"--exclude=./{hosted_model.KEY_FILE}",
             "-C",
             "/src",
             ".",

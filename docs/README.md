@@ -14,6 +14,8 @@ Welcome to the papAIa documentation.
   the distributed mode on two machines
 - [The single exit](./egress.md) — papaia-egress: allow lists per add-on, protected hosts,
   corporate proxy
+- [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
+  only
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions
 - [Parallel Search MCP in LibreChat](./parallel-search-mcp.md) — opt-in hosted web search
   through the customer overlay

@@ -458,6 +458,12 @@ def _install_localai(repo_root, models: str = _LOCALAI_MODELS) -> None:
     for path in (REAL_REPO / "src" / "ai" / "localai" / "models").glob("*.yaml"):
         shutil.copy(path, target / "models" / path.name)
     (target / "models.txt").write_text(models, encoding="utf-8")
+    # The generated entries route to the `localai` service, which the core compose
+    # includes, as in the real repo.
+    root = repo_root / "src" / "docker-compose.yml"
+    doc = yaml.safe_load(root.read_text(encoding="utf-8")) or {}
+    doc.setdefault("include", []).append({"path": "./ai/localai/docker-compose.yml"})
+    root.write_text(yaml.safe_dump(doc), encoding="utf-8")
 
 
 def _rendered_litellm(config_dir):
@@ -543,7 +549,9 @@ def test_an_overlay_entry_with_the_same_name_replaces_the_generated_one(repo_roo
         "  - model_name: qwen2.5-1.5b-instruct\n"
         "    litellm_params:\n"
         "      model: openai/gpt-4o-mini\n"
-        "      api_key: os.environ/OPENAI_API_KEY\n"
+        # LocalAI inside the stack: a route outside it needs the test stack.
+        "      api_base: http://localai:8080/v1\n"
+        "      api_key: os.environ/LOCALAI_API_KEY\n"
     )
     render_core.render(config_dir, repo_root)
 
@@ -660,6 +668,7 @@ def test_the_preview_of_litellm_shows_the_generated_models_before_any_render(
     draft = (
         "model_list:\n  - model_name: nomic-embed-text\n    litellm_params:\n"
         "      model: openai/x\n"
+        "      api_base: http://localai:8080/v1\n"
     )
     result = render_core.preview(config_dir, repo_root, "ai/litellm/config.yaml", draft)
     assert "openai/qwen2.5-1.5b-instruct" in result["current"]
@@ -712,6 +721,16 @@ def _install_voice_module(repo_root):
         REAL_REPO / "src" / "ai" / "voice" / "chatterbox.yaml",
         repo_root / "src" / "ai" / "voice" / "chatterbox.yaml",
     )
+    # The real compose file, included as in the real repo: the fragment's routes go to
+    # its services, which the render accepts as inside the stack only while they exist.
+    shutil.copy(
+        REAL_REPO / "src" / "ai" / "voice" / "docker-compose.yml",
+        repo_root / "src" / "ai" / "voice" / "docker-compose.yml",
+    )
+    root = repo_root / "src" / "docker-compose.yml"
+    doc = yaml.safe_load(root.read_text(encoding="utf-8")) or {}
+    doc.setdefault("include", []).append({"path": "./ai/voice/docker-compose.yml"})
+    root.write_text(yaml.safe_dump(doc), encoding="utf-8")
 
 
 def test_render_merges_the_voice_fragments_only_while_the_profile_is_active(

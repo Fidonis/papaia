@@ -3,7 +3,9 @@
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
 # LITELLM_MASTER_KEY, LITELLM_SALT_KEY, DATABASE_URL are set via .env.
-# No models are shipped by default. Add models and teams in the Admin UI.
+# No models are shipped by default. Models come from the LocalAI profile and
+# the overlay (see "Models" below), teams from the Admin UI. A model added in
+# the Admin UI bypasses the check of the render (docs/hosted-test-model.md).
 
 general_settings:
   ui_access_mode: "sso_only"
@@ -41,12 +43,16 @@ router_settings:
 # key itself is never written here. An overlay entry with the same model_name
 # replaces the generated one.
 #
-# Other models are added in the Admin UI → Models, so that their API keys are
-# stored in the database and not in this file, or through an overlay of this
-# file ($PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml) with `api_key:
-# os.environ/<VAR>` and the variable in litellm/.env. Do not register a
-# generated name in the Admin UI as well: LiteLLM would split the traffic
-# between both entries.
+# Other models are added through an overlay of this file
+# ($PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml) with `api_key:
+# os.environ/<VAR>` and the variable in litellm/.env. Their api_base must name
+# a service the stack defines (a compose service of an active profile or
+# add-on, such as http://localai:8080/v1), their provider must be one that
+# sends to api_base only (openai/, hosted_vllm/, ollama/ ...), and they may
+# name no other endpoint. The render refuses every other route unless the test
+# stack switched the hosted test model on (docs/hosted-test-model.md). Do not
+# register a generated name in the Admin UI as well: LiteLLM would split the
+# traffic between both entries.
 #
 # The LibreChat RAG API embeds with the model named in RAG_EMBEDDINGS_MODEL
 # (ai/librechat/.env, default nomic-embed-text). Activate its line in the
@@ -54,33 +60,16 @@ router_settings:
 
 model_list: []
 
-  # ── Cloud models ──────────────────────────────────────────────────────────
-  # Mammouth.ai — requires MAMMOUTH_API_KEY in litellm/.env
-  # Check available model IDs in your Mammouth dashboard.
-  # - model_name: mammouth-chat
+  # ── Hosted model: test stack only (docs/hosted-test-model.md) ─────────────
+  # Without PAPAIA_TEST_EXTERNAL_MODEL=1 in $PAPAIA_CONFIG_DIR/.env the render
+  # refuses this entry. Put it into the overlay, replace the model id and the
+  # host with the provider's, and keep TEST_HOSTED_API_KEY only in
+  # $PAPAIA_CONFIG_DIR/ai/litellm/test-hosted.env (mode 0600), never in
+  # ai/litellm/.env, which every backup carries.
+  # >>> hosted example
+  # - model_name: test-hosted-chat
   #   litellm_params:
-  #     model: "openai/gpt-4.1-mini"
-  #     api_base: "os.environ/MAMMOUTH_API_BASE"
-  #     api_key: "os.environ/MAMMOUTH_API_KEY"
-
-  # - model_name: mammouth-embed
-  #   litellm_params:
-  #     model: "openai/text-embedding-3-small"
-  #     api_base: "os.environ/MAMMOUTH_API_BASE"
-  #     api_key: "os.environ/MAMMOUTH_API_KEY"
-
-  # OpenRouter — requires OPENROUTER_API_KEY in litellm/.env
-  # - model_name: openrouter/mistral-large
-  #   litellm_params:
-  #     model: "openrouter/mistralai/mistral-large"
-  #     api_key: "os.environ/OPENROUTER_API_KEY"
-
-  # - model_name: openrouter/llama-3.1-70b
-  #   litellm_params:
-  #     model: "openrouter/meta-llama/llama-3.1-70b-instruct"
-  #     api_key: "os.environ/OPENROUTER_API_KEY"
-
-  # - model_name: openrouter/gemini-2.0-flash
-  #   litellm_params:
-  #     model: "openrouter/google/gemini-2.0-flash-001"
-  #     api_key: "os.environ/OPENROUTER_API_KEY"
+  #     model: openai/reference-chat
+  #     api_base: https://api.example.com/v1
+  #     api_key: os.environ/TEST_HOSTED_API_KEY
+  # <<< hosted example

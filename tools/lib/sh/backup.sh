@@ -408,10 +408,14 @@ _backup_artifact() {
                 # shellcheck disable=SC2046
                 _pause_containers $(_containers_of_project "$project")
             fi
+            # The key of the test stack's hosted model never goes into an archive
+            # (lib/hosted_model.py KEY_FILE); a bind mount has no such file to leave out.
+            local -a exclude=()
+            [ "$kind" = "configdir" ] && exclude=(--exclude=./ai/litellm/test-hosted.env)
             _docker_run \
                 -v "$(_docker_hostpath "$source"):/src:ro" \
                 -v "${snapshot_mount}:/backup" \
-                "$BACKUP_IMAGE" tar czf "/backup/${archive}" -C /src . || rc=$?
+                "$BACKUP_IMAGE" tar czf "/backup/${archive}" ${exclude[@]+"${exclude[@]}"} -C /src . || rc=$?
             _unpause_all
             ;;
         *)

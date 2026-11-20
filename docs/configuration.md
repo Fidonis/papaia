@@ -199,6 +199,19 @@ checks. The allow lists come from the add-on manifests (`networks.egress`), the 
 hosts from `$PAPAIA_CONFIG_DIR/security/protected-hosts.yaml` and the internal ranges an
 add-on may reach from `$PAPAIA_CONFIG_DIR/security/egress-internal-targets.yaml`.
 
+## Hosted test model variable
+
+Root `.env`, read by `papaia-ctl` when it renders LiteLLM's configuration
+([hosted-test-model.md](hosted-test-model.md)). Empty by default.
+
+| Variable | Purpose |
+|---|---|
+| `PAPAIA_TEST_EXTERNAL_MODEL` | `1` allows one route of LiteLLM to a model hosted outside the stack, for a test stack with synthetic data only. Any other value: a route outside the stack stops the render |
+
+The key of the hosted model is not a variable of `ai/litellm/.env`: it goes into
+`$PAPAIA_CONFIG_DIR/ai/litellm/test-hosted.env` with mode 0600, which no backup archives,
+under a name `TEST_HOSTED_<NAME>`; the file holds nothing else.
+
 ## Where values come from
 
 `tools/papaia-ctl setup` derives or generates most variables; few are genuinely

@@ -220,9 +220,10 @@ why.
 
 - Only `CONNECT`. Plain-HTTP proxying and protocols that cannot be tunnelled through an HTTP
   proxy (for example SMTP from Postfix) do not go through this service.
-- The allow lists come from the add-on manifests. Lists maintained at run time by a module, and
-  the outbound routes of core services (identity federation, SIEM export), are not part of this
-  release.
+- The allow lists come from the add-on manifests. The one core source is LiteLLM in a test
+  stack with the hosted test model switched on ([hosted-test-model.md](hosted-test-model.md)).
+  Lists maintained at run time by a module, and the other outbound routes of core services
+  (identity federation, SIEM export), are not part of this release.
 - At most 512 connections at a time, 128 of them from one add-on; a tunnel without traffic in
   either direction for five minutes is closed. One add-on cannot use up the exit of the others.
 - In a distributed installation the service runs on the controller, next to the add-ons.

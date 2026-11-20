@@ -239,7 +239,7 @@ def _core_networks(env: dict[str, str]) -> dict[str, str]:
     return names
 
 
-def _allowed_host(value: object) -> str:
+def allowed_host(value: object) -> str:
     """An allow-list host that is outside the stack by its name: no single label (a
     service name in Docker's DNS), not one of the proxy's aliases or the stack's
     services, not the Docker host."""
@@ -324,7 +324,7 @@ def addon_egress(manifest: dict, config_dir: Path, addon_path: Path) -> dict | N
         allow = []
         for rule in _list(declared.get("allow", []), "allow"):
             rule = _check_fields(rule, {"host", "ports"}, set())
-            allow.append({"host": _allowed_host(rule["host"]), "ports": _ports(rule["ports"])})
+            allow.append({"host": allowed_host(rule["host"]), "ports": _ports(rule["ports"])})
     except ValueError as exc:
         raise EgressError(f"add-on '{name}': networks.egress: {exc}") from exc
     return {"name": name, "network": network, "allow": allow}
@@ -428,19 +428,34 @@ def render(config_dir: Path, repo_root: Path | None = None) -> Path:
     """Write the proxy configuration. Raises EgressError, writing nothing, when the
     protected hosts, the internal targets, an add-on's declaration or the corporate
     proxy are unusable."""
+    from . import hosted_model  # reads the rendered LiteLLM configuration
+
     env = common.parse_env_file(config_dir / ".env")
     opened = load_internal_targets(config_dir)
+    sources = [
+        {
+            "name": d["name"],
+            "alias": alias(d["name"]),
+            "allow": d["allow"],
+            "internal": opened.get(d["name"], []),
+        }
+        for d in declarations(config_dir, repo_root)
+    ]
+    # The test stack's hosted model: LiteLLM is one more source, allowed to its one host.
+    try:
+        gateway = hosted_model.egress_source(config_dir, repo_root)
+    except hosted_model.HostedModelError as exc:
+        raise EgressError(str(exc)) from exc
+    if gateway is not None:
+        if any(s["name"] == gateway["name"] for s in sources):
+            raise EgressError(
+                f"add-on '{gateway['name']}': networks.egress: the name is the source of the"
+                " model gateway while the hosted test model is on"
+            )
+        sources.append(gateway)
     config = {
         "format": CONFIG_FORMAT,
-        "sources": [
-            {
-                "name": d["name"],
-                "alias": alias(d["name"]),
-                "allow": d["allow"],
-                "internal": opened.get(d["name"], []),
-            }
-            for d in declarations(config_dir, repo_root)
-        ],
+        "sources": sources,
         "protected": load_protected_hosts(config_dir),
         "upstream": upstream_proxy(env, config_dir),
     }

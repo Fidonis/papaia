@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, compat, deployment, egress, gpu_detect
+from . import common, compat, deployment, egress, gpu_detect, hosted_model
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
 # `networks.app_network` may use to scope its bridge name to the deployment
@@ -90,19 +90,22 @@ def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
 def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[Path]:
     """Read deployment.yaml's active addons and (re-)generate every
     Seam-1 override, plus the attachment of papaia-egress to each add-on's
-    egress network (lib/egress.py). Always empty on the lean core today.
+    egress network (lib/egress.py) and, while the test stack's hosted model is on, the
+    override that puts LiteLLM behind papaia-egress (lib/hosted_model.py).
 
     `repo_root` is used as the base when resolving relative addon paths
     from deployment.yaml (matching render_core.render's behaviour). When
     omitted, Path.cwd() is used — kept for backwards compatibility but
     callers should always supply repo_root.
     """
+    # LiteLLM behind papaia-egress while the test stack's hosted model is on.
+    hosted = hosted_model.generate_override(config_dir, repo_root)
+    written: list[Path] = [hosted] if hosted is not None else []
     deployed = deployment.load(config_dir)
     if not deployed:
-        return []
+        return written
 
     base = repo_root if repo_root is not None else Path.cwd()
-    written: list[Path] = []
     for addon in deployment.active_addons(deployed):
         manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(addon, base))
         if manifest is None:

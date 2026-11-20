@@ -34,6 +34,7 @@ from . import (
     common,
     deployment,
     egress,
+    hosted_model,
     keycloak_role_sync,
     knowledge_map,
     localai_native,
@@ -477,6 +478,14 @@ def _effective_text(
                 )
         if layer is not None:
             merged = _merge_layer(merged, layer, overlay_label)
+        if rel_path == LITELLM_CONFIG:
+            # Every layer is in: a route outside the stack is refused here whichever
+            # layer brought it, unless the test stack switched the hosted model on.
+            try:
+                names = hosted_model.stack_names(repo_root, config_dir, active_addons)
+                merged = hosted_model.guard(merged, config_dir, names)
+            except hosted_model.HostedModelError as exc:
+                raise RenderError(str(exc)) from exc
         return _dump_structured(base_path.suffix, merged)
 
     # Non-structured file: the highest layer present replaces the base
