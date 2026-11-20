@@ -366,9 +366,13 @@ def test_an_approval_without_a_terminal_names_what_was_shown(expected):
 
 
 def test_a_version_flow_shows_other_than_the_one_named_is_not_approved():
-    fake = FakeFlow([_proposal(version="1.0.0")])
-    manifest = {"version": "1.0.1"}
-    outcome, _ = _link(fake, approve=True, manifest=manifest, wait_s=0.0, **_shown())
+    # Flow still shows the version before: it has not read this one.
+    fake = FakeFlow([_proposal(version="0.9.0")])
+    outcome, _ = _link(fake, approve=True, wait_s=0.0, **_shown())
+    assert (outcome, fake.approvals) == ("not_read", [])
+    # The manifest installed is another version than the one named.
+    fake = FakeFlow([_proposal(version="1.0.1")])
+    outcome, _ = _link(fake, approve=True, manifest={"version": "1.0.1"}, **_shown())
     assert (outcome, fake.approvals) == ("error", [])
 
 
