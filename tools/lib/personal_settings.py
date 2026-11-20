@@ -159,6 +159,9 @@ MAX_SETTINGS = 64
 MAX_ITEM_FIELDS = 16
 MAX_OPTIONS = 64
 MAX_OPERATIONS = 8
+# Contract v1 knows these collection operations, and the personal area offers no other; a
+# new operation comes with a new contract version, not with a declaration.
+OPERATIONS = ("create", "end", "renew")
 MAX_DAYS = 3660
 
 _MODULE_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
@@ -638,6 +641,12 @@ def _group(check: _Checker, raw, where: str) -> dict:
             check.string(o, f"{where}.operations", _OPERATION_RE, "an operation name")
             for o in operations
         ]
+        for name in names:
+            if name not in OPERATIONS:
+                check.fail(
+                    f"{where}.operations",
+                    f"{name!r} is not an operation of contract v1 ({', '.join(OPERATIONS)})",
+                )
         if len(set(names)) != len(names):
             check.fail(f"{where}.operations", "lists an operation twice")
         out["operations"] = names

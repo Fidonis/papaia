@@ -285,12 +285,12 @@
           }
         },
         "operations": {
-          "description": "create adds an item (POST .../items); every other name is an operation on one item (POST .../items/{id}/{operation}).",
+          "description": "Contract v1 knows create, end and renew. create adds an item (POST .../items); end and renew act on one item (POST .../items/{id}/{operation}).",
           "type": "array",
           "minItems": 1,
-          "maxItems": 8,
+          "maxItems": 3,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }
+          "items": { "enum": ["create", "end", "renew"] }
         }
       }
     }
