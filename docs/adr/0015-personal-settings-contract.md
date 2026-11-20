@@ -143,6 +143,34 @@ is the single truth; the modules refer to it.
     used for another request); a created item answers with `Location`; `display` is a
     name, never an e-mail address, else `Person <first 8 characters of the id>`.
 
+### Amendment of 20.11.2026: review of the area and the render
+
+19. **An audience belongs to one owner.** An add-on that registered a fragment with the
+    client ID `papaia-manager` (or `assist-api`, `account` …) could make the area hand a
+    token for that service to the add-on's own service. The render therefore refuses as an
+    add-on's audience every client of the core (realm template, fixed audiences of the
+    core modules, Keycloak's built-in clients) and every client that another active
+    add-on's fragment defines too; the audience must be a client that only the add-on's
+    own fragment defines. `ADDON_REALM_CLIENTS` stays for papaia Flow and is bound to the
+    add-on `papaia-flow` alone. The registry never holds one audience twice.
+20. **Declared patterns come from a safe subset.** Python's engine backtracks; a plausible
+    pattern such as `([A-Za-z]+ ?)+` blocks the area's single worker for seconds on 25
+    characters. A non-backtracking engine would have been a new native dependency of the
+    area and a second dialect for module authors; the core instead renders only a subset
+    whose number of ways to match a text of the field's `max_length` is bounded (no
+    nested loops, no alternatives under a loop, no backreferences or lookaround, at most
+    1,000,000 ways), and the area checks the same rules again and matches only texts within
+    `max_length`. The rules are in the contract, section 1.
+21. **Endpoint rules are the area's.** `service` is a DNS label and paths have no `~` and
+    no segment starting with a dot; the render no longer passes what the area refuses.
+22. **One audience also at sign-in and refresh.** The one-audience policies name the
+    grant types `token-exchange`, `authorization_code` and `refresh_token`. Run against a
+    local Keycloak 26.7.0 with the sync's own code: an authorization request of
+    `papaia-me` for `aud-flow aud-assist-api` is refused before the sign-in, a refresh of a
+    grant with both made before the policy is refused, single scopes and the plain sign-in
+    keep working. Without the explicit grant types Keycloak already refused the code grant
+    at the token endpoint; the explicit form does not rely on that.
+
 ## Consequences
 
 - **Positive**: one place for the person, without a central profile of everyone's
@@ -163,6 +191,9 @@ is the single truth; the modules refer to it.
 - **Negative**: a new add-on whose client comes from its own realm setup needs an entry
   in `ADDON_REALM_CLIENTS` before it can declare personal settings; a fragment is the
   way that needs no change of the core.
+- **Negative**: a module author cannot use every regular expression in `pattern`; a
+  pattern such as `(\d+\.){3}\d+` has to be written without the loop over a group with a
+  quantifier (`\d+\.\d+\.\d+\.\d+`).
 - **Neutral**: the core has no platform-wide `PAPAIA_SECURITY_PROFILE` in its own
   configuration yet; `me-web` reads it with the default `standard`.
 

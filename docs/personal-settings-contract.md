@@ -27,7 +27,7 @@ personal_settings:
   module: papaia-flow                   # unique; for an add-on its name
   title: {de: "Abläufe", en: "Workflows"}
   endpoint:
-    service: flow-api                   # Compose service, reachable from me-web
+    service: flow-api                   # Compose service (a DNS label), reachable from me-web
     scheme: https                       # http (default) | https
     port: 8444
     base_path: /api/v1/me/settings      # the module API, section 3
@@ -96,16 +96,39 @@ chosen from the module's own list of persons (section 3.3), never typed in.
   instruction to a model, zero-width and direction-changing characters are refused.
 - **Defaults fit**: a default is among the options, within `min`..`max`, at most
   `max_length` long and matches `pattern`; `pattern` compiles; `min` ≤ `max`.
+- **Patterns of a safe subset.** The area matches a person's text against `pattern` on
+  every save (always as a full match), and the engine backtracks. A pattern is therefore
+  rendered only from this subset: literals, `.`, classes `[...]`, the escapes `\d \D \w
+  \W \s \S \b \B \A \Z \n \t \r \f \v` and escaped punctuation, anchors `^ $`, groups
+  `(...)` and `(?:...)`, alternatives `|`, and the quantifiers `* + ? {m} {m,} {m,n}`
+  (also lazy) with bounds up to 1000. Refused: backreferences, lookaround, inline flags,
+  conditionals, named groups, possessive quantifiers, an unescaped `{`, `}` or nested `[`,
+  a loop (a quantifier that may repeat more than once) over a part that holds a quantifier
+  or an alternative, and a pattern with more than 1,000,000 ways to match a text of the
+  field's `max_length` (a loop counts once per possible repetition count, an optional part
+  and every alternative add their own). `([A-Za-z]+ ?)+` is refused, `^(https://\S+)?$`
+  and `^[^@]*$` are rendered. The area checks the same rules and refuses a value against a
+  pattern outside them.
+- **Endpoint names the area can dial**: `service` is a DNS label (lower-case letters,
+  digits, inner hyphens, at most 63 characters; no dot, no underscore); `base_path`,
+  `data.summary` and `data.export` are absolute paths of segments of letters, digits, `_`,
+  `-` and `.`, where no segment starts with a dot (no `~`, no `..`, no trailing slash).
 - **Unique**: group IDs per module, keys per group or item, option values per field,
   module names across the installation.
-- **Audience**: an add-on may only name a client of its own: one it registers through its
-  Keycloak fragments (`integration.keycloak.clients`), or one its own realm setup creates
-  and the core knows by name (`ADDON_REALM_CLIENTS` in `tools/lib/personal_settings.py`:
-  `flow` of the add-on `papaia-flow`, created by its action `idp-setup` and already the
-  audience papaia-manager exchanges for). No other add-on can claim such a client, not even
-  with a fragment of that name. Without a client of its own an add-on cannot use the
-  section. A core module only the audience the core gives it (`assist-api` for Assist).
-  `module` of an add-on is its `name`.
+- **Audience**: an add-on may only name a client of its own: one that its own Keycloak
+  fragments (`integration.keycloak.clients`) and no other active add-on's fragments define,
+  or one its own realm setup creates and the core knows by name (`ADDON_REALM_CLIENTS` in
+  `tools/lib/personal_settings.py`, bound to the add-on of that name: only `flow` of the
+  add-on `papaia-flow`, created by its action `idp-setup` and already the audience
+  papaia-manager exchanges for). Never a client of the core, even through a fragment of the
+  add-on: the clients of the realm template (`papaia-me`, `papaia-manager`, `librechat`
+  …), the fixed audiences of the core modules (`assist-api`, also while its profile is
+  off) and the clients Keycloak creates in every realm (`account`, `account-console`,
+  `admin-cli`, `broker`, `realm-management`, `security-admin-console`). A token for such a
+  client must never reach an add-on's service. Without a client of its own an add-on
+  cannot use the section. A core module only the audience the core gives it (`assist-api`
+  for Assist). `module` of an add-on is its `name`. No audience appears twice in the
+  registry.
 - **One declaration per module**: papaia Flow is installed as the add-on `papaia-flow`
   and declares in its manifest; Assist is a core module (profile `assist`) and declares in
   `src/ai/assist/personal-settings.yaml`. A module name declared twice stops the render.
@@ -161,7 +184,12 @@ part of `digest`.
 - Keycloak 26.7.0 issues a token with two audiences when two are asked for. The realm
   therefore carries one client policy per audience, `papaia-one-audience-<audience>`:
   a token exchange that asks for `aud-<audience>` together with any other managed
-  `aud-*` scope is refused (`400 invalid_request`, "Request not allowed"). The policies
+  `aud-*` scope is refused (`400 invalid_request`, "Request not allowed"). The same holds
+  for the sign-in and its refresh (`grant-type` condition with `authorization_code` and
+  `refresh_token` as well): an authorization request for two `aud-*` scopes is refused
+  before the sign-in (`error=invalid_request`), and a grant with two that was made before
+  the policy existed is not refreshed (run against a local Keycloak 26.7.0 on 20.11.2026
+  with the realm sync's own code). The policies
   work for every client that exchanges this way; besides `papaia-me` that is
   `papaia-manager`, whose only scope is `aud-flow` (approving a Flow link while an add-on
   is installed).
