@@ -17,7 +17,8 @@ tools/schemas/personal-settings.schema.json, plus what a schema cannot say) and 
 declaration that breaks one is refused with a named error instead of being rendered:
 
 - closed field types; for each type only its own properties;
-- defaults among the options and within the bounds, patterns that compile;
+- defaults among the options and within the bounds, patterns of the safe subset (see
+  `pattern_paths`) that compile;
 - plain text only: control characters are removed, markup, links and text shaped like
   instructions to a model are refused, titles stay within 80 and hints within 300
   characters;
@@ -205,6 +206,172 @@ class PersonalSettingsError(Exception):
     """A declaration the registry must not take (broken contract, foreign audience …)."""
 
 
+# The pattern language of a declared text field: a subset of Python's regular expressions
+# in which the ways a full match can be tried stay bounded. Python's engine backtracks; a
+# pattern such as ([A-Za-z]+ ?)+ takes seconds on 25 characters, and the area runs on one
+# worker for every person. Allowed: literals, ".", classes [...], the escapes \d \D \w \W
+# \s \S \b \B \A \Z \n \t \r \f \v and escaped punctuation, anchors ^ $, groups (...) and
+# (?:...), alternatives |, and the quantifiers * + ? {m} {m,} {m,n} (also lazy), with
+# bounds up to PATTERN_BOUND_MAX. Refused: backreferences, lookaround, inline flags,
+# conditionals, named groups, possessive quantifiers, a loop (a quantifier that repeats
+# more than once) over a part that holds a quantifier or an alternative, and any pattern
+# whose number of ways to match a text of the field's maximum length exceeds
+# PATTERN_PATHS_MAX: each loop counts once per possible repetition count, an optional part
+# and every alternative add their own ways.
+PATTERN_PATHS_MAX = 1_000_000
+PATTERN_BOUND_MAX = 1000
+
+_PLAIN_ESCAPES = frozenset("dDwWsSntrfv")
+_ANCHOR_ESCAPES = frozenset("bBAZ")
+_SET_OPERATORS = ("&&", "--", "||", "~~")
+
+
+class _PatternScan:
+    """One pass over a pattern; every method returns (ways, has_quantifier, has_branch)."""
+
+    def __init__(self, pattern: str, length: int) -> None:
+        self.text = pattern
+        self.pos = 0
+        self.length = length
+
+    def peek(self) -> str:
+        return self.text[self.pos] if self.pos < len(self.text) else ""
+
+    def alternation(self) -> tuple[int, bool, bool]:
+        ways, quantified, branched, branches = 0, False, False, 0
+        while True:
+            w, q, b = self.sequence()
+            ways, quantified, branched = ways + w, quantified or q, branched or b
+            branches += 1
+            if self.peek() != "|":
+                return ways, quantified, branched or branches > 1
+            self.pos += 1
+
+    def sequence(self) -> tuple[int, bool, bool]:
+        ways, quantified, branched = 1, False, False
+        while self.peek() not in ("", "|", ")"):
+            w, q, b = self.atom()
+            w, looped = self.quantifier(w, q, b)
+            ways, quantified, branched = ways * w, quantified or q or looped, branched or b
+            if ways > PATTERN_PATHS_MAX:
+                raise ValueError(
+                    f"has more than {PATTERN_PATHS_MAX} ways to match a text of"
+                    f" {self.length} characters"
+                )
+        return ways, quantified, branched
+
+    def atom(self) -> tuple[int, bool, bool]:
+        ch = self.text[self.pos]
+        self.pos += 1
+        if ch == "(":
+            if self.text.startswith("?:", self.pos):
+                self.pos += 2
+            elif self.peek() == "?":
+                raise ValueError("allows only the groups (...) and (?:...)")
+            inner = self.alternation()
+            if self.peek() != ")":
+                raise ValueError("has a group that is not closed")
+            self.pos += 1
+            return inner
+        if ch == ")":
+            raise ValueError("closes a group that was not opened")
+        if ch == "[":
+            self.char_class()
+        elif ch == "\\":
+            self.escape(in_class=False)
+        elif ch in "*+?":
+            raise ValueError("repeats nothing")
+        elif ch in "{}":
+            raise ValueError("needs a brace escaped where it is not a bound")
+        return 1, False, False
+
+    def quantifier(self, ways: int, quantified: bool, branched: bool) -> tuple[int, bool]:
+        ch = self.peek()
+        if ch in ("*", "+", "?"):
+            self.pos += 1
+            low, high = {"*": (0, None), "+": (1, None), "?": (0, 1)}[ch]
+        elif ch == "{":
+            end = self.text.find("}", self.pos)
+            body = self.text[self.pos + 1 : end] if end != -1 else ""
+            parts = body.split(",")
+            digits = all(p.isdigit() for p in parts if p)
+            if end == -1 or len(parts) > 2 or not digits or not parts[0]:
+                raise ValueError("needs a brace escaped where it is not a bound {m}, {m,} or {m,n}")
+            self.pos = end + 1
+            low = int(parts[0])
+            high = low if len(parts) == 1 else (int(parts[1]) if parts[1] else None)
+            if low > PATTERN_BOUND_MAX or (high is not None and high > PATTERN_BOUND_MAX):
+                raise ValueError(f"has a bound above {PATTERN_BOUND_MAX}")
+            if high is not None and high < low:
+                raise ValueError("has a bound {m,n} with n below m")
+        else:
+            return ways, False
+        if self.peek() == "?":
+            self.pos += 1  # lazy: the same ways in another order
+        if self.peek() in ("*", "+", "?", "{"):
+            raise ValueError("puts a quantifier on a quantifier")
+        if high is None or high > 1:
+            if quantified or branched:
+                raise ValueError("repeats a part that holds a quantifier or an alternative")
+            top = self.length if high is None else min(high, self.length)
+            return max(top - low, 0) + 1, True
+        return (ways + 1 if low == 0 and high == 1 else ways), True
+
+    def char_class(self) -> None:
+        if self.peek() == "^":
+            self.pos += 1
+        first = True
+        while True:
+            ch = self.peek()
+            if not ch:
+                raise ValueError("has a class [...] that is not closed")
+            if ch == "]" and not first:
+                self.pos += 1
+                return
+            if ch == "[":
+                raise ValueError("needs a [ inside a class escaped")
+            if self.text.startswith(_SET_OPERATORS, self.pos):
+                raise ValueError("needs doubled & - | ~ inside a class escaped")
+            self.pos += 1
+            if ch == "\\":
+                self.escape(in_class=True)
+            first = False
+
+    def escape(self, *, in_class: bool) -> None:
+        ch = self.peek()
+        if not ch:
+            raise ValueError("ends with a backslash")
+        self.pos += 1
+        if ch in _PLAIN_ESCAPES or (ch in _ANCHOR_ESCAPES and not in_class):
+            return
+        if ch.isascii() and not ch.isalnum():
+            return
+        raise ValueError(f"uses the escape \\{ch}, which is not allowed")
+
+
+def _pattern_ways(pattern: str, length: int) -> int:
+    """The number of ways a full match of `pattern` against a text of at most `length`
+    characters can be tried; ValueError when the pattern is outside the safe subset."""
+    scan = _PatternScan(pattern, length)
+    ways, _, _ = scan.alternation()
+    if scan.pos != len(pattern):
+        raise ValueError("closes a group that was not opened")
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"does not compile: {exc}") from exc
+    return ways
+
+
+def pattern_paths(pattern: str, length: int) -> int:
+    """`_pattern_ways` with the contract's error: a pattern outside the safe subset is a
+    declaration the registry must not take."""
+    try:
+        return _pattern_ways(pattern, length)
+    except ValueError as exc:
+        raise PersonalSettingsError(f"pattern {exc}") from exc
+
+
 class _Checker:
     """Walks one section and builds its normalised copy. Every error names the origin
     (module or add-on) and the place in the section."""
@@ -368,9 +535,10 @@ def _field(check: _Checker, raw, where: str) -> dict:
             if not isinstance(pattern, str) or not 1 <= len(pattern) <= 200:
                 check.fail(f"{where}.pattern", "must be a string of 1..200 characters")
             try:
-                compiled = re.compile(pattern)
-            except re.error as exc:
-                check.fail(f"{where}.pattern", f"does not compile: {exc}")
+                _pattern_ways(pattern, out["max_length"])
+            except ValueError as exc:
+                check.fail(f"{where}.pattern", f"is outside the safe pattern language: it {exc}")
+            compiled = re.compile(pattern)
             out["pattern"] = pattern
         if "default" in raw:
             default = raw["default"]
