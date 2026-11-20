@@ -180,6 +180,9 @@ _CLOCK_RE = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 # rules keep a declaration from even trying: no markup, no links, no smuggled characters,
 # nothing shaped like an instruction to a model (the area may hand titles to the search
 # or to an assistant later). Every hit refuses the declaration.
+# The two instruction patterns are the same as in the knowledge map's injection scan
+# (tools/lib/knowledge_map.py, release 1.9.0). They stay here until both modules are on
+# main; then one shared list keeps them from drifting apart.
 _FORBIDDEN_TEXT: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"<\s*/?\s*[A-Za-z!?]"), "markup"),
     (re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://"), "a link"),
