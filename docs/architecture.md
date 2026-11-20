@@ -650,6 +650,28 @@ ledger. An **add-on** runs on one node: `addon install --node`, and the compatib
 refuses an add-on that attaches to core services on two nodes. The operator guide is
 [distributed.md](distributed.md).
 
+### Internal TLS between services (`pki` profile)
+
+The optional `pki` profile is the one certificate authority of an installation for TLS
+between its services (ADR 0019). Its key lives in the volume `<project>_pki-ca`, which only a
+one-shot issuer container mounts; no runtime service and not the config directory. Modules
+ask for certificates in a `pki:` block, an add-on in `papaia-app.yaml`, a core module in a
+`pki.yaml` next to its compose file:
+
+```yaml
+pki:                               # optional; ignored by a core without the profile
+  services:
+    - name: <service>              # DNS label; the client certificate's CN
+      uid: <uid>                   # numeric user that reads the files
+      server: {dns: [<name>, ...]} # optional: a server certificate for these names
+      client: true                 # optional: a client certificate
+```
+
+The files land in `<PAPAIA_PKI_DIR>/<module>/<service>/` (`ca.crt`, `tls.crt`, `tls.key`,
+`client.crt`, `client.key`, `generation`), owned by that uid, and are renewed at two thirds of
+their lifetime with a restart of what changed. The edge certificates of the reverse proxy are
+not affected. The operator guide is [pki.md](pki.md).
+
 ---
 
 ## 10. Naming Conventions
