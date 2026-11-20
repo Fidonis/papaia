@@ -118,7 +118,7 @@ def test_render_merges_addon_allowed_domains(repo_root, config_dir):
         (config_dir / "ai/librechat/librechat.yaml").read_text(encoding="utf-8")
     )
     domains = rendered["mcpSettings"]["allowedDomains"]
-    assert "http://mcp-firecrawl:8080" in domains, "base domain must be preserved"
+    assert "http://mcp-firecrawl:3000" in domains, "base domain must be preserved"
     assert "http://paperless-mcp:8000" in domains, "addon domain must be appended"
 
 
@@ -202,7 +202,7 @@ def test_render_merges_the_rag_fragment_only_while_the_profile_is_active(repo_ro
     assert rendered["mcpServers"]["QdrantIngest"]["url"] == "http://qdrant-ingest:8300/mcp"
     assert "FirecrawlMCP" in rendered["mcpServers"], "base servers must be preserved"
     domains = rendered["mcpSettings"]["allowedDomains"]
-    assert "http://mcp-firecrawl:8080" in domains
+    assert "http://mcp-firecrawl:3000" in domains
     assert "http://qdrant-mcp:8000" in domains
     assert "http://qdrant-ingest:8300" in domains
 
@@ -219,7 +219,7 @@ def test_render_drops_the_rag_servers_again_when_the_profile_is_removed(repo_roo
 
     rendered = _rendered_librechat(config_dir)
     assert set(rendered["mcpServers"]) == {"FirecrawlMCP"}
-    assert rendered["mcpSettings"]["allowedDomains"] == ["http://mcp-firecrawl:8080"]
+    assert rendered["mcpSettings"]["allowedDomains"] == ["http://mcp-firecrawl:3000"]
 
 
 def test_render_rag_fragment_is_idempotent_and_loses_to_the_overlay(repo_root, config_dir):
