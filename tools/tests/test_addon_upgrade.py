@@ -730,6 +730,23 @@ def test_a_rollback_goes_back_one_step_and_forgets_it(world):
     assert common.parse_env_file(world["v1"] / ".env") == bundle_after_upgrade
 
 
+def _kept_version(world) -> str:
+    kept = world["config"] / "addon-manifests" / "paperless" / "papaia-app.yaml"
+    return yaml.safe_load(kept.read_text(encoding="utf-8"))["version"]
+
+
+def test_the_kept_manifest_follows_an_upgrade_and_a_rollback(world):
+    # The workflow module reads the `flow:` section from the kept copy: after an
+    # upgrade it must see the new version's section as a proposal, after a
+    # rollback the old one again, not the section of a version no longer installed.
+    assert _kept_version(world) == "1.0.0"
+    _upgraded(world)
+    assert _kept_version(world) == "1.1.0"
+
+    assert cli_addon.cmd_addon_rollback_apply(_rollback_args(world)) == 0
+    assert _kept_version(world) == "1.0.0"
+
+
 def _install(world, path) -> int:
     return cli_addon.cmd_addon_install(
         _args(world["config"], world["repo"], path=str(path), version=None, force=False)
