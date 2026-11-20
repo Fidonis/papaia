@@ -214,6 +214,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     runtime_before = localai_native.runtime(tree.get("", {})) if not fresh_init else ""
+    native_before = not fresh_init and _native_wanted(tree.get("", {}))
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     # Taken out of the environment so nothing started later inherits it. An empty
@@ -353,7 +354,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not _native_wanted(stored_root):
         # After a switch back to the container a job left from the native runtime would
         # hold the port until the next `stop` (quiet when there is none).
-        _retire_native_job(stored_root)
+        _retire_native_job(stored_root, was_native=native_before)
     if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE and (
         runtime_before != localai_native.NATIVE
     ):
@@ -487,25 +488,46 @@ def _native_wanted(root: dict[str, str]) -> bool:
     )
 
 
-def _retire_native_job(root: dict[str, str]) -> bool:
+def _without_native(root: dict[str, str]) -> str:
+    """Why the native LocalAI is no longer wanted, for the messages about its job."""
+    if "localai" not in common.cluster_profiles(root):
+        return "LocalAI is switched off"
+    return "LocalAI runs in its container now"
+
+
+def _retire_native_job(root: dict[str, str], *, was_native: bool = False) -> bool:
     """Unload and disable a launchd job the native LocalAI no longer needs, and remove its
     plist, so it neither keeps LOCALAI_EXT_PORT nor comes back at the next login. For
     `start` and `setup` after the runtime went back to the container (or LocalAI was
     switched off); `stop` handles the same case through localai-native-stop. Messages on
     stderr, so the KEY=VALUE output of the install step stays clean. False when a job is
-    left behind."""
+    left behind.
+
+    `was_native`: this run is the one that ended the native runtime (`setup`). Inside a
+    container (papaia-manager) the plist below the Mac user's home is out of sight, so
+    whether a job is left cannot be told there; the switch itself is what warns."""
+    reason = _without_native(root)
     try:
         label = localai_native.label_for(root)
     except localai_native.LaunchdError:
         return True
     plist = localai_native.plist_path(label)
     if not plist.is_file():
+        if was_native and common.in_container():
+            print(
+                f"WARNING: {reason}, but the launchd job of the native LocalAI on the Mac"
+                " cannot be removed from inside a container and may still hold port"
+                f" {localai_native.port(root)}. Run 'papaia-ctl stop' on the Mac;"
+                " 'papaia-ctl doctor' there reports a job that is still loaded.",
+                file=sys.stderr,
+            )
+            return False
         return True
     available, why = localai_native.launchd_host()
     if not available:
         print(
-            f"WARNING: the launchd job of the native LocalAI ({plist}) is still installed and"
-            f" cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
+            f"WARNING: {reason}, but the launchd job of the native LocalAI ({plist}) is still"
+            f" installed and cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
             file=sys.stderr,
         )
         return False
@@ -520,11 +542,7 @@ def _retire_native_job(root: dict[str, str]) -> bool:
         )
         return False
     plist.unlink(missing_ok=True)
-    print(
-        f"Removed the launchd job of the native LocalAI ({label}): LocalAI runs in its"
-        " container now.",
-        file=sys.stderr,
-    )
+    print(f"Removed the launchd job of the native LocalAI ({label}): {reason}.", file=sys.stderr)
     return True
 
 

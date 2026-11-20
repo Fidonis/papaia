@@ -987,7 +987,7 @@ raw values behind its summary in `details`.
 | `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
 | `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
 | `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, for the native runtime, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
-| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`), the installed binary is the release the checkout pins and, on the Mac, the state of its launchd job (`launchctl print`). | `warn` when it does not answer, is not installed or is another version, when the job is loaded but LocalAI does not answer, or when the job is not loaded although the stack runs; never `fail`; `skip` for the container runtime and while the stack and the job are both stopped |
+| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`), the installed binary is the release the checkout pins and, on the Mac, the state of its launchd job (`launchctl print`). | `warn` when it does not answer, is not installed or is another version, when the job is loaded but LocalAI does not answer, when the job is not loaded although the stack runs, or when the job is still loaded although LocalAI is switched off or runs in its container; never `fail`; `skip` for the container runtime and while LocalAI is off (unless the job is still loaded) and while the stack and the job are both stopped |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
@@ -2022,8 +2022,11 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   removes the override. It works on any host, also on a Mac whose Docker Desktop is not
   running and with a configuration restored on another machine. `setup` unloads and disables
   the launchd job and removes its plist, so the job neither keeps `LOCALAI_EXT_PORT` nor comes
-  back at the next login; where `setup` cannot reach launchd (papaia-manager), the next
-  `start` on the Mac does it before the container starts. `bin/`, `run-localai` and the
+  back at the next login. The same happens when LocalAI is switched off
+  (`--enable-local-ai=false`); the message names which of the two it was. Where `setup`
+  cannot reach launchd (papaia-manager), it warns: the next `start` on the Mac removes the
+  job before the container starts, `stop` there unloads it, and until then `doctor` on the
+  Mac reports it. `bin/`, `run-localai` and the
   models stay for a later switch back (`uninstall` removes them). The seeded model list
   stays, and models in the old `localai-models` volume are not moved in either direction.
 - An interactive `setup` on a host that can never run the native process (no Apple Silicon or
