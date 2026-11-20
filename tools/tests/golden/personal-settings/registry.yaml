@@ -4,7 +4,7 @@
     "min": 1,
     "current": 1
   },
-  "digest": "sha256:98dbbea1596216b3a651eccc78b836013d505ba22c44ceb6df1e42ff624f3667",
+  "digest": "sha256:6e24b4609cfd86543b9b3d24b5244537282fafbd320864071b50a3a9ab3dfa1d",
   "modules": [
     {
       "api": 1,
@@ -23,7 +23,7 @@
       "data": {
         "summary": "/api/v1/me/data/summary",
         "export": "/api/v1/me/data/export",
-        "erasure": "self"
+        "erasure": "request"
       },
       "groups": [
         {
@@ -51,7 +51,8 @@
                 "de": "2 bis 24 Zeichen. Namen von Personen und Funktionen sind ausgeschlossen.",
                 "en": "2 to 24 characters. Names of persons and functions are not allowed."
               },
-              "max_length": 24
+              "max_length": 24,
+              "default": "Fido"
             },
             {
               "key": "tone",
@@ -121,8 +122,8 @@
               "key": "proactivity",
               "type": "choice",
               "title": {
-                "de": "Proaktivität",
-                "en": "Proactivity"
+                "de": "Von sich aus",
+                "en": "On its own initiative"
               },
               "options": [
                 {
@@ -148,16 +149,23 @@
                 }
               ],
               "default": "on_request"
-            },
-            {
-              "key": "attentive_mode",
-              "type": "boolean",
-              "title": {
-                "de": "Aufmerksamer Modus",
-                "en": "Attentive mode"
-              },
-              "default": false
-            },
+            }
+          ]
+        },
+        {
+          "id": "channels",
+          "kind": "settings",
+          "title": {
+            "de": "In Gruppenräumen",
+            "en": "In group rooms"
+          },
+          "description": {
+            "de": "Wann Ihre Assistenz in gemeinsamen Räumen mitliest.",
+            "en": "When your assistant reads along in shared rooms."
+          },
+          "data_class": "personal",
+          "sensitive": false,
+          "settings": [
             {
               "key": "group_mode",
               "type": "choice",
@@ -184,6 +192,35 @@
               "default": "addressed_only"
             },
             {
+              "key": "attentive_mode",
+              "type": "boolean",
+              "title": {
+                "de": "Aufmerksamer Modus",
+                "en": "Attentive mode"
+              },
+              "hint": {
+                "de": "Nur nach Freigabe durch Ihre Organisation.",
+                "en": "Only after your organisation released it."
+              },
+              "default": false
+            }
+          ]
+        },
+        {
+          "id": "approvals",
+          "kind": "settings",
+          "title": {
+            "de": "Was Ihre Assistenz tun darf",
+            "en": "What your assistant may do"
+          },
+          "description": {
+            "de": "Stufe je Art von Aktion und der Weg der Freigabe. Angeboten wird nur, was Ihre Organisation erlaubt.",
+            "en": "Level per kind of action and the way you approve. Only what your organisation allows is offered."
+          },
+          "data_class": "personal",
+          "sensitive": true,
+          "settings": [
+            {
               "key": "approval_path",
               "type": "choice",
               "title": {
@@ -194,20 +231,660 @@
                 {
                   "value": "page",
                   "title": {
-                    "de": "Auf der Seite",
-                    "en": "On the page"
+                    "de": "Auf der Freigabeseite",
+                    "en": "On the approval page"
                   }
                 },
                 {
                   "value": "chat",
                   "title": {
-                    "de": "Im Chat",
-                    "en": "In the chat"
+                    "de": "Im Chat mit Einmalcode",
+                    "en": "In the chat with a one-time code"
                   }
                 }
               ],
               "default": "page"
             },
+            {
+              "key": "mail_mark",
+              "type": "choice",
+              "title": {
+                "de": "Mails markieren",
+                "en": "Mark mail"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "mail_move",
+              "type": "choice",
+              "title": {
+                "de": "Mails in meine Ordner verschieben",
+                "en": "Move mail to my folders"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "mail_draft",
+              "type": "choice",
+              "title": {
+                "de": "Antworten in meinem Postfach entwerfen",
+                "en": "Draft replies in my mailbox"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "calendar_tentative",
+              "type": "choice",
+              "title": {
+                "de": "Termine vorläufig eintragen",
+                "en": "Enter appointments tentatively"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "task_create",
+              "type": "choice",
+              "title": {
+                "de": "Aufgaben für mich anlegen",
+                "en": "Create tasks for me"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "chat_reply",
+              "type": "choice",
+              "title": {
+                "de": "In meinen eigenen Räumen antworten",
+                "en": "Reply in my own rooms"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "wiki_edit",
+              "type": "choice",
+              "title": {
+                "de": "Wiki-Seiten bearbeiten",
+                "en": "Edit wiki pages"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "docs_edit",
+              "type": "choice",
+              "title": {
+                "de": "Gemeinsame Dokumente bearbeiten",
+                "en": "Edit shared documents"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "mail_send_external",
+              "type": "choice",
+              "title": {
+                "de": "Mails nach außen senden",
+                "en": "Send mail outside the company"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "mail_send_internal",
+              "type": "choice",
+              "title": {
+                "de": "Mails im Haus senden",
+                "en": "Send mail inside the company"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "calendar_invite",
+              "type": "choice",
+              "title": {
+                "de": "Andere zu Terminen einladen",
+                "en": "Invite others to appointments"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            },
+            {
+              "key": "workflow_start",
+              "type": "choice",
+              "title": {
+                "de": "Abläufe starten",
+                "en": "Start workflows"
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "title": {
+                    "de": "Aus",
+                    "en": "Off"
+                  }
+                },
+                {
+                  "value": 1,
+                  "title": {
+                    "de": "Vorschlagen",
+                    "en": "Propose"
+                  }
+                },
+                {
+                  "value": 2,
+                  "title": {
+                    "de": "Entwerfen",
+                    "en": "Draft"
+                  }
+                },
+                {
+                  "value": 3,
+                  "title": {
+                    "de": "Nach Freigabe",
+                    "en": "After approval"
+                  }
+                },
+                {
+                  "value": 4,
+                  "title": {
+                    "de": "Tun und berichten",
+                    "en": "Do and report"
+                  }
+                },
+                {
+                  "value": 5,
+                  "title": {
+                    "de": "Selbstständig",
+                    "en": "On its own"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "memory",
+          "kind": "settings",
+          "title": {
+            "de": "Lernen",
+            "en": "Learning"
+          },
+          "description": {
+            "de": "Was sich Ihre Assistenz merkt.",
+            "en": "What your assistant remembers."
+          },
+          "data_class": "personal",
+          "sensitive": true,
+          "settings": [
             {
               "key": "learning_mode",
               "type": "choice",
@@ -243,11 +920,11 @@
           ]
         },
         {
-          "id": "disclosure",
+          "id": "sharing",
           "kind": "settings",
           "title": {
-            "de": "Auskunft an andere Assistenzen",
-            "en": "What other assistants learn"
+            "de": "Andere Assistenzen",
+            "en": "Other assistants"
           },
           "description": {
             "de": "Was Assistenzen anderer Personen über Ihre Termine erfahren.",
@@ -287,646 +964,6 @@
                 }
               ],
               "default": "free_busy"
-            }
-          ]
-        },
-        {
-          "id": "levels",
-          "kind": "settings",
-          "title": {
-            "de": "Was Ihre Assistenz tun darf",
-            "en": "What your assistant may do"
-          },
-          "description": {
-            "de": "Je Art von Aktion. Angeboten wird nur, was die Organisation erlaubt.",
-            "en": "For each kind of action. Only what the organisation allows is offered."
-          },
-          "data_class": "personal",
-          "sensitive": true,
-          "settings": [
-            {
-              "key": "mail_mark",
-              "type": "choice",
-              "title": {
-                "de": "Mail markieren",
-                "en": "Mark mail"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "mail_move",
-              "type": "choice",
-              "title": {
-                "de": "Mail in meine Ordner verschieben",
-                "en": "Move mail to my folders"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "mail_draft",
-              "type": "choice",
-              "title": {
-                "de": "Antworten in meinem Postfach entwerfen",
-                "en": "Draft replies in my mailbox"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "calendar_tentative",
-              "type": "choice",
-              "title": {
-                "de": "Termine vorläufig eintragen",
-                "en": "Enter appointments tentatively"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "task_create",
-              "type": "choice",
-              "title": {
-                "de": "Aufgaben für mich anlegen",
-                "en": "Create tasks for me"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "chat_reply",
-              "type": "choice",
-              "title": {
-                "de": "In meinen eigenen Räumen antworten",
-                "en": "Reply in my own rooms"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "wiki_edit",
-              "type": "choice",
-              "title": {
-                "de": "Wiki-Seiten bearbeiten",
-                "en": "Edit wiki pages"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "docs_edit",
-              "type": "choice",
-              "title": {
-                "de": "Gemeinsame Dokumente bearbeiten",
-                "en": "Edit shared documents"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "mail_send_external",
-              "type": "choice",
-              "title": {
-                "de": "Mail nach außen senden",
-                "en": "Send mail outside the company"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "mail_send_internal",
-              "type": "choice",
-              "title": {
-                "de": "Mail innerhalb des Unternehmens senden",
-                "en": "Send mail inside the company"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "calendar_invite",
-              "type": "choice",
-              "title": {
-                "de": "Andere zu Terminen einladen",
-                "en": "Invite others to appointments"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
-            },
-            {
-              "key": "workflow_start",
-              "type": "choice",
-              "title": {
-                "de": "Abläufe starten",
-                "en": "Start workflows"
-              },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Aus",
-                    "en": "Off"
-                  }
-                },
-                {
-                  "value": "propose",
-                  "title": {
-                    "de": "Vorschlagen",
-                    "en": "Propose"
-                  }
-                },
-                {
-                  "value": "draft",
-                  "title": {
-                    "de": "Entwerfen",
-                    "en": "Draft"
-                  }
-                },
-                {
-                  "value": "after_approval",
-                  "title": {
-                    "de": "Nach Freigabe",
-                    "en": "After approval"
-                  }
-                },
-                {
-                  "value": "do_and_report",
-                  "title": {
-                    "de": "Tun und berichten",
-                    "en": "Do and report"
-                  }
-                },
-                {
-                  "value": "on_its_own",
-                  "title": {
-                    "de": "Selbstständig",
-                    "en": "On its own"
-                  }
-                }
-              ]
             }
           ]
         }
@@ -1100,10 +1137,10 @@
     },
     {
       "api": 1,
-      "module": "flow",
+      "module": "papaia-flow",
       "title": {
-        "de": "Abläufe",
-        "en": "Workflows"
+        "de": "Dokumente",
+        "en": "Documents"
       },
       "endpoint": {
         "service": "flow-api",
@@ -1113,163 +1150,190 @@
         "audience": "flow"
       },
       "data": {
-        "summary": "/api/v1/me/data/summary",
-        "export": "/api/v1/me/data/export",
-        "erasure": "request"
+        "summary": "/api/me/data/summary",
+        "export": "/api/me/data/export",
+        "erasure": "self"
       },
       "groups": [
         {
-          "id": "notifications",
+          "id": "inbox",
           "kind": "settings",
           "title": {
-            "de": "Benachrichtigungen",
-            "en": "Notifications"
+            "de": "Eingang",
+            "en": "Inbox"
           },
           "description": {
-            "de": "Wie und wann Abläufe Sie erreichen.",
-            "en": "How and when workflows reach you."
+            "en": "How new documents reach you."
           },
           "data_class": "personal",
           "sensitive": false,
           "settings": [
             {
-              "key": "channels",
-              "type": "ordered_multi_choice",
+              "key": "notify",
+              "type": "boolean",
               "title": {
-                "de": "Kanäle",
-                "en": "Channels"
+                "en": "Notify"
               },
-              "hint": {
-                "de": "Aufforderungen zum Handeln kommen immer an.",
-                "en": "Calls for action always reach you."
+              "default": true
+            },
+            {
+              "key": "sort",
+              "type": "choice",
+              "title": {
+                "en": "Order"
+              },
+              "options": [
+                {
+                  "value": "newest",
+                  "title": {
+                    "en": "Newest first"
+                  }
+                },
+                {
+                  "value": "oldest",
+                  "title": {
+                    "en": "Oldest first"
+                  }
+                }
+              ],
+              "default": "newest"
+            },
+            {
+              "key": "tags",
+              "type": "multi_choice",
+              "title": {
+                "en": "Tags"
               },
               "options": "runtime"
             },
             {
-              "key": "mute_info",
-              "type": "boolean",
+              "key": "sources",
+              "type": "ordered_multi_choice",
               "title": {
-                "de": "Hinweise zur Information nicht senden",
-                "en": "Do not send information notices"
+                "en": "Sources"
               },
-              "default": false
+              "options": [
+                {
+                  "value": "scanner",
+                  "title": {
+                    "en": "Scanner"
+                  }
+                },
+                {
+                  "value": "mail",
+                  "title": {
+                    "en": "Mail"
+                  }
+                }
+              ],
+              "default": [
+                "scanner"
+              ]
             },
             {
-              "key": "quiet_hours",
-              "type": "boolean",
+              "key": "page_size",
+              "type": "integer",
               "title": {
-                "de": "Ruhezeiten einhalten",
-                "en": "Respect quiet hours"
+                "en": "Page size"
+              },
+              "min": 10,
+              "max": 100,
+              "default": 25
+            },
+            {
+              "key": "signature",
+              "type": "text",
+              "title": {
+                "en": "Signature"
               },
               "hint": {
-                "de": "Die Arbeitszeit legt der Bereich des Ablaufs fest.",
-                "en": "The working hours are set by the area of the workflow."
+                "en": "Shown under your comments."
               },
-              "default": false
+              "max_length": 120,
+              "pattern": "^[^@]*$"
             },
             {
-              "key": "digest",
-              "type": "choice",
+              "key": "quiet",
+              "type": "time_range",
               "title": {
-                "de": "Hinweise zur Information",
-                "en": "Information notices"
+                "en": "Quiet time"
               },
-              "options": [
-                {
-                  "value": "off",
-                  "title": {
-                    "de": "Einzeln",
-                    "en": "One by one"
-                  }
-                },
-                {
-                  "value": "daily",
-                  "title": {
-                    "de": "Einmal täglich gesammelt",
-                    "en": "Daily digest"
-                  }
-                }
-              ],
-              "default": "off"
-            },
-            {
-              "key": "locale",
-              "type": "choice",
-              "title": {
-                "de": "Sprache der Nachrichten",
-                "en": "Language of messages"
-              },
-              "options": [
-                {
-                  "value": "de",
-                  "title": {
-                    "de": "Deutsch",
-                    "en": "German"
-                  }
-                },
-                {
-                  "value": "en",
-                  "title": {
-                    "de": "Englisch",
-                    "en": "English"
-                  }
-                }
-              ],
-              "default": "de"
+              "default": {
+                "start": "18:00",
+                "end": "07:30"
+              }
             }
           ]
         },
         {
-          "id": "deputies",
+          "id": "shares",
           "kind": "collection",
           "title": {
-            "de": "Vertretung",
-            "en": "Deputy"
+            "en": "Shares"
           },
-          "description": {
-            "de": "Wer in Ihrer Abwesenheit für Sie entscheidet, höchstens 90 Tage.",
-            "en": "Who decides for you while you are away, for at most 90 days."
-          },
-          "data_class": "personal",
+          "data_class": "confidential",
           "sensitive": true,
           "item": {
             "fields": [
               {
-                "key": "delegate",
+                "key": "with",
                 "type": "person",
                 "title": {
-                  "de": "Vertreten durch",
-                  "en": "Deputy"
+                  "en": "With"
                 }
-              },
-              {
-                "key": "folder",
-                "type": "choice",
-                "title": {
-                  "de": "Bereich",
-                  "en": "Area"
-                },
-                "options": "runtime"
               },
               {
                 "key": "until",
                 "type": "date",
                 "title": {
-                  "de": "Bis",
                   "en": "Until"
                 },
-                "max_days": 90
+                "max_days": 30
               }
             ]
           },
           "operations": [
             "create",
-            "end",
-            "renew"
+            "end"
           ]
         }
       ],
-      "declared_by": "module:flow"
+      "declared_by": "addon:papaia-flow@1.0.0"
+    }
+  ],
+  "not_connected": [
+    {
+      "id": "chat",
+      "title": {
+        "de": "Chat",
+        "en": "Chat"
+      },
+      "hint": {
+        "de": "Gespräche und hochgeladene Dateien im Chat. Auskunft und Löschung über die Datenschutzbeauftragten.",
+        "en": "Conversations and uploaded files in the chat. Information and erasure through the data protection officer."
+      }
+    },
+    {
+      "id": "model-gateway",
+      "title": {
+        "de": "Zugang zu den Sprachmodellen",
+        "en": "Language model gateway"
+      },
+      "hint": {
+        "de": "Nutzungsdaten je Anfrage an ein Sprachmodell. Auskunft über die Datenschutzbeauftragten.",
+        "en": "Usage data of every request to a language model. Information through the data protection officer."
+      }
+    },
+    {
+      "id": "identity",
+      "title": {
+        "de": "Anmeldung und Konto",
+        "en": "Sign-in and account"
+      },
+      "hint": {
+        "de": "Name, E-Mail-Adresse, Passwort, zweiter Faktor und Sitzungen. Einsicht und Änderung in der Kontoverwaltung der Anmeldung.",
+        "en": "Name, e-mail address, password, second factor and sessions. See and change them in the account console of the sign-in."
+      }
     }
   ]
 }

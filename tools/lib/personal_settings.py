@@ -54,11 +54,70 @@ REGISTRY_FORMAT = 1
 
 # Core modules that may declare personal settings: profile -> (directory, audience). The
 # audience is fixed here because the module's Keycloak client is part of the core's
-# realm, not of the declaration.
+# realm, not of the declaration. A module installed as an add-on declares in its own
+# manifest instead (papaia-flow), so every module has exactly one declaration.
 MODULE_DECLARATIONS: dict[str, tuple[str, str]] = {
-    "flow": ("src/flow", "flow"),
     "assist": ("src/ai/assist", "assist-api"),
 }
+
+# Add-ons whose Keycloak client is created by their own realm setup (an action of the
+# add-on) rather than by a client fragment the core registers: add-on name -> clients.
+# The core already relies on these names elsewhere (papaia-manager exchanges for the
+# audience `flow` to approve a Flow link), so they are fixed here and no other add-on can
+# claim them.
+ADDON_REALM_CLIENTS: dict[str, tuple[str, ...]] = {
+    "papaia-flow": ("flow",),
+}
+
+# Platform services that keep personal data but declare no personal settings. The area
+# names them on "my data" so its overview never claims a completeness it does not have.
+# (id, profile that must be on or None for always, title, hint)
+NOT_CONNECTED: tuple[tuple[str, str | None, dict[str, str], dict[str, str]], ...] = (
+    (
+        "chat",
+        None,
+        {"de": "Chat", "en": "Chat"},
+        {
+            "de": "Gespräche und hochgeladene Dateien im Chat. Auskunft und Löschung über"
+            " die Datenschutzbeauftragten.",
+            "en": "Conversations and uploaded files in the chat. Information and erasure"
+            " through the data protection officer.",
+        },
+    ),
+    (
+        "model-gateway",
+        None,
+        {"de": "Zugang zu den Sprachmodellen", "en": "Language model gateway"},
+        {
+            "de": "Nutzungsdaten je Anfrage an ein Sprachmodell. Auskunft über die"
+            " Datenschutzbeauftragten.",
+            "en": "Usage data of every request to a language model. Information through the"
+            " data protection officer.",
+        },
+    ),
+    (
+        "identity",
+        None,
+        {"de": "Anmeldung und Konto", "en": "Sign-in and account"},
+        {
+            "de": "Name, E-Mail-Adresse, Passwort, zweiter Faktor und Sitzungen. Einsicht"
+            " und Änderung in der Kontoverwaltung der Anmeldung.",
+            "en": "Name, e-mail address, password, second factor and sessions. See and"
+            " change them in the account console of the sign-in.",
+        },
+    ),
+    (
+        "manager",
+        "manager",
+        {"de": "Verwaltung", "en": "Administration"},
+        {
+            "de": "Die Sprache, die Sie in der Verwaltung gewählt haben. Auskunft über die"
+            " Datenschutzbeauftragten.",
+            "en": "The language you chose in the administration. Information through the"
+            " data protection officer.",
+        },
+    ),
+)
 
 FIELD_TYPES = (
     "boolean",
@@ -86,7 +145,9 @@ MAX_DAYS = 3660
 
 _MODULE_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-_OPTION_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+_OPTION_RE = re.compile(r"^[a-z0-9/][a-z0-9_./-]{0,254}$")
+# The integer range JSON numbers keep exactly.
+_INT_LIMIT = 2**53 - 1
 _OPERATION_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 _AUDIENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
@@ -232,7 +293,8 @@ def _field(check: _Checker, raw, where: str) -> dict:
 
     elif field_type in ("choice", "multi_choice", "ordered_multi_choice"):
         options = raw["options"]
-        values: list[str] | None = None
+        # Typed: 1, True and "1" are three different values (JSON keeps them apart).
+        values: list[tuple[type, OptionValue]] | None = None
         if options == "runtime":
             out["options"] = "runtime"
         else:
@@ -243,31 +305,30 @@ def _field(check: _Checker, raw, where: str) -> dict:
             for index, option in enumerate(options):
                 at = f"{where}.options[{index}]"
                 check.mapping(option, at, ("value", "title"), ("value", "title"))
-                value = check.string(option["value"], f"{at}.value", _OPTION_RE, "an option value")
-                if value in values:
+                value = _option_value(check, option["value"], f"{at}.value")
+                if values and type(value) is not values[0][0]:
+                    check.fail(f"{at}.value", "is of another type than the first option")
+                if (type(value), value) in values:
                     check.fail(f"{at}.value", f"{value!r} is listed twice")
-                values.append(value)
+                values.append((type(value), value))
                 out["options"].append(
                     {"value": value, "title": check.text(option["title"], f"{at}.title", TITLE_MAX)}
                 )
         if "default" in raw:
             default = raw["default"]
             if field_type == "choice":
-                default = check.string(default, f"{where}.default", _OPTION_RE, "an option value")
+                default = _option_value(check, default, f"{where}.default")
                 chosen = [default]
             else:
                 if not isinstance(default, list) or len(default) > MAX_OPTIONS:
                     check.fail(f"{where}.default", "must be a list of option values")
-                chosen = [
-                    check.string(v, f"{where}.default", _OPTION_RE, "an option value")
-                    for v in default
-                ]
-                if len(set(chosen)) != len(chosen):
+                chosen = [_option_value(check, v, f"{where}.default") for v in default]
+                if len({(type(v), v) for v in chosen}) != len(chosen):
                     check.fail(f"{where}.default", "lists a value twice")
                 default = list(chosen)
             if values is not None:
                 for value in chosen:
-                    if value not in values:
+                    if (type(value), value) not in values:
                         check.fail(f"{where}.default", f"{value!r} is not among the options")
             out["default"] = default
 
@@ -316,6 +377,20 @@ def _field(check: _Checker, raw, where: str) -> dict:
             out["max_days"] = check.integer(raw["max_days"], f"{where}.max_days", 1, MAX_DAYS)
 
     return out
+
+
+OptionValue = str | int | bool
+
+
+def _option_value(check: _Checker, value, where: str) -> OptionValue:
+    """A string of the option grammar, an integer JSON keeps exactly, or a boolean."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if not -_INT_LIMIT <= value <= _INT_LIMIT:
+            check.fail(where, f"{value} is outside the integers JSON keeps exactly")
+        return value
+    return check.string(value, where, _OPTION_RE, "an option value")
 
 
 def _fields(check: _Checker, raw, where: str, limit: int) -> list[dict]:
@@ -480,6 +555,13 @@ def _load_yaml(path: Path) -> object:
 
 
 def _addon_clients(addon_path: Path, manifest: dict) -> list[str]:
+    """The client IDs that belong to an add-on: those it registers through its Keycloak
+    fragments (Seam 2) and those its own realm setup creates (ADDON_REALM_CLIENTS)."""
+    own = list(ADDON_REALM_CLIENTS.get(str(manifest.get("name", "")), ()))
+    return own + _fragment_clients(addon_path, manifest)
+
+
+def _fragment_clients(addon_path: Path, manifest: dict) -> list[str]:
     """The client IDs an add-on registers through its Keycloak fragments (Seam 2)."""
     files = (((manifest.get("integration") or {}).get("keycloak") or {}).get("clients")) or []
     clients = []
@@ -552,14 +634,29 @@ def collect(
         if "personal_settings" not in manifest:
             continue
         name = str(manifest.get("name", addon_path.name))
+        clients = _addon_clients(addon_path, manifest)
+        # A client the realm setup of another add-on creates is not this add-on's, even
+        # when it ships a fragment of that name.
+        taken = {c for owner, cs in ADDON_REALM_CLIENTS.items() if owner != name for c in cs}
         add(
             manifest["personal_settings"],
             f"addon:{name}@{manifest.get('version', '?')}",
             addon_name=name,
-            addon_clients=_addon_clients(addon_path, manifest),
+            addon_clients=[c for c in clients if c not in taken],
         )
 
     return [modules[name] for name in sorted(modules)], warnings
+
+
+def not_connected(active_profiles: set[str]) -> list[dict]:
+    """The platform services with personal data and without a declaration, in a fixed
+    order: always the chat, the model gateway and the identity provider, and the
+    services of the active profiles."""
+    return [
+        {"id": entry_id, "title": dict(title), "hint": dict(hint)}
+        for entry_id, profile, title, hint in NOT_CONNECTED
+        if profile is None or profile in active_profiles
+    ]
 
 
 def render(
@@ -575,6 +672,7 @@ def render(
         "api": {"min": API_MIN, "current": API_CURRENT},
         "digest": "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         "modules": modules,
+        "not_connected": not_connected(active_profiles),
     }
     path = config_dir / REGISTRY_REL
     common.ensure_dir(path.parent)

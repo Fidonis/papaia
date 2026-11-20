@@ -215,6 +215,12 @@ INVALID_FOR_BOTH = {
     "option value with space": _mutate(
         "groups.0.settings.1.options.0", {"value": "new est", "title": {"en": "N"}}
     ),
+    "option value as a number with a fraction": _mutate(
+        "groups.0.settings.1.options.0", {"value": 1.5, "title": {"en": "N"}}
+    ),
+    "option value as a mapping": _mutate(
+        "groups.0.settings.1.options.0", {"value": {"a": 1}, "title": {"en": "N"}}
+    ),
     "integer without max": _mutate(
         "groups.0.settings.0", {"key": "x", "type": "integer", "min": 0, "title": {"en": "X"}}
     ),
@@ -257,6 +263,10 @@ INVALID_FOR_RENDER_ONLY = {
         "groups.0.settings.1.options.1", {"value": "newest", "title": {"en": "Again"}}
     ),
     "duplicate setting key": _mutate("groups.0.settings.1.key", "notify"),
+    "options of two value types": _mutate(
+        "groups.0.settings.1.options.1", {"value": 2, "title": {"en": "Two"}}
+    ),
+    "default of another type than its options": _mutate("groups.0.settings.1.default", 1),
     "duplicate group id": _mutate("groups.1.id", "inbox"),
     "html in a title": _mutate("title", {"en": "<b>Documents</b>"}),
     "url in a hint": _mutate("groups.0.settings.5.hint", {"en": "See https://evil.example/x"}),
@@ -317,13 +327,129 @@ def test_core_module_declarations_are_valid(profile):
 
 
 def test_a_core_module_must_use_its_own_audience():
-    rel, _ = ps.MODULE_DECLARATIONS["flow"]
+    rel, _ = ps.MODULE_DECLARATIONS["assist"]
     section = yaml.safe_load((REPO / rel / ps.MODULE_FILE).read_text(encoding="utf-8"))[
         "personal_settings"
     ]
-    section["endpoint"]["audience"] = "assist-api"
+    section["endpoint"]["audience"] = "flow"
     with pytest.raises(ps.PersonalSettingsError, match="audience"):
-        ps.validate_section(section, "module:flow", module_audience="flow")
+        ps.validate_section(section, "module:assist", module_audience="assist-api")
+
+
+def test_flow_is_declared_once_by_its_add_on_and_not_by_the_core():
+    # Flow is installed as the add-on papaia-flow; its manifest carries the declaration.
+    assert "flow" not in ps.MODULE_DECLARATIONS
+    assert not (REPO / "src" / "flow" / ps.MODULE_FILE).exists()
+
+
+def test_assist_declares_the_groups_and_levels_it_serves():
+    rel, _ = ps.MODULE_DECLARATIONS["assist"]
+    section = yaml.safe_load((REPO / rel / ps.MODULE_FILE).read_text(encoding="utf-8"))[
+        "personal_settings"
+    ]
+    clean = ps.validate_section(section, "module:assist", module_audience="assist-api")
+    groups = {g["id"]: g for g in clean["groups"]}
+    assert list(groups) == ["assistant", "channels", "approvals", "memory", "sharing"]
+    levels = [f for f in groups["approvals"]["settings"] if f["key"] != "approval_path"]
+    assert len(levels) == 12
+    for field in levels:
+        assert [o["value"] for o in field["options"]] == [0, 1, 2, 3, 4, 5]
+    assert [g["id"] for g in clean["groups"] if g["sensitive"]] == [
+        "approvals",
+        "memory",
+        "sharing",
+    ]
+
+
+def test_option_values_may_be_integers_or_booleans_and_keep_their_type():
+    section = _section()
+    settings = section["groups"][0]["settings"]
+    settings.append(
+        {
+            "key": "level",
+            "type": "choice",
+            "default": 0,
+            "options": [
+                {"value": 0, "title": {"en": "Off"}},
+                {"value": 1, "title": {"en": "Propose"}},
+            ],
+            "title": {"en": "Level"},
+        }
+    )
+    settings.append(
+        {
+            "key": "flags",
+            "type": "multi_choice",
+            "default": [False],
+            "options": [
+                {"value": False, "title": {"en": "No"}},
+                {"value": True, "title": {"en": "Yes"}},
+            ],
+            "title": {"en": "Flags"},
+        }
+    )
+    settings.append(
+        {
+            "key": "folder",
+            "type": "choice",
+            "options": [{"value": "/finance/invoices", "title": {"en": "Invoices"}}],
+            "title": {"en": "Folder"},
+        }
+    )
+    assert _schema_ok(section)
+    clean = ps.validate_section(section, "x", addon_name="docs", addon_clients=("docs-api",))
+    level, flags, folder = clean["groups"][0]["settings"][-3:]
+    assert level["default"] == 0 and type(level["default"]) is int
+    assert [o["value"] for o in level["options"]] == [0, 1]
+    assert flags["default"] == [False] and type(flags["default"][0]) is bool
+    assert folder["options"][0]["value"] == "/finance/invoices"
+
+
+# --- add-ons whose client comes from their own realm setup -------------------------------
+
+
+def _flow_section() -> dict:
+    section = _section()
+    section["module"] = "papaia-flow"
+    section["endpoint"] = {
+        "service": "flow-api",
+        "scheme": "https",
+        "port": 8444,
+        "base_path": "/api/v1/me/settings",
+        "audience": "flow",
+    }
+    return section
+
+
+def test_flow_may_name_the_client_its_own_realm_setup_creates(tmp_path):
+    flow = _write_addon(tmp_path, "papaia-flow", _flow_section(), {})
+    modules, warnings = ps.collect(REPO, {"me"}, [flow])
+    assert [(m["module"], m["endpoint"]["audience"]) for m in modules] == [("papaia-flow", "flow")]
+    assert warnings == []
+
+
+def test_no_other_add_on_may_name_the_client_of_flow(tmp_path):
+    section = _flow_section()
+    section["module"] = "docs"
+    docs = _write_addon(tmp_path, "docs", section, {"docs.json": "docs-api"})
+    with pytest.raises(ps.PersonalSettingsError, match="'flow'"):
+        ps.collect(REPO, {"me"}, [docs])
+
+
+def test_flow_names_only_its_own_client(tmp_path):
+    section = _flow_section()
+    section["endpoint"]["audience"] = "assist-api"
+    flow = _write_addon(tmp_path, "papaia-flow", section, {})
+    with pytest.raises(ps.PersonalSettingsError, match="assist-api"):
+        ps.collect(REPO, {"me"}, [flow])
+
+
+def test_flow_declares_under_its_add_on_name(tmp_path):
+    section = _flow_section()
+    section["module"] = "flow"
+    flow = _write_addon(tmp_path, "papaia-flow", section, {})
+    with pytest.raises(ps.PersonalSettingsError, match="add-on's name"):
+        ps.collect(REPO, {"me"}, [flow])
 
 
 # --- collecting and rendering ------------------------------------------------------------
@@ -353,8 +479,8 @@ def _write_addon(root: Path, name: str, section: dict | None, clients: dict[str,
 
 def test_only_active_profiles_and_add_ons_are_collected(tmp_path):
     docs = _write_addon(tmp_path, "docs", _section(), {"docs.json": "docs-api"})
-    modules, warnings = ps.collect(REPO, {"me", "flow"}, [docs])
-    assert [m["module"] for m in modules] == ["docs", "flow"]
+    modules, warnings = ps.collect(REPO, {"me", "assist"}, [docs])
+    assert [m["module"] for m in modules] == ["assist", "docs"]
     assert warnings == []
     modules, _ = ps.collect(REPO, {"me"}, [])
     assert modules == []
@@ -385,10 +511,10 @@ def test_an_audience_from_another_add_on_is_refused(tmp_path):
 
 def test_two_declarations_of_one_module_are_refused(tmp_path):
     section = _section()
-    section["module"] = "flow"
-    flow_addon = _write_addon(tmp_path, "flow", section, {"flow.json": "docs-api"})
+    section["module"] = "assist"
+    addon = _write_addon(tmp_path, "assist", section, {"assist.json": "docs-api"})
     with pytest.raises(ps.PersonalSettingsError, match="twice"):
-        ps.collect(REPO, {"me", "flow"}, [flow_addon])
+        ps.collect(REPO, {"me", "assist"}, [addon])
 
 
 def test_a_section_that_is_not_a_mapping_is_named(tmp_path):
@@ -405,7 +531,8 @@ def _installation(tmp_path: Path) -> tuple[Path, set[str], list[dict]]:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     docs = _write_addon(tmp_path / "addons", "docs", _section(), {"docs.json": "docs-api"})
-    return config_dir, {"me", "flow", "assist"}, [docs]
+    flow = _write_addon(tmp_path / "addons", "papaia-flow", _flow_section(), {})
+    return config_dir, {"me", "assist"}, [docs, flow]
 
 
 def test_render_writes_the_registry_as_json_that_yaml_reads(tmp_path):
@@ -416,9 +543,10 @@ def test_render_writes_the_registry_as_json_that_yaml_reads(tmp_path):
     registry = json.loads(text)
     assert registry["registry"] == 1
     assert registry["api"] == {"min": 1, "current": 1}
-    assert [m["module"] for m in registry["modules"]] == ["assist", "docs", "flow"]
+    assert [m["module"] for m in registry["modules"]] == ["assist", "docs", "papaia-flow"]
+    assert registry["modules"][0]["declared_by"] == "module:assist"
     assert registry["modules"][1]["declared_by"] == "addon:docs@1.0.0"
-    assert registry["modules"][2]["declared_by"] == "module:flow"
+    assert registry["modules"][2]["declared_by"] == "addon:papaia-flow@1.0.0"
 
 
 def test_render_is_deterministic_and_matches_the_golden_file(tmp_path):
@@ -441,3 +569,32 @@ def test_render_leaves_no_registry_of_a_removed_module(tmp_path):
     ps.render(config_dir, REPO, {"me"}, [])
     registry = json.loads((config_dir / ps.REGISTRY_REL).read_text(encoding="utf-8"))
     assert registry["modules"] == []
+
+
+# --- services without a declaration ------------------------------------------------------
+
+
+def test_render_names_the_platform_services_that_are_not_connected(tmp_path):
+    config_dir, profiles, addons = _installation(tmp_path)
+    ps.render(config_dir, REPO, profiles, addons)
+    registry = json.loads((config_dir / ps.REGISTRY_REL).read_text(encoding="utf-8"))
+    entries = registry["not_connected"]
+    assert [e["id"] for e in entries] == ["chat", "model-gateway", "identity"]
+    check = ps._Checker("test")
+    for entry in entries:
+        assert set(entry) == {"id", "title", "hint"}
+        assert check.text(entry["title"], "title", ps.TITLE_MAX) == entry["title"]
+        assert check.text(entry["hint"], "hint", ps.HINT_MAX) == entry["hint"]
+        assert set(entry["title"]) == set(entry["hint"]) == {"de", "en"}
+
+
+def test_the_manager_is_named_while_its_profile_is_on(tmp_path):
+    config_dir, profiles, addons = _installation(tmp_path)
+    ps.render(config_dir, REPO, profiles | {"manager"}, addons)
+    registry = json.loads((config_dir / ps.REGISTRY_REL).read_text(encoding="utf-8"))
+    assert [e["id"] for e in registry["not_connected"]] == [
+        "chat",
+        "model-gateway",
+        "identity",
+        "manager",
+    ]

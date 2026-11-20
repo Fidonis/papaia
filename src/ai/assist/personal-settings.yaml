@@ -4,7 +4,8 @@
 # the module API of docs/personal-settings-contract.md under endpoint.base_path. Its own
 # page /settings stays and uses the same values. The core renders this file into
 # $PAPAIA_CONFIG_DIR/personal-settings/registry.yaml while the profiles `me` and `assist`
-# are both on (tools/lib/personal_settings.py).
+# are both on (tools/lib/personal_settings.py). This file is the only declaration of
+# Assist; the groups and keys are those assist-api serves.
 #
 # The base path is not /api/v1/me/settings: assist-api already answers there with its own
 # shape, and the contract routes are a layer next to it.
@@ -21,8 +22,9 @@ personal_settings:
   data:
     summary: /api/v1/me/data/summary
     export: /api/v1/me/data/export
-    # The person deletes entries of the assistant's memory themselves.
-    erasure: self
+    # The person forgets single entries of the memory on the transparency page; erasing
+    # everything the assistant keeps is a request to the data protection officer.
+    erasure: request
   groups:
     - id: assistant
       title: {de: "Ihre Assistenz", en: "Your assistant"}
@@ -35,6 +37,7 @@ personal_settings:
         - key: assistant_name
           type: text
           max_length: 24
+          default: "Fido"
           title: {de: "Name der Assistenz", en: "Name of your assistant"}
           hint:
             de: "2 bis 24 Zeichen. Namen von Personen und Funktionen sind ausgeschlossen."
@@ -62,73 +65,62 @@ personal_settings:
             - {value: on_request, title: {de: "Nur auf Anfrage", en: "Only when asked"}}
             - {value: daily_digest, title: {de: "Einmal täglich gesammelt", en: "Daily digest"}}
             - {value: notify, title: {de: "Meldet sich von selbst", en: "Gets in touch itself"}}
-          title: {de: "Proaktivität", en: "Proactivity"}
-        - key: attentive_mode
-          type: boolean
-          default: false
-          title: {de: "Aufmerksamer Modus", en: "Attentive mode"}
+          title: {de: "Von sich aus", en: "On its own initiative"}
+    - id: channels
+      title: {de: "In Gruppenräumen", en: "In group rooms"}
+      description:
+        de: "Wann Ihre Assistenz in gemeinsamen Räumen mitliest."
+        en: "When your assistant reads along in shared rooms."
+      data_class: personal
+      sensitive: false
+      settings:
         - key: group_mode
           type: choice
           default: addressed_only
+          # Narrowed at runtime until the organisation releases the attentive mode.
           options:
             - {value: addressed_only, title: {de: "Nur wenn angesprochen", en: "Only when addressed"}}
             - {value: attentive, title: {de: "Bietet Hilfe an, wenn ihr Thema aufkommt", en: "Offers help when its topic comes up"}}
           title: {de: "In Gruppenräumen", en: "In group rooms"}
+        - key: attentive_mode
+          type: boolean
+          default: false
+          title: {de: "Aufmerksamer Modus", en: "Attentive mode"}
+          hint:
+            de: "Nur nach Freigabe durch Ihre Organisation."
+            en: "Only after your organisation released it."
+    - id: approvals
+      title: {de: "Was Ihre Assistenz tun darf", en: "What your assistant may do"}
+      description:
+        de: "Stufe je Art von Aktion und der Weg der Freigabe. Angeboten wird nur, was Ihre Organisation erlaubt."
+        en: "Level per kind of action and the way you approve. Only what your organisation allows is offered."
+      data_class: personal
+      # Raising a level or the approval path needs a fresh sign-in; assist-api checks it.
+      sensitive: true
+      settings:
         - key: approval_path
           type: choice
           default: page
           options:
-            - {value: page, title: {de: "Auf der Seite", en: "On the page"}}
-            - {value: chat, title: {de: "Im Chat", en: "In the chat"}}
+            - {value: page, title: {de: "Auf der Freigabeseite", en: "On the approval page"}}
+            - {value: chat, title: {de: "Im Chat mit Einmalcode", en: "In the chat with a one-time code"}}
           title: {de: "Freigabeweg", en: "How you approve"}
-        - key: learning_mode
-          type: choice
-          default: ask
-          options:
-            - {value: "off", title: {de: "Aus", en: "Off"}}
-            - {value: ask, title: {de: "Fragt vorher, was sie sich merkt", en: "Asks before it remembers"}}
-            - {value: silent, title: {de: "Merkt sich Muster selbst, als abgeleitet markiert", en: "Notes patterns itself, marked as derived"}}
-          title: {de: "Lernen", en: "Learning"}
-    - id: disclosure
-      title: {de: "Auskunft an andere Assistenzen", en: "What other assistants learn"}
-      description:
-        de: "Was Assistenzen anderer Personen über Ihre Termine erfahren."
-        en: "What the assistants of other persons learn about your appointments."
-      data_class: personal
-      sensitive: true
-      settings:
-        - key: disclose_to_assistants
-          type: choice
-          default: free_busy
-          options:
-            - {value: none, title: {de: "Nichts", en: "Nothing"}}
-            - {value: free_busy, title: {de: "Nur frei oder belegt", en: "Free or busy only"}}
-            - {value: details, title: {de: "Einzelheiten", en: "Details"}}
-          title: {de: "Offenlegung", en: "Disclosure"}
-    - id: levels
-      title: {de: "Was Ihre Assistenz tun darf", en: "What your assistant may do"}
-      description:
-        de: "Je Art von Aktion. Angeboten wird nur, was die Organisation erlaubt."
-        en: "For each kind of action. Only what the organisation allows is offered."
-      data_class: personal
-      # Levels from "do and report" on act for the person; assist-api asks for a fresh
-      # sign-in before it stores them.
-      sensitive: true
-      settings:
+        # Levels 0 to 5; the organisation's ceilings narrow them at runtime. No default
+        # here: a person starts at the defaults of the ceilings.
         - key: mail_mark
           type: choice
           options: &levels
-            - {value: "off", title: {de: "Aus", en: "Off"}}
-            - {value: propose, title: {de: "Vorschlagen", en: "Propose"}}
-            - {value: draft, title: {de: "Entwerfen", en: "Draft"}}
-            - {value: after_approval, title: {de: "Nach Freigabe", en: "After approval"}}
-            - {value: do_and_report, title: {de: "Tun und berichten", en: "Do and report"}}
-            - {value: on_its_own, title: {de: "Selbstständig", en: "On its own"}}
-          title: {de: "Mail markieren", en: "Mark mail"}
+            - {value: 0, title: {de: "Aus", en: "Off"}}
+            - {value: 1, title: {de: "Vorschlagen", en: "Propose"}}
+            - {value: 2, title: {de: "Entwerfen", en: "Draft"}}
+            - {value: 3, title: {de: "Nach Freigabe", en: "After approval"}}
+            - {value: 4, title: {de: "Tun und berichten", en: "Do and report"}}
+            - {value: 5, title: {de: "Selbstständig", en: "On its own"}}
+          title: {de: "Mails markieren", en: "Mark mail"}
         - key: mail_move
           type: choice
           options: *levels
-          title: {de: "Mail in meine Ordner verschieben", en: "Move mail to my folders"}
+          title: {de: "Mails in meine Ordner verschieben", en: "Move mail to my folders"}
         - key: mail_draft
           type: choice
           options: *levels
@@ -156,11 +148,11 @@ personal_settings:
         - key: mail_send_external
           type: choice
           options: *levels
-          title: {de: "Mail nach außen senden", en: "Send mail outside the company"}
+          title: {de: "Mails nach außen senden", en: "Send mail outside the company"}
         - key: mail_send_internal
           type: choice
           options: *levels
-          title: {de: "Mail innerhalb des Unternehmens senden", en: "Send mail inside the company"}
+          title: {de: "Mails im Haus senden", en: "Send mail inside the company"}
         - key: calendar_invite
           type: choice
           options: *levels
@@ -169,3 +161,35 @@ personal_settings:
           type: choice
           options: *levels
           title: {de: "Abläufe starten", en: "Start workflows"}
+    - id: memory
+      title: {de: "Lernen", en: "Learning"}
+      description:
+        de: "Was sich Ihre Assistenz merkt."
+        en: "What your assistant remembers."
+      data_class: personal
+      sensitive: true
+      settings:
+        - key: learning_mode
+          type: choice
+          default: ask
+          options:
+            - {value: "off", title: {de: "Aus", en: "Off"}}
+            - {value: ask, title: {de: "Fragt vorher, was sie sich merkt", en: "Asks before it remembers"}}
+            - {value: silent, title: {de: "Merkt sich Muster selbst, als abgeleitet markiert", en: "Notes patterns itself, marked as derived"}}
+          title: {de: "Lernen", en: "Learning"}
+    - id: sharing
+      title: {de: "Andere Assistenzen", en: "Other assistants"}
+      description:
+        de: "Was Assistenzen anderer Personen über Ihre Termine erfahren."
+        en: "What the assistants of other persons learn about your appointments."
+      data_class: personal
+      sensitive: true
+      settings:
+        - key: disclose_to_assistants
+          type: choice
+          default: free_busy
+          options:
+            - {value: none, title: {de: "Nichts", en: "Nothing"}}
+            - {value: free_busy, title: {de: "Nur frei oder belegt", en: "Free or busy only"}}
+            - {value: details, title: {de: "Einzelheiten", en: "Details"}}
+          title: {de: "Offenlegung", en: "Disclosure"}

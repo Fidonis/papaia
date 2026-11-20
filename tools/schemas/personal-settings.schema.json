@@ -95,8 +95,12 @@
     },
     "data_class": { "enum": ["public", "internal", "confidential", "personal", "special"] },
     "option_value": {
-      "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+      "description": "The value the module stores for an option: a string, an integer or a boolean. All options of one field have the same type; the area writes the value back in that type.",
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-z0-9/][a-z0-9_./-]{0,254}$" },
+        { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        { "type": "boolean" }
+      ]
     },
     "options": {
       "description": "A fixed list, or runtime: the module names the options when it is read; they are bounded but not narrowed by a list here.",
