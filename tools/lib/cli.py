@@ -1236,6 +1236,8 @@ def build_parser() -> argparse.ArgumentParser:
     # token of a Flow administrator from this file (or PAPAIA_FLOW_TOKEN).
     p_addon_install.add_argument("--approve-flow-link", action="store_true")
     p_addon_install.add_argument("--flow-token-file", default=None)
+    p_addon_install.add_argument("--expect-flow-digest", default=None)
+    p_addon_install.add_argument("--expect-addon-version", default=None)
     p_addon_install.set_defaults(func=cli_addon.cmd_addon_install)
 
     p_addon_start = sub.add_parser("addon-start")

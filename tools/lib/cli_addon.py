@@ -267,6 +267,8 @@ def _link_flow(
         token=token,
         out=sys.stdout,
         poll_s=flow_link.POLL_S,
+        expect_digest=getattr(args, "expect_flow_digest", None),
+        expect_version=getattr(args, "expect_addon_version", None),
     )
 
 

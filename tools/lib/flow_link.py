@@ -21,6 +21,7 @@ The core copies files and interprets none of the section beyond printing it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -183,6 +184,20 @@ def client(token: str) -> FlowApi:
 # ── the link at installation ─────────────────────────────────────────────────
 
 
+def section_digest(manifest: dict) -> str | None:
+    """`sha256:<hex>` of the manifest's `flow:` section as canonical JSON (keys
+    sorted, no spaces, UTF-8), or None without one. A caller that showed the
+    section to a person names it by this digest (papaia-manager computes it
+    the same way)."""
+    section = manifest.get(SECTION)
+    if not isinstance(section, dict):
+        return None
+    canonical = json.dumps(
+        section, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def summary(shown: dict) -> list[str]:
     """What the link may do, from the declaration as the module read it."""
     declaration = shown.get("declaration") or {}
@@ -237,6 +252,33 @@ def _wait(
     return None
 
 
+def _unnamed(  # noqa: PLR0913 - the approval and what it names
+    manifest: dict,
+    version: str,
+    shown: dict,
+    approve: bool,
+    ask: Callable[[str], str] | None,
+    expect_digest: str | None,
+    expect_version: str | None,
+) -> str:
+    """Why an approval does not name what Flow is about to approve, or "".
+
+    Without a terminal the operator never sees Flow's summary before the
+    approval: a caller that showed the section elsewhere (the manager's
+    dialog) names it by its digest and the add-on's version, and any other
+    manifest or version is not approved. Flow then compares its own digest of
+    what it read under its lock."""
+    if not approve or (ask is not None and expect_digest is None and expect_version is None):
+        return ""
+    if not expect_digest or not expect_version:
+        return "the approval names no declaration (--expect-flow-digest and --expect-addon-version)"
+    if expect_digest != section_digest(manifest) or expect_version != version:
+        return "the declaration differs from the one that was shown for approval"
+    if str(shown.get("addon_version")) != expect_version:
+        return f"Flow shows version {shown.get('addon_version')}, not {expect_version}"
+    return ""
+
+
 def link_at_install(  # noqa: PLR0911, PLR0913 - one outcome per case
     name: str,
     manifest: dict,
@@ -249,13 +291,19 @@ def link_at_install(  # noqa: PLR0911, PLR0913 - one outcome per case
     wait_s: float = WAIT_S,
     poll_s: float = POLL_S,
     sleep: Callable[[float], None] = time.sleep,
+    expect_digest: str | None = None,
+    expect_version: str | None = None,
 ) -> str:
     """Show the link of `name` and ask the module to approve it. Returns the
     outcome: none, no_token, not_read, unchanged, refused, approved,
     proposal or error. Nothing is approved without a confirmation (`approve`
-    or a `y` from `ask`); a failure is reported and never fails the install."""
+    or a `y` from `ask`); a failure is reported and never fails the install.
+    Without a terminal (`ask` None) `approve` counts only with `expect_digest`
+    (`section_digest` of the manifest) and `expect_version`, and both are
+    checked whenever they are given."""
     if not manifest.get(SECTION):
         return "none"
+    version = str(manifest.get("version", ""))[:64]
     if not token:
         print(
             f"NOTE: {name} declares a Flow link; without a token of a Flow administrator"
@@ -264,7 +312,6 @@ def link_at_install(  # noqa: PLR0911, PLR0913 - one outcome per case
         )
         _later(name, out)
         return "no_token"
-    version = str(manifest.get("version", ""))[:64]
     api = make_client(token)
     try:
         shown = _wait(api, name, version, wait_s, poll_s, sleep)
@@ -297,6 +344,11 @@ def link_at_install(  # noqa: PLR0911, PLR0913 - one outcome per case
             )
             _later(name, out)
             return "refused"
+        problem = _unnamed(manifest, version, shown, approve, ask, expect_digest, expect_version)
+        if problem:
+            print(f"WARNING: Flow link of {name} not approved: {problem}.", file=out)
+            _later(name, out)
+            return "error"
         answer = api.approve(name, str(shown["declaration_digest"]), version, REASON)
     except FlowError as exc:
         print(f"WARNING: Flow link of {name} not approved: {exc}", file=out)
