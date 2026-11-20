@@ -452,7 +452,8 @@ def test_setup_refuses_with_exit_code_3_and_changes_nothing(repo_root, config_di
     assert code == 3
     assert "--smtp-host is required" in capsys.readouterr().err
     assert not smtp.password_path(config_dir).exists()
-    assert "smtp" not in common.parse_env_file(config_dir / ".env")["COMPOSE_PROFILES"]
+    # A first setup: refused before the config directory is created.
+    assert not config_dir.exists()
 
 
 def test_a_login_without_a_password_is_refused_with_a_hint(repo_root, config_dir, capsys):
