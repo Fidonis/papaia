@@ -348,7 +348,13 @@ applies to the manifest (name, version, path) apply to it too.
 - **Approval at install.** When papaia Flow is installed, `addon install`
   waits until Flow shows the proposal of this version, prints what the link
   may do (events, actions with identity, effect, data class and address) and
-  asks for a confirmation (`--approve-flow-link` without a terminal). It then
+  asks for a confirmation (`--approve-flow-link` without a terminal). Without
+  a terminal nobody sees that summary before the approval, so the caller that
+  showed the section (papaia-manager's install dialog) names it:
+  `--expect-flow-digest=sha256:HEX` (SHA-256 of the `flow:` section as
+  canonical JSON: keys sorted, no spaces, UTF-8) and `--expect-addon-version`.
+  Without both, or when the manifest or the version Flow shows differs, the
+  link is not approved and stays a proposal. It then
   asks Flow to approve exactly that declaration (its digest and the add-on
   version) with the person token of the installing Flow administrator
   (`--flow-token-file=PATH` or `PAPAIA_FLOW_TOKEN`; the token is passed in
@@ -524,7 +530,7 @@ No Core changes required.
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
 | `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
-| `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist → keep the manifest in `addon-manifests/` and, with papaia Flow installed, show and approve the `flow:` section on confirmation (`--approve-flow-link`, `--flow-token-file=`). **Starts nothing.** |
+| `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist → keep the manifest in `addon-manifests/` and, with papaia Flow installed, show and approve the `flow:` section on confirmation (`--approve-flow-link`, `--flow-token-file=`; without a terminal also `--expect-flow-digest=`, `--expect-addon-version=`). **Starts nothing.** |
 | `papaia-ctl addon components [<name>] [--json]` | Read-only. List the software each registered add-on bundles (the manifest's `components`: name, version, role, image variable), with the tag the add-on's `.env` pins instead of the catalog's marked as overridden. |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
 | `papaia-ctl addon start <name>` | Copy `.env` from config bundle into checkout → render Core → `docker compose up -d` |
