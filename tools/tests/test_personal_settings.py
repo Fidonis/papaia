@@ -413,6 +413,69 @@ def test_option_values_may_be_integers_or_booleans_and_keep_their_type():
     assert folder["options"][0]["value"] == "/finance/invoices"
 
 
+# --- declared patterns: a safe subset only ----------------------------------------------
+
+# The area matches a person's text against a declared pattern on every save. A pattern that
+# backtracks without bound would block it for every person, so only a subset with a
+# bounded number of ways to match is rendered (docs/personal-settings-contract.md).
+SAFE_PATTERNS = [
+    "^[^@]*$",
+    "[A-Za-zÄÖÜäöüß ]+",
+    "^[A-Za-z0-9_-]{1,64}$",
+    "^https://[^/]+$",
+    "^(https://\\S+)?$",
+    "^([a-z0-9][a-z0-9._-]{0,62})?$",
+    "^(dev|test|prod)$",
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    "^(?:[+]49|0)[0-9 ]{4,20}$",
+    "^\\d{4}-\\d{2}$",
+    "a*?b",
+]
+
+UNSAFE_PATTERNS = {
+    "nested quantifier": "([A-Za-z]+ ?)+",
+    "nested quantifier in a non-capturing group": "(?:a+)+$",
+    "alternatives under a loop": "(a|ab)*c",
+    "backreference": "(a)\\1",
+    "named backreference": "(?P<x>a)(?P=x)",
+    "lookahead": "(?=a)a",
+    "lookbehind": "(?<=a)b",
+    "inline flag": "(?i)abc",
+    "conditional": "(a)?(?(1)b|c)",
+    "possessive quantifier": "a*+",
+    "quantifier on a quantifier": "a{2}{3}",
+    "too many ways to match": "a*a*a*a*b",
+    "unicode property escape": "\\p{L}",
+    "bound above the limit": "a{0,5000}",
+    "unescaped brace": "a{b",
+    "nested set": "[[a]",
+    "unbalanced group": "(a",
+}
+
+
+@pytest.mark.parametrize("pattern", SAFE_PATTERNS)
+def test_render_takes_a_pattern_of_the_safe_subset(pattern):
+    section = _section()
+    section["groups"][0]["settings"][5]["pattern"] = pattern
+    assert _render_ok(section), pattern
+
+
+@pytest.mark.parametrize("case", sorted(UNSAFE_PATTERNS))
+def test_render_refuses_a_pattern_outside_the_safe_subset(case):
+    section = _section()
+    section["groups"][0]["settings"][5]["pattern"] = UNSAFE_PATTERNS[case]
+    assert _schema_ok(section), "the schema cannot see this; the render step must"
+    with pytest.raises(ps.PersonalSettingsError, match="pattern"):
+        ps.validate_section(section, "x", addon_name="docs", addon_clients=("docs-api",))
+
+
+def test_the_bound_of_a_pattern_follows_the_length_of_the_text():
+    # Two loops over 120 characters stay below the bound, three over 1000 do not.
+    assert ps.pattern_paths("a*b*", 120) == 121 * 121
+    with pytest.raises(ps.PersonalSettingsError):
+        ps.pattern_paths("a*b*c*", 1000)
+
+
 # --- add-ons whose client comes from their own realm setup -------------------------------
 
 
