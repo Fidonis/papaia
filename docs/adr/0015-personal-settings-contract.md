@@ -70,12 +70,25 @@ Three findings constrain the answer:
    exchanges the person's token per module for a token with only that module's audience.
    For each audience in the registry the realm sync creates the scope `aud-<audience>`
    (an audience mapper), attaches it as an optional scope of `papaia-me`, and adds the
-   client policy `papaia-me-one-audience-<audience>`: a token exchange that asks for
-   that scope together with another audience scope of the registry is rejected. Keycloak
+   client policy `papaia-one-audience-<audience>`: a token exchange that asks for
+   that scope together with another managed audience scope is rejected. The caller
+   always sends `audience=<audience>` as well: without it Keycloak adds the audiences of
+   the realm's default scopes (`account`). Keycloak
    26.7.0 has no executor that counts audiences (checked in its server info); the
    combination of a `grant-type` condition, two `client-scopes` conditions and the
    `reject-request` executor does the job and was run against a local 26.7.0. The area
    checks the issued token as well.
+7. **papaia-manager uses the same rule.** While the profile `manager` is on, the sync
+   gives `papaia-manager` the optional scope `aud-flow` and standard token exchange: the
+   manager exchanges the signed-in administrator's token for one with only the audience
+   `flow` to approve a Flow link while an add-on is installed, and refuses any other
+   `aud`. The one-audience policies cover it unchanged.
+8. **Other modules link to the area through `PERSONAL_SETTINGS_URL`** in the root
+   `.env`: `ME_PUBLIC_URL` while the profile `me` is on, empty otherwise, re-derived by
+   every `setup`. papaia-manager receives it as `MANAGER_PERSONAL_SETTINGS_URL`; Assist
+   is to receive it as `ASSIST_ME_URL` where its compose file is wired — the core has no
+   such file yet, so that mapping is carried by the Assist module (`ASSIST_ME_URL:
+   ${PERSONAL_SETTINGS_URL:-}`).
 6. **Sensitive groups are checked by the module.** A group with `sensitive: true` needs a
    fresh sign-in; the module answers `403 step_up_required` and does not trust the area to
    have asked.
@@ -91,8 +104,9 @@ Three findings constrain the answer:
 - **Negative**: each module needs the contract routes and a self-service export; the
   workflow and assistant modules have neither today.
 - **Negative**: one more image, client and proxy host. The realm sync manages scopes,
-  optional scopes of `papaia-me` and policies with the prefix `papaia-me-one-audience-`
-  as its own and prunes the ones of removed modules.
+  optional `aud-*` scopes of `papaia-me` and `papaia-manager` and policies with the
+  prefix `papaia-one-audience-` as its own and prunes the ones no longer wanted;
+  scopes themselves are never deleted.
 - **Neutral**: Keycloak's audience mappers name a client; the audience of a core module
   (`flow`, `assist-api`) only takes effect once its client exists in the realm, which
   comes with that module's profile.

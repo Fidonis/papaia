@@ -16,7 +16,8 @@ alternatives are in [ADR 0015](adr/0015-personal-settings-contract.md).
 | JSON Schema of the declaration | [`tools/schemas/personal-settings.schema.json`](../tools/schemas/personal-settings.schema.json) |
 | Check and render | `tools/lib/personal_settings.py`, on every render while the profile `me` is on |
 | Rendered registry | `$PAPAIA_CONFIG_DIR/personal-settings/registry.yaml` |
-| Token exchange per module | Keycloak client `papaia-me`, scopes `aud-<audience>`, client policies `papaia-me-one-audience-*` |
+| Token exchange per module | Keycloak client `papaia-me`, scopes `aud-<audience>`, client policies `papaia-one-audience-*` |
+| Link to the area for other modules | `PERSONAL_SETTINGS_URL` in the root `.env` (empty while `me` is off) |
 
 ## 1. The declaration
 
@@ -135,9 +136,18 @@ about the modules.
   scope `aud-<audience>` is an optional scope of `papaia-me` and the only way the
   audience becomes available.
 - Keycloak 26.7.0 issues a token with two audiences when two are asked for. The realm
-  therefore carries one client policy per audience, `papaia-me-one-audience-<audience>`:
-  a token exchange that asks for `aud-<audience>` together with any other `aud-*` scope
-  of the registry is refused (`400 invalid_request`, "Request not allowed"). The area
+  therefore carries one client policy per audience, `papaia-one-audience-<audience>`:
+  a token exchange that asks for `aud-<audience>` together with any other managed
+  `aud-*` scope is refused (`400 invalid_request`, "Request not allowed"). The policies
+  work for every client that exchanges this way; besides `papaia-me` that is
+  `papaia-manager`, whose only scope is `aud-flow` (approving a Flow link while an add-on
+  is installed).
+- The `audience` parameter is **required**, not optional: without it Keycloak adds the
+  audiences of the realm's default scopes (`account` for a person with the default
+  roles), so `scope=aud-flow` alone yields `aud: ["flow", "account"]`; with
+  `audience=flow` the token carries `flow` only. The policies prevent two module
+  audiences, the caller's `audience` parameter and the module's check prevent the rest.
+  The area
   also checks the issued token before use: exactly one `aud` equal to the module's
   audience, `azp=papaia-me`, `sub` of the signed-in person, lifetime ≤ 300 s.
 - The module checks signature, issuer, audience and expiry as for any other caller, and

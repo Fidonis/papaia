@@ -356,7 +356,8 @@
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
       "attributes": {
-        "login_theme": "papaia"
+        "login_theme": "papaia",
+        "standard.token.exchange.enabled": "true"
       },
       "protocolMappers": [
         {
@@ -384,6 +385,48 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "preferred_username",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "papaia-me",
+      "name": "papaia-me",
+      "description": "Personal area (profile me) — signs persons in and exchanges their token per module for one with that module's audience only; the audience scopes and the one-audience client policies come from keycloak-role-sync",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${env.KC_ME_CLIENT_SECRET}",
+      "redirectUris": [
+        "${env.ME_PUBLIC_URL}/*"
+      ],
+      "webOrigins": [],
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "attributes": {
+        "login_theme": "papaia",
+        "pkce.code.challenge.method": "S256",
+        "standard.token.exchange.enabled": "true",
+        "access.token.lifespan": "300",
+        "post.logout.redirect.uris": "${env.ME_PUBLIC_URL}/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
             "jsonType.label": "String"
           }
         }

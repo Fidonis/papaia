@@ -25,6 +25,13 @@ The realm's mail server follows the optional `smtp` profile: while the mail rela
 and configured, an existing realm without a mail server gets the relay (and the
 reset-password link); a mail server the operator configured is never overwritten.
 
+Token exchange with exactly one audience: while the profile `me` is on, `papaia-me` gets
+one optional scope `aud-<audience>` per module of the personal-settings registry; while
+the profile `manager` is on, `papaia-manager` gets `aud-flow` (approving a Flow link). Per
+audience a client policy refuses a token exchange that asks for that scope together with
+another of them (docs/personal-settings-contract.md, ADR 0015). The sync owns the
+objects with its prefixes and prunes the ones no longer wanted; scopes are never deleted.
+
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
 
@@ -58,7 +65,19 @@ _MIGRATION_TARGET_ROLE = "papaia-admin"
 # this sync, and only once the profile is enabled.
 PROFILE_CLIENTS: dict[str, tuple[str, ...]] = {
     "rag": ("mcp-qdrant", "mcp-qdrant-ingest"),
+    "me": ("papaia-me",),
 }
+
+# Token exchange with exactly one audience (ADR 0015).
+AUDIENCE_SCOPE_PREFIX = "aud-"
+ONE_AUDIENCE_PREFIX = "papaia-one-audience-"
+ONE_AUDIENCE_PROFILE = "papaia-one-audience-reject"
+_TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+_REGISTRY_REL = Path("personal-settings") / "registry.yaml"
+# Same pattern as the contract's schema; anything else in the registry is ignored here.
+_AUDIENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
+# The manager approves a Flow link at add-on installation with a token for Flow alone.
+_MANAGER_EXCHANGE_AUDIENCES = ("flow",)
 
 
 def _compose_value(raw: str) -> str:
@@ -552,6 +571,186 @@ def _migrate_legacy_admins(base_url, ctx, token, existing_roles: dict[str, dict]
     return migrated
 
 
+def registry_audiences(config_dir: Path) -> list[str]:
+    """Audiences of the modules in the rendered personal-settings registry, sorted.
+
+    The registry is written as JSON by the render step; a missing or unreadable file
+    means no module yet. An audience that does not fit the contract is skipped."""
+    try:
+        data = json.loads((config_dir / _REGISTRY_REL).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    found: set[str] = set()
+    for module in data.get("modules", []) if isinstance(data, dict) else []:
+        endpoint = module.get("endpoint") if isinstance(module, dict) else None
+        audience = endpoint.get("audience") if isinstance(endpoint, dict) else None
+        if isinstance(audience, str) and _AUDIENCE_RE.fullmatch(audience):
+            found.add(audience)
+    return sorted(found)
+
+
+def exchange_audiences(root: dict[str, str], config_dir: Path) -> dict[str, list[str]]:
+    """Per client that exchanges tokens: the audiences it may ask for, one at a time."""
+    profiles = common.cluster_profiles(root)
+    wanted: dict[str, list[str]] = {}
+    if "me" in profiles:
+        wanted["papaia-me"] = registry_audiences(config_dir)
+    if "manager" in profiles:
+        wanted["papaia-manager"] = list(_MANAGER_EXCHANGE_AUDIENCES)
+    return wanted
+
+
+def _audience_scope(audience: str) -> dict:
+    return {
+        "name": f"{AUDIENCE_SCOPE_PREFIX}{audience}",
+        "description": f"Adds only the audience {audience}; asked for in a token exchange",
+        "protocol": "openid-connect",
+        "attributes": {"include.in.token.scope": "true", "display.on.consent.screen": "false"},
+        "protocolMappers": [
+            {
+                "name": f"audience-{audience}",
+                "protocol": "openid-connect",
+                "protocolMapper": "oidc-audience-mapper",
+                "consentRequired": False,
+                "config": {
+                    "included.client.audience": audience,
+                    "id.token.claim": "false",
+                    "access.token.claim": "true",
+                    "introspection.token.claim": "true",
+                },
+            }
+        ],
+    }
+
+
+def _one_audience_policies(audiences: list[str]) -> list[dict]:
+    """One policy per audience: a token exchange asking for its scope together with any
+    other audience scope is rejected. A single audience needs none."""
+    scopes = [f"{AUDIENCE_SCOPE_PREFIX}{a}" for a in audiences]
+    if len(scopes) < 2:
+        return []
+    policies = []
+    for audience, scope in zip(audiences, scopes, strict=True):
+        policies.append(
+            {
+                "name": f"{ONE_AUDIENCE_PREFIX}{audience}",
+                "description": f"A token exchange for {audience} carries no other audience",
+                "enabled": True,
+                "conditions": [
+                    {
+                        "condition": "grant-type",
+                        "configuration": {"grant_types": [_TOKEN_EXCHANGE_GRANT]},
+                    },
+                    {
+                        "condition": "client-scopes",
+                        "configuration": {"type": "Optional", "scopes": [scope]},
+                    },
+                    {
+                        "condition": "client-scopes",
+                        "configuration": {
+                            "type": "Optional",
+                            "scopes": [s for s in scopes if s != scope],
+                        },
+                    },
+                ],
+                "profiles": [ONE_AUDIENCE_PROFILE],
+            }
+        )
+    return policies
+
+
+def _listing(answer: object, key: str) -> list[dict]:
+    return list(answer.get(key) or []) if isinstance(answer, dict) else []
+
+
+def _ours(policy: dict) -> bool:
+    return str(policy.get("name", "")).startswith(ONE_AUDIENCE_PREFIX)
+
+
+def _sync_token_exchange(base_url, ctx, token, wanted: dict[str, list[str]], *, api=None) -> int:
+    """Reconcile audience scopes, the clients' optional scopes and the one-audience
+    policies with `wanted` (client ID -> audiences). Returns the number of writes."""
+    call = api or _api
+    if not wanted:
+        return 0
+    writes = 0
+    audiences = sorted({a for auds in wanted.values() for a in auds})
+
+    scopes = {s["name"]: s for s in call(base_url, ctx, token, "GET", "/client-scopes") or []}
+    for audience in audiences:
+        name = f"{AUDIENCE_SCOPE_PREFIX}{audience}"
+        if name not in scopes:
+            call(base_url, ctx, token, "POST", "/client-scopes", _audience_scope(audience))
+            writes += 1
+    if writes:
+        scopes = {s["name"]: s for s in call(base_url, ctx, token, "GET", "/client-scopes") or []}
+
+    for client_id, client_audiences in sorted(wanted.items()):
+        path = f"/clients?clientId={urllib.parse.quote(client_id, safe='')}"
+        matches = call(base_url, ctx, token, "GET", path) or []
+        uuid = matches[0]["id"] if matches else None
+        if uuid is None:
+            print(
+                f"Token exchange: client {client_id} does not exist in the realm yet; "
+                "its audience scopes follow on the next start.",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        current = call(base_url, ctx, token, "GET", f"/clients/{uuid}") or {}
+        attributes = dict(current.get("attributes") or {})
+        if attributes.get("standard.token.exchange.enabled") != "true":
+            attributes["standard.token.exchange.enabled"] = "true"
+            call(base_url, ctx, token, "PUT", f"/clients/{uuid}", {"attributes": attributes})
+            writes += 1
+        want = {f"{AUDIENCE_SCOPE_PREFIX}{a}" for a in client_audiences}
+        path = f"/clients/{uuid}/optional-client-scopes"
+        have = {
+            s["name"]: s["id"]
+            for s in call(base_url, ctx, token, "GET", path) or []
+            if s["name"].startswith(AUDIENCE_SCOPE_PREFIX)
+        }
+        for name in sorted(want - set(have)):
+            call(base_url, ctx, token, "PUT", f"{path}/{scopes[name]['id']}")
+            writes += 1
+        for name in sorted(set(have) - want):
+            call(base_url, ctx, token, "DELETE", f"{path}/{have[name]}")
+            writes += 1
+
+    desired = _one_audience_policies(audiences)
+    profile = {
+        "name": ONE_AUDIENCE_PROFILE,
+        "description": "Rejects the request",
+        "executors": [{"executor": "reject-request", "configuration": {}}],
+    }
+    live_profiles = _listing(
+        call(base_url, ctx, token, "GET", "/client-policies/profiles"), "profiles"
+    )
+    other_profiles = [p for p in live_profiles if p.get("name") != ONE_AUDIENCE_PROFILE]
+    our_profiles = [p for p in live_profiles if p.get("name") == ONE_AUDIENCE_PROFILE]
+    live_policies = _listing(
+        call(base_url, ctx, token, "GET", "/client-policies/policies"), "policies"
+    )
+    other_policies = [p for p in live_policies if not _ours(p)]
+    our_policies = [p for p in live_policies if _ours(p)]
+
+    # Keycloak refuses a policy that names a missing profile: the profile goes in before
+    # the policies and comes out after them.
+    if desired and our_profiles != [profile]:
+        body = {"profiles": [*other_profiles, profile]}
+        call(base_url, ctx, token, "PUT", "/client-policies/profiles", body)
+        writes += 1
+    if our_policies != desired:
+        body = {"policies": [*other_policies, *desired]}
+        call(base_url, ctx, token, "PUT", "/client-policies/policies", body)
+        writes += 1
+    if not desired and our_profiles:
+        body = {"profiles": other_profiles}
+        call(base_url, ctx, token, "PUT", "/client-policies/profiles", body)
+        writes += 1
+    return writes
+
+
 def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
     """Reconcile realm roles/composites/protocol-mappers and run the
     admin -> papaia-admin migration. No-op when AUTH_PROVIDER is not
@@ -612,6 +811,9 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         )
         themes_set = _sync_login_theme(base_url, ctx, token, realm_def)
         mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
+        exchange_writes = _sync_token_exchange(
+            base_url, ctx, token, exchange_audiences(root, config_dir)
+        )
         _sync_smtp(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)
     except urllib.error.HTTPError as exc:
@@ -630,7 +832,8 @@ def sync_roles(tree: EnvTree, config_dir: Path) -> bool:
         f"{composites_added} composite edge(s) added, {clients_created} client(s) "
         f"created, {secrets_updated} client secret(s) updated, {themes_set} login "
         f"theme(s) set, {mappers_added} "
-        f"protocol mapper(s) created, {migrated} user(s) migrated to "
+        f"protocol mapper(s) created, {exchange_writes} token exchange change(s), "
+        f"{migrated} user(s) migrated to "
         f"{_MIGRATION_TARGET_ROLE}.",
         flush=True,
     )

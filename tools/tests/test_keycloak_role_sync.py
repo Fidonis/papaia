@@ -67,6 +67,8 @@ class FakeKeycloak:
             "resetPasswordAllowed": False,
         }
         self.realm_puts: list[dict] = []
+        self.client_scopes: list[dict] = []
+        self.client_policies: dict[str, list[dict]] = {"profiles": [], "policies": []}
         # role name -> {"id", "name", "description", "composite", "composites": set()}
         self.roles: dict[str, dict] = roles or {}
         # client uuid -> {"clientId", "mappers": {name: mapper}, "roles": {role names}}
@@ -219,6 +221,20 @@ class FakeKeycloak:
             uid = m.group(1)
             for rep in body:
                 self.users[uid]["roles"].add(rep["name"])
+            return None
+
+        # The token exchange part (tested on its own in test_token_exchange_sync.py):
+        # scopes and client policies are kept, nothing else about them is modelled here.
+        if path == "/client-scopes" and method == "GET":
+            return list(self.client_scopes)
+        if path == "/client-scopes" and method == "POST":
+            self.client_scopes.append({**body, "id": f"scope-{body['name']}"})
+            return None
+        m = re.fullmatch(r"/client-policies/(profiles|policies)", path)
+        if m and method == "GET":
+            return {m.group(1): list(self.client_policies[m.group(1)])}
+        if m and method == "PUT":
+            self.client_policies[m.group(1)] = list(body[m.group(1)])
             return None
 
         raise AssertionError(f"unhandled fake API call: {method} {path}")
