@@ -555,6 +555,9 @@ def cmd_addon_upgrade_apply(args: argparse.Namespace) -> int:
         candidate, plan, answers, config_dir=config_dir, restore_point=args.restore_point
     )
     deployment.save(config_dir, deployed)
+    # As on start: a changed `flow:` section reaches the workflow module as a
+    # proposal for a second person, never approved here.
+    flow_link.keep_manifest(candidate.new_path, config_dir, name)
     _render_integration(config_dir, repo_root)
 
     _print_upgrade_followups(plan, candidate.new_manifest, config_dir / "addons" / name / ".env")
@@ -610,6 +613,7 @@ def cmd_addon_rollback_apply(args: argparse.Namespace) -> int:
 
     addon_upgrade.apply_rollback(entry, target, manifest, config_dir=config_dir)
     deployment.save(config_dir, deployed)
+    flow_link.keep_manifest(target, config_dir, args.name)
     _render_integration(config_dir, Path(args.repo_root))
     print(f"Addon rolled back: {args.name} {old_version} -> {entry.get('version') or 'unknown'}")
     return 0

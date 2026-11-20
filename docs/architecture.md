@@ -335,8 +335,8 @@ applies to the manifest (name, version, path) apply to it too.
   keeps working (readers ignore unknown manifest keys). No `addon_api` step
   is needed; an add-on with the section still installs on a core without
   papaia Flow.
-- **The core keeps the manifests.** `papaia-ctl addon install` and `addon
-  start` copy the add-on's `papaia-app.yaml` and the files below
+- **The core keeps the manifests.** `papaia-ctl addon install`, `addon
+  start`, `addon upgrade` and `addon rollback` copy the add-on's `papaia-app.yaml` and the files below
   `integration/flow/` (regular files only) to
   `$PAPAIA_CONFIG_DIR/addon-manifests/<name>/`; nothing else, no `.env`, no
   compose file. `addon remove` and `addon uninstall` delete the copy. Flow
@@ -365,7 +365,9 @@ applies to the manifest (name, version, path) apply to it too.
   stays a proposal for a second person, and the install reports why. Without
   Flow, without a token, or when Flow is not reachable, the install still
   completes and prints how to approve later. An upgrade (`addon install` of
-  an installed add-on) with a changed section is decided the same way again.
+  an installed add-on) with a changed section is decided the same way again;
+  `addon upgrade` and `addon rollback` only refresh the copy, so a changed
+  section waits in Flow as a proposal for a second person.
 - **Removal.** When the add-on is removed or uninstalled its link in Flow is
   suspended and, after a grace time, retired.
 - **Paths** in the section (`data_schema`) are relative to the add-on
