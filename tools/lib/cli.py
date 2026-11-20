@@ -290,6 +290,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_knowledge_map(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
+        tree = resolve.resolve_core_profiles(tree)
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3

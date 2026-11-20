@@ -12,6 +12,8 @@ Welcome to the papAIa documentation.
   installation
 - [Validating a two-node installation](./distributed-validation.md) — the hand-run check of
   the distributed mode on two machines
+- [The single exit](./egress.md) — papaia-egress: allow lists per add-on, protected hosts,
+  corporate proxy
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions
 - [Parallel Search MCP in LibreChat](./parallel-search-mcp.md) — opt-in hosted web search
   through the customer overlay

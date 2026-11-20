@@ -136,6 +136,7 @@ ADDON_API_GENERATIONS = {
 # `integration.nginx` counts only in its list form (ingress entries).
 GENERATION_FEATURES = {
     "exposes": 7,
+    "networks.egress": 7,
     "personal_settings": 8,
     "pki": 11,
     "integration.nginx": 12,
@@ -168,6 +169,9 @@ ATTACHABLE_SERVICES = {
     "nginx-proxy-manager-auth": ["nginx"],
     "oauth2-proxy": ["oauth2-proxy"],
     "papaia-manager": ["manager"],
+    # The single exit (always on). An add-on reaches it through `networks.egress`,
+    # which joins it to the add-on's egress network; see lib/egress.py.
+    "papaia-egress": ["egress"],
     "qdrant": ["rag"],
     "qdrant-ingest": ["rag"],
     "qdrant-ingest-tika": ["rag"],

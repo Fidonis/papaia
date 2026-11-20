@@ -388,6 +388,18 @@ def test_uninstall_removes_override(repo_root, config_dir):
     assert not override.exists()
 
 
+def test_uninstall_removes_the_egress_attachment(repo_root, config_dir):
+    _setup(repo_root, config_dir)
+    cmd_addon_install(_install_args(config_dir, repo_root))
+    # Written by an earlier render for an add-on that declared an egress network.
+    attachment = config_dir / "overrides" / "docker-compose.paperless.egress.override.yml"
+    attachment.write_text("services: {}\n", encoding="utf-8")
+
+    cmd_addon_uninstall(_name_args(config_dir, repo_root))
+
+    assert not attachment.exists()
+
+
 def test_uninstall_unknown_addon_returns_2(repo_root, config_dir):
     _setup(repo_root, config_dir)
     args = argparse.Namespace(

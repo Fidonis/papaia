@@ -218,6 +218,22 @@ networks:
                                    # Written to overrides/addons/docker-compose.
                                    # <name>-join.override.yml. Single host only: a
                                    # network cannot span two nodes.
+  egress:                          # optional (addon_api 7): the add-on's way out
+                                   # through papaia-egress (docs/egress.md)
+    network: ${PAPAIA_PROJECT:-papaia}-<name>-egress
+                                   # an internal: true network of the add-on's own
+                                   # compose file (checked), named ${PAPAIA_PROJECT}-
+                                   # <name>-..., not a core network, not the add-on's
+                                   # app_network, not declared by another add-on;
+                                   # papaia-egress joins it under the alias
+                                   # egress-<name> (overrides/docker-compose.
+                                   # <name>.egress.override.yml)
+    allow:                         # host:port pairs this add-on may reach; exact
+      - host: api.example.org      # names (at least two labels, not egress-*,
+        ports: [443]               # papaia-*, *.docker.internal) or IP addresses,
+                                   # no wildcards. The protected hosts override the
+                                   # list; internal addresses need the operator's
+                                   # security/egress-internal-targets.yaml
 
 local_ca_env:                      # optional: env vars pointing at the local
   <service>: [SSL_CERT_FILE]       # Keycloak CA certificate — cleared via override
@@ -889,6 +905,9 @@ posture:
 - **Local-first inference**: LocalAI as the default backend via LiteLLM; external
   LLM APIs are **opt-in** and centrally disableable at exactly one point (LiteLLM)
   → "nothing leaves the building" is enforceable and auditable (one egress point).
+  Everything else that leaves goes through the single exit `papaia-egress` (always on,
+  [docs/egress.md](egress.md)): one allow list per add-on, protected hosts that override
+  every list, one audit line per connection.
   On an Apple Silicon Mac, LocalAI can run as a host process on the Apple GPU instead of a
   container ([ADR 0012](adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md));
   it is still reached only through LiteLLM.

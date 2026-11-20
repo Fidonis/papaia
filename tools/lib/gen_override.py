@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, compat, deployment, gpu_detect
+from . import common, compat, deployment, egress, gpu_detect
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
 # `networks.app_network` may use to scope its bridge name to the deployment
@@ -89,7 +89,8 @@ def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
 
 def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[Path]:
     """Read deployment.yaml's active addons and (re-)generate every
-    Seam-1 override. Always empty on the lean core today.
+    Seam-1 override, plus the attachment of papaia-egress to each add-on's
+    egress network (lib/egress.py). Always empty on the lean core today.
 
     `repo_root` is used as the base when resolving relative addon paths
     from deployment.yaml (matching render_core.render's behaviour). When
@@ -109,6 +110,7 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
         result = generate_override(manifest, config_dir)
         if result is not None:
             written.append(result)
+    written.extend(egress.generate_overrides(config_dir, base))
     return written
 
 

@@ -504,6 +504,8 @@ def test_each_node_starts_only_its_own_profiles(full: Installation):
         "localai",
         "manager",
         "rag",
+        # The single exit stays on the controller (CONTROLLER_ONLY).
+        "egress",
         "link-gateway",
     }
     # In the installation's own order, so a bundle diff only shows real changes.

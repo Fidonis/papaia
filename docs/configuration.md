@@ -182,6 +182,23 @@ keeps it byte for byte. A non-interactive `setup` takes it from the environment 
 `PAPAIA_SMTP_PASSWORD`, which is not a stack variable and is removed from the process environment
 as soon as it has been read.
 
+## Egress variables
+
+Root `.env`, read by `papaia-ctl` when it renders `$PAPAIA_CONFIG_DIR/infra/egress/egress.json`
+for the single exit `papaia-egress` (profile `egress`, always on; [egress.md](egress.md)). Both
+are empty by default: the exit connects directly.
+
+| Variable | Purpose |
+|---|---|
+| `PAPAIA_EGRESS_UPSTREAM_PROXY` | Corporate proxy behind the exit, `http://host:port` or `http://user@host:port`. A URL with a password, another scheme or no port stops the render |
+| `PAPAIA_EGRESS_NO_PROXY` | Comma-separated host names (with their subdomains) the exit reaches directly although a corporate proxy is set |
+
+The password of the proxy user is not a variable: it goes into
+`$PAPAIA_CONFIG_DIR/infra/egress/upstream-proxy-password` with mode 0600, which the render
+checks. The allow lists come from the add-on manifests (`networks.egress`), the protected
+hosts from `$PAPAIA_CONFIG_DIR/security/protected-hosts.yaml` and the internal ranges an
+add-on may reach from `$PAPAIA_CONFIG_DIR/security/egress-internal-targets.yaml`.
+
 ## Where values come from
 
 `tools/papaia-ctl setup` derives or generates most variables; few are genuinely

@@ -91,6 +91,8 @@ ADDON_API_GENERATIONS: dict[int, str] = {
 # the fragment-path form is generation 1.
 GENERATION_FEATURES: dict[str, int] = {
     "exposes": 7,
+    # The add-on's way out through papaia-egress (lib/egress.py).
+    "networks.egress": 7,
     "personal_settings": 8,
     "pki": 11,
     "integration.nginx": 12,
@@ -306,6 +308,9 @@ def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
     for key in ("exposes", "personal_settings", "pki"):
         if manifest.get(key) is not None:
             used.append((key, GENERATION_FEATURES[key]))
+    networks = manifest.get("networks")
+    if isinstance(networks, dict) and networks.get("egress") is not None:
+        used.append(("networks.egress", GENERATION_FEATURES["networks.egress"]))
     integration = manifest.get("integration")
     if integration is not None and not isinstance(integration, dict):
         raise ValueError("integration: must be a mapping")

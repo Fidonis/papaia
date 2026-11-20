@@ -1,0 +1,78 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Single exit · papaia-egress
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ALWAYS ON — profile `egress`; `papaia-ctl setup` keeps it in COMPOSE_PROFILES.
+#
+# The only way out of the stack (docs/egress.md):
+#
+#   service -> egress network of its add-on -> papaia-egress -> [corporate proxy]
+#
+# An add-on that needs the outside declares an egress network and an allow list
+# in its manifest (`networks.egress`). papaia-ctl puts this service on that
+# network under the alias `egress-<add-on>` (a generated override) and renders
+# the allow lists, the protected hosts and the corporate proxy into
+# $PAPAIA_CONFIG_DIR/infra/egress/egress.json, which the proxy re-reads within
+# seconds. Without an add-on that asks for it nothing leaves the stack.
+#
+# Safety:
+#   - No port is published. The service is not on papaia-net: the internal
+#     services cannot use it, and it cannot reach them.
+#   - Only CONNECT tunnels to host:port pairs on the allow list of the add-on
+#     the connection comes from; the protected hosts are refused for everyone.
+#   - Never to itself, its gateways or the egress networks of the add-ons;
+#     internal addresses only where the operator opened them for the add-on.
+#     The host's other addresses belong in security/protected-hosts.yaml.
+#   - Runs as the user that owns the config dir, read-only, without capabilities.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+services:
+
+  papaia-egress:
+    # The proxy is one standard-library Python file next to this one, so the
+    # stock interpreter image is all it needs. Pinned by digest.
+    image: python:3.12.16-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89
+    restart: unless-stopped
+    command: ["python3", "-I", "/opt/papaia-egress/egress.py", "--config", "/etc/papaia-egress/egress.json"]
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ./egress.py
+        target: /opt/papaia-egress/egress.py
+        read_only: true
+      # The directory, not the file: the rendered file is replaced atomically,
+      # and a bind-mounted file would keep showing the old one.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/infra/egress
+        target: /etc/papaia-egress
+        read_only: true
+        bind:
+          # A missing configuration fails the start instead of becoming an
+          # empty directory.
+          create_host_path: false
+    read_only: true
+    healthcheck:
+      # Asks the kernel whether port 3128 (0x0C38) has a listener (state 0A).
+      # No connection is made, so no audit line is written for the check.
+      test: ["CMD-SHELL", "grep -qiE ':0C38 [0-9A-F:]+ 0A ' /proc/net/tcp /proc/net/tcp6"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - papaia-egress-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-egress
+      de.fidonis.role:   egress
+    profiles: [egress]
+
+networks:
+  # The one network with a route to the outside. Its name is scoped to the
+  # Compose project, so two installations on one host do not share it.
+  papaia-egress-net:
+    driver: bridge

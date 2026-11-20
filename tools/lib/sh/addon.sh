@@ -178,6 +178,36 @@ _addon_compose_distributed() {
     py_cli cluster-addon --name="$addon_name" --verb="$verb"
 }
 
+# After `addon start`, the add-on's egress network exists. papaia-egress joins it at
+# once (recreated with every usable core override), so the add-on's way out does not
+# stay closed until the next `papaia-ctl start`. A failure is reported, not fatal: the
+# add-on runs, and its egress stays closed until the operator starts the core again.
+# $1 = addon name
+_egress_attach() {
+    local addon_name="$1"
+    local attachment="$CONFIG_DIR/overrides/docker-compose.$addon_name.egress.override.yml"
+    [ -f "$attachment" ] || return 0
+    local mode
+    mode="$(_topology_mode)" || return 0
+    [ "$mode" = "single" ] || return 0
+    _core_overrides quiet
+    local entry found=0
+    for entry in ${CORE_OVERRIDES[@]+"${CORE_OVERRIDES[@]}"}; do
+        [ "$entry" = "$attachment" ] && found=1
+    done
+    if [ "$found" -eq 0 ]; then
+        warn "The egress network of $addon_name does not exist; its egress stays closed."
+        warn "Run 'papaia-ctl start' once the add-on runs."
+        return 0
+    fi
+    info "Joining papaia-egress to the egress network of $addon_name"
+    if ! docker compose -f "$COMPOSE_FILE" ${CORE_OVERRIDES[@]+"${CORE_OVERRIDES[@]}"} \
+            --env-file "$REPO_ROOT/src/.env" up -d --no-deps papaia-egress; then
+        warn "papaia-egress did not join the egress network of $addon_name; its egress stays"
+        warn "closed. Run 'papaia-ctl start' to retry."
+    fi
+}
+
 cmd_addon_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" force=0
     while [ $# -gt 0 ]; do
@@ -206,6 +236,7 @@ cmd_addon_start() {
     addon_path="$(_addon_path "$addon_name")"
     info "Starting addon $addon_name from $addon_path"
     _addon_compose_up "$addon_name" "$addon_path"
+    _egress_attach "$addon_name"
     success "addon start complete: $addon_name"
 }
 

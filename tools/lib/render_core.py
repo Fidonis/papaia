@@ -30,7 +30,15 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, deployment, keycloak_role_sync, knowledge_map, localai_native, smtp
+from . import (
+    common,
+    deployment,
+    egress,
+    keycloak_role_sync,
+    knowledge_map,
+    localai_native,
+    smtp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +224,13 @@ def render(config_dir: Path, repo_root: Path) -> None:
 
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
+
+    # The exit is always on (profile `egress`); its configuration follows every change
+    # of the active add-ons and of the protected hosts.
+    try:
+        egress.render(config_dir, repo_root)
+    except egress.EgressError as exc:
+        raise RenderError(str(exc)) from exc
 
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean

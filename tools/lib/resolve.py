@@ -789,6 +789,20 @@ def _toggle_profile(tree: EnvTree, name: str, enabled: bool) -> EnvTree:
     return tree
 
 
+# Core profiles that are always active and cannot be switched off: the single exit.
+ALWAYS_ON_PROFILES = ("egress",)
+
+
+def resolve_core_profiles(tree: EnvTree) -> EnvTree:
+    """Add every always-on core profile that COMPOSE_PROFILES lacks, after the other
+    profiles, so an existing installation picks it up on its next setup or upgrade."""
+    profiles = tree.setdefault("", {}).get("COMPOSE_PROFILES", "").split(",")
+    for name in ALWAYS_ON_PROFILES:
+        if name not in profiles:
+            tree = _toggle_profile(tree, name, True)
+    return tree
+
+
 def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Add or remove the `rag` Compose profile based on the operator's choice.
 

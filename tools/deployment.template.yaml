@@ -22,6 +22,7 @@ core:
     - nginx
     - librechat
     - litellm
+    - egress
   inference: local-first
 
 addons: []

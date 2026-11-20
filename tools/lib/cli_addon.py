@@ -21,6 +21,7 @@ from . import (
     compat,
     components,
     deployment,
+    egress,
     envtree,
     gen_override,
     keycloak_role_sync,
@@ -1107,6 +1108,7 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
         config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
     )
     join_override_file.unlink(missing_ok=True)
+    egress.override_path(config_dir, name).unlink(missing_ok=True)
 
     bundle_dir = config_dir / "addons" / name
     if bundle_dir.is_dir():

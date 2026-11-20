@@ -2,19 +2,19 @@
   "default": {
     "backup_manifest": "e20eff6f4eb28d2de0b11d11108cb3ae8be3737467a4300163a8023fc3bb766d",
     "compose": {
-      "config": "a5c2e5da3cd6bc4172266970eb9087cf2aaf2446b6d4c8a399a8018d2d160337",
+      "config": "a3f8acd83ccb72fa41c98a136518b9fef9fca7349d6bb334b315ef6317763170",
       "version": "5.6.0"
     },
-    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
-    "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - nginx\n  inference: local-first\n  addon_api: 12\naddons: []\n",
-    "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - nginx\n  inference: local-first\n  addon_api: 12\naddons: []\n",
-    "doctor_json": "97c2622ca44faaabf4e7f7e094d6c821eedf94904094b3a3b0229097d75cbda6",
+    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,egress,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
+    "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - nginx\n  inference: local-first\n  addon_api: 12\naddons: []\n",
+    "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - nginx\n  inference: local-first\n  addon_api: 12\naddons: []\n",
+    "doctor_json": "e32c2efba34489291fe6406d312f983878dc3364584ea00bbbc5a31ffd3cf24d",
     "repeated_setup_changes": [
       "deployed.lock"
     ],
-    "status_json": "b76602ffd100e062e817424d5ba745b6029ae65611dbb9cb3b4f648828412716",
+    "status_json": "13074381ca78138b2c98e9f8687c5edfcbf63f8a1654e3b2fbc540a05e1d71c0",
     "tree": {
-      ".env": "ffaa17ee9f2276f691e48c76e4b30b610d3253c427513d151bd3c4b78f03570e",
+      ".env": "a6e1151dd6a5725777ae49a7fe2be9ec1e02a474d7d292b1a24128f6ec089eac",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "49a538a2e47ac7b287a460e540f1287a5d951c2f9d6da5ecf0371e201306ce90",
@@ -33,7 +33,8 @@
       "ai/voice/.env": "877cff79748599cbfcf727966baf3ec70ae81a7d606fc1b6b47aad52a76d6ff7",
       "ai/voice/chatterbox.yaml": "c873695af3151e62adba39c71231c015bd62c50cc25d69a9520d2861b141541c",
       "deployed.lock": "8041404a831eb606e4ea02368496a6228c0b61811180e5b88895fd8e2adbb92a",
-      "deployment.yaml": "04784f108075321e7c9c67bc3daa1b4c9efcd42bc76a469124cc6ff5fc0c84ac",
+      "deployment.yaml": "5cd352dd0478216e62c747141f791f27fcf6baa7e1d5dbf00829f1d0a5c84d0f",
+      "infra/egress/egress.json": "735c50c7b395e4892d3e9a113ad18e0a795b9a3f7493cdd20b6e362b2c4e537a",
       "infra/keycloak/.env": "50cae5331882ec86ae3d0b378c550d06d0daf7fc90e60cc90f0608e4c0c56b9c",
       "infra/keycloak/keycloak.conf": "1300ad21f5372d2450106049fdf51ac302eae201e433a9380fe2af640c11333e",
       "infra/keycloak/realm-import/papaia-realm.json": "4f2f1fc8ddb42db5abfe678e2734f3f9555f66931b648abe830ea818f53077e5",
@@ -46,6 +47,8 @@
       "infra/oauth2-proxy/.env": "f46f23da1c0b63fb40c5161bb5f41e2220c8c4a34423378346751ce1b5c449a9",
       "infra/smtp-relay/.env": "ea4386c632ad83d3361cb7a93f3caba966439bf5723d5aae842998fb590f808d",
       "manager/.env": "c20d28a2e375c0df4708b191f54b7ab4d939ee76b1b0e1f18c553520dd8d40a5",
+      "security/egress-internal-targets.yaml": "0b326b0ab90596ddf291d4ecb2ae67d30e471ce0ccc6389ebf2fa28002631a5c",
+      "security/protected-hosts.yaml": "18807f16fdaa4b628d1665f265bbe8ab8f35cae493b49200276079ef3a9780aa",
       "services/firecrawl/.env": "4446cb825ba079ab6db70b695f8cb63b08f81a23e10f97c674b2d276aa5296b6",
       "services/searxng/.env": "c3a48f8664e36a34020e55ef050493a55faf8c147bd36d58a8ef18d160e7c487",
       "services/searxng/settings.yml": "94ca5687743ca260a9607844c43aaa2af36134c5537e88e567e4e543a640671b"
@@ -54,19 +57,19 @@
   "external-oidc": {
     "backup_manifest": "e20eff6f4eb28d2de0b11d11108cb3ae8be3737467a4300163a8023fc3bb766d",
     "compose": {
-      "config": "509d5a5ed32c847e6fab483b65ac4162040bb3d68408709de799d088da548e60",
+      "config": "263b3adbe4b483fcbc3d3c0d67bc7f1835b28586c21655de3f235db9e0ee0c14",
       "version": "5.6.0"
     },
-    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=external_oidc\nREVERSE_PROXY_PROVIDER_STICKY=external_proxy\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=true\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=oauth2-proxy,librechat,litellm\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
-    "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  inference: local-first\n  addon_api: 12\naddons: []\n",
-    "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  inference: local-first\n  addon_api: 12\naddons: []\n",
-    "doctor_json": "8cd18f51c29f35c030a8927ba6fbcb74788ff2b6e8bedde638a429019176a8c3",
+    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=external_oidc\nREVERSE_PROXY_PROVIDER_STICKY=external_proxy\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=true\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=oauth2-proxy,librechat,litellm,egress\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
+    "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  inference: local-first\n  addon_api: 12\naddons: []\n",
+    "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  inference: local-first\n  addon_api: 12\naddons: []\n",
+    "doctor_json": "96c6aa7106e5ee9fe27ef4ee556ad6c698309ce9f9c7430750c51cd343bd2a3e",
     "repeated_setup_changes": [
       "deployed.lock"
     ],
-    "status_json": "299ed54688113d8c5c33da6da22cb2fa8b024a8aab4c7f5eb917e021383bfd5c",
+    "status_json": "78aa31e8e1036efe6a955cc5f719f77bb3e81457be719a28c458c848ce65c0f3",
     "tree": {
-      ".env": "4ce22fa5da003fc677860dc29ac658cc90dea5d97e6410c44afe792ffd4d0724",
+      ".env": "67f855ed7f0dc04b55598c8ac8f14c670d57ca43190560b83c7e8b1f12094a10",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "4ea092dcf6bb0493af434ab28acff431ba10fcf8aee89cb0b68a69b3f45d9adc",
@@ -85,7 +88,8 @@
       "ai/voice/.env": "877cff79748599cbfcf727966baf3ec70ae81a7d606fc1b6b47aad52a76d6ff7",
       "ai/voice/chatterbox.yaml": "c873695af3151e62adba39c71231c015bd62c50cc25d69a9520d2861b141541c",
       "deployed.lock": "7b0ea66e7afeb12c5f7449eb4d493ec61b36f42754d0570642b6109a2019ed3e",
-      "deployment.yaml": "02293a3a1f451041d2f04ffabcb013827cb49453813fe137f156efb21e421a74",
+      "deployment.yaml": "6d905abe93eedfc3970087a1675fce0474348f0e3affcfb5b9efbc4bbd9a574b",
+      "infra/egress/egress.json": "735c50c7b395e4892d3e9a113ad18e0a795b9a3f7493cdd20b6e362b2c4e537a",
       "infra/keycloak/.env": "bf125bdeec2e3ca885351289f32b6ed47538e85df4d8b408720705f4d865704a",
       "infra/keycloak/keycloak.conf": "1300ad21f5372d2450106049fdf51ac302eae201e433a9380fe2af640c11333e",
       "infra/keycloak/realm-import/papaia-realm.json": "2acdd61156cffa4f116834a489a3dad702698c7ea7199e186a5641d563c0a3b1",
@@ -99,6 +103,8 @@
       "infra/smtp-relay/.env": "ea4386c632ad83d3361cb7a93f3caba966439bf5723d5aae842998fb590f808d",
       "manager/.env": "c20d28a2e375c0df4708b191f54b7ab4d939ee76b1b0e1f18c553520dd8d40a5",
       "overrides/docker-compose.ssl-cert.override.yml": "73e5965dad7ad51526d34281450eaba5de331dcc8265720ea9bc0df324f5cc7c",
+      "security/egress-internal-targets.yaml": "0b326b0ab90596ddf291d4ecb2ae67d30e471ce0ccc6389ebf2fa28002631a5c",
+      "security/protected-hosts.yaml": "18807f16fdaa4b628d1665f265bbe8ab8f35cae493b49200276079ef3a9780aa",
       "services/firecrawl/.env": "4446cb825ba079ab6db70b695f8cb63b08f81a23e10f97c674b2d276aa5296b6",
       "services/searxng/.env": "c3a48f8664e36a34020e55ef050493a55faf8c147bd36d58a8ef18d160e7c487",
       "services/searxng/settings.yml": "94ca5687743ca260a9607844c43aaa2af36134c5537e88e567e4e543a640671b"
@@ -107,21 +113,21 @@
   "full": {
     "backup_manifest": "e20eff6f4eb28d2de0b11d11108cb3ae8be3737467a4300163a8023fc3bb766d",
     "compose": {
-      "config": "e9f9ee7b57a6b8ada9228a927a174c1cab273930ca42dae2a9c465b51b369d33",
+      "config": "8d1ab0acfc58729361f59a6a795a30e0dec58243a006abee20ea4762b9545e6a",
       "version": "5.6.0"
     },
-    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://chat.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://llm.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=true\nMANAGER_STICKY=true\nRAG_STICKY=true\nVOICE_STICKY=true\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=cpu\nSMTP_STICKY=true\nSMTP_HOST_STICKY=smtp.example.org\nSMTP_PORT_STICKY=587\nSMTP_SECURITY_STICKY=starttls\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=noreply@example.org\nSMTP_FROM_NAME_STICKY=papAIa\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=true\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,librechat-websearch,localai,manager,rag,voice,smtp,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
-    "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - nginx\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - voice\n  - smtp\n  inference: local-first\n  addon_api: 12\naddons: []\n",
-    "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - voice\n  - smtp\n  - nginx\n  inference: local-first\n  addon_api: 12\naddons: []\n",
-    "doctor_json": "cf8158e1ae0ddab7c9e86c223211590a620550bdaefa36fc78c9f85d76ba7b70",
+    "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://chat.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://llm.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=true\nMANAGER_STICKY=true\nRAG_STICKY=true\nVOICE_STICKY=true\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=cpu\nSMTP_STICKY=true\nSMTP_HOST_STICKY=smtp.example.org\nSMTP_PORT_STICKY=587\nSMTP_SECURITY_STICKY=starttls\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=noreply@example.org\nSMTP_FROM_NAME_STICKY=papAIa\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=true\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,egress,librechat-websearch,localai,manager,rag,voice,smtp,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
+    "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - nginx\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - voice\n  - smtp\n  inference: local-first\n  addon_api: 12\naddons: []\n",
+    "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - voice\n  - smtp\n  - nginx\n  inference: local-first\n  addon_api: 12\naddons: []\n",
+    "doctor_json": "c20453affe9f5ba2b6461a0c15112bd20b0c3f5992e0f051463f2b7a56c9fa42",
     "repeated_setup_changes": [
       ".env",
       "deployed.lock",
       "deployment.yaml"
     ],
-    "status_json": "5ce529866ec90900e886e115aa77442ec32348c77bbd5d846533d96f82103e7c",
+    "status_json": "6a83249d561669d8aaa1979e3d2cbb84e73121d092c2a5cb017ca93974e0ad94",
     "tree": {
-      ".env": "7b1fad32187c4557c34ffe9093af40a45c5b5876a41d9ca3ef17bd1c4a67a774",
+      ".env": "31e5f88ea50ddedf1e26f7b07bff4ac4dde008c32151646d58223df172174184",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "f73aeb7ac7d4c388ad92e5b6d00c5442a79d14b43bd6b4f202314d03136b3650",
@@ -140,7 +146,8 @@
       "ai/voice/.env": "877cff79748599cbfcf727966baf3ec70ae81a7d606fc1b6b47aad52a76d6ff7",
       "ai/voice/chatterbox.yaml": "c873695af3151e62adba39c71231c015bd62c50cc25d69a9520d2861b141541c",
       "deployed.lock": "8041404a831eb606e4ea02368496a6228c0b61811180e5b88895fd8e2adbb92a",
-      "deployment.yaml": "1936e51776352b0608bb8f68a921b7e489331697f7889e2345ca31f07515a6bd",
+      "deployment.yaml": "fd2720a40b2a235c282878cfe15e547237c74594e2cfa62091363aff4ea18b1f",
+      "infra/egress/egress.json": "735c50c7b395e4892d3e9a113ad18e0a795b9a3f7493cdd20b6e362b2c4e537a",
       "infra/keycloak/.env": "50cae5331882ec86ae3d0b378c550d06d0daf7fc90e60cc90f0608e4c0c56b9c",
       "infra/keycloak/keycloak.conf": "1300ad21f5372d2450106049fdf51ac302eae201e433a9380fe2af640c11333e",
       "infra/keycloak/realm-import/papaia-realm.json": "21d150b53e890cfd2eea5d19c9fb0f6ab649fb453c672c3eb9c0dd1064b49939",
@@ -154,6 +161,8 @@
       "infra/smtp-relay/.env": "4be20b97a1bdb291ffb91da1c5d871c094fe1d4a2f8efcd1cf1a98e83f29defa",
       "infra/smtp-relay/upstream-password": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "manager/.env": "c20d28a2e375c0df4708b191f54b7ab4d939ee76b1b0e1f18c553520dd8d40a5",
+      "security/egress-internal-targets.yaml": "0b326b0ab90596ddf291d4ecb2ae67d30e471ce0ccc6389ebf2fa28002631a5c",
+      "security/protected-hosts.yaml": "18807f16fdaa4b628d1665f265bbe8ab8f35cae493b49200276079ef3a9780aa",
       "services/firecrawl/.env": "4446cb825ba079ab6db70b695f8cb63b08f81a23e10f97c674b2d276aa5296b6",
       "services/searxng/.env": "c3a48f8664e36a34020e55ef050493a55faf8c147bd36d58a8ef18d160e7c487",
       "services/searxng/settings.yml": "94ca5687743ca260a9607844c43aaa2af36134c5537e88e567e4e543a640671b"

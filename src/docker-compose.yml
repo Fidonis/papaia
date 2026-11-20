@@ -13,6 +13,7 @@ include:
   - path: ./infra/oauth2-proxy/docker-compose.yml
   - path: ./infra/nginx/docker-compose.yml
   - path: ./infra/smtp-relay/docker-compose.yml
+  - path: ./infra/egress/docker-compose.yml
 
   # Application Services
   - path: ./manager/docker-compose.yml

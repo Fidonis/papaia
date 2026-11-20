@@ -89,6 +89,31 @@ _pull_quietly() {
     [ ! -t 2 ]
 }
 
+# The core compose overrides `start` uses, in CORE_OVERRIDES as `-f <file>` pairs: every
+# override whose external networks exist. Overrides declare add-on networks as
+# external: true; until the add-on has started, its network does not exist and
+# `docker compose up` would fail, so such an override is left out until the next start.
+# $1 = "warn" to name each override left out, anything else to stay quiet.
+CORE_OVERRIDES=()
+_core_overrides() {
+    local mode="${1:-quiet}" f net_name nets_missing
+    CORE_OVERRIDES=()
+    [ -d "$CONFIG_DIR/overrides" ] || return 0
+    for f in "$CONFIG_DIR"/overrides/docker-compose.*.override.yml; do
+        [ -f "$f" ] || continue
+        nets_missing=0
+        while IFS= read -r net_name; do
+            [ -z "$net_name" ] && continue
+            docker network inspect "$net_name" >/dev/null 2>&1 || { nets_missing=1; break; }
+        done < <(py_cli override-external-nets --file="$f" 2>/dev/null)
+        if [ "$nets_missing" -eq 0 ]; then
+            CORE_OVERRIDES+=(-f "$f")
+        elif [ "$mode" = "warn" ]; then
+            warn "Addon not running — skipping override: $(basename "$f")"
+        fi
+    done
+}
+
 cmd_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
     while [ $# -gt 0 ]; do
@@ -176,28 +201,11 @@ cmd_start() {
         done < <(py_cli active-addons 2>/dev/null)
     fi
 
-    # Build the override list, but skip any override whose external networks
-    # don't exist yet.  Overrides declare addon networks as external:true —
-    # if the addon hasn't been started yet the network doesn't exist and
-    # docker compose up would fail.  Once `addon start <name>` (or
-    # `start --addons`) runs, the network is Compose-owned and the override
-    # is included automatically on the next start.
-    local -a compose_overrides=()
-    if [ -d "$CONFIG_DIR/overrides" ]; then
-        for f in "$CONFIG_DIR"/overrides/docker-compose.*.override.yml; do
-            [ -f "$f" ] || continue
-            local nets_missing=0
-            while IFS= read -r net_name; do
-                [ -z "$net_name" ] && continue
-                docker network inspect "$net_name" >/dev/null 2>&1 || { nets_missing=1; break; }
-            done < <(py_cli override-external-nets --file="$f" 2>/dev/null)
-            if [ "$nets_missing" -eq 0 ]; then
-                compose_overrides+=(-f "$f")
-            else
-                warn "Addon not running — skipping override: $(basename "$f")"
-            fi
-        done
-    fi
+    # Overrides whose add-on network does not exist yet are skipped (see _core_overrides);
+    # once `addon start <name>` (or `start --addons`) runs, the network is Compose-owned
+    # and the override is included automatically on the next start.
+    _core_overrides warn
+    local -a compose_overrides=(${CORE_OVERRIDES[@]+"${CORE_OVERRIDES[@]}"})
 
     local up_flags=(-d)
     if _stopped_containers_go_stale; then
