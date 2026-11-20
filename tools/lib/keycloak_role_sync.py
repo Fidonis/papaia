@@ -29,8 +29,9 @@ Token exchange with exactly one audience: while the profile `me` is on, `papaia-
 one optional scope `aud-<audience>` per module of the personal-settings registry; while
 the profile `manager` is on, `papaia-manager` gets `aud-flow` (approving a Flow link). Per
 audience a client policy refuses a token exchange, a sign-in (authorization code) or a
-refresh that asks for that scope together with another of them (docs/personal-settings-contract.md, ADR 0015). The sync owns the
-objects with its prefixes and prunes the ones no longer wanted; scopes are never deleted.
+refresh that asks for that scope together with another of them
+(docs/personal-settings-contract.md, ADR 0015). The sync owns the objects with its
+prefixes and prunes the ones no longer wanted; scopes are never deleted.
 
 It also migrates every current holder of the legacy `admin` role onto the new
 `papaia-admin` role, without touching `admin` itself.
