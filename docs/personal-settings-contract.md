@@ -113,6 +113,9 @@ chosen from the module's own list of persons (section 3.3), never typed in.
   digits, inner hyphens, at most 63 characters; no dot, no underscore); `base_path`,
   `data.summary` and `data.export` are absolute paths of segments of letters, digits, `_`,
   `-` and `.`, where no segment starts with a dot (no `~`, no `..`, no trailing slash).
+- **Operations of contract v1**: a collection declares one or more of `create`, `end`
+  and `renew`, each once; any other name is refused. The area offers exactly these three,
+  so a further operation comes with a new contract version, not with a declaration.
 - **Unique**: group IDs per module, keys per group or item, option values per field,
   module names across the installation.
 - **Audience**: an add-on may only name a client of its own: one that its own Keycloak
@@ -348,7 +351,7 @@ Only for groups with `kind: collection`.
   when an `Idempotency-Key` replays the first answer). The module may require an
   `Idempotency-Key` header (Flow does, for every writing operation); the area always sends
   one per rendered form, and a repeated request answers with the first item.
-- `POST {base_path}/{group}/items/{id}/{operation}` with header `If-Match: <item etag>`,
+- `POST {base_path}/{group}/items/{id}/{operation}` (`end` or `renew`) with header `If-Match: <item etag>`,
   `Idempotency-Key`, and an optional plain object of fields (for example `{"until":
   "2027-01-31"}` for `renew`): `200` (or `201` when the operation makes a new item, as a
   renewal in Flow does) with the item.

@@ -170,6 +170,10 @@ is the single truth; the modules refer to it.
     grant with both made before the policy is refused, single scopes and the plain sign-in
     keep working. Without the explicit grant types Keycloak already refused the code grant
     at the token endpoint; the explicit form does not rely on that.
+23. **Collection operations are those of contract v1.** The render and the schema accept
+    only `create`, `end` and `renew`, the three the area offers; a declaration with another
+    operation used to render and then failed in the area. A further operation needs a new
+    contract version.
 
 ## Consequences
 
