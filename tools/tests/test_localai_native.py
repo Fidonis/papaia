@@ -217,17 +217,22 @@ def test_the_script_reads_the_key_when_it_runs_and_starts_in_the_home(tmp_path):
     binary = home / "bin" / "local-ai-v9.9.9"
     binary.parent.mkdir(parents=True)
     binary.write_text(
-        '#!/bin/sh\necho "$1|$LOCALAI_API_KEY|$LOCALAI_ADDRESS|$LOCALAI_MODELS_PATH|$(pwd -P)"\n'
+        "#!/bin/sh\n"
+        'echo "$1|$LOCALAI_API_KEY|$LOCALAI_ADDRESS|$LOCALAI_MODELS_PATH|$(pwd -P)|"\\\n'
+        '"$DOCKER_CONFIG"\n'
     )
     binary.chmod(0o755)
     localai_native.write_run_script(home, binary, config, "8200")
     path = localai_native.script_path(home)
 
     done = subprocess.run([str(path)], capture_output=True, text=True, check=True)
-    command, key, address, models, cwd = done.stdout.strip().split("|")
+    command, key, address, models, cwd, docker_config = done.stdout.strip().split("|")
     assert (command, key, address) == ("run", "sk-local-test-value", "127.0.0.1:8200")
     assert models == str(home / "models")
     assert Path(cwd) == home.resolve()
+    # The Metal backend is pulled without the credential helper of ~/.docker/config.json,
+    # which is not on launchd's PATH.
+    assert docker_config == str(home / "docker")
 
     (config / "ai" / "localai" / ".env").write_text("LOCALAI_API_KEY=\n", encoding="utf-8")
     missing = subprocess.run([str(path)], capture_output=True, text=True, check=False)
@@ -938,6 +943,18 @@ def test_uninstall_with_purge_removes_the_directory(tmp_path):
     assert not home.exists()
     assert not home.parent.exists(), "the empty localai/ directory goes too"
     assert (tmp_path / "workspace").is_dir()
+
+
+def test_uninstall_with_purge_removes_the_state_of_newer_localai_releases(tmp_path):
+    home, plist = _job_home(tmp_path)
+    for sub in ("cache/vram", "downloading", "docker"):
+        (home / sub).mkdir(parents=True)
+    (home / "cache" / "vram" / "size-1.json").write_text("{}\n", encoding="utf-8")
+
+    localai_native.uninstall(
+        home, LABEL, plist, purge=True, run=FakeLaunchctl(), uid=UID, sleep=lambda s: None
+    )
+    assert not home.exists()
 
 
 def test_uninstall_with_purge_leaves_files_it_does_not_know(tmp_path):
