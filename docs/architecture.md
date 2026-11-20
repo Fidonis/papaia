@@ -100,6 +100,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
 | Mail | `smtp-relay`, a Postfix relay (opt-in, profile `smtp`) that holds the mail server's credentials once; Keycloak and the add-ons that attach it send through it without any — see [ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md) |
 | RAG | Qdrant, `qdrant-mcp-rbac` and `qdrant-ingest` (opt-in, profile `rag`) — retrieval is a capability of the chat layer that an installation either wants or does not; see [ADR 0004](adr/0004-rag-system-as-optional-core-profile.md) |
+| Personal area | `me-web` (opt-in, profile `me`) — one page where every person changes their own settings in the modules that declare `personal_settings:`; it stores no values and calls each module with a token for that module alone — see [ADR 0015](adr/0015-personal-settings-contract.md) and [the contract](personal-settings-contract.md) |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
 points** — no hard-wired application references. The Core is **self-sufficient**:
@@ -277,6 +278,12 @@ env_replace_secrets:               # optional: keys replaced by papaia-ctl
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
   - "Set MW_SERVER in the add-on .env when the wiki is not on the default URL."
+
+personal_settings:                 # optional (addon_api 4): settings each person changes
+  api: 1                           # in the personal area; structure only, never values —
+  module: wiki                     # see docs/personal-settings-contract.md
+  # title, endpoint (service, port, base_path, audience = a Keycloak client of this
+  # add-on), data, groups …
 ```
 
 #### `.env.example` value markers
@@ -484,6 +491,10 @@ The service exists from `ADDON_API` generation 3, so such an add-on declares
 `requires.addon_api: 3`; an older core reports it incompatible instead of failing on an
 unknown service. The profile `smtp` has to be on for the service to exist, and every
 container on an attached network can use the relay, so attach it only to add-ons you trust.
+
+The personal area `me-web` (profile `me`, `addon_api` 4) is attachable too: an add-on that
+declares `personal_settings:` lists it under `attach:` so the area reaches the add-on's
+module API on the add-on's network.
 
 ### Seam 2 — OIDC
 

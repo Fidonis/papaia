@@ -108,6 +108,7 @@ EDGES: tuple[Edge, ...] = (
     Edge("rag", "keycloak", "keycloak", 8443, "MCP sign-in", required=False),
     Edge("keycloak", "smtp", "smtp-relay", 587, "password reset mail", required=False),
     Edge("manager", "keycloak", "keycloak", 8443, "Users & Roles"),
+    Edge("me", "keycloak", "keycloak", 8443, "sign-in and token exchange"),
     Edge("manager", "litellm", "litellm", 4000, "Models & Usage", required=False),
 )
 
@@ -115,7 +116,7 @@ EDGES: tuple[Edge, ...] = (
 # container (LibreChat fetches the issuer's discovery document). Where the proxy runs on
 # another node, the gateway carries the public auth host name as well and passes the TCP
 # stream to the proxy's port 443 there: the real certificate, no split DNS.
-PUBLIC_AUTH_CALLERS = ("librechat", "localai", "rag", "manager", "litellm")
+PUBLIC_AUTH_CALLERS = ("librechat", "localai", "rag", "manager", "litellm", "me")
 
 
 @dataclass(frozen=True)

@@ -176,6 +176,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
+    me_was_enabled = "me" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     # Taken out of the environment so nothing started later inherits it. An empty
     # value means "keep the stored password" (--smtp-no-auth drops it).
@@ -191,6 +192,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_host=args.localai_host,
         manager_host=args.manager_host,
         qdrant_host=args.qdrant_host,
+        me_host=args.me_host,
         npm_admin_host=args.npm_admin_host,
         auth_provider=args.auth_provider,
         oidc_issuer=args.oidc_issuer,
@@ -201,6 +203,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         localai_variant=args.localai_variant or None,
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
+        enable_me=_tristate(args.enable_me),
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
         smtp_port=args.smtp_port,
@@ -240,6 +243,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
+        tree = resolve.resolve_me_hosts(tree, setup_args)
+        tree = resolve.resolve_me(tree, setup_args)
+        tree = resolve.resolve_personal_settings_link(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -309,6 +315,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         reporting.print_rag_next_steps(config_dir, tree)
     if setup_args.enable_smtp and not smtp_was_enabled:
         reporting.print_smtp_next_steps(tree)
+    if setup_args.enable_me and not me_was_enabled:
+        reporting.print_me_next_steps(tree)
     if effective_auth_provider == "external_oidc":
         reporting.print_external_oidc_checklist(config_dir, tree)
     return 0
@@ -1101,6 +1109,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-host")
     p_setup.add_argument("--manager-host")
     p_setup.add_argument("--qdrant-host")
+    p_setup.add_argument("--me-host")
     p_setup.add_argument("--npm-admin-host")
     p_setup.add_argument(
         "--auth-provider", choices=["internal_keycloak", "external_oidc"], default=None
@@ -1117,6 +1126,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--localai-variant", choices=list(gpu_detect.VARIANTS), default=None)
     p_setup.add_argument("--enable-manager", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-me", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)

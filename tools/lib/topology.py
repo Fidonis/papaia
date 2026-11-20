@@ -201,13 +201,22 @@ CATALOGUE: dict[str, ServiceSpec] = {
             start_group=2,
             public_url=("", "MANAGER_PUBLIC_URL"),
         ),
+        ServiceSpec(
+            "me",
+            "Personal area",
+            ("me",),
+            ("infra/me",),
+            start_group=2,
+            public_url=("", "ME_PUBLIC_URL"),
+        ),
     )
 }
 
 # Services that must run where the configuration tree is: the manager mounts the whole
-# config dir and the Docker socket of the host that runs `papaia-ctl`, and the RAG
-# ingester keeps its catalogue and the operator's documents inside the config dir.
-CONTROLLER_ONLY = ("manager", "rag")
+# config dir and the Docker socket of the host that runs `papaia-ctl`, the RAG
+# ingester keeps its catalogue and the operator's documents inside the config dir, and
+# the personal area reads the registry rendered into it.
+CONTROLLER_ONLY = ("manager", "rag", "me")
 
 # The bundled reverse proxy. Its profile, not the `nginx` service, says whether it runs.
 PROXY_PROFILE = "nginx"

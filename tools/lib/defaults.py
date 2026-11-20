@@ -47,6 +47,14 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         if config_seeded
         else ""
     )
+    me_port = root.get("ME_EXT_PORT", "8130")
+    me_sticky = (
+        resolve.sticky_service_url(
+            root.get("ME_PUBLIC_URL", ""), resolve.derive_me_url_default, me_port
+        )
+        if config_seeded
+        else ""
+    )
     jinaai = tree.get("ai/jinaai", {})
     reranker_model_sticky = jinaai.get("RERANKER_MODEL", "") if config_seeded else ""
     if common.is_placeholder(reranker_model_sticky):
@@ -73,6 +81,8 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "MANAGER_EXT_PORT": root.get("MANAGER_EXT_PORT", "8120"),
         "QDRANT_HOST_STICKY": qdrant_sticky,
         "QDRANT_EXT_PORT": qdrant_port,
+        "ME_HOST_STICKY": me_sticky,
+        "ME_EXT_PORT": me_port,
         "LOCAL_AI_STICKY": (
             ("true" if "localai" in profiles else "false") if config_seeded else ""
         ),
@@ -80,6 +90,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
             ("true" if "manager" in profiles else "false") if config_seeded else ""
         ),
         "RAG_STICKY": (("true" if "rag" in profiles else "false") if config_seeded else ""),
+        "ME_STICKY": (("true" if "me" in profiles else "false") if config_seeded else ""),
         "SMTP_STICKY": (
             ("true" if smtp.PROFILE in profiles else "false") if config_seeded else ""
         ),

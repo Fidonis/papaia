@@ -39,6 +39,7 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
         ("oauth2-proxy", f"{app_host}/oauth2/callback"),
     ]
     rag_active = "rag" in _active_profiles(root)
+    me_active = "me" in _active_profiles(root)
 
     sep = "─" * 65
     print()
@@ -57,6 +58,15 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
         print("     and an audience mapper for each on the 'librechat' client's access tokens")
         print("   - the realm roles 'qdrant-ingest-operator' (required for the ingest MCP tools)")
         print("     and 'qdrant-admin'")
+        print()
+    if me_active:
+        me_url = root.get("ME_PUBLIC_URL", "<ME_PUBLIC_URL>")
+        print("   Personal area (profile me), in the same provider:")
+        print(f"   - a confidential client 'papaia-me' with the redirect URI {me_url}/*")
+        print("     and standard token exchange switched on")
+        print("   - per module of personal-settings/registry.yaml an optional scope")
+        print("     'aud-<audience>' on 'papaia-me' that adds that one audience, and a rule")
+        print("     that refuses a token exchange asking for two of them")
         print()
     if needs_edit:
         print("2. Replace REPLACE_WITH_VALID_SECRET in:")
@@ -100,6 +110,21 @@ def print_rag_next_steps(config_dir: Path, tree: envtree.EnvTree) -> None:
         print("     which is not enabled. Switch it on with 'papaia-ctl setup --manager', or")
         print(f"     edit the catalog files in {config_dir / 'ai' / 'rag' / 'catalog'} by hand.")
     print("See README 'RAG system' for details.")
+
+
+def print_me_next_steps(tree: envtree.EnvTree) -> None:
+    """Print what follows after the personal area was switched on."""
+    url = tree.get("", {}).get("ME_PUBLIC_URL", "")
+    print()
+    print("Personal area enabled — after 'papaia-ctl start':")
+    print(f"  1. Every person opens {url} to see and change their own settings.")
+    print("  2. It shows the modules listed in personal-settings/registry.yaml in the")
+    print("     configuration directory: the active add-ons and core modules that declare")
+    print("     personal settings. The registry is rendered on every start.")
+    if tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak") == "internal_keycloak":
+        print("  3. 'start' creates the client 'papaia-me' and one audience scope per module")
+        print("     in the realm, also in an existing one.")
+    print("See docs/personal-settings-contract.md for details.")
 
 
 def print_smtp_next_steps(tree: envtree.EnvTree) -> None:

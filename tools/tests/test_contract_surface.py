@@ -45,7 +45,12 @@ _SURFACE_CHANGED = (
 # server's credentials. Nothing existing changed, so `min` stays 1; add-ons that
 # attach it declare `requires.addon_api: 3`, and an older core reports them
 # incompatible instead of failing on an unknown service.
-ADDON_API_WINDOW = (1, 3)
+#
+# Gen 4 (additive): the personal area `me-web` (profile `me`) is attachable, so an add-on
+# that declares `personal_settings:` can let the area reach its module API; and the tools
+# read the new manifest key `personal_settings` (docs/personal-settings-contract.md).
+# Add-ons without either are unaffected, so `min` stays 1.
+ADDON_API_WINDOW = (1, 4)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -67,6 +72,7 @@ ATTACHABLE_SERVICES = {
     "litellm-prometheus": ["litellm"],
     "localai": ["localai"],
     "localai-model-init": ["localai"],
+    "me-web": ["me"],
     "mcp-firecrawl": ["librechat-websearch"],
     "nginx-proxy-manager": ["nginx"],
     "nginx-proxy-manager-auth": ["nginx"],
@@ -127,6 +133,9 @@ MANIFEST_KEYS = [
     # core does not interpret it. An older core ignores the key and the add-on installs
     # without a flow link, so no ADDON_API bump.
     "flow",
+    # Read by the render step while the profile `me` is on (addon_api 4); an older core
+    # ignores the key and the add-on installs there without personal settings.
+    "personal_settings",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -137,6 +146,7 @@ SECRET_ALIASES = {
     ("infra/keycloak", "KC_OAUTH2_PROXY_CLIENT_SECRET"): [("", "OAUTH2_PROXY_CLIENT_SECRET")],
     ("infra/keycloak", "KC_LOCALAI_CLIENT_SECRET"): [("ai/localai", "LOCALAI_OIDC_CLIENT_SECRET")],
     ("infra/keycloak", "KC_MANAGER_CLIENT_SECRET"): [("manager", "MANAGER_OIDC_CLIENT_SECRET")],
+    ("infra/keycloak", "KC_ME_CLIENT_SECRET"): [("infra/me", "ME_OIDC_CLIENT_SECRET")],
     ("ai/litellm", "LITELLM_MASTER_KEY"): [
         ("ai/librechat", "LITELLM_API_KEY"),
         ("ai/jinaai", "LITELLM_API_KEY"),
@@ -171,4 +181,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 15, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 16, _SURFACE_CHANGED

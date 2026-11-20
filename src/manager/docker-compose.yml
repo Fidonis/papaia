@@ -38,6 +38,8 @@ services:
       AUTH_PROVIDER:        ${AUTH_PROVIDER}
       MANAGER_OIDC_CLIENT_ID: papaia-manager
       MANAGER_HOST:         ${MANAGER_PUBLIC_URL}
+      # Link to the personal area (profile me); empty while that profile is off.
+      MANAGER_PERSONAL_SETTINGS_URL: ${PERSONAL_SETTINGS_URL:-}
       PAPAIA_CONFIG_DIR:    ${PAPAIA_CONFIG_DIR}
       PAPAIA_WORKSPACE_DIR: ${PAPAIA_WORKSPACE_DIR}
       PAPAIA_BACKUP_DIR:    ${PAPAIA_BACKUP_DIR}

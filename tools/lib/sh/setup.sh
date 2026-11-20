@@ -6,6 +6,8 @@
 # The topology flags of the setup run in progress (see cmd_setup). Declared here so that
 # _run_setup_py can be called on its own.
 SETUP_TOPOLOGY_ARGS=()
+# The personal-area flags of the setup run in progress, same lifetime.
+SETUP_ME_ARGS=()
 
 # Reads a py_cli subcommand's KEY=VALUE output into the current shell's
 # variables.
@@ -36,7 +38,7 @@ cmd_setup() {
     local orig_argc=$#
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
     local host_ip="" app_host="" auth_host="" librechat_host="" litellm_host="" localai_host="" manager_host="" npm_admin_host=""
-    local qdrant_host=""
+    local qdrant_host="" me="" me_host=""
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" localai_variant="" manager="" rag="" reranker_model="" backup_dir=""
@@ -49,6 +51,7 @@ cmd_setup() {
     SETUP_SMTP_PASSWORD=""
     # The topology of a distributed installation, same lifetime as the mail arguments.
     SETUP_TOPOLOGY_ARGS=()
+    SETUP_ME_ARGS=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -104,6 +107,9 @@ cmd_setup() {
             --rag) rag="true" ;;
             --no-rag) rag="false" ;;
             --qdrant-host=*) qdrant_host="${1#*=}" ;;
+            --me) me="true" ;;
+            --no-me) me="false" ;;
+            --me-host=*) me_host="${1#*=}" ;;
             --smtp) smtp="true" ;;
             --no-smtp) smtp="false" ;;
             --smtp-host=*) smtp_host="${1#*=}" ;;
@@ -226,6 +232,13 @@ cmd_setup() {
             info "  RAG System        = $_rag_label"
             [ "$RAG_STICKY" = "true" ] && [ -n "${QDRANT_HOST_STICKY:-}" ] && \
                 info "  Qdrant URL        = $QDRANT_HOST_STICKY"
+        fi
+        if [ -n "${ME_STICKY:-}" ]; then
+            local _me_label="disabled"
+            [ "$ME_STICKY" = "true" ] && _me_label="enabled"
+            info "  Personal area     = $_me_label"
+            [ "$ME_STICKY" = "true" ] && [ -n "${ME_HOST_STICKY:-}" ] && \
+                info "  Personal area URL = $ME_HOST_STICKY"
         fi
         if [ -n "${SMTP_STICKY:-}" ]; then
             local _smtp_label="disabled"
@@ -418,6 +431,32 @@ cmd_setup() {
                 "Where browsers reach Qdrant (REST API; the dashboard is under /dashboard)." \
                 "QDRANT_PUBLIC_URL" "$qdrant_default")"
         fi
+        if [ -z "$me" ]; then
+            # Off for a fresh install: the area shows only modules that declare personal
+            # settings, and the core alone has none. A previous opt-in stays the default.
+            local me_default="2"
+            [ "${ME_STICKY:-}" = "true" ] && me_default="1"
+            printf '\n%sPersonal Area%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — one page where every person changes their own settings in the modules\n' >&2
+            printf '  2) No   — skip the personal area (default)\n' >&2
+            local me_choice
+            me_choice="$(prompt_with_default "  Choose" "$me_default")"
+            case "$me_choice" in
+                1|yes) me="true" ;;
+                2|no)  me="false" ;;
+                *)
+                    warn "Unrecognized choice '$me_choice'; defaulting to disabled."
+                    me="false"
+                    ;;
+            esac
+        fi
+        if [ "$me" = "true" ] && [ -z "$me_host" ]; then
+            local me_default_url="${ME_HOST_STICKY:-}"
+            [ -z "$me_default_url" ] && me_default_url="$(_derive_me_default "$app_host")"
+            me_host="$(prompt_field "Public URL of the personal area" \
+                "Where every person reaches their own settings." \
+                "ME_PUBLIC_URL" "$me_default_url")"
+        fi
         if [ -z "$smtp" ]; then
             # Off for a fresh install: the relay needs a mail server only the operator
             # knows. A previous opt-in stays the default so a re-run does not flip it.
@@ -487,6 +526,8 @@ cmd_setup() {
         esac
     fi
 
+    [ -n "$me" ] && SETUP_ME_ARGS+=(--enable-me="$me")
+    [ -n "$me_host" ] && SETUP_ME_ARGS+=(--me-host="$me_host")
     [ -n "$smtp" ] && SETUP_SMTP_ARGS+=(--enable-smtp="$smtp")
     [ -n "$smtp_host" ] && SETUP_SMTP_ARGS+=(--smtp-host="$smtp_host")
     [ -n "$smtp_port" ] && SETUP_SMTP_ARGS+=(--smtp-port="$smtp_port")
@@ -776,6 +817,14 @@ _derive_manager_default() {
     printf '%s:%s' "$base" "$port"
 }
 
+_derive_me_default() {
+    # Best-effort bash-side prefill for the personal-area URL prompt; the authoritative
+    # derivation lives in resolve.derive_me_url_default.
+    local host="$1" port="${ME_EXT_PORT:-8130}" base
+    base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
+    printf '%s:%s' "$base" "$port"
+}
+
 _derive_qdrant_default() {
     # Best-effort bash-side prefill for the Qdrant URL prompt; the authoritative
     # derivation lives in resolve.derive_qdrant_url_default.
@@ -832,6 +881,9 @@ _run_setup_py() {
     fi
     if [ "${#SETUP_TOPOLOGY_ARGS[@]}" -gt 0 ]; then
         extra+=(${SETUP_TOPOLOGY_ARGS[@]+"${SETUP_TOPOLOGY_ARGS[@]}"})
+    fi
+    if [ "${#SETUP_ME_ARGS[@]}" -gt 0 ]; then
+        extra+=(${SETUP_ME_ARGS[@]+"${SETUP_ME_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.

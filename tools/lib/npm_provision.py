@@ -39,6 +39,7 @@ _PROXY_HOST_SPECS: list[tuple[str, str, str, str, int, str, bool, bool]] = [
     ("localai", "", "LOCALAI_PUBLIC_URL", "localai", 8080, "http", True, False),
     ("manager", "", "MANAGER_PUBLIC_URL", "papaia-manager", 8000, "http", True, False),
     ("rag", "", "QDRANT_PUBLIC_URL", "qdrant", 6333, "http", True, False),
+    ("me", "", "ME_PUBLIC_URL", "me-web", 8000, "http", True, False),
 ]
 
 

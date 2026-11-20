@@ -37,6 +37,7 @@ class SetupArgs:
     litellm_host: str | None = None  # public LiteLLM proxy URL (LITELLM_PUBLIC_URL)
     manager_host: str | None = None  # public papaia-manager URL (MANAGER_PUBLIC_URL)
     qdrant_host: str | None = None  # public Qdrant URL (QDRANT_PUBLIC_URL)
+    me_host: str | None = None  # public URL of the personal area (ME_PUBLIC_URL)
     npm_admin_host: str | None = None  # public NPM admin URL (NPM_ADMIN_HOST)
     auth_provider: str | None = None  # None = unset/sticky; "internal_keycloak" | "external_oidc"
     oidc_issuer: str | None = None  # explicit external issuer; only used for external_oidc
@@ -49,6 +50,7 @@ class SetupArgs:
     localai_variant: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
+    enable_me: bool | None = None  # None = sticky / no change
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
     enable_smtp: bool | None = None
     smtp_host: str | None = None  # upstream mail server host
@@ -121,6 +123,11 @@ def derive_litellm_url_default(app_host: str, litellm_port: str) -> str:
 def derive_localai_url_default(app_host: str, localai_port: str) -> str:
     """Default browser-facing LocalAI URL: the public host plus the external LocalAI port."""
     return f"{app_host}:{localai_port}"
+
+
+def derive_me_url_default(app_host: str, me_port: str) -> str:
+    """Default browser-facing URL of the personal area: the public host plus its port."""
+    return f"{app_host}:{me_port}"
 
 
 def derive_manager_url_default(app_host: str, manager_port: str) -> str:
@@ -735,6 +742,56 @@ def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_rag:
         profiles.append("rag")
     root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_me_hosts(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Derive and store ME_PUBLIC_URL, the address of the personal area (profile `me`).
+
+    Always resolved, also while the profile is off, so the realm template can name the
+    area's redirect URI and a later opt-in finds the URL ready. Precedence: flag >
+    stored value > derived default, as for Qdrant."""
+    root = tree.setdefault("", {})
+    app_host = root.get("PAPAIA_HOST", "")
+    port = root.get("ME_EXT_PORT", "8130")
+    derived = derive_me_url_default(app_host, port)
+    sticky = (
+        ""
+        if args.fresh_init
+        else sticky_service_url(root.get("ME_PUBLIC_URL", ""), derive_me_url_default, port)
+    )
+    url = args.me_host or sticky or derived
+    if not args.me_host and not args.non_interactive and args.prompt is not None:
+        url = args.prompt("Public URL of the personal area (ME_PUBLIC_URL)", sticky or derived)
+    root["ME_PUBLIC_URL"] = url
+    return tree
+
+
+def resolve_me(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `me` Compose profile (the personal area) based on the choice.
+
+    When `enable_me` is None the call is a no-op -- whatever was already written to
+    COMPOSE_PROFILES on a prior run is preserved (sticky)."""
+    if args.enable_me is None:
+        return tree
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "me"]
+    if args.enable_me:
+        profiles.append("me")
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
+def resolve_personal_settings_link(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Store PERSONAL_SETTINGS_URL: the area's URL while the profile `me` is on, else "".
+
+    Other modules link to the personal area from it (papaia-manager's account menu reads
+    it as MANAGER_PERSONAL_SETTINGS_URL), and an empty value hides the link instead of
+    pointing at an area that does not run. Re-derived on every run, never sticky."""
+    del args
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    root["PERSONAL_SETTINGS_URL"] = root.get("ME_PUBLIC_URL", "") if "me" in profiles else ""
     return tree
 
 

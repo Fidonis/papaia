@@ -85,6 +85,9 @@ next to it, even when it has an inline `:-` default.
 | `QDRANT_EXT_PORT` | Host port of the Qdrant REST API and dashboard (profile `rag`) |
 | `QDRANT_PUBLIC_URL` | Browser-facing Qdrant URL — the dashboard lives under `/dashboard` |
 | `QDRANT_INGEST_EXT_PORT` | Host port of the ingester's REST API and MCP endpoint (profile `rag`); the ingester has no web interface, papaia-manager manages it |
+| `ME_EXT_PORT` | Host port of the personal area `me-web` (profile `me`) |
+| `ME_PUBLIC_URL` | Browser-facing URL of the personal area, derived by setup also while the profile is off (the realm names it as the redirect URI of `papaia-me`) |
+| `PERSONAL_SETTINGS_URL` | Written by setup: `ME_PUBLIC_URL` while the profile `me` is on, else empty — where other modules link to the area (papaia-manager reads it as `MANAGER_PERSONAL_SETTINGS_URL`) |
 
 The `OIDC_*` endpoint variables are provider-independent: they apply to
 `AUTH_PROVIDER=external_oidc` exactly as they do to the bundled Keycloak. Do not
