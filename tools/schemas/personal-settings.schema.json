@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "papaia-personal-settings.schema.json",
+  "title": "personal_settings: section, contract generation 1",
+  "description": "What a module or add-on declares about the personal settings it keeps for each person. Structure and defaults only, never values or secrets. The module stores and validates the values itself (docs/personal-settings-contract.md). The core checks a declaration against this schema, and against the rules the schema cannot express, when it renders personal-settings/registry.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api", "module", "title", "endpoint", "data", "groups"],
+  "properties": {
+    "api": {
+      "description": "Contract generation of the section. A core skips a declaration whose generation it does not serve, with a warning.",
+      "const": 1
+    },
+    "module": {
+      "description": "Unique name of the module. For an add-on it equals the manifest's name.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,39}$"
+    },
+    "title": { "$ref": "#/$defs/title" },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "port", "base_path", "audience"],
+      "properties": {
+        "service": {
+          "description": "Compose service that answers the module API, reached over a network the area joins.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$"
+        },
+        "scheme": { "enum": ["http", "https"], "default": "http" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "base_path": { "$ref": "#/$defs/path" },
+        "audience": {
+          "description": "Keycloak client of the module (resource server). An add-on may only name one of the clients it registers itself.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$"
+        }
+      }
+    },
+    "data": {
+      "description": "Where the person sees and exports what the module keeps about them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "export", "erasure"],
+      "properties": {
+        "summary": { "$ref": "#/$defs/path" },
+        "export": { "$ref": "#/$defs/path" },
+        "erasure": {
+          "description": "self: the module erases on the person's request; request: erasure is a request to the data protection officer; none: the module keeps nothing that could be erased.",
+          "enum": ["none", "self", "request"]
+        }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/settings_group" },
+          { "$ref": "#/$defs/collection_group" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "path": {
+      "description": "Absolute path below the module's service. Segments never start with a dot and there is no trailing slash.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$"
+    },
+    "title": {
+      "description": "Plain text, at least one of de and en; a missing language falls back to the other.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "de": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "en": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "hint": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "de": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "en": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    },
+    "data_class": { "enum": ["public", "internal", "confidential", "personal", "special"] },
+    "option_value": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+    },
+    "options": {
+      "description": "A fixed list, or runtime: the module names the options when it is read; they are bounded but not narrowed by a list here.",
+      "oneOf": [
+        { "const": "runtime" },
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "title"],
+            "properties": {
+              "value": { "$ref": "#/$defs/option_value" },
+              "title": { "$ref": "#/$defs/title" }
+            }
+          }
+        }
+      ]
+    },
+    "clock": {
+      "type": "string",
+      "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+    },
+    "common_field": {
+      "description": "Properties every field type has.",
+      "type": "object",
+      "required": ["key", "type", "title"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "title": { "$ref": "#/$defs/title" },
+        "hint": { "$ref": "#/$defs/hint" },
+        "replaces": {
+          "description": "The key this one was renamed from; keys are otherwise stable.",
+          "$ref": "#/$defs/key"
+        }
+      }
+    },
+    "field": {
+      "oneOf": [
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "boolean" },
+            "default": { "type": "boolean" }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "required": ["options"],
+          "properties": {
+            "type": { "const": "choice" },
+            "options": { "$ref": "#/$defs/options" },
+            "default": { "$ref": "#/$defs/option_value" }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "required": ["options"],
+          "properties": {
+            "type": { "enum": ["multi_choice", "ordered_multi_choice"] },
+            "options": { "$ref": "#/$defs/options" },
+            "default": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/option_value" }
+            }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "type": { "const": "integer" },
+            "min": { "type": "integer" },
+            "max": { "type": "integer" },
+            "default": { "type": "integer" }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "required": ["max_length"],
+          "properties": {
+            "type": { "const": "text" },
+            "max_length": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "pattern": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "default": { "type": "string", "maxLength": 1000 }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "time_range" },
+            "default": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["start", "end"],
+              "properties": {
+                "start": { "$ref": "#/$defs/clock" },
+                "end": { "$ref": "#/$defs/clock" }
+              }
+            }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "date" },
+            "max_days": {
+              "description": "Latest date the person may choose, in days from today.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3660
+            }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/common_field" }],
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "person" }
+          }
+        }
+      ]
+    },
+    "common_group": {
+      "type": "object",
+      "required": ["id", "title", "data_class"],
+      "properties": {
+        "id": { "$ref": "#/$defs/key" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/hint" },
+        "data_class": { "$ref": "#/$defs/data_class" },
+        "sensitive": {
+          "description": "true: the module asks for a fresh sign-in before it stores a change (403 step_up_required).",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "settings_group": {
+      "allOf": [{ "$ref": "#/$defs/common_group" }],
+      "unevaluatedProperties": false,
+      "required": ["settings"],
+      "properties": {
+        "kind": { "const": "settings", "default": "settings" },
+        "settings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/field" }
+        }
+      }
+    },
+    "collection_group": {
+      "description": "Records with a life cycle (create, end, renew ...) instead of key and value.",
+      "allOf": [{ "$ref": "#/$defs/common_group" }],
+      "unevaluatedProperties": false,
+      "required": ["kind", "item", "operations"],
+      "properties": {
+        "kind": { "const": "collection" },
+        "item": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fields"],
+          "properties": {
+            "fields": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": { "$ref": "#/$defs/field" }
+            }
+          }
+        },
+        "operations": {
+          "description": "create adds an item (POST .../items); every other name is an operation on one item (POST .../items/{id}/{operation}).",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }
+        }
+      }
+    }
+  }
+}
