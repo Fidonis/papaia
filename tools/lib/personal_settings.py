@@ -21,8 +21,11 @@ declaration that breaks one is refused with a named error instead of being rende
 - plain text only: control characters are removed, markup, links and text shaped like
   instructions to a model are refused, titles stay within 80 and hints within 300
   characters;
-- an add-on may only name an audience that is one of its own Keycloak clients, and its
-  module name is its add-on name; a core module only its fixed audience.
+- an add-on may only name an audience that is a Keycloak client its own fragment alone
+  defines (or, for papaia-flow only, the client its realm setup creates), never a client
+  of the core (realm template, core modules, Keycloak's built-in clients) nor one another
+  active add-on defines too; its module name is its add-on name; a core module names only
+  its fixed audience; no audience appears twice in the registry.
 
 The registry is written as JSON. JSON is YAML, so any YAML reader reads the file, and the
 realm sync (keycloak_role_sync.py, standard library only) reads the audiences from it.
@@ -68,6 +71,20 @@ MODULE_DECLARATIONS: dict[str, tuple[str, str]] = {
 ADDON_REALM_CLIENTS: dict[str, tuple[str, ...]] = {
     "papaia-flow": ("flow",),
 }
+
+# Clients Keycloak creates in every realm. No module serves them, and a token for one of
+# them must never be handed to a module.
+BUILTIN_CLIENTS = frozenset(
+    {
+        "account",
+        "account-console",
+        "admin-cli",
+        "broker",
+        "realm-management",
+        "security-admin-console",
+    }
+)
+REALM_TEMPLATE = "src/infra/keycloak/realm-import/papaia-realm.json.template"
 
 # Platform services that keep personal data but declare no personal settings. The area
 # names them on "my data" so its overview never claims a completeness it does not have.
@@ -578,6 +595,24 @@ def _fragment_clients(addon_path: Path, manifest: dict) -> list[str]:
     return clients
 
 
+def core_clients(repo_root: Path) -> set[str]:
+    """Every client the core itself owns: those of the realm template, the fixed audiences
+    of the core modules (also of profiles that are off) and Keycloak's built-in clients.
+
+    An add-on that names one of them as its audience would make the area hand a token for
+    a core service to the add-on's service, so none of them is ever an add-on's."""
+    clients = set(BUILTIN_CLIENTS) | {audience for _, audience in MODULE_DECLARATIONS.values()}
+    path = repo_root / REALM_TEMPLATE
+    try:
+        realm = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PersonalSettingsError(f"{path}: cannot read the realm template: {exc}") from exc
+    for client in realm.get("clients", []) if isinstance(realm, dict) else []:
+        if isinstance(client, dict) and isinstance(client.get("clientId"), str):
+            clients.add(client["clientId"])
+    return clients
+
+
 def _generation_warning(section, origin: str) -> str | None:
     """A warning for a section of a generation this core does not serve, else None."""
     api = section.get("api") if isinstance(section, dict) else None
@@ -626,24 +661,59 @@ def collect(
             )
         add(data["personal_settings"], f"module:{profile}", module_audience=audience)
 
+    loaded: list[tuple[str, Path, dict]] = []
     for addon in active_addons:
         addon_path = deployment.resolve_addon_path(addon, repo_root)
         manifest, reason = deployment.load_addon_manifest(addon_path)
         if manifest is None:
             raise PersonalSettingsError(reason)
+        loaded.append((str(manifest.get("name", addon_path.name)), addon_path, manifest))
+
+    # Who defines which client: the realm setup of an add-on (ADDON_REALM_CLIENTS, bound to
+    # the add-on of that name) and the fragments of every active add-on, also of those
+    # without personal settings.
+    defined_by: dict[str, set[str]] = {}
+    for owner, owned in ADDON_REALM_CLIENTS.items():
+        for client in owned:
+            defined_by.setdefault(client, set()).add(owner)
+    for name, addon_path, manifest in loaded:
+        for client in _fragment_clients(addon_path, manifest):
+            defined_by.setdefault(client, set()).add(name)
+    core = core_clients(repo_root) if any("personal_settings" in m for _, _, m in loaded) else set()
+
+    for name, addon_path, manifest in loaded:
         if "personal_settings" not in manifest:
             continue
-        name = str(manifest.get("name", addon_path.name))
-        clients = _addon_clients(addon_path, manifest)
-        # A client the realm setup of another add-on creates is not this add-on's, even
-        # when it ships a fragment of that name.
-        taken = {c for owner, cs in ADDON_REALM_CLIENTS.items() if owner != name for c in cs}
-        add(
-            manifest["personal_settings"],
-            f"addon:{name}@{manifest.get('version', '?')}",
-            addon_name=name,
-            addon_clients=[c for c in clients if c not in taken],
-        )
+        origin = f"addon:{name}@{manifest.get('version', '?')}"
+        section = manifest["personal_settings"]
+        endpoint = section.get("endpoint") if isinstance(section, dict) else None
+        claimed = endpoint.get("audience") if isinstance(endpoint, dict) else None
+        if isinstance(claimed, str):
+            if claimed in core:
+                raise PersonalSettingsError(
+                    f"{origin}: personal_settings.endpoint.audience: {claimed!r} is a client of"
+                    " the core; an add-on names only a client its own fragment defines"
+                )
+            others = sorted(defined_by.get(claimed, set()) - {name})
+            if others:
+                raise PersonalSettingsError(
+                    f"{origin}: personal_settings.endpoint.audience: {claimed!r} is also"
+                    f" defined by the add-on {', '.join(map(repr, others))}; an audience must"
+                    " belong to one add-on alone"
+                )
+        # Only clients this add-on alone defines and the core does not own.
+        own = [c for c in _addon_clients(addon_path, manifest) if defined_by.get(c) == {name}]
+        add(section, origin, addon_name=name, addon_clients=[c for c in own if c not in core])
+
+    by_audience: dict[str, str] = {}
+    for module in modules.values():
+        audience = module["endpoint"]["audience"]
+        if audience in by_audience:
+            raise PersonalSettingsError(
+                f"audience {audience!r} is declared twice ({by_audience[audience]} and"
+                f" {module['declared_by']}); every module needs a client of its own"
+            )
+        by_audience[audience] = module["declared_by"]
 
     return [modules[name] for name in sorted(modules)], warnings
 
