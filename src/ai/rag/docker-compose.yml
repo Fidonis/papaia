@@ -225,7 +225,7 @@ services:
   #  scanned PDFs needs the -full image variant, which also wants a larger heap.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest-tika:
-    image: docker.io/apache/tika:3.2.3.0
+    image: docker.io/apache/tika:4.2.0-1
     restart: unless-stopped
     environment:
       JAVA_OPTS: "-Xmx${QI_TIKA_HEAP:-2g}"
