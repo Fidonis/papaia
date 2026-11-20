@@ -22,6 +22,7 @@ from . import (
     components,
     deployment,
     envtree,
+    flow_link,
     gen_override,
     render_core,
     reporting,
@@ -221,12 +222,52 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     _render_integration(config_dir, repo_root)
 
     reporting.print_keycloak_checklist(name, manifest, addon_path, config_dir)
+    _link_flow(name, manifest, addon_path, config_dir, deployed, args)
     print(f"Addon installed: {name}")
     if components.parse(manifest):
         bundle_env = common.parse_env_file(bundle_env_path)
         described = components.describe(name, manifest, active=True, bundle_env=bundle_env)
         print(components.format_text([described]))
     return 0
+
+
+def _link_flow(
+    name: str,
+    manifest: dict,
+    addon_path: Path,
+    config_dir: Path,
+    deployed: dict,
+    args: argparse.Namespace,
+) -> str:
+    """Keep the manifest for the workflow module and, when it is installed,
+    let the operator approve the add-on's `flow:` section. A failure there
+    is reported and leaves the install done."""
+    flow_link.keep_manifest(addon_path, config_dir, name)
+    if not manifest.get(flow_link.SECTION):
+        return "none"
+    if not flow_link.flow_installed(deployed):
+        print(
+            f"NOTE: {name} declares a Flow link; Flow is not installed. The declaration is"
+            f" kept in {flow_link.MANIFESTS_DIR}/{name} and becomes a proposal once Flow"
+            " reads that directory."
+        )
+        return "skipped"
+    try:
+        token = flow_link.token_from(getattr(args, "flow_token_file", None))
+    except OSError as exc:
+        print(f"WARNING: Flow token file not readable: {exc.strerror}", file=sys.stderr)
+        token = ""
+    ask = input if sys.stdin.isatty() else None
+    return flow_link.link_at_install(
+        name,
+        manifest,
+        flow_link.client,
+        approve=bool(getattr(args, "approve_flow_link", False)),
+        ask=ask,
+        token=token,
+        out=sys.stdout,
+        poll_s=flow_link.POLL_S,
+    )
 
 
 def cmd_addon_start(args: argparse.Namespace) -> int:
@@ -260,6 +301,9 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
         return 2
 
     addons.materialize_addon_env(config_dir, addon_path, name)
+    # Refreshed on every start: a changed `flow:` section reaches the
+    # workflow module as a proposal for a second person, never approved here.
+    flow_link.keep_manifest(addon_path, config_dir, name)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
     return 0
@@ -679,6 +723,8 @@ def cmd_addon_remove(args: argparse.Namespace) -> int:
 
     entry["active"] = False
     deployment.save(config_dir, deployed)
+    # Without the manifest the workflow module suspends the add-on's link.
+    flow_link.drop_manifest(config_dir, name)
 
     override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
     override_file.unlink(missing_ok=True)
@@ -720,6 +766,7 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     bundle_dir = config_dir / "addons" / name
     if bundle_dir.is_dir():
         shutil.rmtree(bundle_dir)
+    flow_link.drop_manifest(config_dir, name)
 
     deployed["addons"] = [a for a in addon_entries if a.get("name") != name]
     deployment.save(config_dir, deployed)

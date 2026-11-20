@@ -11,7 +11,7 @@ _addon_path() {
 
 cmd_addon_install() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" addon_path="" addon_version="" force=0
-    local node=""
+    local node="" approve_flow_link=0 flow_token_file=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
@@ -19,6 +19,8 @@ cmd_addon_install() {
             --path=*) addon_path="${1#*=}" ;;
             --version=*) addon_version="${1#*=}" ;;
             --force) force=1 ;;
+            --approve-flow-link) approve_flow_link=1 ;;
+            --flow-token-file=*) flow_token_file="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -26,7 +28,8 @@ cmd_addon_install() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon install <name> --path=PATH [--version=VER] [--force]"
+        error "Usage: papaia-ctl addon install <name> --path=PATH [--version=VER] [--force]" \
+            "[--approve-flow-link] [--flow-token-file=PATH]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
@@ -36,6 +39,8 @@ cmd_addon_install() {
     [ -n "$addon_version" ] && extra+=(--version="$addon_version")
     [ "$force" -eq 1 ]      && extra+=(--force)
     [ -n "$node" ]          && extra+=(--node="$node")
+    [ "$approve_flow_link" -eq 1 ] && extra+=(--approve-flow-link)
+    [ -n "$flow_token_file" ] && extra+=(--flow-token-file="$flow_token_file")
     py_cli addon-install --name="$addon_name" ${extra[@]+"${extra[@]}"}
     success "addon install complete: $addon_name"
 }
