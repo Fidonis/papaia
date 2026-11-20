@@ -46,11 +46,15 @@ _SURFACE_CHANGED = (
 # attach it declare `requires.addon_api: 3`, and an older core reports them
 # incompatible instead of failing on an unknown service.
 #
-# Gen 4 (additive): the personal area `me-web` (profile `me`) is attachable, so an add-on
+# Gen 8 (additive): the personal area `me-web` (profile `me`) is attachable, so an add-on
 # that declares `personal_settings:` can let the area reach its module API; and the tools
 # read the new manifest key `personal_settings` (docs/personal-settings-contract.md).
-# Add-ons without either are unaffected, so `min` stays 1.
-ADDON_API_WINDOW = (1, 4)
+# Add-ons without either are unaffected, so `min` stays 1. Generations 4 to 7 are
+# claimed by changes still open for the 1.9.0 release (required add-ons and actions,
+# the voice engines, the `knowledge` key, the clean-up action at uninstall); this one
+# follows them so no two changes give the same number a different meaning. Until they
+# land, this core serves 4 to 7 without their additions.
+ADDON_API_WINDOW = (1, 8)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -133,7 +137,7 @@ MANIFEST_KEYS = [
     # core does not interpret it. An older core ignores the key and the add-on installs
     # without a flow link, so no ADDON_API bump.
     "flow",
-    # Read by the render step while the profile `me` is on (addon_api 4); an older core
+    # Read by the render step while the profile `me` is on (addon_api 8); an older core
     # ignores the key and the add-on installs there without personal settings.
     "personal_settings",
 ]

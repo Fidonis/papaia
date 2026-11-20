@@ -1,5 +1,5 @@
 ---
-adr: 0015
+adr: 0020
 title: Declare personal settings in the manifest, keep the values in each module and render a registry for an own personal area
 status: Proposed
 date: 2026-11-20
@@ -15,7 +15,7 @@ supersedes: null
 superseded_by: null
 ---
 
-# 0015. Declare personal settings in the manifest, keep the values in each module and render a registry for an own personal area
+# 0020. Declare personal settings in the manifest, keep the values in each module and render a registry for an own personal area
 
 ## Context
 
@@ -64,7 +64,7 @@ Three findings constrain the answer:
 4. **The personal area is its own module**: profile `me`, service `me-web`, image
    `ghcr.io/fidonis/papaia-me` pinned in `src/infra/me/docker-compose.yml`, no database,
    the registry mounted read-only, `setup --me`, a proxy host from `ME_PUBLIC_URL`.
-   `me-web` is attachable (`ADDON_API` generation 4), so an add-on's network can be
+   `me-web` is attachable (`ADDON_API` generation 8), so an add-on's network can be
    reached by the area.
 5. **One audience per token.** The area is the confidential client `papaia-me` and
    exchanges the person's token per module for a token with only that module's audience.
@@ -137,7 +137,7 @@ is the single truth; the modules refer to it.
     platform CA and the public CA files in `personal-settings/module-ca/<module>.pem`,
     which a module with its own CA writes (Flow from its certificate setup). Plain http
     is used only where declared and never under `PAPAIA_SECURITY_PROFILE=kritis`.
-    papaia Flow attaches `me-web` (`requires.addon_api: 4`).
+    papaia Flow attaches `me-web` (`requires.addon_api: 8`).
 18. **Errors before a route's own checks carry contract codes as well** (`401
     unauthorized`, `400 malformed_request`, and `409 conflict` for an `Idempotency-Key`
     used for another request); a created item answers with `Location`; `display` is a

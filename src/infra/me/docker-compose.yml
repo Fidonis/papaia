@@ -8,7 +8,7 @@
 #
 # One place where every person sees and changes their own settings in the
 # modules of the installation, and sees what the platform keeps about them
-# (docs/personal-settings-contract.md, ADR 0015). The area stores no values:
+# (docs/personal-settings-contract.md, ADR 0020). The area stores no values:
 # each module keeps its own and answers the module API. me-web only reads the
 # rendered registry, signs the person in as the confidential client papaia-me
 # and exchanges the person's token per module for one with that module's
@@ -16,7 +16,7 @@
 # the registry.
 #
 # Reaching the modules: core modules on papaia-net directly; an add-on lists
-# `me-web` under `networks.attach` (addon_api 4) so its API is reachable.
+# `me-web` under `networks.attach` (addon_api 8) so its API is reachable.
 services:
   me-web:
     image: ghcr.io/fidonis/papaia-me:0.1.0

@@ -542,7 +542,7 @@ def _write_addon(root: Path, name: str, section: dict | None, clients: dict[str,
     manifest = {
         "name": name,
         "version": "1.0.0",
-        "requires": {"addon_api": 4},
+        "requires": {"addon_api": 8},
         "integration": {"keycloak": {"clients": files}},
     }
     if section is not None:

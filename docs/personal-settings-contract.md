@@ -8,7 +8,7 @@ renders, asks each module for the values with a token meant for that module only
 shows one form per group.
 
 This document is the binding description of version 1. The decision and the
-alternatives are in [ADR 0015](adr/0015-personal-settings-contract.md).
+alternatives are in [ADR 0020](adr/0020-personal-settings-contract.md).
 
 | Part | Where |
 |---|---|
@@ -235,7 +235,7 @@ module whose endpoint is signed by its own CA (Flow: `flow-api`) writes that fil
 `scheme: http` is used only as declared and never under the security profile `kritis`
 (`PAPAIA_SECURITY_PROFILE`; the area may set itself stricter, never laxer): there the
 module is shown as not reachable. An add-on whose service the area must reach lists
-`me-web` under `networks.attach` (`requires.addon_api: 4`).
+`me-web` under `networks.attach` (`requires.addon_api: 8`).
 
 ### 3.1 Read all groups — `GET {base_path}`
 
@@ -483,5 +483,5 @@ request to the data protection officer), `none`. The area deletes nothing itself
 - **Breaking**: `min` rises; a module outside the window is shown read-only.
 - Keys are stable; a renamed key names the old one in `replaces`.
 - A core without this contract ignores the section (unknown manifest key); the add-on
-  installs there without personal settings. An add-on needs `requires.addon_api: 4` only
+  installs there without personal settings. An add-on needs `requires.addon_api: 8` only
   when it attaches `me-web` (`networks.attach: [me-web]`) so the area can reach its API.

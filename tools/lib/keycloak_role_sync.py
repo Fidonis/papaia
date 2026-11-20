@@ -30,7 +30,7 @@ one optional scope `aud-<audience>` per module of the personal-settings registry
 the profile `manager` is on, `papaia-manager` gets `aud-flow` (approving a Flow link). Per
 audience a client policy refuses a token exchange, a sign-in (authorization code) or a
 refresh that asks for that scope together with another of them
-(docs/personal-settings-contract.md, ADR 0015). The sync owns the objects with its
+(docs/personal-settings-contract.md, ADR 0020). The sync owns the objects with its
 prefixes and prunes the ones no longer wanted; scopes are never deleted.
 
 It also migrates every current holder of the legacy `admin` role onto the new
@@ -69,7 +69,7 @@ PROFILE_CLIENTS: dict[str, tuple[str, ...]] = {
     "me": ("papaia-me",),
 }
 
-# Token exchange with exactly one audience (ADR 0015).
+# Token exchange with exactly one audience (ADR 0020).
 AUDIENCE_SCOPE_PREFIX = "aud-"
 ONE_AUDIENCE_PREFIX = "papaia-one-audience-"
 ONE_AUDIENCE_PROFILE = "papaia-one-audience-reject"
