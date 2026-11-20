@@ -135,7 +135,16 @@ def test_scopes_optional_scopes_and_policies_are_created():
     conditions = flow["conditions"]
     assert conditions[0] == {
         "condition": "grant-type",
-        "configuration": {"grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"]},
+        # The sign-in and its refresh are held to one audience too: an authorization
+        # request for two audience scopes is refused before the sign-in, and a grant made
+        # before the policy existed is not refreshed (run against a local 26.7.0).
+        "configuration": {
+            "grant_types": [
+                "urn:ietf:params:oauth:grant-type:token-exchange",
+                "authorization_code",
+                "refresh_token",
+            ]
+        },
     }
     assert conditions[1]["configuration"]["scopes"] == ["aud-flow"]
     assert conditions[2]["configuration"]["scopes"] == ["aud-assist-api"]
