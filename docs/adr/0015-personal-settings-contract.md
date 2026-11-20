@@ -93,6 +93,47 @@ Three findings constrain the answer:
    fresh sign-in; the module answers `403 step_up_required` and does not trust the area to
    have asked.
 
+### Amendment of 20.11.2026: the contract as the modules build it
+
+Aligning papaia Flow, Assist and the area on the contract settled what generation 1 left
+open. [docs/personal-settings-contract.md](../personal-settings-contract.md) states it and
+is the single truth; the modules refer to it.
+
+9. **Write bodies are plain.** `PUT {base_path}/{group}` takes the plain object of values,
+   an item is created from the plain object of its fields, and error pointers point into
+   that body (`/digest`). A `person` is written as its id string and read as
+   `{id, display}`. Both modules took this shape already; a wrapper (`{"values": …}`)
+   would have added nothing but a second shape.
+10. **A person is chosen from the module.** `GET {base_path}/{group}/persons?q=` (at least
+    two characters, at most 20 results of exactly `{id, display}`, only persons the caller
+    may name for that purpose, rate-bounded with `429 rate_limited`). The module knows who
+    may be named (Flow: the rules of delegation); the area holds no directory.
+11. **Option values are typed**: a string, an integer or a boolean, one type per field; the
+    area writes a value back in that type (Assist's levels are integers). The string
+    grammar allows `/` so folders can be offered (`/purchasing`).
+12. **Titles are required where a person reads them**: runtime options of a field declared
+    `options: runtime` carry `title{de,en}`, and every summary category carries
+    `title{de,en}`; runtime entries are objects, never bare values.
+13. **Errors keep the module's catalogue.** A module that answers problem details or its
+    own codes adds `contract_code`; entries of `422` carry contract codes and may add
+    `module_code` and `message`.
+14. **The registry names what is not connected**: `not_connected` lists the chat front end,
+    the model gateway, the identity provider and, while its profile is on, papaia-manager,
+    so the overview of a person's data never claims to be complete.
+15. **One declaration per module, where it is installed.** papaia Flow is the add-on
+    `papaia-flow`: it declares in its manifest under its add-on name, and the core file
+    `src/flow/personal-settings.yaml` is gone (no profile `flow` exists to read it). Its
+    Keycloak client `flow` is created by its own action `idp-setup`, not by a fragment, so
+    the core lists it in `ADDON_REALM_CLIENTS`: `papaia-flow` may name `flow`, and no other
+    add-on can, not even with a fragment of that name. Assist is the core module of the
+    profile `assist` with the fixed audience `assist-api` and declares only in
+    `src/ai/assist/personal-settings.yaml`, now with the groups and integer levels it
+    serves.
+16. **Fresh sign-in is `auth_time`.** Measured against Keycloak 26.7.0 (report in
+    `papaia-me`, `docs/messung-auth-time-token-austausch.md`): the standard token exchange
+    keeps `auth_time`, and `prompt=login&max_age=0` renews it. No mapper and no `acr` level
+    are needed; `acr` stays `"1"` and is not used.
+
 ## Consequences
 
 - **Positive**: one place for the person, without a central profile of everyone's
@@ -107,9 +148,15 @@ Three findings constrain the answer:
   optional `aud-*` scopes of `papaia-me` and `papaia-manager` and policies with the
   prefix `papaia-one-audience-` as its own and prunes the ones no longer wanted;
   scopes themselves are never deleted.
-- **Neutral**: Keycloak's audience mappers name a client; the audience of a core module
+- **Neutral**: Keycloak's audience mappers name a client; the audience of a module
   (`flow`, `assist-api`) only takes effect once its client exists in the realm, which
-  comes with that module's profile.
+  comes with that module's profile or, for papaia Flow, with its action `idp-setup`.
+- **Negative**: a new add-on whose client comes from its own realm setup needs an entry
+  in `ADDON_REALM_CLIENTS` before it can declare personal settings; a fragment is the
+  way that needs no change of the core.
+- **Open**: papaia Flow must list `me-web` under `networks.attach` (generation 4) and
+  the area must trust the certificate of `flow-api` before the area reaches it in an
+  installation; neither is part of this change.
 
 ## Alternatives considered
 

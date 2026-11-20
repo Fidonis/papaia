@@ -12,7 +12,7 @@ alternatives are in [ADR 0015](adr/0015-personal-settings-contract.md).
 
 | Part | Where |
 |---|---|
-| Declaration of a module (`personal_settings:`) | add-on: `papaia-app.yaml`; core module: `personal-settings.yaml` in its directory (`src/flow/`, `src/ai/assist/`) |
+| Declaration of a module (`personal_settings:`) | exactly one per module, where the module is installed: an add-on in its `papaia-app.yaml` (papaia Flow: add-on `papaia-flow`), a core module in `personal-settings.yaml` in its directory (Assist: `src/ai/assist/`) |
 | JSON Schema of the declaration | [`tools/schemas/personal-settings.schema.json`](../tools/schemas/personal-settings.schema.json) |
 | Check and render | `tools/lib/personal_settings.py`, on every render while the profile `me` is on |
 | Rendered registry | `$PAPAIA_CONFIG_DIR/personal-settings/registry.yaml` |
@@ -24,7 +24,7 @@ alternatives are in [ADR 0015](adr/0015-personal-settings-contract.md).
 ```yaml
 personal_settings:
   api: 1                                # contract generation of the section
-  module: flow                          # unique; for an add-on its name
+  module: papaia-flow                   # unique; for an add-on its name
   title: {de: "Abläufe", en: "Workflows"}
   endpoint:
     service: flow-api                   # Compose service, reachable from me-web
@@ -69,19 +69,23 @@ The set is closed. A declaration with any other type is refused.
 | `type` | Own properties | Value in the module API |
 |---|---|---|
 | `boolean` | `default` | `true` / `false` |
-| `choice` | `options` (required), `default` | one option value (string) |
+| `choice` | `options` (required), `default` | one option value, in the type of the options |
 | `multi_choice` | `options` (required), `default` (list) | list of option values, no duplicates, order irrelevant |
 | `ordered_multi_choice` | `options` (required), `default` (list) | list of option values, no duplicates, order is the person's priority |
 | `integer` | `min`, `max` (both required), `default` | integer |
 | `text` | `max_length` (1..1000, required), `pattern`, `default` | string, plain text |
 | `time_range` | `default` | `{"start": "HH:MM", "end": "HH:MM"}`, 24 h; `end` before `start` crosses midnight |
 | `date` | `max_days` (1..3660) | `"YYYY-MM-DD"`, from today to today + `max_days` |
-| `person` | — | write: `{"id": "<sub>"}`; read: `{"id": "<sub>", "display": "<name>"}` |
+| `person` | — | write: the id as a string, `"<sub>"`; read: `{"id": "<sub>", "display": "<name>"}` |
 
 Every field has `key` (`^[a-z][a-z0-9_]{0,63}$`, stable), `title` and optionally `hint`
 and `replaces` (the key it was renamed from). `options` is either `runtime` or a list of
-1 to 64 `{value, title}` with `value` matching `^[a-z0-9][a-z0-9_.-]{0,63}$`. A `person`
-is always chosen from the directory, never typed in.
+1 to 64 `{value, title}`. An option value is a string matching
+`^[a-z0-9/][a-z0-9_./-]{0,254}$`, an integer (within ±(2^53 − 1)) or a boolean; all options
+of one field have the same type, and a default has that type too. JSON keeps `1`, `true`
+and `"1"` apart, and so does every party: the area writes a value back in the type the
+module declared or offered (Assist's levels are the integers 0 to 5). A `person` is always
+chosen from the module's own list of persons (section 3.3), never typed in.
 
 ### 1.2 Rules the render step checks
 
@@ -94,10 +98,17 @@ is always chosen from the directory, never typed in.
   `max_length` long and matches `pattern`; `pattern` compiles; `min` ≤ `max`.
 - **Unique**: group IDs per module, keys per group or item, option values per field,
   module names across the installation.
-- **Audience**: an add-on may only name one of the clients it registers itself
-  (`integration.keycloak.clients`); without a client of its own it cannot use the
-  section. A core module only the audience the core gives it (`flow` for Flow,
-  `assist-api` for Assist). `module` of an add-on is its `name`.
+- **Audience**: an add-on may only name a client of its own: one it registers through its
+  Keycloak fragments (`integration.keycloak.clients`), or one its own realm setup creates
+  and the core knows by name (`ADDON_REALM_CLIENTS` in `tools/lib/personal_settings.py`:
+  `flow` of the add-on `papaia-flow`, created by its action `idp-setup` and already the
+  audience papaia-manager exchanges for). No other add-on can claim such a client, not even
+  with a fragment of that name. Without a client of its own an add-on cannot use the
+  section. A core module only the audience the core gives it (`assist-api` for Assist).
+  `module` of an add-on is its `name`.
+- **One declaration per module**: papaia Flow is installed as the add-on `papaia-flow`
+  and declares in its manifest; Assist is a core module (profile `assist`) and declares in
+  `src/ai/assist/personal-settings.yaml`. A module name declared twice stops the render.
 - **Only active software**: declarations of add-ons that are not active and of core
   modules whose profile is off are not rendered.
 - **Generation**: a declaration whose `api` the core does not serve is left out with a
@@ -115,8 +126,11 @@ is always chosen from the directory, never typed in.
   "api": {"min": 1, "current": 1},
   "digest": "sha256:<over modules>",
   "modules": [
-    {"api": 1, "module": "flow", "title": {...}, "endpoint": {...}, "data": {...},
-     "groups": [...], "declared_by": "module:flow"}
+    {"api": 1, "module": "assist", "title": {...}, "endpoint": {...}, "data": {...},
+     "groups": [...], "declared_by": "module:assist"}
+  ],
+  "not_connected": [
+    {"id": "chat", "title": {"de": "Chat", "en": "Chat"}, "hint": {"de": "…", "en": "…"}}
   ]
 }
 ```
@@ -125,6 +139,15 @@ Modules are sorted by name. Each is the checked declaration with the defaults fi
 (`endpoint.scheme`, `kind`, `sensitive`) and `declared_by` (`module:<profile>` or
 `addon:<name>@<version>`). The area mounts the directory read-only and reads nothing else
 about the modules.
+
+`not_connected` lists the platform services that keep personal data but declare no
+personal settings, so "what the platform knows about me" never claims a completeness it
+does not have. The core writes it on every render, in a fixed order: `chat` (the chat
+front end: conversations and uploads), `model-gateway` (usage data of the language
+models), `identity` (the identity provider: name, mail, password, second factor,
+sessions) and, while its profile is on, `manager` (the language chosen there). Each entry
+is `{id, title, hint}` with plain text in `de` and `en` (title ≤ 80, hint ≤ 300). It is not
+part of `digest`.
 
 ## 2. Sign-in and tokens
 
@@ -153,9 +176,18 @@ about the modules.
 - The module checks signature, issuer, audience and expiry as for any other caller, and
   takes the person from `sub`, never from the request. It may also check `azp`.
 - **Fresh sign-in** for a group with `sensitive: true` is checked by the module, not by the
-  area: unless `auth_time` is at most 300 s old (or the module accepts an `acr` value it
-  names), a write answers `403 {"code": "step_up_required", "max_age": 300}`. The area then
-  signs the person in again (`prompt=login`, `max_age=0`) and repeats the request once.
+  area: unless the exchanged token's `auth_time` is at most 300 s old, a write that needs it
+  answers `403 {"code": "step_up_required", "max_age": 300}` (or the module's own code with
+  `"contract_code": "step_up_required"`). The area then signs the person in again
+  (`prompt=login`, `max_age=0`), exchanges the new token and repeats the request once. A
+  module may decide which writes of a sensitive group need it (raising a level does,
+  lowering it does not).
+- Measured against Keycloak 26.7.0 (20.11.2026, report in the `papaia-me` repository,
+  `docs/messung-auth-time-token-austausch.md`): the standard token exchange keeps
+  `auth_time` unchanged in the exchanged token; after `prompt=login&max_age=0` the new
+  sign-in carries a newer `auth_time`, and so does the token exchanged from it. `acr` stays
+  `"1"` and says nothing about freshness, so modules check `auth_time` and nothing needs a
+  mapper. Not measured: an external identity provider or a second factor.
 
 ## 3. Module API, version 1
 
@@ -168,7 +200,7 @@ by the area as "module not reachable". Paths are relative to the module's servic
 ```json
 {
   "contract": 1,
-  "module": "flow",
+  "module": "papaia-flow",
   "groups": {
     "notifications": {
       "etag": "\"n-3\"",
@@ -192,14 +224,17 @@ by the area as "module not reachable". Paths are relative to the module's servic
     "deputies": {
       "etag": "\"d-7\"",
       "count": 1,
-      "runtime": {"options": {"folder": [{"value": "f-12", "title": {"de": "Einkauf"}}]}}
+      "runtime": {"options": {"folder": [{"value": "/purchasing",
+                                          "title": {"de": "/purchasing", "en": "/purchasing"}}]},
+                  "bounds": {"until": {"max_days": 90}}}
     }
   }
 }
 ```
 
 - `contract` is the generation of the module API (1); the area serves a window like the
-  registry's `api`. A module outside the window is shown read-only.
+  registry's `api`. A module outside the window is shown read-only. `module` is optional
+  and not read by the area.
 - A settings group carries `etag`, `values` (every declared key, the module's default
   where the person chose nothing) and optionally `runtime`. A collection group carries
   `etag`, `count` and optionally `runtime`; its items are read separately (3.3).
@@ -211,22 +246,24 @@ entry that would widen it and never offers it:
 
 | `runtime` entry | Shape | Rule |
 |---|---|---|
-| `options.<key>` | list of `{value, title?}` | for declared options: a subset of the declared values (the declared titles are used); for `options: runtime`: 0..64 entries with valid values and titles (≤ 80) — the only source of the options |
+| `options.<key>` | list of `{value, title?}` objects, never bare values | for declared options: a subset of the declared values in their declared type (the declared titles are used; a `title` sent along is ignored); for `options: runtime`: 0..64 entries, each with a valid value and a `title` `{de?, en?}` (≤ 80, plain text) — required, the only source of the options |
+| `options.<key>` (boolean) | subset of `[{"value": false}, {"value": true}]` | fixes a boolean to the values left; with one value the field is shown locked |
 | `bounds.<key>` (integer) | `{"min": n, "max": m}` | within the declared `min`..`max` |
 | `bounds.<key>` (text) | `{"max_length": n}` | at most the declared `max_length` |
 | `bounds.<key>` (date) | `{"max_days": n}` | at most the declared `max_days` |
 
 ### 3.2 Replace one group — `PUT {base_path}/{group}`
 
-Request (header `If-Match: "n-3"`):
+Request (header `If-Match: "n-3"`); the body is the plain object of values:
 
 ```json
-{"values": {"channels": ["chat"], "mute_info": false, "quiet_hours": true,
-            "digest": "off", "locale": "de"}}
+{"channels": ["chat"], "mute_info": false, "quiet_hours": true,
+ "digest": "off", "locale": "de"}
 ```
 
 The body holds the whole group, every declared key; the module replaces the group as a
-whole. Answer `200`:
+whole. A key that is not declared is `unknown_key`. Answer `200` (optionally with
+`runtime`, as in 3.1):
 
 ```json
 {"etag": "\"n-4\"", "values": {"channels": ["chat"], "mute_info": false,
@@ -250,27 +287,62 @@ Only for groups with `kind: collection`.
       "etag": "\"dlg-42-2\"",
       "state": "active",
       "fields": {"delegate": {"id": "4c0a…", "display": "Bernd Muster"},
-                 "folder": "f-12", "until": "2026-12-31"},
+                 "folder": "/purchasing", "until": "2026-12-31"},
       "operations": ["end", "renew"]
     }
   ]
 }
 ```
 
-- `id` matches `^[A-Za-z0-9_-]{1,64}$`; `state` is `active`, `ended` or `expired`;
-  `operations` lists the declared operations this item allows now (never `create`).
-- `POST {base_path}/{group}/items` with `{"fields": {...}}` creates an item when
-  `create` is declared: `201` with the item and a `Location` header. An optional
-  `Idempotency-Key` header makes a repeated request answer with the first item.
-- `POST {base_path}/{group}/items/{id}/{operation}` with header `If-Match: <item etag>`
-  and an optional body `{"fields": {...}}` (for example a new `until` for `renew`):
-  `200` with the item.
+- `id` is a string matching `^[A-Za-z0-9_-]{1,64}$`; `state` is `active`, `ended` or
+  `expired`; `fields` holds the declared item fields (a `person` as `{id, display}`);
+  `operations` lists the declared operations this item allows now (never `create`). A
+  module may add keys of its own to an item (Flow: `role`); the area ignores them.
+- `POST {base_path}/{group}/items` with the plain object of fields creates an item when
+  `create` is declared, a person as its id string:
+
+  ```json
+  {"delegate": "4c0a…", "folder": "/purchasing", "until": "2026-12-31"}
+  ```
+
+  Answer `201` with the item and a `Location` header. The module may require an
+  `Idempotency-Key` header (Flow does, for every writing operation); the area always sends
+  one per rendered form, and a repeated request answers with the first item.
+- `POST {base_path}/{group}/items/{id}/{operation}` with header `If-Match: <item etag>`,
+  `Idempotency-Key`, and an optional plain object of fields (for example `{"until":
+  "2027-01-31"}` for `renew`): `200` (or `201` when the operation makes a new item, as a
+  renewal in Flow does) with the item.
+
+#### Choosing a person — `GET {base_path}/{group}/persons?q=<text>`
+
+For every group with a field of type `person` the module answers which persons the caller
+may name there. The area offers nothing else: a person is never typed in.
+
+```json
+{"persons": [{"id": "4c0a…", "display": "bernd.muster"}]}
+```
+
+- `q` is at least 2 characters after trimming (else `400 malformed_request`) and at most
+  64; the module matches it against the display name, case-insensitive. No other
+  parameter is read.
+- At most 20 entries, sorted by `display`; no `etag`.
+- Only persons the caller may name for that group's purpose under the module's own rules
+  (Flow, `deputies`: active persons of its directory, never the caller, the rules of
+  delegation). The caller's own rights decide, never the request.
+- Each entry is exactly `{id, display}`: no e-mail address and no other attribute.
+  `display` is plain text of at most 80 characters.
+- Rate-bounded per person: beyond the module's bound (at most 30 searches a minute is the
+  default) it answers `429 {"code": "rate_limited"}` with `Retry-After`.
+- A group without a `person` field answers `404 unknown_group`.
 
 ### 3.4 Errors
 
-Every error body is `{"code": "<code>", ...}`. The area translates codes from its own
-catalogue; a `message` from the module (plain text, ≤ 300 characters) is shown only as
-text and never interpreted.
+Every error body is a JSON object with the contract's code below. A module whose errors
+carry its own catalogue code in `code` (problem details, RFC 9457, as in Flow; or its own
+catalogue as in Assist) puts the contract's code in `contract_code`; the area reads
+`contract_code` first, then `code`. The area translates contract codes from its own
+catalogue; a `message` from the module (plain text, ≤ 300 characters) is shown only as text
+and never interpreted.
 
 | Status | `code` | Meaning |
 |---|---|---|
@@ -278,11 +350,13 @@ text and never interpreted.
 | `401` | `unauthorized` | token missing, invalid or not for this audience |
 | `403` | `forbidden` | the person may not use this group or item |
 | `403` | `step_up_required` | sensitive group: a fresh sign-in is needed; `max_age` (s) names how fresh |
+| `405` | `not_allowed_now` | `PUT` on a collection group |
 | `404` | `unknown_group`, `unknown_item`, `unknown_operation` | |
 | `409` | `not_allowed_now` | the operation does not fit the item's state |
 | `412` | `stale` | the ETag in `If-Match` is not the current one; `etag` names the current one |
 | `428` | `precondition_required` | `If-Match` is missing |
 | `422` | `invalid` | values do not pass the module's checks; `errors` lists them |
+| `429` | `rate_limited` | too many requests of this person (person search); `Retry-After` says when |
 
 ```json
 {"code": "invalid",
@@ -290,7 +364,9 @@ text and never interpreted.
             {"pointer": "/values/channels/1", "code": "duplicate"}]}
 ```
 
-`pointer` is a JSON Pointer (RFC 6901) into the request body. Codes of an entry:
+`pointer` is a JSON Pointer (RFC 6901) into the plain request body (`/digest`,
+`/channels/1`, `/until`). `code` is one of the contract's codes below; a module may add its
+own code as `module_code` and a plain-text `message`. Codes of an entry:
 
 | `code` | For |
 |---|---|
@@ -309,7 +385,10 @@ text and never interpreted.
 
 ### 3.5 What the platform knows about me
 
-`GET {data.summary}` → `200`, categories with counts, never content:
+`GET {data.summary}` → `200`, categories with counts, never content. `categories` is a
+list; every category has `id`, a `title` in `de` and `en` (plain text, ≤ 80 — required: the
+area shows titles, never table or key names), `count`, and optionally `data_class` and
+`truncated` (the count reached the module's bound):
 
 ```json
 {"contract": 1,
@@ -322,12 +401,13 @@ text and never interpreted.
  "erasure": "request"}
 ```
 
-`GET {data.export}` → `200`, the person's own data, machine-readable, built on every call
-and never stored:
+`GET {data.export}` → `200`, the person's own data as one JSON object, machine-readable,
+built on every call and never stored. Its shape is the module's own; the area does not
+interpret it and puts it into the download as it came. It should name the module and the
+time it was built, for example:
 
 ```json
-{"contract": 1, "module": "flow", "subject": "<sub>",
- "generated_at": "2026-11-20T09:00:00Z", "data": {"...": "module specific"}}
+{"module": "papaia-flow", "generated_at": "2026-11-20T09:00:00Z", "...": "module specific"}
 ```
 
 Both answer only about the person in the token. `erasure` repeats the declaration:
