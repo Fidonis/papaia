@@ -187,6 +187,20 @@ CATALOGUE: dict[str, ServiceSpec] = {
             public_url=("", "QDRANT_PUBLIC_URL"),
         ),
         ServiceSpec(
+            "voice",
+            "Voice (STT/TTS)",
+            ("voice",),
+            ("ai/voice",),
+            start_group=2,
+        ),
+        ServiceSpec(
+            "knowledge-map",
+            "Knowledge map",
+            ("knowledge-map",),
+            ("ai/knowledge-map",),
+            start_group=2,
+        ),
+        ServiceSpec(
             "smtp",
             "SMTP relay",
             ("smtp",),
@@ -205,9 +219,10 @@ CATALOGUE: dict[str, ServiceSpec] = {
 }
 
 # Services that must run where the configuration tree is: the manager mounts the whole
-# config dir and the Docker socket of the host that runs `papaia-ctl`, and the RAG
-# ingester keeps its catalogue and the operator's documents inside the config dir.
-CONTROLLER_ONLY = ("manager", "rag")
+# config dir and the Docker socket of the host that runs `papaia-ctl`, the RAG
+# ingester keeps its catalogue and the operator's documents inside the config dir,
+# and knowledge-map-mcp reads the rendered map from it.
+CONTROLLER_ONLY = ("manager", "rag", "knowledge-map")
 
 # The bundled reverse proxy. Its profile, not the `nginx` service, says whether it runs.
 PROXY_PROFILE = "nginx"
@@ -220,6 +235,8 @@ COLOCATED = (("websearch", "librechat"),)
 CORE_OVERRIDES = (
     "docker-compose.ssl-cert.override.yml",
     "docker-compose.localai-gpu.override.yml",
+    "docker-compose.localai-runtime.override.yml",
+    "docker-compose.voice-gpu.override.yml",
 )
 
 # Root keys that point at the controller's own directories. On another node they are
@@ -606,6 +623,13 @@ _VARIANT_HARDWARE = {
     "vulkan": ("nvidia", "amd", "intel", "vulkan"),
 }
 
+# The voice TTS catalogue speaks its own, shorter vocabulary (see
+# x-papaia-voice-tts-gpu-images in src/ai/voice/docker-compose.yml).
+_VOICE_VARIANT_HARDWARE = {
+    "nvidia": ("nvidia",),
+    "hipblas": ("amd",),
+}
+
 
 def is_public_url(url: str) -> bool:
     return _is_subdomain_url(url)
@@ -764,6 +788,12 @@ def validate(
         )
 
     # --- LocalAI hardware ------------------------------------------------
+    if "localai" in active and env.get("LOCALAI_RUNTIME", "").strip() == "native":
+        found.errors.append(
+            "LOCALAI_RUNTIME=native runs LocalAI as a process on one Mac and is for a"
+            " single-host installation; set it back with"
+            " 'papaia-ctl setup --localai-runtime=container'"
+        )
     if "localai" in active and topo.node_of("localai") in topo.nodes:
         node = topo.nodes[topo.node_of("localai")]
         variant = env.get("LOCALAI_IMAGE_VARIANT", "") or "cpu"
@@ -778,6 +808,23 @@ def validate(
                 found.errors.append(
                     f"LocalAI runs the '{variant}' image, but node '{node.name}' has"
                     f" gpu: {node.gpu}"
+                )
+
+    # --- Voice TTS hardware ----------------------------------------------
+    if "voice" in active and topo.node_of("voice") in topo.nodes:
+        node = topo.nodes[topo.node_of("voice")]
+        variant = env.get("VOICE_TTS_IMAGE_VARIANT", "") or "cpu"
+        needs = _VOICE_VARIANT_HARDWARE.get(variant)
+        if needs:
+            if not node.gpu:
+                found.warnings.append(
+                    f"the voice TTS engine runs the '{variant}' image on '{node.name}', whose"
+                    " hardware is not recorded (nodes.<name>.gpu); the preflight checks it"
+                )
+            elif node.gpu not in needs:
+                found.errors.append(
+                    f"the voice TTS engine runs the '{variant}' image, but node"
+                    f" '{node.name}' has gpu: {node.gpu}"
                 )
 
     # --- link and ports --------------------------------------------------

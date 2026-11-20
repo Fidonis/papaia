@@ -61,7 +61,7 @@ SYSTEM_DF = (
 
 # Host tools the doctor checks run through the same runner as `docker`. Unless a
 # test says otherwise they are absent, except the clock, which is in sync.
-HOST_TOOLS = ("nvidia-smi", "rocm-smi", "timedatectl")
+HOST_TOOLS = ("nvidia-smi", "rocm-smi", "timedatectl", "launchctl")
 
 
 def not_found(tool: str) -> CommandResult:
@@ -70,8 +70,8 @@ def not_found(tool: str) -> CommandResult:
 
 class FakeDocker:
     """Stands in for `docker` and the host tools next to it: answers
-    ps/inspect/version/compose/info, `nvidia-smi`, `rocm-smi` and `timedatectl`
-    with canned text and records every call.
+    ps/inspect/version/compose/info, `nvidia-smi`, `rocm-smi`, `timedatectl` and
+    `launchctl` with canned text and records every call.
 
     `docker exec <container> [timeout N] <tool> ...` is answered from the same
     tool table, as the tool would answer inside the container, unless the test

@@ -13,11 +13,12 @@ no-op rather than a special case.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import yaml
 
-from . import common, deployment, gpu_detect
+from . import common, compat, deployment, gpu_detect
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
 # `networks.app_network` may use to scope its bridge name to the deployment
@@ -125,6 +126,88 @@ def external_networks(override_path: Path) -> list[str]:
     ]
 
 
+def _service_networks(addon_path: Path, service: str) -> list[str]:
+    """The networks `service` already joins in the addon's own compose file, or
+    ["default"] when it names none. A compose `networks:` override replaces the
+    service's list, so the join override has to repeat them."""
+    compose = addon_path / "docker-compose.yml"
+    if not compose.is_file():
+        return ["default"]
+    doc = yaml.safe_load(compose.read_text(encoding="utf-8")) or {}
+    networks = ((doc.get("services") or {}).get(service) or {}).get("networks")
+    if isinstance(networks, dict):
+        return list(networks) or ["default"]
+    if isinstance(networks, list):
+        return [n for n in networks if isinstance(n, str)] or ["default"]
+    return ["default"]
+
+
+def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
+    """Write or remove each addon's `networks.join_addons` override.
+
+    For an active addon that declares
+
+        networks:
+          join_addons:
+            - addon: <required addon>
+              services: [<service>, ...]
+
+    the listed services join the required addon's resolved `app_network`
+    (declared external); every other service of the addon stays off it. The
+    file lives in overrides/addons/ and is applied to the addon's own compose
+    project by `papaia-ctl addon start`, like the ssl-cert overrides.
+    """
+    deployed = deployment.load(config_dir)
+    entries = deployed.get("addons") or [] if deployed else []
+    manifests: dict[str, tuple[dict, Path]] = {}
+    for addon in entries:
+        if not addon.get("name") or not addon.get("path"):
+            continue
+        path = deployment.resolve_addon_path(addon, repo_root)
+        manifest, _ = deployment.load_addon_manifest(path)
+        if manifest is not None:
+            manifests[addon["name"]] = (manifest, path)
+
+    for addon in entries:
+        name = addon.get("name")
+        if not name:
+            continue
+        out_path = config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
+        manifest, path = manifests.get(name, ({}, Path()))
+        try:
+            joins = compat.joined_addons(manifest) if addon.get("active") else []
+        except ValueError:
+            joins = []  # the compatibility gate reports the malformed manifest
+        services: dict[str, list[str]] = {}
+        external: dict[str, dict] = {}
+        for target, joining in joins:
+            target_manifest = manifests.get(target, ({}, Path()))[0]
+            raw = (target_manifest.get("networks") or {}).get("app_network")
+            if not raw:
+                print(
+                    f"WARNING: addon '{name}': '{target}' declares no networks.app_network;"
+                    " join_addons entry skipped",
+                    file=sys.stderr,
+                )
+                continue
+            network = resolve_app_network(raw, config_dir)
+            external[network] = {"external": True}
+            for service in joining:
+                current = services.setdefault(service, _service_networks(path, service))
+                if network not in current:
+                    current.append(network)
+        if not services:
+            out_path.unlink(missing_ok=True)
+            continue
+        override = {
+            "services": {service: {"networks": nets} for service, nets in services.items()},
+            "networks": external,
+        }
+        common.atomic_write(
+            out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+        )
+
+
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For
 # external OIDC the cert file is absent, so SSL_CERT_FILE must be cleared to
 # let Python's ssl module fall back to the system CA bundle.
@@ -135,6 +218,7 @@ _SSL_CERT_SERVICES = (
     "papaia-manager",
     "qdrant-mcp",
     "qdrant-ingest",
+    "knowledge-map-mcp",
 )
 
 
@@ -250,6 +334,104 @@ def generate_localai_gpu_override(
     service.update(gpu_detect.compose_fragment(variant, dev_root))
 
     override = {"services": {"localai": service}}
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+
+
+LOCALAI_RUNTIME_OVERRIDE = "docker-compose.localai-runtime.override.yml"
+
+
+def generate_localai_runtime_override(config_dir: Path, runtime: str, home: Path | None) -> None:
+    """Write or remove the override of the native LocalAI runtime (ADR 0012).
+
+    The services stay declared, because the add-on contract pins `localai` and
+    `localai-model-init` (ATTACHABLE_SERVICES): `localai` gets no container (`replicas: 0`)
+    and is never pulled (`pull_policy: never`; `replicas: 0` alone still pulls the
+    multi-GB image), and the init job writes the models into the host directory the
+    native process reads, instead of the `localai-models` volume. Removed for `container`,
+    which is what brings the container back."""
+    out_path = config_dir / "overrides" / LOCALAI_RUNTIME_OVERRIDE
+    if runtime != "native" or home is None:
+        out_path.unlink(missing_ok=True)
+        return
+    override = {
+        "services": {
+            "localai": {"pull_policy": "never", "deploy": {"replicas": 0}},
+            "localai-model-init": {
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": str(home / "models"),
+                        "target": "/models",
+                        "bind": {"create_host_path": True},
+                    }
+                ]
+            },
+        }
+    }
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+
+
+_VOICE_COMPOSE = "src/ai/voice/docker-compose.yml"
+
+# voice variant id -> gpu_detect variant whose Compose device fragment applies.
+# The voice catalogue is shorter than LocalAI's because upstream publishes
+# fewer accelerator builds (see the x-papaia-voice-tts-gpu-images mapping).
+_VOICE_VARIANT_FRAGMENT = {
+    "nvidia": gpu_detect.NVIDIA_CUDA_12,
+    "hipblas": gpu_detect.HIPBLAS,
+}
+
+
+def _voice_gpu_images(repo_root: Path) -> dict[str, str]:
+    """The accelerator image per voice variant, pinned in the voice compose file.
+
+    Read back on every render for the same reason as _localai_base_image: a
+    release that bumps the pins must carry through without a stale image
+    surviving in the generated override."""
+    try:
+        doc = yaml.safe_load((repo_root / _VOICE_COMPOSE).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    images = doc.get("x-papaia-voice-tts-gpu-images")
+    if not isinstance(images, dict):
+        return {}
+    return {k: v for k, v in images.items() if isinstance(v, str)}
+
+
+def generate_voice_gpu_override(
+    config_dir: Path,
+    repo_root: Path,
+    variant: str,
+    dev_root: Path = Path("/dev"),
+) -> None:
+    """Write or remove the voice TTS accelerator override.
+
+    CPU is the image pinned in the voice compose file, so it needs no override
+    at all -- the file is removed instead, which is also what makes switching
+    a host back from GPU to CPU actually take effect."""
+    out_path = config_dir / "overrides" / "docker-compose.voice-gpu.override.yml"
+
+    # cpu (and anything unknown) short-circuits before the compose file is
+    # parsed, like the LocalAI counterpart above.
+    fragment_variant = _VOICE_VARIANT_FRAGMENT.get(variant) if variant else None
+    if fragment_variant is None:
+        out_path.unlink(missing_ok=True)
+        return
+    image = _voice_gpu_images(repo_root).get(variant)
+    if image is None:
+        out_path.unlink(missing_ok=True)
+        return
+
+    # The accelerator images are published for linux/amd64, same as the CPU
+    # build, so the platform pin of the base service stays correct.
+    service: dict = {"image": image}
+    service.update(gpu_detect.compose_fragment(fragment_variant, dev_root))
+
+    override = {"services": {"chatterbox": service}}
     common.atomic_write(
         out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
     )

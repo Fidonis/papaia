@@ -5,6 +5,7 @@ Renders the effective core configuration into $PAPAIA_CONFIG_DIR:
     repo base (src/<target>)
       + active-profile fragments (src/<module>/integration/<target>, PROFILE_FRAGMENTS)
       + active-addon fragments (addons/<name>/integration/<target>)
+      + generated fragments (the LocalAI models in LiteLLM's model_list)
       + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>)
       --render--> $PAPAIA_CONFIG_DIR/<target>
 
@@ -18,13 +19,20 @@ the realm JSON before Keycloak ever sees the file.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import re
+import shutil
+import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, deployment, smtp
+from . import common, deployment, keycloak_role_sync, knowledge_map, localai_native, smtp
+
+logger = logging.getLogger(__name__)
 
 # Mirrors sync-config.sh's FILES/DIRS list, minus the stale `ai/n8n/nginx.conf`
 # entry (ai/n8n was deleted by #92's lean-out commit; sync-config.sh just
@@ -36,6 +44,7 @@ BASE_RENDER_TARGETS: list[str] = [
     "ai/litellm/prometheus.yml",
     "ai/localai/models.txt",
     "ai/localai/models",
+    "ai/voice/chatterbox.yaml",
     "services/searxng/settings.yml",
     "infra/keycloak/keycloak.conf",
     "infra/keycloak/themes/papaia",
@@ -48,7 +57,19 @@ _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json"}
 # profile is active -- a stack without the RAG system must not list its MCP
 # servers in LibreChat. The fragments sit between the repo base and the add-on
 # layer.
-PROFILE_FRAGMENTS: dict[str, str] = {"rag": "src/ai/rag"}
+PROFILE_FRAGMENTS: dict[str, str] = {
+    "rag": "src/ai/rag",
+    "voice": "src/ai/voice",
+    "knowledge-map": "src/ai/knowledge-map",
+}
+
+# LiteLLM's configuration, which takes the generated model_list of the LocalAI models.
+LITELLM_CONFIG = "ai/litellm/config.yaml"
+LOCALAI_PROFILE = "localai"
+LOCALAI_MODELS_FILE = "ai/localai/models.txt"
+LOCALAI_MODELS_DIR = "ai/localai/models"
+# LiteLLM resolves `os.environ/...` itself, so the key is never written into the file.
+LOCALAI_API_KEY_REF = "os.environ/LOCALAI_API_KEY"
 
 
 class RenderError(Exception):
@@ -62,13 +83,119 @@ class RenderError(Exception):
         self.column = column
 
 
-def _profile_layers(config_dir: Path) -> list[dict]:
-    """One add-on-shaped layer per active profile that ships fragments.
+def _localai_api_base(config_dir: Path) -> str:
+    """Where LiteLLM reaches LocalAI's OpenAI-compatible API: the container on the stack
+    network, or the native process on the Mac (LOCALAI_RUNTIME=native, ADR 0012)."""
+    root_env = common.parse_env_file(config_dir / ".env")
+    if localai_native.runtime(root_env) == localai_native.NATIVE:
+        return localai_native.api_base(root_env)
+    return "http://localai:8080/v1"
 
-    COMPOSE_PROFILES is read from the root .env, which is what compose itself
-    uses; deployment.yaml only mirrors it."""
+
+def _active_model_files(models_text: str) -> set[str]:
+    """The file names models.txt downloads: the last path segment of every active line, as
+    the init job derives them."""
+    names = set()
+    for line in models_text.splitlines():
+        url = line.strip()
+        if url and not url.startswith("#"):
+            names.add(url.rsplit("/", 1)[-1])
+    return names
+
+
+def _localai_model_files(directory: Path) -> list[Path]:
+    """The model YAMLs in `directory` that the init job copies: top-level `*.yaml` files,
+    without dotfiles (the shell glob skips them; pathlib's does not)."""
+    if not directory.is_dir():
+        return []
+    return sorted(
+        p for p in directory.glob("*.yaml") if p.is_file() and not p.name.startswith(".")
+    )
+
+
+def _localai_model_configs(
+    repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> list[dict]:
+    """The effective LocalAI model YAMLs: the shipped ones with their overlay, and those that
+    exist only in the overlay. Only the top-level `*.yaml`, which is all the init job copies
+    (`cp /models-config/configs/*.yaml`), so a `.yml` is never registered without reaching
+    LocalAI."""
+    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
+    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
+    names = {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
+    configs = []
+    for name in sorted(names):
+        rel_path = f"{LOCALAI_MODELS_DIR}/{name}"
+        text = _effective_text(rel_path, repo_root, config_dir, active_addons)
+        if text is None:
+            text = _overlay_only_text(rel_path, config_dir)
+        data = yaml.safe_load(text)
+        if isinstance(data, dict):
+            configs.append(data)
+    return configs
+
+
+def _localai_models(
+    repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> list[dict] | None:
+    """The LiteLLM entries of the LocalAI models that models.txt downloads, sorted by name, or
+    None while the localai profile is off.
+
+    Built from the effective models.txt (with its overlay), not from the rendered file on
+    disk: `render` writes LiteLLM's configuration first, and a preview must not depend on
+    a render having run. A model is registered when its YAML's `parameters.model` is the
+    file name of an active line."""
+    root_env = common.parse_env_file(config_dir / ".env")
+    if LOCALAI_PROFILE not in common.cluster_profiles(root_env):
+        return None
+    text = _effective_text(LOCALAI_MODELS_FILE, repo_root, config_dir, active_addons)
+    if text is None:
+        return None
+    files = _active_model_files(text)
+    api_base = _localai_api_base(config_dir)
+    entries = []
+    for model in _localai_model_configs(repo_root, config_dir, active_addons):
+        name = model.get("name")
+        params = model.get("parameters")
+        if not isinstance(name, str) or not name or not isinstance(params, dict):
+            continue
+        if params.get("model") not in files:
+            continue
+        entry: dict = {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"openai/{name}",
+                "api_base": api_base,
+                "api_key": LOCALAI_API_KEY_REF,
+            },
+        }
+        if model.get("embeddings") is True:
+            entry["model_info"] = {"mode": "embedding"}
+        entries.append(entry)
+    return sorted(entries, key=lambda e: e["model_name"])
+
+
+def _without_overridden(generated: list[dict], overlay) -> list[dict]:
+    """The generated entries whose model_name the overlay does not list itself.
+
+    A list merge appends, so an overlay entry with the same name would otherwise sit next
+    to the generated one and LiteLLM would route the name to either."""
+    if not isinstance(overlay, dict) or not isinstance(overlay.get("model_list"), list):
+        return generated
+    names = {e.get("model_name") for e in overlay["model_list"] if isinstance(e, dict)}
+    return [e for e in generated if e["model_name"] not in names]
+
+
+def _active_profiles(config_dir: Path) -> set[str]:
+    """COMPOSE_PROFILES is read from the root .env, which is what compose
+    itself uses; deployment.yaml only mirrors it."""
     raw = common.parse_env_file(config_dir / ".env").get("COMPOSE_PROFILES", "")
-    active = {p.strip() for p in raw.split(",") if p.strip()}
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _profile_layers(config_dir: Path) -> list[dict]:
+    """One add-on-shaped layer per active profile that ships fragments."""
+    active = _active_profiles(config_dir)
     return [{"path": path} for profile, path in PROFILE_FRAGMENTS.items() if profile in active]
 
 
@@ -87,7 +214,138 @@ def render(config_dir: Path, repo_root: Path) -> None:
         else:
             _render_file(target, repo_root, config_dir, active_addons)
 
+    render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
+
+    # The knowledge map is a generated artifact like the baked realm, not a
+    # merge target; it is rendered only while its profile is active so a lean
+    # installation's output stays byte-identical.
+    profiles = _active_profiles(config_dir)
+    if "knowledge-map" in profiles:
+        try:
+            warnings = knowledge_map.render(
+                config_dir,
+                repo_root,
+                profiles,
+                deployment.active_addons(deployment.load(config_dir)),
+            )
+        except knowledge_map.KnowledgeMapError as exc:
+            raise RenderError(str(exc)) from exc
+        for warning in warnings:
+            logger.warning("%s", warning)
+
+
+# Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under
+# <addon>/integration/ai/librechat/{agents,prompts}/, rendered as <addon>__<file> into
+# $PAPAIA_CONFIG_DIR/ai/librechat/addon-{agents,prompts}/ and mounted by a generated
+# override, whose label carries a hash of the content so `start` recreates LibreChat
+# when it changes. Its init scripts upsert the files and delete what an add-on no
+# longer provides.
+LIBRECHAT_ADDON_CONTENT: dict[str, tuple[str, tuple[str, ...]]] = {
+    "agents": ("addon-agents", (".yaml", ".yml")),
+    "prompts": ("addon-prompts", (".md", ".markdown")),
+}
+LIBRECHAT_ADDON_OVERRIDE = "overrides/docker-compose.librechat-addons.override.yml"
+_LIBRECHAT_DATA = "/app/api/data"
+
+
+def _agent_problem(text: str, mcp_servers: set[str]) -> str | None:
+    """Why an add-on agent file cannot be provisioned, or None. An agent that names
+    an MCP server the rendered librechat.yaml lacks would appear without its tools."""
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        return f"not valid YAML ({exc})"
+    if not isinstance(doc, dict):
+        return "not a mapping"
+    missing = [k for k in ("id", "name", "provider", "model") if not doc.get(k)]
+    if missing:
+        return "missing " + ", ".join(missing)
+    servers = doc.get("mcpServers") or []
+    if not isinstance(servers, list) or not all(isinstance(s, str) for s in servers):
+        return "has an mcpServers entry that is not a list of server names"
+    unknown = [s for s in servers if s not in mcp_servers]
+    if unknown:
+        return "names MCP servers librechat.yaml does not define: " + ", ".join(unknown)
+    return None
+
+
+def render_librechat_addon_content(config_dir: Path, repo_root: Path) -> list[str]:
+    """Render the LibreChat agents and prompts of the active add-ons and write or
+    remove their override. Returns the warnings printed for skipped files."""
+    rendered_yaml = config_dir / "ai" / "librechat" / "librechat.yaml"
+    try:
+        librechat = yaml.safe_load(rendered_yaml.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        librechat = {}
+    mcp_servers = set((librechat.get("mcpServers") or {}) if isinstance(librechat, dict) else {})
+
+    warnings: list[str] = []
+    digest = hashlib.sha256()
+    mounts: list[dict] = []
+    addons = [a for a in deployment.active_addons(deployment.load(config_dir)) if a.get("name")]
+    for kind, (dirname, suffixes) in LIBRECHAT_ADDON_CONTENT.items():
+        out_dir = config_dir / "ai" / "librechat" / dirname
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        written = 0
+        for addon in addons:
+            src_dir = repo_root / addon["path"] / "integration" / "ai" / "librechat" / kind
+            if not src_dir.is_dir():
+                continue
+            for src in sorted(src_dir.iterdir()):
+                if not src.is_file() or src.suffix.lower() not in suffixes:
+                    continue
+                # A file that cannot be read is skipped like an invalid one: one broken
+                # add-on file must not stop `start` for the whole stack.
+                try:
+                    content = src.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    warnings.append(
+                        f"addon '{addon['name']}': {kind[:-1]} {src.name} cannot be read ({exc})"
+                    )
+                    continue
+                if kind == "agents":
+                    problem = _agent_problem(content, mcp_servers)
+                    if problem:
+                        warnings.append(f"addon '{addon['name']}': agent {src.name} {problem}")
+                        continue
+                name = f"{addon['name']}__{src.name}"
+                common.atomic_write(out_dir / name, content)
+                digest.update(f"{kind}/{name}\0{content}\0".encode())
+                written += 1
+        if written:
+            mounts.append(
+                {
+                    "type": "bind",
+                    "source": str(out_dir),
+                    "target": f"{_LIBRECHAT_DATA}/{dirname}",
+                    "read_only": True,
+                }
+            )
+
+    for warning in warnings:
+        print(f"WARNING: {warning} -- skipped", file=sys.stderr)
+
+    override_path = config_dir / LIBRECHAT_ADDON_OVERRIDE
+    if not mounts:
+        # Removing the override changes LibreChat's labels too, so the next start
+        # recreates it and its init scripts delete the agents and prompts of the
+        # removed add-ons.
+        override_path.unlink(missing_ok=True)
+        return warnings
+    override = {
+        "services": {
+            "librechat": {
+                "volumes": mounts,
+                "labels": {"org.papaia.addon-content": digest.hexdigest()[:16]},
+            }
+        }
+    }
+    common.atomic_write(
+        override_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+    return warnings
 
 
 def _parse_structured(suffix: str, text: str, label: str):
@@ -189,12 +447,20 @@ def _effective_text(
             if frag_path.is_file():
                 label = f"{addon['path']}/integration/{rel_path}"
                 merged = _merge_layer(merged, _load_structured(frag_path, label), label)
+        layer = None
         if overlay_text is _ON_DISK:
             if overlay_path.is_file():
                 layer = _load_structured(overlay_path, overlay_label)
-                merged = _merge_layer(merged, layer, overlay_label)
         elif overlay_text is not None:
             layer = _parse_structured(base_path.suffix, overlay_text, overlay_label)
+        if rel_path == LITELLM_CONFIG:
+            generated = _localai_models(repo_root, config_dir, active_addons)
+            if generated is not None:
+                generated = _without_overridden(generated, layer)
+                merged = _merge_layer(
+                    merged, {"model_list": generated}, f"{LOCALAI_MODELS_FILE} (generated)"
+                )
+        if layer is not None:
             merged = _merge_layer(merged, layer, overlay_label)
         return _dump_structured(base_path.suffix, merged)
 
@@ -249,6 +515,19 @@ def preview(config_dir: Path, repo_root: Path, rel_path: str, overlay_text: str 
     }
 
 
+def _overlay_only_text(rel_path: str, config_dir: Path) -> str:
+    """The text of an overlay file the repository has no base for. A structured file that does
+    not parse is a RenderError that names it, as for every other layer."""
+    path = config_dir / "overlay" / rel_path
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise RenderError(f"overlay/{rel_path}: not a UTF-8 text file ({exc.reason})") from exc
+    if path.suffix in _STRUCTURED_SUFFIXES:
+        _parse_structured(path.suffix, text, f"overlay/{rel_path}")
+    return text
+
+
 def _render_dir(
     rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> None:
@@ -260,6 +539,52 @@ def _render_dir(
         if file_path.is_file():
             sub_rel = file_path.relative_to(src_root).as_posix()
             _render_file(sub_rel, repo_root, config_dir, active_addons)
+    # Files only the overlay has are rendered for the LocalAI models alone, and there only the
+    # model YAMLs the init job copies: an operator's own model. Every other overlay-only file
+    # (a Finder `.DS_Store`, a theme `logo.png`, ...) stays ignored, as it always was.
+    if rel_path != LOCALAI_MODELS_DIR:
+        return
+    overlay_root = config_dir / "overlay"
+    for file_path in _localai_model_files(overlay_root / rel_path):
+        sub_rel = file_path.relative_to(overlay_root).as_posix()
+        if not (src_root / sub_rel).is_file():
+            text = _overlay_only_text(sub_rel, config_dir)
+            common.atomic_write(config_dir / sub_rel, text)
+
+
+# Browser-facing URLs in the root .env. A stored URL counts even while its service is off:
+# disabling HSTS where it was not needed costs less than a service the browser cannot reach.
+_BROWSER_URL_KEYS = (
+    "PAPAIA_HOST",
+    "MANAGER_PUBLIC_URL",
+    "LITELLM_PUBLIC_URL",
+    "LOCALAI_PUBLIC_URL",
+    "QDRANT_PUBLIC_URL",
+    "NPM_ADMIN_HOST",
+)
+
+
+def _auth_host_shares_a_plain_http_hostname(env: dict[str, str], domain_server: str) -> bool:
+    """True when a plain-http browser URL is on the auth host's hostname or a subdomain of it.
+
+    HSTS applies to a hostname on every port, and Keycloak's default header carries
+    includeSubDomains, so after a single Keycloak visit the browser upgrades those http
+    URLs to https for a year. The local defaults put papaia-manager, LiteLLM, LocalAI and
+    Qdrant on the auth host's hostname; a deployment whose plain-http services live on
+    hostnames of their own is unaffected.
+    """
+    auth_hostname = urlsplit(env.get("AUTH_HOST", "")).hostname
+    if not auth_hostname:
+        return False
+    browser_urls = [env.get(key, "") for key in _BROWSER_URL_KEYS]
+    browser_urls.append(domain_server)
+    for url in browser_urls:
+        if not url.startswith("http://"):
+            continue
+        hostname = urlsplit(url).hostname or ""
+        if hostname == auth_hostname or hostname.endswith("." + auth_hostname):
+            return True
+    return False
 
 
 def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
@@ -279,6 +604,7 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     resolved = re.sub(r"\$\{env\.([^}]+)\}", replace, template)
     realm = json.loads(resolved)  # validate the substitution didn't break the JSON
 
+    changed = False
     # The mail relay is optional, so its block cannot sit in the template: a
     # placeholder substitution cannot leave an object out. The relay needs no
     # login, which is also why no secret is baked in here. While the profile is off
@@ -288,6 +614,24 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
         realm["smtpServer"] = smtp.realm_smtp_server(relay)
         # A reset link is only worth offering where it can be delivered.
         realm["resetPasswordAllowed"] = True
+        changed = True
+
+    # On a hostname shared with plain-http services, the papaia realm must not send
+    # Keycloak's default HSTS header (see _auth_host_shares_a_plain_http_hostname).
+    # max-age=0 instead of an empty header: a papaia-realm response then also clears
+    # an entry the browser learned before. Only this header is set; Keycloak keeps its
+    # defaults for every browser header the realm does not name. An existing realm
+    # gets the value from keycloak_role_sync, since --import-realm skips it.
+    domain_server = common.parse_env_file(config_dir / "ai/librechat/.env").get(
+        "DOMAIN_SERVER", ""
+    )
+    if _auth_host_shares_a_plain_http_hostname(env, domain_server):
+        realm["browserSecurityHeaders"] = {
+            "strictTransportSecurity": keycloak_role_sync.NO_HSTS
+        }
+        changed = True
+
+    if changed:
         resolved = json.dumps(realm, indent=2, ensure_ascii=False) + "\n"
 
     out_dir = config_dir / "infra/keycloak/realm-import"

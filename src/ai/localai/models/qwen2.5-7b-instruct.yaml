@@ -1,0 +1,7 @@
+name: qwen2.5-7b-instruct
+backend: llama-cpp
+context_size: 8192
+f16: true
+parameters:
+  model: Qwen2.5-7B-Instruct-Q5_K_M.gguf
+  seed: -1

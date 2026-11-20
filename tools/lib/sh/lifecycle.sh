@@ -81,6 +81,14 @@ _stopped_containers_go_stale() {
     [ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)" = "Docker Desktop" ]
 }
 
+# Without a terminal, Compose prints one line per progress event of every layer it pulls.
+# papaia-manager reads a fixed tail of its runner logs, and a pull of new images would push
+# the opening lines of a start, upgrade or restore out of it. A terminal keeps the progress
+# bars; errors of a failed pull still reach stderr either way.
+_pull_quietly() {
+    [ ! -t 2 ]
+}
+
 cmd_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
     while [ $# -gt 0 ]; do
@@ -138,6 +146,13 @@ cmd_start() {
     info "Rendering current configuration..."
     py_cli render
 
+    # The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native): its binary and
+    # start script, before `up` so a failed download is reported before the stack moves.
+    LOCALAI_NATIVE="off"
+    if _profiles_include_localai "$profiles"; then
+        _localai_native_install
+    fi
+
     local env_file="$REPO_ROOT/src/.env"
 
     # Before the addons, so an unresolvable profile set aborts the whole command
@@ -154,7 +169,9 @@ cmd_start() {
             [ -z "$addon_name" ] && continue
             addon_path="$(_addon_path "$addon_name")"
             info "  addon $addon_name: materialising env + starting"
-            py_cli addon-start --name="$addon_name" ${check_flags[@]+"${check_flags[@]}"}
+            # --no-keycloak: Keycloak may not be up yet; the keycloak-role-sync step
+            # below creates the add-on clients.
+            py_cli addon-start --name="$addon_name" --no-keycloak ${check_flags[@]+"${check_flags[@]}"}
             _addon_compose_up "$addon_name" "$addon_path"
         done < <(py_cli active-addons 2>/dev/null)
     fi
@@ -186,6 +203,10 @@ cmd_start() {
     if _stopped_containers_go_stale; then
         up_flags+=(--force-recreate)
     fi
+    if _pull_quietly; then
+        up_flags+=(--quiet-pull)
+        info "Starting the containers; missing images are pulled without progress output..."
+    fi
 
     if [ -n "$profiles" ]; then
         info "Starting core with profiles: $profiles"
@@ -193,6 +214,10 @@ cmd_start() {
     else
         docker compose -f "$COMPOSE_FILE" ${compose_overrides[@]+"${compose_overrides[@]}"} --env-file "$env_file" up ${up_flags[@]+"${up_flags[@]}"}
     fi
+
+    # After `up`, so LiteLLM is there when LocalAI answers. The init job need not have
+    # finished: LocalAI reads a model's `<name>.yaml` on the first request for it.
+    _localai_native_start
 
     # In a container (papaia-manager and its runners) the provisioning steps reach the stack
     # over its network, which `up` has just created; on the host this does nothing.
@@ -207,6 +232,80 @@ cmd_start() {
     fi
 
     success "start complete."
+}
+
+# What the native LocalAI step of `start` did (LOCALAI_NATIVE = off | skipped | installed |
+# unchanged | failed), the pinned version, and whether a running job has to be
+# restarted (a new binary, start script or key). Set by _localai_native_install.
+LOCALAI_NATIVE="off"
+LOCALAI_NATIVE_VERSION=""
+LOCALAI_NATIVE_REPLACED=""
+LOCALAI_NATIVE_RESTART="0"
+
+# Whether a --profiles list covers LocalAI; no list means the whole stack.
+_profiles_include_localai() {
+    [ -z "$1" ] && return 0
+    case ",$1," in
+        *,localai,*) return 0 ;;
+    esac
+    return 1
+}
+
+# Installs the pinned LocalAI binary and writes the start script. Inside a container
+# (papaia-manager) or on a host other than an Apple Silicon Mac with Docker Desktop it
+# warns and skips; a failed download or checksum warns and the rest of the stack starts.
+_localai_native_install() {
+    local line out rc=0
+    LOCALAI_NATIVE="off"
+    LOCALAI_NATIVE_RESTART="0"
+    out="$(py_cli localai-native-install)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        LOCALAI_NATIVE="failed"
+        warn "The native LocalAI was not installed (see above). Fix the cause and run 'papaia-ctl start' again."
+        return 0
+    fi
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+        case "$line" in
+            LOCALAI_NATIVE=*) LOCALAI_NATIVE="${line#*=}" ;;
+            LOCALAI_NATIVE_VERSION=*) LOCALAI_NATIVE_VERSION="${line#*=}" ;;
+            LOCALAI_NATIVE_REPLACED=*) LOCALAI_NATIVE_REPLACED="${line#*=}" ;;
+            LOCALAI_NATIVE_RESTART=*) LOCALAI_NATIVE_RESTART="${line#*=}" ;;
+        esac
+    done <<< "$out"
+}
+
+# After `up`: load the launchd job (or restart it for a new binary) and wait for /readyz.
+# Nothing when the install step was off, skipped or failed; a launchctl error warns and
+# the rest of `start` goes on.
+_localai_native_start() {
+    case "$LOCALAI_NATIVE" in
+        installed|unchanged) : ;;
+        *) return 0 ;;
+    esac
+    if [ -n "$LOCALAI_NATIVE_REPLACED" ]; then
+        info "LocalAI $LOCALAI_NATIVE_VERSION replaces $LOCALAI_NATIVE_REPLACED."
+    fi
+    local -a flags=()
+    [ "$LOCALAI_NATIVE_RESTART" = "1" ] && flags+=(--restart)
+    if ! py_cli localai-native-start ${flags[@]+"${flags[@]}"}; then
+        warn "The native LocalAI did not start (see above). Fix the cause and run 'papaia-ctl start' again."
+    fi
+    return 0
+}
+
+# Before the Compose part of `stop`: unload and disable the launchd job, so LocalAI stays
+# off after a login. $1 = profile list, $2 = 1 to delete the models and backends as well.
+# Python decides whether there is a job; off a Mac and in a container it warns and skips.
+_localai_native_stop() {
+    local profiles="$1" purge="$2"
+    _profiles_include_localai "$profiles" || return 0
+    local -a flags=()
+    [ "$purge" -eq 1 ] && flags+=(--purge-models)
+    if ! py_cli localai-native-stop ${flags[@]+"${flags[@]}"}; then
+        warn "The native LocalAI was not stopped (see above). Check it with 'papaia-ctl doctor'."
+    fi
+    return 0
 }
 
 # The two provisioning steps `start` runs after `docker compose up`, as commands of their
@@ -298,7 +397,8 @@ _provisioning_step() {
 
 # The profiles of the optional modules. `stop --volumes` deletes data, so it is limited to
 # these: the always-on services (Keycloak, LibreChat, LiteLLM ...) and the manager keep theirs.
-_VOLUME_DELETE_PROFILES="localai librechat-websearch rag smtp"
+# The same set as the profiles of lib/modules.py's MODULES (tests/test_stop_volumes.py).
+_VOLUME_DELETE_PROFILES="localai librechat-websearch rag smtp voice knowledge-map"
 
 _require_deletable_profiles() {
     local profiles="$1" profile allowed
@@ -364,6 +464,10 @@ cmd_stop() {
     if [ -n "$profiles" ]; then
         _require_profiles_resolve "$profiles" "$env_file" -f "$COMPOSE_FILE"
     fi
+
+    local purge_native=0
+    [ "$clean_up" -eq 1 ] && [ "$volumes" -eq 1 ] && purge_native=1
+    _localai_native_stop "$profiles" "$purge_native"
 
     if [ "$addons" -eq 1 ]; then
         info "Stopping active addons..."
@@ -431,7 +535,8 @@ cmd_uninstall() {
 
     warn "This will stop and remove all core containers and permanently delete $CONFIG_DIR."
     if [ "$clean_up" -eq 1 ]; then
-        warn "  --clean-up: all named volumes will also be removed."
+        warn "  --clean-up: all named volumes will also be removed, and the models of a"
+        warn "  native LocalAI."
     fi
     if [ "$addons" -eq 1 ]; then
         warn "  --addons: active addon containers will also be stopped and removed."
@@ -445,6 +550,15 @@ cmd_uninstall() {
     fi
 
     local env_file="$REPO_ROOT/src/.env"
+
+    # While $CONFIG_DIR still says where the native LocalAI lives.
+    if [ -f "$CONFIG_DIR/.env" ]; then
+        local -a native_flags=()
+        [ "$clean_up" -eq 1 ] && native_flags+=(--purge)
+        if ! py_cli localai-native-uninstall ${native_flags[@]+"${native_flags[@]}"}; then
+            warn "The native LocalAI was not removed completely (see above)."
+        fi
+    fi
 
     if [ "$addons" -eq 1 ] && [ -f "$CONFIG_DIR/deployment.yaml" ]; then
         info "Stopping and removing active addon containers..."
@@ -466,9 +580,80 @@ cmd_uninstall() {
 
     if [ -d "$CONFIG_DIR" ]; then
         info "Deleting $CONFIG_DIR..."
-        rm -rf "$CONFIG_DIR"
+        if ! _remove_config_dir "$CONFIG_DIR"; then
+            exit 1
+        fi
     fi
     success "uninstall complete."
+}
+
+# Deletes the configuration directory. Containers write some of their bind-mounted data as
+# root (Nginx Proxy Manager's `infra/nginx/nginx-data/`, for one), which a non-root
+# operator cannot delete. What is left after the first attempt is deleted the way it was
+# written: by a short-lived container that mounts the directory. If that is not possible
+# either, the leftover path and the command that removes it are named.
+_remove_config_dir() {
+    local dir="$1" physical
+    rm -rf "$dir" 2>/dev/null || true
+    [ -e "$dir" ] || return 0
+
+    physical="$(_physical_path "$dir")" || physical=""
+    case "$physical" in
+        "")
+            error "Could not delete $dir completely; refusing to clean it up through a container."
+            error "Remove it by hand: sudo rm -rf '$dir'"
+            return 1
+            ;;
+        /)
+            error "$dir is the root directory; refusing to delete what is left in it."
+            return 1
+            ;;
+    esac
+    if _contains_path "$physical" "${HOME:-}"; then
+        error "$dir is or contains the home directory; refusing to delete what is left in it."
+        return 1
+    fi
+    if _contains_path "$physical" "${REPO_ROOT:-}"; then
+        error "$dir is or contains the papaia checkout; refusing to delete what is left in it."
+        return 1
+    fi
+
+    info "Some files in $dir belong to root (written by containers); deleting them through a container..."
+    if command -v docker >/dev/null 2>&1 \
+        && _docker_run --network none -v "$(_docker_hostpath "$physical"):/target" \
+            "$BACKUP_IMAGE" find /target -mindepth 1 -delete; then
+        rm -rf "$dir" 2>/dev/null || true
+    fi
+    if [ -e "$dir" ]; then
+        error "Could not delete $dir completely."
+        error "Remove what is left with: sudo rm -rf '$dir'"
+        return 1
+    fi
+    return 0
+}
+
+# True when the physical path of $2 is $1 (a path from _physical_path) or lies below it.
+# An empty or unresolvable $2 contains nothing.
+_contains_path() {
+    local outer="$1" inner
+    [ -n "$2" ] || return 1
+    inner="$(_physical_path "$2")" || return 1
+    [ "$inner" = "$outer" ] && return 0
+    case "$inner" in "$outer"/*) return 0 ;; esac
+    return 1
+}
+
+# Prints the physical path of directory $1. `pwd -P` keeps a leading `//` (POSIX leaves
+# its meaning to the system), while Linux and Docker read it as `/`: without collapsing
+# it, `//` or `//home` would slip past the guards above and still be mounted as `/` or
+# `/home`.
+_physical_path() {
+    local path
+    path="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    while [ "${path#//}" != "$path" ]; do
+        path="${path#/}"
+    done
+    printf '%s' "$path"
 }
 
 _require_setup_done() {

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -83,6 +85,61 @@ def test_a_new_server_certificate_is_accepted_by_strict_tls_clients(tmp_path):
         "local-ca.crt",
         "local-ca.key",
     ]
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file modes are not POSIX on Windows")
+def test_the_ca_key_is_readable_by_its_owner_only(tmp_path):
+    assert _ensure(tmp_path).returncode == 0
+    certs = tmp_path / "certs"
+    assert _mode(certs / "local-ca.key") == 0o600
+    assert _mode(certs / "local-ca.crt") == 0o644
+    # Keycloak reads its own key inside the container as another user.
+    assert _mode(certs / "keycloak.key") == 0o644
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file modes are not POSIX on Windows")
+def test_a_world_readable_ca_key_from_an_earlier_setup_is_closed(tmp_path):
+    assert _ensure(tmp_path).returncode == 0
+    key = tmp_path / "certs" / "local-ca.key"
+    key.chmod(0o644)
+    before = _digest(key)
+    done = _ensure(tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert "already present" in done.stdout
+    assert _mode(key) == 0o600
+    assert _digest(key) == before
+
+
+def test_a_new_ca_signs_for_keycloaks_names_only(tmp_path):
+    assert _ensure(tmp_path).returncode == 0
+    certs = tmp_path / "certs"
+    text = openssl("x509", "-in", str(certs / "local-ca.crt"), "-noout", "-text")
+    assert "X509v3 Name Constraints: critical" in text
+    for name in ("DNS:keycloak", "DNS:localhost", "DNS:host.docker.internal"):
+        assert name in text
+    # A certificate the CA key issues for another domain fails verification.
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    openssl("genrsa", "-out", str(foreign / "f.key"), "2048")
+    openssl("req", "-new", "-key", str(foreign / "f.key"), "-out", str(foreign / "f.csr"),
+            "-subj", "/CN=www.example.com")  # fmt: skip
+    (foreign / "f.ext").write_text("subjectAltName=DNS:www.example.com\n", encoding="utf-8")
+    openssl("x509", "-req", "-in", str(foreign / "f.csr"), "-CA", str(certs / "local-ca.crt"),
+            "-CAkey", str(certs / "local-ca.key"), "-CAcreateserial",
+            "-out", str(foreign / "f.crt"), "-days", "30",
+            "-extfile", str(foreign / "f.ext"))  # fmt: skip
+    done = subprocess.run(
+        ["openssl", "verify", "-CAfile", str(certs / "local-ca.crt"), str(foreign / "f.crt")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode != 0
+    assert "permitted subtree violation" in done.stdout + done.stderr
 
 
 @pytest.mark.parametrize(

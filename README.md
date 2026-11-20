@@ -15,7 +15,7 @@ gateway, and no component depends on a vendor that could withdraw it. Local, mod
 vendor-independent — that is what the architecture optimises for, and why the trade-offs
 throughout this document fall the way they do.
 
-This is the **1.8.0** release: the Lean Core is stable, `papaia-ctl` is the single
+This is the **1.9.0** release: the Lean Core is stable, `papaia-ctl` is the single
 idempotent orchestrator for the full deployment lifecycle, and the add-on infrastructure is
 in place for first-party and custom service modules.
 
@@ -51,13 +51,15 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Module | Profile | Port | Purpose |
 |---|---|---|---|
 | LocalAI | `localai` | 8080 | Local model inference, chat-completions API. Native OIDC, gated by the `localai-access` realm role. |
-| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health, model usage, backup/restore with scheduled backups, the nodes of a distributed installation and, with the `rag` profile, the RAG system's connections, collections and ingest jobs. Native OIDC. Linux host only — see [papaia-manager](#papaia-manager). |
+| papaia-manager | `manager` | 8120 | Browser control plane for the add-on lifecycle, the service overview, host health, model usage, backup/restore with scheduled backups, the nodes of a distributed installation, with the `rag` profile the RAG system's connections, collections and ingest jobs, and with the `knowledge-map` profile the AI map. Native OIDC. Linux hosts and Docker Desktop on macOS — see [papaia-manager](#papaia-manager). |
 | Web search | `librechat-websearch` | — | SearXNG (metasearch), Firecrawl (crawler), the Firecrawl MCP bridge, and the Jina reranker. All internal-only; consumed by LibreChat. |
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
+| Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
+| Knowledge map | `knowledge-map` | — | An OIDC-secured MCP directory of the installation's knowledge sources: tells the chat where knowledge lives, trimmed to the caller's roles. Internal-only — see [docs/knowledge-map.md](docs/knowledge-map.md). |
 
-`localai`, `manager`, `librechat-websearch`, `rag` and `smtp` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`). When LocalAI is enabled, setup also asks
+`localai`, `manager`, `librechat-websearch`, `rag`, `smtp`, `voice` and `knowledge-map` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`, `--knowledge-map`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
 The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
@@ -132,15 +134,52 @@ Linux host:
   `LIBRECHAT_AGENTS_DIR` and `LIBRECHAT_PROMPTS_DIR` when they are set. A checkout under
   `/Users` with the default config directory next to it works. `/opt` works only after it
   is added under File sharing, and `/srv` cannot be created on the read-only system volume.
-- **papaia-manager.** It needs a Linux host. `setup` defaults to *no* on macOS; leave it
-  off (`--no-manager`).
-- **Keycloak certificate.** With the default local URLs, trust the generated local CA
-  once so browsers accept Keycloak's certificate:
+- **LocalAI on the Apple GPU.** In Docker Desktop's VM LocalAI runs on the CPU. On an
+  Apple Silicon Mac with Docker Desktop, `setup` offers to run it natively on the GPU
+  instead; see [Native LocalAI on Apple Silicon](#native-localai-on-apple-silicon).
+- **papaia-manager.** It runs on Docker Desktop, with its workspace, configuration and
+  backup directories below `/Users`; a checkout there with the default directories meets
+  this. `setup` recognises Docker Desktop and defaults to *yes* there; with another
+  engine it defaults to *no*, so leave the profile off (`--no-manager`). See
+  [papaia-manager](#papaia-manager).
+- **Keycloak certificate.** With the default local URLs, browsers on the Mac check
+  Keycloak's certificate against the login keychain. `setup` offers to trust the
+  generated local CA there once, for TLS server certificates only (no admin rights
+  needed; macOS may still ask for the login password, and over SSH the step fails and
+  `setup` prints the command). In a non-interactive run, or when the offer is declined,
+  it prints the command instead:
 
   ```bash
-  sudo security add-trusted-cert -d -r trustRoot \
-    -k /Library/Keychains/System.keychain "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
+  security add-trusted-cert -r trustRoot -p ssl \
+    -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"
   ```
+
+  A local CA that `setup` creates can only sign for Keycloak's names (`keycloak`,
+  `localhost`, `host.docker.internal`), and its key `certs/local-ca.key` is readable by
+  its owner only. A CA from an earlier release keeps working without that limit. To
+  replace it:
+
+  1. Delete `$PAPAIA_CONFIG_DIR/certs/` and run `setup` again.
+  2. Restart the stack with `papaia-ctl stop` and `papaia-ctl start`, so that Keycloak
+     and the containers that read `local-ca.crt` pick up the new files.
+  3. Remove the trust of the old CA from the login keychain. Both CAs are named
+     `papaia-local-ca`, and a trust added by an earlier release covers every policy, not
+     only TLS. List the certificates with that name and their SHA-1 hashes, then delete the
+     old one by its hash (the new one's hash is shown by
+     `openssl x509 -noout -fingerprint -sha1 -in "$PAPAIA_CONFIG_DIR/certs/local-ca.crt"`):
+
+     ```bash
+     security find-certificate -a -c papaia-local-ca -Z ~/Library/Keychains/login.keychain-db
+     security delete-certificate -t -Z <SHA-1 of the old CA> ~/Library/Keychains/login.keychain-db
+     ```
+
+  4. Trust the new CA with the `security add-trusted-cert` command above.
+
+  An add-on that issues certificates with this CA for names other than these three is
+  affected by the limit as well (see Fidonis/papaia-addons#71).
+
+  The browsers reach Keycloak at `host.docker.internal`, which resolves on the Mac only
+  through an `/etc/hosts` entry; `setup` prints the command when it is missing.
 
   The server certificate is issued for 825 days with `serverAuth`, as macOS requires.
   `setup` renews an older or expiring one with the same CA, so the trust stays; restart
@@ -210,7 +249,7 @@ Once the stack is up, the default endpoints for a local install are:
 - Keycloak admin — `https://host.docker.internal:8110`, user `admin` (setup generates the
   password; read it with `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`)
 - papaia-manager — `http://host.docker.internal:8120`, when the `manager` profile is active
-  (Linux hosts only — see [papaia-manager](#papaia-manager))
+  (Linux hosts and Docker Desktop on macOS — see [papaia-manager](#papaia-manager))
 
 The realm ships two test users: `admin` / `admin` (roles `admin`, `user`, `localai-access`)
 and `testuser` / `testuser` (roles `user`, `finance`).
@@ -262,6 +301,8 @@ papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup
 papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
                      [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
+papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
+                     [--config-dir=PATH]
 papaia-ctl topology  <show [--json]|validate|firewall [--format=table|json|csv]>
                      [--config-dir=PATH]
 papaia-ctl node      <add|list|check|remove|join-bundle|renew-link|sync> [OPTIONS]
@@ -306,8 +347,12 @@ tools/papaia-ctl setup [OPTIONS]
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
-| `--manager` / `--no-manager` | _(prompted, default on; off on macOS)_ | Toggle the `manager` profile |
+| `--localai-runtime=container\|native` | _(prompted on an Apple Silicon Mac with Docker Desktop, default `native` there; `container` elsewhere)_ | Where LocalAI runs: in its container, or as a process on the Apple GPU ([Native LocalAI on Apple Silicon](#native-localai-on-apple-silicon)). `native` is refused with exit 2 on any other host (and while Docker Desktop is not running); `container` is accepted everywhere |
+| `--manager` / `--no-manager` | _(prompted, default on; on macOS off unless Docker Desktop)_ | Toggle the `manager` profile |
 | `--rag` / `--no-rag` | _(prompted, default on)_ | Toggle the `rag` profile. `--rag` is refused while the `qdrant`, `qdrant-connect` or `qdrant-ingest` add-on is active |
+| `--voice` / `--no-voice` | _(prompted, default off)_ | Toggle the `voice` profile (the local [speech engines](#voice-local-speech)) |
+| `--voice-variant=cpu\|nvidia\|hipblas\|auto` | _(prompted while voice is on)_ | Which image the TTS engine runs on; `auto` probes the host like the LocalAI image choice |
+| `--knowledge-map` / `--no-knowledge-map` | _(prompted, default off)_ | Toggle the `knowledge-map` profile (the [knowledge map](docs/knowledge-map.md)); switching it on also generates its secrets on an installation set up before the module existed |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
 | `--smtp-security=MODE` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (no encryption and no login) |
@@ -395,9 +440,12 @@ the release ships with.
 networks exist by the time the core's generated override files are applied. An override whose
 network does not exist yet is skipped rather than failing the start.
 
-When `--addons` is active, `start` runs a compatibility check against all active add-ons
-before bringing up the core. If any add-on is INCOMPATIBLE the start is aborted. Pass
-`--force` to demote incompatibility to a warning and proceed.
+`start` runs the compatibility check of [`addon check`](#addon) against all active add-ons
+before bringing up the core, with or without `--addons`. If any add-on is INCOMPATIBLE the
+start is aborted: an add-on the core no longer supports, or one whose required add-ons
+(`requires.addons`) are not active or no longer in range. Pass `--force`, or set warn mode
+(`PAPAIA_COMPAT_MODE=warn` or `mode: dev` in `deployment.yaml`), to demote incompatibility to
+a warning and proceed.
 
 `--profiles` takes a comma-separated list of Compose profiles and overrides `COMPOSE_PROFILES`
 for this invocation only. The selection is validated up front: a profile list that names no
@@ -432,9 +480,13 @@ link gateways last). `--node=NAME` stops one node; `--volumes` is not available 
 `--volumes` (only together with `--clean-up` and `--profiles`) also deletes the data of those
 profiles: `docker compose down --volumes` removes the named volumes of their services and the
 anonymous volumes of their containers (a Redis or Postgres image declares one). It is limited to
-the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`); the always-on services and
+the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`, `voice`, `knowledge-map`); the always-on services and
 the manager keep their data, and any other profile is refused before anything runs. A volume that
 a service of another profile still mounts is left in place by Compose.
+
+With a [native LocalAI](#native-localai-on-apple-silicon), `stop` also unloads and disables its
+launchd job first (unless `--profiles` leaves `localai` out), and `--volumes` with the `localai`
+profile also deletes its `models/` and `backends/` directories.
 
 papaia-manager's Settings > Modules tab switches the optional modules on and off with these
 pieces and offers to delete a module's data and settings when it switches one off. It uses two
@@ -444,10 +496,15 @@ they exist, what its settings consist of and the questions `setup` asks when the
 switched on (the public URL of LocalAI and of Qdrant: the `setup` option that takes the answer,
 the default derived from the stack's host and whether the question is still open), as JSON, and
 writes nothing; `module-purge
---module=NAME [--data] [--config]` removes the module's named volumes (by name, from the compose
-files' own table of who mounts what) and/or puts its settings back to what the release ships (its
+--module=NAME [--data] [--config] [--operator-files]` removes the module's named volumes (by name, from the compose
+files' own table of who mounts what; for a native LocalAI its `models/` and `backends/`
+directories instead, listed under `directories` by `module-info`) and/or puts its settings back
+to what the release ships (its
 `.env` files and the public URL kept in the root `.env`, plus the files it keeps outside them:
-the mail relay's password, the RAG catalog). A question is open when its stored URL is empty, a
+the mail relay's password, the RAG catalog, the rendered knowledge map). `--operator-files`
+deletes what the operator wrote by hand for the module (the knowledge map's declarations,
+overrides, governance records and gold set, listed under `operator_files` by `module-info`)
+and the rendered map built from them; neither `--data` nor `--config` touches these files. A question is open when its stored URL is empty, a
 placeholder or the one the release ships, which is what the reset leaves, so a front end can ask it
 again before it switches the module on. A later `setup` run derives the URL from the stack's host
 again and closes the question.
@@ -466,7 +523,7 @@ tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [
 
 Moves the installation to a release. Without `--version` the newest release is used;
 when the installation already runs it, the command reports so and exits 0, which makes
-it safe to run unattended. `--version` accepts `1.8.0` and `v1.8.0` alike and is the
+it safe to run unattended. `--version` accepts `1.9.0` and `v1.9.0` alike and is the
 only way onto a pre-release. Downgrades are refused — restore a backup instead.
 
 The run, in order:
@@ -477,8 +534,9 @@ The run, in order:
 2. Fetches the release tags and resolves the target version.
 3. Checks all active add-ons against the target release — the same evaluation as
    `addon check --target-core=PATH`, run against a temporary worktree of the target
-   tag. An incompatible add-on aborts the upgrade before anything is touched;
-   `--force` demotes it to a warning.
+   tag. An incompatible add-on aborts the upgrade before anything is touched, and so
+   does an add-on whose required add-ons (`requires.addons`) are not active or not in
+   range; `--force` demotes it to a warning.
 4. Creates a restore point (`backup`) unless `--no-backup` is given, and stops the
    stack.
 5. Checks out the release tag and re-executes itself from the new tree, so the
@@ -494,7 +552,7 @@ required.
 
 **Migrations.** A release may ship scripts in `tools/migrations/` that adapt an
 existing config bundle to a change the render pass cannot express on its own. Every
-release carries the complete set, so a jump from 1.0.0 to 1.8.0 runs the 1.1.0 … 1.8.0
+release carries the complete set, so a jump from 1.0.0 to 1.9.0 runs the 1.1.0 … 1.9.0
 steps in between, in order. Applied migrations are recorded in
 `$PAPAIA_CONFIG_DIR/migrations/applied.json` and never run twice. If one fails, the
 upgrade stops and prints the commands to return to the previous release; fixing the
@@ -519,6 +577,13 @@ tools/papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 Stops and removes all core containers, then **permanently deletes the config directory**.
 Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
 Docker volumes. `--addons` stops and removes active add-on containers first.
+
+Some data below the config directory is written by containers as root (the Nginx Proxy Manager
+database and certificates in `infra/nginx/nginx-data/`, for one). What the operator cannot
+delete is deleted through a short-lived `alpine:3` container that mounts the directory. If that
+fails too, `uninstall` exits 1 and names the directory and the `sudo rm -rf` that removes it.
+It never does this for `/` or for a directory that is or contains the home directory or the
+papaia checkout.
 
 ### `backup`
 
@@ -663,6 +728,53 @@ configuration back, hands every node its bundle and release, writes back each no
 starts the installation. A restore point taken of a single host is refused in a distributed
 installation, and the other way round. `--restart-clean` is not available there.
 
+### `librechat clear-history`
+
+```bash
+tools/papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y] \
+                                         [--config-dir=PATH]
+```
+
+Removes one LibreChat user's history before an account is used again: a training or test
+account, or the account of someone who left. It removes the user's conversations with their
+sub-threads, their messages, their shared links and the tool call records of those
+conversations, and the user's files (records and stored files). Without `--before` that is
+every file of the user, including files in "My files" that were never attached to a chat;
+with `--before`, only the files of the conversations that go. The account, its sign-in, its
+MCP connections, its agents and prompts, its avatar, the files an agent uses, and everything
+the stack provisions stay.
+
+Two kinds of data also stay, and matter on a shared or training account:
+
+- **Memories.** When memory extraction is switched on in an overlay, the user's memory
+  entries stay and the next person on the account sees them. Remove them in LibreChat's
+  memory settings before the account is handed on.
+- **Agent checkpoints** of runs paused for a tool approval or a question to the user. LibreChat
+  removes them together with its run queue, which this command cannot reach from outside the
+  server process. They expire after 24 hours on their own.
+
+The counts list sub-threads under conversations (`4 (including 2 sub-threads)`), so they can be
+higher than the number of chats the user sees.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `<email>` | _(required)_ | E-mail address of the LibreChat user. An unknown address is an error |
+| `--before=YYYY-MM-DD` | _(everything)_ | Only conversations last updated before that day (00:00 UTC), with their sub-threads, messages, files and shared links. A sub-thread goes with its conversation, never on its own date. An empty value is an error |
+| `--dry-run` | off | Print what would be removed, per kind, and change nothing |
+| `-y` / `--yes` | _(prompt)_ | Skip the confirmation. Without a terminal, `-y` is required |
+| `--config-dir=PATH` | `../papaia-config` | Config directory location |
+
+Without `-y` the counts are shown first and the deletion waits for a `y`. **The deletion
+cannot be undone** except by restoring a backup; `restore --only=module:librechat` brings back the data of every LibreChat user, not of one.
+
+The command needs the running stack: it runs inside the LibreChat container, through
+LibreChat's own data and file-storage code, so it follows LibreChat's layout across
+releases. Run it while the user is not chatting; a reply that is still being written can
+leave a message behind. In a distributed installation, run it on the node that runs
+LibreChat. Exit status 0 on success, 1 when the user is unknown, LibreChat is not running,
+or a file could not be removed from storage (its record is kept and named), 2 for wrong
+arguments (also an address or a date that is not one), 3 when the confirmation is declined.
+
 ### `addon`
 
 ```bash
@@ -675,8 +787,9 @@ tools/papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force
   [--config-dir=PATH]
 tools/papaia-ctl addon list      [--json] [--config-dir=PATH]
 tools/papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
-tools/papaia-ctl addon remove    <name> [--config-dir=PATH]
-tools/papaia-ctl addon uninstall <name> [--clean-up] [--config-dir=PATH]
+tools/papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
+tools/papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
 tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
   [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
 tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
@@ -684,15 +797,16 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 
 | Command | Effect |
 |---|---|
-| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. |
+| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. A `--path` that re-points an installed add-on is refused, like `upgrade`, when the version there no longer meets a range another active add-on requires of it. |
 | `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
 | `install --node=NAME` | Distributed installations only: the node the add-on runs on. Without it, the add-on goes to the node of the core services it attaches to. An add-on whose `networks.attach` names services on two nodes is **not placeable** and is refused whatever `--force` says: its network exists on one node only. On a remote node the add-on travels in the node's bundle, and `start`, `stop` and `start --addons` run it there. |
-| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). See [Upgrading an add-on](#upgrading-an-add-on). |
-| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. |
+| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. See [Upgrading an add-on](#upgrading-an-add-on). |
+| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. Refused, like `upgrade`, when the older version does not meet a range another active add-on requires of it. |
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
-| `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. |
-| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. |
+| `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
+| `run` | Runs a maintenance action the add-on declares under `actions:` — `docker compose run --rm <service> <args>` in the add-on's project, with the files and env of `addon start` — and exits with the action's code. Only declared actions with their fixed arguments run; without an action, lists the declared ones (`--json` for tools). Single host only. |
+| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. |
 | `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). |
 
@@ -819,7 +933,7 @@ active Compose profile to the modules it brings up.
 {
   "schema_version": 1,
   "generated_at": "2026-09-27T10:15:00Z",
-  "platform_version": "1.8.0",
+  "platform_version": "1.9.0",
   "compose_project": "papaia",
   "docker": { "reachable": true, "reason": null },
   "modules": [
@@ -872,7 +986,8 @@ raw values behind its summary in `details`.
 | `docker_usage` | What Docker's data takes, from `docker system df`: images, containers, volumes and build cache, each with its size and the part the daemon calls reclaimable. It asks the daemon, so it also works where `disk_space` cannot see the data root (Docker Desktop, inside a container). | never `warn` or `fail`; `skip` if Docker cannot be asked, the call times out or the output is not recognised |
 | `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
 | `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
-| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
+| `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, for the native runtime, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
+| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`), the installed binary is the release the checkout pins and, on the Mac, the state of its launchd job (`launchctl print`). | `warn` when it does not answer, is not installed or is another version, when the job is loaded but LocalAI does not answer, or when the job is not loaded although the stack runs; never `fail`; `skip` for the container runtime and while the stack and the job are both stopped |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
@@ -1157,9 +1272,10 @@ upgrade, roll back and remove add-ons, see what the stack is running and how the
 doing, see which models LiteLLM serves and what they consumed, take, schedule or replay a
 backup, switch the optional modules on and off, edit the customer overlay, manage the
 realm's accounts and roles, set up the [mail relay](#outbound-mail) and what it is used for,
-manage the nodes of a [distributed installation](docs/distributed.md) and, with the optional
-[RAG system](#rag-system), manage its connections, collections and ingest jobs, without ever
-opening a terminal on the host.
+manage the nodes of a [distributed installation](docs/distributed.md), with the optional
+[RAG system](#rag-system) manage its connections, collections and ingest jobs and, with the
+optional [knowledge map](docs/knowledge-map.md), see and govern what the AI reaches on the AI
+map page, without ever opening a terminal on the host.
 
 It does not reimplement any of it. Every mutating operation shells out to `papaia-ctl`, and
 status queries read the same modules under `tools/lib/`, so the UI and the CLI cannot drift
@@ -1180,15 +1296,16 @@ from `--app-host` when `--manager-host` is omitted. `--no-manager` leaves the pr
 |---|---|
 | **Dashboard** (`/`) | Tile overview of the deployed applications, configured in `$PAPAIA_CONFIG_DIR/manager/tiles.yaml` and seeded on first run. `{{KEY}}` placeholders in tile links resolve against the core `.env`; each tile's `visibility: all \| admin` is filtered server-side, so an admin-only tile is absent from a regular user's response rather than merely hidden. Administrators edit it in the browser (groups, tiles, drag and drop, a live preview). Besides links, a group can hold *widgets*, cards that show one piece of live state and link to the page that explains it: the installed papAIa release, the age of the newest backup, free disk space, how many services run, open warnings and the nearest certificate expiry. They refresh on their own and read what the manager already knows instead of measuring again. The default tiles (LibreChat, LiteLLM, Keycloak, NGINX Proxy Manager and Qdrant) show an icon that ships inside the manager, so nothing is loaded from another site; the logos stay the property of their owners. |
 | **Services** | What this deployment is configured to run, and how much of it is up. Containers are grouped into modules by the `de.fidonis.module` label, and the *declared* state is read alongside them, so a configured-but-never-started service reads as **not deployed** instead of silently missing. Starting and stopping happens per Compose profile — the granularity `papaia-ctl` accepts — with an optional `--clean-up` on every operation that stops something. A status row in the sidebar of every page summarises the core, the add-ons and the host for every signed-in role, as counts only. |
-| **Add-ons** | Catalogues, install, start/stop, upgrade, rollback and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. When a catalogue's manifest lists the software an add-on bundles (`components`), the gallery card names the primary components and the detail page lists all of them with their role, the version an update brings and the tags an operator pinned in the add-on's `.env`; the manager reads those itself, and [`papaia-ctl addon components`](#addon) prints the same on the command line. *Remove* takes the add-on's containers down before it marks the add-on inactive (volumes and configuration stay) and is refused while the add-on's `docker-compose.yml` is missing. An upgrade is reviewed first: *Review upgrade* stages the catalogue's version and shows what [`papaia-ctl addon upgrade --dry-run`](#addon) reports (compatibility, components, new and removed settings, the add-on's changelog) and asks for the values the new version needs; the upgrade then applies exactly that version with a restore point of the add-on. *Roll back* returns to the version before, with the code and configuration only or with the data of that restore point. The Add-ons page counts and lists the waiting upgrades. Upgrading and rolling back need a core with these verbs (1.8.0 or newer). |
+| **Add-ons** | Catalogues, install, start/stop, upgrade, rollback and removal. Each add-on resolves to one of `available`, `installed`, `running`, `inactive` or `unmanaged`, merged from the catalogue scan, `deployment.yaml` and live container labels. When a catalogue's manifest lists the software an add-on bundles (`components`), the gallery card names the primary components and the detail page lists all of them with their role, the version an update brings and the tags an operator pinned in the add-on's `.env`; the manager reads those itself, and [`papaia-ctl addon components`](#addon) prints the same on the command line. *Remove* takes the add-on's containers down before it marks the add-on inactive (volumes and configuration stay) and is refused while the add-on's `docker-compose.yml` is missing. An upgrade is reviewed first: *Review upgrade* stages the catalogue's version and shows what [`papaia-ctl addon upgrade --dry-run`](#addon) reports (compatibility, components, new and removed settings, the add-on's changelog) and asks for the values the new version needs; the upgrade then applies exactly that version with a restore point of the add-on. *Roll back* returns to the version before, with the code and configuration only or with the data of that restore point. The Add-ons page counts and lists the waiting upgrades. Upgrading and rolling back need a core with these verbs (1.8.0 or newer). The add-ons an add-on requires (`requires.addons`) are badges on its card and page, and *Install* stays disabled while one is missing, inactive or too old, unless warn mode lets [`papaia-ctl`](#addon) install anyway; the active add-ons that require an add-on are listed as *Required by*, and *Remove* and *Uninstall* are refused until they are gone. The maintenance actions an add-on declares (`actions`) are buttons on its page that run [`papaia-ctl addon run`](#addon) as a job, a destructive one after a confirmation; on a distributed installation they are refused, like the command. Requirements and actions need a core with these manifest fields (1.9.0 or newer). |
 | **Models & Usage** (`/models`) | Which models LiteLLM serves and what they consumed: tokens, spend in USD and requests per day, for all models and per model, over the last 7, 30 or 90 days, this month or a custom range. Administrators only, and read-only: models, prices, teams and keys stay in LiteLLM's own Admin UI, which the page links to. The manager reads LiteLLM at `LITELLM_URL` with the master key from `ai/litellm/.env`, which it never shows or logs. Days are UTC days, and a model without a price shows no spend. |
 | **Nodes** (`/nodes`) | Only on a [distributed installation](docs/distributed.md): the machines with their services, address, status, version and link health; adding a node with its enrolment commands, confirming its host keys, handing it its bundle and removing it. Each of these changes needs a fresh sign-in at Keycloak on top of the admin role. The other pages follow the nodes: Services has a section per node and acts on the node that owns a group, Host has a node selector, the widgets and notifications look at every node, Backup backs up one node or all and restores a node as a whole, Upgrade shows the release per node, and module, overlay and mail changes run on their node. While an upgrade has not finished or a node runs another release, every admin page says so and refuses what the core would refuse. On a single host none of this appears. |
+| **AI map** (`/knowledge-map`) | The management side of the [knowledge map](docs/knowledge-map.md), for administrators only; while the `knowledge-map` profile is off, the page links to Settings > Modules. It shows which data the AI reaches, for whom, over which access path and with which model: the rendered map as a graph that can be viewed as a chosen role, every entry with its access paths and roles, the findings of the render, a routing test that asks the map server where a question would land for a set of roles without recording it, usage, gold-set runs and the refinements the map server mined from use, to accept or reject. Entries are created and edited as forms, an entry an add-on, a module or the inventory declares as an override of the changed fields only, and the operator files under `overlay/knowledge-map/` are edited in place; every change is a queued job that renders the map and puts the previous file back when the render refuses it. A *Governance* tab records owner, classification and personal data of each source and the tier of each model, shows the findings with what to change, accepts one until a date and exports the facts as `facts.json` or `facts.csv`. The manager reads the map from the configuration directory and the rest from the map server at `KNOWLEDGE_MAP_URL` with the `KM_ADMIN_TOKEN` from `ai/knowledge-map/.env`, which it never shows or logs. Neither the map nor the page restricts data access or model use. It needs a core that ships the `knowledge-map` profile (1.9.0 or newer). |
 | **RAG** (`/connections`, `/collections`, `/embedding`, `/ingest/jobs`) | The management side of the [RAG system](#rag-system), for administrators only and only while the `rag` profile is active; without it the pages answer 404 and nothing new appears. *Connections* are the vector databases the system works with (the integrated Qdrant is created as `default`). *Collections* creates and deletes Qdrant collections and keeps the realm roles that may read or write each of them, in the format `qdrant-mcp-rbac` enforces. *Embedding* puts uploaded files, or files already in the documents folder, into a collection through the ingester. *Ingest Jobs* edits the ingester's jobs, shows their runs file by file and stores the credentials of remote sources encrypted. The dashboard gains a *Qdrant* tile for administrators. The ingester has no web interface of its own; these pages replace it. They need a core that ships the `rag` profile (1.5.0 or newer). |
 | **Host** (`/host`) | The state of the machine under the deployment: memory, CPU load, GPU, clock synchronisation, free disk space and certificate expiry, plus what Docker's data takes. The manager measures nothing itself: it shows the verdicts of [`papaia-ctl doctor`](#doctor), so the page and a shell on the host cannot disagree about a threshold. It needs a core that ships `doctor` (1.4.0 or newer); on an older one the page says so. How often the host is re-measured is a setting. |
 | **Backup / Restore** | `papaia-ctl backup` and `restore` from the browser, with the restore-point catalogue and a configurable retention period. Backups can run on a schedule (every day, on chosen days, every few hours or a cron expression, in a timezone of choice), run by a scheduler inside the manager, so the host needs no cron job or systemd timer. |
 | **Users** (`/users`) | The accounts and the realm roles of the bundled Keycloak, without the Admin Console, for the identity role `papaia-admin` only (see [Access control](#access-control)). Create an account with a temporary password or a mailed link, enable or disable it, change its roles, reset its password, and view and end its sessions. The *Roles* tab lists the realm roles, creates and changes them and deletes one after showing who holds it; the roles the stack ships stay as they are. The page acts with the signed-in account's own Keycloak rights, so it needs a core whose realm gives `papaia-admin` the user and role administration rights (1.6.0 or newer; [ADR 0006](docs/adr/0006-manage-accounts-with-the-signed-in-users-token.md)). It does not exist where the accounts live in an external identity provider. |
-| **Mail** (`/mail`) | Two tabs under *System*, for administrators. *Notifications* lets recipients (an email address or a webhook URL) choose which events they receive: a failed job, an overdue backup, a service that stopped or turned unhealthy, an available update and an expiring certificate; each event is reported once per occurrence and a webhook URL is never shown again after it is saved. *Mail Server* sets up the stack's outbound relay: the mail server behind it (host, connection security, port, login, write-only password, sender), a connection test that sends nothing, a test mail through the relay and the length of its queue. Saving is a queued job that runs the core's own `setup`; the relay itself needs the `smtp` profile ([Outbound mail](#outbound-mail), 1.6.0 or newer), and the page says so on an older core. |
-| **Settings** | The manager's own configuration in three tabs. *Manager*: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. *Modules*: the one place that switches the optional modules (LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off; it asks what `papaia-ctl setup` asks where an answer is missing, and switching one off asks whether to keep its data and settings, delete the data, or delete both (the module's name has to be typed to delete). *Overlay*: edits the customer [overlay](#configuration--render-lifecycle) files for LibreChat, LiteLLM and SearXNG with a syntax check while typing, the effective result as a diff and **Apply** as a queued job that recreates the services reading the file; the previous version of every file is kept (the latest 20) and restored from a *Versions* tab. Switching on the RAG system and the mail relay, deleting a module's data or settings and the effective-result diff need a core with the module operations and `render-preview` (1.6.0 or newer); an older core still switches LocalAI and web search and switches modules off, keeping everything. |
+| **Mail** (`/mail`) | Two tabs under *System*, for administrators. *Notifications* lets recipients (an email address or a webhook URL) choose which events they receive: a failed job, an overdue backup, a service that stopped or turned unhealthy, an available update, an expiring certificate and a new or changed high finding of the AI map; each event is reported once per occurrence and a webhook URL is never shown again after it is saved. *Mail Server* sets up the stack's outbound relay: the mail server behind it (host, connection security, port, login, write-only password, sender), a connection test that sends nothing, a test mail through the relay and the length of its queue. Saving is a queued job that runs the core's own `setup`; the relay itself needs the `smtp` profile ([Outbound mail](#outbound-mail), 1.6.0 or newer), and the page says so on an older core. |
+| **Settings** | The manager's own configuration in three tabs. *Manager*: the name and second line at the top of the sidebar, an uploaded logo, and the interval of the Host page's measurements. *Modules*: the one place that switches the optional modules (LocalAI with its accelerator variant, web search, the RAG system, voice, the mail relay and the knowledge map) on and off; it asks what `papaia-ctl setup` asks where an answer is missing, and switching one off asks whether to keep its data and settings, delete the data, or delete both (the module's name has to be typed to delete); for the knowledge map a separate choice, off by default, also deletes the operator files. *Overlay*: edits the customer [overlay](#configuration--render-lifecycle) files for LibreChat, LiteLLM, SearXNG and Chatterbox (the speech synthesis of [voice](#voice-local-speech)) with a syntax check while typing, the effective result as a diff and **Apply** as a queued job that recreates the services reading the file; the previous version of every file is kept (the latest 20) and restored from a *Versions* tab. Switching on the RAG system and the mail relay, deleting a module's data or settings and the effective-result diff need a core with the module operations and `render-preview` (1.6.0 or newer); an older core still switches LocalAI and web search and switches modules off, keeping everything. |
 | **Language** | The interface is in English and German. Every account chooses *Automatic*, *English* or *Deutsch* in the account menu at the bottom of the sidebar; the choice is stored on the server by the account's OIDC subject (`preferences.yaml`, part of a backup), so it is the same on every computer. *Automatic* follows the browser's language and falls back to `MANAGER_DEFAULT_LOCALE` in `src/manager/.env` (English unless set). Log lines, the audit log, job logs and the emails and webhooks of notifications stay in English. |
 
 ### Catalogues
@@ -1211,7 +1328,7 @@ guard the JSON API:
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface except Users — add-ons, catalogues, services, host, models, backup, mail, settings (modules and overlay), jobs, nodes and, while the `rag` profile is active, the RAG pages |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Every surface except Users — add-ons, catalogues, services, host, models, backup, mail, settings (modules and overlay), jobs, nodes, the AI map and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | The dashboard only; admins hold it implicitly |
 | `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page: accounts, roles and sessions of the realm. `manager-admin` alone is not enough |
 
@@ -1228,8 +1345,9 @@ the same thing inside the container as on the host — **path parity**:
 - `PAPAIA_WORKSPACE_DIR`, `PAPAIA_CONFIG_DIR` and `PAPAIA_BACKUP_DIR` are each mounted at
   their own host path, not remapped to `/workspace` or `/config`. `setup` stamps all three
   automatically.
-- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it on the
-  host. Discover it with:
+- `/var/run/docker.sock` is mounted, and `DOCKER_GID` must match the GID owning it inside
+  the container. `setup` stamps it: on Linux from the socket on the host, under Docker
+  Desktop on macOS as `0`. Check it with:
 
   ```bash
   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine \
@@ -1239,10 +1357,16 @@ the same thing inside the container as on the host — **path parity**:
 - The container runs as the host `UID`/`GID` so that files it writes into the config
   directory keep the ownership `setup` established.
 
-> **The `manager` profile therefore requires a Linux host.** Docker Desktop on Windows and
-> macOS does not preserve host-path parity across its VM boundary, so the mounts above
-> cannot be satisfied. Everything else in the stack runs on Docker Desktop as usual — leave
-> the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+> **The `manager` profile therefore runs on Linux hosts and on Docker Desktop for macOS.**
+> Docker Desktop on macOS shares `/Users` with its VM under the same path, so the workspace,
+> configuration and backup directories must live below `/Users` (the default). Docker
+> Desktop on Windows does not preserve host-path parity across its VM boundary; there,
+> leave the profile off with `--no-manager` and drive the lifecycle through `papaia-ctl`.
+>
+> On macOS, browsers check Keycloak's certificate against the login keychain and reach
+> Keycloak from the Mac itself. `setup` offers to trust the local CA there (or prints the
+> `security add-trusted-cert` command) and reports when `host.docker.internal` needs an
+> `/etc/hosts` entry.
 
 Granting a container access to the Docker socket is granting it root on the host. That is
 inherent to what the manager does, and the reason its access is role-gated and its
@@ -1578,8 +1702,11 @@ external OIDC provider, create the same objects there yourself.
 
 **First steps after the first start**
 
-1. Add an embedding model to LiteLLM. The core ships no models, so nothing can be embedded or
-   searched before that.
+1. Make the embedding model available in LiteLLM under the name in `RAG_EMBEDDINGS_MODEL`
+   (default `nomic-embed-text`). With LocalAI, activate its line in the LocalAI `models.txt`
+   ([LocalAI models in LiteLLM](#localai-models-in-litellm)); otherwise add a model in LiteLLM.
+   Nothing can be embedded or searched before that. `setup` leaves this step out when the
+   rendered LiteLLM configuration already lists the model.
 2. Give the people who run ingestion through the MCP tools the `qdrant-ingest-operator` realm
    role. Without it the ingester's MCP tools reject them. `qdrant-admin` is a break-glass role
    for the MCP server's access rules; both are included in `papaia-admin`.
@@ -1587,7 +1714,7 @@ external OIDC provider, create the same objects there yourself.
    connection `default` to the integrated Qdrant itself, and it is where collections and their
    access roles, the embedding of files and the ingest jobs, their runs and the credentials of
    remote sources are managed. The ingester has no web interface of its own.
-4. Without the `manager` profile (the manager runs on Linux hosts only) there is no interface:
+4. Without the `manager` profile (see [papaia-manager](#papaia-manager) for the hosts it runs on) there is no interface:
    edit the catalog files `jobs.yaml`, `connections.yaml` and `secrets.yaml` in
    `$PAPAIA_CONFIG_DIR/ai/rag/catalog` yourself, as the qdrant-ingest documentation describes.
    Sources of type `local` read `$PAPAIA_CONFIG_DIR/ai/rag/documents` unless `QI_LOCAL_MOUNT`
@@ -1671,6 +1798,129 @@ backup` includes it and `restore --only=module:smtp-relay` restores it. The pass
 configuration backup in plain text, like the other secrets. The design and its limits are in
 [ADR 0007](docs/adr/0007-outbound-mail-through-an-internal-relay.md).
 
+### LocalAI models in LiteLLM
+
+LiteLLM is LocalAI's only API client. While the `localai` profile is on, every render adds the
+LocalAI models to LiteLLM's `model_list`: a model is registered under its YAML `name` when a model
+YAML in `ai/localai/models/` points (`parameters.model`) at the file of an active line in
+`ai/localai/models.txt`. A YAML with `embeddings: true` is registered as an embedding model. The
+shipped list has every line commented out, so nothing is registered and downloaded until you
+activate lines.
+
+Change the list through an overlay copy, not the rendered file, which every render overwrites:
+
+```bash
+mkdir -p "$PAPAIA_CONFIG_DIR/overlay/ai/localai"
+cp src/ai/localai/models.txt "$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt"
+# uncomment e.g. the Qwen2.5-1.5B and nomic-embed-text lines, then
+tools/papaia-ctl start
+docker restart papaia-litellm-1   # the container name of your project
+```
+
+`start` renders the new `model_list`, but LiteLLM reads its configuration only when it starts,
+and a running LiteLLM is not recreated for a changed configuration file. Restart it after every
+change of the list (and after any other edit of the LiteLLM overlay), as above; until then it
+lists the models it had.
+
+The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
+`<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
+`$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` and its URL in the overlay `models.txt`. Only
+the `*.yaml` files at the top of that directory are used, as the init job copies nothing else;
+other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `context_size`,
+`threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
+An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
+
+LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
+copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. A key
+you change in `ai/localai/.env` reaches LiteLLM only on the next `setup`. The
+generated entries name only the variable (`os.environ/LOCALAI_API_KEY`), never the key. A request
+with this key has admin rights in LocalAI (it can install and delete models), so keep it out of
+other clients.
+
+A model downloads to `<file>.part` and is renamed when it is complete, so an interrupted
+download is fetched again on the next `start`.
+
+> **Upgrading:** if you registered a LocalAI model in the LiteLLM Admin UI under one of the
+> generated names (`store_model_in_db: true`), LiteLLM now has two deployments for that name and
+> splits the traffic between them. Delete the Admin UI entry.
+
+### Voice (local speech)
+
+The `voice` profile adds two internal services: `speaches`, a Whisper server for speech-to-text,
+and `chatterbox`, a Chatterbox Multilingual server for text-to-speech. Neither publishes a host
+port. LiteLLM fronts both as the models `voice-stt` and `voice-tts`, so any holder of a LiteLLM
+key can call `/v1/audio/transcriptions` and `/v1/audio/speech` on the LiteLLM endpoint — an
+automation, an agent, your own web app — with spend tracking attached, and LibreChat's speech
+panel goes through the same routes. Audio is processed on your host; nothing reaches a cloud
+service.
+
+What you get once it is on: a microphone button next to LibreChat's message box, spoken replies,
+and transcription of uploaded audio files. Defaults are tuned for German (`languageSTT: de-DE`);
+each user can change language, voice and engines under **Settings → Speech**. A semi-automatic
+voice conversation works with one keypress per turn (Shift+Alt+L starts the recording; it stops
+on silence, sends, and the reply plays back automatically). Spoken replies use the browser's own
+voice by default — the local TTS engine is wired up but **opt-in per user** (switch
+**Settings → Speech → Text-to-speech engine** to `External`), because on CPU it synthesizes
+slower than real time and LibreChat cuts off a playback stream that stalls 15 s. On a host with
+an NVIDIA or AMD GPU, install the accelerator image instead (`--voice-variant`, prompted during
+setup) — then the local voice is fast enough for live playback and worth making the per-account
+default. Calls through the `voice-tts` LiteLLM route are not affected by the playback timeout —
+generating audio files from an automation just takes its time.
+
+**Enable it** with `papaia-ctl setup`: the wizard asks whether to install the voice engines.
+Non-interactively:
+
+```bash
+tools/papaia-ctl setup -y --voice
+```
+
+**Requirements and first start.** The TTS model stays resident once loaded — plan roughly
+**6 GB of RAM on top** of the stack's baseline (the container is capped by `VOICE_TTS_MEM_LIMIT`,
+default 8g). On the first start the models are downloaded from huggingface.co into named volumes
+(~1.6 GB Whisper, installed by the one-shot `speaches-model-init` container; ~3.2 GB Chatterbox,
+fetched by the server itself — it answers requests only once that is done); later starts are
+offline. An interrupted download is resumed on the next start. For an air-gapped installation,
+run the first start on a connected network or copy a populated
+`speaches-hf-cache` / `chatterbox-hf-cache` volume over. On a CPU-only host, speech-to-text is
+fast enough for dictation; text-to-speech lags behind real time, which is why spoken replies
+default to the browser engine (see above). With `--voice-variant=nvidia` (CUDA) or `--voice-variant=hipblas`
+(ROCm) the TTS engine runs on the GPU through a generated override in
+`$PAPAIA_CONFIG_DIR/overrides/` — the same mechanism as the LocalAI accelerator images, with the
+same host prerequisites (driver plus, for NVIDIA, the Container Toolkit). Both engines process
+one request at a time; they are sized for a handful of users speaking occasionally, not for
+parallel transcription jobs.
+
+**The microphone needs a secure context.** Browsers only expose recording on HTTPS pages or on
+literally `localhost` — on `http://host.docker.internal:8000` or a plain-HTTP LAN address the
+microphone button reports a permission error. Use the HTTPS route of your reverse proxy (or
+`http://localhost:<port>` on the host itself).
+
+**Models and voices.** The transcription model (`deepdml/faster-whisper-large-v3-turbo-ct2`, MIT)
+is named twice: `VOICE_STT_MODEL` in `ai/voice/.env` tells the init container what to install,
+and the LiteLLM route sends the same id per request. Swapping the model (for example for a
+German fine-tune, or `Systran/faster-whisper-small` on tight memory) means: set
+`VOICE_STT_MODEL`, add a route for the new id under a **new** model name through the LiteLLM
+overlay (`$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml` — `model_list` entries merge
+additively, so an overlay entry reusing the name `voice-stt` would be load-balanced against
+the shipped route, not replace it), and point `speech.stt.openai.model` at the new name
+through the LibreChat overlay. The TTS server is configured through
+`ai/voice/chatterbox.yaml` (same overlay mechanism). The TTS engine clones whatever reference
+voice a request names — accent included — so the module ships two public-domain German
+audiobook voices (default `Karlsson.wav`, see `src/ai/voice/voices/README.md` for sources and
+how to add your own); the English samples inside the image remain selectable. The engine
+watermarks its audio output (Resemble Perth), which makes generated speech identifiable as such.
+
+**Operator note (GDPR).** Voice recordings are personal data. Recorded audio is transcribed and
+discarded, but the **transcripts become ordinary chat messages**: they are stored in LibreChat's
+MongoDB and indexed by Meilisearch like anything a user types. Add the voice feature to your
+records of processing activities and inform your users. Note also that the browser speech
+engines (`Browser` STT/TTS in the user settings) use whatever the browser provides — on many
+platforms that is a cloud service of the browser vendor, not a local engine.
+
+The engines' volumes hold only re-downloadable model caches; `papaia-ctl backup` includes them
+like every named volume. The design, the engine choice and its trade-offs are in
+[ADR 0011](docs/adr/0011-local-voice-as-an-optional-core-profile.md).
+
 ### GPU acceleration for LocalAI
 
 LocalAI is pinned to the CPU image by default. Upstream publishes one image per accelerator
@@ -1707,16 +1957,99 @@ like CPU ones. The image swap and the device passthrough live in a generated
 
 Two caveats worth knowing:
 
-- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in the model
-  YAMLs under `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+- **Intel:** upstream reports hangs with memory-mapped models. Set `mmap: false` in overlay
+  copies of the model YAMLs under `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/`.
 - **AMD:** cards ROCm does not target out of the box need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env` (both are pre-documented there, commented out).
 
+### Native LocalAI on Apple Silicon
+
+Docker Desktop's VM has no access to the Apple GPU, so LocalAI in its container runs on the CPU
+(in the default 8 GB VM it cannot even load a 7B model next to the stack). On an Apple Silicon
+Mac with Docker Desktop, LocalAI can run as a process on the Mac instead, on the GPU (Metal),
+with the same model list and the same [LiteLLM registration](#localai-models-in-litellm). The
+decision and the measurements are in
+[ADR 0012](docs/adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md).
+
+```bash
+tools/papaia-ctl setup -y --app-host=http://localhost --local-ai --localai-runtime=native
+tools/papaia-ctl start
+```
+
+Interactively, `setup` asks on such a Mac (default *native*). What changes with `native`:
+
+- No `localai` container runs and no LocalAI image is pulled. The init job still downloads
+  the models, into `<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>/models`.
+- `start` installs the LocalAI release that `src/ai/localai/docker-compose.yml` pins into
+  that directory (`bin/`), after checking it against the release's published checksum, and
+  writes `run-localai` next to it. After `docker compose up` it runs that script as a
+  launchd job of the logged-in user (a LaunchAgent,
+  `~/Library/LaunchAgents/de.fidonis.papaia.<COMPOSE_PROJECT_NAME>.localai.plist`) and waits
+  up to 60 s for `/readyz`. Nothing is left to start by hand, and LocalAI keeps running after
+  the terminal is closed. The first start downloads the Metal backend (internet access
+  needed) and can take longer than 60 s: `start` then says so, with the log path, and LocalAI
+  keeps starting in the background. After an upgrade that moves the pin, `start` installs the
+  new binary and restarts the job. LocalAI reads `LOCALAI_API_KEY` once, when it starts, so
+  `start` also restarts the job when the key changed (`setup --force`, a restore); it keeps
+  a sha256 fingerprint of the key in `run-localai.key-sha256` for that, never the key. A
+  restart that is due stays noted in `run-localai.restart-pending` until launchd has done
+  it, so a `start` that ends early (a failed `docker compose up`) does not lose it.
+- `stop` unloads and disables the job, so LocalAI stays off after a logout or a restart of
+  the Mac until the next `start`. launchd restarts LocalAI when it crashes (not after a clean
+  exit), at most every 10 s. `stop --clean-up --volumes --profiles=localai` also deletes
+  `models/` and `backends/`; `uninstall` removes the job, the plist, `run-localai` and
+  `bin/`, and `uninstall --clean-up` the whole LocalAI directory.
+- LocalAI writes its output to
+  `<PAPAIA_WORKSPACE_DIR>/localai/<COMPOSE_PROJECT_NAME>/logs/localai.log`.
+  `launchctl print gui/$(id -u)/de.fidonis.papaia.<COMPOSE_PROJECT_NAME>.localai` shows the
+  job's state, its process and its last exit code.
+- macOS may deny a launchd job access to `~/Documents`, `~/Desktop` and `~/Downloads`.
+  `setup` warns when the LocalAI directory or the configuration directory (the job reads the
+  key from `$PAPAIA_CONFIG_DIR/ai/localai/.env`) lies below one of them; keep the workspace
+  (the directory that holds the `papaia` checkout) and `--config-dir` elsewhere.
+- The first switch to `native` seeds `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt` with
+  Qwen2.5-7B-Instruct (Q5_K_M, 5.4 GB, about 58 tokens/s on an M4 Max) and `nomic-embed-text`.
+  Whether the 7B model runs without swapping on a 16 GB Mac next to the stack is not measured
+  yet; on a small Mac, activate the 1.5B line of the list instead. An existing overlay list is
+  left alone. The first download of 5.4 GB can take an hour or
+  more.
+- LocalAI listens on `127.0.0.1:<LOCALAI_EXT_PORT>` only, and its web UI is at
+  `http://localhost:<LOCALAI_EXT_PORT>` on the Mac. There is no login: the macOS build of
+  LocalAI has no user database, so `LOCALAI_API_KEY` (which has admin rights in LocalAI) is the
+  only protection. LiteLLM reaches it at `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`.
+- `doctor` reports the process and its launchd job as `localai_native`; `status` no longer
+  lists a missing `localai` container.
+- The models are not in the backup; `start` downloads them again after a restore.
+- `setup --localai-runtime=container` followed by `start` brings the container back and
+  removes the override. It works on any host, also on a Mac whose Docker Desktop is not
+  running and with a configuration restored on another machine. `setup` unloads and disables
+  the launchd job and removes its plist, so the job neither keeps `LOCALAI_EXT_PORT` nor comes
+  back at the next login; where `setup` cannot reach launchd (papaia-manager), the next
+  `start` on the Mac does it before the container starts. `bin/`, `run-localai` and the
+  models stay for a later switch back (`uninstall` removes them). The seeded model list
+  stays, and models in the old `localai-models` volume are not moved in either direction.
+- An interactive `setup` on a host that can never run the native process (no Apple Silicon or
+  another Docker engine) switches a stored `native` back to `container` and says why. On a Mac
+  whose Docker Desktop does not answer it asks instead, with `native` as the default. `setup -y`
+  keeps `native` in both cases and warns.
+
+When papaia-manager runs `start` or `stop` from its container, only the Compose part runs:
+the launchd job belongs to the user logged in on the Mac, and the manager skips it with a
+warning. Run `tools/papaia-ctl start` or `stop` on the Mac for LocalAI.
+
+**Other servers on the host.** Any OpenAI-compatible server on the Mac (LM Studio,
+`mlx_lm.server`, Ollama) can serve papAIa the same way, by hand: add an entry to the LiteLLM
+overlay with `api_base: http://host.docker.internal:<port>/v1`. Such a server is outside
+`papaia-ctl` (`start`, `stop`, `status`, `doctor`, `backup`) and outside the login; LiteLLM's
+keys and teams are its access control. On Docker Engine, where `host.docker.internal` does not
+resolve in the LiteLLM container, use the gateway address of `papaia-net`
+(`docker network inspect papaia-net --format '{{(index .IPAM.Config 0).Gateway}}'`).
+
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](docs/distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](docs/distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](docs/distributed.md#limits) that hold by design.
 
 papAIa can run on several machines: for example Nginx Proxy Manager, Keycloak, the mail relay
 and LiteLLM on an edge node in a DMZ, and LibreChat, the RAG system, LocalAI and papaia-manager

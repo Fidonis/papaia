@@ -1,0 +1,10 @@
+# Pinned fake accelerator images: generate_voice_gpu_override reads this
+# mapping back out of here, proving the pins are never persisted elsewhere.
+x-papaia-voice-tts-gpu-images:
+  nvidia: example/tts:v9.9.9-cu@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  hipblas: example/tts:v9.9.9-rocm@sha256:2222222222222222222222222222222222222222222222222222222222222222
+
+services:
+  chatterbox:
+    image: example/tts:v9.9.9-cpu
+    profiles: [voice]

@@ -131,14 +131,54 @@ def test_stamp_docker_gid_keeps_value_when_socket_absent(monkeypatch, linux_host
     assert tree[""]["DOCKER_GID"] == "999"
 
 
-def test_stamp_docker_gid_keeps_placeholder_on_macos(monkeypatch):
-    # Docker Desktop: the host path is a symlink owned by the user's group (staff, 20),
-    # not the socket inside Docker's VM that the manager container gets (#288).
+def test_stamp_docker_gid_keeps_placeholder_on_macos_without_docker_desktop(monkeypatch):
+    # The host path is a symlink owned by the user's group (staff, 20), not the socket
+    # inside the engine's VM that the manager container gets (#288).
     tree = {"": {"DOCKER_GID": "999"}}
     monkeypatch.setattr(envtree.sys, "platform", "darwin")
+    monkeypatch.setattr(envtree, "_is_docker_desktop", lambda: False)
     monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=20))
     envtree.stamp_docker_gid(tree)
     assert tree[""]["DOCKER_GID"] == "999"
+
+
+def test_stamp_docker_gid_stamps_root_group_on_docker_desktop_for_macos(monkeypatch):
+    # Docker Desktop hands containers a socket owned by root:root (#298).
+    tree = {"": {"DOCKER_GID": "999"}}
+    monkeypatch.setattr(envtree.sys, "platform", "darwin")
+    monkeypatch.setattr(envtree, "_is_docker_desktop", lambda: True)
+    monkeypatch.setattr(envtree.os, "stat", lambda p: types.SimpleNamespace(st_gid=20))
+    envtree.stamp_docker_gid(tree)
+    assert tree[""]["DOCKER_GID"] == "0"
+
+
+def test_stamp_docker_gid_keeps_operator_value_on_docker_desktop_for_macos(monkeypatch):
+    tree = {"": {"DOCKER_GID": "1234"}}
+    monkeypatch.setattr(envtree.sys, "platform", "darwin")
+    monkeypatch.setattr(envtree, "_is_docker_desktop", lambda: True)
+    envtree.stamp_docker_gid(tree)
+    assert tree[""]["DOCKER_GID"] == "1234"
+
+
+def test_is_docker_desktop_reads_the_engine_name(monkeypatch):
+    monkeypatch.setattr(envtree.shutil, "which", lambda name: "/usr/local/bin/docker")
+    monkeypatch.setattr(
+        envtree.subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="Docker Desktop\n"),
+    )
+    assert envtree._is_docker_desktop() is True
+    monkeypatch.setattr(
+        envtree.subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="Ubuntu 24.04 LTS\n"),
+    )
+    assert envtree._is_docker_desktop() is False
+
+
+def test_is_docker_desktop_without_docker_cli(monkeypatch):
+    monkeypatch.setattr(envtree.shutil, "which", lambda name: None)
+    assert envtree._is_docker_desktop() is False
 
 
 def test_init_seeds_config_dir_without_touching_repo_tree(repo_root, config_dir):

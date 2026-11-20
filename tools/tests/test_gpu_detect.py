@@ -122,7 +122,7 @@ def test_nvidia_detected_from_banner_cuda_version(monkeypatch):
             query="NVIDIA GeForce RTX 4090, 580.65.06\n",
         ),
     )
-    info = gpu_detect._detect_nvidia()
+    info, _ = gpu_detect._detect_nvidia()
     assert info.variant == gpu_detect.NVIDIA_CUDA_13
     assert "RTX 4090" in info.label
     assert info.warning == ""
@@ -138,7 +138,7 @@ def test_nvidia_falls_back_to_cuda_12_on_older_driver(monkeypatch):
             query="NVIDIA A100, 550.54.14\n",
         ),
     )
-    assert gpu_detect._detect_nvidia().variant == gpu_detect.NVIDIA_CUDA_12
+    assert gpu_detect._detect_nvidia()[0].variant == gpu_detect.NVIDIA_CUDA_12
 
 
 def test_nvidia_derives_cuda_major_from_driver_when_banner_is_unusable(monkeypatch):
@@ -146,7 +146,7 @@ def test_nvidia_derives_cuda_major_from_driver_when_banner_is_unusable(monkeypat
     monkeypatch.setattr(
         gpu_detect, "_run", _nvidia_probe(banner="unparseable", query="NVIDIA L40S, 580.82.07\n")
     )
-    assert gpu_detect._detect_nvidia().variant == gpu_detect.NVIDIA_CUDA_13
+    assert gpu_detect._detect_nvidia()[0].variant == gpu_detect.NVIDIA_CUDA_13
 
 
 def test_nvidia_future_cuda_major_maps_to_the_newest_published_image(monkeypatch):
@@ -156,7 +156,7 @@ def test_nvidia_future_cuda_major_maps_to_the_newest_published_image(monkeypatch
         "_run",
         _nvidia_probe(banner="CUDA Version: 14.0", query="NVIDIA Future, 999.0\n"),
     )
-    info = gpu_detect._detect_nvidia()
+    info, _ = gpu_detect._detect_nvidia()
     assert info.variant == gpu_detect.NVIDIA_CUDA_13
     assert "CUDA 13" in info.label
 
@@ -168,13 +168,13 @@ def test_nvidia_driver_too_old_is_not_offered(monkeypatch):
         "_run",
         _nvidia_probe(banner="no cuda line here", query="NVIDIA GTX 970, 470.10\n"),
     )
-    info = gpu_detect._detect_nvidia()
+    info, _ = gpu_detect._detect_nvidia()
     assert not info.available
     assert "CUDA 12" in info.label
 
 
 def test_nvidia_absent_without_nvidia_smi(no_nvidia):
-    info = gpu_detect._detect_nvidia()
+    info, _ = gpu_detect._detect_nvidia()
     assert not info.available
     assert info.label == "no NVIDIA GPU detected"
 
@@ -182,7 +182,7 @@ def test_nvidia_absent_without_nvidia_smi(no_nvidia):
 def test_nvidia_smi_present_but_reporting_nothing(monkeypatch):
     monkeypatch.setattr(gpu_detect.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(gpu_detect, "_run", lambda *_a, **_k: "")
-    assert not gpu_detect._detect_nvidia().available
+    assert not gpu_detect._detect_nvidia()[0].available
 
 
 def test_nvidia_warns_when_container_runtime_is_missing(monkeypatch):
@@ -200,7 +200,7 @@ def test_nvidia_warns_when_container_runtime_is_missing(monkeypatch):
         return "NVIDIA RTX 4090, 580.65.06\n"
 
     monkeypatch.setattr(gpu_detect, "_run", _run)
-    info = gpu_detect._detect_nvidia()
+    info, _ = gpu_detect._detect_nvidia()
     # Still selectable — the operator may install the toolkit afterwards.
     assert info.variant == gpu_detect.NVIDIA_CUDA_13
     assert "Container Toolkit" in info.warning
@@ -304,3 +304,65 @@ def test_detection_vars_stay_single_line(tmp_path, no_nvidia):
     for key, value in out.items():
         assert "\n" not in value, key
         assert "=" not in key
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Voice TTS recommendation (the CUDA floor of the nvidia image)
+
+
+def _nvidia_host(monkeypatch, banner: str, driver: str = "550.120") -> None:
+    monkeypatch.setattr(gpu_detect.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        gpu_detect,
+        "_run",
+        _nvidia_probe(banner=banner, query=f"NVIDIA GeForce RTX 3090, {driver}\n"),
+    )
+
+
+def test_voice_recommends_nvidia_from_cuda_12_8(tmp_path, monkeypatch):
+    _nvidia_host(monkeypatch, "CUDA Version: 12.8")
+    detection = gpu_detect.detect(_fake_drm(tmp_path), _fake_dev(tmp_path))
+    assert detection.voice_recommended == "nvidia"
+    assert detection.voice_nvidia_warning == ""
+
+
+def test_voice_stays_on_cpu_below_the_cuda_floor(tmp_path, monkeypatch):
+    # A GeForce driver at CUDA 12.4 runs LocalAI's cu12 image, but the voice
+    # cu128 image would be refused by the NVIDIA runtime.
+    _nvidia_host(monkeypatch, "CUDA Version: 12.4")
+    detection = gpu_detect.detect(_fake_drm(tmp_path), _fake_dev(tmp_path))
+    assert detection.recommended == gpu_detect.NVIDIA_CUDA_12
+    assert detection.voice_recommended == gpu_detect.CPU
+    assert "12.8" in detection.voice_nvidia_warning
+
+
+def test_voice_trusts_a_580_branch_driver_without_a_banner(tmp_path, monkeypatch):
+    # Branch 580+ proves CUDA 13, which clears the floor without a banner.
+    _nvidia_host(monkeypatch, "unparseable", driver="580.82.07")
+    detection = gpu_detect.detect(_fake_drm(tmp_path), _fake_dev(tmp_path))
+    assert detection.voice_recommended == "nvidia"
+
+
+def test_voice_is_conservative_when_the_cuda_minor_is_unknown(tmp_path, monkeypatch):
+    # A 12-branch driver without a readable banner may sit anywhere in 12.x,
+    # so the floor cannot be proven and the recommendation stays on the CPU.
+    _nvidia_host(monkeypatch, "unparseable", driver="550.120")
+    detection = gpu_detect.detect(_fake_drm(tmp_path), _fake_dev(tmp_path))
+    assert detection.recommended == gpu_detect.NVIDIA_CUDA_12
+    assert detection.voice_recommended == gpu_detect.CPU
+    assert "could not be read" in detection.voice_nvidia_warning
+
+
+def test_voice_recommends_hipblas_on_a_rocm_host(tmp_path, no_nvidia):
+    detection = gpu_detect.detect(
+        _fake_drm(tmp_path, gpu_detect._VENDOR_AMD),
+        _fake_dev(tmp_path, "dri/renderD128", "kfd"),
+    )
+    assert detection.voice_recommended == gpu_detect.HIPBLAS
+
+
+def test_detection_vars_carry_the_voice_recommendation(tmp_path, monkeypatch):
+    _nvidia_host(monkeypatch, "CUDA Version: 12.4")
+    out = gpu_detect.detection_vars(gpu_detect.detect(_fake_drm(tmp_path), _fake_dev(tmp_path)))
+    assert out["VOICE_VARIANT_RECOMMENDED"] == gpu_detect.CPU
+    assert "12.8" in out["VOICE_VARIANT_NVIDIA_WARN"]

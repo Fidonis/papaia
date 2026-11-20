@@ -131,9 +131,10 @@ The mappers that produce those audiences ship with the addon, not with the core:
 addon's `integration/keycloak/` fragments contribute both its own client JSON and an
 audience mapper added to the **`librechat`** client. `papaia-ctl addon install`
 registers them additively; the core realm template stays free of addon references.
-The one exception is the RAG system (profile `rag`), a core module: the realm
-template carries its audience mappers `mcp-qdrant-audience` and
-`mcp-qdrant-ingest-audience` on the `librechat` client.
+The exceptions are the core modules: the realm template carries the audience
+mappers of the RAG system (profile `rag`: `mcp-qdrant-audience`,
+`mcp-qdrant-ingest-audience`) and of the knowledge map (profile
+`knowledge-map`: `mcp-knowledge-map-audience`) on the `librechat` client.
 
 Where the MCP server is not a login client, the addon registers it as a resource
 server (no flows, no secret) so that the `included.client.audience` reference in the
@@ -191,7 +192,10 @@ are synced into an already-imported realm automatically on every
 already exists is left as it is (the `qdrant-ingest-ui` client of an older install is
 no longer used and can be deleted). The sync also grants
 `papaia-admin` to every account that already held the old flat `admin` role,
-without removing `admin` itself. Run `papaia-ctl keycloak-role-sync` directly
+without removing `admin` itself. The realm's `Strict-Transport-Security` header is
+set to `max-age=0` while plain-http services share the auth hostname, and back to
+Keycloak's default once they no longer do; a value set by hand is left alone (see
+`docs/configuration.md`). Run `papaia-ctl keycloak-role-sync` directly
 to retry if it's reported as failed (e.g. Keycloak wasn't healthy yet).
 
 **Mail server.** The template carries no `smtpServer`. While the `smtp` profile is on and
@@ -227,18 +231,20 @@ OIDC provider this does not apply.
 | `admin` | `admin` | papaia-admin, user, localai-access |
 | `testuser` | `testuser` | user, finance, librechat-user (no `localai-access` — cannot log in to LocalAI via SSO) |
 
-### Linux Host Note
+### Host Note
 
 `host.docker.internal` is used so that both the browser and Docker containers reach
 Keycloak at the same URL, keeping the OIDC `iss` claim consistent.
 
-On **Linux**, add the entry manually before starting:
+On **Linux** and **macOS**, add the entry manually before starting. Docker Desktop on
+macOS resolves the name inside containers but not on the Mac itself, where the browser
+runs; `setup` prints this command there when the entry is missing:
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 ```
 
-On macOS and Windows (Docker Desktop) it resolves out-of-the-box.
+On Windows, Docker Desktop adds the entry itself.
 
 ---
 
@@ -321,6 +327,13 @@ settings mirror the bundled realm (`src/infra/keycloak/realm-import/papaia-realm
 
 All clients need a **realm-roles protocol mapper** (type: User Realm Role, claim name `roles`,
 multivalued, included in ID token, Access token, and userinfo).
+
+Active MCP profiles additionally need their **resource-server clients** (no
+login flows) plus an **audience mapper** for each on the `librechat` client's
+access tokens, mirroring the bundled realm: `mcp-qdrant` and
+`mcp-qdrant-ingest` for the `rag` profile, `mcp-knowledge-map` for the
+`knowledge-map` profile. `papaia-ctl setup` prints the profile-specific
+checklist.
 
 The `oauth2-proxy` client additionally needs a **second** copy of that same
 mapper with claim name `groups` instead of `roles` — oauth2-proxy's generic

@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.8.0 |
-| **Date** | 2026-11-07 |
-| **Status** | Active — describes the 1.8.0 release as built |
+| **Version** | 1.9.0 |
+| **Date** | 2026-11-20 |
+| **Status** | Active — describes the 1.9.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -100,6 +100,7 @@ Only what every instance needs as a generic platform stays in the Core:
 | Web search | SearXNG, Firecrawl, the Firecrawl MCP bridge and a reranker (opt-in, internal-only) — a generic capability of the chat layer, not an application |
 | Mail | `smtp-relay`, a Postfix relay (opt-in, profile `smtp`) that holds the mail server's credentials once; Keycloak and the add-ons that attach it send through it without any — see [ADR 0007](adr/0007-outbound-mail-through-an-internal-relay.md) |
 | RAG | Qdrant, `qdrant-mcp-rbac` and `qdrant-ingest` (opt-in, profile `rag`) — retrieval is a capability of the chat layer that an installation either wants or does not; see [ADR 0004](adr/0004-rag-system-as-optional-core-profile.md) |
+| Knowledge map | `knowledge-map-mcp` (opt-in, profile `knowledge-map`) — a role-trimmed MCP directory of the installation's knowledge sources, rendered from the `knowledge:` declarations of active add-ons and core modules; see [ADR 0013](adr/0013-knowledge-map-as-optional-core-profile.md) / [ADR 0014](adr/0014-knowledge-manifest-key-and-map-format.md) / [ADR 0016](adr/0016-knowledge-map-governance-metadata.md) (governance metadata) and [docs/knowledge-map.md](knowledge-map.md) |
 
 The Core's integration points are hollowed out to **empty, app-agnostic intake
 points** — no hard-wired application references. The Core is **self-sufficient**:
@@ -157,6 +158,8 @@ papaia-addons/<name>/
 ├── integration/             # The 4 seams as fragments (all optional)
 │   ├── keycloak/            # OIDC client + audience mapper JSONs
 │   ├── librechat/           # mcpServers + allowedDomains fragment (YAML)
+│   ├── ai/librechat/agents/  # optional: LibreChat agents (addon_api 4, Seam 3)
+│   ├── ai/librechat/prompts/ # optional: LibreChat prompts (addon_api 4, Seam 3)
 │   └── nginx/               # Optional ingress snippet
 └── README.md                # Self-contained manual integration path (public-clean)
 ```
@@ -176,6 +179,10 @@ requires:
   addon_api: 1                     # Contract generation the add-on is built against
                                    # (integer or list, e.g. [1, 2]);
                                    # checked against the Core's ADDON_API window
+  addons:                          # optional (addon_api 4): add-ons this one builds on;
+    - <name>                       # each must be installed and active, a mapping adds
+    - name: <name>                 # a SemVer range against that add-on's `version`
+      version: ">=<semver>"
 papaia_compat: ">=<semver>"        # Fallback: SemVer range against the Core version
 description: "<description>"
 
@@ -205,6 +212,12 @@ networks:
   attach: [nginx-proxy-manager, librechat]
                                    # Core containers to attach to the app network;
                                    # validated against the Core Compose service names
+  join_addons:                     # optional (addon_api 4): services of this add-on
+    - addon: <required add-on>     # that join the app network of an add-on listed
+      services: [<service>]        # in requires.addons; the others stay isolated.
+                                   # Written to overrides/addons/docker-compose.
+                                   # <name>-join.override.yml. Single host only: a
+                                   # network cannot span two nodes.
 
 local_ca_env:                      # optional: env vars pointing at the local
   <service>: [SSL_CERT_FILE]       # Keycloak CA certificate — cleared via override
@@ -212,7 +225,11 @@ local_ca_env:                      # optional: env vars pointing at the local
 
 integration:
   keycloak:
-    clients: [integration/keycloak/<client>.json]
+    clients: [integration/keycloak/<client>.json]  # imported by hand, unless named below
+    client_secrets:                    # optional (addon_api 4): clients `start` creates
+      integration/keycloak/<client>.json:
+        secret_env: KC_<CLIENT>_CLIENT_SECRET    # GENERATE_SECRET in .env.example
+        root_url_env: <APP>_SERVER               # optional, replaces rootUrl
     client_mappers:
       librechat: [integration/keycloak/librechat-audience-mapper.json]
   librechat: integration/librechat/<name>.yaml   # optional
@@ -229,17 +246,59 @@ env_prompts:                       # optional: metadata per .env.example key
     pattern: "^[a-z]+$"           # regex for type: text (HTML + server)
     default: "http://localhost"    # static fallback value
     default_from_core: ENV_KEY     # value from the Core .env (overrides default)
+  OTHER_API_KEY:
+    secret: true
+    default_from_addon: "other-addon:OTHER_API_KEY"
+                                   # addon_api 4: value from the config bundle of an
+                                   # add-on in requires.addons that lists the key under
+                                   # `exports`; filled at install, never echoed. Sticky
+                                   # like every bundle value: after the other add-on
+                                   # rotates it, set the new value in this add-on's
+                                   # $PAPAIA_CONFIG_DIR/addons/<name>/.env and run
+                                   # `papaia-ctl addon start <name>`. Installing again
+                                   # keeps the old value; `addon uninstall` + `install`
+                                   # also regenerates this add-on's own GENERATE_*
+                                   # secrets while its volumes stay.
   AUTO_SECRET:
     secret: true                   # required for GENERATE_* values without _KEY suffix
     label:  "Database password"
+
+exports: [OTHER_API_KEY]           # optional (addon_api 4): bundle .env keys other
+                                   # add-ons may read via default_from_addon; no other
+                                   # key of this add-on is ever read by another add-on
 
 env_replace_secrets:               # optional: keys replaced by papaia-ctl
   OIDC_CLIENT_SECRET:              # after the Keycloak import
     hint: "Copy from Keycloak"     # hint is shown in the configuration overview
 
+actions:                           # optional (addon_api 4): maintenance actions,
+  reset:                           # run by `papaia-ctl addon run <name> reset` as
+    service: maintenance           # `docker compose run --rm <service> <args>` in the
+    args: ["--reset-existing"]     # add-on's project; fixed arguments only. Give the
+    description: "Restore the initial data"  # service a compose profile (e.g.
+                                   # `profiles: [actions]`) so `addon start` skips it.
+    destructive: true              # optional: callers (papaia-manager) confirm first
+
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
   - "Set MW_SERVER in the add-on .env when the wiki is not on the default URL."
+
+knowledge:                         # optional (addon_api 6): the knowledge sources
+  sources:                         # this add-on contributes to the knowledge-map
+    - id: <name>.<source>          # profile — see ADR 0014/0015 and
+      system: "<human name>"       # docs/knowledge-map.md for the full field
+      coverage: "<what is here>"   # reference. Rendered only while the
+      not_covered:                 # knowledge-map profile is active; older
+        - { what: "<content class>", instead: <other-source-id> }  # cores ignore it.
+      example_queries: ["..."]
+      required_roles: [user]
+      access:                      # one entry per way to reach the source
+        - { via: mcp, target: <name>, key_tools: [...], best_for: "..." }
+        - { via: rag, target: Qdrant, collection: <name>, best_for: "..." }
+      governance_proposal:         # optional suggestion, never effective on its own;
+        classification: internal   # the operator decides in governance.yaml (ADR 0016)
+        personal_data: ordinary
+        data_subjects: [employees]
 ```
 
 #### `.env.example` value markers
@@ -281,7 +340,12 @@ Only values that differ from the `.env.example` literal are written to the confi
 >    the contract does not lock the add-on out.
 >
 > In addition, all `networks.attach` entries are structurally validated against
-> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Policy:
+> the Core Compose service names; an unknown name is `INCOMPATIBLE`. Each
+> `requires.addons` entry must name an add-on that is active in `deployment.yaml`,
+> and its manifest `version` must satisfy the entry's range; a missing, inactive
+> or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Each
+> `networks.join_addons` entry must name an add-on from `requires.addons` and
+> list at least one service; anything else is a malformed manifest. Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
@@ -399,12 +463,83 @@ idempotently** in the Keycloak realm (via the Keycloak Admin REST API or a
 bootstrap script), including audience mappers for the MCP token flow. Base:
 the existing idempotent Keycloak client sync in `papaia/src/infra/keycloak/bootstrap.sh`.
 
+**Managed clients (addon_api 4).** A client listed under `clients` and named
+under `client_secrets` with its `secret_env` is created without the Admin UI:
+`addon install`
+generates the secret like any `GENERATE_SECRET` value, and `papaia-ctl start`
+(the `keycloak-role-sync` step after `docker compose up`), `papaia-ctl addon
+start <name>` and `papaia-ctl addon upgrade <name>` create the client from its
+export when the realm lacks it, with that secret and, when `root_url_env` names
+a set key, that root URL. An existing client only gets its secret aligned with
+the add-on `.env`, as core clients do, so a secret changed there takes effect on
+the next start. Nothing else about an existing client is changed. A secret that
+is still a placeholder in the add-on `.env` (`GENERATE_*`, `REPLACE_WITH_*`,
+`CHANGE_ME`, empty), as an install from before the add-on named its client
+there carries, is generated and written to the `.env` before the `.env` reaches
+the add-on's checkout, so the add-on's containers start with the value the
+client gets. `addon start` and `addon upgrade` wait only a few seconds for
+Keycloak; when it is not up, they say so and `start` or `papaia-ctl
+keycloak-role-sync` creates the client later. Within `start --addons`, the
+add-ons start before Keycloak may be up, so the clients are left to the
+`keycloak-role-sync` step that follows. Clients not named under
+`client_secrets` keep the manual import, and with `auth_provider=external_oidc`
+nothing is created. A core without this step ignores `client_secrets` and shows
+the manual import for the same clients, so an add-on can use it without raising
+`addon_api`.
+
+In a distributed installation, `keycloak-role-sync` runs on Keycloak's node
+with that node's bundle, which carries only the add-ons placed on that node.
+The clients of add-ons placed on other nodes are therefore not created by
+`start`; until that is supported, import them by hand as before.
+
 ### Seam 3 — LibreChat-MCP
 
 The `mcpServers` and `allowedDomains` fragment from `integration/librechat/`
 is **merged at render time** into the effective `librechat.yaml` in the config
 directory. Render process: base template + sum of active add-on fragments +
 customer overlay.
+
+**Agents and prompts (addon_api 4).** An add-on may ship LibreChat agents and
+prompts in the same formats as `LIBRECHAT_AGENTS_DIR` / `LIBRECHAT_PROMPTS_DIR`
+(`src/ai/librechat/agent.yaml.example`, `prompt.md.example`):
+
+```
+<addon>/integration/ai/librechat/agents/<file>.yaml
+<addon>/integration/ai/librechat/prompts/<file>.md
+```
+
+Every render copies the files of the active add-ons to
+`$PAPAIA_CONFIG_DIR/ai/librechat/addon-agents/` and `addon-prompts/` as
+`<addon>__<file>` and writes `overrides/docker-compose.librechat-addons.override.yml`.
+That override mounts both directories into LibreChat and labels the service with a
+hash of their content, so the next `papaia-ctl start` recreates LibreChat whenever
+the content changes, the add-on is removed included. On start, `agents-init.js` and
+`prompts-init.js` upsert the files and store them with `papaia_managed_by: <addon>`:
+
+- **Tombstones:** An agent or prompt whose add-on no longer provides it is deleted,
+  together with its access entries and project links. Agents and prompts created in
+  the UI or from the operator directories are never touched.
+- **Validation at render:** An agent that names an MCP server the rendered
+  `librechat.yaml` does not define is skipped with a warning, because it would
+  appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
+  `mcpServers` is not a list of server names; the rest of the render goes on.
+- **Tools:** LibreChat equips a stored agent from its `tools` list alone;
+  `mcpServers` adds no tools by itself. An empty `tools` next to `mcpServers`
+  therefore means every tool of those servers: the wildcard key of each server
+  (`sys__all__sys_mcp_<server>`) is stored for it. A non-empty list is stored as
+  written, so an agent can carry single tools (`<tool>_mcp_<server>`), which
+  keeps the tool prompt small for small local models.
+- **Operator files win:** An agent in `LIBRECHAT_AGENTS_DIR` with the id of an
+  add-on agent replaces it: the add-on file is skipped with a warning, and the
+  stored agent loses its add-on mark, so removing the add-on keeps it. Operator
+  prompts never take over an add-on prompt of the same name.
+- **Overwritten edits:** Changes made in the UI to an add-on agent or prompt are
+  overwritten on the next start.
+- **Ids:** Agent ids are stored with the `agent_` prefix, so links use
+  `?agent_id=agent_<id>`. Add-on prompts are keyed by add-on and `command`.
+- **Known limitation:** A distributed installation does not ship the override or
+  the two directories to a node bundle, so add-on agents and prompts are not
+  provisioned there (Fidonis/papaia#368).
 
 ### Seam 4 — Ingress (optional)
 
@@ -438,7 +573,7 @@ No Core changes required.
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
-| `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
+| `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), the native LocalAI of a Mac (`localai_native`), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
 | `papaia-ctl addon components [<name>] [--json]` | Read-only. List the software each registered add-on bundles (the manifest's `components`: name, version, role, image variable), with the tag the add-on's `.env` pins instead of the catalog's marked as overridden. |
 | `papaia-ctl addon check [--target-core=PATH]` | Evaluate all active add-ons against the current — or a candidate — Core and print OK / INCOMPATIBLE / UNKNOWN. Exit 2 if any are incompatible. |
@@ -585,9 +720,9 @@ directory name above is a convention, not a requirement. What matters is the
 
 ### Distributed installations
 
-> **Experimental.** The distributed mode has not yet been checked on real machines. Until
-> the [two-node validation](distributed-validation.md) is recorded, use it to evaluate,
-> not in production. A single-host installation is not affected.
+> The distributed mode has been validated by hand on a two-node split with a firewall
+> between the nodes; the [two-node validation](distributed-validation.md) describes the run that is recorded
+> on its tracking issue. Mind the [limits](distributed.md#limits) that hold by design.
 
 By default an installation is one host. A distributed installation spreads the core services
 over several machines (nodes), described by the `topology` block of `deployment.yaml` (§12,
@@ -706,6 +841,12 @@ posture:
 - **Local-first inference**: LocalAI as the default backend via LiteLLM; external
   LLM APIs are **opt-in** and centrally disableable at exactly one point (LiteLLM)
   → "nothing leaves the building" is enforceable and auditable (one egress point).
+  On an Apple Silicon Mac, LocalAI can run as a host process on the Apple GPU instead of a
+  container ([ADR 0012](adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md));
+  it is still reached only through LiteLLM.
+  The optional voice engines (profile `voice`) process audio locally and sit behind
+  the same point; their one outbound exception is the first-start model download
+  from huggingface.co (telemetry disabled), documented in the README.
 - **Authorization at the data edge, not only in the UI**: MCP servers validate the
   Keycloak bearer token + audience and scope **every** request:
   - `mcp-qdrant-rbac` → Qdrant JWT per collection ACL (role-scoped retrieval)
@@ -989,11 +1130,14 @@ papaia-manager:
   group_add: ["${DOCKER_GID}"]                           # access to docker.sock
 ```
 
-`DOCKER_GID` must match the GID owning `/var/run/docker.sock` on the host; the
-container itself runs as a non-root user.
+`DOCKER_GID` must match the GID owning `/var/run/docker.sock` inside the container;
+`setup` reads it from the host socket on Linux and stamps `0` under Docker Desktop
+on macOS, whose socket proxy is owned by root. The container itself runs as a
+non-root user.
 
-Path parity is the reason the `manager` profile is **Linux-only**: Docker Desktop
-on Windows and macOS cannot present a host path unchanged inside the container, so
+Path parity decides where the `manager` profile runs: on Linux hosts, and on Docker
+Desktop for macOS, which shares `/Users` with its VM under the same path. Docker
+Desktop on Windows cannot present a host path unchanged inside the container, so
 the mounts above cannot be satisfied there. Every other profile is unaffected —
 `--no-manager` leaves an otherwise identical stack.
 
@@ -1050,7 +1194,7 @@ reads from the same place.
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, backup, mail, settings (modules and overlay) and, while the `rag` profile is active, the RAG pages |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, models, backup, mail, settings (modules and overlay), nodes, the AI map and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 | `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page and `/api/v1/users`, `/api/v1/roles`: the accounts, their roles and sessions, and the realm's roles themselves. A tier above the admin role: `manager-admin` alone is not enough |
 
@@ -1102,6 +1246,21 @@ fails the add-on stays active. It is refused while the add-on's `docker-compose.
 a core before 1.7.0 aims its Compose call at the core project then (see the add-on lifecycle table
 above), so a manager on such a core could take its own stack down.
 
+### Add-on requirements and maintenance actions
+
+The manager reads `requires.addons` and `actions` from the manifest itself and leaves the decision
+to `papaia-ctl`. Each required add-on is shown with its state (active, inactive, missing, too old,
+or unchecked when a version or range cannot be read), and *Install* is disabled while one is unmet,
+unless the compatibility mode is `warn`, where `papaia-ctl` installs anyway. The other direction,
+the active add-ons that require an add-on, is shown as *Required by*; while there is one, *Remove*
+and *Uninstall* answer 409 in every compatibility mode, and the queued job checks again before it
+takes anything down, since an install queued ahead can add a dependent. A declared maintenance
+action is a button that queues exactly `papaia-ctl addon run <add-on> <action>`: the request
+carries the action's name only, never a command or an argument, `run` is not one of the generic
+verbs, and an undeclared action or an inactive add-on is a 404. Destructive actions ask for a
+confirmation; on a distributed installation actions are refused, as `addon run` is single-host.
+Both need a core with these manifest fields (1.9.0 or newer).
+
 ### Long-running operations
 
 Installs, upgrades and lifecycle verbs shell out to `papaia-ctl` and can take minutes
@@ -1146,20 +1305,24 @@ Settings has three tabs: *Manager* (the manager's own configuration), *Modules* 
 The last two keep no second source of truth; both drive the core.
 
 **Modules.** The tab is the one place in the manager that switches the optional modules
-(LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off.
+(LocalAI with its accelerator variant, web search, the RAG system, voice, the mail relay and the
+knowledge map) on and off.
 It stores the choice with the core's own `setup`, so validation, sticky values and generated
 secrets stay in one implementation, and starts the module's profile. Which volumes a module owns,
 what its settings consist of and which questions `setup` still needs answered when the module is
 switched on (the public URL of LocalAI and of Qdrant, the relay's mail server) come from the core's
 read-only `module-info`; deleting a module's data (its volumes) and/or its settings is the core's
 `module-purge`, offered only for a module that is switched off, with the module's name typed back
-as confirmation. Both are internal commands of the core's Python entry point, not `papaia-ctl`
+as confirmation. The files an operator wrote by hand for a module (the knowledge map's
+declarations, governance records and gold set) are neither data nor settings: they go only when
+`module-purge --operator-files` asks for them, a separate choice that is off by default. Both are internal commands of the core's Python entry point, not `papaia-ctl`
 verbs, and the manager passes them typed options only: one module, never `--force`, `--env` or any
 other part of the configuration. A core without them (before 1.6.0) still switches LocalAI and web
 search and switches modules off keeping everything.
 
-**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM
-and SearXNG ([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
+**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM,
+SearXNG and Chatterbox, the speech synthesis of the `voice` profile
+([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
 draft is the core's `render-preview`: the draft merged in memory, nothing written. *Apply* saves
 the file and recreates the services that read it as a queued job. Before every Apply, Discard and
 roll-back the previous file is copied to `$PAPAIA_CONFIG_DIR/manager/overlay-history/` (the latest
@@ -1176,7 +1339,8 @@ process in its environment only, never in an argument or the log. While the rela
 recreated and the Keycloak realm gets it as its mail server (`papaia-ctl keycloak-role-sync`), which
 is what lets the Users page offer a mailed link. *Notifications* belongs to the manager: recipients
 (an email address or a webhook URL) choose which events they receive — a failed job, an overdue
-backup, a service that stopped or turned unhealthy, an available update, an expiring certificate.
+backup, a service that stopped or turned unhealthy, an available update, an expiring certificate,
+a new or changed high finding of the AI map that no exception covers.
 The checks run on an interval and after every job, each event is reported once per occurrence
 (`notifications-state.json` keeps what was reported), email goes through the relay and a webhook
 gets a JSON `POST`. A notification carries no job log and no error text.
@@ -1228,8 +1392,8 @@ The manager does not run ingestion itself. It writes the ingester's own catalog 
 compare-and-swap write, asks it to reload, checks that it serves what was written and starts
 and follows runs through its REST API; the ingester mounts the directory read-only. Files for
 the Embedding page are staged in `$PAPAIA_CONFIG_DIR/ai/rag/documents/uploads/` and deleted
-after a run that succeeded without a failed document. Without the `manager` profile, which
-runs on Linux hosts only, there is no interface and the catalog files are edited by hand.
+after a run that succeeded without a failed document. Without the `manager` profile there
+is no interface and the catalog files are edited by hand.
 
 ### Models and usage
 
@@ -1265,6 +1429,23 @@ The core's `upgrade.lock` and each node's `state.json` drive a banner and the sa
 core would make. Switching a module off keeps its data, because the core does not delete volumes
 across nodes. Without a topology in `deployment.yaml` none of this runs, and a single host
 behaves as before.
+
+### AI map
+
+The *AI map* page (`/knowledge-map`, administrators only) is the management view of the
+[knowledge map](knowledge-map.md) ([ADR 0013](adr/0013-knowledge-map-as-optional-core-profile.md)).
+It computes no rule of its own: the rendered map and `lints.yaml` come from the configuration
+directory, as the core's render wrote them, and the server's own view, usage, gold-set runs and
+mined refinements from the map server's admin API at `KNOWLEDGE_MAP_URL`
+(`http://knowledge-map-mcp:8200` on the stack network) with the bearer `KM_ADMIN_TOKEN`, read
+from `$PAPAIA_CONFIG_DIR/ai/knowledge-map/.env` when a request needs it. The only check it adds
+is a live comparison of the model tiers against LiteLLM (findings with `origin: manager`). Every
+change, an entry, an override of a declared entry, an operator file or a governance record under
+`overlay/knowledge-map/`, is a queued job that checks the file, writes it, renders the map and
+puts the previous file back when the render refuses it. A routing test or an entry probe asks
+the map server without recording anything. High findings that no exception covers feed the
+notifications. The module itself is switched in the Modules tab; deleting its operator files is
+the separate `module-purge --operator-files` choice described above.
 
 ---
 
