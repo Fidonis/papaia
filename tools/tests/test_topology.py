@@ -3,6 +3,7 @@ the per-node bundles a render projects out of the config tree."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import subprocess
@@ -308,6 +309,8 @@ def test_one_node_is_not_distributed():
         (Node("edge", address="10.0.1.10", ssh_host="-oProxyCommand=x"), "ssh host"),
         (Node("edge", address="10.0.1.10", ssh_host="a b"), "ssh host"),
         (Node("edge", address="10.0.1.10", gpu="tpu"), "gpu must be one of"),
+        (Node("edge", address="10.0.1.10", ingress_ip="edge.example.org"), "ingress_ip"),
+        (Node("edge", address="10.0.1.10", ingress_ip="10.0.1.10;x"), "ingress_ip"),
     ],
 )
 def test_node_fields_are_checked(node: Node, fragment: str):
@@ -526,6 +529,73 @@ def test_a_remote_node_gets_its_own_directories_and_a_local_bind_address(full: I
     # The controller keeps the paths of the full tree: the manager mounts it.
     internal = bundle_env(full, "internal")
     assert internal["PAPAIA_CONFIG_DIR"] == str(full.config)
+
+
+def test_the_edge_of_a_remote_node_listens_on_the_node_address(full: Installation):
+    """HOST_IP of a node behind the bundled proxy is loopback, which keeps the legacy
+    ports off the network. The edge proxy itself must stay reachable, so the node that
+    runs it binds the edge ports to its own address; no other node gets one."""
+    project(full, dmz_split())
+    edge = bundle_env(full, "edge")
+    assert edge["HOST_IP"] == "127.0.0.1"
+    assert edge["INGRESS_HOST_IP"] == "10.0.1.10"
+    internal = bundle_env(full, "internal")
+    assert internal.get("INGRESS_HOST_IP", "") == ""
+
+
+def test_an_explicit_bind_ip_also_binds_the_edge(full: Installation):
+    topo = dmz_split()
+    topo.nodes["edge"] = dataclasses.replace(topo.nodes["edge"], bind_ip="10.0.1.20")
+    project(full, topo)
+    edge = bundle_env(full, "edge")
+    assert edge["HOST_IP"] == "10.0.1.20"
+    assert edge.get("INGRESS_HOST_IP", "") == ""
+
+
+def test_an_ingress_ip_binds_the_edge_alone(full: Installation):
+    """A dual-homed edge node takes user traffic on another interface than the one the
+    peers use: ingress_ip moves the edge there and leaves HOST_IP on loopback."""
+    topo = dmz_split()
+    topo.nodes["edge"] = dataclasses.replace(topo.nodes["edge"], ingress_ip="192.0.2.10")
+    project(full, topo)
+    edge = bundle_env(full, "edge")
+    assert edge["HOST_IP"] == "127.0.0.1"
+    assert edge["INGRESS_HOST_IP"] == "192.0.2.10"
+
+
+def test_an_ingress_ip_wins_over_bind_ip_for_the_edge(full: Installation):
+    topo = dmz_split()
+    topo.nodes["edge"] = dataclasses.replace(
+        topo.nodes["edge"], bind_ip="10.0.1.20", ingress_ip="192.0.2.10"
+    )
+    project(full, topo)
+    edge = bundle_env(full, "edge")
+    assert edge["HOST_IP"] == "10.0.1.20"
+    assert edge["INGRESS_HOST_IP"] == "192.0.2.10"
+
+
+def test_an_ingress_ip_round_trips_and_is_read_from_a_node_spec():
+    topo = dmz_split()
+    topo.nodes["edge"] = dataclasses.replace(topo.nodes["edge"], ingress_ip="192.0.2.10")
+    assert topology.parse(topo.to_dict()) == topo
+    name, values = topology.parse_node_spec("edge=10.0.1.10,ingress_ip=192.0.2.10")
+    assert (name, values["ingress_ip"]) == ("edge", "192.0.2.10")
+
+
+def test_an_ingress_ip_on_a_node_without_the_proxy_is_a_warning():
+    topo = dmz_split()
+    topo.nodes["internal"] = dataclasses.replace(
+        topo.nodes["internal"], ingress_ip="192.0.2.20"
+    )
+    assert any("ingress_ip" in w and "internal" in w for w in warnings(topo))
+
+
+def test_an_edge_node_known_by_name_listens_everywhere(full: Installation):
+    topo = dmz_split()
+    topo.nodes["edge"] = dataclasses.replace(topo.nodes["edge"], address="edge.example.org")
+    project(full, topo)
+    edge = bundle_env(full, "edge")
+    assert edge["INGRESS_HOST_IP"] == "0.0.0.0"
 
 
 def test_a_node_gets_only_the_env_files_of_its_services(full: Installation):

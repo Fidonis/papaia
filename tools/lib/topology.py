@@ -49,6 +49,7 @@ own services references them. The local CA key and the SSH keys never enter a bu
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import shutil
@@ -284,6 +285,9 @@ class Node:
     root: str = DEFAULT_NODE_ROOT
     # The address the node's published ports bind to (HOST_IP there). Empty: derived.
     bind_ip: str = ""
+    # The address the edge proxy's ports bind to on this node (INGRESS_HOST_IP there),
+    # when users reach it on another interface than node.address. Empty: derived.
+    ingress_ip: str = ""
     gpu: str = ""
 
     @property
@@ -309,6 +313,8 @@ class Node:
             data["root"] = self.root
         if self.bind_ip:
             data["bind_ip"] = self.bind_ip
+        if self.ingress_ip:
+            data["ingress_ip"] = self.ingress_ip
         if self.gpu:
             data["gpu"] = self.gpu
         return data
@@ -405,6 +411,7 @@ def _parse_node(name: str, raw: Any) -> Node:
         ssh_host=_str(ssh.get("host"), f"topology.nodes.{name}.ssh.host"),
         root=_str(raw.get("root"), f"topology.nodes.{name}.root") or DEFAULT_NODE_ROOT,
         bind_ip=_str(raw.get("bind_ip"), f"topology.nodes.{name}.bind_ip"),
+        ingress_ip=_str(raw.get("ingress_ip"), f"topology.nodes.{name}.ingress_ip"),
         gpu=_str(raw.get("gpu"), f"topology.nodes.{name}.gpu").lower(),
     )
 
@@ -467,11 +474,11 @@ def is_distributed(config_dir: Path) -> bool:
 # Building a topology from setup's flags
 # ─────────────────────────────────────────────────────────────────────────
 
-_NODE_OPTIONS = ("ssh", "root", "gpu", "bind_ip")
+_NODE_OPTIONS = ("ssh", "root", "gpu", "bind_ip", "ingress_ip")
 
 
 def parse_node_spec(spec: str) -> tuple[str, dict[str, str]]:
-    """`NAME=ADDR[,ssh=USER@HOST[:PORT]][,root=DIR][,gpu=HINT][,bind_ip=IP]`."""
+    """`NAME=ADDR[,ssh=USER@HOST[:PORT]][,root=DIR][,gpu=HINT][,bind_ip=IP][,ingress_ip=IP]`."""
     name, sep, rest = spec.partition("=")
     if not sep or not name or not rest:
         raise TopologyError(f"--node needs NAME=ADDRESS[,ssh=USER@HOST[:PORT]], got {spec!r}")
@@ -495,6 +502,7 @@ def _node_from_spec(name: str, values: dict[str, str], *, local: bool) -> Node:
             address=values["address"],
             executor=EXECUTOR_LOCAL,
             bind_ip=values.get("bind_ip", ""),
+            ingress_ip=values.get("ingress_ip", ""),
             gpu=values.get("gpu", ""),
         )
     user, host, port = DEFAULT_SSH_USER, "", DEFAULT_SSH_PORT
@@ -520,6 +528,7 @@ def _node_from_spec(name: str, values: dict[str, str], *, local: bool) -> Node:
         ssh_host="" if host == values["address"] else host,
         root=values.get("root") or DEFAULT_NODE_ROOT,
         bind_ip=values.get("bind_ip", ""),
+        ingress_ip=values.get("ingress_ip", ""),
         gpu=values.get("gpu", ""),
     )
 
@@ -721,6 +730,8 @@ def validate(
             found.errors.append(f"{where}: {node.address!r} is not a host name or IP address")
         if node.bind_ip and not _ADDRESS_RE.match(node.bind_ip):
             found.errors.append(f"{where}: bind_ip {node.bind_ip!r} is not an IP address")
+        if node.ingress_ip and not _is_ip(node.ingress_ip):
+            found.errors.append(f"{where}: ingress_ip {node.ingress_ip!r} is not an IP address")
         if node.gpu and node.gpu not in GPU_HINTS:
             found.errors.append(
                 f"{where}: gpu must be one of {', '.join(GPU_HINTS)}, got {node.gpu!r}"
@@ -768,6 +779,14 @@ def validate(
         if service not in active:
             found.warnings.append(
                 f"placement of '{service}' has no effect: the service is not switched on"
+            )
+    for node in topo.nodes.values():
+        if node.ingress_ip and (
+            PROXY_PROFILE not in active or topo.node_of(PROXY_PROFILE) != node.name
+        ):
+            found.warnings.append(
+                f"node '{node.name}': ingress_ip has no effect, the edge proxy does not run"
+                " on this node"
             )
     for service in CONTROLLER_ONLY:
         if service in active and topo.node_of(service) != topo.controller:
@@ -1058,6 +1077,38 @@ def _bind_ip(node: Node, cluster_profiles: list[str]) -> str:
     return "127.0.0.1" if PROXY_PROFILE in cluster_profiles else node.address
 
 
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
+
+
+def address_bind(node: Node) -> str:
+    """The address a port published "on the node's address" binds to: node.address when
+    it is an IP literal, otherwise every address of the node. Shared by the link port and
+    the edge, so the two cannot drift apart."""
+    return node.address if _is_ip(node.address) else "0.0.0.0"
+
+
+def _ingress_bind_ip(node: Node, services: list[str]) -> str:
+    """The edge's own bind address on this node; empty falls back to HOST_IP.
+
+    With the bundled proxy, HOST_IP of a node is loopback unless set explicitly, so that
+    the ports published outside the edge stay off the network. The edge itself must
+    stay reachable from the users: the node running it binds the edge ports to
+    ingress_ip when set (a dual-homed node whose users come in on another interface),
+    else to its own address, unless an explicit bind_ip already covers the edge."""
+    if PROXY_PROFILE not in services:
+        return ""
+    if node.ingress_ip:
+        return node.ingress_ip
+    if node.bind_ip:
+        return ""
+    return address_bind(node)
+
+
 # What an add-on's directory carries that a node does not need, or must not get.
 _ADDON_EXCLUDE = shutil.ignore_patterns(".git", ".env", "__pycache__", "node_modules", ".venv")
 
@@ -1132,6 +1183,7 @@ def project_node(
     root[ACTIVE_MODULES_KEY] = ",".join(cluster_profiles)
     root["PAPAIA_NODE"] = node.name
     root["HOST_IP"] = _bind_ip(node, cluster_profiles)
+    root["INGRESS_HOST_IP"] = _ingress_bind_ip(node, services)
     root.update(_node_paths(topo, node, config_dir, root))
     librechat_url = tree.get("ai/librechat", {}).get("DOMAIN_SERVER", "")
     if librechat_url:

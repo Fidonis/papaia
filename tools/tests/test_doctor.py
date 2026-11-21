@@ -1630,10 +1630,16 @@ def test_unresolvable_port_variables_are_ignored(stack):
         ("8080", None),  # ephemeral host port
         ("8000-8002:8000-8002", None),  # range
         ("${UNSET}:3080", None),
+        # The edge: its own bind address falls back to HOST_IP.
+        (
+            "${INGRESS_HOST_IP:-${HOST_IP:-0.0.0.0}}:${INGRESS_HTTPS_EXT_PORT:-443}:443",
+            ("0.0.0.0", 443),
+        ),
+        ("${INGRESS_HOST_IP:-${H:-0.0.0.0}}:${P}:80", ("10.0.0.1", 8000)),
     ],
 )
 def test_published_host_port_parsing(entry, expected):
-    assert doctor._published_host_port(entry, {"P": "8000"}) == expected
+    assert doctor._published_host_port(entry, {"P": "8000", "H": "10.0.0.1"}) == expected
 
 
 # ─────────────────────────────────────────────────────────────────────────

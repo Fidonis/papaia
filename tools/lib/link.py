@@ -310,11 +310,7 @@ def _ident(text: str) -> str:
 def link_bind_address(node: Node) -> str:
     """The address the link port is published on: the node's address when it is an IP
     literal, otherwise every address of the node."""
-    try:
-        ipaddress.ip_address(node.address)
-    except ValueError:
-        return "0.0.0.0"
-    return node.address
+    return topology.address_bind(node)
 
 
 def haproxy_config(plan_: LinkPlan, node: str) -> str:

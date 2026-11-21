@@ -313,6 +313,20 @@ def test_registering_a_node_adds_it_with_its_key_and_bundle(distributed: Install
     assert topology.bundle_dir(distributed.config, "gpu").is_dir()
 
 
+def test_registering_a_node_keeps_its_ingress_address(distributed: Installation):
+    assert (
+        main(
+            distributed,
+            "node-register",
+            "--name=gpu",
+            "--address=10.0.3.10",
+            "--ingress-ip=192.0.2.30",
+        )
+        == 0
+    )
+    assert topology.load_config(distributed.config).nodes["gpu"].ingress_ip == "192.0.2.30"
+
+
 def test_a_node_that_breaks_the_topology_is_not_added(distributed: Installation, capsys):
     before = (distributed.config / "deployment.yaml").read_text()
     assert main(distributed, "node-register", "--name=Bad_Name", "--address=10.0.3.10") == 2

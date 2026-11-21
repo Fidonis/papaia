@@ -152,6 +152,11 @@ def test_resolve_core_volumes_without_compose_file(tmp_path: Path):
         ("${PAPAIA_CONFIG_DIR}/certs", {"PAPAIA_CONFIG_DIR": "/cfg"}, "/cfg/certs"),
         ("$HOME/data", {"HOME": "/root"}, "/root/data"),
         ("${UNSET}", {}, ""),
+        # Nested defaults, as Compose resolves them.
+        ("${A:-${B:-x}}", {}, "x"),
+        ("${A:-${B:-x}}", {"B": "b"}, "b"),
+        ("${A:-${B:-x}}", {"A": "a", "B": "b"}, "a"),
+        ("${A:-${B}}/data", {"B": "/srv"}, "/srv/data"),
     ],
 )
 def test_expand(value, env, expected):

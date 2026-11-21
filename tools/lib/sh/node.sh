@@ -90,6 +90,7 @@ _node_pin_host_key() {
 
 _node_add() {
     local config_dir="$DEFAULT_CONFIG_DIR" name="" address="" ssh_spec="" root="" gpu="" bind_ip=""
+    local ingress_ip=""
     local bootstrap="join" admin="" output="" fingerprint="" assume_yes=0
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -99,6 +100,7 @@ _node_add() {
             --root=*) root="${1#*=}" ;;
             --gpu=*) gpu="${1#*=}" ;;
             --bind-ip=*) bind_ip="${1#*=}" ;;
+            --ingress-ip=*) ingress_ip="${1#*=}" ;;
             --bootstrap=*) bootstrap="${1#*=}" ;;
             --admin=*) admin="${1#*=}" ;;
             --output=*) output="${1#*=}" ;;
@@ -135,6 +137,7 @@ _node_add() {
     [ -n "$root" ] && register+=(--root="$root")
     [ -n "$gpu" ] && register+=(--gpu="$gpu")
     [ -n "$bind_ip" ] && register+=(--bind-ip="$bind_ip")
+    [ -n "$ingress_ip" ] && register+=(--ingress-ip="$ingress_ip")
     py_cli node-register ${register[@]+"${register[@]}"}
 
     if [ "$bootstrap" = "join" ]; then

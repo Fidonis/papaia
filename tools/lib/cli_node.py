@@ -39,6 +39,7 @@ def cmd_node_register(args: argparse.Namespace) -> int:
         ssh_host=args.ssh_host or "",
         root=args.root or topology.DEFAULT_NODE_ROOT,
         bind_ip=args.bind_ip or "",
+        ingress_ip=args.ingress_ip or "",
         gpu=args.gpu or "",
     )
     try:
@@ -335,6 +336,7 @@ def add_parsers(sub) -> None:
     p.add_argument("--ssh-host", default=None)
     p.add_argument("--root", default=None)
     p.add_argument("--bind-ip", default=None)
+    p.add_argument("--ingress-ip", default=None)
     p.add_argument("--gpu", default=None, choices=list(topology.GPU_HINTS))
     p.set_defaults(func=cmd_node_register)
 

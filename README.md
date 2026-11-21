@@ -1471,6 +1471,33 @@ before letting a request through and bounces the user to Keycloak on a 401.
 
 All core containers share one bridge network, `papaia-net` (or `papaia-<env>-net`).
 
+### Published ports
+
+Only the edge proxy is meant to publish ports. It listens on `HOST_IP` on
+`INGRESS_HTTP_EXT_PORT` and `INGRESS_HTTPS_EXT_PORT` (default 80 and 443), so a second stack
+can run next to one that already holds 80/443 — set other values in `.env` and put the port
+into the public URLs. `INGRESS_HOST_IP` binds the edge alone to another address; leave it
+empty on a single host.
+
+The other ports the core still publishes (Keycloak, LibreChat, LiteLLM, LocalAI,
+oauth2-proxy, papaia-manager, Qdrant, the NPM admin UI and the loopback-only NPM API) are a
+frozen legacy inventory in [`security/published-ports.yaml`](security/published-ports.yaml),
+each with its reason and the change that removes it. The test suite fails on any published
+port that is neither the edge nor on that list, and the list only ever shrinks. The link port
+of a distributed installation is the one documented exception: it is published on the node's
+address and accepts mutual TLS only.
+
+> **Upgrade note.** Earlier releases published 80/443 on every interface regardless of
+> `HOST_IP`. The edge now follows `HOST_IP`: an installation with the bundled proxy and
+> `HOST_IP=127.0.0.1` answers on loopback only after the upgrade. Set `INGRESS_HOST_IP=0.0.0.0`
+> (or the host's address) in `.env` to keep the edge reachable from the network.
+>
+> In a distributed installation the node running the bundled proxy now listens on its node
+> `address` only, no longer on every interface. If users reach that node on another
+> interface than the one the other nodes use (a dual-homed DMZ host), set `ingress_ip` on
+> the node in the topology (`--node=NAME=ADDR,ingress_ip=IP` or `node add --ingress-ip=IP`)
+> before upgrading; it moves only the edge and leaves the other published ports on loopback.
+
 ### Add-ons
 
 An add-on is a self-contained directory — usually its own repository — holding:

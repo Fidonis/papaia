@@ -139,8 +139,14 @@ This lists every connection between the nodes. For `dmz-split`:
 | internal | edge | 7443/tcp | link: keycloak, litellm, the public auth host |
 | edge | internal | 7443/tcp | link: librechat, and whatever is published (localai, papaia-manager, qdrant) |
 
-Plus 80 and 443 from the users to the proxy's node. papaia never changes a firewall; open
-exactly these. `doctor` names a missing rule when a link cannot be reached.
+Plus 80 and 443 (`INGRESS_HTTP_EXT_PORT`/`INGRESS_HTTPS_EXT_PORT`) from the users to the
+proxy's node. That node's bundle binds the edge ports through `INGRESS_HOST_IP` to the
+node's `ingress_ip` when set, otherwise to the node's address (every address when the node
+is known by name), while its `HOST_IP` keeps the other published ports on loopback. Set
+`ingress_ip` when users reach the node on another interface than the other nodes do; a node
+with an explicit `bind_ip` and no `ingress_ip` uses `bind_ip` for both.
+papaia never changes a firewall; open exactly these. `doctor` names a missing rule when a
+link cannot be reached.
 
 The link port is published by Docker, so its packets are DNATed before routing and traverse
 the host's *forward* chain, never its input chain. Enforce the rules above where forwarded

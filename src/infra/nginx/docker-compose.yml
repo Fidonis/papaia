@@ -15,9 +15,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    # The edge: the only service that publishes ports (security/published-ports.yaml
+    # lists the legacy exceptions). Bound to HOST_IP; INGRESS_HOST_IP overrides that
+    # for the edge alone. The host ports come from INGRESS_HTTP_EXT_PORT and
+    # INGRESS_HTTPS_EXT_PORT, so a second stack runs next to one holding 80/443.
     ports:
-      - "80:80"
-      - "443:443"
+      - "${INGRESS_HOST_IP:-${HOST_IP:-0.0.0.0}}:${INGRESS_HTTP_EXT_PORT:-80}:80"
+      - "${INGRESS_HOST_IP:-${HOST_IP:-0.0.0.0}}:${INGRESS_HTTPS_EXT_PORT:-443}:443"
       # Port 81 (admin) is bound to localhost only so papaia-ctl can call the NPM
       # REST API for automatic proxy-host provisioning. External access is only
       # possible through the nginx-proxy-manager-auth sidecar below.

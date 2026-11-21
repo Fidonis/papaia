@@ -62,6 +62,8 @@ next to it, even when it has an inline `:-` default.
 | `PAPAIA_BACKUP_DIR` | Default target of `papaia-ctl backup`; derived by setup as `$PAPAIA_WORKSPACE_DIR/backup` unless `--backup-dir` was passed |
 | `UID` / `GID` | Host ownership for bind-mounted files (Linux only) |
 | `HOST_IP` | Bind address for published ports — the network layer |
+| `INGRESS_HTTP_EXT_PORT` / `INGRESS_HTTPS_EXT_PORT` | Host ports of the edge proxy (`internal_nginx`), default 80/443; bound to `HOST_IP` |
+| `INGRESS_HOST_IP` | Bind address of the edge ports only; empty falls back to `HOST_IP`. Set per node of a distributed installation |
 | `PAPAIA_HOST` | Public base URL of the server — the application layer |
 | `AUTH_HOST` | Public Keycloak URL; ends up in token `iss` claims |
 | `AUTH_PROVIDER` | `internal_keycloak` or `external_oidc` |

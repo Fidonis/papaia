@@ -62,6 +62,7 @@
 #   papaia-ctl topology firewall [--format=table|json|csv] [--config-dir=PATH]
 #   papaia-ctl node add      <name> --address=ADDR [--ssh=USER@HOST[:PORT]] [--root=DIR]
 #                            [--gpu=none|nvidia|amd|intel|vulkan] [--bind-ip=IP]
+#                            [--ingress-ip=IP]
 #                            [--bootstrap=join|admin] [--admin=USER@HOST[:PORT]]
 #                            [--output=FILE] [--host-key-fingerprint=SHA256:...] [-y]
 #   papaia-ctl node list     [--json] [--check] [--config-dir=PATH]
@@ -108,7 +109,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,101p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,102p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

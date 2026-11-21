@@ -1149,6 +1149,7 @@ topology:
       ssh: {user: papaia, port: 22, host: <optional>}
       root: /srv/papaia-node        # node directory; config dir <root>/config
       bind_ip: <optional>           # HOST_IP on that node (default 127.0.0.1 behind the proxy)
+      ingress_ip: <optional>        # edge ports on the proxy's node (default: its address)
       gpu: none | nvidia | amd | intel | vulkan   # optional hint for LocalAI
   placement:                        # catalogue service -> node; default: the controller
     <service>: <node>

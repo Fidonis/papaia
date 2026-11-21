@@ -262,26 +262,66 @@ def resolve_core_volume_owners(repo_root: Path) -> dict[str, VolumeOwner]:
     }
 
 
-_VAR_RE = re.compile(
-    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)"
-)
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _closing_brace(value: str, start: int) -> int:
+    """Index of the `}` that closes the default starting at `start`, skipping nested
+    `${...}`; -1 when there is none."""
+    depth = 0
+    i = start
+    while i < len(value):
+        if value.startswith("${", i):
+            depth += 1
+            i += 2
+            continue
+        if value[i] == "}":
+            if depth == 0:
+                return i
+            depth -= 1
+        i += 1
+    return -1
 
 
 def expand(value: str, env: dict[str, str]) -> str:
     """Expand ${VAR}, ${VAR:-default} and $VAR against `env`, following
     Compose semantics: the `:-` default applies when the variable is unset
-    *or* empty."""
-
-    def _sub(match: re.Match[str]) -> str:
-        if match.group(3):
-            return env.get(match.group(3), "")
-        name = match.group(1)
-        current = env.get(name, "")
-        if current:
-            return current
-        return match.group(2) or ""
-
-    return _VAR_RE.sub(_sub, value)
+    *or* empty, and a default may itself hold a ${...} (nested defaults such as
+    `${INGRESS_HOST_IP:-${HOST_IP:-0.0.0.0}}`). Substituted values are not
+    expanded again. Anything that is not a well-formed reference stays as is."""
+    out: list[str] = []
+    i = 0
+    while i < len(value):
+        if value[i] != "$":
+            out.append(value[i])
+            i += 1
+            continue
+        if value.startswith("${", i):
+            name = _NAME_RE.match(value, i + 2)
+            if name:
+                after = name.end()
+                if value.startswith("}", after):
+                    out.append(env.get(name.group(0), ""))
+                    i = after + 1
+                    continue
+                if value.startswith(":-", after):
+                    close = _closing_brace(value, after + 2)
+                    if close != -1:
+                        current = env.get(name.group(0), "")
+                        out.append(current or expand(value[after + 2 : close], env))
+                        i = close + 1
+                        continue
+            out.append("$")
+            i += 1
+            continue
+        name = _NAME_RE.match(value, i + 1)
+        if name:
+            out.append(env.get(name.group(0), ""))
+            i = name.end()
+            continue
+        out.append("$")
+        i += 1
+    return "".join(out)
 
 
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
