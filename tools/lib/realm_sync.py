@@ -1400,7 +1400,8 @@ class AuditLog:
     ) -> None:
         """One row. `master`: the write was made with the master admin (creating or
         realigning the sync account), not with the sync account. `host`: the host account
-        acted alone, without any identity of the realm (the platform halt)."""
+        acted alone, without any identity of the realm and with no token (the platform halt,
+        or a file write in the configuration directory)."""
         if self._fd is None:
             raise RealmSyncError("the audit log is closed")
         now = time.time()
@@ -3223,6 +3224,45 @@ def sync_paperless_users(
             os.close(dfd)
 
 
+def sync_platform_groups(
+    call, config_dir: Path, *, apply: bool, audit: AuditLog | None = None
+) -> list[Change]:
+    """Compare `platform/groups.json` with the groups of the realm behind `call` (the
+    master admin); with `apply`, rewrite it. Only id, path, display name and the
+    technical mark are written, never a member (catalog.groups_from_realm). One audit
+    row per write. Returns the deviation, if any."""
+    from . import catalog  # it imports the render path
+
+    try:
+        groups = catalog.groups_from_realm(call)
+    except catalog.CatalogError as exc:
+        raise RealmSyncError(str(exc)) from None
+    if catalog.current_groups(config_dir) == groups:
+        return []
+    change = Change(
+        "file",
+        f"{catalog.CATALOG_DIR}/{catalog.GROUPS_FILE}",
+        f"group list written ({len(groups)} group(s))",
+        "platform_groups.write",
+    )
+    print(f"{'  ' if apply else 'fail: '}{change.kind} {change.name}: {change.action}", flush=True)
+    if not apply:
+        return [change]
+    try:
+        catalog.write_groups(config_dir, groups)
+    except (OSError, catalog.CatalogError) as exc:
+        if audit:
+            audit.write(change, "error", "io", host=True)
+        if isinstance(exc, catalog.CatalogError):
+            raise RealmSyncError(str(exc)) from None
+        raise
+    # The master admin only read the groups; the write is a file on the host, so the row
+    # names the host like the one for services.json (catalog.render).
+    if audit:
+        audit.write(change, "allowed", host=True)
+    return [change]
+
+
 def sync_template_users(
     call, hardening: rh.Hardening, *, apply: bool, audit: AuditLog | None = None
 ) -> list[Change]:
@@ -3371,6 +3411,11 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             )
             changes += sync_paperless_users(
                 master.call, plan, config_dir, apply=not check, audit=audit
+            )
+            # The group list next to the catalog (RE-14): read with the master admin,
+            # who may list groups; no right is added for it.
+            changes += sync_platform_groups(
+                master.call, config_dir, apply=not check, audit=audit
             )
             api = AdminApi(base_url, ctx, token)
             reconciler = _Reconciler(

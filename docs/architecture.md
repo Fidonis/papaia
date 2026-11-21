@@ -873,6 +873,47 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
 Optional NPM proxy host entry for the add-on UI. Added additively via the
 Nginx fragment mechanism (or NPM API).
 
+### Platform catalog (`platform/services.json`, `platform/groups.json`)
+
+Modules learn which services, user interfaces and groups the installation offers from
+two files under `${PAPAIA_CONFIG_DIR}/platform`. Each module mounts that directory
+read-only; the core is their only writer.
+
+- **Declarations.** An add-on declares its surfaces in `exposes:` of its
+  `papaia-app.yaml` (contract generation 7). A core profile declares them in
+  `exposes.yaml` next to its compose file (`src/ai/rag/exposes.yaml`). Every section is
+  checked against the papaia-kit schema `exposes.v1`, vendored under
+  `tools/schemas/kit` with the digests of `snapshot.json`. `addon check`, `addon
+  install`, `addon start` and `addon upgrade` refuse an invalid section, name the field
+  and the reason, and leave the catalog unchanged.
+- **`services.json`** (`papaia.platform-services/1`). `papaia-ctl catalog render`
+  writes it, and so does every render (`setup`, `start`, every `addon` command) and
+  `addon stop` and `stop --addons`. It holds one entry per declared id, sorted by id,
+  with `state` (`running` or `stopped`), `trust` (`platform` for core profiles and
+  for add-ons of the suite matrix, otherwise `addon`), the resolved internal address,
+  the public URL of each user interface (`<HOST_KEY>_HOST`, https only) and a
+  `content_hash` (sha256 over the RFC 8785 form of the entry). Branding comes from
+  the overlay file `platform/branding.yaml` (`name`, `suffix`, `contact`; logo
+  `platform/brand-logo`), and `platform_notices` carries the test-mode notice. A
+  stopped add-on stays listed with `state: stopped`; its hash changes, and the
+  hashes of the other entries do not. An id declared twice, an address without its
+  compose service or a user interface without its public host stops the render.
+  `addon install`, `addon start`, `addon upgrade` and `addon rollback` therefore build
+  the catalog of the installation they are about to save first and refuse such an
+  add-on with exit 2, leaving `deployment.yaml` and the catalog unchanged. The
+  installation has no catalog while the core serves no generation 7 or `OIDC_ISSUER`
+  is not an https address.
+- **`groups.json`** (`papaia.platform-groups/1`). `realm sync` reads the groups of
+  the realm through the master administrator and writes `id`, `path`, `display_name`
+  (group attributes `papaia.display_name.de` and `.en`, else the name) and `technical`
+  (attribute `papaia.technical`). The file holds no members and no other personal
+  data. Until the first sync the render writes an empty list.
+- **Writes.** Both files are written atomically (temporary file, then rename), mode
+  0644 in a 0755 directory, and only when their content changed (`generated_at`
+  aside). Every write, the brand logo included, adds one `papaia.audit/1` row
+  (`catalog.services_write`, `catalog.brand_logo_write`, `catalog.brand_logo_delete`,
+  `platform_groups.write`) to the outbox, attributed to the host.
+
 ---
 
 ## 8. Inversion of Control — Orchestrator `papaia-ctl`
@@ -899,7 +940,8 @@ No Core changes required.
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role, then run the realm sync. Runs on every `start`; no-op with an external OIDC provider |
-| `papaia-ctl realm sync [--check]` | Reconcile the clients, roles, exchange scopes and service accounts the installed modules declare and `security/pairings.yaml` confirms, and write the name list of the Paperless gate (see "Realm sync of declared clients"). `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
+| `papaia-ctl catalog render` | Write `platform/services.json` from the `exposes` declarations of the installed add-ons and the active core profiles (see "Platform catalog"). Every render does it as well. Exit 3 when the catalog cannot be rendered; the previous file stays |
+| `papaia-ctl realm sync [--check]` | Reconcile the clients, roles, exchange scopes and service accounts the installed modules declare and `security/pairings.yaml` confirms, write the name list of the Paperless gate (see "Realm sync of declared clients") and the group list `platform/groups.json`. `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
 | `papaia-ctl service-account list [--json]` | Read-only. The declared service accounts with module, owner, deputy, audiences, roles, effects, last key rotation (due after 90 days) and last use (see "Declared service accounts") |
 | `papaia-ctl service-account rotate <id> [--grace=SECONDS]` | Replace an account's key pair; the old key is refused at the latest 60 s after the rotation began (checked against Keycloak, exit 1 otherwise). `--grace` (0 to 60, default 30) keeps the old key registered that long. Exit 2 for an account that is not declared |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |

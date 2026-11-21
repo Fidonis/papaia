@@ -108,7 +108,11 @@ def _tree_digests(inst: Installation) -> dict[str, str]:
             summary = json.loads(text)
             summary["deployed_at"] = "<TIME>"
             text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
-        if rel == "audit/papaia-ctl.jsonl":
+        if rel in ("platform/services.json", "platform/groups.json"):
+            doc = json.loads(text)
+            doc["generated_at"] = "<TIME>"
+            text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+        if rel in ("audit/papaia-ctl.jsonl", "audit/outbox/papaia-ctl.jsonl"):
             rows = [json.loads(line) for line in text.splitlines() if line]
             for row in rows:
                 row["time"], row["correlation_id"] = "<TIME>", "<ID>"

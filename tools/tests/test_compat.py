@@ -446,6 +446,28 @@ V1_8_0_WINDOW = (1, 3)
 
 _INGRESS_ENTRY = {"host_key": "flow", "service": "flow-web", "port": 8080}
 
+# A minimal `exposes:` section the kit schema accepts: one user interface.
+_EXPOSES = [
+    {
+        "id": "a.ui",
+        "kind": "ui",
+        "title": {"en": "A"},
+        "identity": ["person"],
+        "ui": [
+            {
+                "id": "a",
+                "title": {"en": "A"},
+                "summary": {"en": "Does a"},
+                "icon": "a",
+                "order": 1,
+                "host_key": "a",
+                "path": "/",
+                "visible_for_roles": ["a-user"],
+            }
+        ],
+    }
+]
+
 
 def test_generation_12_requirement_names_the_missing_generation():
     result = compat.evaluate_addon(
@@ -468,7 +490,7 @@ def test_every_missing_generation_up_to_the_requirement_is_named():
 @pytest.mark.parametrize(
     ("manifest", "generation"),
     [
-        ({"exposes": [{"id": "x"}]}, 7),
+        ({"exposes": _EXPOSES}, 7),
         ({"personal_settings": {"schema": "s"}}, 8),
         ({"pki": {"server": True}}, 11),
         ({"integration": {"nginx": [_INGRESS_ENTRY]}}, 12),
@@ -487,7 +509,7 @@ def test_generation_feature_on_an_older_core_is_never_ignored(manifest, generati
 
 def test_generation_feature_without_addon_api_is_checked_against_the_window():
     result = compat.evaluate_addon(
-        "a", {"papaia_compat": ">=0.8.0", "exposes": []}, _core(addon_api=(1, 6))
+        "a", {"papaia_compat": ">=0.8.0", "exposes": _EXPOSES}, _core(addon_api=(1, 6))
     )
     assert result.status == compat.STATUS_INCOMPATIBLE
     assert "uses `exposes` (addon_api 7)" in result.reason
@@ -497,7 +519,7 @@ def test_generation_feature_without_addon_api_is_checked_against_the_window():
 def test_generation_features_pass_on_a_core_that_serves_them():
     manifest = {
         "requires": {"addon_api": [12]},
-        "exposes": [],
+        "exposes": _EXPOSES,
         "personal_settings": {},
         "pki": {},
         "integration": {"nginx": [_INGRESS_ENTRY]},
@@ -508,7 +530,7 @@ def test_generation_features_pass_on_a_core_that_serves_them():
 
 
 def test_feature_above_declared_generations_warns():
-    manifest = {"requires": {"addon_api": [6]}, "exposes": []}
+    manifest = {"requires": {"addon_api": [6]}, "exposes": _EXPOSES}
     result = compat.evaluate_addon("a", manifest, _core(addon_api=(1, 12)))
     assert result.status == compat.STATUS_OK
     assert any("`exposes` needs addon_api 7" in w for w in result.warnings)
@@ -520,6 +542,14 @@ def test_feature_without_core_window_warns_instead_of_passing_silently():
     )
     assert result.status == compat.STATUS_OK
     assert any("`pki` (addon_api 11) not checked" in w for w in result.warnings)
+
+
+def test_an_exposes_section_the_kit_schema_refuses_is_a_malformed_manifest():
+    manifest = {"requires": {"addon_api": [7]}, "exposes": []}
+    result = compat.evaluate_addon("a", manifest, _core(addon_api=(1, 12)))
+    assert result.status == compat.STATUS_ERROR
+    assert result.axis == "exposes"
+    assert result.reason == "a: exposes: must have at least 1 item(s)"
 
 
 def test_fragment_path_nginx_stays_generation_1():

@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.papaia.dev/platform-services.v1.schema.json",
+  "title": "papaia platform catalog",
+  "description": "What the add-ons and core profiles of one installation offer, rendered by the core from the exposes declarations into <PAPAIA_CONFIG_DIR>/platform/services.json and mounted read-only into consumers. The catalog is an offer, not a permission. Normative description: contract/platform-services.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "generated_at", "addon_api", "identity", "services", "models"],
+  "properties": {
+    "format": {"const": "papaia.platform-services/1"},
+    "generated_at": {"$ref": "#/$defs/Timestamp"},
+    "addon_api": {"type": "integer", "minimum": 7, "maximum": 1000},
+    "security_profile": {"enum": ["standard", "kritis"]},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "token_endpoint_internal", "jwks_uri_internal"],
+      "properties": {
+        "issuer": {"$ref": "#/$defs/PublicUrl"},
+        "token_endpoint_internal": {"$ref": "#/$defs/InternalUrl"},
+        "jwks_uri_internal": {"$ref": "#/$defs/InternalUrl"}
+      }
+    },
+    "services": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/Entry"}},
+    "models": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/ModelAlias"}},
+    "branding": {"$ref": "#/$defs/Branding"},
+    "platform_notices": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/Notice"}},
+    "approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"single_admin_exception": {"type": "boolean", "default": false}}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["security_profile"], "properties": {"security_profile": {"const": "kritis"}}},
+      "else": {"properties": {"services": {"items": {"not": {"required": ["ca"]}}}}}
+    }
+  ],
+  "$defs": {
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$(?!\\n)",
+      "description": "UTC, RFC 3339."
+    },
+    "Identifier": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$(?!\\n)"},
+    "Name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$(?!\\n)", "description": "Role, client or key name."},
+    "Sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$(?!\\n)"},
+    "DataClass": {
+      "enum": ["public", "internal", "partner_contact", "personal", "employee", "confidential", "special", "professional_secret"],
+      "description": "Eight-level scale, ordered from lowest to highest."
+    },
+    "Text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["de", "en"],
+      "properties": {
+        "de": {"type": "string", "minLength": 1, "maxLength": 200},
+        "en": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    },
+    "Summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["de", "en"],
+      "properties": {
+        "de": {"$ref": "#/$defs/FifteenWords"},
+        "en": {"$ref": "#/$defs/FifteenWords"}
+      }
+    },
+    "FifteenWords": {"type": "string", "maxLength": 160, "pattern": "^\\S+(\\s+\\S+){0,14}$(?!\\n)"},
+    "InternalUrl": {
+      "type": "string",
+      "maxLength": 1000,
+      "pattern": "^https?://[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:[0-9]{1,5})?(/[A-Za-z0-9._~%-]+)*/?$(?!\\n)",
+      "description": "Address on the internal network; no credentials, no query, no fragment."
+    },
+    "PublicUrl": {
+      "type": "string",
+      "maxLength": 1000,
+      "pattern": "^https://[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:[0-9]{1,5})?(/[A-Za-z0-9._~%-]+)*/?$(?!\\n)",
+      "description": "Browser address; https only, no credentials, no query, no fragment."
+    },
+    "Path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^(/[A-Za-z0-9._~%-]+)*/?$(?!\\n)",
+      "description": "Own path of the module; never a URL or a protocol-relative reference."
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^(/([A-Za-z0-9._~%-]|\\{[a-z][a-z0-9_]{0,39}\\})+)*/?$(?!\\n)",
+      "description": "Path with {placeholder} segments."
+    },
+    "JsonSchema": {"$ref": "https://json-schema.org/draft/2020-12/schema"},
+    "Operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "title", "via", "effect", "retry", "input_schema", "output_schema", "data_class_max", "rights_check"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$(?!\\n)", "description": "Tool name or operationId."},
+        "version": {"type": "integer", "minimum": 1},
+        "title": {"$ref": "#/$defs/Text"},
+        "via": {"enum": ["tools", "rest"]},
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+        "path": {"$ref": "#/$defs/PathPattern"},
+        "effect": {"enum": ["read", "write", "send", "delete", "check"]},
+        "retry": {"enum": ["safe", "idempotent", "at_most_once"]},
+        "input_schema": {"$ref": "#/$defs/JsonSchema"},
+        "output_schema": {"$ref": "#/$defs/JsonSchema"},
+        "data_class_max": {"$ref": "#/$defs/DataClass"},
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "id_field"],
+          "properties": {
+            "type": {"$ref": "#/$defs/Identifier"},
+            "id_field": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$(?!\\n)"}
+          }
+        },
+        "rights_check": {"enum": ["server", "server_and_check_access"]},
+        "role_hint": {"type": "string", "maxLength": 80, "description": "Display only; never used for a decision."},
+        "timeout": {"type": "string", "pattern": "^[0-9]{1,6}(ms|s|m)$(?!\\n)"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"via": {"const": "rest"}}},
+          "then": {"required": ["method", "path"]},
+          "else": {"not": {"anyOf": [{"required": ["method"]}, {"required": ["path"]}]}}
+        },
+        {
+          "if": {"properties": {"effect": {"enum": ["write", "delete", "check"]}}},
+          "then": {"required": ["resource"]}
+        }
+      ]
+    },
+    "Event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "title", "payload_schema", "data_class_max"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$(?!\\n)"},
+        "version": {"type": "integer", "minimum": 1},
+        "title": {"$ref": "#/$defs/Text"},
+        "payload_schema": {"$ref": "#/$defs/JsonSchema"},
+        "data_class_max": {"$ref": "#/$defs/DataClass"}
+      }
+    },
+    "Target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern"],
+      "properties": {
+        "pattern": {"$ref": "#/$defs/PathPattern"},
+        "after_done": {"$ref": "#/$defs/Path"}
+      }
+    },
+    "Ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "icon", "order", "public_url", "visible_for_roles", "opens_in"],
+      "properties": {
+        "id": {"$ref": "#/$defs/Identifier"},
+        "title": {"$ref": "#/$defs/Text"},
+        "summary": {"$ref": "#/$defs/Summary"},
+        "example": {"$ref": "#/$defs/Text"},
+        "icon": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$(?!\\n)", "description": "Symbol name from the kit sprite."},
+        "order": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "host_key": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$(?!\\n)"},
+        "path": {"$ref": "#/$defs/Path"},
+        "public_url": {"$ref": "#/$defs/PublicUrl"},
+        "visible_for_roles": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/Name"},
+          "description": "Empty: visible to every signed-in person. Display only; the module checks rights itself."
+        },
+        "targets": {
+          "type": "object",
+          "maxProperties": 50,
+          "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,39}$(?!\\n)"},
+          "additionalProperties": {"$ref": "#/$defs/Target"}
+        },
+        "admin_url": {"$ref": "#/$defs/Path"},
+        "opens_in": {"enum": ["same_tab", "new_tab"]}
+      }
+    },
+    "Role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "title"],
+      "properties": {
+        "name": {"$ref": "#/$defs/Name"},
+        "title": {"$ref": "#/$defs/Text"},
+        "description": {"$ref": "#/$defs/Text"}
+      }
+    },
+    "Entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "provider", "version", "kind", "title", "identity", "content_hash", "trust"],
+      "properties": {
+        "id": {"$ref": "#/$defs/Identifier"},
+        "provider": {"type": "string", "pattern": "^(core:)?[a-z0-9][a-z0-9_-]{0,63}$(?!\\n)", "description": "Add-on name or core:<profile>."},
+        "version": {"type": "string", "pattern": "^[A-Za-z0-9._+-]{1,40}$(?!\\n)"},
+        "kind": {"enum": ["mcp", "rest", "ui", "me"]},
+        "title": {"$ref": "#/$defs/Text"},
+        "description": {"$ref": "#/$defs/Text"},
+        "state": {"enum": ["running", "stopped"]},
+        "trust": {"enum": ["platform", "addon"]},
+        "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)"},
+        "address": {"$ref": "#/$defs/InternalUrl"},
+        "ca": {"type": "string", "pattern": "^(/[A-Za-z0-9._-]+){1,16}$(?!\\n)", "description": "CA path inside the container; kritis only."},
+        "audience": {"type": "string", "pattern": "^(mcp|papaia)-[a-z0-9-]{1,60}$(?!\\n)|^(flow|assist-api)$(?!\\n)"},
+        "azp": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"$ref": "#/$defs/Name"}},
+        "identity": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["person", "service"]}},
+        "operations": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/Operation"}},
+        "events": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/Event"}},
+        "ui": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/Ui"}},
+        "downstream": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "anyOf": [
+              {"$ref": "#/$defs/Identifier"},
+              {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "catalog_sources"}}}
+            ]
+          }
+        },
+        "standard_operations": {"type": "array", "uniqueItems": true, "items": {"enum": ["describe_access", "check_access"]}},
+        "roles": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/Role"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"enum": ["mcp", "rest", "me"]}}}, "then": {"required": ["address", "audience"]}},
+        {"if": {"properties": {"kind": {"const": "mcp"}}}, "then": {"required": ["operations"]}},
+        {
+          "if": {"properties": {"kind": {"const": "ui"}}},
+          "then": {"required": ["state", "ui"], "properties": {"ui": {"minItems": 1}}}
+        }
+      ]
+    },
+    "ModelAlias": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "features", "context", "max_class"],
+      "properties": {
+        "alias": {"type": "string", "pattern": "^papaia-[a-z0-9-]{1,40}$(?!\\n)"},
+        "features": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["chat", "tools", "json_schema", "json_object", "stream", "embeddings"]}
+        },
+        "context": {"type": "integer", "minimum": 1024},
+        "max_class": {"$ref": "#/$defs/DataClass"},
+        "test_backend": {"type": "boolean", "description": "true only in the test stack with the test switch."}
+      }
+    },
+    "Branding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 60},
+        "suffix": {"type": "string", "minLength": 1, "maxLength": 60},
+        "logo_sha256": {"$ref": "#/$defs/Sha256", "description": "Digest of platform/brand-logo next to the catalog."},
+        "contact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 120},
+            "mail": {"type": "string", "format": "email", "maxLength": 254, "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$(?!\\n)"},
+            "phone": {"type": "string", "pattern": "^\\+?[0-9 ()/-]{3,40}$(?!\\n)"}
+          }
+        }
+      }
+    },
+    "Notice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "level", "text"],
+      "properties": {
+        "id": {"$ref": "#/$defs/Identifier"},
+        "level": {"enum": ["info", "warning"]},
+        "text": {"$ref": "#/$defs/Text"}
+      }
+    }
+  }
+}

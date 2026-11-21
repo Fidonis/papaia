@@ -1,0 +1,650 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.papaia.dev/exposes.v1.schema.json",
+  "x-papaia-schema-version": "1.0.0",
+  "title": "papaia manifest section exposes",
+  "description": "Value of the manifest key exposes: (add-on manifest papaia-app.yaml) or of the file exposes.yaml of a core profile. Each entry declares one surface a module offers to the platform. Normative description: contract/exposes.md.",
+  "type": "array",
+  "minItems": 1,
+  "maxItems": 100,
+  "items": {"$ref": "#/$defs/Entry"},
+  "$defs": {
+    "Entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "title", "identity"],
+      "properties": {
+        "id": {"$ref": "#/$defs/CatalogId"},
+        "kind": {"enum": ["mcp", "rest", "ui", "me"]},
+        "title": {"$ref": "#/$defs/Title"},
+        "description": {"$ref": "#/$defs/Description"},
+        "address": {"$ref": "#/$defs/Address"},
+        "audience": {"$ref": "#/$defs/Audience"},
+        "identity": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["person", "service"]}
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": {"$ref": "#/$defs/Operation"}
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {"$ref": "#/$defs/Event"}
+        },
+        "ui": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {"$ref": "#/$defs/UiItem"}
+        },
+        "downstream": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "anyOf": [
+              {"$ref": "#/$defs/CatalogId"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind"],
+                "properties": {"kind": {"const": "catalog_sources"}}
+              }
+            ]
+          }
+        },
+        "standard_operations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["describe_access", "check_access"]}
+        },
+        "roles": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {"$ref": "#/$defs/Role"}
+        },
+        "service_accounts": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {"$ref": "#/$defs/ServiceAccount"}
+        },
+        "delegation": {"$ref": "#/$defs/Delegation"},
+        "models": {"$ref": "#/$defs/Models"},
+        "requires": {"$ref": "#/$defs/Requires"},
+        "volumes": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {"$ref": "#/$defs/Volume"}
+        },
+        "export": {"$ref": "#/$defs/Export"},
+        "storage": {"$ref": "#/$defs/Storage"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"enum": ["mcp", "rest", "me"]}}},
+          "then": {"required": ["address", "audience"]}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["mcp", "rest"]}}},
+          "then": {"required": ["operations"]}
+        },
+        {
+          "$comment": "Personal-area interfaces accept only persons (PLT-15-A3); the realm sync binds their audience to persons.",
+          "if": {"properties": {"kind": {"const": "me"}}},
+          "then": {"properties": {"identity": {"const": ["person"]}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "ui"}}},
+          "then": {
+            "required": ["ui"],
+            "not": {
+              "anyOf": [
+                {"required": ["address"]},
+                {"required": ["operations"]},
+                {"required": ["standard_operations"]}
+              ]
+            }
+          },
+          "else": {"not": {"required": ["ui"]}}
+        },
+        {
+          "if": {
+            "required": ["kind", "identity"],
+            "properties": {
+              "kind": {"const": "mcp"},
+              "identity": {"contains": {"const": "person"}}
+            }
+          },
+          "then": {"required": ["standard_operations"]}
+        },
+        {
+          "if": {
+            "required": ["standard_operations"],
+            "properties": {"standard_operations": {"contains": {"const": "describe_access"}}}
+          },
+          "then": {
+            "required": ["operations"],
+            "properties": {
+              "operations": {
+                "contains": {
+                  "required": ["name", "effect"],
+                  "properties": {"name": {"const": "describe_access"}, "effect": {"const": "read"}}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["standard_operations"],
+            "properties": {"standard_operations": {"contains": {"const": "check_access"}}}
+          },
+          "then": {
+            "required": ["operations"],
+            "properties": {
+              "operations": {
+                "contains": {
+                  "required": ["name", "effect"],
+                  "properties": {"name": {"const": "check_access"}, "effect": {"const": "check"}}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["storage"],
+            "properties": {
+              "storage": {"required": ["personal_data"], "properties": {"personal_data": {"const": true}}}
+            }
+          },
+          "then": {"required": ["export"]}
+        }
+      ]
+    },
+
+    "CatalogId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$(?![\\s\\S])"
+    },
+    "Audience": {
+      "description": "Audience at the target, naming register V-12: mcp-<system>, papaia-<module>[-<surface>], or the kept names flow and assist-api.",
+      "type": "string",
+      "maxLength": 67,
+      "pattern": "^(mcp|papaia)-[a-z0-9-]{1,60}$(?![\\s\\S])|^(flow|assist-api)$(?![\\s\\S])"
+    },
+    "RoleName": {
+      "description": "Realm role <module>-<role> or papaia-<role>.",
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)+$(?![\\s\\S])"
+    },
+    "DataClass": {
+      "description": "Scale of data classes, lowest first.",
+      "enum": [
+        "public",
+        "internal",
+        "partner_contact",
+        "personal",
+        "employee",
+        "confidential",
+        "special",
+        "professional_secret"
+      ]
+    },
+    "Effect": {"enum": ["read", "write", "send", "delete", "check"]},
+
+    "PlainText": {
+      "description": "Plain text: no control, zero-width or direction-changing characters, no markup, no links.",
+      "type": "string",
+      "pattern": "^[^\\u0000-\\u001f\\u007f<>\\u200b-\\u200f\\u202a-\\u202e\\u2060-\\u2064\\ufeff]*$(?![\\s\\S])",
+      "not": {"pattern": "[A-Za-z][A-Za-z0-9+.-]*://|[Ww][Ww][Ww]\\.|[Jj][Aa][Vv][Aa][Ss][Cc][Rr][Ii][Pp][Tt]:|\\]\\("}
+    },
+    "TitleText": {"$ref": "#/$defs/PlainText", "minLength": 1, "maxLength": 80},
+    "LongText": {"$ref": "#/$defs/PlainText", "minLength": 1, "maxLength": 300},
+    "SummaryText": {
+      "$ref": "#/$defs/PlainText",
+      "minLength": 1,
+      "maxLength": 120,
+      "allOf": [{"pattern": "^\\S+(\\s+\\S+){0,14}$(?![\\s\\S])"}]
+    },
+    "Title": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "de": {"$ref": "#/$defs/TitleText"},
+        "en": {"$ref": "#/$defs/TitleText"}
+      }
+    },
+    "Description": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "de": {"$ref": "#/$defs/LongText"},
+        "en": {"$ref": "#/$defs/LongText"}
+      }
+    },
+    "Summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "de": {"$ref": "#/$defs/SummaryText"},
+        "en": {"$ref": "#/$defs/SummaryText"}
+      }
+    },
+
+    "Path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(/[A-Za-z0-9._~-]+)*/?$(?![\\s\\S])",
+      "not": {"pattern": "(^|/)\\.\\.?(/|$(?![\\s\\S]))"}
+    },
+    "PathTemplate": {
+      "description": "Path on the module's own host; a segment {name} is a placeholder.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(/([A-Za-z0-9._~-]+|\\{[a-z][a-z0-9_]{0,63}\\}))*/?$(?![\\s\\S])",
+      "not": {"pattern": "(^|/)\\.\\.?(/|$(?![\\s\\S]))"}
+    },
+    "Address": {
+      "description": "Internal address; the core resolves service to the container name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "port"],
+      "properties": {
+        "service": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$(?![\\s\\S])"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "scheme": {"enum": ["http", "https"], "default": "http"},
+        "path": {"$ref": "#/$defs/Path", "default": "/"}
+      }
+    },
+
+    "JsonSchemaDocument": {
+      "$comment": "open object: a JSON Schema document; it is checked against the 2020-12 meta-schema instead.",
+      "type": "object",
+      "allOf": [
+        {"$ref": "https://json-schema.org/draft/2020-12/schema"},
+        {"$ref": "#/$defs/LocalReferencesOnly"}
+      ]
+    },
+    "LocalReferencesOnly": {
+      "$comment": "open object: walks every object and array of an embedded schema; references stay inside the document, no $id moves the base URI and the meta-schema is the 2020-12 one, so no consumer fetches a remote document or registers the schema under a foreign identifier. The 2019-09 keywords $recursiveRef and $recursiveAnchor are rejected.",
+      "propertyNames": {"not": {"enum": ["$id", "$recursiveRef", "$recursiveAnchor"]}},
+      "properties": {
+        "$ref": {"$ref": "#/$defs/LocalReferencesOnly", "pattern": "^#"},
+        "$dynamicRef": {"$ref": "#/$defs/LocalReferencesOnly", "pattern": "^#"},
+        "$schema": {
+          "$ref": "#/$defs/LocalReferencesOnly",
+          "if": {"type": "string"},
+          "then": {"const": "https://json-schema.org/draft/2020-12/schema"}
+        }
+      },
+      "additionalProperties": {"$ref": "#/$defs/LocalReferencesOnly"},
+      "items": {"$ref": "#/$defs/LocalReferencesOnly"}
+    },
+    "InputSchema": {
+      "$comment": "open object: a JSON Schema document whose instances are objects (tool arguments, request body and parameters).",
+      "$ref": "#/$defs/JsonSchemaDocument",
+      "required": ["type"],
+      "properties": {"type": {"const": "object"}}
+    },
+    "Operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "title",
+        "via",
+        "effect",
+        "retry",
+        "input_schema",
+        "output_schema",
+        "data_class_max",
+        "rights_check"
+      ],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$(?![\\s\\S])"},
+        "version": {"type": "integer", "minimum": 1},
+        "title": {"$ref": "#/$defs/Title"},
+        "description": {"$ref": "#/$defs/Description"},
+        "via": {"enum": ["tools", "rest"]},
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+        "path": {"$ref": "#/$defs/PathTemplate"},
+        "effect": {"$ref": "#/$defs/Effect"},
+        "retry": {"enum": ["safe", "idempotent", "at_most_once"]},
+        "input_schema": {"$ref": "#/$defs/InputSchema"},
+        "output_schema": {"$ref": "#/$defs/JsonSchemaDocument"},
+        "data_class_max": {"$ref": "#/$defs/DataClass"},
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$(?![\\s\\S])"},
+            "id_field": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$(?![\\s\\S])"}
+          }
+        },
+        "rights_check": {"enum": ["server", "server_and_check_access"]},
+        "role_hint": {"$ref": "#/$defs/TitleText"},
+        "timeout": {"type": "string", "pattern": "^[0-9]{1,6}(ms|s|m)$(?![\\s\\S])"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"via": {"const": "rest"}}},
+          "then": {"required": ["method", "path"]},
+          "else": {"not": {"anyOf": [{"required": ["method"]}, {"required": ["path"]}]}}
+        },
+        {
+          "if": {"properties": {"effect": {"enum": ["write", "delete", "check"]}}},
+          "then": {"required": ["resource"]}
+        }
+      ]
+    },
+    "Event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "title", "payload_schema", "data_class_max"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$(?![\\s\\S])"
+        },
+        "version": {"type": "integer", "minimum": 1},
+        "title": {"$ref": "#/$defs/Title"},
+        "payload_schema": {"$ref": "#/$defs/JsonSchemaDocument"},
+        "data_class_max": {"$ref": "#/$defs/DataClass"}
+      }
+    },
+    "UiItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "summary", "icon", "order", "host_key", "path", "visible_for_roles"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$(?![\\s\\S])"},
+        "title": {"$ref": "#/$defs/Title"},
+        "summary": {"$ref": "#/$defs/Summary"},
+        "example": {"$ref": "#/$defs/Description"},
+        "icon": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$(?![\\s\\S])"},
+        "order": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "host_key": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$(?![\\s\\S])"},
+        "path": {"$ref": "#/$defs/Path"},
+        "visible_for_roles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/RoleName"}
+        },
+        "targets": {
+          "type": "object",
+          "maxProperties": 50,
+          "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,31}$(?![\\s\\S])"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pattern"],
+            "properties": {
+              "pattern": {"$ref": "#/$defs/PathTemplate"},
+              "after_done": {"$ref": "#/$defs/PathTemplate"}
+            }
+          }
+        },
+        "admin_url": {"$ref": "#/$defs/PathTemplate"},
+        "opens_in": {"enum": ["same_tab", "new_tab"], "default": "same_tab"}
+      }
+    },
+    "Role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "title"],
+      "properties": {
+        "name": {"$ref": "#/$defs/RoleName"},
+        "title": {"$ref": "#/$defs/Title"},
+        "description": {"$ref": "#/$defs/Description"}
+      }
+    },
+
+    "Subject": {
+      "description": "OIDC subject of a person, or a placeholder ${NAME} the core resolves from the install input of the module.",
+      "type": "string",
+      "anyOf": [
+        {"pattern": "^[A-Za-z0-9][A-Za-z0-9._@:-]{0,254}$(?![\\s\\S])"},
+        {"pattern": "^\\$\\{[A-Z][A-Z0-9_]{0,63}\\}$(?![\\s\\S])"}
+      ]
+    },
+    "ServiceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "purpose", "owner_sub", "deputy_sub", "audiences", "effects", "credential"],
+      "properties": {
+        "id": {
+          "description": "svc-<module>-<purpose>, one account per purpose.",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^svc-[a-z][a-z0-9]*-[a-z0-9]+(-[a-z0-9]+)*$(?![\\s\\S])",
+          "not": {"pattern": "^svc-[a-z0-9]+-prefs$(?![\\s\\S])"}
+        },
+        "purpose": {"$ref": "#/$defs/Title"},
+        "owner_sub": {"$ref": "#/$defs/Subject"},
+        "deputy_sub": {"$ref": "#/$defs/Subject"},
+        "roles": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "default": [],
+          "items": {"$ref": "#/$defs/RoleName"}
+        },
+        "audiences": {
+          "type": "array",
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/Audience"}
+        },
+        "effects": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/Effect"}
+        },
+        "realm_management_roles": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "default": [],
+          "items": {"type": "string", "pattern": "^[a-z]+(-[a-z]+)*$(?![\\s\\S])", "maxLength": 40}
+        },
+        "credential": {"const": "private_key_jwt"}
+      }
+    },
+    "DelegationPurpose": {
+      "enum": ["flow.run", "assist.event", "assist.room-check", "assist.tools"]
+    },
+    "Delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purposes", "max_idle_days", "max_age_days"],
+      "properties": {
+        "purposes": {
+          "description": "Fixed purposes of the kit (sicherheit 1.10); their display texts belong to the personal area, not to the manifest.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/DelegationPurpose"}
+        },
+        "max_idle_days": {"type": "integer", "minimum": 1, "maximum": 30},
+        "max_age_days": {"type": "integer", "minimum": 1, "maximum": 180}
+      }
+    },
+    "Models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["needs"],
+      "properties": {
+        "needs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["alias", "features", "min_context", "max_class"],
+            "properties": {
+              "alias": {"type": "string", "pattern": "^papaia-[a-z0-9-]{1,40}$(?![\\s\\S])"},
+              "features": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"enum": ["chat", "tools", "json_schema", "json_object", "stream", "embeddings"]}
+              },
+              "min_context": {"type": "integer", "minimum": 1024},
+              "max_class": {"$ref": "#/$defs/DataClass"}
+            }
+          }
+        }
+      }
+    },
+    "Requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["addon_api"],
+      "properties": {
+        "addon_api": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 7}
+        },
+        "addons": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "optional"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$(?![\\s\\S])"},
+              "optional": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "Volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "backup"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$(?![\\s\\S])"},
+        "backup": {"enum": ["include", "exclude"]},
+        "reason": {"$ref": "#/$defs/Description"}
+      },
+      "if": {"properties": {"backup": {"const": "exclude"}}},
+      "then": {"required": ["reason"]}
+    },
+    "Export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exit"],
+      "properties": {
+        "exit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "schema"],
+          "properties": {
+            "format": {"type": "string", "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9.-]*/[1-9][0-9]*$(?![\\s\\S])"},
+            "schema": {
+              "description": "Schema of the export: path inside the module repository or https URL.",
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "^(https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~-]+)+|[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\\.json)$(?![\\s\\S])",
+              "not": {"pattern": "(^|/)\\.\\.?(/|$(?![\\s\\S]))"}
+            }
+          }
+        }
+      }
+    },
+    "Retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "days": {"type": "integer", "minimum": 1, "maximum": 36500},
+        "until": {"enum": ["account_deleted", "deleted_by_person", "legal_obligation"]},
+        "note": {"$ref": "#/$defs/Description"}
+      },
+      "anyOf": [{"required": ["days"]}, {"required": ["until"]}]
+    },
+    "Category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "purpose", "legal_basis", "retention", "data_class", "erasure"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$(?![\\s\\S])"},
+        "title": {"$ref": "#/$defs/Title"},
+        "purpose": {"$ref": "#/$defs/Description"},
+        "legal_basis": {"$ref": "#/$defs/Description"},
+        "retention": {"$ref": "#/$defs/Retention"},
+        "data_class": {"$ref": "#/$defs/DataClass"},
+        "erasure": {"enum": ["retention", "me_api", "person_erase", "on_request"]},
+        "on_request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "way", "responsible"],
+          "properties": {
+            "action": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?![\\s\\S])"},
+            "way": {"$ref": "#/$defs/Description"},
+            "responsible": {"$ref": "#/$defs/Title"}
+          }
+        }
+      },
+      "if": {"properties": {"erasure": {"const": "on_request"}}},
+      "then": {"required": ["on_request"]},
+      "else": {"not": {"required": ["on_request"]}}
+    },
+    "Storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["personal_data"],
+      "properties": {
+        "personal_data": {"type": "boolean"},
+        "categories": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {"$ref": "#/$defs/Category"}
+        },
+        "retention": {"$ref": "#/$defs/Retention"},
+        "secrets": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "location"],
+            "properties": {
+              "kind": {"enum": ["file", "database", "keyring"]},
+              "location": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$(?![\\s\\S])"}
+            }
+          }
+        }
+      },
+      "if": {"properties": {"personal_data": {"const": true}}},
+      "then": {
+        "required": ["categories", "retention"],
+        "properties": {"categories": {"minItems": 1}}
+      }
+    }
+  }
+}

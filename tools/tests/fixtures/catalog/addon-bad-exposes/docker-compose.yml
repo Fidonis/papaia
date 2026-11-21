@@ -1,0 +1,3 @@
+services:
+  bad-mcp:
+    image: example.invalid/bad-mcp:1.0.0

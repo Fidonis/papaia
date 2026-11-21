@@ -1,0 +1,60 @@
+# A user interface add-on of the suite (named in the compatibility matrix) with one
+# REST interface next to it.
+name: papaia-flow
+version: 0.1.4
+requires:
+  addon_api: [7]
+exposes:
+  - id: flow.console
+    kind: ui
+    title: {de: "Flow"}
+    description:
+      de: "Abläufe bauen, freigeben und Läufe verfolgen."
+      en: "Build and approve flows and track their runs."
+    identity: [person]
+    ui:
+      - id: flow
+        title: {de: "Flow", en: "Flow"}
+        summary: {de: "Abläufe bauen, freigeben und Läufe verfolgen", en: "Build, approve and track flows"}
+        example: {de: "Rechnungseingang prüfen und an die Buchhaltung geben"}
+        icon: flow
+        order: 30
+        host_key: flow
+        path: /
+        visible_for_roles: [flow-member, flow-admin]
+        targets:
+          run: {pattern: "/runs/{run_id}", after_done: /runs}
+        admin_url: /admin
+  - id: flow.api
+    kind: rest
+    title: {de: "Flow-Schnittstelle", en: "Flow interface"}
+    address: {service: console-web, port: 8443, scheme: https, path: /api}
+    audience: flow
+    identity: [service]
+    operations:
+      - name: start_run
+        version: 1
+        title: {de: "Lauf starten", en: "Start run"}
+        description: {de: "Startet einen Lauf.", en: "Starts a run."}
+        via: rest
+        method: POST
+        path: "/runs/{flow_id}"
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          required: [flow_id]
+          properties:
+            flow_id: {type: string}
+        output_schema: {type: object}
+        data_class_max: confidential
+        resource: {type: flow, id_field: flow_id}
+        rights_check: server
+    events:
+      - name: flow.run.finished
+        version: 1
+        title: {de: "Lauf beendet", en: "Run finished"}
+        payload_schema: {type: object}
+        data_class_max: internal
+    storage:
+      personal_data: false

@@ -421,6 +421,9 @@ cmd_addon_stop() {
         info "Stopping addon $addon_name..."
         _addon_compose stop "$addon_name" "$addon_path"
     fi
+    # The catalog keeps the add-on, marked stopped (`addon start` marks it running).
+    py_cli addon-state --name="$addon_name" --state=stopped \
+        || warn "Addon $addon_name is stopped, but the platform catalog was not updated."
     success "addon stop complete: $addon_name"
 }
 

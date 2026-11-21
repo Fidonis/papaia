@@ -1,0 +1,5 @@
+services:
+  probe-mcp:
+    image: example.invalid/probe-mcp:0.3.0
+    environment:
+      PROBE_TOKEN: ${PROBE_TOKEN}

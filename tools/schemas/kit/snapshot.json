@@ -1,0 +1,13 @@
+{
+  "format": "papaia.kit-schema-snapshot/1",
+  "source": {
+    "package": "papaia-kit",
+    "version": "0.1.1",
+    "commit": "fb8225c710df4bf104d04116dcec4a9259e525e4"
+  },
+  "files": {
+    "exposes.v1.schema.json": "3c837c3b09dff148d916618b43a3a23f29130b1c27907554b4a6ee90e159abea",
+    "platform-groups.v1.schema.json": "6d32c907d9a0d3761372f1526a2f9da05e04f09d979260473e36487df4dc733e",
+    "platform-services.v1.schema.json": "434528d032c527106043b4d77ab7ce6ef83973b8c83a007316ddd4fdaca8fda1"
+  }
+}

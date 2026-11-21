@@ -451,6 +451,15 @@ class FakeRealm:
             if method == "PUT":
                 self.realm.update(copy.deepcopy(body))
                 return None
+        if route == "/groups" and method == "GET":
+            # The fake's groups are flat: top level only, no children.
+            first, size = int(query["first"][0]), int(query["max"][0])
+            reps = [
+                {"id": g["id"], "name": g["name"], "path": g["path"], "subGroupCount": 0,
+                 "attributes": {}}
+                for g in self.groups.values()
+            ]
+            return reps[first:first + size]
         if route == "/roles" and method == "GET":
             return [self._role_rep(n) for n in self.roles]
         if route == "/roles" and method == "POST":

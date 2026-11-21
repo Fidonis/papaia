@@ -42,7 +42,7 @@ from pathlib import Path
 
 import yaml
 
-from . import semver
+from . import exposes, semver
 
 STATUS_OK = "OK"
 STATUS_INCOMPATIBLE = "INCOMPATIBLE"
@@ -99,6 +99,7 @@ GENERATION_FEATURES: dict[str, int] = {
 }
 
 INGRESS_AXIS = "integration.nginx"
+EXPOSES_AXIS = "exposes"
 
 MODE_ENFORCE = "enforce"
 MODE_WARN = "warn"
@@ -421,6 +422,14 @@ def evaluate_addon(
         features = manifest_generation_features(manifest)
     except ValueError as exc:
         return CompatResult(name, STATUS_ERROR, axis=INGRESS_AXIS, reason=str(exc))
+
+    # The section the catalog is rendered from (generation 7): a declaration the kit
+    # schema refuses is a malformed manifest, whatever the core serves.
+    if manifest.get("exposes") is not None:
+        try:
+            exposes.check(manifest["exposes"], name)
+        except exposes.ExposesError as exc:
+            return CompatResult(name, STATUS_ERROR, axis=EXPOSES_AXIS, reason=str(exc))
 
     warnings: list[str] = []
     if features and generations is not None:

@@ -1,0 +1,4 @@
+services:
+  console-web:
+    image: example.invalid/console-web:2.1.0
+    container_name: papaia-console-web

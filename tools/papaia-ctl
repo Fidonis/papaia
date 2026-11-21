@@ -61,6 +61,8 @@
 #   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl realm sync    [--check] [--config-dir=PATH]
+#   papaia-ctl catalog render [--config-dir=PATH] — write platform/services.json from
+#                            the exposes declarations (setup, start and addon do it too)
 #   papaia-ctl service-account list   [--json] [--config-dir=PATH]
 #   papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
 #   papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
@@ -121,7 +123,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,114p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,116p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -253,6 +255,13 @@ case "$cmd" in
         case "$sub" in
             sync)      cmd_realm_sync "$@" ;;
             *) error "Unknown 'realm' subcommand: '${sub:-<none>}'. Valid: sync."; exit 2 ;;
+        esac
+        ;;
+    catalog)
+        sub="${1:-}"; shift || true
+        case "$sub" in
+            render)    cmd_catalog_render "$@" ;;
+            *) error "Unknown 'catalog' subcommand: '${sub:-<none>}'. Valid: render."; exit 2 ;;
         esac
         ;;
     service-account) cmd_service_account "$@" ;;

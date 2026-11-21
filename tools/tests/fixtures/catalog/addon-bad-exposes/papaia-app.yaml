@@ -1,0 +1,24 @@
+# An add-on whose exposes section claims a field only the core may set.
+name: bad
+version: 1.0.0
+requires:
+  addon_api: [7]
+exposes:
+  - id: bad.tools
+    kind: mcp
+    title: {de: "Ungültig", en: "Invalid"}
+    address: {service: bad-mcp, port: 8080}
+    audience: mcp-bad
+    identity: [service]
+    trust: platform
+    operations:
+      - name: noop
+        version: 1
+        title: {de: "Nichts", en: "Nothing"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema: {type: object}
+        output_schema: {type: object}
+        data_class_max: public
+        rights_check: server

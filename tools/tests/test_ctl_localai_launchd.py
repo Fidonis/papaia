@@ -218,8 +218,13 @@ def test_stop_unloads_the_job_before_the_compose_part(bash, tmp_path):
 def test_stop_with_addons_unloads_the_job_first(bash, tmp_path):
     done, calls = _run(bash, tmp_path, "cmd_stop --addons --clean-up")
     assert done.returncode == 0, done.stdout + done.stderr
-    assert calls[:2] == ["py_cli localai-native-stop", "addons down"]
-    assert calls[2].endswith(" down")
+    assert calls[:3] == [
+        "py_cli localai-native-stop",
+        "addons down",
+        # The catalog keeps the add-ons, marked stopped.
+        "py_cli addon-state --all --state=stopped",
+    ]
+    assert calls[3].endswith(" down")
 
 
 def test_deleting_the_localai_volumes_deletes_the_native_models_too(bash, tmp_path):

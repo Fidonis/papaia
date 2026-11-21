@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from . import (
+    catalog,
     common,
     deployment,
     egress,
@@ -265,6 +266,13 @@ def render(config_dir: Path, repo_root: Path) -> None:
             raise RenderError(str(exc)) from exc
         for warning in warnings:
             logger.warning("%s", warning)
+
+    # The platform catalog follows every change of the add-ons, their state and the
+    # active profiles; it is written only when its content changed.
+    try:
+        catalog.render(config_dir, repo_root)
+    except catalog.CatalogError as exc:
+        raise RenderError(f"platform catalog: {exc}") from exc
 
 
 LIFECYCLE_ACCOUNT = "svc-papaia-lifecycle"

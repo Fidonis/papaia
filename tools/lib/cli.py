@@ -30,6 +30,7 @@ import yaml
 from . import (
     audit,
     backup,
+    catalog,
     cli_addon,
     cli_node,
     cluster,
@@ -747,6 +748,25 @@ def cmd_render(args: argparse.Namespace) -> int:
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
     print("Rendered.")
+    return 0
+
+
+def cmd_catalog_render(args: argparse.Namespace) -> int:
+    """`papaia-ctl catalog render`: write platform/services.json from the declarations
+    of the installed add-ons and the active core profiles (groups.json is written by
+    `realm sync`, which reads the groups from the identity provider)."""
+    config_dir = Path(args.config_dir)
+    try:
+        written = catalog.render(config_dir, Path(args.repo_root))
+    except catalog.CatalogError as exc:
+        print(f"ERROR: platform catalog: {exc}", file=sys.stderr)
+        return 3
+    path = config_dir / catalog.CATALOG_DIR / catalog.SERVICES_FILE
+    reason = catalog.skip_reason(config_dir, Path(args.repo_root))
+    if reason is not None:
+        print(f"ERROR: no platform catalog: {reason}.", file=sys.stderr)
+        return 3
+    print(f"Platform catalog {'written' if written else 'unchanged'}: {path}")
     return 0
 
 
@@ -2233,6 +2253,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_dependents.add_argument("--name", required=True)
     p_addon_dependents.add_argument("--force", action="store_true")
     p_addon_dependents.set_defaults(func=cli_addon.cmd_addon_dependents)
+
+    p_addon_state = sub.add_parser("addon-state")
+    p_addon_state.add_argument("--name", default=None)
+    p_addon_state.add_argument("--all", action="store_true")
+    p_addon_state.add_argument("--state", required=True)
+    p_addon_state.set_defaults(func=cli_addon.cmd_addon_state)
+
+    p_catalog_render = sub.add_parser("catalog-render")
+    p_catalog_render.set_defaults(func=cmd_catalog_render)
 
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)

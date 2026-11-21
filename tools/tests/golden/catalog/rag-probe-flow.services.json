@@ -1,0 +1,952 @@
+{
+  "format": "papaia.platform-services/1",
+  "generated_at": "2026-11-21T09:30:00Z",
+  "addon_api": 12,
+  "security_profile": "standard",
+  "identity": {
+    "issuer": "https://auth.papaia.example/realms/papaia",
+    "token_endpoint_internal": "https://keycloak:8443/realms/papaia/protocol/openid-connect/token",
+    "jwks_uri_internal": "https://keycloak:8443/realms/papaia/protocol/openid-connect/certs"
+  },
+  "services": [
+    {
+      "id": "flow.api",
+      "provider": "papaia-flow",
+      "version": "0.1.4",
+      "kind": "rest",
+      "state": "stopped",
+      "trust": "addon",
+      "title": {
+        "de": "Flow-Schnittstelle",
+        "en": "Flow interface"
+      },
+      "address": "https://papaia-console-web:8443/api",
+      "audience": "flow",
+      "identity": [
+        "service"
+      ],
+      "operations": [
+        {
+          "name": "start_run",
+          "version": 1,
+          "title": {
+            "de": "Lauf starten",
+            "en": "Start run"
+          },
+          "via": "rest",
+          "method": "POST",
+          "path": "/runs/{flow_id}",
+          "effect": "write",
+          "retry": "at_most_once",
+          "input_schema": {
+            "type": "object",
+            "required": [
+              "flow_id"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": "string"
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "confidential",
+          "resource": {
+            "type": "flow",
+            "id_field": "flow_id"
+          },
+          "rights_check": "server"
+        }
+      ],
+      "events": [
+        {
+          "name": "flow.run.finished",
+          "version": 1,
+          "title": {
+            "de": "Lauf beendet",
+            "en": "Run finished"
+          },
+          "payload_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal"
+        }
+      ],
+      "content_hash": "sha256:04750a91a28bdb877917836eb75ef0f7541e77656216192797a0b5ae43c37b3e"
+    },
+    {
+      "id": "flow.console",
+      "provider": "papaia-flow",
+      "version": "0.1.4",
+      "kind": "ui",
+      "state": "stopped",
+      "trust": "addon",
+      "title": {
+        "de": "Flow",
+        "en": "Flow"
+      },
+      "description": {
+        "de": "Abläufe bauen, freigeben und Läufe verfolgen.",
+        "en": "Build and approve flows and track their runs."
+      },
+      "identity": [
+        "person"
+      ],
+      "ui": [
+        {
+          "id": "flow",
+          "title": {
+            "de": "Flow",
+            "en": "Flow"
+          },
+          "summary": {
+            "de": "Abläufe bauen, freigeben und Läufe verfolgen",
+            "en": "Build, approve and track flows"
+          },
+          "example": {
+            "de": "Rechnungseingang prüfen und an die Buchhaltung geben",
+            "en": "Rechnungseingang prüfen und an die Buchhaltung geben"
+          },
+          "icon": "flow",
+          "order": 30,
+          "host_key": "flow",
+          "path": "/",
+          "public_url": "https://flow.papaia.example/",
+          "visible_for_roles": [
+            "flow-member",
+            "flow-admin"
+          ],
+          "targets": {
+            "run": {
+              "pattern": "/runs/{run_id}",
+              "after_done": "/runs"
+            }
+          },
+          "admin_url": "/admin",
+          "opens_in": "same_tab"
+        }
+      ],
+      "content_hash": "sha256:344d2bc6eb0842b7e704f243263907022b2734291e4bc7e92f0158b7d466f312"
+    },
+    {
+      "id": "probe.echo",
+      "provider": "probe",
+      "version": "0.3.0",
+      "kind": "mcp",
+      "state": "running",
+      "trust": "addon",
+      "title": {
+        "de": "Probe-Anbindung",
+        "en": "Probe connection"
+      },
+      "description": {
+        "de": "Gibt die Eingabe zurück und schreibt Notizen.",
+        "en": "Echoes the input and writes notes."
+      },
+      "address": "http://probe-mcp:8080/mcp",
+      "audience": "mcp-probe",
+      "identity": [
+        "person",
+        "service"
+      ],
+      "operations": [
+        {
+          "name": "echo",
+          "version": 1,
+          "title": {
+            "de": "Echo",
+            "en": "Echo"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "text"
+            ],
+            "properties": {
+              "text": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "ratio": {
+                "type": "number",
+                "minimum": 0.5,
+                "maximum": 1000.0
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "rights_check": "server"
+        },
+        {
+          "name": "write_note",
+          "version": 2,
+          "title": {
+            "de": "Notiz schreiben",
+            "en": "Write note"
+          },
+          "via": "tools",
+          "effect": "write",
+          "retry": "at_most_once",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "note_id",
+              "text"
+            ],
+            "properties": {
+              "note_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "personal",
+          "resource": {
+            "type": "note",
+            "id_field": "note_id"
+          },
+          "rights_check": "server_and_check_access"
+        },
+        {
+          "name": "check_access",
+          "version": 1,
+          "title": {
+            "de": "Rechte prüfen",
+            "en": "Check access"
+          },
+          "via": "tools",
+          "effect": "check",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "resource": {
+            "type": "note",
+            "id_field": "id"
+          },
+          "rights_check": "server"
+        }
+      ],
+      "standard_operations": [
+        "check_access"
+      ],
+      "roles": [
+        {
+          "name": "probe-user",
+          "title": {
+            "de": "Probe nutzen",
+            "en": "Use the probe"
+          }
+        }
+      ],
+      "content_hash": "sha256:102b5d708077def25067104db615a2a6b0b1055137b7912d3dcd655bea99d2ab"
+    },
+    {
+      "id": "qdrant.collections",
+      "provider": "core:rag",
+      "version": "1.9.0",
+      "kind": "mcp",
+      "state": "running",
+      "trust": "platform",
+      "title": {
+        "de": "Vektorsammlungen",
+        "en": "Vector collections"
+      },
+      "description": {
+        "de": "Sammlungen und Punkte einer Qdrant-Instanz suchen, lesen und pflegen, mit den Rechten der Person aus der Rechteliste des Servers.",
+        "en": "Search, read and maintain collections and points of a Qdrant instance with the rights of the person from the grant list of the server."
+      },
+      "address": "http://qdrant-mcp:8000/mcp",
+      "audience": "mcp-qdrant",
+      "identity": [
+        "person"
+      ],
+      "operations": [
+        {
+          "name": "list_collections",
+          "version": 1,
+          "title": {
+            "de": "Sammlungen auflisten",
+            "en": "List collections"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "rights_check": "server"
+        },
+        {
+          "name": "get_collection_info",
+          "version": 1,
+          "title": {
+            "de": "Sammlung beschreiben",
+            "en": "Describe collection"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "collection"
+            ],
+            "properties": {
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "rights_check": "server"
+        },
+        {
+          "name": "search_collection",
+          "version": 1,
+          "title": {
+            "de": "Mit Vektor suchen",
+            "en": "Search by vector"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "collection",
+              "vector"
+            ],
+            "properties": {
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "vector": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 65536,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "query_filter": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "with_payload": {
+                "type": "boolean"
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "confidential",
+          "rights_check": "server"
+        },
+        {
+          "name": "search_collection_by_text",
+          "version": 1,
+          "title": {
+            "de": "Mit Text suchen",
+            "en": "Search by text"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "collection",
+              "query"
+            ],
+            "properties": {
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "query_filter": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "with_payload": {
+                "type": "boolean"
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "confidential",
+          "rights_check": "server",
+          "timeout": "60s"
+        },
+        {
+          "name": "scroll_collection",
+          "version": 1,
+          "title": {
+            "de": "Punkte durchblättern",
+            "en": "Scroll points"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "collection"
+            ],
+            "properties": {
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "offset": {
+                "type": [
+                  "string",
+                  "integer",
+                  "null"
+                ],
+                "maxLength": 255
+              },
+              "query_filter": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "with_payload": {
+                "type": "boolean"
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "confidential",
+          "rights_check": "server"
+        },
+        {
+          "name": "list_documents",
+          "version": 1,
+          "title": {
+            "de": "Dokumente auflisten",
+            "en": "List documents"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "collection"
+            ],
+            "properties": {
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "query_filter": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "confidential",
+          "rights_check": "server"
+        },
+        {
+          "name": "upsert_points",
+          "version": 1,
+          "title": {
+            "de": "Punkte schreiben",
+            "en": "Upsert points"
+          },
+          "via": "tools",
+          "effect": "write",
+          "retry": "idempotent",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "collection",
+              "points"
+            ],
+            "properties": {
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "points": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10000,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "vector"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": [
+                        "string",
+                        "integer"
+                      ],
+                      "maxLength": 64,
+                      "minimum": 0
+                    },
+                    "vector": {
+                      "type": [
+                        "array",
+                        "object"
+                      ]
+                    },
+                    "payload": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "confidential",
+          "resource": {
+            "type": "collection",
+            "id_field": "collection"
+          },
+          "rights_check": "server"
+        },
+        {
+          "name": "delete_points",
+          "version": 1,
+          "title": {
+            "de": "Punkte löschen",
+            "en": "Delete points"
+          },
+          "via": "tools",
+          "effect": "delete",
+          "retry": "idempotent",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "collection",
+              "point_ids"
+            ],
+            "properties": {
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "point_ids": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10000,
+                "items": {
+                  "type": [
+                    "string",
+                    "integer"
+                  ],
+                  "maxLength": 64,
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "confidential",
+          "resource": {
+            "type": "collection",
+            "id_field": "collection"
+          },
+          "rights_check": "server"
+        },
+        {
+          "name": "list_acl",
+          "version": 1,
+          "title": {
+            "de": "Freigaben auflisten",
+            "en": "List grants"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "role": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 255
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "rights_check": "server",
+          "role_hint": "Collection administrators only"
+        },
+        {
+          "name": "grant_access",
+          "version": 1,
+          "title": {
+            "de": "Freigabe erteilen",
+            "en": "Grant access"
+          },
+          "via": "tools",
+          "effect": "write",
+          "retry": "idempotent",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "collection",
+              "access"
+            ],
+            "properties": {
+              "role": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "access": {
+                "enum": [
+                  "r",
+                  "rw",
+                  "m"
+                ]
+              },
+              "doc_policy": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "default"
+                    ],
+                    "properties": {
+                      "default": {
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ]
+                      },
+                      "conditions": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "field",
+                            "mode",
+                            "values"
+                          ],
+                          "properties": {
+                            "field": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255
+                            },
+                            "mode": {
+                              "enum": [
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            "values": {
+                              "type": "array",
+                              "minItems": 1,
+                              "maxItems": 1000,
+                              "items": {
+                                "type": "string",
+                                "maxLength": 1024
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "resource": {
+            "type": "acl_grant",
+            "id_field": "role"
+          },
+          "rights_check": "server",
+          "role_hint": "Collection administrators only"
+        },
+        {
+          "name": "revoke_access",
+          "version": 1,
+          "title": {
+            "de": "Freigabe entziehen",
+            "en": "Revoke access"
+          },
+          "via": "tools",
+          "effect": "delete",
+          "retry": "idempotent",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "collection"
+            ],
+            "properties": {
+              "role": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "collection": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "resource": {
+            "type": "acl_grant",
+            "id_field": "role"
+          },
+          "rights_check": "server",
+          "role_hint": "Collection administrators only"
+        },
+        {
+          "name": "refresh_acl",
+          "version": 1,
+          "title": {
+            "de": "Freigaben neu laden",
+            "en": "Reload grants"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "rights_check": "server",
+          "role_hint": "Collection administrators only"
+        },
+        {
+          "name": "describe_access",
+          "version": 1,
+          "title": {
+            "de": "Eigene Rechte anzeigen",
+            "en": "Describe own access"
+          },
+          "via": "tools",
+          "effect": "read",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "rights_check": "server"
+        },
+        {
+          "name": "check_access",
+          "version": 1,
+          "title": {
+            "de": "Rechte prüfen",
+            "en": "Check access"
+          },
+          "via": "tools",
+          "effect": "check",
+          "retry": "safe",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "resources",
+              "right"
+            ],
+            "properties": {
+              "resources": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "collection",
+                        "acl_grant"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    }
+                  }
+                }
+              },
+              "right": {
+                "enum": [
+                  "read",
+                  "write",
+                  "delete"
+                ]
+              }
+            }
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "data_class_max": "internal",
+          "resource": {
+            "type": "collection",
+            "id_field": "resources"
+          },
+          "rights_check": "server"
+        }
+      ],
+      "standard_operations": [
+        "describe_access",
+        "check_access"
+      ],
+      "content_hash": "sha256:35cd20401af36d526c0942ce7902d0c03764201a0f03a5e8aae44a1311151602"
+    }
+  ],
+  "models": [],
+  "branding": {
+    "name": "papAIa"
+  },
+  "platform_notices": []
+}

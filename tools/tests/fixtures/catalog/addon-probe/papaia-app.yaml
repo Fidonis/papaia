@@ -1,0 +1,75 @@
+# A tool server add-on with one read and one write operation (contract generation 7).
+name: probe
+version: 0.3.0
+requires:
+  addon_api: [7]
+exposes:
+  - id: probe.echo
+    kind: mcp
+    title: {de: "Probe-Anbindung", en: "Probe connection"}
+    description:
+      de: "Gibt die Eingabe zurück und schreibt Notizen."
+      en: "Echoes the input and writes notes."
+    address: {service: probe-mcp, port: 8080, path: /mcp}
+    audience: mcp-probe
+    identity: [person, service]
+    standard_operations: [check_access]
+    operations:
+      - name: echo
+        version: 1
+        title: {de: "Echo", en: "Echo"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [text]
+          properties:
+            text: {type: string, maxLength: 200}
+            ratio: {type: number, minimum: 0.5, maximum: 1.0e+3}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+      - name: write_note
+        version: 2
+        title: {de: "Notiz schreiben", en: "Write note"}
+        via: tools
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [note_id, text]
+          properties:
+            note_id: {type: string}
+            text: {type: string}
+        output_schema: {type: object}
+        data_class_max: personal
+        resource: {type: note, id_field: note_id}
+        rights_check: server_and_check_access
+      - name: check_access
+        version: 1
+        title: {de: "Rechte prüfen", en: "Check access"}
+        via: tools
+        effect: check
+        retry: safe
+        input_schema: {type: object, properties: {id: {type: string}}}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: note, id_field: id}
+        rights_check: server
+    roles:
+      - name: probe-user
+        title: {de: "Probe nutzen", en: "Use the probe"}
+    service_accounts:
+      - id: svc-probe-sync
+        purpose:
+          de: "Gleicht Notizen ab"
+          en: "Synchronises notes"
+        owner_sub: 0f8e6c1a-2b3d-4e5f-8a9b-1c2d3e4f5a6b
+        deputy_sub: 1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d
+        roles: [probe-user]
+        audiences: [mcp-probe]
+        effects: [read]
+        credential: private_key_jwt

@@ -609,6 +609,24 @@ cmd_realm_sync() {
     py_cli realm-sync ${flags[@]+"${flags[@]}"}
 }
 
+# papaia-ctl catalog render: platform/services.json from the exposes declarations of the
+# installed add-ons and the active core profiles. setup, start and every addon command
+# render it as well; this renders it alone, without touching anything else.
+cmd_catalog_render() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for catalog render: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli catalog-render
+}
+
 # papaia-ctl service-account list [--json] | rotate <id> [--grace=SECONDS]
 # The declared service accounts; created and kept by the realm sync, so this runs where
 # the realm sync runs (Keycloak's node).
@@ -841,6 +859,9 @@ cmd_stop() {
         else
             _addon_compose_all stop
         fi
+        # The catalog keeps the add-ons, marked stopped; a catalog that cannot be
+        # rendered does not undo the stop.
+        py_cli addon-state --all --state=stopped || warn "The platform catalog was not updated."
     fi
 
     if [ "$clean_up" -eq 1 ]; then

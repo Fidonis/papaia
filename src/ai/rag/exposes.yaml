@@ -1,0 +1,306 @@
+# Catalog declaration of the core profile `rag` (contract generation 7, schema exposes.v1).
+#
+# The profile has no add-on manifest, so its surfaces are declared here under the same
+# key as an add-on's `exposes:`. `papaia-ctl catalog render` reads this file while the
+# profile is active and renders the entry into $PAPAIA_CONFIG_DIR/platform/services.json.
+#
+# The operations describe the tool server qdrant-mcp-rbac from version 0.5.0 on, as its
+# own papaia-app.yaml declares them; `address.service` names the service of this
+# profile's docker-compose.yml.
+exposes:
+  - id: qdrant.collections
+    kind: mcp
+    title: {de: "Vektorsammlungen", en: "Vector collections"}
+    description:
+      de: "Sammlungen und Punkte einer Qdrant-Instanz suchen, lesen und pflegen, mit den Rechten der Person aus der Rechteliste des Servers."
+      en: "Search, read and maintain collections and points of a Qdrant instance with the rights of the person from the grant list of the server."
+    address: {service: qdrant-mcp, port: 8000, scheme: http, path: /mcp}
+    audience: mcp-qdrant
+    identity: [person]
+    standard_operations: [describe_access, check_access]
+    operations:
+      - name: list_collections
+        version: 1
+        title: {de: "Sammlungen auflisten", en: "List collections"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          properties: {}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+      - name: get_collection_info
+        version: 1
+        title: {de: "Sammlung beschreiben", en: "Describe collection"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [collection]
+          properties:
+            collection: {type: string, minLength: 1, maxLength: 255}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+      - name: search_collection
+        version: 1
+        title: {de: "Mit Vektor suchen", en: "Search by vector"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [collection, vector]
+          properties:
+            collection: {type: string, minLength: 1, maxLength: 255}
+            vector:
+              type: array
+              minItems: 1
+              maxItems: 65536
+              items: {type: number}
+            limit: {type: integer, minimum: 1, maximum: 1000}
+            query_filter: {type: [object, "null"]}
+            with_payload: {type: boolean}
+        output_schema: {type: object}
+        data_class_max: confidential
+        rights_check: server
+      - name: search_collection_by_text
+        version: 1
+        title: {de: "Mit Text suchen", en: "Search by text"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [collection, query]
+          properties:
+            collection: {type: string, minLength: 1, maxLength: 255}
+            query: {type: string, minLength: 1, maxLength: 8000}
+            limit: {type: integer, minimum: 1, maximum: 1000}
+            query_filter: {type: [object, "null"]}
+            with_payload: {type: boolean}
+        output_schema: {type: object}
+        data_class_max: confidential
+        rights_check: server
+        timeout: 60s
+      - name: scroll_collection
+        version: 1
+        title: {de: "Punkte durchblättern", en: "Scroll points"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [collection]
+          properties:
+            collection: {type: string, minLength: 1, maxLength: 255}
+            limit: {type: integer, minimum: 1, maximum: 1000}
+            offset: {type: [string, integer, "null"], maxLength: 255}
+            query_filter: {type: [object, "null"]}
+            with_payload: {type: boolean}
+        output_schema: {type: object}
+        data_class_max: confidential
+        rights_check: server
+      - name: list_documents
+        version: 1
+        title: {de: "Dokumente auflisten", en: "List documents"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [collection]
+          properties:
+            collection: {type: string, minLength: 1, maxLength: 255}
+            limit: {type: integer, minimum: 1, maximum: 10000}
+            query_filter: {type: [object, "null"]}
+        output_schema: {type: object}
+        data_class_max: confidential
+        rights_check: server
+      - name: upsert_points
+        version: 1
+        title: {de: "Punkte schreiben", en: "Upsert points"}
+        via: tools
+        effect: write
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [collection, points]
+          properties:
+            collection: {type: string, minLength: 1, maxLength: 255}
+            points:
+              type: array
+              minItems: 1
+              maxItems: 10000
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, vector]
+                properties:
+                  id: {type: [string, integer], maxLength: 64, minimum: 0}
+                  vector: {type: [array, object]}
+                  payload: {type: [object, "null"]}
+        output_schema: {type: object}
+        data_class_max: confidential
+        resource: {type: collection, id_field: collection}
+        rights_check: server
+      - name: delete_points
+        version: 1
+        title: {de: "Punkte löschen", en: "Delete points"}
+        via: tools
+        effect: delete
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [collection, point_ids]
+          properties:
+            collection: {type: string, minLength: 1, maxLength: 255}
+            point_ids:
+              type: array
+              minItems: 1
+              maxItems: 10000
+              items: {type: [string, integer], maxLength: 64, minimum: 0}
+        output_schema: {type: object}
+        data_class_max: confidential
+        resource: {type: collection, id_field: collection}
+        rights_check: server
+      - name: list_acl
+        version: 1
+        title: {de: "Freigaben auflisten", en: "List grants"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          properties:
+            role: {type: [string, "null"], minLength: 1, maxLength: 255}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+        role_hint: "Collection administrators only"
+      - name: grant_access
+        version: 1
+        title: {de: "Freigabe erteilen", en: "Grant access"}
+        via: tools
+        effect: write
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [role, collection, access]
+          properties:
+            role: {type: string, minLength: 1, maxLength: 255}
+            collection: {type: string, minLength: 1, maxLength: 255}
+            access: {enum: [r, rw, m]}
+            doc_policy:
+              anyOf:
+                - type: "null"
+                - type: object
+                  additionalProperties: false
+                  required: [default]
+                  properties:
+                    default: {enum: [allow, deny]}
+                    conditions:
+                      type: array
+                      maxItems: 100
+                      items:
+                        type: object
+                        additionalProperties: false
+                        required: [field, mode, values]
+                        properties:
+                          field: {type: string, minLength: 1, maxLength: 255}
+                          mode: {enum: [allow, deny]}
+                          values:
+                            type: array
+                            minItems: 1
+                            maxItems: 1000
+                            items: {type: string, maxLength: 1024}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: acl_grant, id_field: role}
+        rights_check: server
+        role_hint: "Collection administrators only"
+      - name: revoke_access
+        version: 1
+        title: {de: "Freigabe entziehen", en: "Revoke access"}
+        via: tools
+        effect: delete
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [role, collection]
+          properties:
+            role: {type: string, minLength: 1, maxLength: 255}
+            collection: {type: string, minLength: 1, maxLength: 255}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: acl_grant, id_field: role}
+        rights_check: server
+        role_hint: "Collection administrators only"
+      - name: refresh_acl
+        version: 1
+        title: {de: "Freigaben neu laden", en: "Reload grants"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          properties: {}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+        role_hint: "Collection administrators only"
+      - name: describe_access
+        version: 1
+        title: {de: "Eigene Rechte anzeigen", en: "Describe own access"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          properties: {}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+      - name: check_access
+        version: 1
+        title: {de: "Rechte prüfen", en: "Check access"}
+        via: tools
+        effect: check
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [resources, right]
+          properties:
+            resources:
+              type: array
+              minItems: 1
+              maxItems: 100
+              items:
+                type: object
+                additionalProperties: false
+                required: [type, id]
+                properties:
+                  type: {enum: [collection, acl_grant]}
+                  id: {type: string, minLength: 1, maxLength: 255}
+            right: {enum: [read, write, delete]}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: collection, id_field: resources}
+        rights_check: server

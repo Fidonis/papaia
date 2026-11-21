@@ -688,7 +688,8 @@ def test_sync_applies_audits_and_check_then_reports_ok(tmp_path, connected, caps
     assert "Realm sync complete" in capsys.readouterr().out
     outbox = rs.audit_path(config_dir)
     assert outbox.stat().st_mode & 0o777 == 0o600
-    assert len(outbox.read_text().splitlines()) == len(connected.writes)
+    # One row per Keycloak write, and one for the group list next to the catalog.
+    assert len(outbox.read_text().splitlines()) == len(connected.writes) + 1
 
     writes = len(connected.writes)
     assert rs.sync(_tree(), config_dir, repo_root, check=True) == 0

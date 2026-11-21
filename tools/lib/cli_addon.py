@@ -17,6 +17,7 @@ from pathlib import Path
 from . import (
     addon_upgrade,
     addons,
+    catalog,
     common,
     compat,
     components,
@@ -294,6 +295,21 @@ def _compat_gate_addon(
     return exit_code
 
 
+def _catalog_refuses(config_dir: Path, repo_root: Path, deployed: dict, name: str) -> bool:
+    """Check the catalog of the installation `deployed` describes before it is saved.
+    A declaration can be valid on its own and still clash with the installation (an id
+    another module declares, a UI surface whose public host is not set, an address
+    service missing from compose); saved, it would make every later render fail until
+    the add-on is removed. Not forcible for that reason."""
+    try:
+        catalog.check(config_dir, repo_root, deployed)
+    except catalog.CatalogError as exc:
+        print(f"ERROR: addon '{name}': platform catalog: {exc}", file=sys.stderr)
+        print("deployment.yaml is unchanged.", file=sys.stderr)
+        return True
+    return False
+
+
 def _render_integration(config_dir: Path, repo_root: Path) -> None:
     """Re-render the core config and regenerate the addon overrides from
     deployment.yaml, as every addon verb that changes the registration does."""
@@ -387,7 +403,10 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         if node:
             existing["node"] = node
     else:
-        entry: dict = {"name": name, "path": str(addon_path), "active": True}
+        # Installed, not yet started: the catalog lists it as stopped until `addon start`.
+        entry: dict = {
+            "name": name, "path": str(addon_path), "active": True, "state": catalog.STOPPED
+        }
         if args.version:
             entry["version"] = args.version
         if node:
@@ -403,6 +422,9 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         env_vals.update(updates)
         common.write_env_file(bundle_env_path, env_vals)
 
+    # After the bundle .env: a UI surface's public host may be set there.
+    if _catalog_refuses(config_dir, repo_root, deployed, name):
+        return 2
     deployment.save(config_dir, deployed)
     _render_integration(config_dir, repo_root)
 
@@ -444,6 +466,13 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
         return 2
     if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
         return 2
+    # `addon start` sets the state the catalog shows; `addon stop` sets it back. Checked
+    # before anything is written: the installation may have changed since install (a
+    # public host unset, another add-on declaring the same id).
+    state_before = entry.get("state")
+    entry["state"] = catalog.RUNNING
+    if _catalog_refuses(config_dir, repo_root, deployed, name):
+        return 2
 
     # Clients the add-on names under client_secrets. A secret that is still a placeholder
     # is generated before the .env is materialized, so the containers start with the value
@@ -462,6 +491,8 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
     addons.materialize_addon_env(config_dir, addon_path, name)
+    if state_before != catalog.RUNNING:
+        deployment.save(config_dir, deployed)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
     # Brings the front network of a header-identity add-on along after an upgrade.
@@ -751,6 +782,8 @@ def cmd_addon_upgrade_apply(args: argparse.Namespace) -> int:
     addon_upgrade.apply_upgrade(
         candidate, plan, answers, config_dir=config_dir, restore_point=args.restore_point
     )
+    if _catalog_refuses(config_dir, repo_root, deployed, name):
+        return 2
     deployment.save(config_dir, deployed)
     _render_integration(config_dir, repo_root)
 
@@ -822,6 +855,8 @@ def cmd_addon_rollback_apply(args: argparse.Namespace) -> int:
     old_version = entry.get("version") or "unknown"
 
     addon_upgrade.apply_rollback(entry, target, manifest, config_dir=config_dir)
+    if _catalog_refuses(config_dir, Path(args.repo_root), deployed, args.name):
+        return 2
     deployment.save(config_dir, deployed)
     _render_integration(config_dir, Path(args.repo_root))
     print(f"Addon rolled back: {args.name} {old_version} -> {entry.get('version') or 'unknown'}")
@@ -1215,4 +1250,35 @@ def cmd_addon_override_files(args: argparse.Namespace) -> int:
         )
         if owner == args.name:
             print(path)
+    return 0
+
+
+def cmd_addon_state(args: argparse.Namespace) -> int:
+    """Record the state `addon stop` (or `stop --addons`, with `all`) left an add-on in
+    and render the catalog: a stopped add-on stays listed with `state: stopped`."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    if args.state not in catalog.STATES:
+        print(f"ERROR: state must be one of {', '.join(catalog.STATES)}.", file=sys.stderr)
+        return 2
+    deployed = deployment.load(config_dir)
+    if args.all:
+        targets = deployment.active_addons(deployed)
+    else:
+        targets = [a for a in deployed.get("addons") or [] if a.get("name") == args.name]
+        if not targets:
+            print(f"ERROR: addon '{args.name}' is not registered.", file=sys.stderr)
+            return 2
+    changed = False
+    for entry in targets:
+        if entry.get("state") != args.state:
+            entry["state"] = args.state
+            changed = True
+    if changed:
+        deployment.save(config_dir, deployed)
+    try:
+        catalog.render(config_dir, repo_root)
+    except catalog.CatalogError as exc:
+        print(f"ERROR: platform catalog: {exc}", file=sys.stderr)
+        return 3
     return 0
