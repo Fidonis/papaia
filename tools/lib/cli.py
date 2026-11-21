@@ -55,6 +55,7 @@ from . import (
     npm_provision,
     paperless_gate,
     post_restore,
+    privacy_pack,
     realm_sync,
     render_core,
     reporting,
@@ -791,6 +792,60 @@ def cmd_catalog_render(args: argparse.Namespace) -> int:
         print(f"ERROR: no platform catalog: {reason}.", file=sys.stderr)
         return 3
     print(f"Platform catalog {'written' if written else 'unchanged'}: {path}")
+    return 0
+
+
+def cmd_privacy_pack(args: argparse.Namespace) -> int:
+    """`papaia-ctl privacy-pack`: the data protection package from the declarations.
+    Exit 0 done or up to date, 1 `--check` found problems, 2 bad options, 3 the
+    declarations or the installation cannot be read."""
+    repo_root = Path(args.repo_root)
+    if args.installation:
+        if args.check:
+            print("ERROR: --check checks the package of the repository, not --installation.",
+                  file=sys.stderr)
+            return 2
+        if not args.out or args.backup_retention is None:
+            print("ERROR: --installation needs --out=FILE and --backup-retention=DAYS.",
+                  file=sys.stderr)
+            return 2
+        settings = privacy_pack.Installation(
+            args.backup_retention, args.offsite, args.offsite_retention
+        )
+        try:
+            settings.validate()
+            privacy_pack.write_installation(
+                repo_root, Path(args.config_dir), settings, Path(args.out), args.format or "html"
+            )
+        except privacy_pack.PrivacyPackError as exc:
+            print(f"ERROR: privacy-pack: {exc}", file=sys.stderr)
+            return 3
+        print(f"Data protection package of this installation written: {args.out}")
+        return 0
+    if args.format or args.backup_retention is not None or args.offsite or args.offsite_retention:
+        print("ERROR: --format, --backup-retention and --offsite* need --installation.",
+              file=sys.stderr)
+        return 2
+    out = Path(args.out) if args.out else repo_root / privacy_pack.REPO_OUT
+    try:
+        pack = privacy_pack.collect(repo_root)
+        for warning in pack.warnings:
+            print(f"WARNING: {warning}", file=sys.stderr)
+        if args.check:
+            problems = privacy_pack.check(pack, out)
+            for problem in problems:
+                print(f"fail: {problem}", file=sys.stderr)
+            if problems:
+                return 1
+            print(f"Data protection package up to date: {out}")
+            return 0
+        written = privacy_pack.write(pack, out)
+    except privacy_pack.PrivacyPackError as exc:
+        print(f"ERROR: privacy-pack: {exc}", file=sys.stderr)
+        return 3
+    for name in written:
+        print(f"  written: {name}")
+    print(f"Data protection package {'written' if written else 'unchanged'}: {out}")
     return 0
 
 
@@ -2513,6 +2568,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_catalog_render = sub.add_parser("catalog-render")
     p_catalog_render.set_defaults(func=cmd_catalog_render)
+
+    p_privacy = sub.add_parser("privacy-pack")
+    p_privacy.add_argument("--lang", choices=["de"], default="de")
+    p_privacy.add_argument("--out", default=None)
+    p_privacy.add_argument("--check", action="store_true")
+    p_privacy.add_argument("--installation", action="store_true")
+    p_privacy.add_argument("--format", choices=list(privacy_pack.FORMATS), default=None)
+    p_privacy.add_argument("--backup-retention", type=int, default=None)
+    p_privacy.add_argument("--offsite", default=None)
+    p_privacy.add_argument("--offsite-retention", type=int, default=None)
+    p_privacy.set_defaults(func=cmd_privacy_pack)
 
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)

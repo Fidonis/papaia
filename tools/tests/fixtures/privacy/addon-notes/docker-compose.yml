@@ -1,0 +1,10 @@
+services:
+  notes-mcp:
+    image: example.invalid/notes-mcp:1.2.0
+    volumes:
+      - notes-data:/data
+  notes-me:
+    image: example.invalid/notes-me:1.2.0
+volumes:
+  notes-data:
+  notes-cache:

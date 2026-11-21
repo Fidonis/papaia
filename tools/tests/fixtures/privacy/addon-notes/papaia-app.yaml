@@ -1,0 +1,68 @@
+# A tool server add-on that keeps personal notes: the sample installation of the data
+# protection package (one module with personal data, two categories, a personal-area
+# interface and two volumes).
+name: notes
+version: 1.2.0
+requires:
+  addon_api: [7]
+exposes:
+  - id: notes.store
+    kind: mcp
+    title: {de: "Notizen", en: "Notes"}
+    address: {service: notes-mcp, port: 8080, path: /mcp}
+    audience: mcp-notes
+    identity: [person]
+    standard_operations: [check_access]
+    operations:
+      - name: check_access
+        version: 1
+        title: {de: "Rechte prüfen", en: "Check access"}
+        via: tools
+        effect: check
+        retry: safe
+        input_schema: {type: object, properties: {id: {type: string}}}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: note, id_field: id}
+        rights_check: server
+    downstream: [qdrant.collections]
+    volumes:
+      - name: notes-data
+        backup: include
+      - name: notes-cache
+        backup: exclude
+        reason: {de: "Zwischenspeicher, wird neu aufgebaut", en: "Cache, rebuilt"}
+    export:
+      exit: {format: notes-export/1, schema: schemas/export.json}
+    storage:
+      personal_data: true
+      retention:
+        until: account_deleted
+        note: {de: "Notizen bleiben bis zur Löschung des Kontos.", en: "Notes stay until the account is deleted."}
+      categories:
+        - id: notes
+          title: {de: "Notizen | Entwürfe", en: "Notes"}
+          purpose: {de: "Persönliche Notizen der Person ablegen und wiederfinden", en: "Keep personal notes"}
+          legal_basis: {de: "Art. 6 Abs. 1 lit. b DSGVO", en: "Art. 6(1)(b) GDPR"}
+          retention: {days: 365}
+          data_class: personal
+          erasure: me_api
+        - id: shares
+          title: {de: "Freigaben", en: "Shares"}
+          purpose: {de: "Notizen mit anderen Personen teilen", en: "Share notes"}
+          legal_basis: {de: "Art. 6 Abs. 1 lit. f DSGVO", en: "Art. 6(1)(f) GDPR"}
+          retention: {until: deleted_by_person}
+          data_class: employee
+          erasure: on_request
+          on_request:
+            action: transfer-ownership
+            way: {de: "Die Verwaltung übergibt geteilte Notizen an eine benannte Person.", en: "Handed over."}
+            responsible: {de: "Notizverwaltung", en: "Notes administration"}
+  - id: notes.me
+    kind: me
+    title: {de: "Meine Notizen", en: "My notes"}
+    address: {service: notes-me, port: 8081, path: /me}
+    audience: papaia-notes-me
+    identity: [person]
+    storage:
+      personal_data: false

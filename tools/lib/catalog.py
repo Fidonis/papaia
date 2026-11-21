@@ -450,6 +450,26 @@ def skip_reason(config_dir: Path, repo_root: Path) -> str | None:
     return None
 
 
+def repository_sources(repo_root: Path) -> list[Source]:
+    """The `exposes:` sections of every core profile of this checkout, active or not."""
+    env = {"COMPOSE_PROFILES": ",".join(CORE_PROFILES)}
+    return _core_sources(repo_root, env, "repository")
+
+
+def installation_sources(
+    config_dir: Path, repo_root: Path, *, deployed: dict | None = None
+) -> list[Source]:
+    """The `exposes:` sections of this installation: the active core profiles and the
+    installed add-ons, unchecked (callers run exposes.check). The data protection
+    package reads the same sections as the catalog."""
+    env = common.parse_env_file(config_dir / ".env")
+    core = compat.resolve_core_target(repo_root)
+    version = core.platform_version or "unversioned"
+    return _core_sources(repo_root, env, version) + _addon_sources(
+        config_dir, repo_root, env, core.platform_version, deployed
+    )
+
+
 def build(
     config_dir: Path,
     repo_root: Path,
@@ -467,10 +487,7 @@ def build(
         if not env.get(key):
             raise CatalogError(f"{key} is not set in the root .env")
     core = compat.resolve_core_target(repo_root)
-    version = core.platform_version or "unversioned"
-    sources = _core_sources(repo_root, env, version) + _addon_sources(
-        config_dir, repo_root, env, core.platform_version, deployed
-    )
+    sources = installation_sources(config_dir, repo_root, deployed=deployed)
 
     entries: dict[str, dict] = {}
     for source in sources:

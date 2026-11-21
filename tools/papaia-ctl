@@ -69,6 +69,11 @@
 #   papaia-ctl realm sync    [--check] [--config-dir=PATH]
 #   papaia-ctl catalog render [--config-dir=PATH] — write platform/services.json from
 #                            the exposes declarations (setup, start and addon do it too)
+#   papaia-ctl privacy-pack  [--lang=de] [--out=DIR] [--check] — the data protection package
+#                            docs/de/datenschutz/ from the storage declarations
+#   papaia-ctl privacy-pack  --installation --out=FILE --backup-retention=DAYS
+#                            [--format=html|pdf|md] [--offsite=PLACE --offsite-retention=DAYS]
+#                            [--config-dir=PATH]
 #   papaia-ctl service-account list   [--json] [--config-dir=PATH]
 #   papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
 #   papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
@@ -129,7 +134,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,122p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,127p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -271,6 +276,7 @@ case "$cmd" in
             *) error "Unknown 'catalog' subcommand: '${sub:-<none>}'. Valid: render."; exit 2 ;;
         esac
         ;;
+    privacy-pack)  cmd_privacy_pack "$@" ;;
     service-account) cmd_service_account "$@" ;;
     secrets)
         sub="${1:-}"; shift || true

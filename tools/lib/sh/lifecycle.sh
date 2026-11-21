@@ -687,6 +687,28 @@ cmd_catalog_render() {
     py_cli catalog-render
 }
 
+# papaia-ctl privacy-pack: the data protection package. Without --installation it writes
+# (or with --check compares) docs/de/datenschutz/ of this checkout and needs no setup;
+# with --installation it writes the package of the installation in --config-dir.
+cmd_privacy_pack() {
+    local config_dir="$DEFAULT_CONFIG_DIR" installation=0
+    local -a flags=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            --installation) installation=1; flags+=("$1") ;;
+            --check|--lang=*|--out=*|--format=*|--backup-retention=*|--offsite=*|--offsite-retention=*)
+                flags+=("$1") ;;
+            *) error "Unknown option for privacy-pack: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    [ "$installation" -eq 1 ] && _require_setup_done
+    py_cli privacy-pack ${flags[@]+"${flags[@]}"}
+}
+
 # papaia-ctl service-account list [--json] | rotate <id> [--grace=SECONDS]
 # The declared service accounts; created and kept by the realm sync, so this runs where
 # the realm sync runs (Keycloak's node).
