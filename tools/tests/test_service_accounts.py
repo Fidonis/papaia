@@ -164,7 +164,8 @@ def test_a_declared_account_is_planned_with_only_its_declared_rights():
     assert spec.optional_scopes == {"aud-mcp-paperless"}
     assert spec.default_scopes == {"basic", "roles", "service_account"}
     assert spec.role_scope == {"prefs-read"}
-    assert plan.exchange_scopes == {"aud-mcp-paperless": "mcp-paperless"}
+    # aud-flow is the sign-in scope of Flow's console, not a right of the account
+    assert plan.exchange_scopes == {"aud-mcp-paperless": "mcp-paperless", "aud-flow": "flow"}
     rep = spec.representation()
     assert rep["serviceAccountsEnabled"] is True
     assert rep["standardFlowEnabled"] is False
@@ -190,7 +191,7 @@ def test_a_declared_account_is_planned_with_only_its_declared_rights():
 def test_an_audience_that_is_not_installed_assigns_nothing_and_is_noted():
     plan = _plan(_flow())
     assert plan.clients["svc-flow-events"].optional_scopes == set()
-    assert plan.exchange_scopes == {}
+    assert plan.exchange_scopes == {"aud-flow": "flow"}  # the console's sign-in scope
     assert any("svc-flow-events" in n and "mcp-paperless" in n for n in plan.notes)
 
 

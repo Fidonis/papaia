@@ -569,13 +569,13 @@ def test_a_revoked_pairing_loses_its_scope():
     _run(realm, _full_plan())
     plan = _plan(
         [_flow(delegation=DELEGATION), _studio(), _paperless()],
-        _pairings(("flow-engine", "mcp-paperless", ["r"], "confirmed")),
+        _pairings(("papaia-studio-gateway", "flow", ["x"], "confirmed")),
     )
     changes = _run(realm, plan)
-    assert ("client-scope", "aud-flow") in {(c.kind, c.name) for c in changes}
-    assert "aud-flow" not in {s["name"] for s in realm.scopes.values()}
-    assert realm.scope_names("papaia-studio-gateway", "optional") == set()
-    assert realm.scope_names("flow-engine", "optional") == {"aud-mcp-paperless", "offline_access"}
+    assert ("client-scope", "aud-mcp-paperless") in {(c.kind, c.name) for c in changes}
+    assert "aud-mcp-paperless" not in {s["name"] for s in realm.scopes.values()}
+    assert realm.scope_names("papaia-studio-gateway", "optional") == {"aud-flow"}
+    assert realm.scope_names("flow-engine", "optional") == {"offline_access"}
 
 
 def test_a_scope_or_client_the_sync_does_not_manage_is_left_alone():
@@ -1063,9 +1063,10 @@ def test_an_existing_unmanaged_exchange_scope_is_adopted_and_removed_on_revocati
         and r["operation"] == "realm_sync.update_scope"
         for r in rows
     )
+    # without Flow, aud-flow is no sign-in scope of its console either
     revoked = _plan(
-        [_flow(delegation=DELEGATION), _studio(), _paperless()],
-        _pairings(("flow-engine", "mcp-paperless", ["r"], "confirmed")),
+        [_studio(), _paperless()],
+        _pairings(("papaia-studio-gateway", "mcp-paperless", ["r"], "confirmed")),
     )
     _run(realm, revoked)
     assert "aud-flow" not in {s["name"] for s in realm.scopes.values()}

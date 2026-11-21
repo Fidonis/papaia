@@ -582,6 +582,12 @@ def test_drift_in_a_realm_setting_is_reported_and_corrected():
     assert realm.realm["sslRequired"] == "external"
 
 
+def _not_exchange(items: list[dict], plan: rs.Plan) -> list[dict]:
+    """Profiles or policies of the realm without the exchange ones the sync owns."""
+    owned = set(plan.policies) | set(plan.profiles)
+    return [item for item in items if item["name"] not in owned]
+
+
 def test_managed_clients_get_pkce_and_the_policy_enforces_it():
     realm = FakeRealm()
     plan = _hardened_plan()
@@ -589,10 +595,13 @@ def test_managed_clients_get_pkce_and_the_policy_enforces_it():
     for client_id, spec in plan.clients.items():
         attributes = realm.by_client_id(client_id)["attributes"]
         assert attributes["pkce.code.challenge.method"] == "S256", (client_id, spec.kind)
-    assert [p["name"] for p in realm.profiles] == [rh.CLIENT_POLICY]
-    executors = {e["executor"] for e in realm.profiles[0]["executors"]}
+    profiles = _not_exchange(realm.profiles, plan)
+    assert [p["name"] for p in profiles] == [rh.CLIENT_POLICY]
+    executors = {e["executor"] for e in profiles[0]["executors"]}
     assert executors == {"pkce-enforcer", "reject-implicit-grant", "reject-ropc-grant"}
-    policy = realm.policies[0]
+    policies = _not_exchange(realm.policies, plan)
+    assert [p["name"] for p in policies] == [rh.CLIENT_POLICY]
+    policy = policies[0]
     assert policy["enabled"] is True
     assert policy["profiles"] == [rh.CLIENT_POLICY]
     condition = policy["conditions"][0]
@@ -625,14 +634,19 @@ def test_other_client_policies_of_the_realm_stay():
     realm.policies.append(other_policy)
     plan = _hardened_plan()
     _run(realm, plan)
-    assert [p["name"] for p in realm.profiles] == ["pair-flow", rh.CLIENT_POLICY]
-    assert [p["name"] for p in realm.policies] == ["pair-flow", rh.CLIENT_POLICY]
-    realm.policies[1]["enabled"] = False
+    assert [p["name"] for p in _not_exchange(realm.profiles, plan)] == [
+        "pair-flow",
+        rh.CLIENT_POLICY,
+    ]
+    policies = _not_exchange(realm.policies, plan)
+    assert [p["name"] for p in policies] == ["pair-flow", rh.CLIENT_POLICY]
+    policies[1]["enabled"] = False
     changes = _run(realm, plan, apply=False)
     assert [c.operation for c in changes] == ["set_client_policy"]
     _run(realm, plan)
-    assert realm.policies[1]["enabled"] is True
-    assert realm.policies[0] == other_policy
+    policies = _not_exchange(realm.policies, plan)
+    assert policies[1]["enabled"] is True
+    assert policies[0] == other_policy
 
 
 def test_every_hardening_write_leaves_one_audit_row(tmp_path):

@@ -258,7 +258,9 @@ def test_an_admin_token_from_each_sign_in_client_carries_no_admin_rights(realm):
         if spec.kind == "bearer":
             continue
         token = _example_token(_client(client_id), user["id"])
+        # Keycloak's `roles` scope writes realm_access; papaia-person the flat claim roles
         roles = set((token.get("realm_access") or {}).get("roles", []))
+        roles |= set(token.get("roles") or [])
         allowed = spec.role_scope
         assert roles <= allowed, (client_id, roles - allowed)
         assert "papaia-admin" not in roles

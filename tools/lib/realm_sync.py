@@ -47,15 +47,21 @@ What it manages:
   registers its own public key, the sync leaves that in place). No other client carries
   the attribute, whatever its value: the sync removes it (`--check` reports it);
 - the client policies the identity provider enforces: per pair of `aud-*` scopes of one
-  client a policy `papaia-one-aud-<x>-<y>` that rejects an exchange asking for both
-  (`reject-request`); Data's `data-chain` for the client named by `papaia.chain-holder=true`
-  (the subject token's `azp` is one of Data's `upstream_origins`, first delivery only
-  Studio, and its `aud` is exactly `papaia-data`), `data-self` for every other Data client
+  client a policy `papaia-one-aud-<x>-<y>` that rejects a sign-in or an exchange asking
+  for both (`reject-request`); Data's `data-chain` for the client named by
+  `papaia.chain-holder=true` (the subject token's `azp` is one of Data's
+  `upstream_origins`, first delivery only Studio, and its `aud` is exactly
+  `papaia-data`), `data-self` for every other Data client
   (only an own session token of `papaia-data-ui` that carries no `aud-*` scope yet: one
   hop) and, with `aud-papaia-studio`, `data-handover`; per person-only audience (Data, the
   knowledge map, module APIs for Me, any audience declared `identity: [person]`) no
   `client_credentials` and no exchange without `sid`. Other policies and profiles of
   the realm are left as they are;
+- Flow's console `flow-console`: `private_key_jwt` (Keycloak holds the public key Flow
+  registers; the sync never writes key material), the shared person scope
+  `papaia-person` as its only default scope, `aud-flow` as an optional sign-in scope
+  while Flow serves `flow`, and pairings only for the task sources `papaia-data` and
+  `papaia-studio`; no client with token exchange keeps an `aud-*` default scope;
 - a client role of a managed client includes no role but other roles of that client:
   Keycloak puts a client's own roles, with their composites, into its token scope
   whatever `fullScopeAllowed` says;
@@ -171,8 +177,6 @@ CHAIN_HOLDER = "papaia-data"
 CHAIN_HOLDER_MARK = "papaia.chain-holder"
 # Data's own interface: signs persons in, exchanges only its own session token, in one hop.
 DATA_UI = "papaia-data-ui"
-# Clients that authenticate with a signed JWT (RFC 7523, `private_key_jwt`).
-_PRIVATE_KEY_JWT = frozenset({DATA_UI})
 # The clients whose tokens the chain holder may exchange further. First delivery: only
 # Studio (Studio -> Data -> connection); the assistant and Flow are no origins, and any
 # extension comes with its own acceptance. A Data client is never an origin.
@@ -206,6 +210,19 @@ USER_PAGE = 100
 # A name the gate compares with a header value: no space, comma, control character or
 # other separator, at most 255 characters (Keycloak's own limit).
 _HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,254}$")
+
+# Flow's console (security 1.2, 1.4 "Aufgabenquellen"): it signs persons in with a signed
+# assertion (private_key_jwt, RFC 7523; the key pair is Flow's, Keycloak holds the public
+# key Flow registers), its only default scope is the shared person scope, `aud-flow` is
+# an optional scope it asks for at sign-in, and it exchanges its own tokens only for the
+# task sources Data and Studio. It is never an audience (an exchange client).
+# Clients that authenticate with a signed JWT (RFC 7523, `private_key_jwt`): Data's own
+# interface and Flow's console.
+PRIVATE_KEY_JWT = frozenset({DATA_UI, "flow-console"})
+PERSON_SCOPE = "papaia-person"
+PERSON_SCOPE_CLIENTS = frozenset({"flow-console"})
+SIGN_IN_AUDIENCES = {"flow-console": ("flow",)}
+EXCHANGE_LIMITS = {"flow-console": ("papaia-data", "papaia-studio")}
 
 # Delegation (offline sessions) is held at exactly one client per purpose family.
 HOLDERS = {"flow": ("papaia-flow", "flow-engine"), "assist": ("papaia-assist", "assist-gate")}
@@ -416,6 +433,9 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
         audience = register.check(row["audience"], "audience", label)
         if audience in exchange_clients and audience != CHAIN_HOLDER:
             raise RealmSyncError(f"{label}: {audience!r} exchanges tokens and is never an audience")
+        limits = EXCHANGE_LIMITS.get(client)
+        if limits is not None and audience not in limits:
+            raise RealmSyncError(f"{label}: {client} exchanges only for {', '.join(limits)}")
         effects = row["effects"]
         if (
             not isinstance(effects, list)
@@ -542,6 +562,9 @@ class ClientSpec:
     role_scope: set[str] = field(default_factory=set)
     # Recorded facts of a service account (owner, deputy, purpose, effects, rotation).
     record: dict[str, str] = field(default_factory=dict)
+    # Keycloak's client authenticator, where the sync fixes it ("client-jwt" for
+    # private_key_jwt); None leaves the one Keycloak gives the client.
+    authenticator: str | None = None
 
     @property
     def service_account(self) -> bool:
@@ -570,8 +593,11 @@ class ClientSpec:
             **(_ACCOUNT_FLAGS if self.service_account else {}),
             "attributes": attributes,
         }
-        if self.client_id in _PRIVATE_KEY_JWT:
-            rep["clientAuthenticatorType"] = "client-jwt"
+        authenticator = self.authenticator or (
+            "client-jwt" if self.client_id in PRIVATE_KEY_JWT else None
+        )
+        if authenticator:
+            rep["clientAuthenticatorType"] = authenticator
         return rep
 
 
@@ -597,6 +623,8 @@ class Plan:
     # Realm settings, client hardening and client policy (realm_hardening); `sync` sets
     # it from the security profile and the configured hosts.
     hardening: rh.Hardening = field(default_factory=rh.Hardening)
+    # the shared person scope is the default scope of a planned client
+    person_scope: bool = False
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -881,17 +909,19 @@ def _client_policies(
     policy here names planned exchange scopes only."""
     policies: dict[str, dict] = {}
 
-    # Exactly one audience: a token exchange that asks for two aud-* scopes of a client
-    # is rejected, one policy per pair (k*(k-1)/2 per client, at most 66).
+    # Exactly one audience: a request that asks for two aud-* scopes of a client is
+    # rejected, one policy per pair (k*(k-1)/2 per client, at most 66). No grant-type
+    # condition: the rule holds for a sign-in (authorization request, code, refresh) as
+    # for a token exchange, so Flow's console cannot sign in with aud-flow and a task
+    # source at once (Keycloak 26.7.0 evaluates `client-scopes` on each of them).
     for spec in clients.values():
         audiences = sorted(exchange_scopes[s] for s in spec.optional_scopes if s in exchange_scopes)
         for x, y in itertools.combinations(audiences, 2):
             name = f"{PAIR_POLICY_PREFIX}{x}-{y}"
             policies[name] = _policy(
                 name,
-                f"rejects a token exchange for both {x} and {y}",
+                f"rejects a sign-in or token exchange for both {x} and {y}",
                 [
-                    _grant(TOKEN_EXCHANGE_GRANT),
                     _scope_condition(exchange_scope(x), "Optional"),
                     _scope_condition(exchange_scope(y), "Optional"),
                 ],
@@ -1120,6 +1150,15 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
             exchange_scopes[scope] = pairing.audience
             clients[pairing.client].optional_scopes.add(scope)
 
+    # Sign-in scopes come from the declaration, not from a pairing: an optional `aud-*`
+    # scope the client asks for at sign-in, while both sides are installed.
+    for client_id, sign_in in SIGN_IN_AUDIENCES.items():
+        for audience in sign_in:
+            if client_id in clients and audience in audiences:
+                scope = exchange_scope(audience)
+                exchange_scopes[scope] = audience
+                clients[client_id].optional_scopes.add(scope)
+
     for holder in holders:
         clients[holder].optional_scopes.add(OFFLINE)
 
@@ -1162,11 +1201,19 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
                 "not declared by an installed module; it is mapped once it exists"
             )
     for spec in clients.values():
+        if spec.client_id in PRIVATE_KEY_JWT:
+            spec.authenticator = "client-jwt"
         if spec.kind not in ("bearer", SERVICE_ACCOUNT):
-            spec.default_scopes = set(DEFAULT_SCOPES)
+            spec.default_scopes = (
+                {PERSON_SCOPE} if spec.client_id in PERSON_SCOPE_CLIENTS else set(DEFAULT_SCOPES)
+            )
             spec.role_scope = (
                 own_roles.get(spec.owner, set()) | visible | set(MODULE_PLATFORM_ROLES)
             )
+        # No client with token exchange holds an aud-* default scope (security 1.2):
+        # Keycloak would put that audience into every token of the client.
+        if spec.token_exchange and {s for s in spec.default_scopes if s.startswith("aud-")}:
+            raise RealmSyncError(f"client {spec.client_id}: an aud-* scope as a default scope")
     admin_members = {
         name for declared in own_roles.values() for name in declared if name.endswith("-admin")
     }
@@ -1194,6 +1241,7 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
         profiles=profiles,
         never_audiences=never,
         legacy_accounts=legacy,
+        person_scope=any(PERSON_SCOPE in s.default_scopes for s in clients.values()),
     )
 
 
@@ -1760,6 +1808,86 @@ _SCOPE_ATTRIBUTES = {
 }
 _AUDIENCE_MAPPERS = frozenset({"oidc-audience-mapper", "oidc-audience-resolve-mapper"})
 
+_IN_TOKENS = {
+    "access.token.claim": "true",
+    "id.token.claim": "true",
+    "introspection.token.claim": "true",
+    "userinfo.token.claim": "true",
+}
+# The shared person claims (security 1.2 "Gemeinsame Claims") of the scope `papaia-person`,
+# as (name, mapper, config); Keycloak sets `sid`, `iat` and `exp` itself. `sub` and
+# `auth_time` are the mappers of Keycloak's `basic` scope, which a client with only this
+# default scope does not have. `roles` shows only the realm roles of the token scope.
+# A group id claim (`group_ids`) has no mapper in Keycloak 26.7.0 and is not set here.
+PERSON_MAPPERS = (
+    ("sub", "oidc-sub-mapper", {"access.token.claim": "true", "introspection.token.claim": "true"}),
+    (
+        "auth_time",
+        "oidc-usersessionmodel-note-mapper",
+        {
+            **_IN_TOKENS,
+            "user.session.note": "AUTH_TIME",
+            "claim.name": "auth_time",
+            "jsonType.label": "long",
+        },
+    ),
+    (
+        "person_id",
+        "oidc-usermodel-property-mapper",
+        {
+            **_IN_TOKENS,
+            "user.attribute": "id",
+            "claim.name": "person_id",
+            "jsonType.label": "String",
+        },
+    ),
+    (
+        "roles",
+        "oidc-usermodel-realm-role-mapper",
+        {**_IN_TOKENS, "claim.name": "roles", "multivalued": "true", "jsonType.label": "String"},
+    ),
+    (
+        "groups",
+        "oidc-group-membership-mapper",
+        {**_IN_TOKENS, "claim.name": "groups", "full.path": "true"},
+    ),
+    (
+        "email",
+        "oidc-usermodel-attribute-mapper",
+        {
+            **_IN_TOKENS,
+            "user.attribute": "email",
+            "claim.name": "email",
+            "jsonType.label": "String",
+        },
+    ),
+    (
+        "email verified",
+        "oidc-usermodel-property-mapper",
+        {
+            **_IN_TOKENS,
+            "user.attribute": "emailVerified",
+            "claim.name": "email_verified",
+            "jsonType.label": "boolean",
+        },
+    ),
+)
+
+
+def _person_mappers() -> list[dict]:
+    return [
+        {"name": name, "protocol": "openid-connect", "protocolMapper": kind, "config": dict(config)}
+        for name, kind, config in PERSON_MAPPERS
+    ]
+
+
+def _same_mapper(mapper: dict, wanted: dict) -> bool:
+    """Exactly the wanted mapper: name, type and the whole configuration."""
+    return (
+        all(mapper.get(k) == wanted[k] for k in ("name", "protocolMapper"))
+        and (mapper.get("config") or {}) == wanted["config"]
+    )
+
 
 def _exchange_event(scope_name: str) -> str:
     return (
@@ -1767,6 +1895,14 @@ def _exchange_event(scope_name: str) -> str:
         if scope_name.startswith("aud-") or scope_name == OFFLINE
         else "config_changed"
     )
+
+
+def _scope_removed(kind: str, name: str, exchange: bool) -> str:
+    """The action of removing a scope from a client; an `aud-*` default scope of an
+    exchange client is named as what it is (security 1.2, ISB-G2.3)."""
+    if kind == "default" and exchange and name.startswith("aud-"):
+        return f"default scope {name} removed (an exchange client holds no aud-* default scope)"
+    return f"{kind} scope {name} removed"
 
 
 def _audience_mapper(audience: str) -> dict:
@@ -1879,6 +2015,7 @@ class _Reconciler(_Actions):
         self.exchange_scopes()
         self.realm_defaults()
         self.shared_scopes()
+        self.person_scope()
         scopes = self._scopes()
         clients = self._clients()
         self.client_names = {c["id"]: client_id for client_id, c in clients.items()}
@@ -2148,10 +2285,73 @@ class _Reconciler(_Actions):
                     f"/client-scopes/{scope['id']}",
                 )
 
-    def scope_settings(self, name: str, scope: dict) -> None:
-        """Protocol and attributes of an exchange scope. A scope that a module's own
-        setup created is adopted: it gets `papaia.managed=true`, so revoking its last
-        confirmed pairing removes it."""
+    def person_scope(self) -> None:
+        """The shared person scope, while a planned client has it as its default scope:
+        exactly the mappers of PERSON_MAPPERS, no role mapping. Any other mapper is
+        removed (one that adds an audience or takes claims from the request with event
+        `exchange_right_changed`); a changed one is removed and added again."""
+        if not self.plan.person_scope:
+            return
+        wanted = _person_mappers()
+        scope = self._scopes().get(PERSON_SCOPE)
+        if scope is None:
+            rep = {
+                "name": PERSON_SCOPE,
+                "protocol": "openid-connect",
+                "attributes": dict(_SCOPE_ATTRIBUTES),
+                "protocolMappers": wanted,
+            }
+            self.do(
+                Change("client-scope", PERSON_SCOPE, "created", "create_scope"),
+                "POST",
+                "/client-scopes",
+                rep,
+            )
+            return
+        self.scope_settings(PERSON_SCOPE, scope, "config_changed")
+        self.scope_roles(PERSON_SCOPE, scope["id"], set(), "config_changed")
+        base = f"/client-scopes/{scope['id']}/protocol-mappers/models"
+        kept: set[str] = set()
+        for mapper in scope.get("protocolMappers") or []:
+            target = _named(wanted, mapper.get("name") or "")
+            if target is not None and target["name"] not in kept and _same_mapper(mapper, target):
+                kept.add(target["name"])
+                continue
+            event = "exchange_right_changed"
+            if mapper.get("protocolMapper") == CLAIMS_PARAM_MAPPER:
+                why = "takes claims from the request"
+            elif _adds_audience(mapper):
+                why = "adds an audience"
+            else:
+                why, event = "not one of the shared person claims", "config_changed"
+                if target is not None:
+                    why = "differs from the shared person claims"
+            self.do(
+                Change(
+                    "client-scope",
+                    PERSON_SCOPE,
+                    f"mapper {mapper.get('name')} removed ({why})",
+                    "remove_mapper",
+                    event,
+                    "delete",
+                ),
+                "DELETE",
+                f"{base}/{mapper['id']}",
+            )
+        for mapper in wanted:
+            if mapper["name"] in kept:
+                continue
+            self.do(
+                Change("client-scope", PERSON_SCOPE, f"mapper {mapper['name']} set", "set_mapper"),
+                "POST",
+                base,
+                mapper,
+            )
+
+    def scope_settings(self, name: str, scope: dict, event: str = "exchange_right_changed") -> None:
+        """Protocol and attributes of a managed scope. A scope that a module's own
+        setup created is adopted: it gets `papaia.managed=true`, so revoking the last
+        confirmed pairing of an exchange scope removes it."""
         attributes = dict(scope.get("attributes") or {})
         drift = ["protocol"] if scope.get("protocol") != "openid-connect" else []
         drift += sorted(k for k, v in _SCOPE_ATTRIBUTES.items() if attributes.get(k) != v)
@@ -2164,7 +2364,7 @@ class _Reconciler(_Actions):
         )
         attributes.update(_SCOPE_ATTRIBUTES)
         self.do(
-            Change("client-scope", name, action, "update_scope", "exchange_right_changed"),
+            Change("client-scope", name, action, "update_scope", event),
             "PUT",
             f"/client-scopes/{scope['id']}",
             {
@@ -2368,7 +2568,7 @@ class _Reconciler(_Actions):
                     Change(
                         "client",
                         spec.client_id,
-                        f"{kind} scope {name} removed",
+                        _scope_removed(kind, name, spec.token_exchange),
                         "remove_scope",
                         _exchange_event(name),
                         "delete",
@@ -2673,13 +2873,15 @@ class _Reconciler(_Actions):
         `aud-*` scope (managed clients get exactly their planned scopes in `client`;
         pairings name only register clients, which are managed once installed). A holder
         or register client without an installed module is treated like any other client.
-        Bearer-only clients never obtain a token, so a scope there has no effect;
-        Keycloak's own `realm-management` is one of them and cannot be changed from
-        inside the realm."""
+        Bearer-only clients never obtain a token, so a scope there has no effect, unless
+        the client has token exchange switched on: no client with token exchange keeps an
+        `aud-*` scope. Keycloak's own `realm-management` is bearer-only without exchange
+        and cannot be changed from inside the realm."""
         for client_id, client in sorted(clients.items()):
-            if client_id in self.plan.clients or client.get("bearerOnly"):
-                continue
             attributes = client.get("attributes") or {}
+            exchange = attributes.get(TOKEN_EXCHANGE) == "true"
+            if client_id in self.plan.clients or (client.get("bearerOnly") and not exchange):
+                continue
             if attributes.get(MANAGED) == "true" and attributes.get(KIND) == SERVICE_ACCOUNT:
                 continue  # an undeclared account is removed as a whole
             for kind in ("default", "optional"):
@@ -2690,7 +2892,7 @@ class _Reconciler(_Actions):
                         Change(
                             "client",
                             client_id,
-                            f"{kind} scope {name} removed",
+                            _scope_removed(kind, name, exchange),
                             "remove_scope",
                             "exchange_right_changed",
                             "delete",
@@ -2708,6 +2910,8 @@ class _Reconciler(_Actions):
         already checked above (they carry no foreign audience at all)."""
         never = self.plan.never_audiences
         checked = DEFAULT_SCOPES | {OFFLINE} | set(self.plan.exchange_scopes)
+        if self.plan.person_scope:
+            checked |= {PERSON_SCOPE}
         for name, scope in sorted(self._scopes().items()):
             if name in {exchange_scope(n) for n in never}:
                 self.do(

@@ -97,7 +97,8 @@ def test_one_pair_policy_per_pair_of_exchange_scopes_of_a_client():
     ]
     policy = realm.policy("papaia-one-aud-flow-mcp-paperless")
     assert policy["enabled"] is True
-    assert _grants(policy) == [TE]
+    # no grant-type condition: refused at sign-in as in an exchange
+    assert [c["condition"] for c in policy["conditions"]] == ["client-scopes", "client-scopes"]
     assert _scopes_of(policy) == [["aud-flow"], ["aud-mcp-paperless"]]
     assert all(
         c["configuration"]["type"] == "Optional"
@@ -142,20 +143,20 @@ def test_a_revoked_pairing_removes_its_pair_policies_before_its_scope():
         [_studio(), _flow(), _paperless(), _data()],
         _pairings(
             ("papaia-studio-gateway", "mcp-paperless", ["r"], "confirmed"),
-            ("papaia-studio-gateway", "flow", ["x"], "pending"),
-            ("papaia-studio-gateway", "papaia-data", ["r", "x"], "confirmed"),
+            ("papaia-studio-gateway", "flow", ["x"], "confirmed"),
+            ("papaia-studio-gateway", "papaia-data", ["r", "x"], "pending"),
             ("papaia-data", "mcp-paperless", ["r"], "confirmed"),
         ),
     )
     realm.writes.clear()
     changes = _run(realm, revoked)
     assert {n for n in _managed_policies(realm) if n.startswith("papaia-one-aud-")} == {
-        "papaia-one-aud-mcp-paperless-papaia-data"
+        "papaia-one-aud-flow-mcp-paperless"
     }
-    assert "aud-flow" not in {s["name"] for s in realm.scopes.values()}
+    assert "aud-papaia-data" not in {s["name"] for s in realm.scopes.values()}
     order = [(c.kind, c.name) for c in changes]
     assert order.index(("client-policy", "papaia-one-aud-flow-papaia-data")) < order.index(
-        ("client-scope", "aud-flow")
+        ("client-scope", "aud-papaia-data")
     )
     assert _run(realm, revoked) == []
 
