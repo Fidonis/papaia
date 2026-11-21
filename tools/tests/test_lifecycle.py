@@ -282,6 +282,9 @@ def test_render_refuses_an_erasure_key_others_can_read(tmp_path):
 # ─────────────────────────────────────────────────────────────────────────
 
 
+PERSONS_GROUP_ID = "6f1c2b9e-0d4a-4c1e-9a77-3b5e8d2f4a10"
+
+
 class FakeKeycloak:
     """The admin endpoints papaia-lifecycle uses, with a log of every call."""
 
@@ -293,13 +296,44 @@ class FakeKeycloak:
         self.forbidden: set[str] = set()
         self.fail_logout = False
         self.fail_logout_for: set[str] = set()
+        self.fail_consent_delete_for: set[str] = set()
         self.events_error: Exception | None = None
         # The user id of the service account itself (`sub` of its token).
         self.actor_id = SERVICE_USER
+        self.users_error: Exception | None = None
+        # (account, client) -> createdDate of the consent in ms; 0 when not given.
+        self.created: dict[tuple[str, str], int] = {}
+        self.extra_listed: list[object] = []
+        # The id of papaia-persons as the realm sync writes it next to the account key.
+        self.group_id: str | None = PERSONS_GROUP_ID
+
+    def persons_group(self) -> str:
+        if self.group_id is None:
+            raise lc.LifecycleError("the id of the persons group is not known")
+        return self.group_id
 
     def add_user(self, uid: str, *, enabled: bool = True, consents=("flow-engine",)) -> None:
         self.users[uid] = {"id": uid, "username": f"u-{uid[:4]}", "enabled": enabled}
         self.consents[uid] = list(consents)
+
+    def grant(self, uid: str, client: str, created_ms: int) -> None:
+        self.consents[uid].append(client)
+        self.created[(uid, client)] = created_ms
+
+    def _members(self, q: dict) -> list:
+        """`GET /groups/<persons>/members`: the members of papaia-persons (not the
+        forbidden ones, which are outside the group), brief and paged. The endpoint has
+        no filter by state."""
+        if self.users_error is not None:
+            raise self.users_error
+        rows: list = [
+            {"id": u["id"], "username": u["username"], "enabled": u["enabled"]}
+            for uid, u in sorted(self.users.items())
+            if uid not in self.forbidden
+        ]
+        rows.extend(self.extra_listed)
+        first, size = int(q.get("first", "0")), int(q.get("max", "100"))
+        return rows[first : first + size]
 
     def event(self, op: str, uid: str, ms: int, eid: str | None = None, path=None) -> None:
         self.events.append(
@@ -336,6 +370,14 @@ class FakeKeycloak:
             first, size = int(q.get("first", "0")), int(q.get("max", "100"))
             rows = sorted((e for e in self.events if e["time"] >= since), key=lambda e: e["time"])
             return rows[first : first + size]
+        if parts == ["users"]:
+            # As the live Keycloak answers svc-papaia-lifecycle: the group permission
+            # (view-members) does not cover the user search, nor a group lookup.
+            raise lc.HttpError(403)
+        if parts[0] == "groups":
+            if parts != ["groups", PERSONS_GROUP_ID, "members"] or method != "GET":
+                raise lc.HttpError(403)
+            return self._members(dict(p.split("=", 1) for p in query.split("&") if "=" in p))
         uid = parts[1]
         if uid in self.forbidden:
             raise lc.HttpError(403)
@@ -348,9 +390,20 @@ class FakeKeycloak:
                 raise lc.HttpError(500)
             return None
         if parts[2:] == ["consents"]:
-            return [{"clientId": c, "grantedClientScopes": []} for c in self.consents[uid]]
+            return [
+                {
+                    "clientId": c,
+                    "grantedClientScopes": [],
+                    "createdDate": self.created.get((uid, c), 0),
+                    "lastUpdatedDate": self.created.get((uid, c), 0),
+                }
+                for c in self.consents[uid]
+            ]
         if parts[2] == "consents" and method == "DELETE":
+            if uid in self.fail_consent_delete_for:
+                raise lc.HttpError(500)
             self.consents[uid].remove(parts[3])
+            self.created.pop((uid, parts[3]), None)
             return None
         raise AssertionError(f"unexpected call {method} {path}")
 
@@ -406,6 +459,23 @@ def stack(tmp_path):
     )
 
 
+def _settled(stack, *people: str, consents=("flow-engine",)) -> None:
+    """Accounts active at start, the first round (with the reconciliation at start)
+    done, then deactivated: what follows is the event path alone."""
+    for uid in people:
+        stack.keycloak.add_user(uid, consents=consents)
+    stack.service.start()
+    stack.service.step()
+    stack.clock.now += lc.POLL_SECONDS
+    for uid in people:
+        stack.keycloak.users[uid]["enabled"] = False
+
+
+def _per_account(calls: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Calls about one account (the reconciliation also lists the group's members)."""
+    return [c for c in calls if c[1].startswith("/users/")]
+
+
 def _rows(out: io.StringIO) -> list[dict]:
     return [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
 
@@ -441,8 +511,7 @@ def test_deactivation_logs_out_removes_every_consent_and_lists_the_person(stack)
 
 def test_every_write_is_one_audit_row_with_one_correlation_id(stack):
     kc = stack.keycloak
-    kc.add_user(PERSON, enabled=False, consents=("flow-engine", "assist-gate"))
-    stack.service.start()
+    _settled(stack, PERSON, consents=("flow-engine", "assist-gate"))
     kc.event("UPDATE", PERSON, int(stack.clock.now * 1000) + 10)
     stack.service.step()
     rows = [r for r in _rows(stack.out) if r["object_ref"]["id"] == PERSON]
@@ -469,7 +538,7 @@ def test_a_deleted_account_is_listed_without_calls(stack):
     kc.event("DELETE", PERSON, int(stack.clock.now * 1000) + 10)
     before = len(kc.calls)
     stack.service.step()
-    assert all(c[1].startswith("/admin-events") for c in kc.calls[before:])
+    assert _per_account(kc.calls[before:]) == []
     assert _published(stack.state_dir)["entries"][0]["reason"] == "account_deleted"
 
 
@@ -485,8 +554,7 @@ def test_an_update_of_an_active_account_changes_nothing(stack):
 
 def test_an_event_is_handled_once(stack):
     kc = stack.keycloak
-    kc.add_user(PERSON, enabled=False)
-    stack.service.start()
+    _settled(stack, PERSON)
     kc.event("UPDATE", PERSON, int(stack.clock.now * 1000) + 10)
     stack.service.step()
     stack.clock.now += 20
@@ -537,10 +605,8 @@ def test_a_revocation_that_keeps_failing_does_not_hold_up_later_ones(stack):
     """After a few attempts a failing event is parked: later deactivations go ahead, the
     parked one is tried again on every poll and health warns while it is parked."""
     kc = stack.keycloak
-    kc.add_user(PERSON, enabled=False)
-    kc.add_user(OTHER, enabled=False)
+    _settled(stack, PERSON, OTHER)
     kc.fail_logout_for.add(PERSON)
-    stack.service.start()
     kc.event("UPDATE", PERSON, int(stack.clock.now * 1000) + 10)
     kc.event("UPDATE", OTHER, int(stack.clock.now * 1000) + 20)
     for _ in range(lc.MAX_EVENT_ATTEMPTS):
@@ -604,7 +670,7 @@ def test_malformed_events_are_ignored(stack, path):
     kc.event("UPDATE", PERSON, int(stack.clock.now * 1000) + 10, path=path)
     before = len(kc.calls)
     stack.service.step()
-    assert all(c[1].startswith("/admin-events") for c in kc.calls[before:])
+    assert _per_account(kc.calls[before:]) == []
 
 
 def test_a_malformed_consent_client_is_not_put_into_a_path(stack):
@@ -759,8 +825,7 @@ def test_an_active_account_and_an_unreadable_one_write_no_entry(stack):
 
 def test_each_entry_is_one_audit_row_with_the_correlation_id_of_its_event(stack):
     kc = stack.keycloak
-    kc.add_user(PERSON, enabled=False)
-    stack.service.start()
+    _settled(stack, PERSON)
     kc.event("UPDATE", PERSON, _ms(stack, 10))
     kc.admin_event(
         "DELETE", "REALM_ROLE_MAPPING", f"users/{OTHER}/role-mappings/realm", _ms(stack, 20)
@@ -1112,8 +1177,7 @@ def test_the_global_since_command_waits_for_the_running_service(stack, capsys, m
 
 
 def test_the_state_survives_a_restart(stack):
-    stack.keycloak.add_user(PERSON, enabled=False)
-    stack.service.start()
+    _settled(stack, PERSON)
     stack.keycloak.event("UPDATE", PERSON, int(stack.clock.now * 1000) + 10)
     stack.service.step()
     seq = _published(stack.state_dir)["seq"]

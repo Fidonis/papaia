@@ -1704,11 +1704,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
     config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    skip = _csv(args.skip)
+    only = list(dict.fromkeys(args.checks or []))
     try:
+        if only:
+            # `doctor lifecycle`: the named checks only; the others do not run.
+            doctor.parse_skip(only)
+            skip = [n for n in (*doctor.CHECK_NAMES, *doctor.DISTRIBUTED_CHECK_NAMES)
+                    if n not in only or n in (skip or [])]
         if topology.is_distributed(config_dir):
-            report = cluster.run_doctor(cluster.load(config_dir, repo_root), skip=_csv(args.skip))
+            report = cluster.run_doctor(cluster.load(config_dir, repo_root), skip=skip)
         else:
-            report = doctor.run_checks(config_dir, repo_root, skip=_csv(args.skip))
+            report = doctor.run_checks(config_dir, repo_root, skip=skip)
+        if only:
+            report.checks = [c for c in report.checks if c.name in only]
     except cluster.ClusterError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -2294,6 +2303,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.set_defaults(func=cmd_status)
 
     p_doctor = sub.add_parser("doctor")
+    p_doctor.add_argument("checks", nargs="*", metavar="CHECK")
     p_doctor.add_argument("--skip", action="append", default=None)
     p_doctor.add_argument("--json", action="store_true")
     p_doctor.set_defaults(func=cmd_doctor)

@@ -39,9 +39,69 @@ Admin events are kept in Keycloak for 7 days (see below). If the service is stop
 longer, events are lost; the reconciliation independent of events closes that gap.
 
 Removed roles and groups, ended sessions and reset credentials are written to the
-journal only; the service does not act on them in Keycloak. Not handled here: the
-regular reconciliation independent of events, federated directories, the signal to the
-modules' `/internal/lifecycle` and replaying the journal (the core start gate).
+journal only; the service does not act on them in Keycloak. Not handled here: federated
+directories, the signal to the modules' `/internal/lifecycle` and replaying the journal
+(the core start gate).
+
+## Reconciliation independent of events
+
+Events can be missed: the service was stopped, Keycloak no longer keeps them, or an
+account was deactivated in a directory behind Keycloak without any event. So at start
+and then every hour (a failed round is tried again after a minute) the service also
+reconciles without events:
+
+1. **Gap revoke.** When the last successful read of the events is older than Keycloak's
+   event retention (7 days), a deactivation followed by a reactivation inside that gap
+   cannot be told apart from an active account. The service then removes every consent
+   at a holder client (`flow-engine`, `assist-gate`) of every member of `papaia-persons`,
+   active or not, writes one audit row `lifecycle.gap_revoke` (the event
+   `lifecycle_gap_revoke`: `detail.reason`, with the number of consents and of persons)
+   and `papaia-ctl doctor lifecycle` warns for 7 days. The persons grant their
+   delegations anew. Sessions in the browser are not ended. The gap revoke is recorded
+   before it runs and repeated until it succeeds, so a successful read in between does
+   not cancel it; it runs once per gap.
+2. **Deactivated accounts.** Every deactivated member of `papaia-persons` that the
+   service has not revoked yet, or that still holds a consent, is revoked as on the
+   event (list, logout, every consent removed; `since` = time of the round). An account
+   revoked once is not logged out again every hour.
+3. **Accounts active again.** An account the service knows as deactivated (revoked by
+   it, or listed with `account_disabled`) that is active again loses every consent
+   created before the deactivation, on the update event or in the next round. A consent
+   granted after the reactivation stays.
+4. **Update events read late.** An update event of an account that reads active, read
+   more than 60 s after it happened (the service was stopped, or Keycloak could not be
+   read), may have been a deactivation undone before the read: admin events are stored
+   without representations (see below), so the event does not say. The account then
+   loses every consent at a holder client (`flow-engine`, `assist-gate`) created before
+   that event, one `lifecycle.consent_delete` row each. A delegation granted after the
+   event stays; other consents stay. An ordinary change (name, mail) during a stop or a
+   restart therefore also ends that person's delegations; they grant them anew.
+5. **Accounts out of reach.** Accounts recorded as skipped (outside the group, see
+   below) are read again; once the realm sync has put them back they are handled as
+   above.
+
+The round reads the members of `papaia-persons` page by page
+(`GET /groups/<id>/members`, which the group permission's `view-members` allows; the
+account may neither search accounts nor look the group up). The group's id is written by
+the realm sync next to the account key
+(`$PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle/persons-group`, mode
+0600, not a secret) and read again on every round. Without it no round succeeds: run
+`papaia-ctl realm sync` (every `start` runs it). While no round has succeeded, the
+health check counts from the first start of this version (`started_at` in the state,
+recorded once and kept across restarts) and fails 2 h after it, whether or not events
+are read in between.
+
+The tests: stop `papaia-lifecycle`, deactivate an account, start the service: the
+person's offline session ends with the round at start (well within 300 s), and after
+reactivation no delegation comes back. Stop the service, deactivate the account and
+activate it again, start the service: the old delegation is invalid after the first
+round (item 4).
+
+**Not covered**: a deactivation and reactivation that both fall inside one poll
+(10 s) while the service runs: the update events are read in time and the account reads
+active. The service assumes Keycloak keeps admin events for 7 days (the realm sync sets
+that); a shorter retention an operator set on the realm is not read, so a gap between
+that value and 7 days is not detected as one. Keep the retention at 7 days or more.
 
 An account outside the group `papaia-persons` (see below) cannot be read by the service
 (Keycloak answers 403), so it is **not revoked**: for example a person someone removed
@@ -151,7 +211,8 @@ the README.
 The container's health check runs `lifecycle.py health`, which prints for example
 
 ```json
-{"journal_pending": 0, "journal_target": "ok", "last_poll_age_seconds": 4,
+{"disabled_with_consent": 0, "gap_revoke_age_seconds": null, "journal_pending": 0,
+ "journal_target": "ok", "last_poll_age_seconds": 4, "last_reconcile_age_seconds": 1210,
  "parked_revocations": 0, "revocations_age_seconds": 3, "seq": 812,
  "skipped_revocations": 0, "status": "ok"}
 ```
@@ -159,8 +220,20 @@ The container's health check runs `lifecycle.py health`, which prints for exampl
 and fails (`warn` above 60 s, `fail` above 300 s) when the list is old, does not verify,
 or Keycloak has not been read for that long; it warns while an event is parked or a
 journal entry is not at the backup target yet (`journal_target`: `ok`, `unreachable`,
-`corrupt`), and fails while the local copy of the journal is damaged. A
-restart does not reset `last_poll_age_seconds`: a poll that keeps failing stays visible.
+`corrupt`), and fails while the local copy of the journal is damaged. It also
+fails when the last reconciliation is older than 2 h (none yet: 2 h after the first
+start, `last_reconcile_age_seconds` is then `null`) or a deactivated account still
+holds a consent after a round (`disabled_with_consent`). `gap_revoke_age_seconds` is the
+time since the last gap revoke and does not change the container's health. A restart
+does not reset `last_poll_age_seconds`: a poll that keeps failing stays visible.
+
+`papaia-ctl doctor lifecycle` runs that command in the container and reports:
+
+| Result | When |
+|---|---|
+| `fail` | the last reconciliation is older than 2 h or none has run, a deactivated account still holds a consent, the list is old, missing or does not verify, the service does not run |
+| `warn` | a gap revoke in the last 7 days, a parked event, an account outside the group that was not revoked |
+| `skip` | the profile is off, or the service runs on another node |
 
 ## The service account `svc-papaia-lifecycle`
 
@@ -168,7 +241,7 @@ While the profile is active, `papaia-ctl realm sync` (also run by every `start`)
 
 | Object | Setting |
 |---|---|
-| Client `svc-papaia-lifecycle` | `client_credentials` with `private_key_jwt` (ES256) only; no sign-in flow, no password grant, no token exchange, `fullScopeAllowed: false`. The private key is `$PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle/private-key.pem` (made by `setup`/`start` before the container starts; mounted read-only) |
+| Client `svc-papaia-lifecycle` | `client_credentials` with `private_key_jwt` (ES256) only; no sign-in flow, no password grant, no token exchange, `fullScopeAllowed: false`. The private key is `$PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle/private-key.pem` (made by `setup`/`start` before the container starts; mounted read-only). Next to it `persons-group`: the id of `papaia-persons` for the reconciliation |
 | Its service-account user | `realm-management` `view-events` only (reading admin events), also in the client's token scope; no other role, no group, no `manage-users` |
 | Group `papaia-persons` | a default group; every account except service accounts is a member |
 | Admin permissions | switched on for the realm (`adminPermissionsEnabled`); one permission on resource type Groups, scopes `view-members` and `manage-members`, for `papaia-persons`, granted to the client alone |
@@ -200,8 +273,9 @@ content (not the 15 s reissue) is one `papaia.audit/1` line on the service's sta
 correlation id per handled event, the service account as actor and the person's `sub`
 as object. So is an account that could not be revoked (`lifecycle.revoke`, `denied`), an
 event parked after repeated failures (`lifecycle.revocation_parked`, `error`,
-`retries_exhausted`) and a new `global_since` (`lifecycle.global_since`, written by the
-service also when the command set it). Tokens, assertions and Keycloak's answers are
+`retries_exhausted`), a gap revoke (`lifecycle.gap_revoke`, one row for the round with
+the same correlation id as its consent removals) and a new `global_since`
+(`lifecycle.global_since`, written by the service also when the command set it). Tokens, assertions and Keycloak's answers are
 never printed.
 
 ```sh

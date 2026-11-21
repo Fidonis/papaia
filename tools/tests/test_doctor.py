@@ -23,6 +23,7 @@ from stack_helpers import (
     FakeDocker,
     healthy_addon,
     healthy_core,
+    lifecycle_container,
     localai_container,
     not_found,
     ps_line,
@@ -206,6 +207,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # addon_compat
         PASS,  # container_health
         PASS,  # image_signatures: nothing runs in the fake
+        SKIP,  # lifecycle: the lifecycle profile is off
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -229,6 +231,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "addon_compat",
         "container_health",
         "image_signatures",
+        "lifecycle",
     )
 
 
@@ -2451,3 +2454,182 @@ def test_the_doctor_json_with_a_launchd_job_matches_the_schema(stack, tmp_path):
         launchd_host=lambda: True,
     )
     assert not list(VALIDATOR.iter_errors(json.loads(doctor.to_json(report))))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# lifecycle
+# ─────────────────────────────────────────────────────────────────────────
+
+LIFECYCLE_OK = {
+    "status": "ok",
+    "revocations_age_seconds": 3,
+    "last_poll_age_seconds": 4,
+    "last_reconcile_age_seconds": 1200,
+    "disabled_with_consent": 0,
+    "gap_revoke_age_seconds": None,
+    "parked_revocations": 0,
+    "skipped_revocations": 0,
+    "seq": 812,
+}
+
+
+def lifecycle_docker(
+    report: dict | str | None = None, *, state: str | None = "running", code: int = 0
+) -> FakeDocker:
+    """A stack with papaia-lifecycle whose `lifecycle.py health` prints `report`."""
+    body = LIFECYCLE_OK if report is None else report
+    text = body if isinstance(body, str) else json.dumps(body)
+    containers = lifecycle_container(state) if state else []
+    return FakeDocker(
+        healthy_core() + healthy_addon() + containers,
+        tools={"python3": CommandResult(code, text + "\n", "")},
+    )
+
+
+def lifecycle_result(stack, docker: FakeDocker) -> doctor.CheckResult:
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},lifecycle")
+    return result(run_doctor(stack, docker=docker), "lifecycle")
+
+
+def test_lifecycle_is_skipped_before_setup(tmp_path, stack):
+    report = doctor.run_checks(
+        tmp_path / "never-set-up", stack["repo"], run=healthy_docker(), probes=probes(), now=NOW
+    )
+    assert result(report, "lifecycle").status == SKIP
+
+
+def test_lifecycle_is_skipped_while_the_profile_is_off(stack):
+    found = result(run_doctor(stack, docker=lifecycle_docker()), "lifecycle")
+    assert found.status == SKIP
+    assert "profile" in found.summary
+
+
+def test_lifecycle_passes_with_a_recent_reconciliation(stack):
+    docker = lifecycle_docker()
+    found = lifecycle_result(stack, docker)
+    assert found.status == PASS, found.summary
+    assert "20 min ago" in found.summary
+    assert found.details["last_reconcile_age_seconds"] == 1200
+    execs = [c for c in docker.calls if c[:2] == ["docker", "exec"]]
+    assert execs == [
+        [
+            "docker",
+            "exec",
+            "papaia-papaia-lifecycle-1",
+            "python3",
+            "-I",
+            "/opt/papaia-lifecycle/lifecycle.py",
+            "health",
+            "--key-dir=/var/lib/papaia-lifecycle",
+            "--state-dir=/var/lib/papaia-security-state",
+            "--journal-dir=/var/lib/papaia-backup/erasure-journal",
+            "--journal-local-dir=/var/lib/papaia-lifecycle/erasure-journal",
+        ]
+    ]
+
+
+def test_lifecycle_fails_when_the_last_reconciliation_is_older_than_two_hours(stack):
+    report = dict(LIFECYCLE_OK, last_reconcile_age_seconds=2 * 3600 + 1, status="fail")
+    found = lifecycle_result(stack, lifecycle_docker(report, code=1))
+    assert found.status == FAIL
+    assert "reconciliation" in found.summary
+
+
+def test_lifecycle_fails_without_any_reconciliation(stack):
+    report = dict(LIFECYCLE_OK, last_reconcile_age_seconds=None)
+    assert lifecycle_result(stack, lifecycle_docker(report)).status == FAIL
+
+
+def test_lifecycle_fails_while_a_deactivated_account_holds_a_consent(stack):
+    report = dict(LIFECYCLE_OK, disabled_with_consent=2, status="fail")
+    found = lifecycle_result(stack, lifecycle_docker(report, code=1))
+    assert found.status == FAIL
+    assert "2 deactivated account(s)" in found.summary
+
+
+def test_lifecycle_warns_after_a_gap_revoke(stack):
+    report = dict(LIFECYCLE_OK, gap_revoke_age_seconds=3600)
+    found = lifecycle_result(stack, lifecycle_docker(report))
+    assert found.status == WARN
+    assert "lifecycle_gap_revoke" in found.summary
+
+
+def test_lifecycle_no_longer_warns_a_week_after_a_gap_revoke(stack):
+    report = dict(LIFECYCLE_OK, gap_revoke_age_seconds=8 * 24 * 3600)
+    assert lifecycle_result(stack, lifecycle_docker(report)).status == PASS
+
+
+@pytest.mark.parametrize("field", ["parked_revocations", "skipped_revocations"])
+def test_lifecycle_warns_about_accounts_it_could_not_revoke(stack, field):
+    report = dict(LIFECYCLE_OK, **{field: 1})
+    assert lifecycle_result(stack, lifecycle_docker(report)).status == WARN
+
+
+@pytest.mark.parametrize(
+    "fields", [{"journal_pending": 2}, {"journal_target": "unreachable", "journal_pending": 1}]
+)
+def test_lifecycle_warns_while_the_erasure_journal_is_not_at_the_target(stack, fields):
+    report = {**LIFECYCLE_OK, "status": "warn", "journal_target": "ok", "journal_pending": 0}
+    report.update(fields)
+    found = lifecycle_result(stack, lifecycle_docker(report, code=1))
+    assert found.status == WARN
+    assert "erasure journal" in found.summary
+
+
+def test_lifecycle_fails_for_an_old_revocation_list(stack):
+    report = dict(LIFECYCLE_OK, revocations_age_seconds=400, status="fail")
+    assert lifecycle_result(stack, lifecycle_docker(report, code=1)).status == FAIL
+
+
+def test_lifecycle_fails_when_the_service_does_not_run(stack):
+    found = lifecycle_result(stack, lifecycle_docker(state="exited"))
+    assert found.status == FAIL
+    assert "exited" in found.summary
+
+
+def test_lifecycle_fails_when_the_health_report_cannot_be_read(stack):
+    found = lifecycle_result(stack, lifecycle_docker("Traceback (most recent call last):"))
+    assert found.status == FAIL
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        dict(LIFECYCLE_OK, last_reconcile_age_seconds="soon"),
+        dict(LIFECYCLE_OK, disabled_with_consent=True),
+        dict(LIFECYCLE_OK, journal_target="somewhere"),
+        dict(LIFECYCLE_OK, journal_pending=-1),
+        ["not", "an", "object"],
+    ],
+)
+def test_lifecycle_refuses_a_malformed_health_report(stack, report):
+    assert lifecycle_result(stack, lifecycle_docker(report)).status == FAIL
+
+
+def test_lifecycle_is_skipped_where_the_service_is_not_declared(stack):
+    found = lifecycle_result(stack, lifecycle_docker(state=None))
+    assert found.status == SKIP
+
+
+def test_cli_doctor_lifecycle_runs_only_that_check(stack, monkeypatch, capsys):
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},lifecycle")
+    code = _run_cli(stack, monkeypatch, lifecycle_docker(), "lifecycle", "--json")
+    document = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert [c["name"] for c in document["checks"]] == ["lifecycle"]
+    assert document["checks"][0]["status"] == PASS
+    assert not list(VALIDATOR.iter_errors(document))
+
+
+def test_cli_doctor_lifecycle_exits_2_on_fail(stack, monkeypatch, capsys):
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},lifecycle")
+    report = dict(LIFECYCLE_OK, disabled_with_consent=1, status="fail")
+    code = _run_cli(stack, monkeypatch, lifecycle_docker(report, code=1), "lifecycle")
+    assert code == 2
+    assert "lifecycle" in capsys.readouterr().out
+
+
+def test_cli_doctor_with_an_unknown_check_name_exits_2(stack, monkeypatch, capsys):
+    code = _run_cli(stack, monkeypatch, healthy_docker(), "nope")
+    assert code == 2
+    assert "nope" in capsys.readouterr().err

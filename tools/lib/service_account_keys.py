@@ -193,21 +193,36 @@ class KeyStore:
         """A new key pair in `file` of the account's folder (replacing it); returns the
         public JWK. The private key goes from openssl's output straight into a new 0600
         file, which then replaces the old one in one step."""
-        folder = self._prepare(account_id)
         pem = _openssl(["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"], b"")
         jwk = public_jwk(pem)
+        self.write(account_id, file, pem)
+        return jwk
+
+    def write(self, account_id: str, file: str, data: bytes) -> None:
+        """`data` as `file` (0600) of the account's folder, replacing it in one step."""
+        folder = self._prepare(account_id)
         staging = folder / f".{file}.{os.getpid()}.tmp"
         fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
             with os.fdopen(fd, "wb") as fh:
-                fh.write(pem)
+                fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(staging, folder / file)
         except BaseException:
             staging.unlink(missing_ok=True)
             raise
-        return jwk
+
+    def read(self, account_id: str, file: str) -> bytes | None:
+        """`file` of the account's folder (checked like a key file), None when missing."""
+        folder = self.folder(account_id)
+        try:
+            st = os.lstat(folder)
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            raise KeyFileError(f"{folder} is not a folder (a symbolic link is refused)")
+        return self._read(folder / file)
 
     def move(self, account_id: str, source: str, target: str) -> None:
         folder = self.folder(account_id)

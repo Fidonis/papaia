@@ -125,6 +125,26 @@ LOCALAI_PROFILE = "localai"
 LOCALAI_SERVICE = "localai"
 GPU_OVERRIDE = Path("overrides") / "docker-compose.localai-gpu.override.yml"
 VOICE_PROFILE = "voice"
+LIFECYCLE_PROFILE = "lifecycle"
+LIFECYCLE_SERVICE = "papaia-lifecycle"
+# The container's own health command (src/infra/lifecycle/docker-compose.yml): it only
+# reads the published list and the service's state, nothing in Keycloak.
+LIFECYCLE_HEALTH_COMMAND = (
+    "python3",
+    "-I",
+    "/opt/papaia-lifecycle/lifecycle.py",
+    "health",
+    "--key-dir=/var/lib/papaia-lifecycle",
+    "--state-dir=/var/lib/papaia-security-state",
+    "--journal-dir=/var/lib/papaia-backup/erasure-journal",
+    "--journal-local-dir=/var/lib/papaia-lifecycle/erasure-journal",
+)
+LIFECYCLE_TIMEOUT_SECONDS = 20.0
+# security 1.12 no. 2: the reconciliation independent of events runs hourly; older than
+# two hours is `fail`. A gap revoke is reported as `warn` for as long as Keycloak keeps
+# events (people grant their delegations anew in that time).
+LIFECYCLE_RECONCILE_FAIL_SECONDS = 2 * 3600
+LIFECYCLE_GAP_WARN_SECONDS = 7 * 24 * 3600
 VOICE_GPU_OVERRIDE = Path("overrides") / "docker-compose.voice-gpu.override.yml"
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
@@ -1904,6 +1924,136 @@ def check_image_signatures(ctx: Context) -> CheckResult:
     return CheckResult(name, _worst(i["status"] for i in items), summary, {"images": items})
 
 
+def _lifecycle_container(ctx: Context) -> tuple[str | None, str | None] | None:
+    """(name, state) of papaia-lifecycle's container; None when this host's stack does not
+    declare or run it (another node in a distributed installation)."""
+    for module in ctx.status_report().modules:
+        if module.kind != "core":
+            continue
+        for container in module.containers:
+            if container.service == LIFECYCLE_SERVICE:
+                return container.name or None, container.state or None
+    return None
+
+
+def _count_field(report: dict[str, Any], key: str, *, optional: bool = False) -> int | None:
+    value = report.get(key)
+    if value is None and optional:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(key)
+    return value
+
+
+def check_lifecycle(ctx: Context) -> CheckResult:
+    """papaia-lifecycle (`doctor lifecycle`): its reconciliation independent of events and
+    the revocation list, as the service's own health command reports them.
+
+    `fail` when the last reconciliation is older than 2 h or never ran, a deactivated
+    account still holds a consent, the list is old or does not verify, or the service
+    does not run; `warn` for a gap revoke in the last 7 days and for accounts it could
+    not revoke (parked events, accounts outside the persons group)."""
+    name = "lifecycle"
+    if not ctx.configured:
+        return _not_set_up(name)
+    if LIFECYCLE_PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "not enabled (the lifecycle profile is off)")
+    found = _lifecycle_container(ctx)
+    if found is None:
+        return CheckResult(name, SKIP, "papaia-lifecycle does not run on this host")
+    container, state = found
+    if container is None or state != "running":
+        return CheckResult(
+            name,
+            FAIL,
+            f"papaia-lifecycle is {state or 'not created'}: deactivations are not revoked "
+            "('papaia-ctl start' starts it)",
+            {"state": state},
+        )
+    done = ctx.run(["docker", "exec", container, *LIFECYCLE_HEALTH_COMMAND],
+                   LIFECYCLE_TIMEOUT_SECONDS)
+    try:
+        report = json.loads(status.first_line(done.stdout))
+        if not isinstance(report, dict):
+            raise ValueError("not an object")
+        values = {
+            key: _count_field(report, key, optional=optional)
+            for key, optional in (
+                ("revocations_age_seconds", True),
+                ("last_reconcile_age_seconds", True),
+                ("gap_revoke_age_seconds", True),
+                ("disabled_with_consent", True),
+                ("parked_revocations", True),
+                ("skipped_revocations", True),
+                ("journal_pending", True),
+            )
+        }
+        target = report.get("journal_target")
+        if target not in (None, "ok", "unreachable", "corrupt"):
+            raise ValueError("journal_target")
+        health = report.get("status")
+        if health not in ("ok", "warn", "fail"):
+            raise ValueError("status")
+    except (ValueError, TypeError):
+        return CheckResult(
+            name, FAIL, "the health report of papaia-lifecycle cannot be read",
+            {"exit_code": done.returncode},
+        )
+    details: dict[str, Any] = {**values, "health": health}
+    failures: list[str] = []
+    warnings: list[str] = []
+    if values["revocations_age_seconds"] is None:
+        # The health command stops there: no list, or one that does not verify.
+        return CheckResult(
+            name, FAIL, "the revocation list of papaia-lifecycle is missing or does not verify",
+            details,
+        )
+    reconcile = values["last_reconcile_age_seconds"]
+    if reconcile is None:
+        failures.append("no reconciliation has run yet")
+    elif reconcile > LIFECYCLE_RECONCILE_FAIL_SECONDS:
+        failures.append(f"the last reconciliation ran {reconcile // 60} min ago (more than 2 h)")
+    if values["disabled_with_consent"]:
+        failures.append(
+            f"{values['disabled_with_consent']} deactivated account(s) still hold a consent"
+        )
+    if health == "fail" and not failures:
+        failures.append(
+            "the revocation list is old or does not verify, or Keycloak is not read"
+        )
+    gap = values["gap_revoke_age_seconds"]
+    if gap is not None and gap <= LIFECYCLE_GAP_WARN_SECONDS:
+        warnings.append(
+            f"lifecycle_gap_revoke {gap // 3600} h ago: events were missed, every delegation "
+            "was ended and people grant them anew"
+        )
+    if values["parked_revocations"]:
+        warnings.append(f"{values['parked_revocations']} revocation(s) parked after failures")
+    if values["skipped_revocations"]:
+        warnings.append(
+            f"{values['skipped_revocations']} account(s) outside the group papaia-persons "
+            "not revoked"
+        )
+    if values["journal_pending"] or target not in (None, "ok"):
+        warnings.append(
+            f"{values['journal_pending'] or 0} erasure journal entr(ies) not at the backup "
+            f"target yet (target {target})"
+        )
+    if health == "warn" and not warnings and not failures:
+        warnings.append("the revocation list or the last read of Keycloak is late")
+    if failures:
+        return CheckResult(name, FAIL, "; ".join(failures + warnings), details)
+    if warnings:
+        return CheckResult(name, WARN, "; ".join(warnings), details)
+    return CheckResult(
+        name,
+        PASS,
+        f"last reconciliation {reconcile // 60} min ago, revocation list "
+        f"{values['revocations_age_seconds']} s old",
+        details,
+    )
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -1920,6 +2070,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("addon_compat", check_addon_compat),
     ("container_health", check_container_health),
     ("image_signatures", check_image_signatures),
+    ("lifecycle", check_lifecycle),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

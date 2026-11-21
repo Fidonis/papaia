@@ -16,6 +16,16 @@ is recorded as skipped, with one audit row, and counted in health. An event whos
 handling keeps failing is parked after `MAX_EVENT_ATTEMPTS` polls, so later events go
 ahead; it is tried again on every poll and health warns while one is parked.
 
+Events can be missed: the service was stopped, Keycloak no longer keeps them, or the
+deactivation came from a directory behind Keycloak and has no event at all. So at start
+and every hour the service also reconciles without events: every deactivated account it
+can see is revoked unless it already was, and every consent such an account still
+holds is removed. An account it saw deactivated that is active again loses the
+consents from before (the person grants anew). When the last successful read of the
+events is older than Keycloak's event retention, nothing tells a deactivation and
+reactivation inside that gap apart from an active account: every consent at a holder
+client (`flow-engine`, `assist-gate`) is removed (`lifecycle_gap_revoke`).
+
 The revocation list `revocations.json` = {seq, issued_at, global_since?, entries:
 [{sub, since, reason}]} is written to the security state volume, which every module
 mounts read-only, together with its Ed25519 signature (`revocations.json.sig`, the 64
@@ -81,6 +91,10 @@ KEY_FILE = "signing-key.pem"
 STATE_FILE = "state.json"
 LOCK_FILE = "state.lock"
 ACCOUNT_KEY_FILE = "private-key.pem"
+# The id of papaia-persons, written next to the key by the realm sync
+# (lib/lifecycle_account.py): the group permission lets the account list the group's
+# members, but neither search accounts nor look the group up.
+GROUP_FILE = "persons-group"
 STATE_FORMAT = "papaia.lifecycle-state/1"
 
 POLL_SECONDS = 10
@@ -98,6 +112,22 @@ MAX_EVENT_PAGES = 20
 MAX_ENTRIES = 100_000
 MAX_RESPONSE_BYTES = 4 << 20
 ASSERTION_SECONDS = 60
+# Reconciliation independent of events (security 1.12 no. 2): at start, then hourly; a
+# failed one is tried again after a minute. Older than two hours is `fail` in health.
+RECONCILE_SECONDS = 3600
+RECONCILE_RETRY_SECONDS = 60
+RECONCILE_FAIL_SECONDS = 2 * 3600
+# How long Keycloak keeps admin events (lib/lifecycle_account.py sets 7 days). A gap
+# between two successful reads longer than that may hide events.
+EVENT_RETENTION_SECONDS = 7 * 24 * 3600
+# An event normally reaches the service within one poll. One read later than this (the
+# service was stopped, or Keycloak could not be read) may hide a deactivation that was
+# undone before the read: the account then reads active (security 1.12 no. 2).
+LATE_EVENT_SECONDS = 60
+# The clients that hold delegations (offline sessions): Flow and the assistant.
+HOLDER_CLIENTS = frozenset({"assist-gate", "flow-engine"})
+USER_PAGE = 100
+MAX_USER_PAGES = 1000
 # Polls an event may fail before it is parked and later events go ahead.
 MAX_EVENT_ATTEMPTS = 3
 MAX_PARKED = 1000
@@ -115,6 +145,7 @@ _REALM_ROLES_RE = re.compile(rf"users/({_ID})/role-mappings/realm")
 _CLIENT_ROLES_RE = re.compile(rf"users/({_ID})/role-mappings/clients/({_ID})")
 _GROUP_PATH_RE = re.compile(rf"users/({_ID})/groups/({_ID})")
 _SUB_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_GROUP_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
 _EVENT_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 _REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -132,6 +163,23 @@ _STATE_KEYS = {
     "mark_ms",
     "mark_ids",
     "last_poll",
+    "disabled",
+    "last_reconcile",
+    "disabled_with_consent",
+    "gap_pending",
+    "gap_revoke_at",
+    "started_at",
+}
+# Added with the reconciliation; a state written before it gets them on load.
+_RECONCILE_DEFAULTS = {
+    "disabled": {},
+    "last_reconcile": 0,
+    "disabled_with_consent": 0,
+    "gap_pending": False,
+    "gap_revoke_at": None,
+    # The first start of a version with the reconciliation (seconds); health counts from
+    # it while no round has succeeded.
+    "started_at": None,
 }
 _PARKED_KEYS = {"time", "op", "type", "path"}
 # A parked event as CORE-012 stored it (account events only).
@@ -678,6 +726,7 @@ def _new_state() -> dict:
         "mark_ms": None,
         "mark_ids": [],
         "last_poll": 0,
+        **json.loads(json.dumps(_RECONCILE_DEFAULTS)),
     }
 
 
@@ -691,6 +740,20 @@ def _check_state(doc: object) -> dict:
             _int(doc[name], name)
     if doc["mark_ms"] is not None:
         _int(doc["mark_ms"], "mark_ms")
+    for name in ("last_reconcile", "disabled_with_consent"):
+        _int(doc[name], name)
+    for name in ("gap_revoke_at", "started_at"):
+        if doc[name] is not None:
+            _int(doc[name], name)
+    if not isinstance(doc["gap_pending"], bool):
+        raise LifecycleError("state: gap_pending must be true or false")
+    disabled = doc["disabled"]
+    if not isinstance(disabled, dict) or len(disabled) > MAX_ENTRIES:
+        raise LifecycleError("state: disabled is malformed")
+    for sub, seen in disabled.items():
+        if not _SUB_RE.match(sub):
+            raise LifecycleError("state: disabled is malformed")
+        _int(seen, "disabled")
     if not isinstance(doc["digest"], str) or len(doc["digest"]) > 64:
         raise LifecycleError("state: digest is malformed")
     ids = doc["mark_ids"]
@@ -806,9 +869,13 @@ class Store:
                 return _new_state()
             raise
         try:
-            return _check_state(json.loads(raw))
+            doc = json.loads(raw)
         except ValueError:
             raise LifecycleError("state: not JSON") from None
+        if isinstance(doc, dict):
+            for key, value in _RECONCILE_DEFAULTS.items():
+                doc.setdefault(key, json.loads(json.dumps(value)))
+        return _check_state(doc)
 
     def save(self, doc: dict) -> None:
         _write_atomic(self.key_dir, STATE_FILE, canonical(_check_state(doc)), 0o600)
@@ -911,6 +978,24 @@ class AccountClient:
             raise LifecycleError("answer of Keycloak too large")
         return json.loads(raw) if raw else None
 
+    def persons_group(self) -> str:
+        """The id of papaia-persons from the account folder, read on every round so a
+        realm sync that recreated the group takes effect without a restart."""
+        path = self.account_dir / GROUP_FILE
+        if not os.path.lexists(path):
+            raise LifecycleError(
+                "the id of the persons group is missing; run `papaia-ctl realm sync`"
+            )
+        raw = _read_private(path, 256)
+        try:
+            text = raw.decode("ascii")
+        except UnicodeDecodeError:
+            raise LifecycleError("the id of the persons group is malformed") from None
+        text = text[:-1] if text.endswith("\n") else text
+        if not _GROUP_ID_RE.fullmatch(text):
+            raise LifecycleError("the id of the persons group is malformed")
+        return text
+
     def token(self) -> str:
         if self._token and time.monotonic() < self._until:
             return self._token
@@ -976,6 +1061,8 @@ class Lifecycle:
         # The journal `identity` (sicherheit §4.9 (1)); only `global-since` runs without.
         self.journal = journal
         self._next_poll = 0.0
+        # 0: reconcile on the first step (at start), then every RECONCILE_SECONDS.
+        self._next_reconcile = 0.0
 
     # audit ------------------------------------------------------------
     def _audit(
@@ -1076,9 +1163,26 @@ class Lifecycle:
             state = self.store.load()
             if state["mark_ms"] is None:
                 state["mark_ms"] = max(0, int(self.clock() * 1000) - FIRST_LOOKBACK_MS)
+            if state["started_at"] is None:
+                state["started_at"] = int(self.clock())
             # last_poll is left alone: a restart must not hide a poll that keeps failing
             # (the health check's start period covers the first poll).
+            self._note_gap(state)
             self._issue(state, force=True)
+
+    def _note_gap(self, state: dict) -> None:
+        """Mark a gap revoke as due when the last successful read of the events is older
+        than Keycloak keeps them. Kept in the state until the gap revoke succeeded, so a
+        successful poll in between cannot make the service forget it."""
+        # A gap revoke covers everything up to the time it ran.
+        last = max(state["last_poll"], state["gap_revoke_at"] or 0)
+        if last and int(self.clock()) - last > EVENT_RETENTION_SECONDS and not state["gap_pending"]:
+            state["gap_pending"] = True
+            self._next_reconcile = 0.0
+            _log(
+                f"no events read for {int(self.clock()) - last} s, longer than Keycloak keeps "
+                "them: every consent at a holder client is removed"
+            )
 
     def _issue(self, state: dict, *, force: bool = False) -> None:
         now = int(self.clock())
@@ -1198,6 +1302,7 @@ class Lifecycle:
         self._retry_parked()
         with self.store.locked():
             state = self.store.load()
+            self._note_gap(state)
             state["last_poll"] = int(self.clock())
             self.store.save(state)
 
@@ -1250,7 +1355,7 @@ class Lifecycle:
 
     def _skipped(self, sub: str, since: int) -> None:
         """An account the service may not read: not revoked. One audit row and a count
-        in health make the gap visible (CORE-046 reconciles)."""
+        in health make the gap visible; the reconciliation looks at it again."""
         with self.store.locked():
             state = self.store.load()
             if state["skipped"].get(sub, -1) >= since or len(state["skipped"]) >= MAX_ENTRIES:
@@ -1289,9 +1394,20 @@ class Lifecycle:
                     raise
                 kind = "account_delete"
             else:
-                if not isinstance(user, dict) or user.get("enabled") is not False:
+                if not isinstance(user, dict):
                     return
-                self.revoke(sub, since, "account_disabled", correlation)
+                if user.get("enabled") is True:
+                    self._activated(sub)
+                    if int(self.clock() * 1000) - when_ms > LATE_EVENT_SECONDS * 1000:
+                        self._late_update(sub, when_ms, correlation)
+                    return
+                if user.get("enabled") is not False:
+                    return
+                with self.store.locked():
+                    seen = self.store.load()["disabled"].get(sub, -1)
+                if seen < when_ms:  # else the reconciliation revoked it after this event
+                    self.revoke(sub, since, "account_disabled", correlation)
+                    self._seen_disabled(sub, int(self.clock() * 1000))
                 self._journal("account_disable", sub, object_ref, correlation)
                 return
         if kind == "account_delete":
@@ -1319,31 +1435,228 @@ class Lifecycle:
         self._list(sub, since, reason)
         correlation = correlation or _uuid7()
         self._write("POST", f"/users/{sub}/logout", "logout", "operation", correlation, sub)
-        consents = self.api.call("GET", f"/users/{sub}/consents") or []
-        for consent in consents if isinstance(consents, list) else []:
+        for client, _ in self._consents(sub):
+            self._delete_consent(sub, client, correlation)
+
+    # reconciliation ---------------------------------------------------
+    def _users(self, *, enabled: bool | None) -> list[str]:
+        """Ids of the members of the persons group (the accounts the service may see),
+        all of them or by state. The members endpoint has no filter by state."""
+        group = urllib.parse.quote(self.api.persons_group(), safe="-")
+        ids: list[str] = []
+        for page in range(MAX_USER_PAGES):
+            params = [
+                ("briefRepresentation", "true"),
+                ("first", str(page * USER_PAGE)),
+                ("max", str(USER_PAGE)),
+            ]
+            batch = self.api.call(
+                "GET", f"/groups/{group}/members?{urllib.parse.urlencode(params)}"
+            )
+            if not isinstance(batch, list):
+                raise LifecycleError("users: not a list")
+            for user in batch:
+                uid = user.get("id") if isinstance(user, dict) else None
+                if not isinstance(uid, str) or not _SUB_RE.match(uid):
+                    continue
+                if enabled is not None and user.get("enabled") is not enabled:
+                    continue
+                ids.append(uid)
+            if len(batch) < USER_PAGE:
+                return list(dict.fromkeys(ids))
+        raise LifecycleError(f"more than {MAX_USER_PAGES * USER_PAGE} accounts")
+
+    def _consents(self, sub: str) -> list[tuple[str, int]]:
+        """(client id, created in ms) of every consent; malformed client ids are left out
+        and never put into a path."""
+        rows = self.api.call("GET", f"/users/{sub}/consents") or []
+        found: list[tuple[str, int]] = []
+        for consent in rows if isinstance(rows, list) else []:
             client = consent.get("clientId") if isinstance(consent, dict) else None
             if not isinstance(client, str) or not _CLIENT_ID_RE.match(client) or ".." in client:
                 _log(f"consent of account {sub} with a malformed client id skipped")
                 continue
-            self._write(
-                "DELETE",
-                f"/users/{sub}/consents/{urllib.parse.quote(client, safe='')}",
-                "consent_delete",
-                "delegation_revoked",
-                correlation,
-                sub,
-                {"client": client},
-            )
+            created = consent.get("createdDate")
+            if isinstance(created, bool) or not isinstance(created, int) or created < 0:
+                created = 0
+            found.append((client, created))
+        return found
+
+    def _delete_consent(self, sub: str, client: str, correlation: str) -> None:
+        self._write(
+            "DELETE",
+            f"/users/{sub}/consents/{urllib.parse.quote(client, safe='')}",
+            "consent_delete",
+            "delegation_revoked",
+            correlation,
+            sub,
+            {"client": client},
+        )
+
+    def _seen_disabled(self, sub: str, at_ms: int) -> None:
+        """Record that the deactivated account `sub` was revoked at `at_ms`."""
+        with self.store.locked():
+            state = self.store.load()
+            if len(state["disabled"]) < MAX_ENTRIES or sub in state["disabled"]:
+                state["disabled"][sub] = max(at_ms, state["disabled"].get(sub, 0))
+                self.store.save(state)
+
+    def _activated(self, sub: str) -> None:
+        """An account known as deactivated is active again: the consents from before the
+        deactivation go (they survived only if a removal failed); a consent granted
+        since stays. Known: revoked by this service (`disabled`, the time in ms) or
+        listed as deactivated (`since` of its entry)."""
+        with self.store.locked():
+            state = self.store.load()
+        seen = state["disabled"].get(sub)
+        entry = state["entries"].get(sub)
+        if entry is not None and entry["reason"] == "account_disabled":
+            seen = max(seen or 0, entry["since"] * 1000)
+        if seen is None:
+            return
+        correlation = _uuid7()
+        for client, created in self._consents(sub):
+            if created < seen:
+                self._delete_consent(sub, client, correlation)
+        with self.store.locked():
+            state = self.store.load()
+            if state["disabled"].pop(sub, None) is not None:
+                self.store.save(state)
+
+    def _late_update(self, sub: str, when_ms: int, correlation: str) -> None:
+        """An update of an active account read late: it may have been a deactivation
+        undone before the read, which the account no longer shows. Every consent at a
+        holder client created before the event goes; a grant after it stays."""
+        old = [c for c, created in self._consents(sub) if c in HOLDER_CLIENTS and created < when_ms]
+        if not old:
+            return
+        _log(
+            f"update of account {sub} read {int(self.clock() - when_ms / 1000)} s late: "
+            f"{len(old)} delegation(s) from before it removed"
+        )
+        for client in old:
+            self._delete_consent(sub, client, correlation)
+
+    def _gap_revoke(self) -> None:
+        """Every consent at a holder client of every account the service can see."""
+        correlation, count, persons = _uuid7(), 0, 0
+        for sub in self._users(enabled=None):
+            held = [c for c, _ in self._consents(sub) if c in HOLDER_CLIENTS]
+            for client in held:
+                self._delete_consent(sub, client, correlation)
+            count += len(held)
+            persons += 1 if held else 0
+        with self.store.locked():
+            state = self.store.load()
+            state["gap_pending"] = False
+            state["gap_revoke_at"] = int(self.clock())
+            self.store.save(state)
+        _log(f"gap revoke: {count} consent(s) of {persons} account(s) removed")
+        self._audit(
+            "gap_revoke",
+            "delete",
+            "delegation_revoked",
+            correlation,
+            {"type": "realm", "id": REALM},
+            detail={"count": count, "persons": persons, "reason": "lifecycle_gap_revoke"},
+        )
+
+    def reconcile(self) -> None:
+        """Independent of events: the gap revoke when due, then every deactivated account
+        revoked once and stripped of every consent it still holds, accounts seen
+        deactivated and active again stripped of their old consents, and accounts that
+        could not be read (outside the group) looked at again."""
+        with self.store.locked():
+            state = self.store.load()
+        if state["gap_pending"]:
+            self._gap_revoke()
+        now = int(self.clock())
+        now_ms = int(self.clock() * 1000)
+        disabled = self._users(enabled=False)
+        still_holding = 0
+        for sub in disabled:
+            with self.store.locked():
+                known = sub in self.store.load()["disabled"]
+            try:
+                consents = self._consents(sub)
+                if consents or not known:
+                    self.revoke(sub, now, "account_disabled")
+            except RETRYABLE as exc:
+                # Not marked as revoked: the next round and a later event try again.
+                _log(f"reconciling account {sub} failed ({exc})")
+                # Counted unless a read shows that nothing is left.
+                try:
+                    still_holding += 1 if self._consents(sub) else 0
+                except RETRYABLE:
+                    still_holding += 1
+                continue
+            self._seen_disabled(sub, now_ms)
+        current = set(disabled)
+        with self.store.locked():
+            state = self.store.load()
+        for sub in sorted(set(state["disabled"]) - current):
+            self._recheck(sub, now)
+        for sub in sorted(set(state["skipped"]) - current):
+            self._recheck(sub, now)
+        with self.store.locked():
+            state = self.store.load()
+            for sub in current:
+                state["skipped"].pop(sub, None)
+            state["last_reconcile"] = now
+            state["disabled_with_consent"] = still_holding
+            self.store.save(state)
+
+    def _recheck(self, sub: str, now: int) -> None:
+        """An account that left the deactivated set, or one the service could not read
+        before: deleted, active again, or still out of reach."""
+        try:
+            user = self.api.call("GET", f"/users/{sub}")
+        except HttpError as exc:
+            if exc.status not in (403, 404):
+                raise
+            if exc.status == 404:
+                self._list(sub, now, "account_deleted")
+            with self.store.locked():
+                state = self.store.load()
+                state["disabled"].pop(sub, None)
+                if exc.status == 404:
+                    state["skipped"].pop(sub, None)
+                self.store.save(state)
+            return
+        if not isinstance(user, dict):
+            return
+        if user.get("enabled") is True:
+            with self.store.locked():
+                state = self.store.load()
+                since = state["skipped"].pop(sub, None)
+                if since is not None and sub not in state["disabled"]:
+                    # A deactivation it could not act on: consents from before go.
+                    state["disabled"][sub] = since * 1000
+                self.store.save(state)
+            self._activated(sub)
 
     # loop -------------------------------------------------------------
+    def _reconcile_now(self, now: float) -> None:
+        try:
+            self.reconcile()
+        except RETRYABLE as exc:
+            self._next_reconcile = now + RECONCILE_RETRY_SECONDS
+            _log(f"reconciliation failed ({exc!r}); trying again in {RECONCILE_RETRY_SECONDS} s")
+            return
+        self._next_reconcile = now + RECONCILE_SECONDS
+
     def step(self, *, force_poll: bool = False) -> None:
         now = self.clock()
+        if now >= self._next_reconcile:
+            self._reconcile_now(now)
         if force_poll or now >= self._next_poll:
             self._next_poll = now + POLL_SECONDS
             try:
                 self.poll()
             except RETRYABLE as exc:
                 _log(f"reading the events failed ({exc!r}); trying again")
+            if self._next_reconcile == 0.0:  # the poll found a gap
+                self._reconcile_now(now)
             self._flush_journal()
         self.reissue()
 
@@ -1366,10 +1679,13 @@ def health(
     state_dir: Path, key_dir: Path, *, now: float | None = None, journal=None
 ) -> tuple[int, dict]:
     """`revocations_age_seconds` of the published list; 1 when it is older than 60 s,
-    does not verify, Keycloak has not been read for 60 s, or an event is parked.
-    `skipped_revocations` counts accounts that could not be read (outside the group).
-    With the journal: `journal_pending` entries not at the backup target yet and
-    `journal_target` (ok, unreachable, corrupt) warn; a damaged local copy fails."""
+    does not verify, Keycloak has not been read for 60 s, or an event is parked; `fail`
+    also when the last reconciliation is older than 2 h or a deactivated account still
+    holds a consent (`disabled_with_consent`). `skipped_revocations` counts accounts that
+    could not be read (outside the group); `gap_revoke_age_seconds` tells since when the
+    last gap revoke ran (it does not make the container unhealthy: `doctor lifecycle`
+    warns about it). With the journal: `journal_pending` entries not at the backup target
+    yet and `journal_target` (ok, unreachable, corrupt) warn; a damaged local copy fails."""
     now = time.time() if now is None else now
     report: dict = {"status": "fail", "revocations_age_seconds": None}
     try:
@@ -1392,6 +1708,13 @@ def health(
     report["last_poll_age_seconds"] = max(0, int(now - state["last_poll"]))
     report["parked_revocations"] = len(state["parked"])
     report["skipped_revocations"] = len(state["skipped"])
+    report["last_reconcile_age_seconds"] = (
+        max(0, int(now - state["last_reconcile"])) if state["last_reconcile"] else None
+    )
+    report["disabled_with_consent"] = state["disabled_with_consent"]
+    report["gap_revoke_age_seconds"] = (
+        max(0, int(now - state["gap_revoke_at"])) if state["gap_revoke_at"] is not None else None
+    )
     journal_ok = True
     if journal is not None:
         place = journal.status()
@@ -1401,7 +1724,16 @@ def health(
             return 1, report
         journal_ok = place["pending"] == 0 and place["target"] == "ok"
     worst = max(age, report["last_poll_age_seconds"])
-    if worst > FAIL_AGE_SECONDS:
+    reconcile_age = report["last_reconcile_age_seconds"]
+    if reconcile_age is None and state["started_at"] is not None:
+        # No round has succeeded yet: counted from the first start, so a round that never
+        # works is not healthy forever (events read in between do not change that).
+        reconcile_age = max(0, int(now - state["started_at"]))
+    if (
+        worst > FAIL_AGE_SECONDS
+        or state["disabled_with_consent"]
+        or (reconcile_age is not None and reconcile_age > RECONCILE_FAIL_SECONDS)
+    ):
         return 1, report
     if worst > WARN_AGE_SECONDS or state["parked"] or not journal_ok:
         report["status"] = "warn"

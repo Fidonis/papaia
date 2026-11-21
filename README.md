@@ -1047,7 +1047,7 @@ the release it runs. A node that does not answer contributes no modules, and
 ### `doctor`
 
 ```bash
-tools/papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+tools/papaia-ctl doctor [CHECK...] [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 ```
 
 Preflight and diagnostics, to run before `setup` or `upgrade` and whenever something seems
@@ -1077,10 +1077,13 @@ raw values behind its summary in `details`.
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
 | `image_signatures` | Every running container of the core project runs an image pinned by digest, listed with that digest in the signed bill of materials of the checkout and signed with its key (see [Image pinning and signatures](#image-pinning-and-signatures)). | `fail` for an unpinned, unlisted or unsigned image, for a running image whose digest is not the pinned one, and while containers run without the pinned release key or bill of materials; `warn` if the registry cannot be asked (no connection, rate limit, server error) or Docker does not say what runs |
+| `lifecycle` | Only while the `lifecycle` profile is on: the health report of `papaia-lifecycle` (see [docs/lifecycle.md](docs/lifecycle.md)), read with `docker exec`: the age of its last reconciliation independent of events, deactivated accounts still holding a consent, the revocation list, gap revokes and accounts it could not revoke. | `fail` when the last reconciliation is older than 2 h or none has run, a deactivated account holds a consent, the list is old, missing or does not verify, or the service does not run; `warn` for a gap revoke in the last 7 days, a parked event or an account outside the group of persons; `skip` while the profile is off or where the service runs on another node |
 
 Before `setup` has run, the checks that need the installation's configuration report `skip`
 instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as
 `skip` without running them, for example `--skip=dns,certs` on a host without internet access.
+Check names given as arguments run those checks only, for example `papaia-ctl doctor lifecycle`;
+the exit code follows the same rule.
 
 `docker_usage` is a report, not a verdict: how much room is left is `disk_space`'s question, and how
 much Docker may take is yours to decide. "Reclaimable" is Docker's word for what no container uses

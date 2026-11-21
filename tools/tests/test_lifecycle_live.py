@@ -18,6 +18,7 @@ import io
 import json
 import os
 import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -247,6 +248,91 @@ def test_removed_roles_ended_sessions_and_reset_credentials_are_journaled(realm,
     ]
 
 
+def _clear_admin_events() -> None:
+    """What the service finds after an outage longer than the event retention, or for a
+    deactivation that came from a directory behind Keycloak: no event."""
+    _master_call("DELETE", "/admin-events")
+
+
+def test_a_deactivation_the_service_missed_is_revoked_at_start(realm, service):
+    """CORE-046: service stopped, person deactivated, service started: the offline
+    session ends with the reconciliation at start; reactivation revives nothing."""
+    berta = _person("berta")
+    offline = _offline_token("berta")
+    assert _refresh(offline) == 200
+    _enabled(berta, False)
+    _clear_admin_events()
+    service.step(force_poll=True)
+
+    assert _master_call("GET", f"/users/{berta}/consents") == []
+    _enabled(berta, True)
+    _clear_admin_events()
+    service.step(force_poll=True)
+    assert _refresh(offline) == 400
+    assert _master_call("GET", f"/users/{berta}/consents") == []
+    entries = json.loads((service.state_dir / lc.LIST_FILE).read_bytes())["entries"]
+    assert (berta, "account_disabled") in [(e["sub"], e["reason"]) for e in entries]
+    assert offline not in service.out.getvalue()
+
+
+def test_a_gap_longer_than_the_event_retention_ends_every_delegation(realm, service):
+    """Deactivated and activated again during an outage longer than the retention:
+    every consent at a holder client goes, with the gap audit row."""
+    carla = _person("carla")
+    offline = _offline_token("carla")
+    assert _refresh(offline) == 200
+    service.step(force_poll=True)
+    with service.store.locked():
+        state = service.store.load()
+        state["last_poll"] -= lc.EVENT_RETENTION_SECONDS + 3600
+        service.store.save(state)
+    out = io.StringIO()
+    again = lc.Lifecycle(service.api, service.store, service.publisher, out=out)
+    again.start()
+    again.step(force_poll=True)
+
+    assert _refresh(offline) == 400
+    assert _master_call("GET", f"/users/{carla}")["enabled"] is True
+    rows = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    gap = [r for r in rows if r["operation"] == "lifecycle.gap_revoke"]
+    assert len(gap) == 1 and gap[0]["detail"]["reason"] == "lifecycle_gap_revoke"
+    assert offline not in out.getvalue()
+
+
+def test_deactivated_and_reactivated_while_stopped_ends_the_delegation(realm, service):
+    """sicherheit §1.12 no. 2: service stopped, account deactivated and activated again
+    (both admin events kept), service started: the old delegation is invalid after the
+    first round, a delegation granted after the start works."""
+    dora = _person("dora")
+    offline = _offline_token("dora")
+    assert _refresh(offline) == 200
+    service.step(force_poll=True)
+    # Stopped: no step while the account is switched off and on again.
+    _enabled(dora, False)
+    _enabled(dora, True)
+    # Started later than the usual poll delay: the clock of the new process runs ahead.
+    ahead = lc.LATE_EVENT_SECONDS + 5
+    out = io.StringIO()
+    again = lc.Lifecycle(
+        service.api, service.store, service.publisher, out=out,
+        clock=lambda: time.time() + ahead,
+    )
+    again.start()
+    again.step(force_poll=True)
+
+    assert _master_call("GET", f"/users/{dora}")["enabled"] is True
+    assert _refresh(offline) == 400
+    assert _master_call("GET", f"/users/{dora}/consents") == []
+    rows = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    deleted = [r for r in rows if r["operation"] == "lifecycle.consent_delete"]
+    assert [r["detail"]["client"] for r in deleted] == ["flow-engine"]
+    assert offline not in out.getvalue()
+
+    fresh = _offline_token("dora")
+    again.step(force_poll=True)
+    assert _refresh(fresh) == 200
+
+
 def test_the_account_cannot_reach_a_person_outside_the_group(realm, service):
     olga = _person("olga")
     group = _master_call("GET", f"/groups?search={la.PERSONS_GROUP}&exact=true")[0]["id"]
@@ -276,3 +362,4 @@ def test_without_the_profile_the_account_is_removed(realm):
     assert _admin("GET", f"/papaia/clients?clientId={la.CLIENT_ID}") == []
     assert realm["keys"].public_jwk(la.CLIENT_ID) is None
     assert la.align(_master_call, realm["keys"], enabled=False, apply=False) == []
+

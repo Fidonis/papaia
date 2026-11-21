@@ -47,6 +47,9 @@ PROFILE = "lifecycle"
 ADMIN_EVENTS_EXPIRATION = 7 * 24 * 3600
 EXPIRATION_ATTRIBUTE = "adminEventsExpiration"
 _PAGE = 100
+# Next to the account key: the id of PERSONS_GROUP for papaia-lifecycle, which may list
+# the group's members but not look the group up (same name in its lifecycle.py).
+GROUP_FILE = "persons-group"
 
 _FLAGS = {
     "protocol": "openid-connect",
@@ -190,6 +193,29 @@ class _Align:
                     "DELETE",
                     f"/users/{user['id']}/groups/{group_id}",
                 )
+
+    def persons_group_file(self, group_id: str) -> None:
+        """The group's id for the service, in its account folder (not a secret; 0600
+        like the key, which the service reads from the same read-only mount)."""
+        data = f"{group_id}\n".encode("ascii")
+        if self.keys.read(CLIENT_ID, GROUP_FILE) == data:
+            return
+        change = _change(
+            rs.SERVICE_ACCOUNT,
+            CLIENT_ID,
+            f"id of {PERSONS_GROUP} written for the service",
+            "group_file",
+        )
+        self.act.changes.append(change)
+        print(f"{'  ' if self.apply else 'fail: '}{change.kind} {change.name}: {change.action}")
+        if not self.apply:
+            return
+        try:
+            self.keys.write(CLIENT_ID, GROUP_FILE, data)
+        except OSError:
+            self.act._audit(change, "error", "local_write")
+            raise
+        self.act._audit(change, "allowed")
 
     # client --------------------------------------------------------------
     def client(self) -> dict | None:
@@ -478,5 +504,6 @@ def align(call, keys: sak.KeyStore, *, enabled: bool, apply: bool, audit=None) -
         run.account_user(client)
     run.permission(client, group)
     if group is not None:
+        run.persons_group_file(group)
         run.members(group)
     return run.act.changes

@@ -10,7 +10,9 @@
 # What it does: when an account of the papaia realm is deactivated or deleted, it
 # ends the person's sessions, removes every consent (offline sessions, delegations)
 # and puts the person on the signed revocation list, which modules read from the
-# volume papaia-security-state. The list is issued again every 15 s. Every
+# volume papaia-security-state. The list is issued again every 15 s. At start and
+# every hour it also reconciles without events (missed or expired events, directories
+# behind Keycloak) and after a longer outage ends every delegation (gap revoke). Every
 # deactivation, deletion, removed role or group, ended session and reset credential
 # is one line of the erasure journal `identity` at the backup target, so that a
 # restored snapshot cannot bring it back (docs/lifecycle.md).
@@ -68,7 +70,7 @@ services:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base, which brings the openssl
     # command line (Ed25519, ES256). Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-lifecycle:1.9.0@sha256:0346daa780b0510b2b91d01e5deaa39fc538165718eac5b7fc233c72e37690ce
+    image: ghcr.io/fidonis/papaia-lifecycle:1.9.0@sha256:d8449e7b7eb5db7a99cfd9a5f39ade0f2e043bbe998d840f1a3a8e77c2c3f424
     restart: unless-stopped
     depends_on:
       papaia-lifecycle-init:
