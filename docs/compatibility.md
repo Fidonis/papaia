@@ -209,7 +209,7 @@ Without 1 to 3 every operator would need `--insecure-images`.
 ## Own images of the core
 
 A core service that runs code of this repository runs it from an image built
-here: `papaia-egress` and `papaia-lifecycle` today. A stock image with the code
+here: `papaia-egress`, `papaia-lifecycle` and `papaia-audit` today. A stock image with the code
 mounted in, or an image built by Compose (`build:`), is not used: the start
 check would have nothing to compare it with. The images are listed in
 [`compat/own-images.yaml`](../compat/own-images.yaml) (schema
@@ -225,6 +225,12 @@ file per package under `/usr/share/doc/`). The label
 `org.opencontainers.image.licenses` names the license. `tools/build-images
 check` and the test suite enforce these rules, and that the compose services
 pin `<name>:<VERSION>@sha256:<digest>`.
+
+A stage that only fetches files for the target may run on the build platform
+(`FROM --platform=$BUILDPLATFORM`, the only flag allowed on `FROM`):
+`papaia-audit` unpacks the wheels pinned by hash in its `requirements.txt` for
+the target platform there, without compiling or running them, and the final
+stage copies the result. Both variants are thus built without emulation.
 
 `tools/build-images` takes an image from the checkout to the bill of
 materials:

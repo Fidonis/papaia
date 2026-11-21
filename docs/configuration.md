@@ -379,6 +379,11 @@ back on every re-run. Neither is ever committed. The generated Keycloak realm im
 `${env.…}` placeholder substituted with its real value before Keycloak imports it; this
 supersedes Keycloak's own import-time substitution, which was found unreliable.
 
+The audit store is the exception: its database passwords and its signing key are files
+under `$PAPAIA_CONFIG_DIR/infra/audit/secrets/`, handed to the containers as Docker
+secrets, never `.env` variables. `papaia-ctl start` creates missing ones and keeps existing
+ones ([audit.md](audit.md)).
+
 ## Migrating an existing installation
 
 `papaia-ctl setup` renames, relocates and drops env keys that changed shape between

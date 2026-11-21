@@ -46,6 +46,7 @@ REGISTRY_IMAGE = (
 )
 EGRESS = "ghcr.io/fidonis/papaia-egress"
 LIFECYCLE = "ghcr.io/fidonis/papaia-lifecycle"
+AUDIT = "ghcr.io/fidonis/papaia-audit"
 INDEX_TYPES = (
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -222,16 +223,17 @@ def test_own_images_round_trip_through_a_registry(
     _, entries = own_images.read_builds(egress_only)
     own_images.sign(root, prefix, entries, key=key, env=env)
 
-    # The bill of materials lists both own images with their digests.
+    # The bill of materials lists every own image with its digest.
     sboms = {}
-    for name in (EGRESS, LIFECYCLE):
+    for name in built:
         sbom = tmp_path / f"{name.rsplit('/', 1)[1]}.cdx.json"
         sbom.write_text(json.dumps({"bomFormat": "CycloneDX", "component": name}), "utf-8")
         sboms[name] = sbom
     listed = own_images.bom_entries(root, sboms)
     assert {(e["name"], e["digest"]) for e in listed} == {
-        (EGRESS, built[EGRESS]["digest"]), (LIFECYCLE, built[LIFECYCLE]["digest"])
+        (name, build["digest"]) for name, build in built.items()
     }
+    assert {EGRESS, LIFECYCLE, AUDIT} <= set(built)
     version = images.core_version(root)
     doc = _bom(pem, listed, version=version)
     (root / suite.RELEASE_KEY_PATH).write_text(pem, encoding="ascii")

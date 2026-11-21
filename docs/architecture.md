@@ -211,7 +211,10 @@ networks:
                                    # compose interpolation.
   attach: [nginx-proxy-manager, librechat]
                                    # Core containers to attach to the app network;
-                                   # validated against the Core Compose service names
+                                   # validated against the Core Compose service names.
+                                   # papaia-audit-db and papaia-audit-schema are
+                                   # never attachable
+                                   # (docs/audit.md)
   join_addons:                     # optional (addon_api 4): services of this add-on
     - addon: <required add-on>     # that join the app network of an add-on listed
       services: [<service>]        # in requires.addons; the others stay isolated.

@@ -2239,7 +2239,7 @@ whose upstream keeps no tag for the pinned build may stay digest-only through an
 at most 90 days. The sidecar image of `backup` is pinned the same way.
 
 **Own images of the core.** Services that run code of this repository (`papaia-egress`,
-`papaia-lifecycle`) run it from images built here, `ghcr.io/fidonis/papaia-<service>`, listed
+`papaia-lifecycle`, `papaia-audit`) run it from images built here, `ghcr.io/fidonis/papaia-<service>`, listed
 in [`compat/own-images.yaml`](compat/own-images.yaml) and pinned with the core `VERSION` as
 tag. `tools/build-images` builds them for linux/amd64 and linux/arm64 (reproducibly: the same
 inputs give the same digest), signs them, pins the digests and prints their entries for the

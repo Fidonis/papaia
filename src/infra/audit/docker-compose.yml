@@ -1,0 +1,143 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Audit store · papaia-audit
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ALWAYS ON — profile `audit`; `papaia-ctl setup` keeps it in COMPOSE_PROFILES.
+#
+# The one place that keeps `papaia.audit/1` events (docs/audit.md). Every module and
+# server delivers its events to https://papaia-audit:8443/v1/ingest over mutual TLS;
+# papaia-audit takes the source from the client certificate and appends the event to
+# that source's hash chain in papaia-audit-db.
+#
+# Safety:
+#   - No port is published. papaia-audit-db is only on papaia-audit-net (internal);
+#     sources reach papaia-audit only on papaia-audit-ingest-net (internal).
+#   - Client certificates come from the ingest CA that `papaia-ctl` keeps in
+#     $PAPAIA_CONFIG_DIR/infra/audit/pki; a certificate counts only while its
+#     fingerprint is listed for its source in service/sources.json.
+#   - The service logs in as audit_ingest (may only call audit.append) and audit_read
+#     (may only read). The owner's password is used only by the database container and
+#     by the one-shot papaia-audit-schema, which creates the store and sets the role
+#     passwords; the service never holds it.
+#   - papaia-audit and papaia-audit-schema run the core's own image
+#     ghcr.io/fidonis/papaia-audit; nothing of the checkout is mounted.
+#   - Runs as the user that owns the config dir, read-only, without capabilities.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+services:
+
+  papaia-audit-db:
+    image: postgres:17.12-alpine3.24@sha256:526f86d93c6ea08fd3f1fe5605650cacc781b2c6013169a0ad8f42c7d3d84f32
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: audit
+      POSTGRES_USER: audit_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/audit_db_owner_password
+    # Only the owner's password; papaia-audit-schema creates the store and the roles.
+    secrets:
+      - audit_db_owner_password
+    volumes:
+      - papaia-audit-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d audit -U audit_owner"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - papaia-audit-net
+    security_opt: [no-new-privileges:true]
+    labels:
+      de.fidonis.module: papaia-audit
+      de.fidonis.role:   database
+    profiles: [audit]
+
+  # One shot before the service: creates the store (schema.sql in the image) on an
+  # empty database and sets the service role passwords. The only holder of the owner's
+  # password besides the database.
+  papaia-audit-schema:
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:e7829d9135656c3540bdb4f6aac5cf64de8f5c9f8b2985fc646fbc4e9d9f1d2f
+    restart: "no"
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["schema"]
+    secrets:
+      - audit_db_owner_password
+      - audit_db_ingest_password
+      - audit_db_read_password
+    read_only: true
+    depends_on:
+      papaia-audit-db:
+        condition: service_healthy
+    networks:
+      - papaia-audit-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-audit
+      de.fidonis.role:   init
+    profiles: [audit]
+
+  papaia-audit:
+    # The core's own image (Dockerfile next to this file, compat/own-images.yaml).
+    # Built, signed and pinned by tools/build-images.
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:e7829d9135656c3540bdb4f6aac5cf64de8f5c9f8b2985fc646fbc4e9d9f1d2f
+    restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["serve"]
+    secrets:
+      - audit_db_ingest_password
+      - audit_db_read_password
+      - audit_heads_key
+    volumes:
+      # Server certificate and key, the ingest CA certificate and sources.json. The
+      # directory, not the files: sources.json is replaced atomically when a source
+      # certificate is issued, and a bind-mounted file would keep showing the old one.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/infra/audit/service
+        target: /etc/papaia-audit
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    depends_on:
+      papaia-audit-schema:
+        condition: service_completed_successfully
+    healthcheck:
+      # Asks the kernel whether port 8443 (0x20FB) has a listener (state 0A).
+      test: ["CMD-SHELL", "grep -qiE ':20FB [0-9A-F:]+ 0A ' /proc/net/tcp /proc/net/tcp6"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - papaia-audit-net
+      - papaia-audit-ingest-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-audit
+      de.fidonis.role:   audit
+    profiles: [audit]
+
+secrets:
+  audit_db_owner_password:
+    file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-owner-password
+  audit_db_ingest_password:
+    file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-ingest-password
+  audit_db_read_password:
+    file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-read-password
+  audit_heads_key:
+    file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/heads-signing-key
+
+networks:
+  # Only papaia-audit and its database.
+  papaia-audit-net:
+    driver: bridge
+    internal: true
+  # papaia-audit and the audit sources; no route out.
+  papaia-audit-ingest-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  papaia-audit-pgdata:

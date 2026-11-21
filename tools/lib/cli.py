@@ -28,6 +28,7 @@ from pathlib import Path
 import yaml
 
 from . import (
+    audit,
     backup,
     cli_addon,
     cli_node,
@@ -1707,6 +1708,50 @@ def cmd_librechat_clear_history(args: argparse.Namespace) -> int:
     return 1 if result.get("files_failed") else 0
 
 
+def cmd_audit_prepare(args: argparse.Namespace) -> int:
+    """Create the missing keys, certificates and passwords of papaia-audit."""
+    try:
+        audit.prepare(Path(args.config_dir))
+    except (audit.AuditError, OSError) as exc:
+        print(f"ERROR: audit store: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_audit_cert(args: argparse.Namespace) -> int:
+    """Issue a client certificate for one audit source. Exit 2 for an unknown source."""
+    if args.source not in audit.SOURCES:
+        print(
+            f"ERROR: '{args.source}' is not an audit source. Known: {', '.join(audit.SOURCES)}.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        out_dir = audit.issue_source_certificate(Path(args.config_dir), args.source)
+    except (audit.AuditError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(f"Client certificate for {args.source} written to {out_dir}.")
+    print("It replaces the previous certificate of this source, which no longer works.")
+    return 0
+
+
+def cmd_audit_run(args: argparse.Namespace) -> int:
+    """`verify` or `heads` inside the running papaia-audit; its exit status passes through."""
+    against = Path(args.against) if getattr(args, "against", None) else None
+    try:
+        argv, stdin = audit.service_command(
+            args.audit_command,
+            source=getattr(args, "source", None),
+            against=against,
+            as_json=getattr(args, "json", False),
+        )
+        return audit.run_in_service(Path(args.config_dir), argv, stdin)
+    except audit.AuditError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
@@ -2326,6 +2371,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_clear.add_argument("--before", default=None)
     p_clear.add_argument("--dry-run", action="store_true")
     p_clear.set_defaults(func=cmd_librechat_clear_history)
+
+    p_audit_prepare = sub.add_parser("audit-prepare")
+    p_audit_prepare.set_defaults(func=cmd_audit_prepare)
+
+    p_audit_cert = sub.add_parser("audit-cert")
+    p_audit_cert.add_argument("--source", required=True)
+    p_audit_cert.set_defaults(func=cmd_audit_cert)
+
+    p_audit_verify = sub.add_parser("audit-verify")
+    p_audit_verify.add_argument("--source", default=None)
+    p_audit_verify.add_argument("--against", default=None)
+    p_audit_verify.add_argument("--json", action="store_true")
+    p_audit_verify.set_defaults(func=cmd_audit_run, audit_command="verify")
+
+    p_audit_heads = sub.add_parser("audit-heads")
+    p_audit_heads.set_defaults(func=cmd_audit_run, audit_command="heads")
 
     return parser
 

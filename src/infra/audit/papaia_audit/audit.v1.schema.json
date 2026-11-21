@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.papaia.dev/audit.v1.schema.json",
+  "x-papaia-schema-version": "1.1.0",
+  "title": "papaia.audit/1 event (stored form)",
+  "description": "One audit event as papaia-audit stores and exports it: the submitted body plus source, seq, prev_hash and hash, which only papaia-audit assigns. A source submits the form '#/$defs/submission'. Events never carry tokens, payloads, titles, search texts, form values or SQL literals; every string is limited to identifiers, and unknown fields are rejected at every level. Rules in contract/audit.md.",
+  "type": "object",
+  "allOf": [{"$ref": "#/$defs/body"}],
+  "properties": {
+    "source": {
+      "description": "Writing source, taken from the mTLS client certificate at ingest, never from the submitted body.",
+      "$ref": "#/$defs/source_name"
+    },
+    "seq": {
+      "description": "Position in the hash chain of the source, assigned by papaia-audit, gapless from 1.",
+      "$ref": "#/$defs/counter"
+    },
+    "prev_hash": {
+      "description": "Hash of the previous event of the same source; the first event uses 32 zero bytes.",
+      "$ref": "#/$defs/sha256"
+    },
+    "hash": {
+      "description": "SHA-256 over prev_hash followed by the RFC 8785 canonical JSON of the submitted body. Required so that an export can be checked for tampering without the store.",
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "required": ["source", "seq", "prev_hash", "hash"],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "submission": {
+      "description": "Event as a source hands it to its audit writer and delivers it to papaia-audit. Fields assigned by papaia-audit are not allowed here.",
+      "$ref": "#/$defs/body",
+      "unevaluatedProperties": false
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "format": {"const": "papaia.audit/1"},
+        "time": {
+          "description": "Time of the event at the source, UTC with milliseconds. The date must exist in the calendar (format date-time).",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$(?!\\n)"
+        },
+        "source_seq": {
+          "description": "Gapless counter of the source's writer; papaia-audit uses it to drop repeated deliveries.",
+          "$ref": "#/$defs/counter"
+        },
+        "correlation_id": {"$ref": "#/$defs/correlation_id"},
+        "writer": {
+          "description": "Writing component: '<source>' or '<source>/<component>'.",
+          "allOf": [
+            {"$ref": "#/$defs/token_free"},
+            {"type": "string", "maxLength": 128, "pattern": "^[a-z][a-z0-9-]{0,62}(/[a-z0-9][a-z0-9_.-]{0,62})?$(?!\\n)"}
+          ]
+        },
+        "role": {
+          "description": "Side of the call that wrote the event.",
+          "enum": ["caller", "server", null]
+        },
+        "sub": {
+          "description": "Subject of the acting identity; null only for events without a known identity.",
+          "anyOf": [{"$ref": "#/$defs/subject"}, {"type": "null"}]
+        },
+        "identity_kind": {"enum": ["person", "service", null]},
+        "service_account": {
+          "description": "Service account id when identity_kind is 'service'.",
+          "anyOf": [{"$ref": "#/$defs/client_id"}, {"type": "null"}]
+        },
+        "azp": {
+          "description": "Authorized party of the presented token.",
+          "anyOf": [{"$ref": "#/$defs/client_id"}, {"type": "null"}]
+        },
+        "aud": {
+          "description": "The single audience of the presented token.",
+          "anyOf": [{"$ref": "#/$defs/client_id"}, {"type": "null"}]
+        },
+        "origin_azp": {
+          "description": "Origin of a token chain as set by the server, never from a header.",
+          "anyOf": [{"$ref": "#/$defs/client_id"}, {"type": "null"}]
+        },
+        "origin_source": {
+          "description": "Where origin_azp comes from: 'policy' (upstream origins enforced by the identity provider) or 'azp' (the caller is its own origin).",
+          "enum": ["policy", "azp", null]
+        },
+        "origin_asserted_by": {
+          "description": "Value of the X-Papaia-Origin-Azp header, recorded for information only and never used for a decision.",
+          "anyOf": [{"$ref": "#/$defs/client_id"}, {"type": "null"}]
+        },
+        "context": {"anyOf": [{"$ref": "#/$defs/context"}, {"type": "null"}]},
+        "catalog_id": {
+          "anyOf": [
+            {
+              "allOf": [
+                {"$ref": "#/$defs/token_free"},
+                {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$(?!\\n)"}
+              ]
+            },
+            {"type": "null"}
+          ]
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "allOf": [
+                {"$ref": "#/$defs/token_free"},
+                {"type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$(?!\\n)"}
+              ]
+            },
+            {"type": "null"}
+          ]
+        },
+        "effect": {"enum": ["read", "write", "send", "delete", "check", null]},
+        "object_ref": {"anyOf": [{"$ref": "#/$defs/object_ref"}, {"type": "null"}]},
+        "data_class": {
+          "description": "Data class of the object or operation (schemas data class scale).",
+          "enum": [
+            "public",
+            "internal",
+            "partner_contact",
+            "personal",
+            "employee",
+            "confidential",
+            "special",
+            "professional_secret",
+            null
+          ]
+        },
+        "result": {"enum": ["allowed", "denied", "error"]},
+        "error_code": {
+          "description": "Module error code or error class; never a message text.",
+          "anyOf": [
+            {
+              "allOf": [
+                {"$ref": "#/$defs/token_free"},
+                {"type": "string", "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$(?!\\n)"}
+              ]
+            },
+            {"type": "null"}
+          ]
+        },
+        "client_ip": {
+          "description": "Client address at the edge, for sign-in events.",
+          "anyOf": [{"$ref": "#/$defs/ip_address"}, {"type": "null"}]
+        },
+        "detail": {"anyOf": [{"$ref": "#/$defs/detail"}, {"type": "null"}]},
+        "token_iat": {
+          "description": "iat of the presented token (NumericDate, seconds since the epoch). Only in an operation row with role 'server'; never the token itself.",
+          "anyOf": [{"$ref": "#/$defs/numeric_date"}, {"type": "null"}]
+        },
+        "token_auth_time": {
+          "description": "auth_time of the presented token, the time of the sign-in (NumericDate); null when the token carries none, for example a service account. Only in an operation row with role 'server'.",
+          "anyOf": [{"$ref": "#/$defs/numeric_date"}, {"type": "null"}]
+        },
+        "token_remaining_s": {
+          "description": "Seconds from the check of the presented token to its exp, 0 when already past exp within the tolerance. Only in an operation row with role 'server'.",
+          "anyOf": [{"$ref": "#/$defs/amount"}, {"type": "null"}]
+        },
+        "event": {"$ref": "#/$defs/event"}
+      },
+      "required": ["format", "time", "source_seq", "correlation_id", "writer", "result", "event"],
+      "allOf": [
+        {
+          "description": "An operation names who did what on which catalog entry, from which side.",
+          "if": {"properties": {"event": {"const": "operation"}}, "required": ["event"]},
+          "then": {
+            "required": ["role", "sub", "identity_kind", "azp", "catalog_id", "operation", "effect"],
+            "properties": {
+              "role": {"type": "string"},
+              "sub": {"type": "string"},
+              "identity_kind": {"type": "string"},
+              "azp": {"type": "string"},
+              "catalog_id": {"type": "string"},
+              "operation": {"type": "string"},
+              "effect": {"type": "string"}
+            }
+          }
+        },
+        {
+          "description": "A service identity names its service account; a person never does.",
+          "if": {"properties": {"identity_kind": {"const": "service"}}, "required": ["identity_kind"]},
+          "then": {"required": ["service_account"], "properties": {"service_account": {"type": "string"}}},
+          "else": {"properties": {"service_account": {"type": "null"}}}
+        },
+        {
+          "description": "origin_azp and origin_source come together or not at all.",
+          "if": {"properties": {"origin_azp": {"type": "string"}}, "required": ["origin_azp"]},
+          "then": {"required": ["origin_source"], "properties": {"origin_source": {"type": "string"}}},
+          "else": {"properties": {"origin_source": {"type": "null"}}}
+        },
+        {
+          "description": "Token times belong to the server's row of an operation only.",
+          "if": {
+            "anyOf": [
+              {"properties": {"token_iat": {"not": {"type": "null"}}}, "required": ["token_iat"]},
+              {"properties": {"token_auth_time": {"not": {"type": "null"}}}, "required": ["token_auth_time"]},
+              {"properties": {"token_remaining_s": {"not": {"type": "null"}}}, "required": ["token_remaining_s"]}
+            ]
+          },
+          "then": {
+            "required": ["role", "event"],
+            "properties": {"role": {"const": "server"}, "event": {"const": "operation"}}
+          }
+        }
+      ]
+    },
+    "event": {
+      "enum": [
+        "operation",
+        "delegation_granted",
+        "delegation_redeemed",
+        "delegation_revoked",
+        "approval_changed",
+        "exchange_right_changed",
+        "role_changed",
+        "emergency_stop_set",
+        "emergency_stop_lifted",
+        "exchange_rejected",
+        "audit_read",
+        "login_failed",
+        "breakglass_login",
+        "breakglass_change",
+        "service_account_rotated",
+        "config_changed",
+        "pseudonym_resolved",
+        "audit_person_query_requested",
+        "audit_person_query_confirmed",
+        "audit_person_query_rejected",
+        "audit_exported",
+        "legal_hold_set",
+        "legal_hold_lifted",
+        "retention_run",
+        "source_locked",
+        "source_unlocked",
+        "protected_host_denied",
+        "inventory_exported",
+        "ownership_transferred",
+        "confirmation_due",
+        "object_suspended",
+        "idp_group_overflow",
+        "status_sync_failed",
+        "paperless_unknown_user",
+        "free_sql_blocked",
+        "person_request_created",
+        "person_request_confirmed",
+        "person_request_rejected",
+        "erasure_replayed",
+        "post_restore_applied",
+        "lifecycle_request_rejected",
+        "state_epoch_behind",
+        "state_epoch_unverified",
+        "state_epoch_unknown"
+      ]
+    },
+    "token_free": {
+      "description": "Rejects strings shaped like a JSON Web Token, a bearer credential, a PEM block or an opaque key with a well-known prefix (sk-, ghp_/gho_/ghu_/ghs_/ghr_, github_pat_, glpat-, xoxa-/xoxb-/xoxe-/xoxp-/xoxr-/xoxs-, AKIA). All quantifiers are bounded so the pattern runs in linear time. Opaque random values without a prefix cannot be told apart from identifiers (contract/audit.md).",
+      "not": {
+        "type": "string",
+        "pattern": "eyJ[A-Za-z0-9_-]{0,256}\\.|[Bb][Ee][Aa][Rr][Ee][Rr][ \\t]|-----BEGIN|(^|[^A-Za-z0-9])(sk-[A-Za-z0-9_-]{20}|gh[opusr]_[A-Za-z0-9]{20}|github_pat_[A-Za-z0-9_]{20}|glpat-[A-Za-z0-9_-]{20}|xox[abeprs]-[A-Za-z0-9-]{10}|AKIA[0-9A-Z]{16})"
+      }
+    },
+    "correlation_id": {
+      "description": "Value of the X-Papaia-Correlation-Id header: 1 to 64 characters out of A-Z, a-z, 0-9 and '-', not shaped like a prefixed key. It arrives from outside, so the token rule applies; a receiver replaces such a value (contract/audit.md).",
+      "allOf": [
+        {"$ref": "#/$defs/token_free"},
+        {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9-]+$(?!\\n)"}
+      ]
+    },
+    "source_name": {
+      "allOf": [
+        {"$ref": "#/$defs/token_free"},
+        {"type": "string", "maxLength": 63, "pattern": "^[a-z][a-z0-9-]*$(?!\\n)"}
+      ]
+    },
+    "client_id": {
+      "allOf": [
+        {"$ref": "#/$defs/token_free"},
+        {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$(?!\\n)"}
+      ]
+    },
+    "subject": {
+      "allOf": [
+        {"$ref": "#/$defs/token_free"},
+        {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@|+-]*$(?!\\n)"}
+      ]
+    },
+    "reference": {
+      "description": "Identifier of a run, step, app, analysis or delegation.",
+      "allOf": [
+        {"$ref": "#/$defs/token_free"},
+        {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$(?!\\n)"}
+      ]
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "app": {"anyOf": [{"$ref": "#/$defs/reference"}, {"type": "null"}]},
+        "run": {"anyOf": [{"$ref": "#/$defs/reference"}, {"type": "null"}]},
+        "step": {"anyOf": [{"$ref": "#/$defs/reference"}, {"type": "null"}]},
+        "analysis": {"anyOf": [{"$ref": "#/$defs/reference"}, {"type": "null"}]},
+        "delegation": {"anyOf": [{"$ref": "#/$defs/reference"}, {"type": "null"}]}
+      },
+      "additionalProperties": false
+    },
+    "object_ref": {
+      "description": "Reference to the object acted on: type and id only, never a title or content.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "allOf": [
+            {"$ref": "#/$defs/token_free"},
+            {"type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_]*$(?!\\n)"}
+          ]
+        },
+        "id": {
+          "allOf": [
+            {"$ref": "#/$defs/token_free"},
+            {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$(?!\\n)"}
+          ]
+        }
+      },
+      "required": ["type", "id"],
+      "additionalProperties": false
+    },
+    "detail": {
+      "description": "Counters and hashes only; never statement text, rows or values.",
+      "type": "object",
+      "properties": {
+        "objects": {
+          "description": "Names of the database objects touched.",
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/token_free"},
+              {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_\\[][A-Za-z0-9_.$#@\\[\\]-]*$(?!\\n)"}
+            ]
+          }
+        },
+        "rows": {"$ref": "#/$defs/amount"},
+        "bytes": {"$ref": "#/$defs/amount"},
+        "count": {"$ref": "#/$defs/amount"},
+        "duration_ms": {"$ref": "#/$defs/amount"},
+        "spid": {"$ref": "#/$defs/amount"},
+        "statement_hash": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "ip_address": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "ipv4",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$(?!\\n)"
+        },
+        {
+          "type": "string",
+          "format": "ipv6",
+          "maxLength": 45,
+          "pattern": "^[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*$(?!\\n)"
+        }
+      ]
+    },
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)"},
+    "counter": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "numeric_date": {
+      "description": "Seconds since 1970-01-01T00:00:00Z without leap seconds (RFC 7519), as an integer.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "amount": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}
+  }
+}

@@ -223,6 +223,13 @@ CATALOGUE: dict[str, ServiceSpec] = {
             start_group=1,
         ),
         ServiceSpec(
+            "audit",
+            "papaia-audit (audit store)",
+            ("audit",),
+            (),
+            start_group=0,
+        ),
+        ServiceSpec(
             "manager",
             "papaia-manager",
             ("manager",),
@@ -236,9 +243,10 @@ CATALOGUE: dict[str, ServiceSpec] = {
 # Services that must run where the configuration tree is: the manager mounts the whole
 # config dir and the Docker socket of the host that runs `papaia-ctl`, the RAG
 # ingester keeps its catalogue and the operator's documents inside the config dir,
-# knowledge-map-mcp reads the rendered map from it, and papaia-egress reads the allow
-# lists rendered there and joins the egress networks of the add-ons, which run there too.
-CONTROLLER_ONLY = ("manager", "rag", "knowledge-map", "egress")
+# knowledge-map-mcp reads the rendered map from it, papaia-egress reads the allow
+# lists rendered there and joins the egress networks of the add-ons, which run there too,
+# and papaia-audit mounts its certificates and secrets from it.
+CONTROLLER_ONLY = ("manager", "rag", "knowledge-map", "egress", "audit")
 
 # The bundled reverse proxy. Its profile, not the `nginx` service, says whether it runs.
 PROXY_PROFILE = "nginx"

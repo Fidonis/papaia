@@ -123,7 +123,7 @@ def test_setup_always_activates_the_egress_profile():
     tree = resolve.resolve_core_profiles(tree)
     tree = resolve.resolve_core_profiles(tree)
 
-    assert tree[""]["COMPOSE_PROFILES"].split(",") == ["keycloak", "litellm", "egress"]
+    assert tree[""]["COMPOSE_PROFILES"].split(",") == ["keycloak", "litellm", "egress", "audit"]
 
 
 def test_the_egress_service_stays_on_the_controller():

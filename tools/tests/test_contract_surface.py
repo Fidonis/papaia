@@ -168,6 +168,12 @@ ATTACHABLE_SERVICES = {
     "nginx-proxy-manager": ["nginx"],
     "nginx-proxy-manager-auth": ["nginx"],
     "oauth2-proxy": ["oauth2-proxy"],
+    # The audit store (always on). Sources deliver to papaia-audit; its database is on
+    # papaia-audit-net only; no add-on may attach it or the one-shot schema step
+    # (compat.NEVER_ATTACHABLE).
+    "papaia-audit": ["audit"],
+    "papaia-audit-db": ["audit"],
+    "papaia-audit-schema": ["audit"],
     "papaia-manager": ["manager"],
     # The single exit (always on). An add-on reaches it through `networks.egress`,
     # which joins it to the add-on's egress network; see lib/egress.py.

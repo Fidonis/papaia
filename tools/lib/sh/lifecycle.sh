@@ -389,6 +389,10 @@ cmd_start() {
     info "Rendering current configuration..."
     py_cli render
 
+    # The audit store (profile `audit`, always on) needs its certificates and passwords
+    # before `up`; existing ones are kept.
+    py_cli audit-prepare
+
     # The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native): its binary and
     # start script, before `up` so a failed download is reported before the stack moves.
     LOCALAI_NATIVE="off"
@@ -689,6 +693,7 @@ _start_distributed() {
     py_cli sync-env
     info "Rendering the configuration and the node bundles..."
     py_cli render
+    py_cli audit-prepare
     # Every pin of the tree (the nodes start their own services) and the active add-ons,
     # each add-on with its own list.
     local verified=0

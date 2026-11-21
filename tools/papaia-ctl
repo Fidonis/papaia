@@ -104,6 +104,9 @@
 #                            [--suite=VERSION] [--scope=delivery|test]
 #   papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
 #                              [--config-dir=PATH]
+#   papaia-ctl audit cert    <source> [--config-dir=PATH]
+#   papaia-ctl audit verify  [--source=NAME] [--against=FILE] [--json] [--config-dir=PATH]
+#   papaia-ctl audit heads   [--config-dir=PATH]
 #   papaia-ctl help
 #
 # Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
@@ -118,7 +121,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,111p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,114p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -157,6 +160,8 @@ source "$SH_LIB/librechat.sh"
 source "$SH_LIB/secrets.sh"
 # shellcheck source=lib/sh/halt.sh
 source "$SH_LIB/halt.sh"
+# shellcheck source=lib/sh/audit.sh
+source "$SH_LIB/audit.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -224,6 +229,7 @@ case "$cmd" in
     node)          cmd_node "$@" ;;
     node-shell)    cmd_node_shell "$@" ;;
     librechat)     cmd_librechat "$@" ;;
+    audit)         cmd_audit "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

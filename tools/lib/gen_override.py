@@ -75,6 +75,12 @@ def generate_override(
     if not name or not app_network or not attach:
         return None
 
+    sealed = sorted(set(attach) & compat.NEVER_ATTACHABLE)
+    if sealed:
+        # The compatibility check refuses such an add-on; this keeps the override from
+        # ever putting the audit database on an add-on network.
+        raise ValueError(f"add-on '{name}' may not attach {', '.join(sealed)}")
+
     app_network = resolve_app_network(app_network, config_dir)
 
     override = {

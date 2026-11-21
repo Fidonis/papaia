@@ -23,6 +23,7 @@ core:
     - librechat
     - litellm
     - egress
+    - audit
   inference: local-first
 
 addons: []

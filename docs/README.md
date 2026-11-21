@@ -19,6 +19,8 @@ Welcome to the papAIa documentation.
   erasure journal `identity`, its service account
 - [Platform halt](./halt.md) — `papaia-ctl halt`: stop every write, send and delete of the
   installation with one host command
+- [The audit store](./audit.md) — papaia-audit: ingest over mutual TLS, hash chain per source,
+  verification and signed chain heads
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
   only
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions

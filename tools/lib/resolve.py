@@ -789,8 +789,9 @@ def _toggle_profile(tree: EnvTree, name: str, enabled: bool) -> EnvTree:
     return tree
 
 
-# Core profiles that are always active and cannot be switched off: the single exit.
-ALWAYS_ON_PROFILES = ("egress",)
+# Core profiles that are always active and cannot be switched off: the single exit and
+# the audit store.
+ALWAYS_ON_PROFILES = ("egress", "audit")
 
 
 def resolve_core_profiles(tree: EnvTree) -> EnvTree:

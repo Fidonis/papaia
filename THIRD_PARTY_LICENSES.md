@@ -25,6 +25,7 @@ their images there; the table below covers the Core only.
 |---|---|---|---|---|
 | `quay.io/keycloak/keycloak` | 26.7.0 | Apache-2.0 | `infra/keycloak` | |
 | `postgres` | 18.3 | PostgreSQL License | `infra/keycloak` | Keycloak database |
+| `postgres` | 17.12-alpine3.24 (digest-pinned) | PostgreSQL License | `infra/audit` | audit store database `papaia-audit-db` (profile `audit`) |
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.6 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
 | `boky/postfix` | 5.1.0-alpine | MIT | `infra/smtp-relay` | optional mail relay (profile `smtp`); the image bundles Postfix (IPL-1.0 or EPL-2.0), OpenDKIM and rsyslog (GPL-3.0-or-later among others), used as network service |
@@ -32,7 +33,9 @@ their images there; the table below covers the Core only.
 | `ghcr.io/fidonis/papaia-manager` | 1.7.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
 | `ghcr.io/fidonis/papaia-egress` | 1.9.0 | MIT | `infra/egress` | own image of the core (`compat/own-images.yaml`): the egress proxy on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-egress/` |
 | `ghcr.io/fidonis/papaia-lifecycle` | 1.9.0 | MIT | `infra/lifecycle` | own image of the core (`compat/own-images.yaml`): the lifecycle service on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, OpenSSL Apache-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-lifecycle/` |
+| `ghcr.io/fidonis/papaia-audit` | 1.9.0 | MIT | `infra/audit` | own image of the core (`compat/own-images.yaml`): the audit store service and its schema step (profile `audit`) on `python:3.12.16-alpine3.24`; carries psycopg and psycopg-binary (LGPL-3.0-only, unmodified libraries; the wheel bundles libpq, OpenSSL and further libraries), cryptography (Apache-2.0 OR BSD-3-Clause), cffi (MIT-0), pycparser (BSD-3-Clause), jsonschema, jsonschema-specifications, referencing, attrs and rpds-py (MIT), typing-extensions (PSF-2.0); notice files under `/usr/share/licenses/papaia-audit/` |
 | `python` | 3.12.16-slim-trixie | PSF-2.0 | `infra/lifecycle` | `papaia-lifecycle-init` (hands the volumes to the service user); also the base of the own images above |
+| `python` | 3.12.16-alpine3.24 (digest-pinned) | PSF-2.0 | `infra/audit` | base of the own image `ghcr.io/fidonis/papaia-audit` |
 | `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
 | `mongo` | 8.3.17 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |
@@ -70,6 +73,9 @@ their images there; the table below covers the Core only.
 | AGPL-3.0 | GNU Affero General Public License v3.0 |
 | GPL-2.0 | GNU General Public License v2.0 |
 | GPL-3.0 | GNU General Public License v3.0 |
+| LGPL-3.0 | GNU Lesser General Public License v3.0 |
+| PSF-2.0 | Python Software Foundation License 2.0 |
+| BSD-3-Clause | BSD 3-Clause License |
 | SSPL | Server Side Public License v1 (MongoDB / Elastic) |
 | RSALv2 | Redis Source Available License v2 |
 | BUSL-1.1 | Business Source License 1.1 |

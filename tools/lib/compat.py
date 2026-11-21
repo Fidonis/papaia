@@ -184,6 +184,12 @@ def compose_files(root_compose: Path) -> list[Path]:
     return files
 
 
+# Core services no add-on network may reach: the audit database is on
+# papaia-audit-net only (docs/audit.md), like its one-shot schema step; add-ons deliver
+# events to papaia-audit.
+NEVER_ATTACHABLE = frozenset({"papaia-audit-db", "papaia-audit-schema"})
+
+
 def resolve_core_services(repo_root: Path) -> dict[str, list[str]] | None:
     """Map every core compose service to its `profiles` list, walking the
     root compose's `include:` entries.
@@ -450,7 +456,14 @@ def evaluate_addon(
         return CompatResult(name, STATUS_ERROR, reason="networks.attach must be a list")
     if attach and core.services is not None and status in (STATUS_OK, STATUS_UNKNOWN):
         unknown = [service for service in attach if service not in core.services]
-        if unknown:
+        sealed = [service for service in attach if service in NEVER_ATTACHABLE]
+        if sealed:
+            status = STATUS_INCOMPATIBLE
+            axis = "attach"
+            requirement = list(attach)
+            core_value = None
+            reason = "no add-on may attach " + ", ".join(f"'{service}'" for service in sealed)
+        elif unknown:
             status = STATUS_INCOMPATIBLE
             axis = "attach"
             requirement = list(attach)

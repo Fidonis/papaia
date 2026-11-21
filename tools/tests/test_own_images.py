@@ -44,9 +44,17 @@ MIRROR = "127.0.0.1:59860/unpublished/"
 def test_the_core_builds_its_own_images_for_the_services_that_run_its_code():
     declared = {image.name: image for image in own_images.load(REPO)}
 
-    assert set(declared) == {"ghcr.io/fidonis/papaia-egress", "ghcr.io/fidonis/papaia-lifecycle"}
+    assert set(declared) == {
+        "ghcr.io/fidonis/papaia-egress",
+        "ghcr.io/fidonis/papaia-lifecycle",
+        "ghcr.io/fidonis/papaia-audit",
+    }
     assert declared["ghcr.io/fidonis/papaia-egress"].services == ("papaia-egress",)
     assert declared["ghcr.io/fidonis/papaia-lifecycle"].services == ("papaia-lifecycle",)
+    assert declared["ghcr.io/fidonis/papaia-audit"].services == (
+        "papaia-audit",
+        "papaia-audit-schema",
+    )
     for image in declared.values():
         assert image.license == "MIT"
         assert image.license_class == "P"
@@ -227,6 +235,19 @@ def test_the_declaration_refuses_unknown_top_level_fields_and_duplicates(tmp_pat
         own_images.load(_tree(tmp_path / "b", declaration=doc))
 
 
+def test_a_stage_may_run_on_the_build_platform(tmp_path: Path):
+    """A stage that only fetches files for the target (such as wheels pinned by hash)
+    runs natively; what it produces is copied into the final stage by name."""
+    staged = DOCKERFILE.replace(
+        f"FROM {BASE}",
+        f"FROM --platform=$BUILDPLATFORM {BASE} AS deps\nRUN true\nFROM {BASE}",
+        1,
+    ).replace("COPY src/infra/probe/probe.py", "COPY --from=deps /opt/lib /opt/lib\n"
+              "COPY src/infra/probe/probe.py", 1)
+
+    assert own_images.check(_tree(tmp_path, dockerfile=staged)) == []
+
+
 def test_an_input_that_is_a_symlink_is_refused(tmp_path: Path):
     root = _tree(tmp_path)
     target = root / "src" / "infra" / "probe" / "probe.py"
@@ -251,6 +272,9 @@ def test_an_input_that_is_a_symlink_is_refused(tmp_path: Path):
         ("COPY LICENSE /usr/share/licenses/papaia-probe/LICENSE\n", "", "LICENSE"),
         ("src/infra/probe/probe.py /opt", "src/infra/probe/other.py /opt", "inputs"),
         ("CMD [", "ADD https://example.org/x.tar.gz /opt/\nCMD [", "ADD"),
+        (f"FROM {BASE}", "FROM --platform=$BUILDPLATFORM python:3.12.16-alpine3.24", "FROM"),
+        (f"FROM {BASE}", f"FROM --platform=linux/amd64 {BASE}", "--platform"),
+        (f"FROM {BASE}", f"FROM --network=host {BASE}", "--network"),
     ],
 )
 def test_the_dockerfile_rules(tmp_path: Path, old: str, new: str, message: str):

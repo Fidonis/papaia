@@ -207,7 +207,8 @@ def _flags(args: str) -> tuple[dict[str, str], list[str]]:
 
 def dockerfile_problems(repo_root: Path, image: OwnImage) -> list[str]:
     """Why the Dockerfile of `image` breaks the rules of an own image: every base and
-    every `COPY --from` image pinned by tag and digest; no ADD; COPY only from the
+    every `COPY --from` image pinned by tag and digest; no FROM flag but
+    `--platform=$BUILDPLATFORM`; no ADD; COPY only from the
     declared inputs; the license label; the notice files under
     /usr/share/licenses/<image>/; the last USER numeric and not root."""
     where = image.dockerfile
@@ -219,7 +220,14 @@ def dockerfile_problems(repo_root: Path, image: OwnImage) -> list[str]:
     available = set(image.inputs) | {"LICENSE"}
     for keyword, args in _instructions(text):
         if keyword == "FROM":
-            words = args.split()
+            flags, words = _flags(args)
+            # A stage may run on the build platform (fetching files for the target, such
+            # as wheels pinned by hash), so both variants build without emulation. Any
+            # other platform or flag would make the variants differ.
+            for flag, value in flags.items():
+                if flag != "platform" or value != "$BUILDPLATFORM":
+                    problems.append(f"{where}: FROM --{flag}={value}: only "
+                                    "--platform=$BUILDPLATFORM is used")
             base = words[0] if words else ""
             if images.pin_problem(base) is not None:
                 problems.append(f"{where}: FROM {base}: {images.pin_problem(base)}")
