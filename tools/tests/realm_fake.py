@@ -493,7 +493,13 @@ class FakeRealm:
         if m and method == "PUT":
             client = self.clients[m.group(1)]
             for key, value in body.items():
-                if key not in ("defaultClientScopes", "optionalClientScopes", "id"):
+                if key == "attributes":
+                    # Keycloak keeps an attribute the body leaves out and removes one it
+                    # sends as an empty string (checked against 26.7.0).
+                    attributes = client.setdefault("attributes", {})
+                    attributes.update(copy.deepcopy(value or {}))
+                    client["attributes"] = {k: v for k, v in attributes.items() if v != ""}
+                elif key not in ("defaultClientScopes", "optionalClientScopes", "id"):
                     client[key] = copy.deepcopy(value)
             if client.get("serviceAccountsEnabled") and "_service_user" not in client:
                 self._add_service_user(client)

@@ -246,11 +246,11 @@ def test_data_chain_admits_only_studio_as_origin_and_a_single_data_audience():
     _run(realm, _gateway_plan())
     policy = realm.policy("data-chain")
     assert _grants(policy) == [TE]
-    (owner,) = [c for c in policy["conditions"] if c["condition"] == "client-attributes"]
-    assert json.loads(owner["configuration"]["attributes"]) == [
-        {"key": "papaia.owner", "value": "data"}
+    (holder,) = [c for c in policy["conditions"] if c["condition"] == "client-attributes"]
+    assert json.loads(holder["configuration"]["attributes"]) == [
+        {"key": "papaia.chain-holder", "value": "true"}
     ]
-    assert not owner["configuration"].get("is-negative-logic")
+    assert not holder["configuration"].get("is-negative-logic")
     claims = {
         e["configuration"]["claim-name"]: e["configuration"]["allowed-value"]
         for e in _executors(realm, "data-chain")

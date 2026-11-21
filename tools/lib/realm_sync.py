@@ -41,11 +41,18 @@ What it manages:
   or a shared scope;
 - no exchange client but the chain holder is an audience: no scope `aud-<client>` and no
   audience mapper naming it, anywhere in the realm (`flow-engine` included);
+- Data's two clients: the chain holder `papaia-data` signs nobody in and carries the
+  attribute `papaia.chain-holder=true`; `papaia-data-ui`, the sign-in client of Data's own
+  interface, authenticates with `private_key_jwt` (Keycloak's `client-jwt`; the module
+  registers its own public key, the sync leaves that in place). No other client carries
+  the attribute, whatever its value: the sync removes it (`--check` reports it);
 - the client policies the identity provider enforces: per pair of `aud-*` scopes of one
   client a policy `papaia-one-aud-<x>-<y>` that rejects an exchange asking for both
-  (`reject-request`); Data's `data-chain` (the subject token's `azp` is one of Data's
-  `upstream_origins`, first delivery only Studio, and its `aud` is exactly `papaia-data`)
-  and, with `aud-papaia-studio`, `data-handover`; per person-only audience (Data, the
+  (`reject-request`); Data's `data-chain` for the client named by `papaia.chain-holder=true`
+  (the subject token's `azp` is one of Data's `upstream_origins`, first delivery only
+  Studio, and its `aud` is exactly `papaia-data`), `data-self` for every other Data client
+  (only an own session token of `papaia-data-ui` that carries no `aud-*` scope yet: one
+  hop) and, with `aud-papaia-studio`, `data-handover`; per person-only audience (Data, the
   knowledge map, module APIs for Me, any audience declared `identity: [person]`) no
   `client_credentials` and no exchange without `sid`. Other policies and profiles of
   the realm are left as they are;
@@ -153,6 +160,13 @@ OFFLINE = "offline_access"
 DEFAULT_SCOPES = frozenset({"basic", "acr", "profile", "email", "roles", "web-origins"})
 EFFECTS = ("r", "w", "d", "x")
 CHAIN_HOLDER = "papaia-data"
+# The client attribute that names the chain holder positively in `data-chain`; set on
+# CHAIN_HOLDER alone (security 1.5 no. 2).
+CHAIN_HOLDER_MARK = "papaia.chain-holder"
+# Data's own interface: signs persons in, exchanges only its own session token, in one hop.
+DATA_UI = "papaia-data-ui"
+# Clients that authenticate with a signed JWT (RFC 7523, `private_key_jwt`).
+_PRIVATE_KEY_JWT = frozenset({DATA_UI})
 # The clients whose tokens the chain holder may exchange further. First delivery: only
 # Studio (Studio -> Data -> connection); the assistant and Flow are no origins, and any
 # extension comes with its own acceptance. A Data client is never an origin.
@@ -163,13 +177,16 @@ IDENTITIES = ("person", "service")
 # every module API for Me (`kind: me`) as well.
 PERSON_ONLY_AUDIENCES = frozenset({CHAIN_HOLDER, "mcp-knowledge-map"})
 TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+# The `scope` claim of a token that carries no `aud-*` scope: a session token, not one that
+# was exchanged already (jwt-claim-enforcer matches the whole value).
+NO_EXCHANGE_SCOPE = "^(?!(.* )?aud-).*$"
 # Takes claims from the caller's request; never on a client or scope a managed client uses.
 CLAIMS_PARAM_MAPPER = "oidc-claims-param-token-mapper"
 
 # Client policies and profiles the sync owns (identified by name).
 PAIR_POLICY_PREFIX = "papaia-one-aud-"
 PERSON_POLICY_PREFIX = "papaia-person-"
-CHAIN_POLICIES = ("data-chain", "data-handover")
+CHAIN_POLICIES = ("data-chain", "data-self", "data-handover")
 REJECT_PROFILE = "papaia-reject"
 PERSON_PROFILE = "papaia-person-subject"
 MANAGED_PROFILES = frozenset({REJECT_PROFILE, PERSON_PROFILE, *CHAIN_POLICIES})
@@ -536,7 +553,9 @@ class ClientSpec:
             attributes["oauth2.device.authorization.grant.enabled"] = "true"
         if self.service_account:
             attributes.update(_ACCOUNT_ATTRIBUTES, **self.record)
-        return {
+        if self.client_id == CHAIN_HOLDER:
+            attributes[CHAIN_HOLDER_MARK] = "true"
+        rep = {
             "clientId": self.client_id,
             "protocol": "openid-connect",
             **_FLAGS[self.kind],
@@ -544,6 +563,9 @@ class ClientSpec:
             **(_ACCOUNT_FLAGS if self.service_account else {}),
             "attributes": attributes,
         }
+        if self.client_id in _PRIVATE_KEY_JWT:
+            rep["clientAuthenticatorType"] = "client-jwt"
+        return rep
 
 
 @dataclass
@@ -805,10 +827,18 @@ def _scope_condition(scope: str, kind: str) -> dict:
     return {"condition": "client-scopes", "configuration": {"type": kind, "scopes": [scope]}}
 
 
+def _attribute_condition(key: str, value: str, *, negative: bool = False) -> dict:
+    """Clients with the attribute `key=value` (an exact value; Keycloak has no wildcard
+    here); with `negative`, every client without it."""
+    configuration: dict = {"attributes": json.dumps([{"key": key, "value": value}])}
+    if negative:
+        configuration["is-negative-logic"] = True
+    return {"condition": "client-attributes", "configuration": configuration}
+
+
 def _owner_condition(owner: str) -> dict:
-    """Clients with `papaia.owner=<owner>` (an exact value; Keycloak has no wildcard here)."""
-    attributes = json.dumps([{"key": OWNER, "value": _owner_value(owner)}])
-    return {"condition": "client-attributes", "configuration": {"attributes": attributes}}
+    """Clients with `papaia.owner=<owner>`."""
+    return _attribute_condition(OWNER, _owner_value(owner))
 
 
 def _claim(name: str, pattern: str) -> dict:
@@ -884,13 +914,30 @@ def _client_policies(
     if CHAIN_HOLDER in clients:
         owner = clients[CHAIN_HOLDER].owner
         origin = origins[0] if len(origins) == 1 else f"({'|'.join(origins)})"
+        # The holder is named positively by its own attribute: the owner attribute is
+        # shared by both Data clients, and a scope condition would open a gap as soon as
+        # the scope is assigned again.
         policies["data-chain"] = _policy(
             "data-chain",
             "Data re-exchanges only tokens of its upstream origins issued for papaia-data alone",
-            [_grant(TOKEN_EXCHANGE_GRANT), _owner_condition(owner)],
+            [_grant(TOKEN_EXCHANGE_GRANT), _attribute_condition(CHAIN_HOLDER_MARK, "true")],
             "data-chain",
         )
         profiles["data-chain"] = [_claim("azp", f"^{origin}$"), _claim("aud", f"^{CHAIN_HOLDER}$")]
+        # Every other Data client (papaia-data-ui) exchanges only its own session token, in
+        # one hop: a token it got from an exchange carries an aud-* scope. Without the
+        # holder's attribute both Data clients fall under this policy, which fails closed.
+        policies["data-self"] = _policy(
+            "data-self",
+            "Data's own interface exchanges only its own session token, in one hop",
+            [
+                _grant(TOKEN_EXCHANGE_GRANT),
+                _owner_condition(owner),
+                _attribute_condition(CHAIN_HOLDER_MARK, "true", negative=True),
+            ],
+            "data-self",
+        )
+        profiles["data-self"] = [_claim("azp", f"^{DATA_UI}$"), _claim("scope", NO_EXCHANGE_SCOPE)]
         handover = exchange_scope("papaia-studio")
         if handover in exchange_scopes:
             policies["data-handover"] = _policy(
@@ -903,7 +950,7 @@ def _client_policies(
                 ],
                 "data-handover",
             )
-            profiles["data-handover"] = [_claim("azp", "^papaia-data-ui$")]
+            profiles["data-handover"] = [_claim("azp", f"^{DATA_UI}$")]
 
     executors = {
         REJECT_PROFILE: [{"executor": "reject-request", "configuration": {}}],
@@ -1829,6 +1876,7 @@ class _Reconciler(_Actions):
         self.exchange_elsewhere(clients, scopes)
         self.undeclared_accounts(clients)
         self.never_audience()
+        self.chain_holder_mark()
         # Policies before stale scopes: a policy may only name a scope that exists.
         self.client_policies()
         self.stale_exchange_scopes()
@@ -2605,6 +2653,28 @@ class _Reconciler(_Actions):
             if client_id not in self.plan.clients:
                 base = f"/clients/{client['id']}/protocol-mappers/models"
                 self._never_audience_mappers("client", client_id, client, base)
+
+    def chain_holder_mark(self) -> None:
+        """`papaia.chain-holder` names the client `data-chain` applies to; no client but
+        the installed chain holder carries it, with any value (the holder's own value is
+        set in `client`). An empty value is how Keycloak removes an attribute."""
+        holder = CHAIN_HOLDER if CHAIN_HOLDER in self.plan.clients else None
+        for client_id, client in sorted(self._clients().items()):
+            if client_id == holder or CHAIN_HOLDER_MARK not in (client.get("attributes") or {}):
+                continue
+            self.do(
+                Change(
+                    "client",
+                    client_id,
+                    f"attribute {CHAIN_HOLDER_MARK} removed (only {CHAIN_HOLDER} holds the chain)",
+                    "remove_client_attribute",
+                    "exchange_right_changed",
+                    "delete",
+                ),
+                "PUT",
+                f"/clients/{client['id']}",
+                {"attributes": {CHAIN_HOLDER_MARK: ""}},
+            )
 
     def _never_audience_mappers(self, kind: str, name: str, holder: dict, base: str) -> None:
         for mapper in holder.get("protocolMappers") or []:
