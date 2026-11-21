@@ -132,6 +132,47 @@ class FakeRealm:
             "_client_composites": set(),
         }
 
+    def add_user(
+        self,
+        username: str,
+        *,
+        realm_roles: set[str] = frozenset(),
+        groups: tuple[str, ...] = (),
+        enabled: bool = True,
+    ) -> str:
+        """A person: `realm_roles` mapped directly, member of the groups (ids) given."""
+        uid = self._id("user")
+        self.users[uid] = {
+            "id": uid,
+            "username": username,
+            "enabled": enabled,
+            "_realm": {"default-roles-papaia", *realm_roles},
+            "_clients": {},
+            "_groups": set(groups),
+        }
+        return uid
+
+    def add_realm_role(self, name: str, composites: set[str] = frozenset()) -> None:
+        """A realm role created by hand, optionally a composite of other realm roles."""
+        self._add_role(name)
+        self.roles[name]["_composites"] = set(composites)
+        self.roles[name]["composite"] = bool(composites)
+
+    def _effective_realm(self, user: dict) -> set[str]:
+        """Keycloak's effective realm roles of a user: direct and group mappings with
+        every composite expanded."""
+        todo = list(user["_realm"])
+        for gid in user["_groups"]:
+            todo += self.groups[gid]["_realm"]
+        seen: set[str] = set()
+        while todo:
+            name = todo.pop()
+            if name in seen or name not in self.roles:
+                continue
+            seen.add(name)
+            todo += self.roles[name]["_composites"]
+        return seen
+
     def add_group(self, name: str, realm_roles: set[str] = frozenset()) -> str:
         gid = self._id("group")
         self.groups[gid] = {"id": gid, "name": name, "path": f"/{name}", "_realm": set(realm_roles)}
@@ -243,6 +284,8 @@ class FakeRealm:
             self.users[uid] = {
                 "id": uid,
                 "username": f"service-account-{client['clientId']}",
+                "enabled": True,
+                "serviceAccountClientLink": client["id"],
                 "_realm": {"default-roles-papaia"},
                 "_clients": {},
                 "_groups": set(),
@@ -437,6 +480,24 @@ class FakeRealm:
         if m:
             held = self.clients[m.group(1)]["_client_scope"].setdefault(m.group(2), set())
             return self._map(held, self.clients[m.group(2)], method, body)
+        if route == "/users" and method == "GET":
+            # Keycloak leaves service-account users out of the user list.
+            people = [u for u in self.users.values() if "serviceAccountClientLink" not in u]
+            first = int(query.get("first", ["0"])[0])
+            count = int(query.get("max", ["100"])[0])
+            return [
+                {k: v for k, v in u.items() if not k.startswith("_")}
+                for u in people[first : first + count]
+            ]
+        m = re.fullmatch(r"/users/([^/]+)", route)
+        if m and method == "DELETE":
+            if self.users.pop(m.group(1), None) is None:
+                raise NotFound(path)
+            return None
+        m = re.fullmatch(r"/users/([^/]+)/role-mappings/realm/composite", route)
+        if m and method == "GET":
+            user = self.users[m.group(1)]
+            return [self._role_rep(n) for n in sorted(self._effective_realm(user))]
         m = re.fullmatch(r"/users/([^/]+)/role-mappings", route)
         if m and method == "GET":
             user = self.users[m.group(1)]

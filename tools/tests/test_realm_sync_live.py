@@ -558,3 +558,73 @@ def test_a_group_or_service_account_scope_role_of_the_sync_account_is_removed(re
         "clientMappings"
     )
     _admin("DELETE", f"/papaia/groups/{group['id']}")
+
+
+def _ensure(method: str, path: str, body) -> None:
+    try:
+        _admin(method, path, body)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 409:
+            raise
+
+
+def _person(username: str, *, enabled: bool = True) -> str:
+    _ensure("POST", "/papaia/users", {"username": username, "enabled": enabled})
+    (user,) = _admin("GET", f"/papaia/users?username={username}&exact=true")
+    return user["id"]
+
+
+def test_the_paperless_name_list_follows_the_realm(realm):
+    """Effective roles as Keycloak computes them: direct, through a group and through a
+    composite; deactivated accounts, service accounts and deleted accounts are not listed."""
+    for name in ("paperless-member", "paperless-admin", "pl-bundle"):
+        _ensure("POST", "/papaia/roles", {"name": name})
+    _admin("POST", "/papaia/roles/pl-bundle/composites", [_role("paperless-member")])
+    _ensure("POST", "/papaia/groups", {"name": "pl-archive"})
+    (group,) = [g for g in _admin("GET", "/papaia/groups") if g["name"] == "pl-archive"]
+    _admin("POST", f"/papaia/groups/{group['id']}/role-mappings/realm", [_role("paperless-member")])
+    anna = _person("pl-anna")
+    _admin("POST", f"/papaia/users/{anna}/role-mappings/realm", [_role("paperless-member")])
+    ben = _person("pl-ben")
+    _admin("PUT", f"/papaia/users/{ben}/groups/{group['id']}")
+    carla = _person("pl-carla")
+    _admin("POST", f"/papaia/users/{carla}/role-mappings/realm", [_role("pl-bundle")])
+    dora = _person("pl-dora")
+    _admin("POST", f"/papaia/users/{dora}/role-mappings/realm", [_role("paperless-admin")])
+    _person("pl-erik")
+    frida = _person("pl-frida", enabled=False)
+    _admin("POST", f"/papaia/users/{frida}/role-mappings/realm", [_role("paperless-member")])
+    sync_client = _client(rs.SYNC_CLIENT)
+    service_user = _admin("GET", f"/papaia/clients/{sync_client['id']}/service-account-user")
+    _admin(
+        "POST",
+        f"/papaia/users/{service_user['id']}/role-mappings/realm",
+        [_role("paperless-member")],
+    )
+
+    master = rs.AdminApi(URL, None, _master_token()).call
+    roles = frozenset({"paperless-member", "paperless-admin"})
+    listed = [n for n in rs.paperless_users(master, roles) if n.startswith(("pl-", "service-"))]
+    assert listed == ["pl-anna", "pl-ben", "pl-carla", "pl-dora"]
+
+    _admin("DELETE", f"/papaia/users/{anna}")
+    listed = [n for n in rs.paperless_users(master, roles) if n.startswith(("pl-", "service-"))]
+    assert listed == ["pl-ben", "pl-carla", "pl-dora"]
+
+    # the sync account cannot read accounts (no view-users): the list is read as master
+    _, secret = realm
+    api = rs.AdminApi(URL, None, rs._client_credentials(URL, None, secret))
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        api.call("GET", "/users?first=0&max=1")
+    assert refused.value.code == 403
+
+    _admin(
+        "DELETE",
+        f"/papaia/users/{service_user['id']}/role-mappings/realm",
+        [_role("paperless-member")],
+    )
+    for user in (ben, carla, dora, frida, _person("pl-erik")):
+        _admin("DELETE", f"/papaia/users/{user}")
+    _admin("DELETE", f"/papaia/groups/{group['id']}")
+    for name in ("pl-bundle", "paperless-member", "paperless-admin"):
+        _admin("DELETE", f"/papaia/roles/{name}")

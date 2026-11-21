@@ -39,7 +39,14 @@ What it manages:
 - no client-level mapper on a managed client that adds an audience or a role;
 - a client role of a managed client includes no role but other roles of that client:
   Keycloak puts a client's own roles, with their composites, into its token scope
-  whatever `fullScopeAllowed` says.
+  whatever `fullScopeAllowed` says;
+- the name list of the Paperless gate, `$PAPAIA_CONFIG_DIR/security/paperless-gate/
+  users.json`: the user names of the active persons (no service account) that hold a
+  role of the module serving `mcp-paperless`, directly, through a group or through a
+  composite. It is rewritten when the realm changes, so an account that is deleted,
+  deactivated or loses the role is gone after the next run, and removed when no module
+  serves `mcp-paperless` any more. Keycloak's accounts are read with the master admin
+  (the sync account holds no `view-users`); the list is the only thing that reads them.
 
 Every input is checked before the first write: a rejected declaration changes nothing. A
 second run reports 0 changes; `--check` compares without writing and reports every
@@ -126,6 +133,16 @@ OFFLINE = "offline_access"
 DEFAULT_SCOPES = frozenset({"basic", "acr", "profile", "email", "roles", "web-origins"})
 EFFECTS = ("r", "w", "d", "x")
 CHAIN_HOLDER = "papaia-data"
+
+# The Paperless gate passes the identity header only for names on this list (security
+# 4.5 (f)); the realm sync writes it, the gate mounts its directory read-only.
+PAPERLESS_AUDIENCE = "mcp-paperless"
+PAPERLESS_USERS_FORMAT = "papaia.paperless-users/1"
+PAPERLESS_USERS_REF = "security/paperless-gate/users.json"
+USER_PAGE = 100
+# A name the gate compares with a header value: no space, comma, control character or
+# other separator, at most 255 characters (Keycloak's own limit).
+_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,254}$")
 
 # Delegation (offline sessions) is held at exactly one client per purpose family.
 HOLDERS = {"flow": ("papaia-flow", "flow-engine"), "assist": ("papaia-assist", "assist-gate")}
@@ -325,17 +342,18 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
     return pairings
 
 
-def _trusted(st: os.stat_result, label: object) -> None:
-    """pairings.yaml grants exchange rights; only the user running papaia-ctl (or root)
-    may be able to change it, never group or others."""
+def _trusted(st: os.stat_result, label: object, grants: str = "exchange rights") -> None:
+    """pairings.yaml grants exchange rights, the Paperless name list grants the identity
+    header; only the user running papaia-ctl (or root) may be able to change them, never
+    group or others."""
     if st.st_uid not in (os.geteuid(), 0):
         raise RealmSyncError(
             f"{label} is owned by uid {st.st_uid}, not by the user running papaia-ctl; "
-            "it grants exchange rights"
+            f"it grants {grants}"
         )
     if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         raise RealmSyncError(
-            f"{label} is writable by group or others; it grants exchange rights (chmod go-w)"
+            f"{label} is writable by group or others; it grants {grants} (chmod go-w)"
         )
 
 
@@ -451,6 +469,9 @@ class Plan:
     admin_members: set[str]
     exchange_scopes: dict[str, str]
     notes: list[str]
+    # Roles whose holders are on the Paperless name list; None: no module serves
+    # mcp-paperless, so there is no list.
+    paperless_roles: frozenset[str] | None = None
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -546,6 +567,7 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
     visible: set[str] = set()
     holders: set[str] = set()
     audiences: set[str] = set()
+    paperless_modules: set[str] = set()
     notes: list[str] = []
     product_clients = register.product_clients()
 
@@ -589,6 +611,8 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
                 audience = entry["audience"]
                 if isinstance(audience, str) and audience in register.audiences:
                     audiences.add(audience)
+                    if audience == PAPERLESS_AUDIENCE:
+                        paperless_modules.add(module.name)
                     if audience in product_clients:
                         manage(audience, module.name)
                 elif isinstance(audience, str) and register.successor(audience, "audience"):
@@ -656,7 +680,15 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
     admin_members = {
         name for declared in own_roles.values() for name in declared if name.endswith("-admin")
     }
-    return Plan(clients, roles, admin_members, exchange_scopes, notes)
+    paperless_roles = None
+    if paperless_modules:
+        paperless_roles = frozenset().union(*(own_roles[m] for m in paperless_modules))
+        if not paperless_roles:
+            notes.append(
+                f"module {', '.join(sorted(paperless_modules))} serves {PAPERLESS_AUDIENCE} but "
+                "declares no role: the Paperless name list stays empty, the gate admits no name"
+            )
+    return Plan(clients, roles, admin_members, exchange_scopes, notes, paperless_roles)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1849,6 +1881,175 @@ class _Reconciler(_Actions):
                     )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# the name list of the Paperless gate
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def paperless_users_path(config_dir: Path) -> Path:
+    return config_dir / PAPERLESS_USERS_REF
+
+
+def paperless_users(call, roles: frozenset[str]) -> list[str]:
+    """The user names of the active persons holding one of `roles` as an effective realm
+    role (direct, through a group or a composite), sorted. `call` must be allowed to read
+    accounts (the master admin). Service accounts are never listed: Keycloak leaves them
+    out of the user list, and one that shows up anyway is skipped. A name that could not
+    be compared with a header value safely is left out and noted by account id."""
+    if not roles:
+        return []
+    names: set[str] = set()
+    first = 0
+    while True:
+        page = call("GET", f"/users?briefRepresentation=true&first={first}&max={USER_PAGE}") or []
+        for user in page:
+            uid = user.get("id")
+            if (
+                user.get("enabled") is not True
+                or user.get("serviceAccountClientLink")
+                or not isinstance(uid, str)
+                or not uid
+            ):
+                continue
+            held = call(
+                "GET", f"/users/{urllib.parse.quote(uid, safe='')}/role-mappings/realm/composite"
+            )
+            if not roles & {r.get("name") for r in held or []}:
+                continue
+            name = user.get("username")
+            if not isinstance(name, str) or not _HEADER_NAME_RE.match(name):
+                print(
+                    f"  note: account {uid}: its user name cannot be compared with a header "
+                    "value safely; it is not on the Paperless name list",
+                    flush=True,
+                )
+                continue
+            names.add(name)
+        if len(page) < USER_PAGE:
+            return sorted(names)
+        first += USER_PAGE
+
+
+def _gate_directory(config_dir: Path, *, create: bool) -> int | None:
+    """A descriptor of the list's directory, created (0755) with `create`; None when it
+    does not exist. A symbolic link, or a directory someone else could change, is
+    refused."""
+    directory = paperless_users_path(config_dir).parent
+    if create:
+        directory.parent.mkdir(mode=0o700, exist_ok=True)
+        try:
+            os.mkdir(directory, 0o755)
+            os.chmod(directory, 0o755)  # the gate runs under its own uid and must read it
+        except FileExistsError:
+            pass
+    try:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RealmSyncError(
+            f"{directory} cannot be opened safely (a symbolic link is refused): {exc.strerror}"
+        ) from None
+    try:
+        _trusted(os.fstat(fd), directory, "the Paperless identity header")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_list(dfd: int | None, name: str) -> bytes | None:
+    """The current list; None when there is none, b"" when it is no regular file."""
+    if dfd is None:
+        return None
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return b""  # a symbolic link or worse: replaced, never followed
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            return b""
+        return fh.read()
+
+
+def _replace_list(dfd: int, name: str, content: bytes) -> None:
+    """Write `content` beside the list and rename it into place: the gate reads either
+    the old or the new list, never a part. A bind mount of the single file would keep
+    the old inode, so the gate mounts the directory."""
+    tmp = f".{name}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            os.fchmod(fh.fileno(), 0o644)
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp, dir_fd=dfd)
+        raise
+    os.fsync(dfd)
+
+
+def sync_paperless_users(
+    call, plan: Plan, config_dir: Path, *, apply: bool, audit: AuditLog | None = None
+) -> list[Change]:
+    """Compare the Paperless name list with the realm behind `call` (the master admin);
+    with `apply`, rewrite it (or remove it when no module serves mcp-paperless). One
+    audit row per write or removal, never with a name. Returns the deviation, if any."""
+    name = paperless_users_path(config_dir).name
+    if plan.paperless_roles is None:
+        target = None
+    else:
+        users = paperless_users(call, plan.paperless_roles)
+        doc = {"format": PAPERLESS_USERS_FORMAT, "users": users}
+        target = (json.dumps(doc, indent=2) + "\n").encode("utf-8")
+    dfd = _gate_directory(config_dir, create=apply and target is not None)
+    try:
+        current = _read_list(dfd, name)
+        if current == target:
+            return []
+        if target is None:
+            change = Change(
+                "file",
+                PAPERLESS_USERS_REF,
+                f"Paperless name list removed (no module serves {PAPERLESS_AUDIENCE})",
+                "paperless_users.delete",
+                effect="delete",
+            )
+        else:
+            change = Change(
+                "file",
+                PAPERLESS_USERS_REF,
+                f"Paperless name list written ({len(users)} name(s))",
+                "paperless_users.write",
+            )
+        print(
+            f"{'  ' if apply else 'fail: '}{change.kind} {change.name}: {change.action}", flush=True
+        )
+        if not apply:
+            return [change]
+        assert dfd is not None  # created above, or the list to remove exists
+        try:
+            if target is None:
+                os.unlink(name, dir_fd=dfd)
+            else:
+                _replace_list(dfd, name, target)
+        except OSError:
+            if audit:
+                audit.write(change, "error", "io", master=True)
+            raise
+        if audit:
+            audit.write(change, "allowed", master=True)
+        return [change]
+    finally:
+        if dfd is not None:
+            os.close(dfd)
+
+
 def reconcile(call, plan: Plan, *, apply: bool, audit: AuditLog | None = None) -> list[Change]:
     """Compare the realm behind `call` with `plan`; with `apply`, correct every deviation.
     Returns the deviations found (= the changes made when applying)."""
@@ -1910,6 +2111,13 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
                     flush=True,
                 )
                 return 1
+            # The name list first: a reconcile that stops must not keep a removed account
+            # on it. Accounts are read with the master admin (no view-users for the
+            # sync account); a fresh token, the first may have run out meanwhile.
+            master = AdminApi(base_url, ctx, kcs._get_admin_token(base_url, ctx, admin_password))
+            changes += sync_paperless_users(
+                master.call, plan, config_dir, apply=not check, audit=audit
+            )
             api = AdminApi(base_url, ctx, token)
             reconciler = _Reconciler(api.call, plan, not check, audit)
             changes += reconciler.run()

@@ -594,6 +594,7 @@ What the sync manages:
 | Token scope | A sign-in client's token carries its module's roles, every existing role of a `visible_for_roles` and `papaia-confirm`. `papaia-admin` never enters a module client's scope (it is a composite of every module's admin role and of `realm-management` roles); an admin gets the module's own admin role through it. A role whose composite reaches outside that set or into client roles is left out and named in a note, and client roles are removed from a module client's scope, so an admin's token of a module client carries nothing of `realm-management` and no other module's admin role. A `visible_for_roles` entry of a module that is not installed waits until its role exists. |
 | Shared scopes | Keycloak's default scopes (`basic`, `acr`, `profile`, `email`, `roles`, `web-origins`) and `offline_access`, which every managed client gets, map no role; `offline_access` maps only its own role, and that role is no composite. Any other role mapping, a composite of `offline_access`, a role-adding mapper and a mapper that adds an audience (audience mapper, any mapper writing `aud`; event `exchange_right_changed`) on these scopes are removed: they would put the role or a fixed audience into the token of every managed client, also an exchanged one. Keycloak's own audience resolve mapper of `roles` stays: it only adds clients whose client roles are in the token, and no client role reaches a managed client's token scope. Clients of the realm template share these scopes; their own settings are not changed. |
 | Service accounts | Checked, not yet created: `owner_sub` and `deputy_sub` may be a placeholder `${NAME}` resolved from the add-on's `.env`; an unresolved placeholder or one person in both fields refuses the sync. |
+| Paperless name list | `$PAPAIA_CONFIG_DIR/security/paperless-gate/users.json`, see "Name list of the Paperless gate" below. |
 
 Every input is checked before the first write: a refused declaration or pairings file
 changes nothing (exit 2). A second run reports 0 changes. `--check` lists each deviation
@@ -662,6 +663,49 @@ applied a change, the run stops and reports a failed sync. A change that names a
 scope Keycloak does not know (on a managed client, an unmanaged one or the sync account)
 is skipped with a note, `realm sync` then ends with exit 1 ("incomplete") and `--check`
 keeps reporting it. No client secret is printed or written.
+
+### Name list of the Paperless gate
+
+Paperless takes the identity of a request from the header `X-Papaia-Remote-User` and
+creates an account for a name it does not know. The gate in front of Paperless
+(`paperless-gate`, part of the Paperless add-on) therefore passes the header only for
+names on a list that the realm sync writes on every run, also on every `start`:
+
+```json
+{
+  "format": "papaia.paperless-users/1",
+  "users": ["anna", "ben"]
+}
+```
+
+- Who is listed: the user name of every active account of the `papaia` realm that holds
+  a role declared by the module serving the audience `mcp-paperless`, directly, through a
+  group or through a composite role (Keycloak's effective realm roles). Deactivated
+  accounts and service accounts are never listed. A user name that cannot be compared
+  with a header value safely (anything outside letters, digits and `._@+-`, a leading
+  separator, more than 255 characters) is left out and named in a note by account id.
+- When it changes: an account that is deleted, deactivated or loses the role is gone
+  from the list after the next run. The list is compared before the clients are
+  reconciled, so a reconcile that stops does not keep a removed account on it. An
+  unchanged list is not rewritten; `--check` reports a stale list as
+  `fail: file security/paperless-gate/users.json: ...`.
+- A Paperless module that declares no role leaves the list empty (the gate then admits
+  no name) and the run says so in a note. When no module serves `mcp-paperless` any
+  more, the list is removed.
+- Where: the directory `security/paperless-gate/` (mode 0755, created by the sync) holds
+  only `users.json` (mode 0644): the gate runs under a user of its own and must read it;
+  only the user running `papaia-ctl` (or root) may be able to change the directory, a
+  symbolic link or a directory writable by group or others stops the sync. The list is
+  written beside the old one and renamed into place, so the gate reads either the old or
+  the new list, never a part. The add-on mounts the **directory** read-only (for example
+  `${PAPAIA_CONFIG_DIR}/security/paperless-gate:/run/paperless-gate:ro`); a bind mount of
+  the single file would keep showing the replaced file.
+- Credentials: reading accounts needs `view-users`, which the sync account does not
+  hold; the accounts and their effective roles are read with the master admin the run
+  already signs in with. Nothing else reads accounts.
+- Audit: each write or removal of the list is one `papaia.audit/1` row (operation
+  `realm_sync.paperless_users.write` or `.delete`, `object_ref` type `file`, `azp`
+  `admin-cli`), with the run's correlation id and without any user name.
 
 ### Seam 3 — LibreChat-MCP
 
@@ -743,7 +787,7 @@ No Core changes required.
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role, then run the realm sync. Runs on every `start`; no-op with an external OIDC provider |
-| `papaia-ctl realm sync [--check]` | Reconcile the clients, roles and exchange scopes the installed modules declare and `security/pairings.yaml` confirms (see "Realm sync of declared clients"). `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
+| `papaia-ctl realm sync [--check]` | Reconcile the clients, roles and exchange scopes the installed modules declare and `security/pairings.yaml` confirms, and write the name list of the Paperless gate (see "Realm sync of declared clients"). `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
 | `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), the native LocalAI of a Mac (`localai_native`), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |
