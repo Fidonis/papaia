@@ -10,7 +10,10 @@
 # What it does: when an account of the papaia realm is deactivated or deleted, it
 # ends the person's sessions, removes every consent (offline sessions, delegations)
 # and puts the person on the signed revocation list, which modules read from the
-# volume papaia-security-state. The list is issued again every 15 s.
+# volume papaia-security-state. The list is issued again every 15 s. Every
+# deactivation, deletion, removed role or group, ended session and reset credential
+# is one line of the erasure journal `identity` at the backup target, so that a
+# restored snapshot cannot bring it back (docs/lifecycle.md).
 #
 # Safety:
 #   - No port is published. The only network is papaia-lifecycle-net (internal),
@@ -19,6 +22,8 @@
 #     $PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle.
 #   - The signing key of the list lives in papaia-lifecycle-key, which backups
 #     leave out. Only this service writes papaia-security-state.
+#   - Of the backup target it sees erasure-journal/ alone; the installation key
+#     erasure-hmac is mounted read-only. Both are made by `render` before `up`.
 #   - Runs as the user that owns the config dir, read-only, without capabilities.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
@@ -77,6 +82,9 @@ services:
       - --account-dir=/run/papaia-lifecycle/account
       - --key-dir=/var/lib/papaia-lifecycle
       - --state-dir=/var/lib/papaia-security-state
+      - --journal-dir=/var/lib/papaia-backup/erasure-journal
+      - --journal-local-dir=/var/lib/papaia-lifecycle/erasure-journal
+      - --erasure-key=/run/papaia-lifecycle/erasure-hmac
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -98,6 +106,21 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/security/erasure-hmac
+        target: /run/papaia-lifecycle/erasure-hmac
+        read_only: true
+        bind:
+          create_host_path: false
+      # The journal folder of the backup target, written by this service alone among
+      # the core services. Compose must not create it: an empty folder in place of an
+      # unmounted target would look like an empty journal.
+      - type: bind
+        source: ${PAPAIA_BACKUP_DIR}/erasure-journal
+        target: /var/lib/papaia-backup/erasure-journal
+        bind:
+          create_host_path: false
+      # Also holds the local copy of the journal (erasure-journal/), not backed up.
       - type: volume
         source: papaia-lifecycle-key
         target: /var/lib/papaia-lifecycle
@@ -117,6 +140,8 @@ services:
         - health
         - --key-dir=/var/lib/papaia-lifecycle
         - --state-dir=/var/lib/papaia-security-state
+        - --journal-dir=/var/lib/papaia-backup/erasure-journal
+        - --journal-local-dir=/var/lib/papaia-lifecycle/erasure-journal
       interval: 15s
       timeout: 10s
       retries: 3
@@ -137,7 +162,8 @@ networks:
     internal: true
 
 volumes:
-  # Signing key and state of the service; never backed up (lib/backup.py).
+  # Signing key, state and local journal copy of the service; never backed up
+  # (lib/backup.py).
   papaia-lifecycle-key:
   # The revocation list for the modules, which mount it read-only.
   papaia-security-state:

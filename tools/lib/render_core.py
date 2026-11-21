@@ -23,8 +23,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import secrets
 import shutil
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -237,6 +240,7 @@ def render(config_dir: Path, repo_root: Path) -> None:
         raise RenderError(str(exc)) from exc
 
     ensure_lifecycle_key(config_dir)
+    ensure_lifecycle_journal(config_dir)
 
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
@@ -271,6 +275,44 @@ def ensure_lifecycle_key(config_dir: Path) -> None:
             keys.generate(LIFECYCLE_ACCOUNT)
     except service_account_keys.KeyFileError as exc:
         raise RenderError(str(exc)) from exc
+
+
+ERASURE_KEY_FILE = Path("security") / "erasure-hmac"
+JOURNAL_FOLDER = "erasure-journal"
+_ERASURE_KEY_TEXT = re.compile(rb"[0-9A-Fa-f]{64,2048}\r?\n?")
+
+
+def ensure_lifecycle_journal(config_dir: Path) -> None:
+    """With the `lifecycle` profile, the installation key `erasure-hmac` and the journal
+    folder `$PAPAIA_BACKUP_DIR/erasure-journal` exist before `up`; the container mounts
+    both and Compose must not create them (sicherheit §4.9). The key is made once and
+    kept: a new key would cut every journal entry off from its person. It lives in the
+    configuration directory, so it is part of the backup, never next to the journal."""
+    if "lifecycle" not in _active_profiles(config_dir):
+        return
+    backup_dir = common.parse_env_file(config_dir / ".env").get("PAPAIA_BACKUP_DIR", "")
+    if not backup_dir:
+        raise RenderError("the lifecycle profile needs PAPAIA_BACKUP_DIR (the erasure journal)")
+    if not Path(backup_dir).is_absolute():
+        raise RenderError(f"PAPAIA_BACKUP_DIR must be an absolute path, not {backup_dir!r}")
+    key = config_dir / ERASURE_KEY_FILE
+    key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        _check_erasure_key(key)
+    else:
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(secrets.token_hex(32) + "\n")
+    (Path(backup_dir) / JOURNAL_FOLDER).mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+def _check_erasure_key(key: Path) -> None:
+    st = os.lstat(key)
+    if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o077:
+        raise RenderError(f"{key} (erasure-hmac) must be a regular file with mode 0600")
+    if not _ERASURE_KEY_TEXT.fullmatch(key.read_bytes()) or len(key.read_bytes().strip()) % 2:
+        raise RenderError(f"{key} (erasure-hmac) must hold the key as 64 to 2048 hex digits")
 
 
 # Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under

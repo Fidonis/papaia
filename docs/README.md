@@ -15,7 +15,8 @@ Welcome to the papAIa documentation.
 - [The single exit](./egress.md) — papaia-egress: allow lists per add-on, protected hosts,
   corporate proxy
 - [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on
-  deactivation, the signed revocation list, its service account
+  deactivation, the signed revocation list, the erasure journal `identity`, its service
+  account
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
   only
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions

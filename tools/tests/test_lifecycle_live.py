@@ -12,8 +12,11 @@ below exist only in that throwaway realm.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import io
 import json
+import os
 import secrets
 import urllib.error
 import urllib.parse
@@ -130,12 +133,33 @@ def service(realm, tmp_path):
     key_dir, state_dir = tmp_path / "key", tmp_path / "state"
     key_dir.mkdir(mode=0o700)
     state_dir.mkdir()
+    target = tmp_path / "erasure-journal"
+    target.mkdir()
+    erasure_key = os.urandom(32)
+    journal = lc.ErasureJournal(
+        "identity", key=erasure_key, target_dir=target, local_dir=key_dir / "erasure-journal"
+    )
     api = lc.AccountClient(URL, None, realm["keys"].folder(la.CLIENT_ID))
     out = io.StringIO()
-    svc = lc.Lifecycle(api, lc.Store(key_dir), lc.Publisher(state_dir, lc.Signer(key_dir)), out=out)
+    svc = lc.Lifecycle(
+        api,
+        lc.Store(key_dir),
+        lc.Publisher(state_dir, lc.Signer(key_dir)),
+        out=out,
+        journal=journal,
+    )
     svc.start()
     svc.state_dir, svc.key_dir, svc.out = state_dir, key_dir, out
+    svc.target, svc.erasure_key = target, erasure_key
     return svc
+
+
+def _journal(service, sub: str) -> list[tuple[str, str]]:
+    """(kind, object_ref) of the journal lines of one account."""
+    ref = hmac.new(service.erasure_key, sub.encode(), hashlib.sha256).hexdigest()
+    path = service.target / "identity.jsonl"
+    lines = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    return [(e["kind"], e["object_ref"]) for e in lines if e["subject_ref"] == ref]
 
 
 def test_the_account_is_set_up_and_a_second_run_changes_nothing(realm):
@@ -189,6 +213,38 @@ def test_deactivation_ends_the_offline_session_and_reactivation_revives_nothing(
     assert all(lc.verify(data, sig, pub) for _ in range(1))
     assert "refresh_token" not in service.out.getvalue()
     assert offline not in service.out.getvalue()
+    # One journal entry; the service's own logout is not a second one.
+    service.step(force_poll=True)
+    assert _journal(service, anna) == [("account_disable", "account")]
+
+
+def test_removed_roles_ended_sessions_and_reset_credentials_are_journaled(realm, service):
+    """The admin events of the pinned Keycloak, as the master admin causes them."""
+    bert = _person("bert")
+    _master_call("POST", "/roles", {"name": "journal-probe"})
+    role = _master_call("GET", "/roles/journal-probe")
+    _master_call("POST", f"/users/{bert}/role-mappings/realm", [role])
+    _master_call("DELETE", f"/users/{bert}/role-mappings/realm", [role])
+    _master_call("POST", "/groups", {"name": "journal-probe"})
+    group = _master_call("GET", "/groups?search=journal-probe&exact=true")[0]["id"]
+    _master_call("PUT", f"/users/{bert}/groups/{group}")
+    _master_call("DELETE", f"/users/{bert}/groups/{group}")
+    _master_call("POST", f"/users/{bert}/logout")
+    _master_call(
+        "PUT",
+        f"/users/{bert}/reset-password",
+        {"type": "password", "value": secrets.token_hex(16), "temporary": False},
+    )
+    credential = _master_call("GET", f"/users/{bert}/credentials")[0]["id"]
+    _master_call("DELETE", f"/users/{bert}/credentials/{credential}")
+    service.step(force_poll=True)
+    assert _journal(service, bert) == [
+        ("role_revoke", "realm-roles"),
+        ("role_revoke", f"group:{group}"),
+        ("session_revoke", "sessions"),
+        ("credential_reset", "password"),
+        ("credential_reset", f"credential:{credential}"),
+    ]
 
 
 def test_the_account_cannot_reach_a_person_outside_the_group(realm, service):

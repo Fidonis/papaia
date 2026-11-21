@@ -27,6 +27,13 @@ is before `global_since`, or before `since` of its `sub`, is refused with
 only records the new value in the state; the running service publishes it and writes
 the audit rows, so they reach the container log.
 
+Every deactivation and deletion, and every removed role or group membership, ended
+session and reset credential the admin events show, is one line of the erasure journal
+`identity` (`<backup target>/erasure-journal/identity.jsonl`, local copy in the key
+volume), in the format of the modules' erasure journals: `seq` gap-free per source, the
+person named only as `subject_ref` = HMAC-SHA256(erasure-hmac, sub). A restored snapshot
+therefore cannot bring an account state back unnoticed.
+
 The signing key and the service's own state live in a volume of their own, which is
 not backed up. The service signs in as `svc-papaia-lifecycle` with a client assertion
 (private_key_jwt, ES256); the key is mounted read-only from the configuration
@@ -45,6 +52,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
@@ -99,7 +107,13 @@ GLOBAL_SINCE_SKEW_SECONDS = 300
 GLOBAL_SINCE_WAIT_SECONDS = 20
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")
 
-_USER_PATH_RE = re.compile(r"^users/([A-Za-z0-9-]{1,64})$")
+_ID = r"[A-Za-z0-9-]{1,64}"
+_USER_PATH_RE = re.compile(rf"users/({_ID})")
+_USER_ACTION_RE = re.compile(rf"users/({_ID})/(logout|reset-password)")
+_CREDENTIAL_PATH_RE = re.compile(rf"users/({_ID})/credentials/({_ID})")
+_REALM_ROLES_RE = re.compile(rf"users/({_ID})/role-mappings/realm")
+_CLIENT_ROLES_RE = re.compile(rf"users/({_ID})/role-mappings/clients/({_ID})")
+_GROUP_PATH_RE = re.compile(rf"users/({_ID})/groups/({_ID})")
 _SUB_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _EVENT_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
@@ -119,7 +133,21 @@ _STATE_KEYS = {
     "mark_ids",
     "last_poll",
 }
-_PARKED_KEYS = {"time", "sub", "op"}
+_PARKED_KEYS = {"time", "op", "type", "path"}
+# A parked event as CORE-012 stored it (account events only).
+_LEGACY_PARKED_KEYS = {"time", "sub", "op"}
+# Admin events the service reads: account changes, ended sessions and reset credentials
+# of an account, removed roles and group memberships.
+EVENT_RESOURCE_TYPES = ("USER", "REALM_ROLE_MAPPING", "CLIENT_ROLE_MAPPING", "GROUP_MEMBERSHIP")
+EVENT_OPERATION_TYPES = ("UPDATE", "DELETE", "ACTION")
+# Reason code of each identity journal entry.
+JOURNAL_REASONS = {
+    "account_disable": "account_disabled",
+    "account_delete": "account_deleted",
+    "role_revoke": "role_removed",
+    "session_revoke": "sessions_ended",
+    "credential_reset": "credential_changed",
+}
 
 
 class LifecycleError(Exception):
@@ -311,6 +339,320 @@ class Publisher:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# erasure journal
+# ─────────────────────────────────────────────────────────────────────────
+
+IDENTITY_SOURCE = "identity"
+# Kinds per core source (sicherheit §4.9 (1)); a module journal never holds these.
+JOURNAL_KINDS = {
+    "identity": frozenset(
+        {"account_disable", "account_delete", "role_revoke", "session_revoke", "credential_reset"}
+    ),
+    "core-chat": frozenset({"erase", "erase_subject"}),
+    "model-gateway": frozenset({"erase", "erase_subject", "key_revoke"}),
+}
+_JOURNAL_FIELDS = ("id", "module", "seq", "kind", "object_ref", "subject_ref", "at", "reason")
+MAX_JOURNAL_LINE = 4096
+MAX_JOURNAL_SEQ = 2**53 - 1  # exact in every JSON reader
+_OBJECT_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+#=-]{0,255}")
+_JOURNAL_REASON_RE = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
+_SUBJECT_REF_RE = re.compile(r"[0-9a-f]{64}")
+_UUID4_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_KEY_TEXT_RE = re.compile(rb"([0-9A-Fa-f]+)(?:\r?\n)?")
+
+
+class JournalError(LifecycleError):
+    """The local copy of the journal cannot be read or written; no entry is safe."""
+
+
+def read_erasure_key(path: Path) -> bytes:
+    """The installation key `erasure-hmac`: hex text of 32 to 1024 bytes, optionally
+    followed by one line break, in a file only its owner can read."""
+    match = _KEY_TEXT_RE.fullmatch(_read_private(path, 4100))
+    if match is None or len(match.group(1)) % 2 or not 64 <= len(match.group(1)) <= 2048:
+        raise LifecycleError(f"{path} must hold the key as 64 to 2048 hex digits")
+    return bytes.fromhex(match.group(1).decode("ascii"))
+
+
+def _journal_line(entry: dict) -> bytes:
+    record = {name: entry[name] for name in _JOURNAL_FIELDS}
+    if "provisional_seq" in entry:
+        record["provisional_seq"] = entry["provisional_seq"]
+    return json.dumps(record, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
+
+
+def _unique_keys(pairs: list) -> dict:
+    record = dict(pairs)
+    if len(record) != len(pairs):
+        raise ValueError("duplicate field")
+    return record
+
+
+def _seq(value: object) -> bool:
+    return type(value) is int and 0 < value <= MAX_JOURNAL_SEQ
+
+
+def _check_entry(record: object, source: str) -> dict:
+    """One decoded line in the format of the kit's erasure-journal-entry.v1 schema."""
+    if not isinstance(record, dict):
+        raise ValueError("entry is not an object")
+    if set(record) - {"provisional_seq"} != set(_JOURNAL_FIELDS):
+        raise ValueError("entry has unknown or missing fields")
+    if record["module"] != source or not _seq(record["seq"]):
+        raise ValueError("entry of another journal or without a valid seq")
+    if "provisional_seq" in record and (
+        not _seq(record["provisional_seq"]) or record["provisional_seq"] == record["seq"]
+    ):
+        raise ValueError("provisional_seq must be a positive integer other than seq")
+    checks = (
+        ("id", _UUID4_RE),
+        ("object_ref", _OBJECT_REF_RE),
+        ("subject_ref", _SUBJECT_REF_RE),
+        ("at", _AT_RE),
+        ("reason", _JOURNAL_REASON_RE),
+    )
+    for name, pattern in checks:
+        if not isinstance(record[name], str) or not pattern.fullmatch(record[name]):
+            raise ValueError(f"{name} is malformed")
+    if not isinstance(record["kind"], str) or record["kind"] not in JOURNAL_KINDS[source]:
+        raise ValueError("kind is not allowed in this journal")
+    time.strptime(record["at"], "%Y-%m-%dT%H:%M:%S.%fZ")  # a valid date
+    return record
+
+
+def _same_entry(a: dict, b: dict) -> bool:
+    """Both lines describe one entry, whatever seq they carry."""
+    return all(a[name] == b[name] for name in _JOURNAL_FIELDS if name != "seq")
+
+
+def _merged(entries: dict, lines: list[dict]) -> dict:
+    """Entries by id after taking `lines` in: the last line of an id wins, and one seq
+    never holds two entries."""
+    merged = dict(entries)
+    for line in lines:
+        known = merged.get(line["id"])
+        if known is not None and not _same_entry(known, line):
+            raise ValueError("different entries for one id")
+        merged[line["id"]] = line
+    if len({e["seq"] for e in merged.values()}) != len(merged):
+        raise ValueError("different entries for one seq")
+    return merged
+
+
+class _Place:
+    """The journal file of one source in one folder, read once."""
+
+    def __init__(self, name: str, folder: Path, source: str) -> None:
+        self.name, self.folder, self.path = name, folder, folder / f"{source}.jsonl"
+        self.state, self.lines, self.entries = "ok", [], {}
+        if not folder.is_dir() or not os.access(folder, os.R_OK | os.W_OK | os.X_OK):
+            self.state = "unreachable"
+            return
+        try:
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return
+        except OSError:
+            self.state = "unreachable"
+            return
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read()
+        # A last line without a line break is a write that never completed: it is
+        # ignored here and cut off by the next append.
+        try:
+            lines = []
+            for raw in data[: data.rfind(b"\n") + 1].splitlines():
+                if len(raw) > MAX_JOURNAL_LINE:
+                    raise ValueError("line too long")
+                lines.append(_check_entry(json.loads(raw, object_pairs_hook=_unique_keys), source))
+            # All lines at once: a later line of an id may move it off a shared seq.
+            self.add(lines)
+        except (ValueError, RecursionError):  # json.JSONDecodeError is a ValueError
+            self.state, self.lines, self.entries = "corrupt", [], {}
+
+    def add(self, lines: list[dict]) -> None:
+        self.entries = _merged(self.entries, lines)
+        self.lines.extend(lines)
+
+    def end(self) -> int:
+        return max((e["seq"] for e in self.entries.values()), default=0)
+
+    def append(self, lines: list[dict]) -> None:
+        """Append complete lines (cutting off a torn last line first), fsync, then take
+        them in. Raises OSError when the place cannot be written."""
+        _merged(self.entries, lines)  # ValueError: the lines would damage the place
+        created = not self.path.exists()
+        fd = os.open(self.path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o640)
+        try:
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                os.ftruncate(fd, os.pread(fd, size, 0).rfind(b"\n") + 1)
+            payload = memoryview(b"".join(_journal_line(e) for e in lines))
+            while payload:
+                payload = payload[os.write(fd, payload) :]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        if created:
+            dir_fd = os.open(self.folder, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        self.add(lines)
+
+
+class ErasureJournal:
+    """Writer of the journal of one core source (`identity`, `core-chat`,
+    `model-gateway`) in the format of the kit's erasure journal (erasure-journal-entry.v1).
+
+    `target_dir` is `<backup target>/erasure-journal`, `local_dir` the local copy in the
+    service's own volume (not backed up). An entry is written to the local copy first and
+    then delivered to the target; the target assigns the final `seq`, gap-free per source.
+    An unreachable or damaged target keeps the entry in the local copy until a later
+    `record` or `flush` delivers it. An entry that reaches the target under another `seq`
+    than first handed out (the local copy was older than the target, for example restored
+    from a VM backup) carries that first number as `provisional_seq`. The writer never
+    creates the target folder: a missing mount shows as unreachable, not as an empty
+    journal. Lines name the person by `subject_ref` = HMAC-SHA256(erasure-hmac, sub)
+    only; they never carry content.
+    """
+
+    def __init__(
+        self,
+        source: str,
+        *,
+        key: bytes,
+        target_dir: Path,
+        local_dir: Path,
+        clock=time.time,
+    ) -> None:
+        if source not in JOURNAL_KINDS:
+            raise LifecycleError(f"unknown journal source {source!r}")
+        if not isinstance(key, bytes) or not 32 <= len(key) <= 1024:
+            raise LifecycleError("the erasure key needs 32 to 1024 bytes")
+        self.source, self._key = source, key
+        self.target_dir, self.local_dir = Path(target_dir), Path(local_dir)
+        self.clock = clock
+
+    def __repr__(self) -> str:
+        return f"ErasureJournal({self.source!r}, key=<redacted>)"
+
+    def subject_ref(self, sub: str) -> str:
+        if not isinstance(sub, str) or not 0 < len(sub) <= 255 or _CONTROL_RE.search(sub):
+            raise LifecycleError("subject must be 1 to 255 characters without control characters")
+        return hmac.new(self._key, sub.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    @contextlib.contextmanager
+    def _locked(self):
+        # One writer at a time, also across processes: seq stays gap-free and unique.
+        try:
+            self.local_dir.mkdir(mode=0o700, exist_ok=True)
+            fd = os.open(
+                self.local_dir / f".{self.source}.lock",
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError as exc:
+            raise JournalError(f"local copy of the journal: {exc.strerror}") from None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    def _load(self) -> tuple[_Place, _Place]:
+        local = _Place("local copy", self.local_dir, self.source)
+        if local.state != "ok":
+            raise JournalError(f"local copy of the journal {self.source} is {local.state}")
+        return local, _Place("target", self.target_dir, self.source)
+
+    def _deliver(self, local: _Place, target: _Place) -> None:
+        """Bring the target, then the local copy, up to date; the target's lines are final."""
+        if target.state == "ok":
+            end, delivered = target.end(), []
+            pending = [e for e in local.entries.values() if e["id"] not in target.entries]
+            for entry in sorted(pending, key=lambda e: e["seq"]):
+                end += 1
+                first = entry.get("provisional_seq", entry["seq"])
+                line = {name: entry[name] for name in _JOURNAL_FIELDS} | {"seq": end}
+                if end != first:
+                    line["provisional_seq"] = first
+                delivered.append(line)
+            if delivered:
+                try:
+                    target.append(delivered)
+                except (OSError, ValueError):
+                    target.state = "unreachable"
+        if target.state != "ok":
+            return
+        wanted = [e for e in target.entries.values() if local.entries.get(e["id"]) != e]
+        if wanted:
+            try:
+                local.append(sorted(wanted, key=lambda e: e["seq"]))
+            except (OSError, ValueError) as exc:
+                raise JournalError(f"local copy of the journal {self.source}: {exc}") from None
+
+    def record(self, kind: str, *, object_ref: str, sub: str, reason: str) -> dict:
+        """Write one entry and return it (with its final seq once delivered)."""
+        if not isinstance(kind, str) or kind not in JOURNAL_KINDS[self.source]:
+            raise LifecycleError(f"kind {kind!r} is not allowed in the journal {self.source}")
+        if not isinstance(object_ref, str) or not _OBJECT_REF_RE.fullmatch(object_ref):
+            raise LifecycleError("object_ref must be an identifier of 1 to 256 characters")
+        if not isinstance(reason, str) or not _JOURNAL_REASON_RE.fullmatch(reason):
+            raise LifecycleError("reason must be a short code, never free text")
+        subject_ref = self.subject_ref(sub)
+        now = self.clock()
+        at = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now % 1 * 1000):03d}Z"
+        with self._locked():
+            local, target = self._load()
+            self._deliver(local, target)
+            # Final while the target is usable (every entry is there now); provisional
+            # otherwise: the highest number either place knows.
+            entry = {
+                "id": str(uuid.uuid4()),
+                "module": self.source,
+                "seq": max(local.end(), target.end()) + 1,
+                "kind": kind,
+                "object_ref": object_ref,
+                "subject_ref": subject_ref,
+                "at": at,
+                "reason": reason,
+            }
+            try:
+                local.append([entry])
+            except (OSError, ValueError) as exc:
+                raise JournalError(f"local copy of the journal {self.source}: {exc}") from None
+            self._deliver(local, target)
+            return dict(target.entries.get(entry["id"], entry))
+
+    def flush(self) -> None:
+        """Deliver buffered entries to the target."""
+        with self._locked():
+            self._deliver(*self._load())
+
+    def status(self) -> dict:
+        return JournalView(self.source, self.target_dir, self.local_dir).status()
+
+
+class JournalView:
+    """Reads a journal without its key, for the health check."""
+
+    def __init__(self, source: str, target_dir: Path, local_dir: Path) -> None:
+        self.source, self.target_dir, self.local_dir = source, Path(target_dir), Path(local_dir)
+
+    def status(self) -> dict:
+        """State of both places and the number of entries the target lacks; writes nothing
+        and takes no lock."""
+        local = _Place("local copy", self.local_dir, self.source)
+        target = _Place("target", self.target_dir, self.source)
+        missing = set(local.entries) - (set(target.entries) if target.state == "ok" else set())
+        return {"local": local.state, "target": target.state, "pending": len(missing)}
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # state
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -386,18 +728,66 @@ def _check_state(doc: object) -> dict:
     parked = doc["parked"]
     if not isinstance(parked, dict) or len(parked) > MAX_PARKED:
         raise LifecycleError("state: parked is malformed")
-    for eid, item in parked.items():
+    for eid, item in list(parked.items()):
+        if isinstance(item, dict) and set(item) == _LEGACY_PARKED_KEYS:
+            item = parked[eid] = {
+                "time": item["time"],
+                "op": item["op"],
+                "type": "USER",
+                "path": f"users/{item['sub']}",
+            }
         if (
             not _EVENT_ID_RE.match(eid)
             or not isinstance(item, dict)
             or set(item) != _PARKED_KEYS
-            or not isinstance(item["sub"], str)
-            or not _SUB_RE.match(item["sub"])
-            or item["op"] not in ("UPDATE", "DELETE")
+            or classify(_parked_event(eid, item)) is None
         ):
             raise LifecycleError("state: parked is malformed")
         _int(item["time"], "parked time")
     return doc
+
+
+def _parked_event(eid: str, item: dict) -> dict:
+    return {
+        "id": eid,
+        "time": item["time"],
+        "operationType": item["op"],
+        "resourceType": item["type"],
+        "resourcePath": item["path"],
+    }
+
+
+def classify(event: object) -> tuple[str, str, str] | None:
+    """(action, account id, object_ref) of an admin event the service acts on, else None.
+
+    `account_update` is a changed account (revoked when it is now disabled); every other
+    action is the kind of its identity journal entry. Paths are matched in full, so a
+    deleted credential is never taken for a deleted account."""
+    if not isinstance(event, dict):
+        return None
+    rtype, op = event.get("resourceType"), event.get("operationType")
+    path = event.get("resourcePath")
+    if not isinstance(path, str):
+        return None
+    if rtype == "USER":
+        if (m := _USER_PATH_RE.fullmatch(path)) and op in ("UPDATE", "DELETE"):
+            return ("account_update" if op == "UPDATE" else "account_delete", m[1], "account")
+        if (m := _USER_ACTION_RE.fullmatch(path)) and op == "ACTION":
+            if m[2] == "logout":
+                return "session_revoke", m[1], "sessions"
+            return "credential_reset", m[1], "password"
+        if (m := _CREDENTIAL_PATH_RE.fullmatch(path)) and op in ("DELETE", "ACTION"):
+            return "credential_reset", m[1], f"credential:{m[2]}"
+        return None
+    if op != "DELETE":
+        return None
+    if rtype == "REALM_ROLE_MAPPING" and (m := _REALM_ROLES_RE.fullmatch(path)):
+        return "role_revoke", m[1], "realm-roles"
+    if rtype == "CLIENT_ROLE_MAPPING" and (m := _CLIENT_ROLES_RE.fullmatch(path)):
+        return "role_revoke", m[1], f"client-roles:{m[2]}"
+    if rtype == "GROUP_MEMBERSHIP" and (m := _GROUP_PATH_RE.fullmatch(path)):
+        return "role_revoke", m[1], f"group:{m[2]}"
+    return None
 
 
 class Store:
@@ -469,6 +859,17 @@ class AccountKey:
         return f"{signing_input}.{b64(_raw_signature(der))}"
 
 
+def _token_sub(token: str) -> str | None:
+    """`sub` of an access token Keycloak just issued to this service (read, not checked:
+    it only tells the service which admin events it caused itself)."""
+    try:
+        claims = json.loads(b64decode(token.split(".")[1]))
+    except (IndexError, ValueError):
+        return None
+    sub = claims.get("sub") if isinstance(claims, dict) else None
+    return sub if isinstance(sub, str) and _SUB_RE.fullmatch(sub) else None
+
+
 def _raw_signature(der: bytes) -> bytes:
     """ECDSA DER (SEQUENCE of two INTEGERs) as JOSE wants it: r || s."""
     if len(der) < 8 or der[0] != 0x30 or der[1] & 0x80:
@@ -495,6 +896,9 @@ class AccountClient:
         self.account_dir = account_dir
         self._token: str | None = None
         self._until = 0.0
+        # User id of the service account (`sub` of its token): its own logouts show in
+        # the admin events and are not journaled a second time.
+        self.actor_id: str | None = None
 
     def _open(self, req: urllib.request.Request):
         try:
@@ -532,6 +936,7 @@ class AccountClient:
         lifetime = lifetime if isinstance(lifetime, int) and lifetime > 0 else 60
         self._token = body["access_token"]
         self._until = time.monotonic() + max(5, lifetime - 30)
+        self.actor_id = _token_sub(self._token)
         return self._token
 
     def call(self, method: str, path: str, body: object = None):
@@ -555,10 +960,21 @@ class AccountClient:
 
 
 class Lifecycle:
-    def __init__(self, api, store: Store, publisher: Publisher, *, out=None, clock=time.time):
+    def __init__(
+        self,
+        api,
+        store: Store,
+        publisher: Publisher,
+        *,
+        out=None,
+        clock=time.time,
+        journal: ErasureJournal | None = None,
+    ) -> None:
         self.api, self.store, self.publisher = api, store, publisher
         self.out = out or sys.stdout
         self.clock = clock
+        # The journal `identity` (sicherheit §4.9 (1)); only `global-since` runs without.
+        self.journal = journal
         self._next_poll = 0.0
 
     # audit ------------------------------------------------------------
@@ -612,10 +1028,50 @@ class Lifecycle:
             raise
         self._audit(operation, "delete", event, correlation, ref, detail=detail)
 
+    def _journal(self, kind: str, sub: str, object_ref: str, correlation: str) -> None:
+        """One entry in the journal `identity`, one audit row with the event's correlation
+        id. A local copy that cannot be written raises: the event is tried again."""
+        if self.journal is None:
+            raise LifecycleError("no erasure journal configured")
+        try:
+            entry = self.journal.record(
+                kind, object_ref=object_ref, sub=sub, reason=JOURNAL_REASONS[kind]
+            )
+        except LifecycleError:
+            self._audit(
+                "journal",
+                "write",
+                "operation",
+                correlation,
+                {"type": "erasure_journal", "id": self.journal.source},
+                "error",
+                "journal_unavailable",
+                {"kind": kind},
+            )
+            raise
+        self._audit(
+            "journal",
+            "write",
+            "operation",
+            correlation,
+            {"type": "erasure_journal", "id": f"{entry['module']}:{entry['seq']}"},
+            detail={"kind": kind},
+        )
+
+    def _flush_journal(self) -> None:
+        """Deliver entries the target did not take yet (it was unreachable)."""
+        if self.journal is None:
+            return
+        try:
+            self.journal.flush()
+        except RETRYABLE as exc:
+            _log(f"delivering the erasure journal failed ({exc}); trying again")
+
     # list -------------------------------------------------------------
     def start(self) -> None:
         """Make the key, set the first read position, publish a list at once."""
         self.publisher.signer.ensure()
+        self._flush_journal()
         with self.store.locked():
             state = self.store.load()
             if state["mark_ms"] is None:
@@ -698,9 +1154,8 @@ class Lifecycle:
         for page in range(MAX_EVENT_PAGES):
             query = urllib.parse.urlencode(
                 [
-                    ("resourceTypes", "USER"),
-                    ("operationTypes", "UPDATE"),
-                    ("operationTypes", "DELETE"),
+                    *(("resourceTypes", t) for t in EVENT_RESOURCE_TYPES),
+                    *(("operationTypes", o) for o in EVENT_OPERATION_TYPES),
                     ("dateFrom", str(since_ms)),
                     ("direction", "asc"),
                     ("first", str(page * EVENT_PAGE)),
@@ -749,22 +1204,21 @@ class Lifecycle:
     def _failed(self, eid: str, event: dict, when_ms: int, exc: Exception) -> bool:
         """Count a failed attempt; after MAX_EVENT_ATTEMPTS park the event (True) so the
         poll goes on with later events. False: the poll stops and tries it again."""
-        match = _USER_PATH_RE.match(str(event.get("resourcePath", "")))
-        op = event.get("operationType")
+        action = classify(event)
         with self.store.locked():
             state = self.store.load()
             count = state["attempts"].get(eid, 0) + 1
-            if (
-                count < MAX_EVENT_ATTEMPTS
-                or not match
-                or op not in ("UPDATE", "DELETE")
-                or len(state["parked"]) >= MAX_PARKED
-            ):
+            if count < MAX_EVENT_ATTEMPTS or action is None or len(state["parked"]) >= MAX_PARKED:
                 state["attempts"][eid] = min(count, MAX_EVENT_ATTEMPTS)
                 self.store.save(state)
                 return False
             state["attempts"].pop(eid, None)
-            state["parked"][eid] = {"time": when_ms, "sub": match.group(1), "op": op}
+            state["parked"][eid] = {
+                "time": when_ms,
+                "op": event["operationType"],
+                "type": event["resourceType"],
+                "path": event["resourcePath"],
+            }
             self.store.save(state)
         _log(f"event {eid} failed {count} times ({exc}); parked, later events go ahead")
         self._audit(
@@ -772,7 +1226,7 @@ class Lifecycle:
             "write",
             "operation",
             _uuid7(),
-            {"type": "user", "id": match.group(1)},
+            {"type": "user", "id": action[1]},
             "error",
             "retries_exhausted",
             {"attempts": count},
@@ -783,15 +1237,8 @@ class Lifecycle:
         with self.store.locked():
             parked = dict(self.store.load()["parked"])
         for eid, item in sorted(parked.items(), key=lambda kv: (kv[1]["time"], kv[0])):
-            event = {
-                "id": eid,
-                "time": item["time"],
-                "operationType": item["op"],
-                "resourceType": "USER",
-                "resourcePath": f"users/{item['sub']}",
-            }
             try:
-                self._handle(event, item["time"])
+                self._handle(_parked_event(eid, item), item["time"])
             except RETRYABLE as exc:
                 _log(f"parked event {eid} failed again ({exc})")
                 continue
@@ -822,28 +1269,39 @@ class Lifecycle:
         )
 
     def _handle(self, event: dict, when_ms: int) -> None:
-        match = _USER_PATH_RE.match(str(event.get("resourcePath", "")))
-        if event.get("resourceType") != "USER" or not match:
+        """Act on one admin event; every identity change it stands for is one journal
+        entry, written after the revocation (a failure retries both, which repeat
+        harmlessly)."""
+        action = classify(event)
+        if action is None:
             return
-        sub, op = match.group(1), event.get("operationType")
+        kind, sub, object_ref = action
         since = math.ceil(when_ms / 1000)
-        if op == "DELETE":
-            self._list(sub, since, "account_deleted")
-            return
-        if op != "UPDATE":
-            return
-        try:
-            user = self.api.call("GET", f"/users/{sub}")
-        except HttpError as exc:
-            if exc.status == 404:
-                self._list(sub, since, "account_deleted")
-            elif exc.status == 403:
-                self._skipped(sub, since)
+        correlation = _uuid7()
+        if kind == "account_update":
+            try:
+                user = self.api.call("GET", f"/users/{sub}")
+            except HttpError as exc:
+                if exc.status == 403:
+                    self._skipped(sub, since)
+                    return
+                if exc.status != 404:
+                    raise
+                kind = "account_delete"
             else:
-                raise
-            return
-        if isinstance(user, dict) and user.get("enabled") is False:
-            self.revoke(sub, since, "account_disabled")
+                if not isinstance(user, dict) or user.get("enabled") is not False:
+                    return
+                self.revoke(sub, since, "account_disabled", correlation)
+                self._journal("account_disable", sub, object_ref, correlation)
+                return
+        if kind == "account_delete":
+            self._list(sub, since, "account_deleted")
+        auth = event.get("authDetails")
+        actor = auth.get("userId") if isinstance(auth, dict) else None
+        own = getattr(self.api, "actor_id", None)
+        if kind == "session_revoke" and own is not None and actor == own:
+            return  # the service's own logout, covered by the entry that caused it
+        self._journal(kind, sub, object_ref, correlation)
 
     def _list(self, sub: str, since: int, reason: str) -> None:
         with self.store.locked():
@@ -853,13 +1311,13 @@ class Lifecycle:
                 state["entries"][sub] = {"since": since, "reason": reason}
             self._issue(state)
 
-    def revoke(self, sub: str, since: int, reason: str) -> None:
+    def revoke(self, sub: str, since: int, reason: str, correlation: str | None = None) -> None:
         """List first (modules refuse the person's tokens within 15 s even if a call
         below fails), then end the sessions and remove every consent."""
-        if not _SUB_RE.match(sub):
+        if not _SUB_RE.fullmatch(sub):
             raise LifecycleError("malformed account id")
         self._list(sub, since, reason)
-        correlation = _uuid7()
+        correlation = correlation or _uuid7()
         self._write("POST", f"/users/{sub}/logout", "logout", "operation", correlation, sub)
         consents = self.api.call("GET", f"/users/{sub}/consents") or []
         for consent in consents if isinstance(consents, list) else []:
@@ -886,6 +1344,7 @@ class Lifecycle:
                 self.poll()
             except RETRYABLE as exc:
                 _log(f"reading the events failed ({exc!r}); trying again")
+            self._flush_journal()
         self.reissue()
 
 
@@ -903,10 +1362,14 @@ def _event_time(event: object) -> int | None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def health(state_dir: Path, key_dir: Path, *, now: float | None = None) -> tuple[int, dict]:
+def health(
+    state_dir: Path, key_dir: Path, *, now: float | None = None, journal=None
+) -> tuple[int, dict]:
     """`revocations_age_seconds` of the published list; 1 when it is older than 60 s,
     does not verify, Keycloak has not been read for 60 s, or an event is parked.
-    `skipped_revocations` counts accounts that could not be read (outside the group)."""
+    `skipped_revocations` counts accounts that could not be read (outside the group).
+    With the journal: `journal_pending` entries not at the backup target yet and
+    `journal_target` (ok, unreachable, corrupt) warn; a damaged local copy fails."""
     now = time.time() if now is None else now
     report: dict = {"status": "fail", "revocations_age_seconds": None}
     try:
@@ -929,10 +1392,18 @@ def health(state_dir: Path, key_dir: Path, *, now: float | None = None) -> tuple
     report["last_poll_age_seconds"] = max(0, int(now - state["last_poll"]))
     report["parked_revocations"] = len(state["parked"])
     report["skipped_revocations"] = len(state["skipped"])
+    journal_ok = True
+    if journal is not None:
+        place = journal.status()
+        report["journal_pending"] = place["pending"]
+        report["journal_target"] = place["target"]
+        if place["local"] != "ok":
+            return 1, report
+        journal_ok = place["pending"] == 0 and place["target"] == "ok"
     worst = max(age, report["last_poll_age_seconds"])
     if worst > FAIL_AGE_SECONDS:
         return 1, report
-    if worst > WARN_AGE_SECONDS or state["parked"]:
+    if worst > WARN_AGE_SECONDS or state["parked"] or not journal_ok:
         report["status"] = "warn"
         return 1, report
     report["status"] = "ok"
@@ -946,7 +1417,11 @@ def _parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name)
         cmd.add_argument("--key-dir", type=Path, required=True)
         cmd.add_argument("--state-dir", type=Path, required=True)
+        if name in ("run", "health"):
+            cmd.add_argument("--journal-dir", type=Path, required=name == "run")
+            cmd.add_argument("--journal-local-dir", type=Path, required=name == "run")
         if name == "run":
+            cmd.add_argument("--erasure-key", type=Path, required=True)
             cmd.add_argument("--keycloak-url", required=True)
             cmd.add_argument("--ca-file", type=Path)
             cmd.add_argument("--account-dir", type=Path, required=True)
@@ -993,7 +1468,10 @@ def _global_since(service: Lifecycle, args) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "health":
-        code, report = health(args.state_dir, args.key_dir)
+        view = None
+        if args.journal_dir is not None and args.journal_local_dir is not None:
+            view = JournalView(IDENTITY_SOURCE, args.journal_dir, args.journal_local_dir)
+        code, report = health(args.state_dir, args.key_dir, journal=view)
         print(json.dumps(report, sort_keys=True))
         return code
     store, publisher = Store(args.key_dir), Publisher(args.state_dir, Signer(args.key_dir))
@@ -1002,7 +1480,15 @@ def main(argv: list[str] | None = None) -> int:
     ctx = None
     if urllib.parse.urlsplit(keycloak_url(args.keycloak_url)).scheme == "https":
         ctx = ssl.create_default_context(cafile=str(args.ca_file) if args.ca_file else None)
-    service = Lifecycle(AccountClient(args.keycloak_url, ctx, args.account_dir), store, publisher)
+    journal = ErasureJournal(
+        IDENTITY_SOURCE,
+        key=read_erasure_key(args.erasure_key),
+        target_dir=args.journal_dir,
+        local_dir=args.journal_local_dir,
+    )
+    service = Lifecycle(
+        AccountClient(args.keycloak_url, ctx, args.account_dir), store, publisher, journal=journal
+    )
     service.start()
     if args.once:
         service.step(force_poll=True)

@@ -9,6 +9,8 @@ Keycloak of the pinned version.
 from __future__ import annotations
 
 import copy
+import hashlib
+import hmac
 import http.client
 import io
 import json
@@ -18,6 +20,8 @@ import stat
 import subprocess
 import sys
 import types
+import urllib.parse
+import uuid
 from pathlib import Path
 
 import pytest
@@ -31,6 +35,10 @@ REPO = Path(__file__).resolve().parents[2]
 MODULE_DIR = REPO / "src" / "infra" / "lifecycle"
 PERSON = "0b9c7b1e-1c1f-4e55-9a51-2f7c0c3d4e5f"
 OTHER = "5d0f6a2b-8e1c-4a7d-b3f2-9c8e7d6a5b4c"
+THIRD = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+SERVICE_USER = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a"
+GROUP = "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918"
+CLIENT = "1f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b"
 
 
 def _service_module():
@@ -165,10 +173,36 @@ def test_the_volumes_are_the_signing_key_and_the_security_state():
     named = {m["source"]: m for m in mounts if m["type"] == "volume"}
     assert set(named) == {"papaia-lifecycle-key", "papaia-security-state"}
     binds = {m["target"]: m for m in mounts if m["type"] == "bind"}
-    assert all(m["read_only"] for m in binds.values())
+    # The journal at the backup target is the only bind the service writes.
+    assert all(m["read_only"] for t, m in binds.items() if t != JOURNAL_TARGET)
     account = binds["/run/papaia-lifecycle/account"]
     assert account["source"].endswith("/security/service-accounts/svc-papaia-lifecycle")
     assert account["bind"]["create_host_path"] is False
+
+
+JOURNAL_TARGET = "/var/lib/papaia-backup/erasure-journal"
+
+
+def test_the_service_mounts_only_the_journal_folder_of_the_backup_target():
+    """A-02: the service sees `erasure-journal/` of the backup target, nothing else of it,
+    and the installation key erasure-hmac read-only. A missing folder must not be created
+    by Compose: an empty folder would look like an empty journal."""
+    service = _compose()["services"]["papaia-lifecycle"]
+    binds = {m["target"]: m for m in service["volumes"] if m["type"] == "bind"}
+    target = binds[JOURNAL_TARGET]
+    assert target["source"] == "${PAPAIA_BACKUP_DIR}/erasure-journal"
+    assert target.get("read_only", False) is False
+    assert target["bind"]["create_host_path"] is False
+    key = binds["/run/papaia-lifecycle/erasure-hmac"]
+    assert key["source"] == "${PAPAIA_CONFIG_DIR}/security/erasure-hmac"
+    assert key["read_only"] is True
+    assert key["bind"]["create_host_path"] is False
+    sources = [m["source"] for m in service["volumes"]]
+    assert sum("PAPAIA_BACKUP_DIR" in s for s in sources) == 1
+    for command in (service["command"], service["healthcheck"]["test"]):
+        assert f"--journal-dir={JOURNAL_TARGET}" in command
+        assert "--journal-local-dir=/var/lib/papaia-lifecycle/erasure-journal" in command
+    assert "--erasure-key=/run/papaia-lifecycle/erasure-hmac" in service["command"]
 
 
 def test_the_signing_key_volume_is_left_out_of_backups():
@@ -197,6 +231,49 @@ def test_render_creates_the_account_key_only_with_the_profile(tmp_path):
     assert key.read_bytes() == before
 
 
+def test_render_creates_the_erasure_key_and_the_journal_folder_only_with_the_profile(tmp_path):
+    config, backup_dir = tmp_path / "config", tmp_path / "backup"
+    config.mkdir()
+    env = f"PAPAIA_BACKUP_DIR={backup_dir}\nCOMPOSE_PROFILES=keycloak,egress"
+    (config / ".env").write_text(env + "\n")
+    render_core.ensure_lifecycle_journal(config)
+    assert not (config / "security" / "erasure-hmac").exists()
+    assert not backup_dir.exists()
+    (config / ".env").write_text(env + ",lifecycle\n")
+    render_core.ensure_lifecycle_journal(config)
+    key = config / "security" / "erasure-hmac"
+    assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    assert len(lc.read_erasure_key(key)) == 32
+    folder = backup_dir / "erasure-journal"
+    assert folder.is_dir()
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+    # Kept on every later render: a new key would cut the link to every entry.
+    before = key.read_bytes()
+    render_core.ensure_lifecycle_journal(config)
+    assert key.read_bytes() == before
+
+
+def test_render_refuses_a_lifecycle_without_a_backup_target(tmp_path):
+    (tmp_path / ".env").write_text("COMPOSE_PROFILES=keycloak,lifecycle\n")
+    with pytest.raises(render_core.RenderError, match="PAPAIA_BACKUP_DIR"):
+        render_core.ensure_lifecycle_journal(tmp_path)
+    (tmp_path / ".env").write_text("PAPAIA_BACKUP_DIR=backup\nCOMPOSE_PROFILES=lifecycle\n")
+    with pytest.raises(render_core.RenderError, match="absolute"):
+        render_core.ensure_lifecycle_journal(tmp_path)
+
+
+def test_render_refuses_an_erasure_key_others_can_read(tmp_path):
+    backup_dir = tmp_path / "backup"
+    (tmp_path / ".env").write_text(
+        f"PAPAIA_BACKUP_DIR={backup_dir}\nCOMPOSE_PROFILES=keycloak,lifecycle\n"
+    )
+    render_core.ensure_lifecycle_journal(tmp_path)
+    key = tmp_path / "security" / "erasure-hmac"
+    key.chmod(0o644)
+    with pytest.raises(render_core.RenderError, match="erasure-hmac"):
+        render_core.ensure_lifecycle_journal(tmp_path)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # in-memory Keycloak
 # ─────────────────────────────────────────────────────────────────────────
@@ -214,6 +291,8 @@ class FakeKeycloak:
         self.fail_logout = False
         self.fail_logout_for: set[str] = set()
         self.events_error: Exception | None = None
+        # The user id of the service account itself (`sub` of its token).
+        self.actor_id = SERVICE_USER
 
     def add_user(self, uid: str, *, enabled: bool = True, consents=("flow-engine",)) -> None:
         self.users[uid] = {"id": uid, "username": f"u-{uid[:4]}", "enabled": enabled}
@@ -229,6 +308,18 @@ class FakeKeycloak:
                 "resourcePath": path or f"users/{uid}",
             }
         )
+
+    def admin_event(self, op: str, rtype: str, path: str, ms: int, actor: str | None = None):
+        row = {
+            "id": f"e{len(self.events):04d}",
+            "time": ms,
+            "operationType": op,
+            "resourceType": rtype,
+            "resourcePath": path,
+        }
+        if actor is not None:
+            row["authDetails"] = {"realmId": "papaia", "userId": actor}
+        self.events.append(row)
 
     def call(self, method: str, path: str, body=None):
         self.calls.append((method, path))
@@ -269,15 +360,33 @@ class Clock:
         return self.now
 
 
+def _write_key(path: Path, key: bytes) -> Path:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(fd, key.hex().encode("ascii") + b"\n")
+    os.close(fd)
+    return path
+
+
 @pytest.fixture
 def stack(tmp_path):
     key_dir, state_dir = tmp_path / "key", tmp_path / "state"
     key_dir.mkdir(mode=0o700)
     state_dir.mkdir()
+    target, local = tmp_path / "backup" / "erasure-journal", key_dir / "erasure-journal"
+    target.mkdir(parents=True)
+    erasure_key = os.urandom(32)
+    key_file = _write_key(tmp_path / "erasure-hmac", erasure_key)
     keycloak, clock, out = FakeKeycloak(), Clock(), io.StringIO()
     store = lc.Store(key_dir)
     publisher = lc.Publisher(state_dir, lc.Signer(key_dir))
-    service = lc.Lifecycle(keycloak, store, publisher, out=out, clock=clock)
+    journal = lc.ErasureJournal(
+        "identity",
+        key=lc.read_erasure_key(key_file),
+        target_dir=target,
+        local_dir=local,
+        clock=clock,
+    )
+    service = lc.Lifecycle(keycloak, store, publisher, out=out, clock=clock, journal=journal)
     return types.SimpleNamespace(
         keycloak=keycloak,
         clock=clock,
@@ -286,6 +395,11 @@ def stack(tmp_path):
         service=service,
         state_dir=state_dir,
         key_dir=key_dir,
+        journal=journal,
+        target=target,
+        local=local,
+        erasure_key=erasure_key,
+        key_file=key_file,
     )
 
 
@@ -498,6 +612,365 @@ def test_a_malformed_consent_client_is_not_put_into_a_path(stack):
     stack.service.step()
     assert not any("clients" in path.split("consents", 1)[-1] for _, path in kc.calls)
     assert kc.consents[PERSON] == ["../../clients"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# erasure journal (source identity)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _lines(folder: Path, source: str = "identity") -> list[dict]:
+    path = folder / f"{source}.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="ascii").splitlines()]
+
+
+def _ref(key: bytes, sub: str) -> str:
+    return hmac.new(key, sub.encode(), hashlib.sha256).hexdigest()
+
+
+def _ms(stack, offset: int) -> int:
+    return int(stack.clock.now * 1000) + offset
+
+
+def test_deactivation_deletion_and_role_removal_each_write_one_entry(stack):
+    """sicherheit §4.9 (1), RE-99: account states survive a restored snapshot like module
+    deletions, so each one is one line of the journal `identity`, `seq` strictly rising."""
+    kc = stack.keycloak
+    kc.add_user(PERSON, enabled=False)
+    kc.add_user(THIRD)
+    stack.service.start()
+    kc.event("UPDATE", PERSON, _ms(stack, 10))
+    kc.event("DELETE", OTHER, _ms(stack, 20))
+    kc.admin_event(
+        "DELETE", "REALM_ROLE_MAPPING", f"users/{THIRD}/role-mappings/realm", _ms(stack, 30)
+    )
+    stack.clock.now += 1
+    stack.service.step()
+
+    lines = _lines(stack.target)
+    assert [(e["kind"], e["subject_ref"]) for e in lines] == [
+        ("account_disable", _ref(stack.erasure_key, PERSON)),
+        ("account_delete", _ref(stack.erasure_key, OTHER)),
+        ("role_revoke", _ref(stack.erasure_key, THIRD)),
+    ]
+    assert [e["seq"] for e in lines] == [1, 2, 3]
+    assert [e["object_ref"] for e in lines] == ["account", "account", "realm-roles"]
+    assert [e["reason"] for e in lines] == ["account_disabled", "account_deleted", "role_removed"]
+    for entry in lines:
+        assert set(entry) == {
+            "id",
+            "module",
+            "seq",
+            "kind",
+            "object_ref",
+            "subject_ref",
+            "at",
+            "reason",
+        }
+        assert entry["module"] == "identity"
+        assert uuid.UUID(entry["id"]).version == 4
+        assert entry["at"] == "2027-01-15T08:00:01.000Z"
+    # The local copy holds the same lines; no file holds a sub in clear.
+    assert _lines(stack.local) == lines
+    for folder in (stack.target, stack.local):
+        text = (folder / "identity.jsonl").read_text()
+        assert PERSON not in text and OTHER not in text and THIRD not in text
+
+
+def test_every_role_and_group_removal_names_its_scope(stack):
+    kc = stack.keycloak
+    stack.service.start()
+    kc.admin_event(
+        "DELETE",
+        "CLIENT_ROLE_MAPPING",
+        f"users/{PERSON}/role-mappings/clients/{CLIENT}",
+        _ms(stack, 10),
+    )
+    kc.admin_event("DELETE", "GROUP_MEMBERSHIP", f"users/{PERSON}/groups/{GROUP}", _ms(stack, 20))
+    # Granting a role or joining a group revokes nothing.
+    kc.admin_event(
+        "CREATE", "REALM_ROLE_MAPPING", f"users/{PERSON}/role-mappings/realm", _ms(stack, 30)
+    )
+    kc.admin_event("CREATE", "GROUP_MEMBERSHIP", f"users/{PERSON}/groups/{GROUP}", _ms(stack, 40))
+    stack.service.step()
+    lines = _lines(stack.target)
+    assert [(e["kind"], e["object_ref"]) for e in lines] == [
+        ("role_revoke", f"client-roles:{CLIENT}"),
+        ("role_revoke", f"group:{GROUP}"),
+    ]
+
+
+def test_ended_sessions_and_reset_credentials_are_journaled(stack):
+    """RE-103: a password reset or a removed second factor, and sessions ended by the
+    administration. The service's own logout (it revokes after a deactivation) is not a
+    second entry: the account_disable entry covers it."""
+    kc = stack.keycloak
+    kc.add_user(THIRD, enabled=False)
+    stack.service.start()
+    kc.admin_event("ACTION", "USER", f"users/{PERSON}/logout", _ms(stack, 10), actor=OTHER)
+    kc.admin_event("ACTION", "USER", f"users/{PERSON}/reset-password", _ms(stack, 20), actor=OTHER)
+    kc.admin_event("DELETE", "USER", f"users/{OTHER}/credentials/{CLIENT}", _ms(stack, 30))
+    kc.event("UPDATE", THIRD, _ms(stack, 40))
+    kc.admin_event("ACTION", "USER", f"users/{THIRD}/logout", _ms(stack, 50), actor=SERVICE_USER)
+    stack.service.step()
+    lines = _lines(stack.target)
+    assert [(e["kind"], e["object_ref"], e["subject_ref"]) for e in lines] == [
+        ("session_revoke", "sessions", _ref(stack.erasure_key, PERSON)),
+        ("credential_reset", "password", _ref(stack.erasure_key, PERSON)),
+        ("credential_reset", f"credential:{CLIENT}", _ref(stack.erasure_key, OTHER)),
+        ("account_disable", "account", _ref(stack.erasure_key, THIRD)),
+    ]
+    # A deleted credential is not mistaken for a deleted account.
+    assert _published(stack.state_dir)["entries"] == [
+        {"sub": THIRD, "since": 1_800_000_001, "reason": "account_disabled"}
+    ]
+
+
+def test_the_service_asks_for_every_event_it_journals(stack):
+    stack.service.start()
+    stack.service.step()
+    query = next(p for _, p in stack.keycloak.calls if p.startswith("/admin-events"))
+    params = urllib.parse.parse_qs(query.partition("?")[2])
+    assert set(params["resourceTypes"]) == {
+        "USER",
+        "REALM_ROLE_MAPPING",
+        "CLIENT_ROLE_MAPPING",
+        "GROUP_MEMBERSHIP",
+    }
+    assert set(params["operationTypes"]) == {"UPDATE", "DELETE", "ACTION"}
+
+
+def test_an_active_account_and_an_unreadable_one_write_no_entry(stack):
+    kc = stack.keycloak
+    kc.add_user(PERSON)
+    kc.add_user(OTHER, enabled=False)
+    kc.forbidden.add(OTHER)
+    stack.service.start()
+    kc.event("UPDATE", PERSON, _ms(stack, 10))
+    kc.event("UPDATE", OTHER, _ms(stack, 20))
+    stack.service.step()
+    assert _lines(stack.target) == []
+
+
+def test_each_entry_is_one_audit_row_with_the_correlation_id_of_its_event(stack):
+    kc = stack.keycloak
+    kc.add_user(PERSON, enabled=False)
+    stack.service.start()
+    kc.event("UPDATE", PERSON, _ms(stack, 10))
+    kc.admin_event(
+        "DELETE", "REALM_ROLE_MAPPING", f"users/{OTHER}/role-mappings/realm", _ms(stack, 20)
+    )
+    stack.service.step()
+    rows = _rows(stack.out)
+    journal = [r for r in rows if r["operation"] == "lifecycle.journal"]
+    assert [r["object_ref"] for r in journal] == [
+        {"type": "erasure_journal", "id": "identity:1"},
+        {"type": "erasure_journal", "id": "identity:2"},
+    ]
+    assert [r["detail"] for r in journal] == [{"kind": "account_disable"}, {"kind": "role_revoke"}]
+    assert all(r["effect"] == "write" and r["result"] == "allowed" for r in journal)
+    logout = next(r for r in rows if r["operation"] == "lifecycle.logout")
+    assert journal[0]["correlation_id"] == logout["correlation_id"]
+    assert journal[1]["correlation_id"] != logout["correlation_id"]
+    text = stack.out.getvalue()
+    assert _ref(stack.erasure_key, PERSON) not in text
+
+
+def test_seq_keeps_rising_across_a_restart(stack):
+    kc = stack.keycloak
+    stack.service.start()
+    kc.event("DELETE", PERSON, _ms(stack, 10))
+    stack.service.step()
+    journal = lc.ErasureJournal(
+        "identity",
+        key=lc.read_erasure_key(stack.key_file),
+        target_dir=stack.target,
+        local_dir=stack.local,
+    )
+    again = lc.Lifecycle(
+        kc,
+        lc.Store(stack.key_dir),
+        lc.Publisher(stack.state_dir, lc.Signer(stack.key_dir)),
+        out=io.StringIO(),
+        clock=stack.clock,
+        journal=journal,
+    )
+    again.start()
+    kc.event("DELETE", OTHER, _ms(stack, 20))
+    stack.clock.now += lc.POLL_SECONDS
+    again.step()
+    assert [e["seq"] for e in _lines(stack.target)] == [1, 2]
+
+
+def test_an_unreachable_target_buffers_the_entry_and_delivers_it_later(stack):
+    """sicherheit §4.9: the revocation goes ahead, the entry waits in the local copy and
+    health warns until it is at the target."""
+    kc = stack.keycloak
+    kc.add_user(PERSON, enabled=False)
+    stack.service.start()
+    stack.target.rename(stack.target.with_name("away"))
+    kc.event("UPDATE", PERSON, _ms(stack, 10))
+    stack.service.step()
+    assert kc.consents[PERSON] == []
+    assert [e["kind"] for e in _lines(stack.local)] == ["account_disable"]
+    assert not stack.target.exists()  # never created by the writer
+    code, report = lc.health(
+        stack.state_dir, stack.key_dir, now=stack.clock.now, journal=stack.journal
+    )
+    assert code == 1 and report["status"] == "warn"
+    assert report["journal_pending"] == 1 and report["journal_target"] == "unreachable"
+    stack.target.with_name("away").rename(stack.target)
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    assert _lines(stack.target) == _lines(stack.local)
+    assert [e["seq"] for e in _lines(stack.target)] == [1]
+    code, report = lc.health(
+        stack.state_dir, stack.key_dir, now=stack.clock.now, journal=stack.journal
+    )
+    assert code == 0 and report["journal_pending"] == 0 and report["journal_target"] == "ok"
+
+
+def test_an_entry_buffered_on_an_older_local_copy_takes_the_next_seq_at_the_target(stack):
+    """The local copy came back from a VM backup and lacks the target's last entry: the
+    buffered entry reaches the target under the next free seq and keeps the one first
+    handed out as provisional_seq (kit format), so no seq holds two entries."""
+    kc = stack.keycloak
+    stack.service.start()
+    kc.event("DELETE", PERSON, _ms(stack, 10))
+    stack.service.step()
+    (stack.local / "identity.jsonl").write_bytes(b"")
+    stack.target.rename(stack.target.with_name("away"))
+    kc.event("DELETE", OTHER, _ms(stack, 20))
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    assert [e["seq"] for e in _lines(stack.local)] == [1]
+    stack.target.with_name("away").rename(stack.target)
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    target = _lines(stack.target)
+    assert [(e["seq"], e.get("provisional_seq")) for e in target] == [(1, None), (2, 1)]
+    assert target[1]["subject_ref"] == _ref(stack.erasure_key, OTHER)
+    assert stack.journal.status() == {"local": "ok", "target": "ok", "pending": 0}
+    # The local copy stays usable: the next entry follows the target's last seq.
+    kc.event("DELETE", THIRD, _ms(stack, 30))
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    assert [e["seq"] for e in _lines(stack.target)] == [1, 2, 3]
+
+
+def test_a_damaged_target_is_not_taken_as_delivered(stack):
+    kc = stack.keycloak
+    stack.service.start()
+    (stack.target / "identity.jsonl").write_text('{"id": "x"}\n')
+    kc.event("DELETE", PERSON, _ms(stack, 10))
+    stack.service.step()
+    assert stack.journal.status() == {"local": "ok", "target": "corrupt", "pending": 1}
+    assert (stack.target / "identity.jsonl").read_text() == '{"id": "x"}\n'
+
+
+def test_a_broken_local_copy_parks_the_event_and_later_revocations_go_ahead(stack):
+    """Without a local copy no entry is safe: the event is retried and parked, while the
+    revocation of later deactivations goes on."""
+    kc = stack.keycloak
+    kc.add_user(OTHER, enabled=False)
+    stack.service.start()
+    (stack.local / "identity.jsonl").write_text("not json\n")
+    kc.admin_event("DELETE", "GROUP_MEMBERSHIP", f"users/{PERSON}/groups/{GROUP}", _ms(stack, 10))
+    kc.event("UPDATE", OTHER, _ms(stack, 20))
+    # Each event is tried MAX_EVENT_ATTEMPTS times before it is parked.
+    for _ in range(2 * lc.MAX_EVENT_ATTEMPTS):
+        stack.clock.now += lc.POLL_SECONDS
+        stack.service.step()
+    assert kc.consents[OTHER] == []
+    state = lc.Store(stack.key_dir).load()
+    assert len(state["parked"]) == 2
+    # The copy is repaired: both parked events are journaled on the next poll.
+    (stack.local / "identity.jsonl").write_text("")
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    assert [e["kind"] for e in _lines(stack.target)] == ["role_revoke", "account_disable"]
+    assert lc.Store(stack.key_dir).load()["parked"] == {}
+
+
+def test_a_parked_event_from_an_earlier_version_is_still_retried(stack):
+    stack.service.start()
+    path = stack.key_dir / lc.STATE_FILE
+    doc = json.loads(path.read_text())
+    doc["parked"] = {"e0001": {"time": _ms(stack, 0), "sub": PERSON, "op": "DELETE"}}
+    path.write_text(json.dumps(doc))
+    stack.service.step()
+    assert [e["kind"] for e in _lines(stack.target)] == ["account_delete"]
+    assert lc.Store(stack.key_dir).load()["parked"] == {}
+
+
+def test_kinds_are_checked_per_source(stack, tmp_path):
+    key = lc.read_erasure_key(stack.key_file)
+
+    def journal(source: str):
+        return lc.ErasureJournal(source, key=key, target_dir=stack.target, local_dir=stack.local)
+
+    with pytest.raises(lc.LifecycleError, match="not allowed"):
+        stack.journal.record("erase", object_ref="account", sub=PERSON, reason="art17")
+    with pytest.raises(lc.LifecycleError, match="not allowed"):
+        journal("core-chat").record("account_disable", object_ref="x", sub=PERSON, reason="r")
+    chat = journal("core-chat").record(
+        "erase_subject", object_ref="chat", sub=PERSON, reason="art17"
+    )
+    key_entry = journal("model-gateway").record(
+        "key_revoke", object_ref="key:mod-flow", sub=PERSON, reason="rotation"
+    )
+    assert chat["seq"] == key_entry["seq"] == 1  # seq per source
+    assert _lines(stack.target, "core-chat")[0]["kind"] == "erase_subject"
+    assert _lines(stack.target, "model-gateway")[0]["kind"] == "key_revoke"
+    with pytest.raises(lc.LifecycleError, match="source"):
+        journal("flow")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("object_ref", "two words"),
+        ("object_ref", ""),
+        ("object_ref", "x" * 300),
+        ("reason", "Free text"),
+        ("sub", ""),
+        ("sub", "a\nb"),
+    ],
+)
+def test_entry_fields_are_checked_at_the_boundary(stack, field, value):
+    args = {"object_ref": "account", "sub": PERSON, "reason": "account_disabled"}
+    args[field] = value
+    with pytest.raises(lc.LifecycleError):
+        stack.journal.record("account_disable", **args)
+    assert _lines(stack.local) == []
+
+
+@pytest.mark.parametrize(
+    ("content", "mode"),
+    [
+        (b"ab" * 32 + b"\n", 0o644),
+        (b"ab" * 31 + b"\n", 0o600),
+        (b"xy" * 32 + b"\n", 0o600),
+        (b"a" * 65, 0o600),  # odd number of digits
+        (os.urandom(32), 0o600),
+    ],
+)
+def test_the_erasure_key_file_must_be_private_hex_of_at_least_32_bytes(tmp_path, content, mode):
+    path = tmp_path / "erasure-hmac"
+    path.write_bytes(content)
+    path.chmod(mode)
+    with pytest.raises(lc.LifecycleError):
+        lc.read_erasure_key(path)
+
+
+def test_the_writer_never_leaves_a_torn_line(stack):
+    stack.service.start()
+    (stack.local / "identity.jsonl").write_bytes(b'{"id": "torn')
+    entry = stack.journal.record("account_delete", object_ref="account", sub=PERSON, reason="r")
+    assert entry["seq"] == 1
+    assert [e["seq"] for e in _lines(stack.local)] == [1]
 
 
 # ─────────────────────────────────────────────────────────────────────────
