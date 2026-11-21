@@ -2163,6 +2163,14 @@ whose upstream keeps no tag for the pinned build may stay digest-only through an
 [`compat/image-exceptions.yaml`](compat/image-exceptions.yaml), with a reason and an expiry of
 at most 90 days. The sidecar image of `backup` is pinned the same way.
 
+**Own images of the core.** Services that run code of this repository (`papaia-egress`,
+`papaia-lifecycle`) run it from images built here, `ghcr.io/fidonis/papaia-<service>`, listed
+in [`compat/own-images.yaml`](compat/own-images.yaml) and pinned with the core `VERSION` as
+tag. `tools/build-images` builds them for linux/amd64 and linux/arm64 (reproducibly: the same
+inputs give the same digest), signs them, pins the digests and prints their entries for the
+bill of materials; they pass the check below only when listed and signed, like every other
+image (see [`docs/compatibility.md`](docs/compatibility.md#own-images-of-the-core)).
+
 **Check before `start` and `upgrade`.** Before any container starts, `papaia-ctl` lists the
 images Compose is about to run (with the active profiles and the same override files `up`
 gets) and checks each one:

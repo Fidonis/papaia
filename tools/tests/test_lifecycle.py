@@ -1,7 +1,8 @@
 """papaia-lifecycle: revocation on deactivation and the signed revocation list.
 
-The service (`src/infra/lifecycle/lifecycle.py`) runs in a stock Python image, so it is
-imported here straight from the checkout, like papaia-egress. Keycloak is replaced by an
+The service (`src/infra/lifecycle/lifecycle.py`) is one standard-library file in the core's
+own image `ghcr.io/fidonis/papaia-lifecycle`, so it is imported here straight from the
+checkout, like papaia-egress. Keycloak is replaced by an
 in-memory admin API; `test_lifecycle_live.py` runs the same code against a throwaway
 Keycloak of the pinned version.
 """
@@ -89,6 +90,8 @@ def test_the_service_is_hardened_and_pinned():
         assert service["cap_drop"] == ["ALL"]
         assert "no-new-privileges:true" in service["security_opt"]
     service = doc["services"]["papaia-lifecycle"]
+    assert service["image"].startswith("ghcr.io/fidonis/papaia-lifecycle:")
+    assert not any(m["source"].startswith("./") for m in service["volumes"])
     assert "cap_add" not in service
     assert service["user"] == "${UID:-1000}:${GID:-1000}"
     init = doc["services"]["papaia-lifecycle-init"]

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — build-images · the core's own images
+# by Fidonis GmbH · https://fidonis.de
+#
+# Builds, signs and pins the images listed in compat/own-images.yaml
+# (lib/own_images.py; docs/compatibility.md, "Own images of the core").
+#
+# Usage:
+#   build-images check
+#   build-images build --out=FILE [--registry=PREFIX] [--image=NAME]...
+#   build-images sign  --builds=FILE --key=FILE [--cosign=PATH] [--signatures=REPO]
+#   build-images pin   --builds=FILE
+#   build-images bom-entries --sbom=NAME=FILE...
+#
+# Needs Docker with buildx for linux/amd64 and linux/arm64 (build), cosign or Docker
+# (sign) and Python 3.10+ with PyYAML. The passphrase of the signing key is read from
+# COSIGN_PASSWORD only.
+# ═══════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+error() { printf 'ERROR: %s\n' "$*" >&2; }
+
+# shellcheck source=lib/sh/python.sh
+source "$REPO_ROOT/tools/lib/sh/python.sh"
+find_python || exit 2
+
+PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
+    exec "$PYTHON_BIN" -m lib.own_images --repo-root "$REPO_ROOT" "$@"

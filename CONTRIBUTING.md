@@ -89,6 +89,8 @@ Please run them locally before pushing if you can. Configuration lives in `.gith
 
 The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker compose config` only with the Compose release it records; CI installs that release. Every image bump, including the ones Dependabot proposes, changes that snapshot: regenerate it on the pull request's branch with `PAPAIA_UPDATE_GOLDEN=1 uv run --locked --extra dev python -m pytest tests/test_golden_single_node.py` (from `tools/`) before merging. `ruff format` is not enforced.
 
+The core's own images (`compat/own-images.yaml`) are pinned by the digest their inputs build to. A change to one of their declared inputs (Dockerfile, program, notice file), to `LICENSE` or to `VERSION` therefore needs a rebuild and a new pin in the same pull request: commit the change, then `tools/build-images build --registry=<prefix of a test registry> --out=builds.json` and `tools/build-images pin --builds=builds.json`, and commit the pins (see [`docs/compatibility.md`](docs/compatibility.md#own-images-of-the-core)). `tools/build-images check` runs without Docker.
+
 ## Local development
 
 See [`docs/deployment.md`](./docs/deployment.md) (work in progress) for local setup. The short version:

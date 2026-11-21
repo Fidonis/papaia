@@ -1,0 +1,28 @@
+# Images the core builds itself (lib/own_images.py, tools/build-images).
+#
+# A core service that runs code of this repository runs it from one of these images:
+# never a stock image with the code mounted in, never a compose `build:`. Each entry
+# names the Dockerfile, every file its build may read (the build context holds these
+# and LICENSE, nothing else), the compose services that run it, and its license for the
+# suite bill of materials. The compose files pin each image as
+# `<name>:<VERSION>@sha256:<digest>`; tools/build-images builds, signs and pins it.
+schema: papaia.own-images/1
+images:
+  - name: ghcr.io/fidonis/papaia-egress
+    dockerfile: src/infra/egress/Dockerfile
+    inputs:
+      - src/infra/egress/Dockerfile
+      - src/infra/egress/egress.py
+      - src/infra/egress/THIRD_PARTY_LICENSES.md
+    services: [papaia-egress]
+    license: MIT
+    license_class: P
+  - name: ghcr.io/fidonis/papaia-lifecycle
+    dockerfile: src/infra/lifecycle/Dockerfile
+    inputs:
+      - src/infra/lifecycle/Dockerfile
+      - src/infra/lifecycle/lifecycle.py
+      - src/infra/lifecycle/THIRD_PARTY_LICENSES.md
+    services: [papaia-lifecycle]
+    license: MIT
+    license_class: P

@@ -30,6 +30,9 @@ their images there; the table below covers the Core only.
 | `boky/postfix` | 5.1.0-alpine | MIT | `infra/smtp-relay` | optional mail relay (profile `smtp`); the image bundles Postfix (IPL-1.0 or EPL-2.0), OpenDKIM and rsyslog (GPL-3.0-or-later among others), used as network service |
 | `haproxy` | 3.2.26-alpine | GPL-2.0 | `infra/link-gateway` | mTLS link gateway between the nodes of a distributed installation (profile `link-gateway`, not in the include list); its include files are LGPL-2.1; used as network service |
 | `ghcr.io/fidonis/papaia-manager` | 1.7.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
+| `ghcr.io/fidonis/papaia-egress` | 1.9.0 | MIT | `infra/egress` | own image of the core (`compat/own-images.yaml`): the egress proxy on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-egress/` |
+| `ghcr.io/fidonis/papaia-lifecycle` | 1.9.0 | MIT | `infra/lifecycle` | own image of the core (`compat/own-images.yaml`): the lifecycle service on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, OpenSSL Apache-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-lifecycle/` |
+| `python` | 3.12.16-slim-trixie | PSF-2.0 | `infra/lifecycle` | `papaia-lifecycle-init` (hands the volumes to the service user); also the base of the own images above |
 | `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
 | `mongo` | 8.3.17 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |

@@ -65,9 +65,10 @@ services:
     profiles: [lifecycle]
 
   papaia-lifecycle:
-    # One standard-library Python file next to this one; the image brings Python
-    # and the openssl command line (Ed25519, ES256). Pinned by digest.
-    image: python:3.12.16-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
+    # standard-library Python file on a pinned Python base, which brings the openssl
+    # command line (Ed25519, ES256). Built, signed and pinned by tools/build-images.
+    image: ghcr.io/fidonis/papaia-lifecycle:1.9.0@sha256:0346daa780b0510b2b91d01e5deaa39fc538165718eac5b7fc233c72e37690ce
     restart: unless-stopped
     depends_on:
       papaia-lifecycle-init:
@@ -89,10 +90,6 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
-      - type: bind
-        source: ./lifecycle.py
-        target: /opt/papaia-lifecycle/lifecycle.py
-        read_only: true
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/certs/local-ca.crt
         target: /etc/papaia-lifecycle/local-ca.crt

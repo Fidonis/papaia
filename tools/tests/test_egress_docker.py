@@ -2,7 +2,10 @@
 reaches an allowed host only through the proxy; a protected host, an allowed name that
 resolves into the stack, the host gateway and everything else are refused.
 
-The setup is the one `papaia-ctl` produces: the add-on's own compose file creates its
+The proxy runs in the core's own image, built here from its Dockerfile and the inputs
+compat/own-images.yaml declares (the pinned image is not pulled: the test is about the
+proxy, the image path is test_own_images_registry.py). The setup is the one `papaia-ctl`
+produces: the add-on's own compose file creates its
 internal egress network, its manifest declares that network and the allow list, the
 operator opens the test's "outside" range for that add-on, `lib.egress` renders the
 proxy configuration and the attachment override, and the core compose file of the
@@ -26,7 +29,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import deployment, egress, gen_override
+from lib import deployment, egress, gen_override, own_images
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "src" / "infra" / "egress" / "docker-compose.yml"
@@ -126,7 +129,12 @@ def stack(tmp_path: Path):
     config_dir = tmp_path / "papaia-config"
     config_dir.mkdir()
     (config_dir / ".env").write_text(f"PAPAIA_PROJECT={PROJECT}\n", encoding="utf-8")
-    image = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"][egress.SERVICE]["image"]
+    image = f"{PROJECT}-egress:test"
+    (own,) = [i for i in own_images.load(REPO) if egress.SERVICE in i.services]
+    context = own_images.stage_context(REPO, own, tmp_path / "build")
+    built = _run("docker", "buildx", "build", "--load", "--provenance=false", "-t", image,
+                 "-f", str(context / own.dockerfile), str(context), check=False)
+    assert built.returncode == 0, built.stderr
 
     def server(name: str, network: str, alias: str) -> dict:
         return {
@@ -195,7 +203,10 @@ def stack(tmp_path: Path):
     addon_network = f"{PROJECT}-probe-egress"
 
     targets = {
-        "services": {name: server(name, egress.EGRESS_NETWORK, name) for name in OUTSIDE},
+        "services": {
+            **{name: server(name, egress.EGRESS_NETWORK, name) for name in OUTSIDE},
+            egress.SERVICE: {"image": image},
+        },
         "networks": {egress.EGRESS_NETWORK: {"ipam": {"config": [{"subnet": str(outside)}]}}},
     }
     targets_file = tmp_path / "targets.yml"
@@ -226,6 +237,7 @@ def stack(tmp_path: Path):
         _run(*compose, "down", "-v", "--remove-orphans", env=env, check=False)
         _run(*addon, "down", "-v", "--remove-orphans", env=env, check=False)
         _run("docker", "network", "rm", addon_network, check=False)
+        _run("docker", "image", "rm", image, check=False)
 
 
 def test_an_addon_reaches_only_allowed_hosts_and_only_through_the_proxy(stack):

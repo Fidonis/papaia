@@ -2,8 +2,9 @@
 `papaia-ctl` renders for it, the attachment to the egress network of each add-on, and the
 decisions of the proxy itself.
 
-The proxy (`src/infra/egress/egress.py`) runs in a stock Python image, so its decision
-logic is imported here straight from the checkout. The end-to-end check with real
+The proxy (`src/infra/egress/egress.py`) is one standard-library file in the core's own
+image `ghcr.io/fidonis/papaia-egress`, so its decision logic is imported here straight
+from the checkout. The end-to-end check with real
 containers is `test_egress_docker.py`.
 """
 
@@ -79,7 +80,8 @@ def test_the_service_has_no_published_port_and_only_its_own_network():
 def test_the_service_runs_without_privileges_on_a_pinned_image():
     service = _service()
 
-    pinned = r"python:\d+\.\d+\.\d+-alpine\d+\.\d+@sha256:[0-9a-f]{64}"
+    version = (REPO / "VERSION").read_text(encoding="utf-8").strip()
+    pinned = rf"ghcr\.io/fidonis/papaia-egress:{re.escape(version)}@sha256:[0-9a-f]{{64}}"
     assert re.fullmatch(pinned, service["image"])
     assert service["read_only"] is True
     assert service["cap_drop"] == ["ALL"]
@@ -96,9 +98,8 @@ def test_the_service_reads_its_configuration_read_only_from_the_config_dir():
     assert config["source"] == "${PAPAIA_CONFIG_DIR}/infra/egress"
     assert config["read_only"] is True
     assert config["bind"]["create_host_path"] is False
-    program = mounts["/opt/papaia-egress/egress.py"]
-    assert program["source"] == "./egress.py"
-    assert program["read_only"] is True
+    # The program is in the image, not mounted from the checkout.
+    assert set(mounts) == {"/etc/papaia-egress"}
 
 
 def test_the_healthcheck_looks_for_the_listener_of_the_proxy_port():

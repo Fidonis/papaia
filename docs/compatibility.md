@@ -199,5 +199,70 @@ release (and a hotfix) is not cut until all of the following hold:
 4. The tag exceptions in `compat/image-exceptions.yaml` are still valid on the
    release date; they expire after at most 90 days and then fail CI on every
    branch, so they are renewed or resolved before that.
+5. The own images of the core (next section) are built from the tagged tree,
+   pushed to `ghcr.io/fidonis/`, signed like 3, and pinned in compose with
+   the release `VERSION` as tag; their entries in the bill of materials come
+   from `tools/build-images bom-entries`.
 
 Without 1 to 3 every operator would need `--insecure-images`.
+
+## Own images of the core
+
+A core service that runs code of this repository runs it from an image built
+here: `papaia-egress` and `papaia-lifecycle` today. A stock image with the code
+mounted in, or an image built by Compose (`build:`), is not used: the start
+check would have nothing to compare it with. The images are listed in
+[`compat/own-images.yaml`](../compat/own-images.yaml) (schema
+`papaia.own-images/1`) with their Dockerfile, every file the build may read,
+the compose services that run them and their license.
+
+Each Dockerfile starts from a base pinned by tag and digest, copies only the
+declared inputs, sets a numeric user other than root and carries the notice
+files under `/usr/share/licenses/<image>/`: `LICENSE`,
+`THIRD_PARTY_LICENSES.md` (the runtime components) and `texts/` with the full
+license texts the base image does not already hold (Debian keeps one copyright
+file per package under `/usr/share/doc/`). The label
+`org.opencontainers.image.licenses` names the license. `tools/build-images
+check` and the test suite enforce these rules, and that the compose services
+pin `<name>:<VERSION>@sha256:<digest>`.
+
+`tools/build-images` takes an image from the checkout to the bill of
+materials:
+
+```sh
+# 1. Build linux/amd64 and linux/arm64 from the committed inputs and push.
+tools/build-images build --registry=<prefix> --out=builds.json
+# 2. Sign each digest into the signature repository (behind <prefix>).
+COSIGN_PASSWORD=... tools/build-images sign --builds=builds.json --key=<cosign key>
+# 3. Pin the digests in compose.
+tools/build-images pin --builds=builds.json
+# 4. The image entries of the core for the bill of materials.
+tools/build-images bom-entries --sbom=ghcr.io/fidonis/papaia-egress=<sbom> ...
+```
+
+- `<prefix>` is empty for the release registry, or the prefix of a local
+  registry such as `127.0.0.1:5000/unpublished/`. The images then lie under
+  `<prefix>ghcr.io/fidonis/<image>`, which is where an installation with
+  `PAPAIA_IMAGE_MIRROR=<prefix>` pulls and checks them. The compose files
+  always name `ghcr.io/fidonis/<image>`; there is no image name that exists
+  only locally.
+- The build is reproducible. The context holds only the declared inputs and
+  `LICENSE`; timestamps are fixed (`SOURCE_DATE_EPOCH=0`) and no provenance or
+  SBOM attestation is added to the index. The same inputs and `VERSION`
+  therefore give the same digest on any host and from any later commit, and
+  anyone can rebuild a release and compare it with the pin. Inputs with
+  uncommitted changes are refused.
+- A change to an input (the Dockerfile, the program, its notice), to `LICENSE`
+  or to `VERSION` changes the digest: rebuild and pin in the same change.
+  The live test `tools/tests/test_own_images_registry.py` fails while the pin
+  is stale.
+- The signing key is a cosign key file outside the checkout; its passphrase is
+  read from `COSIGN_PASSWORD` only. With `--cosign=<binary>` the host's
+  registry login is used (release); without it cosign runs as a pinned
+  container on the host network (local registry). For a loopback registry the
+  signature is not written to the public transparency log.
+- An own image gets no exception at start: it must be listed with its digest
+  and signed, like every other image. For a local test environment that means
+  the local registry, its test key, and a test bill of materials signed with
+  that key.
+

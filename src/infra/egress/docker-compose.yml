@@ -30,19 +30,16 @@
 services:
 
   papaia-egress:
-    # The proxy is one standard-library Python file next to this one, so the
-    # stock interpreter image is all it needs. Pinned by digest.
-    image: python:3.12.16-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89
+    # The core's own image (Dockerfile next to this file, compat/own-images.yaml): the
+    # proxy, one standard-library Python file, on a pinned Python base. Built, signed
+    # and pinned by tools/build-images.
+    image: ghcr.io/fidonis/papaia-egress:1.9.0@sha256:20d8d12040631ac2ea2b80e8ceaac654fb352c82b2fd49c865caaf12c7a60c83
     restart: unless-stopped
     command: ["python3", "-I", "/opt/papaia-egress/egress.py", "--config", "/etc/papaia-egress/egress.json"]
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
-      - type: bind
-        source: ./egress.py
-        target: /opt/papaia-egress/egress.py
-        read_only: true
       # The directory, not the file: the rendered file is replaced atomically,
       # and a bind-mounted file would keep showing the old one.
       - type: bind
