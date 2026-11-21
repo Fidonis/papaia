@@ -1548,7 +1548,14 @@ def test_an_exchange_scope_on_an_unmanaged_client_is_reported_and_removed(tmp_pa
     realm = FakeRealm()
     plan = _full_plan()
     _run(realm, plan)
-    realm.call("POST", "/clients", {"clientId": "librechat", "defaultClientScopes": ["aud-flow"]})
+    # a hardened client of the realm template (realm_hardening owns its switches)
+    librechat = {
+        "clientId": "librechat",
+        "publicClient": False,
+        "directAccessGrantsEnabled": False,
+        "defaultClientScopes": ["aud-flow"],
+    }
+    realm.call("POST", "/clients", librechat)
     uid = realm.by_client_id("librechat")["id"]
     sid = realm.scope_by_name("aud-mcp-paperless")["id"]
     realm.call("PUT", f"/clients/{uid}/optional-client-scopes/{sid}")

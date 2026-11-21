@@ -14,7 +14,8 @@ the addon layer is a real loop that iterates zero times -- not a stub.
 
 Realm-secret baking supersedes Keycloak's native `${env.VAR}` import-time
 substitution (found unreliable in practice): secrets are substituted into
-the realm JSON before Keycloak ever sees the file.
+the realm JSON before Keycloak ever sees the file. The rendered realm also
+carries the realm hardening of the security profile (realm_hardening).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from . import (
     keycloak_role_sync,
     knowledge_map,
     localai_native,
+    realm_hardening,
     smtp,
 )
 
@@ -628,7 +630,15 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     resolved = re.sub(r"\$\{env\.([^}]+)\}", replace, template)
     realm = json.loads(resolved)  # validate the substitution didn't break the JSON
 
-    changed = False
+    # Realm settings of the security profile and the redirect URIs of the template's
+    # sign-in clients from the configured hosts (realm_hardening); `realm sync` applies
+    # the same target to a realm that exists already.
+    librechat = common.parse_env_file(config_dir / "ai/librechat/.env")
+    try:
+        realm_hardening.apply_to_realm(realm, realm_hardening.load(env, librechat))
+    except realm_hardening.HardeningError as exc:
+        raise RenderError(f"Realm hardening: {exc}") from exc
+
     # The mail relay is optional, so its block cannot sit in the template: a
     # placeholder substitution cannot leave an object out. The relay needs no
     # login, which is also why no secret is baked in here. While the profile is off
@@ -638,7 +648,6 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
         realm["smtpServer"] = smtp.realm_smtp_server(relay)
         # A reset link is only worth offering where it can be delivered.
         realm["resetPasswordAllowed"] = True
-        changed = True
 
     # On a hostname shared with plain-http services, the papaia realm must not send
     # Keycloak's default HSTS header (see _auth_host_shares_a_plain_http_hostname).
@@ -646,17 +655,13 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     # an entry the browser learned before. Only this header is set; Keycloak keeps its
     # defaults for every browser header the realm does not name. An existing realm
     # gets the value from keycloak_role_sync, since --import-realm skips it.
-    domain_server = common.parse_env_file(config_dir / "ai/librechat/.env").get(
-        "DOMAIN_SERVER", ""
-    )
+    domain_server = librechat.get("DOMAIN_SERVER", "")
     if _auth_host_shares_a_plain_http_hostname(env, domain_server):
         realm["browserSecurityHeaders"] = {
             "strictTransportSecurity": keycloak_role_sync.NO_HSTS
         }
-        changed = True
 
-    if changed:
-        resolved = json.dumps(realm, indent=2, ensure_ascii=False) + "\n"
+    resolved = json.dumps(realm, indent=2, ensure_ascii=False) + "\n"
 
     out_dir = config_dir / "infra/keycloak/realm-import"
     common.ensure_dir(out_dir)

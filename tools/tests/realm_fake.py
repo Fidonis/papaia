@@ -7,10 +7,12 @@ every client, the realm's default roles, `realm-management` with its client role
 service-account user for every client created with `serviceAccountsEnabled` (with Keycloak's
 `service_account` scope as a default scope of that client), groups, and the
 `offline_access` scope mapping the `offline_access` role, and the realm's client policies
-and profiles (empty, as in a fresh realm). Every write
-is counted in `writes`. A role that does not exist is a `NotFound`, as Keycloak answers
-with HTTP 404. Clients can be deleted; turning `serviceAccountsEnabled` on or off creates
-or removes the service-account user. The realm's event settings and stored sign-in
+and profiles (empty, as in a fresh realm). The realm's own settings carry Keycloak's
+defaults of a new realm. Like Keycloak, a client policy with the `pkce-enforcer` executor
+refuses (HTTP 400) every update of a client it applies to whose PKCE method is not S256.
+Every write is counted in `writes`. A role that does not exist is a `NotFound`, as Keycloak
+answers with HTTP 404. Clients can be deleted; turning `serviceAccountsEnabled` on or off
+creates or removes the service-account user. The realm's event settings and stored sign-in
 events (`events`, newest first) are kept as well.
 """
 
@@ -18,7 +20,9 @@ from __future__ import annotations
 
 import copy
 import itertools
+import json
 import re
+import urllib.error
 import urllib.parse
 
 BUILTIN_DEFAULT = ["web-origins", "acr", "profile", "roles", "basic", "email"]
@@ -45,6 +49,28 @@ REALM_MANAGEMENT_ROLES = [
 ]
 
 
+# Keycloak 26.7.0's settings of a new realm (read from a fresh realm through the Admin API).
+NEW_REALM = {
+    "realm": "papaia",
+    "sslRequired": "external",
+    "registrationAllowed": False,
+    "editUsernameAllowed": False,
+    "accessTokenLifespan": 300,
+    "revokeRefreshToken": False,
+    "refreshTokenMaxReuse": 0,
+    "ssoSessionIdleTimeout": 1800,
+    "ssoSessionMaxLifespan": 36000,
+    "offlineSessionIdleTimeout": 2592000,
+    "offlineSessionMaxLifespanEnabled": False,
+    "offlineSessionMaxLifespan": 5184000,
+    "bruteForceProtected": False,
+    "permanentLockout": False,
+    "failureFactor": 30,
+    "waitIncrementSeconds": 60,
+    "maxFailureWaitSeconds": 900,
+}
+
+
 class NotFound(Exception):
     pass
 
@@ -61,7 +87,10 @@ class FakeRealm:
         self.scopes: dict[str, dict] = {}
         self.clients: dict[str, dict] = {}
         self.users: dict[str, dict] = {}
+        # Keycloak's clock in milliseconds; each new account moves it on.
+        self.clock = 1_790_000_000_000
         self.groups: dict[str, dict] = {}
+        self.realm = copy.deepcopy(NEW_REALM)
         # realm-level client policies and profiles (Keycloak's global ones are not listed)
         self.policies: list[dict] = []
         self.profiles: list[dict] = []
@@ -157,17 +186,35 @@ class FakeRealm:
         realm_roles: set[str] = frozenset(),
         groups: tuple[str, ...] = (),
         enabled: bool = True,
+        email: str | None = None,
+        password: str | None = None,
+        password_changed: bool = False,
+        required_actions: tuple[str, ...] = (),
     ) -> str:
-        """A person: `realm_roles` mapped directly, member of the groups (ids) given."""
+        """A person: `realm_roles` mapped directly, member of the groups (ids) given.
+        `password`: a password credential stored with the account (as a realm import or
+        a create with credentials does), or later when `password_changed`."""
         uid = self._id("user")
+        self.clock += 1000
         self.users[uid] = {
             "id": uid,
             "username": username,
             "enabled": enabled,
+            "createdTimestamp": self.clock,
+            "requiredActions": list(required_actions),
             "_realm": {"default-roles-papaia", *realm_roles},
             "_clients": {},
             "_groups": set(groups),
+            "_credentials": [],
         }
+        if email is not None:
+            self.users[uid]["email"] = email
+        if password is not None:
+            created = self.clock + (3_600_000 if password_changed else 20)
+            self.users[uid]["_credentials"].append(
+                {"id": self._id("cred"), "type": "password", "createdDate": created}
+            )
+            self.users[uid]["_password"] = password
         return uid
 
     def add_realm_role(self, name: str, composites: set[str] = frozenset()) -> None:
@@ -370,6 +417,26 @@ class FakeRealm:
             held -= names
         return None
 
+    def _enforces_pkce(self, attributes: dict) -> bool:
+        """Whether an enabled client policy with a `pkce-enforcer` profile applies to a
+        client with these attributes (condition `client-attributes`, exact values)."""
+        enforcing = {
+            p["name"]
+            for p in self.profiles
+            if any(e.get("executor") == "pkce-enforcer" for e in p.get("executors") or [])
+        }
+        for policy in self.policies:
+            if not policy.get("enabled") or not enforcing & set(policy.get("profiles") or []):
+                continue
+            for condition in policy.get("conditions") or []:
+                config = condition.get("configuration") or {}
+                if condition.get("condition") != "client-attributes":
+                    continue
+                wanted = json.loads(config.get("attributes") or "[]")
+                if all(attributes.get(a["key"]) == a["value"] for a in wanted):
+                    return True
+        return False
+
     # the API ---------------------------------------------------------------
     def call(self, method: str, path: str, body=None):
         if method != "GET":
@@ -378,6 +445,12 @@ class FakeRealm:
         route = parts.path
         query = urllib.parse.parse_qs(parts.query)
 
+        if route == "":
+            if method == "GET":
+                return copy.deepcopy(self.realm)
+            if method == "PUT":
+                self.realm.update(copy.deepcopy(body))
+                return None
         if route == "/roles" and method == "GET":
             return [self._role_rep(n) for n in self.roles]
         if route == "/roles" and method == "POST":
@@ -492,6 +565,12 @@ class FakeRealm:
         m = re.fullmatch(r"/clients/([^/]+)", route)
         if m and method == "PUT":
             client = self.clients[m.group(1)]
+            attributes = body.get("attributes", client.get("attributes") or {})
+            if (
+                self._enforces_pkce(attributes)
+                and attributes.get("pkce.code.challenge.method") != "S256"
+            ):
+                raise urllib.error.HTTPError(path, 400, "invalid_client_metadata", {}, None)
             for key, value in body.items():
                 if key == "attributes":
                     # Keycloak keeps an attribute the body leaves out and removes one it
@@ -559,16 +638,41 @@ class FakeRealm:
         if route == "/users" and method == "GET":
             # Keycloak leaves service-account users out of the user list.
             people = [u for u in self.users.values() if "serviceAccountClientLink" not in u]
+            if "username" in query:
+                assert query.get("exact") == ["true"], "only exact user name searches"
+                people = [u for u in people if u["username"] == query["username"][0]]
             first = int(query.get("first", ["0"])[0])
             count = int(query.get("max", ["100"])[0])
             return [
-                {k: v for k, v in u.items() if not k.startswith("_")}
+                {k: copy.deepcopy(v) for k, v in u.items() if not k.startswith("_")}
                 for u in people[first : first + count]
             ]
         m = re.fullmatch(r"/users/([^/]+)", route)
         if m and method == "DELETE":
             if self.users.pop(m.group(1), None) is None:
                 raise NotFound(path)
+            return None
+        if m and method == "PUT":
+            unknown = set(body) - {"enabled", "requiredActions"}
+            assert not unknown, f"unexpected user fields {unknown}"
+            self.users[m.group(1)].update(copy.deepcopy(body))
+            return None
+        m = re.fullmatch(r"/users/([^/]+)/credentials", route)
+        if m and method == "GET":
+            return copy.deepcopy(self.users[m.group(1)]["_credentials"])
+        m = re.fullmatch(r"/users/([^/]+)/reset-password", route)
+        if m and method == "PUT":
+            # Keycloak replaces the password credential (a new creation date) and, for a
+            # temporary password, adds the required action UPDATE_PASSWORD.
+            user = self.users[m.group(1)]
+            assert body["type"] == "password" and body["value"], body
+            self.clock += 60_000
+            user["_credentials"] = [
+                {"id": self._id("cred"), "type": "password", "createdDate": self.clock}
+            ]
+            user["_password"] = body["value"]
+            if body.get("temporary") and "UPDATE_PASSWORD" not in user["requiredActions"]:
+                user["requiredActions"].append("UPDATE_PASSWORD")
             return None
         m = re.fullmatch(r"/users/([^/]+)/role-mappings/realm/composite", route)
         if m and method == "GET":

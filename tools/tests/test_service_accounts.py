@@ -457,9 +457,13 @@ def test_a_registered_legacy_account_of_a_modules_own_setup_is_named_not_changed
             "optionalClientScopes": [],
         },
     )
-    assert "flow-directory" not in {c.name for c in _run(realm, _full_plan(), keys, apply=False)}
+    # Only the realm hardening, which applies to every client that can obtain a token,
+    # touches it; the service-account sync leaves it alone.
+    found = _run(realm, _full_plan(), keys, apply=False)
+    assert {c.operation for c in found if c.name == "flow-directory"} <= {"harden_client"}
     _run(realm, _full_plan(), keys)
     assert realm.by_client_id("flow-directory")["serviceAccountsEnabled"] is True
+    assert not realm.by_client_id("flow-directory").get("directAccessGrantsEnabled")
     assert "service account flow-directory is created by its module" in capsys.readouterr().out
 
 

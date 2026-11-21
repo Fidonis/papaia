@@ -9,10 +9,21 @@
   "rememberMe": true,
   "verifyEmail": false,
   "resetPasswordAllowed": false,
-  "sslRequired": "none",
-  "accessTokenLifespan": 300,
+  "sslRequired": "external",
+  "editUsernameAllowed": false,
+  "accessTokenLifespan": 240,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 36000,
+  "offlineSessionIdleTimeout": 2592000,
+  "offlineSessionMaxLifespanEnabled": true,
+  "offlineSessionMaxLifespan": 15552000,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
   "roles": {
     "realm": [
       {
@@ -115,12 +126,8 @@
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "${env.KC_LIBRECHAT_CLIENT_SECRET}",
-      "redirectUris": [
-        "*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
+      "redirectUris": [],
+      "webOrigins": [],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -206,12 +213,8 @@
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "${env.KC_LITELLM_CLIENT_SECRET}",
-      "redirectUris": [
-        "*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
+      "redirectUris": [],
+      "webOrigins": [],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -219,7 +222,6 @@
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
       "attributes": {
-        "post.logout.redirect.uris": "*",
         "login_theme": "papaia"
       },
       "protocolMappers": [
@@ -279,12 +281,8 @@
           }
         }
       ],
-      "redirectUris": [
-        "*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
+      "redirectUris": [],
+      "webOrigins": [],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -299,12 +297,8 @@
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "${env.KC_LOCALAI_CLIENT_SECRET}",
-      "redirectUris": [
-        "*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
+      "redirectUris": [],
+      "webOrigins": [],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -355,12 +349,8 @@
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "${env.KC_MANAGER_CLIENT_SECRET}",
-      "redirectUris": [
-        "*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
+      "redirectUris": [],
+      "webOrigins": [],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -449,37 +439,13 @@
       "lastName": "User",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "admin",
-          "temporary": false
-        }
+      "requiredActions": [
+        "UPDATE_PASSWORD"
       ],
       "realmRoles": [
         "papaia-admin",
         "user",
         "localai-access"
-      ]
-    },
-    {
-      "username": "testuser",
-      "email": "testuser@papaia.lan",
-      "firstName": "Test",
-      "lastName": "User",
-      "enabled": true,
-      "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "testuser",
-          "temporary": false
-        }
-      ],
-      "realmRoles": [
-        "user",
-        "finance",
-        "librechat-user"
       ]
     }
   ],

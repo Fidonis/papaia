@@ -145,8 +145,10 @@ def test_first_run_creates_second_run_reports_no_change(realm):
 def test_manual_drift_is_detected_and_repaired(realm):
     api, _ = realm
     rs.reconcile(api.call, _plan(), apply=True)
-    engine = _client("flow-engine")
-    _admin("PUT", f"/papaia/clients/{engine['id']}", {"fullScopeAllowed": True})
+    engine = {k: v for k, v in _client("flow-engine").items() if k != "secret"}
+    # The client policy of the realm hardening checks every update of a managed client
+    # against its full representation.
+    _admin("PUT", f"/papaia/clients/{engine['id']}", dict(engine, fullScopeAllowed=True))
     gateway = _client("papaia-studio-gateway")
     scope_id = next(
         s["id"] for s in _admin("GET", "/papaia/client-scopes") if s["name"] == "address"

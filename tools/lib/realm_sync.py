@@ -99,6 +99,11 @@ which lives in the Keycloak `.env`.
 
 Clients of the realm template (LibreChat, LiteLLM, oauth2-proxy, LocalAI, the manager, the
 RAG resource servers) stay with `keycloak_role_sync` until their modules declare themselves.
+
+Realm hardening (`realm_hardening`): the realm settings of the security profile, no password
+grant and no implicit flow at any client, PKCE S256 at public clients, redirect URIs only
+of the configured hosts, and the client policy `papaia-hardening` for managed clients,
+which is written last, once every managed client carries PKCE S256.
 """
 
 from __future__ import annotations
@@ -124,6 +129,7 @@ import yaml
 
 from . import common, deployment
 from . import keycloak_role_sync as kcs
+from . import realm_hardening as rh
 from . import service_account_keys as sak
 
 REGISTER_PATH = Path(__file__).with_name("names_register.json")
@@ -542,13 +548,14 @@ class ClientSpec:
         return self.kind == SERVICE_ACCOUNT
 
     def representation(self) -> dict:
+        # PKCE S256 on every managed client, also on those without a sign-in flow: the
+        # client policy refuses any update of a managed client without it.
         attributes = {
             MANAGED: "true",
             OWNER: _owner_value(self.owner),
             TOKEN_EXCHANGE: "true" if self.token_exchange else "false",
+            rh.PKCE: "S256",
         }
-        if self.kind in ("confidential", "public"):
-            attributes["pkce.code.challenge.method"] = "S256"
         if self.kind == "public":
             attributes["oauth2.device.authorization.grant.enabled"] = "true"
         if self.service_account:
@@ -587,6 +594,9 @@ class Plan:
     # flow-control): a module's own setup creates them and they cannot be declared in
     # service_accounts[] yet, so the sync names them and leaves them alone.
     legacy_accounts: frozenset[str] = frozenset()
+    # Realm settings, client hardening and client policy (realm_hardening); `sync` sets
+    # it from the security profile and the configured hosts.
+    hardening: rh.Hardening = field(default_factory=rh.Hardening)
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -1864,6 +1874,7 @@ class _Reconciler(_Actions):
         return {r["name"]: r for r in self.call("GET", "/roles?briefRepresentation=false") or []}
 
     def run(self) -> list[Change]:
+        self.realm_settings()
         self.roles()
         self.exchange_scopes()
         self.realm_defaults()
@@ -1880,6 +1891,11 @@ class _Reconciler(_Actions):
         # Policies before stale scopes: a policy may only name a scope that exists.
         self.client_policies()
         self.stale_exchange_scopes()
+        # Fresh: an update names all attributes, and `client` may just have changed some.
+        self.harden_clients(self._clients() if self.apply else clients)
+        # Last: the policy refuses an update of a managed client without PKCE S256, which
+        # the steps above give every managed client first.
+        self.client_policy()
         for client_id, client in sorted(clients.items()):
             attributes = client.get("attributes") or {}
             managed = attributes.get(MANAGED) == "true"
@@ -1901,6 +1917,67 @@ class _Reconciler(_Actions):
             self.changes += self.master.changes
             self.skipped += self.master.skipped
         return self.changes
+
+    # realm hardening -------------------------------------------------------
+    def realm_settings(self) -> None:
+        live = self.call("GET", "") or {}
+        settings = self.plan.hardening.settings
+        want = settings.realm()
+        drift = sorted(k for k, v in want.items() if live.get(k) != v)
+        if drift:
+            self.do(
+                Change(
+                    "realm", kcs._REALM, f"settings corrected ({', '.join(drift)})", "update_realm"
+                ),
+                "PUT",
+                "",
+                {k: want[k] for k in drift},
+            )
+        shown = {**live, **want} if self.apply else live
+        print(f"  {rh.describe(shown, settings.profile)}", flush=True)
+
+    def harden_clients(self, clients: dict[str, dict]) -> None:
+        """No password grant and no implicit flow at any client, PKCE S256 at public
+        ones, redirect URIs and web origins only of the configured hosts. Managed
+        clients have their switches from `client`; here only their URIs are checked."""
+        for client_id, client in sorted(clients.items()):
+            if client_id == SYNC_CLIENT:
+                continue
+            body, drift = rh.harden_client(
+                client, self.plan.hardening, uris_only=client_id in self.plan.clients
+            )
+            if body:
+                self.do(
+                    Change("client", client_id, f"hardened ({', '.join(drift)})", "harden_client"),
+                    "PUT",
+                    f"/clients/{client['id']}",
+                    body,
+                )
+
+    def client_policy(self) -> None:
+        """The profile and the policy `papaia-hardening`; the realm's other client
+        profiles and policies are kept as they are."""
+        for kind, one, want in (
+            ("profiles", "profile", rh.client_profile()),
+            ("policies", "policy", rh.client_policy()),
+        ):
+            path = f"/client-policies/{kind}"
+            have = (self.call("GET", path) or {}).get(kind) or []
+            current = next((p for p in have if p.get("name") == want["name"]), None)
+            if rh.same(current, want):
+                continue
+            others = [p for p in have if p.get("name") != want["name"]]
+            self.do(
+                Change(
+                    "realm",
+                    kcs._REALM,
+                    f"client {one} {want['name']} set",
+                    f"set_client_{one}",
+                ),
+                "PUT",
+                path,
+                {kind: [*others, want]},
+            )
 
     # roles ----------------------------------------------------------------
     def roles(self) -> None:
@@ -2930,6 +3007,50 @@ def sync_paperless_users(
             os.close(dfd)
 
 
+def sync_template_users(
+    call, hardening: rh.Hardening, *, apply: bool, audit: AuditLog | None = None
+) -> list[Change]:
+    """Take the known password away from the accounts the 1.9.0 realm template created
+    (`admin`/`admin`, `testuser`/`testuser`) while they still have it (rh.known_password):
+    `admin` gets KC_REALM_ADMIN_PASSWORD as a temporary password (changed at the next
+    sign-in), every other one, and `admin` without that value, is disabled. `call` must
+    be allowed to manage accounts (the master admin). One audit row per write, never with
+    the password. Returns the deviations found (= the changes made when applying)."""
+    actions = _Actions(call, apply, audit, master=True)
+    for name in sorted(rh.TEMPLATE_USERS):
+        query = urllib.parse.urlencode({"username": name, "exact": "true"})
+        for user in call("GET", f"/users?{query}") or []:
+            uid = user.get("id")
+            if not isinstance(uid, str) or not uid:
+                continue
+            base = f"/users/{urllib.parse.quote(uid, safe='')}"
+            if not rh.known_password(user, call("GET", f"{base}/credentials") or []):
+                continue
+            if name == rh.REALM_ADMIN and hardening.realm_admin_password:
+                change = Change(
+                    "user",
+                    name,
+                    f"the realm template's password replaced by {rh.REALM_ADMIN_PASSWORD_KEY}, "
+                    "to be changed at the next sign-in",
+                    "reset_template_password",
+                )
+                body = {
+                    "type": "password",
+                    "value": hardening.realm_admin_password,
+                    "temporary": True,
+                }
+                actions.do(change, "PUT", f"{base}/reset-password", body)
+            else:
+                change = Change(
+                    "user",
+                    name,
+                    "disabled, it still has the realm template's password",
+                    "disable_template_user",
+                )
+                actions.do(change, "PUT", base, {"enabled": False})
+    return actions.changes
+
+
 def reconcile(
     call,
     plan: Plan,
@@ -2980,6 +3101,7 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
     if root.get("AUTH_PROVIDER", "internal_keycloak") != "internal_keycloak":
         print("Realm sync skipped: AUTH_PROVIDER is not internal_keycloak.", flush=True)
         return 0
+    keycloak = tree.get(kcs._KEYCLOAK_NODE, {})
     try:
         register = load_register()
         plan = build_plan(
@@ -2987,13 +3109,13 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             load_modules(config_dir, repo_root),
             load_pairings(pairings_path(config_dir), register),
         )
-    except RealmSyncError as exc:
+        plan.hardening = rh.load({**root, **keycloak}, tree.get("ai/librechat", {}))
+    except (RealmSyncError, rh.HardeningError) as exc:
         print(f"Realm sync refused: {exc}. Nothing was changed.", file=sys.stderr, flush=True)
         return 2
-    for note in plan.notes:
+    for note in plan.notes + plan.hardening.notes:
         print(f"  {note}", flush=True)
 
-    keycloak = tree.get(kcs._KEYCLOAK_NODE, {})
     admin_password = kcs._compose_value(keycloak.get("KC_ADMIN_PASSWORD", ""))
     secret = kcs._compose_value(keycloak.get(SYNC_SECRET_KEY, ""))
     if kcs._unset(secret) or secret.startswith("GENERATE_"):
@@ -3027,6 +3149,10 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             # on it. Accounts are read with the master admin (no view-users for the
             # sync account); a fresh token, the first may have run out meanwhile.
             master = AdminApi(base_url, ctx, kcs._get_admin_token(base_url, ctx, admin_password))
+            # Before the name list: a disabled template account is not on it.
+            changes += sync_template_users(
+                master.call, plan.hardening, apply=not check, audit=audit
+            )
             changes += sync_paperless_users(
                 master.call, plan, config_dir, apply=not check, audit=audit
             )

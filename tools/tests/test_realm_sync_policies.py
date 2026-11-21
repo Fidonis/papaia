@@ -18,6 +18,7 @@ import json
 
 import pytest
 
+from lib import realm_hardening as rh
 from lib import realm_sync as rs
 from tests.realm_fake import FakeRealm
 from tests.test_realm_sync import REGISTER, _flow, _pairings, _paperless, _plan, _run, _studio
@@ -124,7 +125,12 @@ def test_pair_policies_of_several_clients_are_merged_without_duplicates():
 def test_no_profile_of_the_sync_uses_the_downscope_executor():
     realm = FakeRealm()
     _run(realm, _gateway_plan())
-    executors = {e["executor"] for p in realm.profiles for e in p["executors"]}
+    executors = {
+        e["executor"]
+        for p in realm.profiles
+        if p["name"] != rh.CLIENT_POLICY  # the realm hardening's own profile
+        for e in p["executors"]
+    }
     assert "downscope-assertion-grant-enforcer" not in executors
     assert executors == {"reject-request", "jwt-claim-enforcer"}
 
@@ -223,8 +229,9 @@ def test_a_profile_the_sync_no_longer_needs_is_removed_after_its_policies():
     # Studio alone: no Data, no pairing -> no managed policy, no managed profile
     plan = _plan([_studio()])
     changes = _run(realm, plan)
-    assert realm.policies == []
-    assert realm.profiles == []
+    # only the realm hardening's own profile and policy stay
+    assert [p["name"] for p in realm.policies] == [rh.CLIENT_POLICY]
+    assert [p["name"] for p in realm.profiles] == [rh.CLIENT_POLICY]
     kinds = [c.kind for c in changes if c.kind in ("client-policy", "client-profile")]
     last_policy = max(i for i, k in enumerate(kinds) if k == "client-policy")
     first_profile_removal = min(i for i, k in enumerate(kinds) if k == "client-profile")
@@ -533,7 +540,10 @@ def test_flow_engine_is_never_an_audience_scope_or_mapper(tmp_path):
     assert not realm.scope_by_name("microprofile-jwt")["protocolMappers"]
     remaining = realm.by_client_id("librechat")["protocolMappers"]
     assert [m["config"]["included.client.audience"] for m in remaining] == ["mcp-paperless"]
-    assert all(r["event"] == "exchange_right_changed" for r in _rows(tmp_path / "audit.jsonl"))
+    # the realm hardening of the bare client is a row of its own
+    rows = _rows(tmp_path / "audit.jsonl")
+    rows = [r for r in rows if r["operation"] != "realm_sync.harden_client"]
+    assert all(r["event"] == "exchange_right_changed" for r in rows)
     assert _run(realm, plan, apply=False) == []
 
 
