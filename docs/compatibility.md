@@ -73,7 +73,12 @@ lists:
   Paperless add-on lives there) and both MCP servers (role `mcp`, two entries);
 - the checksum of the kit snapshot;
 - the contract generation window of the suite;
-- the public key the file is signed with and its fingerprint.
+- the public key the file is signed with and its fingerprint;
+- optionally the exchange-right pairings the suite ships with (`pairings:`, each
+  `client`, `audience` and `effects` out of `r`, `w`, `d`, `x`, a pair listed once).
+  `setup` shows them with the sha256 of the list and confirms only the read pairings;
+  a pairing with `w` or `d` waits for a second person (see "Pairing approval" in
+  [`architecture.md`](architecture.md)).
 
 The file is signed with an ECDSA P-256 key, as `cosign sign-blob` does with a
 key pair. The signature file holds the base64 signature. Real

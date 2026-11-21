@@ -618,7 +618,52 @@ pairings:
     audience: mcp-paperless    # a registered audience
     effects: [r, w]            # r read, w write, d delete, x module interface
     state: confirmed           # or pending: waiting for approval, assigns nothing
+    requested_by: host:anna    # who asked for it (host account; optional for a read pairing)
+    confirmed_by: host:bert    # who confirmed it
 ```
+
+`papaia-ctl` writes this file (see "Pairing approval" below); edited by hand, it is read
+the same way. A confirmed pairing with effect `w` or `d` (a write pairing) must name two
+different host accounts in `requested_by` and `confirmed_by`; otherwise the file is
+refused (exit 2) and nothing is changed. Both fields are `host:<login>`.
+
+#### Pairing approval
+
+The confirmation of the pairings at installation (security 1.4): the signed bill of
+materials of the checkout (`compat/suite-<version>.yaml`) may list the pairings the suite
+ships with (`pairings:` with `client`, `audience`, `effects`). `setup` verifies the file
+against the pinned release key, shows each pairing (client, audience, effects, read or
+write, recorded state) and the sha256 of the list, and asks once. The digest is
+`sha256` over a format line `papaia.pairing-list/1` followed by one line
+`<client> <audience> <effects>` per pairing, sorted, effects in the order `rwdx`.
+
+- Confirming the list (the question, or `setup --approve-pairings=<sha256>`, also
+  `papaia-ctl pairing confirm --approve-pairings=<sha256>`) confirms every read pairing
+  (no `w`, no `d`) and records every write pairing as `pending`, with the confirming host
+  account as `requested_by`. A digest of another list confirms nothing.
+- `-y` never confirms: `setup -y` without `--approve-pairings` completes, assigns nothing
+  of the list and prints the command with the digest.
+- A pairing the file already holds is left as it is, in whatever state; a second
+  confirmation of the same list changes nothing. The realm sync assigns only confirmed
+  pairings, so a write pairing of the bill of materials reaches no client until
+  `papaia-ctl pairing approve` is run by another host account than the one that
+  requested it. The same person is refused, whatever `approvals.four_eyes` says.
+- `pairing approve --client --audience --effects` for a pairing outside the bill of
+  materials: a read pairing is confirmed, a write pairing is recorded as `pending` with
+  the caller as `requested_by` and needs a second person as well. `pairing revoke`
+  removes a pairing in any state.
+
+The acting person is the host account that runs `papaia-ctl` (`host:<login>`; as root,
+the `SUDO_USER` that called `sudo`, which is believed only then); running `papaia-ctl` on
+the host is the `papaia-admin` role of the installation. A host account that cannot be
+named decides nothing. Every change is one `papaia.audit/1` row in the core's audit
+outbox, writer `papaia-ctl/pairing`, event `exchange_right_changed`, operation
+`pairing.confirm`, `pairing.request`, `pairing.approve` or `pairing.revoke`, object
+`pairing` `<client>/<audience>`, `sub` the host account and the time; rows of the
+installation step carry the digest of the list (`detail.statement_hash`). A refused
+attempt is a row too (`result: denied`, `list_digest_mismatch` or `same_person`). A
+decision takes effect with the next realm sync (`papaia-ctl start` runs it). Approval in
+the manager is not part of this release.
 
 Task sources ("My tasks", `GET /api/v1/me/tasks[/summary]`, read with the person's
 token) are pairings like any other: Me (`papaia-me`) on `flow`, `papaia-data` and
@@ -993,6 +1038,10 @@ No Core changes required.
 | `papaia-ctl privacy-pack --installation --out=FILE --backup-retention=DAYS [--format=html\|pdf\|md] [--offsite=PLACE --offsite-retention=DAYS]` | Write the data protection package of this installation as one document (default HTML): the processors it actually sends data to (the hosted model route, the mail server behind the relay, the host service provider), the places that keep copies with their deadlines (backup target, copy off site), and the records of every active core profile and installed add-on. One `papaia.audit/1` row (`privacy_pack.installation_write`) |
 | `papaia-ctl realm sync [--check]` | Reconcile the clients, roles, exchange scopes and service accounts the installed modules declare and `security/pairings.yaml` confirms, write the name list of the Paperless gate (see "Realm sync of declared clients") and the group list `platform/groups.json`. `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
 | `papaia-ctl realm keys apply <module>` | Register the public keys the module wrote to the files of its `client_keys` (see "Realm sync of declared clients", row "Client keys") without a full sync; every declaration is checked as for `realm sync`. Exit 2 when the module declares no `client_keys` or a declaration or key file is refused, 1 when a client does not exist yet |
+| `papaia-ctl pairing list [--json]` | Read-only. The pairings of the signed bill of materials with read or write, their state in `security/pairings.yaml` and the sha256 of the list (see "Pairing approval"). Exit 2 when the bill of materials does not verify |
+| `papaia-ctl pairing confirm --approve-pairings=SHA256` | The confirmation step of `setup`: confirms the read pairings of the list with this digest and records its write pairings as waiting for approval. Exit 2 for another list; nothing is changed then |
+| `papaia-ctl pairing approve --client=NAME --audience=NAME [--effects=rwdx]` | Confirm a pairing; a write pairing (`w` or `d`) is confirmed only by a second host account, the first one records it as waiting. Exit 2 when refused (same person, other effects, a name the register does not allow) |
+| `papaia-ctl pairing revoke --client=NAME --audience=NAME` | Remove a pairing; the next realm sync removes its scope |
 | `papaia-ctl service-account list [--json]` | Read-only. The declared service accounts with module, owner, deputy, audiences, roles, effects, last key rotation (due after 90 days) and last use (see "Declared service accounts") |
 | `papaia-ctl service-account rotate <id> [--grace=SECONDS]` | Replace an account's key pair; the old key is refused at the latest 60 s after the rotation began (checked against Keycloak, exit 1 otherwise). `--grace` (0 to 60, default 30) keeps the old key registered that long. Exit 2 for an account that is not declared |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |

@@ -8,7 +8,9 @@ sources and reconciles the live `papaia` realm with them, idempotently:
 - the `exposes:` sections of the installed modules (active add-ons): the roles they
   declare, the audiences they serve, `delegation` and `service_accounts`;
 - `$PAPAIA_CONFIG_DIR/security/pairings.yaml`: which client may exchange tokens for which
-  audience. Only confirmed pairings count; a pairing waiting for approval assigns nothing.
+  audience. Only confirmed pairings count; a pairing waiting for approval assigns nothing,
+  and a confirmed write pairing (effect `w` or `d`) names two different host accounts
+  (`requested_by`, `confirmed_by`; `pairing_approval` writes the file).
 
 What it manages:
 
@@ -182,6 +184,8 @@ OFFLINE = "offline_access"
 # Keycloak's own default scopes; every client that issues tokens keeps exactly these.
 DEFAULT_SCOPES = frozenset({"basic", "acr", "profile", "email", "roles", "web-origins"})
 EFFECTS = ("r", "w", "d", "x")
+# Effects that make a pairing a write pairing (security 1.4: a second person confirms it).
+WRITE_EFFECTS = frozenset({"w", "d"})
 CHAIN_HOLDER = "papaia-data"
 # The client attribute that names the chain holder positively in `data-chain`; set on
 # CHAIN_HOLDER alone (security 1.5 no. 2).
@@ -408,6 +412,15 @@ class Pairing:
     audience: str
     effects: tuple[str, ...]
     confirmed: bool
+    # The host accounts (`host:<login>`) that asked for the pairing and that confirmed it
+    # (security 1.4). A write pairing is confirmed only by a second person.
+    requested_by: str | None = None
+    confirmed_by: str | None = None
+
+    @property
+    def writes(self) -> bool:
+        """Effect `w` or `d`: such a pairing needs a second person (security 1.4)."""
+        return any(e in WRITE_EFFECTS for e in self.effects)
 
 
 def pairings_path(config_dir: Path) -> Path:
@@ -426,6 +439,20 @@ def _exact_keys(value: object, keys: frozenset[str], label: str) -> dict:
     return value
 
 
+_PAIRING_KEYS = frozenset({"client", "audience", "effects", "state"})
+_PAIRING_PERSONS = ("requested_by", "confirmed_by")
+# `host:<login>`: the host account that acted (pairing_approval.acting_person).
+_PAIRING_PERSON_RE = re.compile(r"^host:[A-Za-z0-9._][A-Za-z0-9._@-]{0,63}$")
+
+
+def _pairing_person(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _PAIRING_PERSON_RE.match(value):
+        raise RealmSyncError(f"{label}: must be host:<login>")
+    return value
+
+
 def parse_pairings(doc: object, register: Register) -> list[Pairing]:
     doc = _exact_keys(doc, frozenset({"format", "pairings"}), "pairings.yaml")
     if doc["format"] != PAIRINGS_FORMAT:
@@ -438,7 +465,12 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
     seen: set[tuple[str, str]] = set()
     for index, row in enumerate(rows):
         label = f"pairings.yaml: pairing {index + 1}"
-        row = _exact_keys(row, frozenset({"client", "audience", "effects", "state"}), label)
+        if not isinstance(row, dict):
+            raise RealmSyncError(f"{label}: must be a mapping")
+        # requested_by and confirmed_by are optional; every other field is required.
+        _exact_keys({k: v for k, v in row.items() if k not in _PAIRING_PERSONS},
+                    _PAIRING_KEYS, label)
+        persons = {k: _pairing_person(row.get(k), f"{label}: {k}") for k in _PAIRING_PERSONS}
         client = register.check(row["client"], "client", label)
         entry = register.clients[client]
         if entry.test_profile_only:
@@ -464,7 +496,21 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
         if (client, audience) in seen:
             raise RealmSyncError(f"{label}: {client} -> {audience} is listed twice")
         seen.add((client, audience))
-        pairings.append(Pairing(client, audience, tuple(effects), row["state"] == "confirmed"))
+        pairing = Pairing(
+            client, audience, tuple(effects), row["state"] == "confirmed",
+            persons["requested_by"], persons["confirmed_by"],
+        )
+        if pairing.confirmed and pairing.writes and (
+            pairing.requested_by is None
+            or pairing.confirmed_by is None
+            or pairing.requested_by == pairing.confirmed_by
+        ):
+            raise RealmSyncError(
+                f"{label}: {client} -> {audience} writes or deletes and is confirmed without "
+                "a second person (requested_by and confirmed_by must name two host accounts; "
+                "papaia-ctl pairing approve)"
+            )
+        pairings.append(pairing)
     for client in sorted({p.client for p in pairings}):
         count = sum(1 for p in pairings if p.client == client and p.confirmed)
         if count > MAX_EXCHANGE_SCOPES:
@@ -1484,11 +1530,13 @@ class AuditLog:
         *,
         master: bool = False,
         host: bool = False,
+        detail: dict | None = None,
     ) -> None:
         """One row. `master`: the write was made with the master admin (creating or
         realigning the sync account), not with the sync account. `host`: the host account
         acted alone, without any identity of the realm and with no token (the platform halt,
-        or a file write in the configuration directory)."""
+        or a file write in the configuration directory). `detail`: counters and hashes only
+        (`papaia.audit/1`), never content."""
         if self._fd is None:
             raise RealmSyncError("the audit log is closed")
         now = time.time()
@@ -1519,7 +1567,7 @@ class AuditLog:
             "result": result,
             "error_code": error_code,
             "client_ip": None,
-            "detail": None,
+            "detail": detail,
             "event": change.event,
         }
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)

@@ -58,7 +58,7 @@ cmd_setup() {
     local knowledge_map=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
-    local force=0 non_interactive=0 env_only=0
+    local force=0 non_interactive=0 env_only=0 approve_pairings=""
     # Extra `setup` arguments for the mail relay and the password for the Python side
     # (consumed by _run_setup_py). Reset on every run so a re-render never repeats them.
     SETUP_SMTP_ARGS=()
@@ -169,6 +169,15 @@ cmd_setup() {
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
+            --approve-pairings=*)
+                # The one way to confirm the pairings without the question: the sha256 of
+                # the list setup shows. -y never confirms them (security 1.4).
+                approve_pairings="${1#*=}"
+                if ! [[ "$approve_pairings" =~ ^(sha256:)?[0-9a-f]{64}$ ]]; then
+                    error "Invalid --approve-pairings value: expected the sha256 of the pairing list (sha256:<64 hex digits>)"
+                    exit 2
+                fi
+                ;;
             --env-only) env_only=1 ;;
             --topology=*)
                 case "${1#*=}" in
@@ -691,6 +700,11 @@ cmd_setup() {
     if [ "${auth_provider:-internal_keycloak}" = "internal_keycloak" ]; then
         _ensure_keycloak_certs
         _macos_local_tls_steps "$non_interactive"
+    fi
+    local pairing_rc=0
+    _setup_pairings "$non_interactive" "$approve_pairings" || pairing_rc=$?
+    if [ "$pairing_rc" -ne 0 ]; then
+        return "$pairing_rc"
     fi
     local mode
     mode="$(_topology_mode)" || return 3

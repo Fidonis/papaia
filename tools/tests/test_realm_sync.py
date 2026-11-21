@@ -55,10 +55,18 @@ def _paperless() -> rs.Module:
     )
 
 
+# A confirmed write pairing names the person who asked for it and a second one who
+# confirmed it (security 1.4, lib/pairing_approval.py).
+TWO_PERSONS = {"requested_by": "host:anna", "confirmed_by": "host:bert"}
+
+
 def _pairings(*rows) -> list[rs.Pairing]:
     doc = {
         "format": "papaia.pairings/1",
-        "pairings": [{"client": c, "audience": a, "effects": e, "state": s} for c, a, e, s in rows],
+        "pairings": [
+            {"client": c, "audience": a, "effects": e, "state": s, **(extra[0] if extra else {})}
+            for c, a, e, s, *extra in rows
+        ],
     }
     return rs.parse_pairings(doc, REGISTER)
 
@@ -113,6 +121,7 @@ def test_pairings_are_read_from_the_security_directory(tmp_path):
                         "audience": "mcp-paperless",
                         "effects": ["r", "w"],
                         "state": "confirmed",
+                        **TWO_PERSONS,
                     }
                 ],
             }
@@ -437,7 +446,7 @@ def _full_plan() -> rs.Plan:
     return _plan(
         [_flow(delegation=DELEGATION), _studio(), _paperless()],
         _pairings(
-            ("flow-engine", "mcp-paperless", ["r", "w", "d"], "confirmed"),
+            ("flow-engine", "mcp-paperless", ["r", "w", "d"], "confirmed", TWO_PERSONS),
             ("papaia-studio-gateway", "mcp-paperless", ["r"], "confirmed"),
             ("papaia-studio-gateway", "flow", ["x"], "confirmed"),
             ("flow-engine", "mcp-qdrant", ["r"], "confirmed"),

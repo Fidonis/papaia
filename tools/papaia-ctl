@@ -29,6 +29,7 @@
 #                       [--smtp-from=ADDRESS] [--smtp-from-name=NAME]
 #                       [--backup-dir=PATH] [--env-only]
 #                       [--allow-direct-port-access] [--force] [-y]
+#                       [--approve-pairings=SHA256]  (-y never confirms pairings)
 #                       [--topology=single|distributed] [--node=NAME=ADDR[,ssh=USER@HOST[:PORT]]]
 #                       [--controller=NAME] [--preset=dmz-split|dmz-edge] [--place=SERVICE=NODE]
 #                       [--link-port=PORT] [--topology-file=PATH]
@@ -117,6 +118,12 @@
 #   papaia-ctl suite verify  --bom=FILE [--signature=FILE] [--json]
 #                            [--key=FILE | --fingerprint=sha256:HEX]
 #                            [--suite=VERSION] [--scope=delivery|test]
+#   papaia-ctl pairing list  [--json] [--config-dir=PATH] — exchange-right pairings of the
+#                            signed bill of materials, their state and the sha256 of the list
+#   papaia-ctl pairing confirm --approve-pairings=SHA256 [--config-dir=PATH]
+#   papaia-ctl pairing approve --client=NAME --audience=NAME [--effects=rwdx]
+#                            [--config-dir=PATH] — a write pairing needs a second person
+#   papaia-ctl pairing revoke --client=NAME --audience=NAME [--config-dir=PATH]
 #   papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
 #                              [--config-dir=PATH]
 #   papaia-ctl audit cert    <source> [--config-dir=PATH]
@@ -136,7 +143,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,129p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,136p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -177,6 +184,8 @@ source "$SH_LIB/secrets.sh"
 source "$SH_LIB/halt.sh"
 # shellcheck source=lib/sh/audit.sh
 source "$SH_LIB/audit.sh"
+# shellcheck source=lib/sh/pairing.sh
+source "$SH_LIB/pairing.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -246,6 +255,7 @@ case "$cmd" in
     node-shell)    cmd_node_shell "$@" ;;
     librechat)     cmd_librechat "$@" ;;
     audit)         cmd_audit "$@" ;;
+    pairing)       cmd_pairing "$@" ;;
     addon)
         sub="${1:-}"; shift || true
         case "$sub" in

@@ -23,6 +23,13 @@
       }
     },
     "repos": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/repo"}},
+    "pairings": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/pairing"},
+      "description": "Exchange rights the suite ships with (client, audience, effects). `setup` shows them with the sha256 of the list; the confirmation covers the read pairings only, a pairing with effect w or d waits for a second person. A client and audience pair is listed once."
+    },
     "totals": {
       "type": "object",
       "additionalProperties": false,
@@ -34,6 +41,23 @@
     }
   },
   "$defs": {
+    "pairing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client", "audience", "effects"],
+      "properties": {
+        "client": {"$ref": "#/$defs/register_name"},
+        "audience": {"$ref": "#/$defs/register_name"},
+        "effects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"enum": ["r", "w", "d", "x"]}
+        }
+      }
+    },
+    "register_name": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
     "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$"},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "count": {"type": "integer", "minimum": 0, "maximum": 10000},

@@ -2,12 +2,14 @@
 
 The bill of materials (`suite-<version>.yaml`, schema `papaia.suite-bom/1`)
 names every repo of one suite with tag and commit, every image with digest,
-the container and image counts, the kit snapshot checksum and the public key
-the suite is signed with. It is signed like `cosign sign-blob` with a key
-pair: ECDSA P-256 over SHA-256, the signature file holding base64 DER. The
-signature is checked against a key the operator trusts, never against the key
-inside the file alone: the release key pinned in the core checkout
-(`compat/release-key.pub`), or one given with `--key` or `--fingerprint`.
+the container and image counts, the kit snapshot checksum, the public key
+the suite is signed with and, optionally, the exchange-right pairings the suite
+ships with (confirmed at installation by `pairing_approval`). It is signed like
+`cosign sign-blob` with a key pair: ECDSA P-256 over SHA-256, the signature
+file holding base64 DER. The signature is checked against a key the operator
+trusts, never against the key inside the file alone: the release key pinned
+in the core checkout (`compat/release-key.pub`), or one given with `--key` or
+`--fingerprint`.
 No byte of the file is parsed as YAML before the signature holds; with a
 fingerprint, the embedded key is located by a bounded pattern over the raw
 bytes and must hash to that fingerprint. A verified file is then bound to the
@@ -78,6 +80,10 @@ _IMAGE_RE = re.compile(r"\A[a-z0-9][a-z0-9._:/-]{0,254}\Z")
 _TAG_RE = re.compile(r"\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 _SPDX_RE = re.compile(r"\A[A-Za-z0-9.+() -]{1,128}\Z")
 _TIME_RE = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
+# A client or audience name of the naming register.
+_CLIENT_RE = re.compile(r"\A[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
+PAIRING_EFFECTS = ("r", "w", "d", "x")
+MAX_PAIRINGS = 256
 
 
 class SuiteError(ValueError):
@@ -283,13 +289,43 @@ def _validate_repo(repo: object, where: str, scope: str) -> None:
         _validate_image(image, f"{where}.images[{index}]", scope)
 
 
+def _validate_pairings(value: object) -> None:
+    """The exchange-right pairings the suite ships with (security 1.4): client, audience
+    and effects. Only their shape is checked here; `pairing_approval` checks them against
+    the naming register before anything is offered for confirmation."""
+    if not isinstance(value, list) or len(value) > MAX_PAIRINGS:
+        raise SuiteError(f"pairings: must be a list of at most {MAX_PAIRINGS} entries")
+    seen: set[tuple[str, str]] = set()
+    for index, pairing in enumerate(value):
+        where = f"pairings[{index}]"
+        _mapping(pairing, where, {"client", "audience", "effects"})
+        client = _text(pairing["client"], f"{where}.client", _CLIENT_RE)
+        audience = _text(pairing["audience"], f"{where}.audience", _CLIENT_RE)
+        effects = pairing["effects"]
+        if (
+            not isinstance(effects, list)
+            or not effects
+            or len(set(map(str, effects))) != len(effects)
+            or not all(isinstance(e, str) and e in PAIRING_EFFECTS for e in effects)
+        ):
+            raise SuiteError(
+                f"{where}.effects: distinct letters out of {', '.join(PAIRING_EFFECTS)}"
+            )
+        if (client, audience) in seen:
+            raise SuiteError(f"{where}: {client} -> {audience} is listed twice")
+        seen.add((client, audience))
+
+
 def validate_bom(doc: object) -> None:
     """Raise SuiteError unless `doc` is a complete, consistent bill of materials."""
     _mapping(
         doc, "bill of materials",
         {"schema", "suite", "scope", "created", "contract_generation", "signing_key", "repos",
          "totals"},
+        {"pairings"},
     )
+    if "pairings" in doc:
+        _validate_pairings(doc["pairings"])
     if doc["schema"] != BOM_SCHEMA:
         raise SuiteError(f"schema: must be '{BOM_SCHEMA}'")
     _text(doc["suite"], "suite", _VERSION_RE)

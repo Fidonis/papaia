@@ -300,6 +300,9 @@ papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl keycloak-role-sync [--config-dir=PATH]
 papaia-ctl realm sync [--check] [--config-dir=PATH]
 papaia-ctl realm keys apply <module> [--config-dir=PATH]
+papaia-ctl pairing   <list [--json]|confirm --approve-pairings=SHA256> [--config-dir=PATH]
+papaia-ctl pairing   <approve|revoke> --client=NAME --audience=NAME [--effects=rwdx]
+                     [--config-dir=PATH]
 papaia-ctl service-account list [--json] [--config-dir=PATH]
 papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
 papaia-ctl status    [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
@@ -371,7 +374,8 @@ tools/papaia-ctl setup [OPTIONS]
 | `--smtp-from=ADDRESS` | _(prompted)_ | Address the mails are sent from |
 | `--smtp-from-name=NAME` | `papAIa` | Sender name shown next to the address |
 | `--force` | — | Regenerate all secrets unconditionally |
-| `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
+| `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags. Never confirms pairings |
+| `--approve-pairings=SHA256` | _(prompted)_ | Confirm the pairings of the signed bill of materials whose list has this sha256 (as `setup` and `papaia-ctl pairing list` show it); the one way to confirm them without the question |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |
 | `--topology=single\|distributed` | `single` (prompted for a new installation) | One machine, or several machines (see [Distributed installations](#distributed-installations)) |
 | `--node=NAME=ADDR[,ssh=USER@HOST[:PORT]][,root=DIR][,gpu=HINT]` | — | A machine of a distributed installation, repeatable. A node without `ssh=` is the controller: the machine `setup` runs on |
@@ -404,6 +408,16 @@ untouched rather than reset to a default.
   file reaches Keycloak, rather than relying on Keycloak's `${env.*}` substitution at import.
 - **Configuration render** — see [Configuration & render lifecycle](#configuration--render-lifecycle).
 - **`deployment.yaml`** — writes the resolved profiles, platform version, and add-on list.
+- **Pairings** — when the signed bill of materials of the checkout lists exchange-right
+  pairings (which module client may exchange a person's token for which audience),
+  `setup` shows each one with client, audience, effects and whether it reads or writes,
+  and the sha256 of the list, and asks once. Yes (or `--approve-pairings=<sha256>`)
+  confirms the read pairings; every pairing that writes or deletes waits for a second
+  person (`papaia-ctl pairing approve`, run by another host account) and is assigned to
+  no client until then. `-y` never confirms: `setup -y` completes, assigns nothing of the
+  list and prints the command to confirm it later. Each decision is an audit row with
+  the host account and the time. See "Pairing approval" in
+  [`docs/architecture.md`](docs/architecture.md).
 
 **Distributed setup.** A distributed installation is set up once, as a new installation.
 `setup` asks for it interactively ("on this machine" or "on several machines": names and
@@ -918,6 +932,27 @@ outlasts a restart of every container. The model gateway refuses every request w
 active; modules check it before each effect. Lifting it needs a reason. Setting, lifting and a
 refused lift are `papaia.audit/1` rows of the host account. `backup` leaves the halt out and
 `restore` keeps it as it is. Details: [docs/halt.md](docs/halt.md).
+
+### `pairing`
+
+```bash
+tools/papaia-ctl pairing list    [--json] [--config-dir=PATH]
+tools/papaia-ctl pairing confirm --approve-pairings=SHA256 [--config-dir=PATH]
+tools/papaia-ctl pairing approve --client=NAME --audience=NAME [--effects=rwdx] [--config-dir=PATH]
+tools/papaia-ctl pairing revoke  --client=NAME --audience=NAME [--config-dir=PATH]
+```
+
+Exchange rights: which module client may exchange a person's token for which audience,
+with which effects (`r` read, `w` write, `d` delete, `x` module interface). `list` shows
+the pairings of the signed bill of materials, whether each reads or writes, its state and
+the sha256 of the list. `confirm` is the confirmation step of `setup`: it confirms the read
+pairings of exactly the list with that digest and records each write pairing as waiting for
+approval. `approve` confirms a pairing; one that writes or deletes is confirmed only when a
+second person approves it — another host account than the one that asked for it (as root,
+the login that called `sudo`). The same person is refused. `revoke` removes a pairing. None
+of them takes `-y`. Each decision and each refusal is a `papaia.audit/1` row with the host
+account and the time; a decision takes effect with the next realm sync (`start` runs it).
+Details: "Pairing approval" in [`docs/architecture.md`](docs/architecture.md).
 
 ### `librechat clear-history`
 

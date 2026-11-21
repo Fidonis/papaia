@@ -21,7 +21,15 @@ import urllib.request
 import pytest
 
 from lib import realm_sync as rs
-from tests.test_realm_sync import DELEGATION, REGISTER, _flow, _pairings, _paperless, _studio
+from tests.test_realm_sync import (
+    DELEGATION,
+    REGISTER,
+    TWO_PERSONS,
+    _flow,
+    _pairings,
+    _paperless,
+    _studio,
+)
 
 URL = os.environ.get("PAPAIA_TEST_KEYCLOAK_URL", "")
 PASSWORD = os.environ.get("PAPAIA_TEST_KEYCLOAK_ADMIN_PASSWORD", "")
@@ -93,7 +101,7 @@ def _plan():
         REGISTER,
         [_flow(delegation=DELEGATION), _studio(), _paperless()],
         _pairings(
-            ("flow-engine", "mcp-paperless", ["r", "w", "d"], "confirmed"),
+            ("flow-engine", "mcp-paperless", ["r", "w", "d"], "confirmed", TWO_PERSONS),
             ("papaia-studio-gateway", "mcp-paperless", ["r"], "confirmed"),
             ("papaia-studio-gateway", "flow", ["x"], "confirmed"),
             ("papaia-studio-gateway", "papaia-data", ["r", "x"], "pending"),

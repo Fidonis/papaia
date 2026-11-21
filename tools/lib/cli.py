@@ -53,6 +53,7 @@ from . import (
     modules,
     nodes,
     npm_provision,
+    pairing_approval,
     paperless_gate,
     post_restore,
     privacy_pack,
@@ -2382,6 +2383,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_topology_project.set_defaults(func=cmd_topology_project)
 
     cli_node.add_parsers(sub)
+    pairing_approval.add_parsers(sub)
 
     p_cluster_start = sub.add_parser("cluster-start")
     p_cluster_start.add_argument("--node", default=None)
