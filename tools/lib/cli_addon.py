@@ -26,6 +26,7 @@ from . import (
     envtree,
     gen_override,
     keycloak_role_sync,
+    model_gateway,
     render_core,
     reporting,
     semver,
@@ -490,6 +491,8 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
                     "Run 'papaia-ctl keycloak-role-sync' once Keycloak is up.",
                     file=sys.stderr,
                 )
+    if _ensure_model_key(config_dir, repo_root, name, manifest):
+        return 2
     addons.materialize_addon_env(config_dir, addon_path, name)
     if state_before != catalog.RUNNING:
         deployment.save(config_dir, deployed)
@@ -497,6 +500,65 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     # Brings the front network of a header-identity add-on along after an upgrade.
     gen_override.generate_addon_join_overrides(config_dir, repo_root)
+    return 0
+
+
+def _ensure_model_key(config_dir: Path, repo_root: Path, name: str, manifest: dict) -> int:
+    """The module key of an add-on that declares model needs, in its bundle .env before
+    the .env is materialized (docs/model-gateway.md). Returns 0, or 2 to stop the start.
+    A LiteLLM that does not run yet is no reason to stop: `start` makes the key after `up`
+    and starts the add-on again."""
+    try:
+        aliases = model_gateway.module_aliases(manifest)
+        if not aliases and model_gateway._current_key(config_dir, name) is None:
+            return 0
+        outcome = model_gateway.ensure_module_key(
+            config_dir, repo_root, name, aliases, model_gateway.admin_for(config_dir),
+            correlation=model_gateway.new_correlation(),
+        )
+    except model_gateway.ModelGatewayError as exc:
+        print(f"ERROR: addon '{name}': model key: {exc}", file=sys.stderr)
+        return 2
+    if outcome == "unavailable":
+        print(
+            f"WARNING: LiteLLM does not answer; addon '{name}' starts without its model key. "
+            "'papaia-ctl start' makes it once LiteLLM runs.",
+            file=sys.stderr,
+        )
+    elif outcome != "unchanged":
+        print(f"Model key of addon '{name}': {outcome}")
+    return 0
+
+
+def _revoke_model_key(config_dir: Path, repo_root: Path, name: str, entry: dict) -> int:
+    """Revoke the module key of an add-on being uninstalled. Returns 0, or 2 to stop."""
+    manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(entry, repo_root))
+    try:
+        needs = bool(manifest) and bool(model_gateway.module_aliases(manifest))
+    except model_gateway.ModelGatewayError:
+        needs = True  # a key may have been made before the manifest changed
+    if not needs and model_gateway._current_key(config_dir, name) is None:
+        return 0
+    try:
+        outcome = model_gateway.revoke_module_key(
+            config_dir,
+            repo_root,
+            name,
+            model_gateway.admin_for(config_dir),
+            reason="addon_uninstall",
+            correlation=model_gateway.new_correlation(),
+        )
+    except model_gateway.ModelGatewayError as exc:
+        print(f"ERROR: addon '{name}': its model key cannot be revoked: {exc}", file=sys.stderr)
+        return 2
+    if outcome == "pending":
+        print(
+            f"WARNING: LiteLLM does not answer; the model key of '{name}' is journaled as "
+            "revoked and is deleted at the next 'papaia-ctl start'.",
+            file=sys.stderr,
+        )
+    elif outcome == "revoked":
+        print(f"Model key of addon '{name}' revoked")
     return 0
 
 
@@ -1129,6 +1191,11 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     entry = next((a for a in addon_entries if a.get("name") == name), None)
     if entry is None:
         print(f"ERROR: addon '{name}' is not registered.", file=sys.stderr)
+        return 2
+
+    # The module key goes first, journaled before it is deleted; a journal that cannot
+    # take the entry stops the uninstall while everything else is still in place.
+    if _revoke_model_key(config_dir, repo_root, name, entry):
         return 2
 
     override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"

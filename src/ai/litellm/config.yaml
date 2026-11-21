@@ -11,11 +11,18 @@ general_settings:
   ui_access_mode: "sso_only"
   store_model_in_db: true        # allow adding models via Admin UI
   allow_user_auth: true          # users can log in via SSO and get personal keys
+  # The gateway stores no contents (docs/model-gateway.md): spend logs keep usage
+  # counts per key, never the prompt or the answer. The render refuses a layer that
+  # changes this or the two settings below, any callback but the three registered
+  # under litellm_settings.callbacks, response caching outside the process and alerting.
+  store_prompts_in_spend_logs: false
 
 litellm_settings:
   drop_params: true              # ignore unknown/unsupported params silently
   num_retries: 2
   request_timeout: 600
+  turn_off_message_logging: true   # no messages or responses to any logger
+  redact_user_api_key_info: true   # no key or user details in logs and callbacks
   # prometheus exposes /metrics for scraping. papaia_hooks (mounted next to
   # this file) hides deployments marked `model_info: {discoverable: false}`
   # from the model listings for every key — LiteLLM's own flag spares admin
@@ -40,6 +47,13 @@ router_settings:
 # Per-user budgets and rate limits can be set under Settings → Users.
 
 # ── Models ─────────────────────────────────────────────────────────────────
+# Modules use aliases only: the render adds papaia-chat and papaia-structured,
+# mapped onto the model PAPAIA_DEFAULT_MODEL names, and papaia-embed, mapped onto
+# PAPAIA_DEFAULT_EMBED_MODEL (root .env; `setup --local-ai` names the shipped
+# default model). An overlay entry with an alias's name replaces the generated one.
+# Each module calls with a key of its own that reaches its aliases only
+# (docs/model-gateway.md).
+#
 # With the localai module on, every LocalAI model that models.txt downloads
 # and that a model YAML in ai/localai/models/ describes is added to this list
 # when the configuration is rendered, under the YAML's name. The entries send

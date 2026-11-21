@@ -17,6 +17,8 @@ Welcome to the papAIa documentation.
 - [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on
   deactivation, reconciliation independent of events, the signed revocation list, the
   erasure journal `identity`, its service account
+- [Model gateway](./model-gateway.md) — LiteLLM for the modules: aliases, the default model,
+  one key per module, no stored contents
 - [Platform halt](./halt.md) — `papaia-ctl halt`: stop every write, send and delete of the
   installation with one host command
 - [The audit store](./audit.md) — papaia-audit: ingest over mutual TLS, hash chain per source,

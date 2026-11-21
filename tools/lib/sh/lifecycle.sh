@@ -497,7 +497,42 @@ cmd_start() {
         warn "Keycloak role sync failed. Once Keycloak is healthy, run 'papaia-ctl keycloak-role-sync' to retry."
     fi
 
+    _model_keys_sync "$addons"
+
     success "start complete."
+}
+
+# After `up`: every module that declares model needs holds its own LiteLLM key, and keys
+# revoked while LiteLLM was down are deleted (docs/model-gateway.md). An add-on whose key
+# changed is materialised and started again, so its containers see the key. A failure is
+# reported, not fatal: the add-ons run, without a usable model key; the add-ons whose key
+# did change are still started again.
+# $1 = 1 when the add-ons are part of this start
+_model_keys_sync() {
+    local addons="$1" out="" changed="" rc=0 line addon_name addon_path
+    out="$(py_cli model-keys-sync)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        warn "Not every module key of LiteLLM could be checked (see above). Once LiteLLM is"
+        warn "healthy and the add-on manifests are fixed, run 'papaia-ctl start --addons' again."
+    fi
+    while IFS= read -r line; do
+        case "$line" in
+            MODEL_KEY_CHANGED=*) changed+="${line#MODEL_KEY_CHANGED=}"$'\n' ;;
+        esac
+    done <<< "$out"
+    [ -n "$changed" ] || return 0
+    if [ "$addons" -ne 1 ]; then
+        warn "New model keys for: $(printf '%s' "$changed" | tr '\n' ' ')- run"
+        warn "'papaia-ctl start --addons' so these add-ons see them."
+        return 0
+    fi
+    while IFS= read -r addon_name; do
+        [ -n "$addon_name" ] || continue
+        info "  addon $addon_name: new model key, starting it again"
+        py_cli addon-start --name="$addon_name" --no-keycloak || continue
+        addon_path="$(_addon_path "$addon_name")"
+        _addon_compose_up "$addon_name" "$addon_path"
+    done <<< "$changed"
 }
 
 # What the native LocalAI step of `start` did (LOCALAI_NATIVE = off | skipped | installed |

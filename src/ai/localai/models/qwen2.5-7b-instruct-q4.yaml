@@ -1,0 +1,9 @@
+# Default model on CPU (papaia-ctl setup --local-ai): Qwen2.5-7B-Instruct, Q4_K_M,
+# Apache-2.0. The render downloads it while PAPAIA_DEFAULT_MODEL names it.
+name: qwen2.5-7b-instruct-q4
+backend: llama-cpp
+context_size: 8192
+f16: true
+parameters:
+  model: Qwen2.5-7B-Instruct-Q4_K_M.gguf
+  seed: -1

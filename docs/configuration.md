@@ -81,6 +81,8 @@ next to it, even when it has an inline `:-` default.
 | `*_EXT_PORT` | External port allocation — kept together to stay collision-free |
 | `LOCALAI_PUBLIC_URL` | Browser-facing LocalAI URL, derived by setup |
 | `LOCALAI_IMAGE_VARIANT` | LocalAI accelerator image chosen during setup (`cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`); drives the generated GPU override |
+| `PAPAIA_DEFAULT_MODEL` | Model the aliases `papaia-chat` and `papaia-structured` map onto (a `model_name` of LiteLLM's model list). `setup --local-ai` names the shipped default model when it is empty (`qwen2.5-7b-instruct-q4`, or `qwen2.5-7b-instruct-q8` with an accelerator variant), and the render adds its download to LocalAI's list; `--no-local-ai` drops a shipped default. See [model gateway](./model-gateway.md) |
+| `PAPAIA_DEFAULT_EMBED_MODEL` | Model the alias `papaia-embed` maps onto (an embedding model); empty means no `papaia-embed` |
 | `LOCALAI_RUNTIME` | Where LocalAI runs: `container` (default) or `native`, a process on an Apple Silicon Mac with Docker Desktop (ADR 0012); drives the generated runtime override |
 | `VOICE_TTS_IMAGE_VARIANT` | Voice TTS accelerator image chosen during setup (`cpu`, `nvidia`, `hipblas`; set via `setup --voice-variant`); drives the generated GPU override, which only materializes while the `voice` profile is active — the image pins live in `src/ai/voice/docker-compose.yml` |
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |

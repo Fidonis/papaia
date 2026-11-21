@@ -7,6 +7,7 @@ containers start, the bundle .env is copied back into the checkout.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -201,4 +202,7 @@ def materialize_addon_env(config_dir: Path, addon_path: Path, addon_name: str) -
     bundle_env = config_dir / "addons" / addon_name / ".env"
     target_env = addon_path / ".env"
     if bundle_env.is_file():
+        # The bundle .env holds secrets (the module key among them): the copy the
+        # containers read keeps the owner-only mode of the bundle.
         shutil.copyfile(bundle_env, target_env)
+        os.chmod(target_env, 0o600)

@@ -1,0 +1,10 @@
+# Default model with an accelerator (papaia-ctl setup --local-ai with a GPU variant):
+# Qwen2.5-7B-Instruct, Q8_0, Apache-2.0. The render downloads it while
+# PAPAIA_DEFAULT_MODEL names it.
+name: qwen2.5-7b-instruct-q8
+backend: llama-cpp
+context_size: 8192
+f16: true
+parameters:
+  model: Qwen2.5-7B-Instruct-Q8_0.gguf
+  seed: -1

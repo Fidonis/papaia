@@ -690,7 +690,7 @@ def test_every_shipped_model_yaml_matches_a_line_of_the_shipped_list():
         if line.lstrip("# ").startswith("https://")
     }
     yamls = sorted((localai / "models").glob("*.yaml"))
-    assert len(yamls) == len(files) == 5
+    assert len(yamls) == len(files) == 7
     for path in yamls:
         model = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert path.name == f"{model['name']}.yaml"

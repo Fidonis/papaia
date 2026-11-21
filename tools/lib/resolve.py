@@ -651,6 +651,28 @@ def resolve_local_ai(tree: EnvTree, args: SetupArgs) -> EnvTree:
     return tree
 
 
+def resolve_default_model(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Name the shipped default model with `--local-ai` (E-32), unless one is named.
+
+    The variant decides: Q8_0 with an accelerator image, Q4_K_M otherwise. Runs after
+    resolve_localai_variant. `--no-local-ai` drops a shipped default (its model is gone
+    with LocalAI), never a model the operator named. Without either flag nothing
+    changes, so an existing installation does not start a download on its own."""
+    from . import model_gateway
+
+    if args.enable_local_ai is None:
+        return tree
+    root = tree.setdefault("", {})
+    current = root.get(model_gateway.DEFAULT_MODEL_VAR, "").strip()
+    if args.enable_local_ai:
+        if not current:
+            variant = root.get("LOCALAI_IMAGE_VARIANT", "")
+            root[model_gateway.DEFAULT_MODEL_VAR] = model_gateway.default_model_for(variant)
+    elif current in model_gateway.LOCAL_DEFAULTS:
+        root[model_gateway.DEFAULT_MODEL_VAR] = ""
+    return tree
+
+
 def resolve_localai_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Write LOCALAI_IMAGE_VARIANT into the root env when the operator chose one.
 

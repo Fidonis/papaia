@@ -313,6 +313,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_local_ai(tree, setup_args)
         tree = resolve.resolve_localai_variant(tree, setup_args)
         tree = resolve.resolve_localai_runtime(tree, setup_args)
+        tree = resolve.resolve_default_model(tree, setup_args)
         tree = resolve.resolve_manager(tree, setup_args)
         tree = resolve.resolve_rag_hosts(tree, setup_args)
         tree = resolve.resolve_rag(tree, setup_args)
@@ -1315,6 +1316,36 @@ def cmd_secrets_rotate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_model_keys_sync(args: argparse.Namespace) -> int:
+    """After `up`: delete the module keys revoked while LiteLLM was down and give every
+    active module the key its model needs call for (docs/model-gateway.md). Prints one
+    `MODEL_KEY_CHANGED=<add-on>` line per add-on whose key changed, for `start` to start
+    them again. Exit 1 when LiteLLM cannot be reached or the key of an add-on could not be
+    checked (the other add-ons are still served); nothing to do without the litellm
+    profile."""
+    from . import model_gateway
+
+    config_dir = Path(args.config_dir)
+    env = common.parse_env_file(config_dir / ".env")
+    if "litellm" not in common.cluster_profiles(env):
+        return 0
+    try:
+        admin = model_gateway.connect(config_dir)
+        model_gateway.wait_ready(admin, timeout=args.timeout)
+        changed, failed = model_gateway.sync(
+            config_dir, Path(args.repo_root), admin, correlation=model_gateway.new_correlation()
+        )
+    except model_gateway.ModelGatewayError as exc:
+        print(f"ERROR: module keys: {exc}", file=sys.stderr)
+        return 1
+    for name in changed:
+        print(f"MODEL_KEY_CHANGED={name}")
+    for name in failed:
+        print(f"ERROR: module keys: addon '{name}': its model key could not be checked "
+              "(see the log above)", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def cmd_join_stack_network(args: argparse.Namespace) -> int:
     """Attach the container papaia-ctl runs in to the stack's network (a no-op on the
     host). A failure is a warning: the provisioning steps then report what they skip."""
@@ -2273,6 +2304,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_addon_networks = sub.add_parser("addon-networks")
     p_addon_networks.set_defaults(func=cli_addon.cmd_addon_networks)
+
+    p_model_keys = sub.add_parser("model-keys-sync")
+    p_model_keys.add_argument("--timeout", type=int, default=120)
+    p_model_keys.set_defaults(func=cmd_model_keys_sync)
 
     p_active_addons = sub.add_parser("active-addons")
     p_active_addons.set_defaults(func=cli_addon.cmd_active_addons)

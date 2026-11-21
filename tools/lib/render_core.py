@@ -44,6 +44,7 @@ from . import (
     keycloak_role_sync,
     knowledge_map,
     localai_native,
+    model_gateway,
     realm_hardening,
     service_account_keys,
     smtp,
@@ -230,6 +231,13 @@ def render(config_dir: Path, repo_root: Path) -> None:
             _render_dir(target, repo_root, config_dir, active_addons)
         else:
             _render_file(target, repo_root, config_dir, active_addons)
+
+    try:
+        model_gateway.check_gateway_env(
+            common.parse_env_file(config_dir / "ai" / "litellm" / ".env")
+        )
+    except model_gateway.ModelGatewayError as exc:
+        raise RenderError(str(exc)) from exc
 
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
@@ -597,6 +605,16 @@ def _effective_text(
         if layer is not None:
             merged = _merge_layer(merged, layer, overlay_label)
         if rel_path == LITELLM_CONFIG:
+            # The aliases map onto the named default models of every layer; the settings
+            # that keep contents out of the gateway hold whichever layer touched them.
+            try:
+                merged, warnings = model_gateway.apply(
+                    merged, common.parse_env_file(config_dir / ".env")
+                )
+            except model_gateway.ModelGatewayError as exc:
+                raise RenderError(str(exc)) from exc
+            for warning in warnings:
+                logger.warning("%s", warning)
             # Every layer is in: a route outside the stack is refused here whichever
             # layer brought it, unless the test stack switched the hosted model on.
             try:
@@ -616,9 +634,17 @@ def _effective_text(
     if overlay_text is _ON_DISK:
         if overlay_path.is_file():
             content_path = overlay_path
+        text = content_path.read_text(encoding="utf-8")
     elif overlay_text is not None:
-        return overlay_text
-    return content_path.read_text(encoding="utf-8")
+        text = overlay_text
+    else:
+        text = content_path.read_text(encoding="utf-8")
+    if rel_path == LOCALAI_MODELS_FILE:
+        # The default model `setup --local-ai` names is downloaded without a hand-made line.
+        text = model_gateway.with_default_download(
+            text, common.parse_env_file(config_dir / ".env")
+        )
+    return text
 
 
 def _render_file(
