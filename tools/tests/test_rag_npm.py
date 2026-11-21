@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 
-from lib import npm_provision
+from lib import npm_provision, paperless_gate
 
 
 def _tree(profiles: str) -> dict[str, dict[str, str]]:
@@ -91,5 +91,7 @@ def test_the_advanced_config_turns_off_upstream_verification_only_when_asked(mon
     create(base, "t", "a.example.com", "svc", 80, "http", True, False)
     create(base, "t", "b.example.com", "svc", 443, "https", False, False)
 
-    assert sent[0]["advanced_config"] == ""
-    assert sent[1]["advanced_config"] == "proxy_ssl_verify off;\n"
+    # Every host clears the identity and gate headers of the Paperless gate first.
+    strip = paperless_gate.strip_config()
+    assert sent[0]["advanced_config"] == strip
+    assert sent[1]["advanced_config"] == strip + "proxy_ssl_verify off;\n"

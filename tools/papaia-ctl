@@ -57,6 +57,7 @@
 #   papaia-ctl realm sync    [--check] [--config-dir=PATH]
 #   papaia-ctl service-account list   [--json] [--config-dir=PATH]
 #   papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
+#   papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
 #   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
 #   papaia-ctl doctor        [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 #   papaia-ctl topology show [--json] [--config-dir=PATH]
@@ -111,7 +112,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,104p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,105p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -146,6 +147,8 @@ source "$SH_LIB/topology.sh"
 source "$SH_LIB/node.sh"
 # shellcheck source=lib/sh/librechat.sh
 source "$SH_LIB/librechat.sh"
+# shellcheck source=lib/sh/secrets.sh
+source "$SH_LIB/secrets.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -237,6 +240,13 @@ case "$cmd" in
         esac
         ;;
     service-account) cmd_service_account "$@" ;;
+    secrets)
+        sub="${1:-}"; shift || true
+        case "$sub" in
+            rotate)    cmd_secrets_rotate "$@" ;;
+            *) error "Unknown 'secrets' subcommand: '${sub:-<none>}'. Valid: rotate."; exit 2 ;;
+        esac
+        ;;
     suite)
         sub="${1:-}"; shift || true
         case "$sub" in

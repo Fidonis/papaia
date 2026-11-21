@@ -7,7 +7,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from lib import cli, common, envtree
+from lib import cli, common, envtree, paperless_gate
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -62,6 +62,10 @@ class Installation:
                     value = tree.get(rel_dir, {}).get(key, "")
                     if value and not common.is_placeholder(value):
                         found.add(value)
+        # The proxy's gate secret is a file of its own, not a `.env` value.
+        gate = paperless_gate.read_proxy_secret(self.config)
+        if gate:
+            found.add(gate)
         return sorted(found, key=len, reverse=True)
 
     def normalise(self, text: str) -> str:

@@ -33,7 +33,9 @@ def test_generate_override_synthetic_fixture():
         assert out_path.name == "docker-compose.paperless.override.yml"
         override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
         assert override["services"]["nginx-proxy-manager"]["networks"] == ["papaia-paperless-net"]
-        assert override["services"]["librechat"]["networks"] == ["papaia-paperless-net"]
+        # Paperless takes the identity from a header: the chat service reaches its MCP
+        # server over a front network and is never on the Paperless network itself.
+        assert override["services"]["librechat"]["networks"] == ["papaia-paperless-front"]
         assert override["networks"]["papaia-paperless-net"]["external"] is True
 
 
@@ -47,9 +49,9 @@ def test_generate_override_returns_none_without_networks():
 
 def _templated_manifest() -> dict:
     return {
-        "name": "paperless",
+        "name": "docs",
         "networks": {
-            "app_network": "${PAPAIA_PROJECT:-papaia}-paperless-net",
+            "app_network": "${PAPAIA_PROJECT:-papaia}-docs-net",
             "attach": ["librechat", "litellm"],
         },
     }
@@ -98,11 +100,11 @@ def test_generate_override_resolves_templated_app_network(config_dir, repo_root)
 
     assert out_path is not None
     override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
-    assert override["services"]["librechat"]["networks"] == ["papaia-dev-paperless-net"]
-    assert override["services"]["litellm"]["networks"] == ["papaia-dev-paperless-net"]
-    assert override["networks"]["papaia-dev-paperless-net"]["external"] is True
+    assert override["services"]["librechat"]["networks"] == ["papaia-dev-docs-net"]
+    assert override["services"]["litellm"]["networks"] == ["papaia-dev-docs-net"]
+    assert override["networks"]["papaia-dev-docs-net"]["external"] is True
     # The start-up guard reads the resolved name back out of the file.
-    assert gen_override.external_networks(out_path) == ["papaia-dev-paperless-net"]
+    assert gen_override.external_networks(out_path) == ["papaia-dev-docs-net"]
 
 
 def test_generate_override_templated_default_env_matches_legacy_name(config_dir, repo_root):
@@ -113,7 +115,7 @@ def test_generate_override_templated_default_env_matches_legacy_name(config_dir,
     override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
     # PAPAIA_PROJECT=papaia (the shipped default) -> the pre-templating name,
     # so single-deployment hosts are unaffected.
-    assert override["networks"]["papaia-paperless-net"]["external"] is True
+    assert override["networks"]["papaia-docs-net"]["external"] is True
 
 
 def test_generate_ssl_cert_override_creates_file_for_external_oidc(config_dir, repo_root):

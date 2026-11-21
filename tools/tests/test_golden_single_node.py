@@ -108,6 +108,11 @@ def _tree_digests(inst: Installation) -> dict[str, str]:
             summary = json.loads(text)
             summary["deployed_at"] = "<TIME>"
             text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+        if rel == "audit/papaia-ctl.jsonl":
+            rows = [json.loads(line) for line in text.splitlines() if line]
+            for row in rows:
+                row["time"], row["correlation_id"] = "<TIME>", "<ID>"
+            text = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
         digests[rel] = _digest(inst.normalise(text))
     return digests
 

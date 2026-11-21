@@ -443,6 +443,26 @@ integration:
 forwards requests as `X-Papaia-Remote-User` — Paperless enforces its own per-user RBAC.
 No admin credential in the MCP layer.
 
+#### Header identity: the proxy side of the Paperless gate
+
+Because Paperless trusts `X-Papaia-Remote-User`, the header must reach it from the MCP
+server only. The add-on puts a gate (`paperless-gate`) into Paperless' network namespace;
+Paperless listens on its container's loopback, and the gate passes a request only when
+`X-Papaia-Gate` carries the secret of one of its callers. Every caller has its own secret.
+The core holds the proxy's and meets this contract (`tools/lib/paperless_gate.py`):
+
+| Part | Core behaviour |
+|---|---|
+| Header strip | `npm-provision` writes `more_clear_input_headers "X-Papaia-Remote-User" "X-Papaia-Gate";` as a managed block into the proxy manager's `server_proxy.conf` (included in every proxy host, also hand-made ones), through the proxy container; core-created hosts carry the line themselves. `proxy_set_header` at server level is ignored by the proxy manager's own `location /` and is not used |
+| Paperless route | While the add-on `paperless` is active and `PAPERLESS_PUBLIC_URL` (add-on bundle `.env`) is a host name without a port: proxy host to `paperless:8001` (the gate, reached through the Paperless service name), advanced configuration with its own `location /` that clears the identity header and includes `/run/papaia/paperless-gate/nginx.conf`. An existing host for that name with other settings is corrected. Without a valid secret the route is not created and `npm-provision` exits 1 |
+| Secret | `setup` generates it once (sticky): `$PAPAIA_CONFIG_DIR/secrets/paperless-gate/proxy/secret` (raw value, for the gate) and `nginx.conf` (`more_set_input_headers "X-Papaia-Gate: …";`), directory 0700, files 0600. 32–512 characters of `A-Z a-z 0-9 . _ ~ + / = -`; a file that is a symbolic link, larger than 4 KiB or not of that form is refused and never passed on. The proxy mounts the directory read-only at `/run/papaia/paperless-gate`; no other core service mounts it. It ships with the proxy to its node in a distributed installation |
+| Rotation | `papaia-ctl secrets rotate paperless-gate/proxy`: new value in both files, reload of the running proxy; the gate reads the new value when the add-on starts again |
+| Audit | One `papaia.audit/1` row in `audit/papaia-ctl.jsonl` for the creation (`paperless_gate_secret_created`) and each rotation (`paperless_gate_secret_rotated`), with the correlation id and the target, never the value |
+| Networks | For `paperless`, only `nginx-proxy-manager` joins the add-on's `app_network`. Every other core service in `networks.attach` joins `${PAPAIA_PROJECT:-papaia}-paperless-front` (external in the core override); the add-on side (`overrides/addons/docker-compose.paperless-front.override.yml`, applied at `addon start`) creates that network with `paperless-mcp` on it. Without `paperless-mcp` in the add-on's compose file the other services are not attached at all |
+
+The gate's port (8001), the mount of the secret directory into the gate and the MCP
+server's own secret belong to the add-on.
+
 ### 6.4 Example B: `papaia-addon-qdrant-rbac`
 
 > Illustration of a vector-store add-on. The RAG system the stack ships itself is the

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, compat, deployment, egress, gpu_detect, hosted_model, images
+from . import common, compat, deployment, egress, gpu_detect, hosted_model, images, paperless_gate
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
 # `networks.app_network` may use to scope its bridge name to the deployment
@@ -54,7 +54,9 @@ def resolve_app_network(raw: str, config_dir: Path) -> str:
     return _expand_env_refs(raw, common.parse_env_file(config_dir / ".env"))
 
 
-def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
+def generate_override(
+    addon_manifest: dict, config_dir: Path, addon_path: Path | None = None
+) -> Path | None:
     """Generate a single addon's network-attachment override.
 
     `addon_manifest` is the parsed papaia-app.yaml-shaped dict for one
@@ -79,12 +81,82 @@ def generate_override(addon_manifest: dict, config_dir: Path) -> Path | None:
         "services": {service: {"networks": [app_network]} for service in attach},
         "networks": {app_network: {"external": True}},
     }
+    if name in paperless_gate.FRONT_SERVICES:
+        # The add-on takes the person from a request header: only the proxy joins its
+        # network. Every other core service it attaches (the chat service) joins the
+        # front network instead, where only the add-on's MCP server is.
+        # Without an MCP server in the add-on's compose file (`addon_path` given) there is
+        # no front network, and those services are not attached at all.
+        front = front_network_name(name, config_dir)
+        has_front = addon_path is None or bool(_front_services(name, addon_path))
+        services = {}
+        for service in attach:
+            if service in paperless_gate.PROXY_SERVICES:
+                services[service] = {"networks": [app_network]}
+            elif has_front:
+                services[service] = {"networks": [front]}
+            else:
+                print(
+                    f"WARNING: addon '{name}': '{service}' is not attached; the add-on has"
+                    f" none of {', '.join(paperless_gate.FRONT_SERVICES[name])}",
+                    file=sys.stderr,
+                )
+        override["services"] = services
+        if any(body["networks"] == [front] for body in services.values()):
+            override["networks"][front] = {"external": True}
+        if not services:
+            (config_dir / "overrides" / f"docker-compose.{name}.override.yml").unlink(
+                missing_ok=True
+            )
+            return None
 
     out_path = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
     common.atomic_write(
         out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
     )
     return out_path
+
+
+def front_network_name(name: str, config_dir: Path) -> str:
+    """The resolved name of the front network of a header-identity add-on."""
+    return resolve_app_network(paperless_gate.front_network(name)[1], config_dir)
+
+
+def has_front_network(name: str, addon_path: Path) -> bool:
+    """Whether the add-on's project creates a front network (lib/paperless_gate.py)."""
+    return bool(_front_services(name, addon_path))
+
+
+def _front_services(name: str, addon_path: Path) -> list[str]:
+    """The services of the add-on that join its front network: those of FRONT_SERVICES
+    its compose file has."""
+    compose = addon_path / "docker-compose.yml"
+    if not compose.is_file():
+        return []
+    doc = yaml.safe_load(compose.read_text(encoding="utf-8")) or {}
+    present = set((doc.get("services") or {}).keys())
+    return [s for s in paperless_gate.FRONT_SERVICES.get(name, ()) if s in present]
+
+
+def _write_front_override(name: str, active: bool, path: Path, config_dir: Path) -> None:
+    """The add-on side of the front network: its MCP server joins a network the
+    add-on's project creates, next to the networks it already has. Removed when the
+    add-on is not active."""
+    out_path = config_dir / "overrides" / "addons" / f"docker-compose.{name}-front.override.yml"
+    services = _front_services(name, path) if active else []
+    if not services:
+        out_path.unlink(missing_ok=True)
+        return
+    key, _ = paperless_gate.front_network(name)
+    override = {
+        "services": {
+            service: {"networks": [*_service_networks(path, service), key]} for service in services
+        },
+        "networks": {key: {"name": front_network_name(name, config_dir)}},
+    }
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
 
 
 def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[Path]:
@@ -107,10 +179,11 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
 
     base = repo_root if repo_root is not None else Path.cwd()
     for addon in deployment.active_addons(deployed):
-        manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(addon, base))
+        addon_path = deployment.resolve_addon_path(addon, base)
+        manifest, _ = deployment.load_addon_manifest(addon_path)
         if manifest is None:
             continue
-        result = generate_override(manifest, config_dir)
+        result = generate_override(manifest, config_dir, addon_path)
         if result is not None:
             written.append(result)
     written.extend(egress.generate_overrides(config_dir, base))
@@ -177,8 +250,10 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
         name = addon.get("name")
         if not name:
             continue
-        out_path = config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
         manifest, path = manifests.get(name, ({}, Path()))
+        if name in paperless_gate.FRONT_SERVICES:
+            _write_front_override(name, bool(addon.get("active")), path, config_dir)
+        out_path = config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
         try:
             joins = compat.joined_addons(manifest) if addon.get("active") else []
         except ValueError:

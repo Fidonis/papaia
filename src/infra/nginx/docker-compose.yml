@@ -9,6 +9,16 @@ services:
     volumes:
       - ${PAPAIA_CONFIG_DIR}/infra/nginx/nginx-data:/data
       - ${PAPAIA_CONFIG_DIR}/infra/nginx/nginx-letsencrypt:/etc/letsencrypt
+      # The proxy's own secret for the Paperless gate (X-Papaia-Gate), written by
+      # `papaia-ctl setup` and included only by the Paperless proxy host. A directory,
+      # so a rotated file is seen after a reload; missing, the start fails instead of
+      # Docker creating an empty directory.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/secrets/paperless-gate/proxy
+        target: /run/papaia/paperless-gate
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:81/api/ || exit 1"]
       interval: 30s

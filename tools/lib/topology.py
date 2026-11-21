@@ -61,7 +61,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import backup, common, compat, envtree, render_core
+from . import backup, common, compat, envtree, paperless_gate, render_core
 from . import deployment as deployment_module
 
 SINGLE = "single"
@@ -1142,7 +1142,12 @@ class NodeBundle:
 
 
 def _render_dirs() -> set[str]:
-    return {target for target in render_core.BASE_RENDER_TARGETS} | {"infra/keycloak/realm-import"}
+    # The proxy's gate secret is written by `setup` on the controller and travels with
+    # the proxy to its node; it is not state the proxy keeps.
+    return {target for target in render_core.BASE_RENDER_TARGETS} | {
+        "infra/keycloak/realm-import",
+        paperless_gate.PROXY_SECRET_DIR,
+    }
 
 
 def project_node(

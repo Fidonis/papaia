@@ -48,6 +48,7 @@ from . import (
     modules,
     nodes,
     npm_provision,
+    paperless_gate,
     realm_sync,
     render_core,
     reporting,
@@ -391,6 +392,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print(f"Seeded the LocalAI model list for the native runtime: {seeded}")
             # The render above ran before the list existed.
             render_core.render(config_dir, repo_root)
+
+    try:
+        # Before the bundles: the proxy's node gets the secret directory with them.
+        paperless_gate.prepare(config_dir)
+    except paperless_gate.GateError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -1254,8 +1262,33 @@ def cmd_npm_provision(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    if not npm_provision.provision_npm_hosts(tree):
+    if not npm_provision.provision_npm_hosts(tree, config_dir):
         return 1
+    return 0
+
+
+def cmd_secrets_rotate(args: argparse.Namespace) -> int:
+    """Replace one stored secret and make the proxy use it (lib/paperless_gate.py)."""
+    config_dir = Path(args.config_dir)
+    try:
+        paperless_gate.rotate(config_dir, args.target, correlation=args.correlation_id)
+    except paperless_gate.GateError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except images.ImageError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(f"Rotated the secret {args.target}.")
+    root = common.parse_env_file(config_dir / ".env")
+    project = root.get("COMPOSE_PROJECT_NAME") or "papaia"
+    if paperless_gate.reload_proxy(project):
+        print("The proxy uses the new secret.")
+    else:
+        print("The proxy does not run here; it uses the new secret when it starts.")
+    print(
+        "The Paperless gate reads it when the add-on starts again:"
+        " papaia-ctl addon start paperless"
+    )
     return 0
 
 
@@ -2149,6 +2182,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_npm = sub.add_parser("npm-provision")
     p_npm.set_defaults(func=cmd_npm_provision)
+
+    p_secrets_rotate = sub.add_parser("secrets-rotate")
+    p_secrets_rotate.add_argument("--target", required=True)
+    p_secrets_rotate.add_argument("--correlation-id", default=None)
+    p_secrets_rotate.set_defaults(func=cmd_secrets_rotate)
 
     p_join_net = sub.add_parser("join-stack-network")
     p_join_net.set_defaults(func=cmd_join_stack_network)

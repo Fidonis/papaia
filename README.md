@@ -791,6 +791,20 @@ LibreChat. Exit status 0 on success, 1 when the user is unknown, LibreChat is no
 or a file could not be removed from storage (its record is kept and named), 2 for wrong
 arguments (also an address or a date that is not one), 3 when the confirmation is declined.
 
+### `secrets rotate`
+
+```bash
+tools/papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
+```
+
+Replaces the proxy's own secret for the Paperless gate and reloads the running proxy, which
+then sends the new value. The Paperless gate reads it when the add-on starts again
+(`papaia-ctl addon start paperless`); until then requests through the proxy to Paperless are
+refused. The secret is never printed. Each rotation writes one `papaia.audit/1` row (target
+and event, not the value) to `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`. `paperless-gate/proxy`
+is the only target; any other name is refused with exit status 2. See
+[Paperless behind the proxy](#paperless-behind-the-proxy).
+
 ### `addon`
 
 ```bash
@@ -1501,6 +1515,38 @@ address and accepts mutual TLS only.
 > interface than the one the other nodes use (a dual-homed DMZ host), set `ingress_ip` on
 > the node in the topology (`--node=NAME=ADDR,ingress_ip=IP` or `node add --ingress-ip=IP`)
 > before upgrading; it moves only the edge and leaves the other published ports on loopback.
+
+### Paperless behind the proxy
+
+Paperless takes the signed-in person from the request header `X-Papaia-Remote-User`. Whoever
+can send that header to Paperless can act as anyone, so the header must never get there
+except from the Paperless MCP server. The Paperless add-on puts a gate in front of Paperless
+that passes a request only with a caller's secret in `X-Papaia-Gate`; the core does the
+proxy's part:
+
+- **Every proxy host clears both headers.** `npm-provision` (part of `start`) writes
+  `more_clear_input_headers "X-Papaia-Remote-User" "X-Papaia-Gate";` into the proxy
+  manager's `server_proxy.conf`, which it includes in every proxy host, also in hosts created
+  by hand; the hosts `papaia-ctl` creates carry the same line. A `proxy_set_header ... "";`
+  in a host's advanced settings does **not** do this in the proxy manager and lets the header
+  through. Your own lines in `server_proxy.conf` below the managed block are kept.
+- **Only the Paperless route carries the proxy's secret.** While the Paperless add-on is
+  active and its `PAPERLESS_PUBLIC_URL` is a host name without a port, `npm-provision` creates
+  (or corrects) its proxy host: to the gate (`paperless:8001`), the identity header cleared,
+  the gate header set from a file. The value is not stored in the proxy manager's database.
+- **The secret is the proxy's own.** `setup` generates it (43 characters, URL-safe) into
+  `$PAPAIA_CONFIG_DIR/secrets/paperless-gate/proxy/` (directory 0700, files 0600, never in a
+  `.env`); the proxy mounts that directory read-only. The MCP server has a different secret,
+  so either can be revoked alone. Rotate it with `papaia-ctl secrets rotate paperless-gate/proxy`.
+- **The chat service is not on the Paperless network.** For the Paperless add-on,
+  `papaia-ctl` attaches only the proxy to the add-on's network; LibreChat (and any other core
+  service the manifest attaches) joins `${PAPAIA_PROJECT}-paperless-front` instead, a network
+  the add-on's project creates with only its MCP server on it.
+
+With an external proxy (`external_proxy`), configure the same yourself: clear both headers
+on every host, set `X-Papaia-Gate` to the content of
+`$PAPAIA_CONFIG_DIR/secrets/paperless-gate/proxy/secret` only on the Paperless host, and
+forward that host to the gate.
 
 ### Add-ons
 

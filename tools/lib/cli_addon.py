@@ -464,6 +464,8 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     addons.materialize_addon_env(config_dir, addon_path, name)
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
+    # Brings the front network of a header-identity add-on along after an upgrade.
+    gen_override.generate_addon_join_overrides(config_dir, repo_root)
     return 0
 
 
@@ -1136,14 +1138,16 @@ def cmd_addon_networks(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     deployed = deployment.load(config_dir)
     for addon in deployment.active_addons(deployed):
-        manifest, _ = deployment.load_addon_manifest(
-            deployment.resolve_addon_path(addon, repo_root)
-        )
+        addon_path = deployment.resolve_addon_path(addon, repo_root)
+        manifest, _ = deployment.load_addon_manifest(addon_path)
         if manifest is None:
             continue
         net = (manifest.get("networks") or {}).get("app_network")
         if net:
             print(gen_override.resolve_app_network(net, config_dir))
+        name = str(addon.get("name") or "")
+        if gen_override.has_front_network(name, addon_path):
+            print(gen_override.front_network_name(name, config_dir))
     return 0
 
 
