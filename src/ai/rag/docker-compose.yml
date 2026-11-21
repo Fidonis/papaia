@@ -223,6 +223,8 @@ services:
   #  A JVM plus roughly 200 parsers, kept out of the ingester image so that
   #  image stays small and a parser OOM has its own blast radius. OCR for
   #  scanned PDFs needs the -full image variant, which also wants a larger heap.
+  #  Tika 4 takes its OCR settings from its own configuration, not from the
+  #  ingester's QI_TIKA_OCR_* variables, and needs qdrant-ingest 1.1.0 or later.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest-tika:
     image: docker.io/apache/tika:4.2.0-1
