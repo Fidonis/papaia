@@ -71,7 +71,11 @@ def generate_override(
     name = addon_manifest.get("name")
     networks = addon_manifest.get("networks") or {}
     app_network = networks.get("app_network")
-    attach = networks.get("attach") or []
+    attach = list(networks.get("attach") or [])
+    if _serves_ingress(addon_manifest, config_dir) and INGRESS_PROXY not in attach:
+        # Generation 12: the bundled proxy reaches the interfaces of `integration.nginx`
+        # on the add-on's network (lib/ingress.py), without the manifest attaching it.
+        attach.append(INGRESS_PROXY)
     if not name or not app_network or not attach:
         return None
 
@@ -121,6 +125,20 @@ def generate_override(
         out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
     )
     return out_path
+
+
+# The bundled proxy's service in the core compose (src/infra/nginx/docker-compose.yml).
+INGRESS_PROXY = "nginx-proxy-manager"
+
+
+def _serves_ingress(addon_manifest: dict, config_dir: Path) -> bool:
+    """Whether the bundled proxy serves this add-on's interfaces: ingress entries in
+    the list form of generation 12, and the installation runs the bundled proxy."""
+    nginx = (addon_manifest.get("integration") or {}).get("nginx")
+    if not isinstance(nginx, list) or not nginx:
+        return False
+    provider = common.parse_env_file(config_dir / ".env").get("REVERSE_PROXY_PROVIDER")
+    return (provider or "internal_nginx") == "internal_nginx"
 
 
 def front_network_name(name: str, config_dir: Path) -> str:

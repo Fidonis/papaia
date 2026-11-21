@@ -698,6 +698,8 @@ cmd_setup() {
         _setup_distributed "$non_interactive"
         return
     fi
+    # With an external proxy: the forwards to set up there (also 'papaia-ctl proxy list').
+    py_cli proxy-list --if-external || warn "The list of forwards could not be built (see above)."
     success "setup complete. Run 'papaia-ctl start' to bring up the stack."
 }
 
@@ -798,10 +800,26 @@ _setup_distributed() {
     success "setup complete. Run 'papaia-ctl start' to bring up the installation."
 }
 
+# The pre-fill of a core interface on the local edge (`<label>.<env>.papaia.localhost`
+# with the edge port, E-35), empty where that scheme does not apply. One derivation for
+# both paths: resolve.edge_url_default, which setup -y applies. Reads the caller's
+# env_name, reverse_proxy_provider and allow_direct_port_access (cmd_setup).
+_derive_edge_default() {
+    py_cli derive-edge-url "$1" "$2" "${env_name:-papaia}" \
+        "${reverse_proxy_provider:-${REVERSE_PROXY_PROVIDER_STICKY:-}}" \
+        "${allow_direct_port_access:-0}"
+}
+
 _derive_auth_default() {
     # The prompt's pre-fill for an app host the defaults did not know yet. One
     # derivation for both paths: resolve.derive_auth_host_default, which setup -y
     # applies, with the installation's KEYCLOAK_EXT_PORT from defaults.
+    local edge
+    edge="$(_derive_edge_default auth "$1")"
+    if [ -n "$edge" ]; then
+        printf '%s' "$edge"
+        return 0
+    fi
     py_cli derive-auth-host "$1" "${KEYCLOAK_EXT_PORT:-8110}"
 }
 
@@ -1091,7 +1109,12 @@ _prompt_voice_variant() {
 _derive_manager_default() {
     # Best-effort bash-side prefill for the papaia-manager URL prompt; the
     # authoritative derivation lives in resolve.derive_manager_url_default.
-    local host="$1" port="${MANAGER_EXT_PORT:-8120}" base
+    local host="$1" port="${MANAGER_EXT_PORT:-8120}" base edge
+    edge="$(_derive_edge_default manager "$host")"
+    if [ -n "$edge" ]; then
+        printf '%s' "$edge"
+        return 0
+    fi
     base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
     printf '%s:%s' "$base" "$port"
 }
@@ -1109,7 +1132,12 @@ _derive_librechat_default() {
     # authoritative derivation lives in resolve.derive_librechat_url_default.
     # host.docker.internal over plain HTTP -> localhost (Secure-cookie reason);
     # otherwise keep the app host, appending the LibreChat port.
-    local host="$1" port="${LIBRECHAT_EXT_PORT:-8000}" base
+    local host="$1" port="${LIBRECHAT_EXT_PORT:-8000}" base edge
+    edge="$(_derive_edge_default chat "$host")"
+    if [ -n "$edge" ]; then
+        printf '%s' "$edge"
+        return 0
+    fi
     case "$host" in
         http://host.docker.internal*) printf 'http://localhost:%s' "$port" ;;
         *)

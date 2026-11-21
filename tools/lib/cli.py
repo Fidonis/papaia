@@ -44,6 +44,7 @@ from . import (
     gpu_detect,
     halt,
     images,
+    ingress,
     keycloak_role_sync,
     librechat_history,
     localai_native,
@@ -122,6 +123,27 @@ def cmd_defaults(args: argparse.Namespace) -> int:
 def cmd_derive_auth_host(args: argparse.Namespace) -> int:
     """Print the Keycloak URL setup derives for an app host, for the interactive prompt."""
     print(resolve.derive_auth_host_default(args.app_host, args.keycloak_ext_port))
+    return 0
+
+
+def cmd_derive_edge_url(args: argparse.Namespace) -> int:
+    """Print the URL a fresh setup derives for a core interface on the local edge, or
+    nothing when the edge scheme does not apply; for the interactive prompt."""
+    tree = envtree.load_config_dir_tree(Path(args.config_dir), Path(args.repo_root))
+    project = "papaia" if args.env_name == "papaia" else f"papaia-{args.env_name}"
+    try:
+        url = resolve.edge_url_default(
+            args.label,
+            args.app_host,
+            project,
+            tree.get("", {}),
+            provider=args.provider or None,
+            allow_direct=args.allow_direct == "1",
+        )
+    except resolve.SetupError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(url or "")
     return 0
 
 
@@ -1286,8 +1308,30 @@ def cmd_npm_provision(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
-    if not npm_provision.provision_npm_hosts(tree, config_dir):
+    if not npm_provision.provision_npm_hosts(tree, config_dir, repo_root):
         return 1
+    return 0
+
+
+def cmd_proxy_list(args: argparse.Namespace) -> int:
+    """Host name -> internal target for every interface (lib/ingress.py): what an
+    external proxy forwards, what the bundled proxy serves."""
+    config_dir = Path(args.config_dir)
+    tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
+    provider = tree.get("", {}).get("REVERSE_PROXY_PROVIDER") or "internal_nginx"
+    if args.if_external and provider != "external_proxy":
+        return 0
+    try:
+        found = ingress.routes(tree, config_dir, Path(args.repo_root))
+    except ingress.IngressError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(ingress.to_json(provider, found))
+    else:
+        if args.if_external:
+            print("Forwards to set up at the external proxy (papaia-ctl proxy list):")
+        print(ingress.format_table(provider, found), end="")
     return 0
 
 
@@ -2010,6 +2054,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_derive_auth.add_argument("keycloak_ext_port")
     p_derive_auth.set_defaults(func=cmd_derive_auth_host)
 
+    p_derive_edge = sub.add_parser("derive-edge-url")
+    p_derive_edge.add_argument("label", choices=sorted(resolve.EDGE_LABELS))
+    p_derive_edge.add_argument("app_host")
+    p_derive_edge.add_argument("env_name")
+    p_derive_edge.add_argument("provider", nargs="?", default="")
+    p_derive_edge.add_argument("allow_direct", nargs="?", default="0")
+    p_derive_edge.set_defaults(func=cmd_derive_edge_url)
+
     p_localai_variants = sub.add_parser("localai-variants")
     p_localai_variants.set_defaults(func=cmd_localai_variants)
 
@@ -2311,6 +2363,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_active_addons = sub.add_parser("active-addons")
     p_active_addons.set_defaults(func=cli_addon.cmd_active_addons)
+
+    p_proxy_list = sub.add_parser("proxy-list")
+    p_proxy_list.add_argument("--json", action="store_true")
+    # The end of `setup`: print the list only for an external proxy.
+    p_proxy_list.add_argument("--if-external", action="store_true")
+    p_proxy_list.set_defaults(func=cmd_proxy_list)
 
     p_npm = sub.add_parser("npm-provision")
     p_npm.set_defaults(func=cmd_npm_provision)

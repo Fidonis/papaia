@@ -64,6 +64,9 @@ next to it, even when it has an inline `:-` default.
 | `HOST_IP` | Bind address for published ports — the network layer |
 | `INGRESS_HTTP_EXT_PORT` / `INGRESS_HTTPS_EXT_PORT` | Host ports of the edge proxy (`internal_nginx`), default 80/443; bound to `HOST_IP` |
 | `INGRESS_HOST_IP` | Bind address of the edge ports only; empty falls back to `HOST_IP`. Set per node of a distributed installation |
+| `INGRESS_DOMAIN` | Domain of the web interfaces (`<name>.<domain>`) when it differs from the one of `PAPAIA_HOST`; empty for a local installation, which uses `<name>.<env>.papaia.localhost` |
+| `INGRESS_APP_DOMAIN` | Second domain of the app host (host key `apps`), a site of its own; locally `<env>.papaia-apps.localhost` |
+| `INGRESS_HOST_<KEY>` | Renames an interface's host key to another single DNS label |
 | `PAPAIA_HOST` | Public base URL of the server — the application layer |
 | `AUTH_HOST` | Public Keycloak URL; ends up in token `iss` claims |
 | `AUTH_PROVIDER` | `internal_keycloak` or `external_oidc` |

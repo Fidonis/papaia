@@ -13,13 +13,16 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 REAL_REPO = Path(__file__).resolve().parents[2]
 
 
-def _setup_minimal(repo_root, config_dir):
+def _setup_minimal(repo_root, config_dir, *, reverse_proxy_provider=None):
     envtree.init(config_dir, repo_root, env_name="papaia")
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     seed = envtree.load_seed_tree(repo_root)
     tree = secrets.generate_missing_secrets(tree, seed)
     args = resolve.SetupArgs(
-        config_dir=config_dir, app_host="http://host.docker.internal", non_interactive=True
+        config_dir=config_dir,
+        app_host="http://host.docker.internal",
+        reverse_proxy_provider=reverse_proxy_provider,
+        non_interactive=True,
     )
     tree = resolve.resolve_hostnames(tree, args)
     tree = resolve.resolve_multi_env(tree, args)
@@ -340,9 +343,10 @@ def test_render_switching_the_relay_off_restores_the_plain_realm(repo_root, conf
 def test_render_disables_hsts_while_plain_http_services_share_the_auth_hostname(
     repo_root, config_dir
 ):
-    # The local defaults: LibreChat and papaia-manager on http://host.docker.internal,
-    # Keycloak on https://host.docker.internal:8110 — the same hostname.
-    _setup_minimal(repo_root, config_dir)
+    # The local addresses without the edge: LibreChat and papaia-manager on
+    # http://host.docker.internal, Keycloak on https://host.docker.internal:8110 — the
+    # same hostname.
+    _setup_minimal(repo_root, config_dir, reverse_proxy_provider="no_proxy")
 
     render_core.render(config_dir, repo_root)
 

@@ -36,9 +36,10 @@ APP_HOSTS = [
 ]
 
 
-def _prefill(app_host: str, port: str | None, tmp_path: Path) -> str:
+def _prefill(app_host: str, port: str | None, tmp_path: Path, provider: str = "") -> str:
     assert BASH is not None
     port_line = f"KEYCLOAK_EXT_PORT={port}\n" if port else ""
+    port_line += f"reverse_proxy_provider={provider}\n" if provider else ""
     script = (
         "set -euo pipefail\n"
         'py_cli() { "$PYTHON_BIN" -m lib.cli --repo-root "$REPO_ROOT" '
@@ -64,12 +65,25 @@ def _prefill(app_host: str, port: str | None, tmp_path: Path) -> str:
 
 @needs_bash
 @pytest.mark.parametrize("app_host", APP_HOSTS)
-def test_the_prompt_pre_fills_what_setup_derives(app_host: str, tmp_path: Path) -> None:
-    assert _prefill(app_host, "18334", tmp_path) == resolve.derive_auth_host_default(
-        app_host, "18334"
-    )
+@pytest.mark.parametrize("provider", ["", "no_proxy"])
+def test_the_prompt_pre_fills_what_setup_derives(
+    app_host: str, provider: str, tmp_path: Path
+) -> None:
+    # A fresh local installation behind the bundled proxy (the default provider) gets
+    # the edge name; every other case the port derivation, as `setup -y` does.
+    expected = resolve.edge_url_default(
+        "auth", app_host, "papaia", {}, provider=provider or None, allow_direct=False
+    ) or resolve.derive_auth_host_default(app_host, "18334")
+    assert _prefill(app_host, "18334", tmp_path, provider) == expected
 
 
 @needs_bash
 def test_without_a_known_port_the_prompt_uses_the_default_port(tmp_path: Path) -> None:
     assert _prefill("http://192.168.50.20", None, tmp_path) == "https://192.168.50.20:8110"
+
+
+@needs_bash
+def test_a_local_app_host_behind_the_bundled_proxy_gets_the_edge_name(tmp_path: Path) -> None:
+    assert _prefill("http://host.docker.internal", None, tmp_path) == (
+        "https://auth.papaia.localhost"
+    )

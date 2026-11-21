@@ -1591,6 +1591,59 @@ address and accepts mutual TLS only.
 > the node in the topology (`--node=NAME=ADDR,ingress_ip=IP` or `node add --ingress-ip=IP`)
 > before upgrading; it moves only the edge and leaves the other published ports on loopback.
 
+### Host names and add-on interfaces
+
+Every web interface gets a host name of one scheme; no proxy host is created by hand.
+
+| Installation | Host name of an interface | Example |
+|---|---|---|
+| Server domain (`PAPAIA_HOST` is a fully qualified name, or `INGRESS_DOMAIN`) | `<name>.<domain>`, with the edge port when it is not the default | `https://flow.example.org` |
+| Local (`localhost`, `host.docker.internal`, a loopback address), behind the bundled proxy | `<name>.<env>.papaia.localhost` with the edge port | `https://auth.itest.papaia.localhost:57143` |
+| LAN address or bare host name | no host names: the core keeps its ports, an add-on interface needs `INGRESS_DOMAIN` | – |
+| `no_proxy` or `--allow-direct-port-access` | `host.docker.internal` (or the app host) with a port per service | `https://host.docker.internal:8110` |
+
+`<env>` is the `--env` of the installation (`papaia-itest` gives `itest`; the default
+project `papaia` has none). Browsers resolve every name below `localhost` to the loopback
+address without an `/etc/hosts` entry (RFC 6761, section 6.3); Safari on macOS may not, so
+use a Chromium-based browser or Firefox for a local installation. A fresh local setup
+behind the bundled proxy derives Keycloak (`auth`), LibreChat (`chat`) and papaia-manager
+(`manager`) this way; an installation that already stores other addresses keeps them, so
+saved links stay valid. The edge port follows `INGRESS_HTTPS_EXT_PORT` (443 is left out of
+the URL). The proxy hosts `papaia-ctl` creates carry no certificate of their own, like the
+ones it created before; a certificate for these names is set up in Nginx Proxy Manager.
+
+An add-on declares its interfaces in `integration.nginx` (contract generation 12, see
+[`docs/architecture.md`](docs/architecture.md)): a host key, the service, its port and
+optionally `websocket` and `max_body`. The manifest never names a host. The core gives each
+interface the host name `<host key>.<domain>` of the scheme above and
+
+- with the bundled proxy (`internal_nginx`): `start` (`npm-provision`) creates or corrects a
+  proxy host per interface, which clears the identity and gate headers like every host
+  `papaia-ctl` creates, and attaches the proxy to the add-on's network;
+- with an external proxy (`external_proxy`): `papaia-ctl proxy list` and the end of `setup`
+  print the forwards to set up (below);
+- without a proxy (`no_proxy`): there are no host names.
+
+Settings in the root `.env`:
+
+| Variable | Purpose |
+|---|---|
+| `INGRESS_HOST_<KEY>` | Renames the host key `<key>` (upper case, `-` as `_`), for example `INGRESS_HOST_FLOW=workflows`. One DNS label, nothing else: an address or a path is refused |
+| `INGRESS_DOMAIN` | The domain of the interfaces when it differs from the one of `PAPAIA_HOST` |
+| `INGRESS_APP_DOMAIN` | The second domain of the app host (host key `apps`), for example `example-apps.org`. A site of its own: neither the platform domain nor a domain inside or above it, so the platform's cookies never reach it. Locally `<env>.papaia-apps.localhost` |
+
+The app host serves its domain and every subdomain (`*.<app domain>`). Two interfaces that
+claim the same host name (also one of the core's) stop `npm-provision` and `proxy list`
+with both owners named; rename one.
+
+```bash
+tools/papaia-ctl proxy list [--json] [--config-dir=PATH]
+```
+
+Prints host name → internal target for every interface of the core and the active add-ons,
+with the Docker network the target is reached in and the options the forward needs
+(`websocket`, `max_body`, `tls-no-verify` for Keycloak's own certificate).
+
 ### Paperless behind the proxy
 
 Paperless takes the signed-in person from the request header `X-Papaia-Remote-User`. Whoever
@@ -1640,7 +1693,7 @@ The manifest declares every seam in machine-readable form, so integrating an add
 | Network | The add-on declares its bridge network and which core containers must attach; `papaia-ctl` writes the Compose override |
 | OIDC | Keycloak clients and protocol mappers registered additively |
 | LibreChat / MCP | `mcpServers` and `allowedDomains` fragments merged at render time |
-| Ingress | Nginx Proxy Manager fragment merged at render time (optional) |
+| Ingress | `integration.nginx`: since contract generation 12 a list of interfaces the core gives host names and proxy hosts (see [Host names and add-on interfaces](#host-names-and-add-on-interfaces)); before, a Nginx Proxy Manager fragment merged at render time (optional) |
 | TLS trust | The add-on lists env vars that point at the bundled CA cert (`local_ca_env`); `papaia-ctl` clears them via a generated override when an external OIDC issuer is used |
 
 Add-ons are registered explicitly by path — there is no auto-discovery:
@@ -1747,6 +1800,12 @@ Your proxy must map two public URLs onto the published container ports:
 |---|---|---|
 | `${AUTH_HOST}` | `HOST_IP:KEYCLOAK_EXT_PORT` (default 8110) | **HTTPS** |
 | `${LIBRECHAT_HOST}` | `HOST_IP:LIBRECHAT_EXT_PORT` (default 8000) | HTTP |
+
+The web interfaces of add-ons and the core interfaces served by host name are listed with
+their internal targets by `papaia-ctl proxy list` (`--json` for a machine-readable list);
+`setup` prints the same list at its end. A target is a service name and port inside a
+Docker network on this host (the column `NETWORK`): a proxy on the same host joins that
+network to reach it. Include the app host's second domain with its subdomains.
 
 Keycloak terminates TLS itself, on port 8443 inside the container, using the self-signed
 certificate `papaia-ctl` generated. Its plain-HTTP listener is never published. **Your proxy

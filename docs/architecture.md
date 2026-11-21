@@ -260,6 +260,9 @@ integration:
   #     port: 8080                 # 1..65535
   #     websocket: false           # optional
   #     max_body: 10m              # optional request-body limit
+  # The core names the hosts (`<host_key>.<domain>`, operator rename INGRESS_HOST_<KEY>;
+  # host key `apps` is the app host on INGRESS_APP_DOMAIN), creates the bundled proxy's
+  # hosts and attaches the proxy to app_network; `papaia-ctl proxy list` prints them.
 
 env_prompts:                       # optional: metadata per .env.example key
   SOME_URL:

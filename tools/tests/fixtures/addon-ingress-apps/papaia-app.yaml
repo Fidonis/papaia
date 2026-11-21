@@ -1,0 +1,24 @@
+# Fixture add-on with two web interfaces: its console on the platform domain and an app
+# host on the second domain (host key `apps`), each published through add-on ingress.
+name: appdemo
+version: 1.0.0
+addon_repo: papaia-addon-appdemo
+description: "Fixture add-on with a console and an app host"
+
+requires:
+  addon_api: [12]
+
+networks:
+  app_network: ${PAPAIA_PROJECT:-papaia}-appdemo-net
+  attach: []
+
+integration:
+  nginx:
+    - host_key: appdemo
+      service: appdemo-console
+      port: 8080
+    - host_key: apps
+      service: appdemo-app-host
+      port: 8090
+      websocket: true
+      max_body: 25m

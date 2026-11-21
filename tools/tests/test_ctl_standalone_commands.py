@@ -189,3 +189,26 @@ def test_the_real_entrypoint_refuses_an_unknown_option_of_a_step():
 
     assert result.returncode == 2
     assert "Unknown option for keycloak-role-sync: --bogus" in result.stderr
+
+
+@needs_bash
+def test_proxy_list_hands_the_config_dir_and_json_to_py_cli(tmp_path):
+    config = _seeded(tmp_path / "config")
+    dispatch = CTL.read_text(encoding="utf-8")
+    assert 'proxy)         cmd_proxy "$@" ;;' in dispatch
+
+    result = _call("cmd_proxy", "list", "--json", f"--config-dir={config.as_posix()}")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        f"py_cli proxy-list --json CONFIG_DIR={config.as_posix()}"
+    ]
+
+
+@needs_bash
+def test_proxy_refuses_an_unknown_subcommand(tmp_path):
+    result = _call("cmd_proxy", "add", default=_seeded(tmp_path / "c"))
+
+    assert result.returncode == 2
+    assert "py_cli" not in result.stdout
+    assert "Valid: list" in result.stderr

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, envtree, resolve, smtp
+from . import common, envtree, ingress, resolve, smtp
 
 
 def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
@@ -47,6 +47,20 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
     manager_sticky = root.get("MANAGER_PUBLIC_URL", "") if config_seeded else ""
     if common.is_placeholder(manager_sticky):
         manager_sticky = ""
+    # An earlier edge derivation is no choice: setup derives it again with the current
+    # edge port (resolve.edge_url_default), so the prompt does not pre-fill it.
+    auth_host_derived = resolve.derive_auth_host_default(
+        app_host or "http://host.docker.internal", keycloak_port
+    )
+    if resolve.is_edge_derivation(auth_host_sticky, "auth"):
+        auth_host_sticky = ""
+        auth_host_derived = ingress.local_scheme(
+            root.get("COMPOSE_PROJECT_NAME", ""), root
+        ).url("auth")
+    if resolve.is_edge_derivation(librechat_sticky, "chat"):
+        librechat_sticky = ""
+    if resolve.is_edge_derivation(manager_sticky, "manager"):
+        manager_sticky = ""
     qdrant_port = root.get("QDRANT_EXT_PORT", "6333")
     qdrant_sticky = (
         resolve.sticky_service_url(
@@ -67,9 +81,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
     return {
         "APP_HOST_STICKY": app_host,
         "AUTH_HOST_STICKY": auth_host_sticky,
-        "AUTH_HOST_DERIVED": resolve.derive_auth_host_default(
-            app_host or "http://host.docker.internal", keycloak_port
-        ),
+        "AUTH_HOST_DERIVED": auth_host_derived,
         "KEYCLOAK_EXT_PORT": keycloak_port,
         "LIBRECHAT_HOST_STICKY": librechat_sticky,
         "LIBRECHAT_EXT_PORT": root.get("LIBRECHAT_EXT_PORT", "8000"),

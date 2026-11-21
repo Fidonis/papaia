@@ -617,6 +617,31 @@ cmd_npm_provision() { _provisioning_step npm-provision "$@"; }
 
 cmd_keycloak_role_sync() { _provisioning_step keycloak-role-sync "$@"; }
 
+# papaia-ctl proxy list [--json]: host name -> internal target of every web interface of
+# the core and the active add-ons (lib/ingress.py), the forwards an external proxy needs.
+cmd_proxy() {
+    local sub="${1:-}" config_dir="$DEFAULT_CONFIG_DIR" json=0
+    shift || true
+    case "$sub" in
+        list) ;;
+        *) error "Unknown 'proxy' subcommand: '${sub:-<none>}'. Valid: list."; exit 2 ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --json) json=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for proxy list: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local -a flags=()
+    [ "$json" -eq 1 ] && flags+=(--json)
+    py_cli proxy-list ${flags[@]+"${flags[@]}"}
+}
+
 # `realm sync` also runs at the end of every keycloak-role-sync step; on its own it takes
 # --check, which compares the realm with the declarations and changes nothing.
 cmd_realm_sync() {

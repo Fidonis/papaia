@@ -66,6 +66,7 @@ def test_resolve_hostnames_librechat_default_prefers_localhost(repo_root):
     args = resolve.SetupArgs(
         config_dir=repo_root,
         app_host="http://host.docker.internal",
+        reverse_proxy_provider="no_proxy",
         prompt=fake_prompt,
     )
     tree = resolve.resolve_hostnames(tree, args)
@@ -445,6 +446,7 @@ def test_resolve_hostnames_external_oidc_resolves_librechat_domain(repo_root):
         app_host="http://host.docker.internal",
         auth_provider="external_oidc",
         oidc_issuer="https://idp.customer.com/realms/foo",
+        reverse_proxy_provider="no_proxy",
         non_interactive=True,
     )
     tree = resolve.resolve_hostnames(tree, args)

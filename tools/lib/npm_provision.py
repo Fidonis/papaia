@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import common, deployment, paperless_gate
+from . import common, deployment, ingress, paperless_gate
 from .envtree import EnvTree
 
 # Env-tree node holding the bundled proxy's own configuration. The NPM admin
@@ -30,56 +30,19 @@ _NGINX_NODE = "infra/nginx"
 _PROXY_HOSTS_PATH = "/api/nginx/proxy-hosts"
 
 
-# Ordered list of (compose-profile, url-node, url-key, forward-host, forward-port,
-# forward-scheme, ssl-verify, allow-websocket) tuples.  Only entries whose profile
-# is in COMPOSE_PROFILES and whose URL passes _is_subdomain_url() are provisioned.
-_PROXY_HOST_SPECS: list[tuple[str, str, str, str, int, str, bool, bool]] = [
-    ("keycloak", "", "AUTH_HOST", "keycloak", 8443, "https", False, False),
-    ("librechat", "ai/librechat", "DOMAIN_SERVER", "librechat", 3080, "http", True, True),
-    ("litellm", "", "LITELLM_PUBLIC_URL", "litellm", 4000, "http", True, False),
-    ("localai", "", "LOCALAI_PUBLIC_URL", "localai", 8080, "http", True, False),
-    ("manager", "", "MANAGER_PUBLIC_URL", "papaia-manager", 8000, "http", True, False),
-    ("rag", "", "QDRANT_PUBLIC_URL", "qdrant", 6333, "http", True, False),
-]
-
-
-def _is_subdomain_url(url: str) -> bool:
-    """Return True only for clean subdomain URLs with no explicit port.
+def _is_subdomain_url(url: str, edge: tuple[int, ...] = ()) -> bool:
+    """Return True only for URLs the proxy serves by host name.
 
     Port-based URLs (e.g. https://papaia.example.com:8200) indicate direct port
-    access — no NPM proxy host should be created for them.  localhost /
-    host.docker.internal addresses are also skipped since they are not reachable
-    from inside the Docker network via the domain name NPM would proxy.
+    access -- no NPM proxy host is created for them -- unless the port is one of the
+    edge's own (`edge`), as in the local scheme `https://auth.itest.papaia.localhost:57143`.
+    localhost / host.docker.internal addresses are also skipped since they are not
+    reachable from inside the Docker network via the domain name NPM would proxy.
     """
-    if not url:
-        return False
-    try:
-        parts = urlsplit(url)
-        hostname = parts.hostname or ""
-        if not hostname or not parts.scheme:
-            return False
-        if hostname in ("localhost", "host.docker.internal", "127.0.0.1"):
-            return False
-        if parts.port is not None:
-            return False
-        return "." in hostname
-    except Exception:
-        return False
+    return ingress.is_proxied_url(url, edge)
 
 
-# On a node of a distributed installation the proxy's node does not have LibreChat's
-# .env; the node bundle carries the URL in the root .env under this key instead.
-_ROOT_FALLBACK = {("ai/librechat", "DOMAIN_SERVER"): "LIBRECHAT_PUBLIC_URL"}
-
-
-def _public_url(tree: EnvTree, node: str, key: str) -> str:
-    root = tree.get("", {})
-    if not node:
-        return root.get(key, "")
-    fallback = _ROOT_FALLBACK.get((node, key))
-    if fallback and root.get(fallback):
-        return root[fallback]
-    return tree.get(node, {}).get(key, "")
+_public_url = ingress.public_url_of
 
 
 def _wait_for_npm(base_url: str, timeout: int = 60) -> None:
@@ -115,20 +78,14 @@ def _get_token(base_url: str, email: str, password: str) -> str:
 
 def _existing_domains(base_url: str, token: str) -> set[str]:
     """Return the set of all domain names already registered as proxy hosts."""
-    req = urllib.request.Request(
-        f"{base_url}{_PROXY_HOSTS_PATH}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        hosts = json.loads(resp.read())
     result: set[str] = set()
-    for host in hosts:
+    for host in _list_proxy_hosts(base_url, token):
         result.update(host.get("domain_names", []))
     return result
 
 
 def proxy_host_body(
-    domain: str,
+    domain: str | list[str],
     forward_host: str,
     forward_port: int,
     forward_scheme: str,
@@ -144,7 +101,7 @@ def proxy_host_body(
             "" if ssl_verify else "proxy_ssl_verify off;\n"
         )
     return {
-        "domain_names": [domain],
+        "domain_names": [domain] if isinstance(domain, str) else list(domain),
         "forward_host": forward_host,
         "forward_port": forward_port,
         "forward_scheme": forward_scheme,
@@ -160,6 +117,46 @@ def proxy_host_body(
         "locations": [],
         "advanced_config": advanced_config,
     }
+
+
+def route_body(route: ingress.Route) -> dict:
+    """The NPM API body of an add-on interface (lib/ingress.py): its host names to its
+    service, the identity and gate headers cleared, the upload limit of `max_body`."""
+    advanced = paperless_gate.strip_config()
+    if route.scheme == "https" and not route.verify_tls:
+        advanced += "proxy_ssl_verify off;\n"
+    if route.max_body:
+        advanced += f"client_max_body_size {route.max_body};\n"
+    return proxy_host_body(
+        list(route.hostnames),
+        route.service,
+        route.port,
+        route.scheme,
+        allow_websocket=route.websocket,
+        advanced_config=advanced,
+    )
+
+
+def _ingress_hosts(base_url: str, token: str, found: list[ingress.Route]) -> int:
+    """Create or correct the proxy host of every add-on interface; the count of hosts
+    created or corrected. A host that already matches is left as it is."""
+    hosts = _list_proxy_hosts(base_url, token)
+    changed = 0
+    for route in found:
+        body = route_body(route)
+        current = next(
+            (h for h in hosts if set(route.hostnames) & set(h.get("domain_names") or [])), None
+        )
+        if current is None:
+            _post_proxy_host(base_url, token, body)
+            print(f"  created proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
+        elif any(current.get(key) != value for key, value in body.items()):
+            _put_proxy_host(base_url, token, current.get("id"), body)
+            print(f"  updated proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
+        else:
+            continue
+        changed += 1
+    return changed
 
 
 def _send(base_url: str, token: str, path: str, method: str, body: dict | None = None):
@@ -224,7 +221,8 @@ def _paperless_route(base_url: str, token: str, config_dir: Path) -> bool:
         return True
     env = common.parse_env_file(config_dir / "addons" / paperless_gate.ADDON / ".env")
     url = env.get(paperless_gate.PUBLIC_URL_KEY, "")
-    if not _is_subdomain_url(url):
+    edge = ingress.edge_ports(common.parse_env_file(config_dir / ".env"))
+    if not _is_subdomain_url(url, edge):
         return True
     try:
         secret = paperless_gate.read_proxy_secret(config_dir)
@@ -285,15 +283,19 @@ def _api_base_url(nginx: dict[str, str]) -> str:
     return f"http://localhost:{nginx.get('NPM_API_LOCAL_PORT', '8181')}"
 
 
-def provision_npm_hosts(tree: EnvTree, config_dir: Path | None = None) -> bool:
+def provision_npm_hosts(
+    tree: EnvTree, config_dir: Path | None = None, repo_root: Path | None = None
+) -> bool:
     """Create NPM proxy hosts for all active services, skipping existing ones.
 
     No-op when REVERSE_PROXY_PROVIDER is not 'internal_nginx'.
     Idempotent: already-existing domain names are silently skipped.
     With `config_dir`, also puts the header strip into the proxy's `server_proxy.conf`
-    and creates or corrects the Paperless route (lib/paperless_gate.py).
-    Returns False if the NPM API was not reachable or the Paperless route could not be
-    set up; True otherwise.
+    and creates or corrects the Paperless route (lib/paperless_gate.py); with
+    `repo_root` as well, creates or corrects the host of every add-on interface
+    declared in `integration.nginx` (lib/ingress.py).
+    Returns False if the NPM API was not reachable, an add-on interface cannot be served
+    or the Paperless route could not be set up; True otherwise.
     """
     root = tree.get("", {})
     if root.get("REVERSE_PROXY_PROVIDER") != "internal_nginx":
@@ -326,11 +328,13 @@ def provision_npm_hosts(tree: EnvTree, config_dir: Path | None = None) -> bool:
     skipped_existing = 0
     skipped_port_based = 0
 
-    for profile, node, key, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws in _PROXY_HOST_SPECS:
+    edge = ingress.edge_ports(root)
+    for spec in ingress.CORE_PROXY_HOSTS:
+        profile, node, key, _label, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws = spec
         if profile not in active_profiles:
             continue
         url = _public_url(tree, node, key)
-        if not _is_subdomain_url(url):
+        if not _is_subdomain_url(url, edge):
             skipped_port_based += 1
             continue
         domain = urlsplit(url).hostname or ""
@@ -352,8 +356,18 @@ def provision_npm_hosts(tree: EnvTree, config_dir: Path | None = None) -> bool:
         created += 1
 
     ok = True
+    if config_dir is not None and repo_root is not None:
+        try:
+            found = ingress.routes(tree, Path(config_dir), Path(repo_root))
+        except ingress.IngressError as exc:
+            print(f"Add-on proxy hosts skipped: {exc}", file=sys.stderr, flush=True)
+            ok = False
+        else:
+            # The Paperless route goes to its gate with the proxy's secret (below).
+            addon = [r for r in found if r.module not in ("core", paperless_gate.ADDON)]
+            created += _ingress_hosts(base_url, token, addon)
     if config_dir is not None:
-        ok = _gate_steps(base_url, token, Path(config_dir), root)
+        ok = _gate_steps(base_url, token, Path(config_dir), root) and ok
 
     if created:
         print(f"NPM provisioning complete: {created} host(s) created.", flush=True)

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import common, smtp
+from . import common, ingress, smtp
 from .envtree import EnvTree
 
 _HOSTLIKE_NO_FQDN = {"localhost", "127.0.0.1", "host.docker.internal"}
@@ -194,6 +194,83 @@ def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str
     return f"{host}:{npm_admin_ext_port}"
 
 
+# The core interfaces whose fresh local default moves onto the edge (E-35).
+EDGE_LABELS = ("auth", "chat", "manager")
+
+
+def _effective_proxy_provider(root: dict[str, str], args: SetupArgs) -> str:
+    """The provider resolve_reverse_proxy will settle on, known before it runs (the
+    host names come first). Same order: flag, legacy flag, stored, the profile of an
+    older installation, then the app host's scheme."""
+    if args.reverse_proxy_provider:
+        return args.reverse_proxy_provider
+    if args.external_reverse_proxy is not None:
+        return "external_proxy" if args.external_reverse_proxy else "internal_nginx"
+    stored = root.get("REVERSE_PROXY_PROVIDER", "") if not args.fresh_init else ""
+    if stored:
+        return stored
+    if not args.fresh_init and "nginx" in root.get("COMPOSE_PROFILES", "").split(","):
+        return "internal_nginx"
+    return "external_proxy" if _is_https(root.get("PAPAIA_HOST", "")) else "internal_nginx"
+
+
+def local_edge(
+    app_host: str,
+    project: str,
+    root: dict[str, str],
+    *,
+    provider: str | None,
+    allow_direct: bool,
+) -> ingress.HostScheme | None:
+    """The local edge scheme (E-35) when it applies: a local app host behind the
+    bundled proxy. None for a server domain, an external proxy, no proxy and direct
+    port access: there the earlier derivation stays. SetupError for an unusable edge
+    port or project name."""
+    if allow_direct or (provider or "internal_nginx") != "internal_nginx":
+        return None
+    hostname = (urlsplit(app_host).hostname or "").lower()
+    if not hostname or not ingress.is_local_host(hostname):
+        return None
+    try:
+        return ingress.local_scheme(project, root)
+    except ingress.IngressError as exc:
+        raise SetupError(str(exc)) from exc
+
+
+def edge_url_default(
+    label: str,
+    app_host: str,
+    project: str,
+    root: dict[str, str],
+    *,
+    provider: str | None,
+    allow_direct: bool,
+) -> str | None:
+    """The default URL of a core interface on the local edge,
+    `https://<label>.<env>.papaia.localhost` with the edge port, or None."""
+    edge = local_edge(app_host, project, root, provider=provider, allow_direct=allow_direct)
+    return edge.url(label) if edge else None
+
+
+def is_edge_derivation(value: str, label: str) -> bool:
+    """A stored value that is only an earlier edge derivation (any env, any port), so
+    a run follows a changed edge port instead of keeping the old one."""
+    suffix = re.escape(ingress.LOCAL_SUFFIX)
+    pattern = rf"https://{label}\.(?:[a-z0-9-]+\.)?{suffix}(?::\d{{1,5}})?"
+    return bool(re.fullmatch(pattern, value or ""))
+
+
+def _edge_default(edge: ingress.HostScheme | None, label: str, stored: str) -> str | None:
+    """The edge derivation for `label` when `stored` is no choice of the operator's:
+    empty, a placeholder or an earlier edge derivation. An installation that stores
+    the earlier addresses keeps them, so saved addresses stay valid."""
+    if edge is None:
+        return None
+    if not stored or common.is_placeholder(stored) or is_edge_derivation(stored, label):
+        return edge.url(label)
+    return None
+
+
 def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
     """Resolve the real external issuer URL on a first-time transition into
     external_oidc. Never falls back to the bundled-Keycloak-shaped seed
@@ -250,6 +327,15 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
                 "no interactive terminal to prompt in."
             )
     root["PAPAIA_HOST"] = app_host
+
+    # --- Local edge scheme (E-35): `<label>.<env>.papaia.localhost` with the edge port ---
+    edge = local_edge(
+        app_host,
+        root.get("COMPOSE_PROJECT_NAME", ""),
+        root,
+        provider=_effective_proxy_provider(root, args),
+        allow_direct=args.allow_direct_port_access,
+    )
 
     # --- LITELLM_PUBLIC_URL (provider-independent) ---
     # Resolved before the auth-provider branch so both branches can reference
@@ -310,6 +396,9 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             stored_app_host=sticky_app_host,
             keycloak_ext_port=keycloak_port,
         )
+        edge_auth = _edge_default(edge, "auth", stored_auth_host)
+        if edge_auth:
+            derived_auth_host, sticky_auth = edge_auth, ""
         auth_host = args.auth_host or sticky_auth or derived_auth_host
         if not args.auth_host and not args.non_interactive and args.prompt is not None:
             auth_host = args.prompt(
@@ -361,6 +450,9 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     sticky_librechat = "" if args.fresh_init else librechat.get("DOMAIN_SERVER", "")
     if sticky_librechat and common.is_placeholder(sticky_librechat):
         sticky_librechat = ""
+    edge_chat = _edge_default(edge, "chat", sticky_librechat)
+    if edge_chat:
+        derived_librechat, sticky_librechat = edge_chat, ""
     librechat_url = args.librechat_host or sticky_librechat or derived_librechat
     if not args.librechat_host and not args.non_interactive and args.prompt is not None:
         librechat_url = args.prompt(
@@ -402,6 +494,9 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     sticky_manager = "" if args.fresh_init else root.get("MANAGER_PUBLIC_URL", "")
     if sticky_manager and common.is_placeholder(sticky_manager):
         sticky_manager = ""
+    edge_manager = _edge_default(edge, "manager", sticky_manager)
+    if edge_manager:
+        derived_manager, sticky_manager = edge_manager, ""
     manager_url = args.manager_host or sticky_manager or derived_manager
     if not args.manager_host and not args.non_interactive and args.prompt is not None:
         manager_url = args.prompt(

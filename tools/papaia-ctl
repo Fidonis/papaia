@@ -59,6 +59,8 @@
 #   papaia-ctl halt clear    --reason=TEXT [--config-dir=PATH] — lift it (also: halt off)
 #   papaia-ctl halt status   [--json] [--config-dir=PATH]
 #   papaia-ctl npm-provision [--config-dir=PATH]
+#   papaia-ctl proxy list    [--json] [--config-dir=PATH] — host name -> internal target of
+#                            every web interface, the forwards of an external proxy
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl realm sync    [--check] [--config-dir=PATH]
 #   papaia-ctl catalog render [--config-dir=PATH] — write platform/services.json from
@@ -123,7 +125,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,116p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,118p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -224,6 +226,7 @@ case "$cmd" in
     post-restore)  cmd_post_restore "$@" ;;
     halt)          cmd_halt "$@" ;;
     npm-provision) cmd_npm_provision "$@" ;;
+    proxy)         cmd_proxy "$@" ;;
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;
     doctor)        cmd_doctor "$@" ;;
