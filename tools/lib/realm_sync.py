@@ -36,7 +36,19 @@ What it manages:
   `visible_for_roles` that exist and `papaia-confirm`. `papaia-admin` never enters it, nor
   any role whose composite reaches beyond that set or into client roles: an admin's token
   of a module client carries that module's admin role and nothing of `realm-management`;
-- no client-level mapper on a managed client that adds an audience or a role;
+- no client-level mapper on a managed client that adds an audience or a role, and no
+  `oidc-claims-param-token-mapper` (it takes claims from the request) on a managed client
+  or a shared scope;
+- no exchange client but the chain holder is an audience: no scope `aud-<client>` and no
+  audience mapper naming it, anywhere in the realm (`flow-engine` included);
+- the client policies the identity provider enforces: per pair of `aud-*` scopes of one
+  client a policy `papaia-one-aud-<x>-<y>` that rejects an exchange asking for both
+  (`reject-request`); Data's `data-chain` (the subject token's `azp` is one of Data's
+  `upstream_origins`, first delivery only Studio, and its `aud` is exactly `papaia-data`)
+  and, with `aud-papaia-studio`, `data-handover`; per person-only audience (Data, the
+  knowledge map, module APIs for Me, any audience declared `identity: [person]`) no
+  `client_credentials` and no exchange without `sid`. Other policies and profiles of
+  the realm are left as they are;
 - a client role of a managed client includes no role but other roles of that client:
   Keycloak puts a client's own roles, with their composites, into its token scope
   whatever `fullScopeAllowed` says;
@@ -80,6 +92,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import itertools
 import json
 import os
 import pwd
@@ -133,6 +146,26 @@ OFFLINE = "offline_access"
 DEFAULT_SCOPES = frozenset({"basic", "acr", "profile", "email", "roles", "web-origins"})
 EFFECTS = ("r", "w", "d", "x")
 CHAIN_HOLDER = "papaia-data"
+# The clients whose tokens the chain holder may exchange further. First delivery: only
+# Studio (Studio -> Data -> connection); the assistant and Flow are no origins, and any
+# extension comes with its own acceptance. A Data client is never an origin.
+CHAIN_ORIGINS = ("papaia-studio-gateway",)
+_MAX_ORIGINS = 8
+IDENTITIES = ("person", "service")
+# Audiences that admit persons only, whatever a manifest says: Data and the knowledge map;
+# every module API for Me (`kind: me`) as well.
+PERSON_ONLY_AUDIENCES = frozenset({CHAIN_HOLDER, "mcp-knowledge-map"})
+TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+# Takes claims from the caller's request; never on a client or scope a managed client uses.
+CLAIMS_PARAM_MAPPER = "oidc-claims-param-token-mapper"
+
+# Client policies and profiles the sync owns (identified by name).
+PAIR_POLICY_PREFIX = "papaia-one-aud-"
+PERSON_POLICY_PREFIX = "papaia-person-"
+CHAIN_POLICIES = ("data-chain", "data-handover")
+REJECT_PROFILE = "papaia-reject"
+PERSON_PROFILE = "papaia-person-subject"
+MANAGED_PROFILES = frozenset({REJECT_PROFILE, PERSON_PROFILE, *CHAIN_POLICIES})
 
 # The Paperless gate passes the identity header only for names on this list (security
 # 4.5 (f)); the realm sync writes it, the gate mounts its directory read-only.
@@ -472,6 +505,11 @@ class Plan:
     # Roles whose holders are on the Paperless name list; None: no module serves
     # mcp-paperless, so there is no list.
     paperless_roles: frozenset[str] | None = None
+    # realm-level client policies and profiles the sync owns, by name
+    policies: dict[str, dict] = field(default_factory=dict)
+    profiles: dict[str, dict] = field(default_factory=dict)
+    # exchange clients that are never an audience: no scope aud-<name>, no mapper to them
+    never_audiences: set[str] = field(default_factory=set)
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -550,6 +588,173 @@ def _check_delegation(delegation: object, module: Module, label: str) -> str:
     return holders[module.name]
 
 
+def _check_identity(entry: dict, label: str) -> tuple[str, ...] | None:
+    """The declared identity kinds of an exposes entry, or None if it declares none."""
+    if "identity" not in entry:
+        return None
+    value = entry["identity"]
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(v, str) and v in IDENTITIES for v in value)
+        or len(set(value)) != len(value)
+    ):
+        raise RealmSyncError(f"{label}: identity must be distinct values out of {IDENTITIES}")
+    return tuple(value)
+
+
+def _check_origins(value: object, register: Register, chain_owner: str, label: str) -> tuple:
+    """`upstream_origins` of the chain holder: registered clients of the first delivery,
+    never a Data client."""
+    label = f"{label}: upstream_origins"
+    if not isinstance(value, list):
+        raise RealmSyncError(f"{label} must be a list of client ids")
+    if not value or len(value) > _MAX_ORIGINS:
+        raise RealmSyncError(f"{label} needs at least one and at most {_MAX_ORIGINS} origins")
+    origins: list[str] = []
+    for origin in value:
+        name = register.check(origin, "client", label)
+        if name in origins:
+            raise RealmSyncError(f"{label}: {name} is listed twice")
+        if register.clients[name].owner == chain_owner:
+            raise RealmSyncError(f"{label}: {name} is a Data client; Data is never its own origin")
+        if name not in CHAIN_ORIGINS:
+            raise RealmSyncError(
+                f"{label}: {name} is not a chain origin in this release "
+                f"(only {', '.join(CHAIN_ORIGINS)})"
+            )
+        origins.append(name)
+    return tuple(origins)
+
+
+def _grant(*grants: str) -> dict:
+    return {"condition": "grant-type", "configuration": {"grant_types": list(grants)}}
+
+
+def _scope_condition(scope: str, kind: str) -> dict:
+    return {"condition": "client-scopes", "configuration": {"type": kind, "scopes": [scope]}}
+
+
+def _owner_condition(owner: str) -> dict:
+    """Clients with `papaia.owner=<owner>` (an exact value; Keycloak has no wildcard here)."""
+    attributes = json.dumps([{"key": OWNER, "value": _owner_value(owner)}])
+    return {"condition": "client-attributes", "configuration": {"attributes": attributes}}
+
+
+def _claim(name: str, pattern: str) -> dict:
+    """The subject token's claim `name` must match `pattern`; an empty pattern only asks
+    for the claim to be present."""
+    return {
+        "executor": "jwt-claim-enforcer",
+        "configuration": {"claim-name": name, "allowed-value": pattern},
+    }
+
+
+def _policy(name: str, purpose: str, conditions: list[dict], profile: str) -> dict:
+    return {
+        "name": name,
+        "description": f"papaia.managed=true; {purpose}",
+        "enabled": True,
+        "conditions": conditions,
+        "profiles": [profile],
+    }
+
+
+def _client_policies(
+    clients: dict[str, ClientSpec],
+    exchange_scopes: dict[str, str],
+    person_audiences: set[str],
+    origins: tuple[str, ...],
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """The client policies and profiles the identity provider enforces (security 1.4,
+    1.5, 1.9). A `client-scopes` condition may only name a scope that exists, so every
+    policy here names planned exchange scopes only."""
+    policies: dict[str, dict] = {}
+
+    # Exactly one audience: a token exchange that asks for two aud-* scopes of a client
+    # is rejected, one policy per pair (k*(k-1)/2 per client, at most 66).
+    for spec in clients.values():
+        audiences = sorted(exchange_scopes[s] for s in spec.optional_scopes if s in exchange_scopes)
+        for x, y in itertools.combinations(audiences, 2):
+            name = f"{PAIR_POLICY_PREFIX}{x}-{y}"
+            policies[name] = _policy(
+                name,
+                f"rejects a token exchange for both {x} and {y}",
+                [
+                    _grant(TOKEN_EXCHANGE_GRANT),
+                    _scope_condition(exchange_scope(x), "Optional"),
+                    _scope_condition(exchange_scope(y), "Optional"),
+                ],
+                REJECT_PROFILE,
+            )
+
+    # Person-only audiences: no client_credentials, and an exchange only with a subject
+    # token that carries `sid` (service tokens carry none). "Any" also catches the scope
+    # as a default scope.
+    for audience in sorted(person_audiences):
+        scope = exchange_scope(audience)
+        if scope not in exchange_scopes:
+            continue
+        name = f"{PERSON_POLICY_PREFIX}{audience}-client-credentials"
+        policies[name] = _policy(
+            name,
+            f"{audience} admits persons only: no client_credentials",
+            [_grant("client_credentials"), _scope_condition(scope, "Any")],
+            REJECT_PROFILE,
+        )
+        name = f"{PERSON_POLICY_PREFIX}{audience}-exchange"
+        policies[name] = _policy(
+            name,
+            f"{audience} admits persons only: an exchange needs a subject token with sid",
+            [_grant(TOKEN_EXCHANGE_GRANT), _scope_condition(scope, "Any")],
+            PERSON_PROFILE,
+        )
+
+    profiles: dict[str, dict] = {}
+    if CHAIN_HOLDER in clients:
+        owner = clients[CHAIN_HOLDER].owner
+        origin = origins[0] if len(origins) == 1 else f"({'|'.join(origins)})"
+        policies["data-chain"] = _policy(
+            "data-chain",
+            "Data re-exchanges only tokens of its upstream origins issued for papaia-data alone",
+            [_grant(TOKEN_EXCHANGE_GRANT), _owner_condition(owner)],
+            "data-chain",
+        )
+        profiles["data-chain"] = [_claim("azp", f"^{origin}$"), _claim("aud", f"^{CHAIN_HOLDER}$")]
+        handover = exchange_scope("papaia-studio")
+        if handover in exchange_scopes:
+            policies["data-handover"] = _policy(
+                "data-handover",
+                "the handover to Studio only with the session token of Data's own interface",
+                [
+                    _grant(TOKEN_EXCHANGE_GRANT),
+                    _owner_condition(owner),
+                    _scope_condition(handover, "Optional"),
+                ],
+                "data-handover",
+            )
+            profiles["data-handover"] = [_claim("azp", "^papaia-data-ui$")]
+
+    executors = {
+        REJECT_PROFILE: [{"executor": "reject-request", "configuration": {}}],
+        PERSON_PROFILE: [_claim("sid", "")],
+        **profiles,
+    }
+    used = {p for policy in policies.values() for p in policy["profiles"]}
+    return policies, {
+        name: {
+            "name": name,
+            "description": "papaia.managed=true; profile of the realm sync",
+            "executors": executors[name],
+        }
+        for name in sorted(used)
+    }
+
+
+def _managed_policy(name: str) -> bool:
+    return name.startswith((PAIR_POLICY_PREFIX, PERSON_POLICY_PREFIX)) or name in CHAIN_POLICIES
+
+
 def _list(mapping: dict, key: str, label: str) -> list:
     value = mapping.get(key)
     if value is None:
@@ -593,6 +798,10 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
             kind = "confidential"
         clients[client_id] = ClientSpec(client_id, owner, kind, entry.token_exchange)
 
+    chain_owner = register.clients[CHAIN_HOLDER].owner
+    person_audiences: set[str] = set()
+    origins: tuple[str, ...] | None = None
+
     names = [m.name for m in modules]
     for module in modules:
         label = f"module {module.name}"
@@ -607,6 +816,19 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
             if not isinstance(entry, dict):
                 raise RealmSyncError(f"{label}: an exposes entry must be a mapping")
             entry_label = f"{label}, entry {entry.get('id')}"
+            identity = _check_identity(entry, entry_label)
+            for key in ("downstream", "upstream_origins"):
+                if key in entry and module.name != chain_owner:
+                    raise RealmSyncError(
+                        f"{entry_label}: only the chain holder {CHAIN_HOLDER} declares {key}"
+                    )
+            if "upstream_origins" in entry:
+                found = _check_origins(
+                    entry["upstream_origins"], register, chain_owner, entry_label
+                )
+                if origins is not None and found != origins:
+                    raise RealmSyncError(f"{entry_label}: upstream_origins differ between entries")
+                origins = found
             if "audience" in entry:
                 audience = entry["audience"]
                 if isinstance(audience, str) and audience in register.audiences:
@@ -615,6 +837,14 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
                         paperless_modules.add(module.name)
                     if audience in product_clients:
                         manage(audience, module.name)
+                    person_only = audience in PERSON_ONLY_AUDIENCES or entry.get("kind") == "me"
+                    if person_only and identity and "service" in identity:
+                        raise RealmSyncError(
+                            f"{entry_label}: {audience} admits persons only; "
+                            "identity must not list service"
+                        )
+                    if person_only or identity == ("person",):
+                        person_audiences.add(audience)
                 elif isinstance(audience, str) and register.successor(audience, "audience"):
                     register.check(audience, "audience", entry_label)
                 else:
@@ -688,7 +918,21 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
                 f"module {', '.join(sorted(paperless_modules))} serves {PAPERLESS_AUDIENCE} but "
                 "declares no role: the Paperless name list stays empty, the gate admits no name"
             )
-    return Plan(clients, roles, admin_members, exchange_scopes, notes, paperless_roles)
+    policies, profiles = _client_policies(
+        clients, exchange_scopes, person_audiences, origins or CHAIN_ORIGINS
+    )
+    never = register.exchange_clients() - {CHAIN_HOLDER}
+    return Plan(
+        clients,
+        roles,
+        admin_members,
+        exchange_scopes,
+        notes,
+        paperless_roles=paperless_roles,
+        policies=policies,
+        profiles=profiles,
+        never_audiences=never,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1348,6 +1592,10 @@ class _Reconciler(_Actions):
         for client_id in sorted(self.plan.clients):
             self.client(self.plan.clients[client_id], clients.get(client_id), scopes)
         self.exchange_elsewhere(clients, scopes)
+        self.never_audience()
+        # Policies before stale scopes: a policy may only name a scope that exists.
+        self.client_policies()
+        self.stale_exchange_scopes()
         for client_id, client in sorted(clients.items()):
             managed = (client.get("attributes") or {}).get(MANAGED) == "true"
             if managed and client_id not in self.plan.clients and client_id != SYNC_CLIENT:
@@ -1508,7 +1756,11 @@ class _Reconciler(_Actions):
                 base,
                 _audience_mapper(audience),
             )
-        for name, scope in sorted(scopes.items()):
+
+    def stale_exchange_scopes(self) -> None:
+        """A managed `aud-*` scope without a confirmed pairing is removed; this runs after
+        the client policies, which no longer name it by then."""
+        for name, scope in sorted(self._scopes().items()):
             managed = (scope.get("attributes") or {}).get(MANAGED) == "true"
             if managed and name.startswith("aud-") and name not in self.plan.exchange_scopes:
                 self.do(
@@ -1605,7 +1857,9 @@ class _Reconciler(_Actions):
             keep = {OFFLINE} if name == OFFLINE else set()
             self.scope_roles(name, scope["id"], keep, event)
             for mapper in scope.get("protocolMappers") or []:
-                if _adds_audience(mapper) and not _own_resolve_mapper(name, mapper):
+                if mapper.get("protocolMapper") == CLAIMS_PARAM_MAPPER:
+                    why, mapper_event = "takes claims from the request", "exchange_right_changed"
+                elif _adds_audience(mapper) and not _own_resolve_mapper(name, mapper):
                     why, mapper_event = "adds an audience", "exchange_right_changed"
                 elif _adds_role(mapper):
                     why, mapper_event = "adds roles", event
@@ -1710,7 +1964,9 @@ class _Reconciler(_Actions):
                 body,
             )
         for mapper in current.get("protocolMappers") or []:
-            if _adds_audience(mapper):
+            if mapper.get("protocolMapper") == CLAIMS_PARAM_MAPPER:
+                why, event = "takes claims from the request", "exchange_right_changed"
+            elif _adds_audience(mapper):
                 why, event = "fixed audience", "exchange_right_changed"
             elif _adds_role(mapper):
                 why, event = "adds roles", "config_changed"
@@ -1879,6 +2135,120 @@ class _Reconciler(_Actions):
                         (scopes.get(name) or {}).get("id"),
                         f"client scope {name}",
                     )
+
+    def never_audience(self) -> None:
+        """No client that exchanges tokens is an audience, the chain holder aside: no
+        scope `aud-<client>` and no audience mapper naming it, on any client scope or any
+        client. Managed clients, Keycloak's shared scopes and the exchange scopes are
+        already checked above (they carry no foreign audience at all)."""
+        never = self.plan.never_audiences
+        checked = DEFAULT_SCOPES | {OFFLINE} | set(self.plan.exchange_scopes)
+        for name, scope in sorted(self._scopes().items()):
+            if name in {exchange_scope(n) for n in never}:
+                self.do(
+                    Change(
+                        "client-scope",
+                        name,
+                        f"removed, {name.removeprefix('aud-')} exchanges tokens and is never "
+                        "an audience",
+                        "delete_scope",
+                        "exchange_right_changed",
+                        "delete",
+                    ),
+                    "DELETE",
+                    f"/client-scopes/{scope['id']}",
+                )
+            elif name not in checked:
+                base = f"/client-scopes/{scope['id']}/protocol-mappers/models"
+                self._never_audience_mappers("client-scope", name, scope, base)
+        for client_id, client in sorted(self._clients().items()):
+            if client_id not in self.plan.clients:
+                base = f"/clients/{client['id']}/protocol-mappers/models"
+                self._never_audience_mappers("client", client_id, client, base)
+
+    def _never_audience_mappers(self, kind: str, name: str, holder: dict, base: str) -> None:
+        for mapper in holder.get("protocolMappers") or []:
+            audience = _mapper_audience(mapper)
+            if audience not in self.plan.never_audiences:
+                continue
+            self.do(
+                Change(
+                    kind,
+                    name,
+                    f"mapper {mapper.get('name')} removed ({audience} is never an audience)",
+                    "remove_mapper",
+                    "exchange_right_changed",
+                    "delete",
+                ),
+                "DELETE",
+                f"{base}/{mapper['id']}",
+            )
+
+    # client policies -------------------------------------------------------
+    def client_policies(self) -> None:
+        """The realm's client profiles and policies the sync owns are exactly the planned
+        ones; every other profile or policy is left as it is. Keycloak replaces the whole
+        list on each write, so each change is one write of the full list (and one audit
+        row): profiles the planned policies need first, then stale policies out and
+        planned ones in, stale profiles last (a policy names its profiles)."""
+        profiles = (self.call("GET", "/client-policies/profiles") or {}).get("profiles") or []
+        policies = (self.call("GET", "/client-policies/policies") or {}).get("policies") or []
+        profiles = self._align("profiles", profiles, self.plan.profiles, lambda n: False)
+        policies = self._align("policies", policies, self.plan.policies, _managed_policy)
+        self._align("profiles", profiles, self.plan.profiles, MANAGED_PROFILES.__contains__)
+
+    def _align(self, kind: str, items: list[dict], wanted: dict[str, dict], stale) -> list[dict]:
+        """Remove each item named `stale(name)` that is not wanted, then add or correct
+        each wanted one; one PUT of the whole list per change. Returns the new list."""
+        noun, keys = _POLICY_KINDS[kind]
+        label = f"client-{noun}"
+
+        def write(change: Change, new: list[dict]) -> list[dict]:
+            self.do(change, "PUT", f"/client-policies/{kind}", {kind: new})
+            return new
+
+        for item in list(items):
+            name = item.get("name") or ""
+            if stale(name) and name not in wanted:
+                change = Change(
+                    label,
+                    name,
+                    "removed, no longer planned",
+                    f"delete_{noun}",
+                    "exchange_right_changed",
+                    "delete",
+                )
+                items = write(change, [i for i in items if i.get("name") != name])
+        for name, want in sorted(wanted.items()):
+            have = _named(items, name)
+            if have is not None and all(have.get(k) == want.get(k) for k in keys):
+                continue
+            if have is None:
+                change = Change(label, name, "created", f"create_{noun}", "exchange_right_changed")
+                items = write(change, [*items, want])
+            else:
+                change = Change(
+                    label, name, "settings corrected", f"update_{noun}", "exchange_right_changed"
+                )
+                items = write(change, [want if i.get("name") == name else i for i in items])
+        return items
+
+
+# What the sync compares of a realm client policy or profile; Keycloak 26.7.0 returns
+# them exactly as written.
+_POLICY_KINDS = {
+    "policies": ("policy", ("name", "description", "enabled", "conditions", "profiles")),
+    "profiles": ("profile", ("name", "description", "executors")),
+}
+
+
+def _named(items: list[dict], name: str) -> dict | None:
+    return next((i for i in items if i.get("name") == name), None)
+
+
+def _mapper_audience(mapper: dict) -> str | None:
+    config = mapper.get("config") or {}
+    return config.get("included.client.audience") or config.get("included.custom.audience")
 
 
 # ─────────────────────────────────────────────────────────────────────────

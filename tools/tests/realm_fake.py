@@ -6,7 +6,8 @@ client scopes, with `offline_access` among the realm's default optional scopes a
 every client, the realm's default roles, `realm-management` with its client roles, a
 service-account user for every client created with `serviceAccountsEnabled` (with Keycloak's
 `service_account` scope as a default scope of that client), groups, and the
-`offline_access` scope mapping the `offline_access` role. Every write
+`offline_access` scope mapping the `offline_access` role, and the realm's client policies
+and profiles (empty, as in a fresh realm). Every write
 is counted in `writes`. A role that does not exist is a `NotFound`, as Keycloak answers
 with HTTP 404.
 """
@@ -46,6 +47,10 @@ class NotFound(Exception):
     pass
 
 
+class BadRequest(Exception):
+    pass
+
+
 class FakeRealm:
     def __init__(self) -> None:
         self._ids = itertools.count(1)
@@ -55,6 +60,9 @@ class FakeRealm:
         self.clients: dict[str, dict] = {}
         self.users: dict[str, dict] = {}
         self.groups: dict[str, dict] = {}
+        # realm-level client policies and profiles (Keycloak's global ones are not listed)
+        self.policies: list[dict] = []
+        self.profiles: list[dict] = []
         for name in ("offline_access", "uma_authorization", "default-roles-papaia"):
             self._add_role(name)
         self.roles["default-roles-papaia"]["_composites"] = {"offline_access", "uma_authorization"}
@@ -223,6 +231,24 @@ class FakeRealm:
         if clients:
             rep["clientMappings"] = clients
         return rep
+
+    def _check_policies(self, policies: list[dict]) -> None:
+        """Keycloak 26.7.0 refuses a policy whose `client-scopes` condition names a
+        scope that does not exist (HTTP 400 `Client scopes not allowed`)."""
+        names = {s["name"] for s in self.scopes.values()}
+        for policy in policies:
+            for condition in policy.get("conditions") or []:
+                if condition.get("condition") != "client-scopes":
+                    continue
+                missing = set(condition["configuration"]["scopes"]) - names
+                if missing:
+                    raise BadRequest(f"Client scopes not allowed: {sorted(missing)}")
+
+    def policy(self, name: str) -> dict:
+        return next(p for p in self.policies if p["name"] == name)
+
+    def profile(self, name: str) -> dict:
+        return next(p for p in self.profiles if p["name"] == name)
 
     def service_account_user(self, client_id: str) -> dict:
         uid = self.by_client_id(client_id)["_service_user"]
@@ -555,6 +581,20 @@ class FakeRealm:
             elif method == "DELETE":
                 client["_role_scope"] -= names
             return None
+
+        if route == "/client-policies/profiles":
+            if method == "GET":
+                return {"profiles": copy.deepcopy(self.profiles)}
+            if method == "PUT":
+                self.profiles = copy.deepcopy(body["profiles"])
+                return None
+        if route == "/client-policies/policies":
+            if method == "GET":
+                return {"policies": copy.deepcopy(self.policies)}
+            if method == "PUT":
+                self._check_policies(body["policies"])
+                self.policies = copy.deepcopy(body["policies"])
+                return None
 
         m = re.fullmatch(r"/default-(optional|default)-client-scopes(?:/([^/]+))?", route)
         if m:
