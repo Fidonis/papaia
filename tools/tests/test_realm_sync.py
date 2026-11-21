@@ -767,7 +767,7 @@ def test_the_dispatcher_knows_realm_sync_only():
         [BASH, str(CTL), "realm", "export"], capture_output=True, text=True, timeout=60, check=False
     )
     assert result.returncode == 2
-    assert "Unknown 'realm' subcommand: 'export'. Valid: sync." in result.stderr
+    assert "Unknown 'realm' subcommand: 'export'. Valid: sync, keys." in result.stderr
     assert (
         "papaia-ctl realm sync    [--check] [--config-dir=PATH]"
         in subprocess.run(

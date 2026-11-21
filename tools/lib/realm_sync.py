@@ -44,7 +44,8 @@ What it manages:
 - Data's two clients: the chain holder `papaia-data` signs nobody in and carries the
   attribute `papaia.chain-holder=true`; `papaia-data-ui`, the sign-in client of Data's own
   interface, authenticates with `private_key_jwt` (Keycloak's `client-jwt`; the module
-  registers its own public key, the sync leaves that in place). No other client carries
+  registers its own public key through `client_keys`; undeclared, the sync leaves a
+  registered key in place). No other client carries
   the attribute, whatever its value: the sync removes it (`--check` reports it);
 - the client policies the identity provider enforces: per pair of `aud-*` scopes of one
   client a policy `papaia-one-aud-<x>-<y>` that rejects a sign-in or an exchange asking
@@ -58,7 +59,7 @@ What it manages:
   `client_credentials` and no exchange without `sid`. Other policies and profiles of
   the realm are left as they are;
 - Flow's console `flow-console`: `private_key_jwt` (Keycloak holds the public key Flow
-  registers; the sync never writes key material), the shared person scope
+  declares in `client_keys`; the sync writes no private key material), the shared person scope
   `papaia-person` as its only default scope, `aud-flow` as an optional sign-in scope
   while Flow serves `flow`, and pairings only for the task sources `papaia-data` and
   `papaia-studio`; no client with token exchange keeps an `aud-*` default scope;
@@ -72,6 +73,10 @@ What it manages:
   deactivated or loses the role is gone after the next run, and removed when no module
   serves `mcp-paperless` any more. Keycloak's accounts are read with the master admin
   (the sync account holds no `view-users`); the list is the only thing that reads them.
+- the public keys of module clients (`client_keys[]` of a manifest, lib/client_keys.py):
+  for each client the module owns and declares, `client-jwt` and exactly the public JWK
+  set of the file the module wrote to its add-on configuration folder; a changed file is
+  applied on the next run or by `papaia-ctl realm keys apply <module>`;
 - one client per declared service account (`svc-<module>-<purpose>`): client_credentials
   with `private_key_jwt` only, the key pair in the configuration directory, only the
   declared audiences (`aud-*` optional scopes) and roles, owner, deputy and rotation
@@ -133,6 +138,7 @@ from pathlib import Path
 
 import yaml
 
+from . import client_keys as ck
 from . import common, deployment
 from . import keycloak_role_sync as kcs
 from . import realm_hardening as rh
@@ -298,6 +304,10 @@ ROTATED_AT = "papaia.key_rotated_at"
 ACCOUNT_DEFAULT_SCOPES = frozenset({"basic", "roles", "service_account"})
 # Last use of an account is Keycloak's CLIENT_LOGIN event (a client_credentials grant).
 # Kept 180 days, two rotation intervals, when the realm stores no events yet.
+# The audit event of a client key change. The kit's papaia.audit/1 schema (1.1.0) has no
+# `client_key_rotated` yet, and papaia-audit refuses an unknown event, so the rows carry
+# `config_changed` with the operations `set_client_key` and `rotate_client_key`.
+KEY_EVENT = "config_changed"
 LOGIN_EVENT = "CLIENT_LOGIN"
 EVENTS_EXPIRATION = 180 * 24 * 3600
 _ACCOUNT_ID_RE = re.compile(r"^svc-[a-z][a-z0-9]*-[a-z0-9]+(-[a-z0-9]+)*$")
@@ -516,6 +526,10 @@ class Module:
     name: str
     exposes: object
     install_input: dict[str, str] = field(default_factory=dict)
+    # `client_keys:` of the manifest as declared (None: not declared) and the add-on's
+    # configuration folder its `jwks_file` paths are relative to.
+    client_keys: object = None
+    folder: Path | None = None
 
 
 def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
@@ -536,11 +550,13 @@ def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
         )
         if manifest is None:
             raise RealmSyncError(f"add-on {name}: {reason}")
-        if "exposes" not in manifest:
+        if "exposes" not in manifest and "client_keys" not in manifest:
             continue
         declared = manifest.get("name")
         if not isinstance(declared, str) or not declared:
-            raise RealmSyncError(f"add-on {name}: the manifest declares exposes but no name")
+            raise RealmSyncError(
+                f"add-on {name}: the manifest declares exposes or client_keys but no name"
+            )
         if len(declared) > 64 or not _NAME_RE.match(declared):
             raise RealmSyncError(
                 f"add-on {name}: the manifest names {declared!r}, not a module name"
@@ -552,7 +568,15 @@ def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
             )
         env = common.parse_env_file(config_dir / "addons" / str(name) / ".env")
         install_input = {k: kcs._compose_value(v) for k, v in env.items()}
-        modules.append(Module(declared, manifest["exposes"], install_input))
+        modules.append(
+            Module(
+                declared,
+                manifest.get("exposes", []),
+                install_input,
+                client_keys=manifest.get("client_keys"),
+                folder=config_dir / "addons" / str(name),
+            )
+        )
     return modules
 
 
@@ -570,6 +594,11 @@ class ClientSpec:
     # Keycloak's client authenticator, where the sync fixes it ("client-jwt" for
     # private_key_jwt); None leaves the one Keycloak gives the client.
     authenticator: str | None = None
+    # Declared in client_keys[]: the key file (for messages), the public keys Keycloak
+    # must hold (empty when the file is missing) and whether the file is missing.
+    key_file: str | None = None
+    jwks: list[dict] = field(default_factory=list)
+    key_missing: bool = False
 
     @property
     def service_account(self) -> bool:
@@ -590,6 +619,8 @@ class ClientSpec:
             attributes.update(_ACCOUNT_ATTRIBUTES, **self.record)
         if self.client_id == CHAIN_HOLDER:
             attributes[CHAIN_HOLDER_MARK] = "true"
+        if self.key_file is not None:
+            attributes.update({"use.jwks.string": "true", "use.jwks.url": "false"})
         rep = {
             "clientId": self.client_id,
             "protocol": "openid-connect",
@@ -1167,6 +1198,8 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
     for holder in holders:
         clients[holder].optional_scopes.add(OFFLINE)
 
+    _plan_client_keys(register, modules, clients, notes)
+
     # Service accounts: one client each, with the scopes of its installed audiences only.
     # It obtains an audience with client_credentials and scope=aud-<a>; no exchange.
     for account in accounts:
@@ -1248,6 +1281,60 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
         legacy_accounts=legacy,
         person_scope=any(PERSON_SCOPE in s.default_scopes for s in clients.values()),
     )
+
+
+def _plan_client_keys(
+    register: Register, modules: list[Module], clients: dict[str, ClientSpec], notes: list[str]
+) -> None:
+    """`client_keys[]`: only clients the module owns and the sync manages, which
+    authenticate (not public, not bearer-only, not a service account); the key file is
+    read and checked here, before any write."""
+    for module in modules:
+        if module.client_keys is None:
+            continue
+        label = f"module {module.name}"
+        try:
+            declarations = ck.parse_declarations(module.client_keys, label)
+        except ck.ClientKeyError as exc:
+            raise RealmSyncError(str(exc)) from None
+        for decl in declarations:
+            entry = register.clients.get(decl.client)
+            if entry is None or entry.test_profile_only:
+                raise RealmSyncError(
+                    f"{label}: client_keys: {decl.client!r} is not a registered client"
+                )
+            if entry.owner != module.name:
+                raise RealmSyncError(
+                    f"{label}: client_keys: {decl.client} belongs to {entry.owner}"
+                )
+            spec = clients.get(decl.client)
+            if spec is None:
+                raise RealmSyncError(
+                    f"{label}: client_keys: {decl.client} is not a client the sync manages"
+                )
+            if spec.kind == "public":
+                raise RealmSyncError(
+                    f"{label}: client_keys: {decl.client} is a public client without credentials"
+                )
+            if spec.kind == "bearer":
+                raise RealmSyncError(
+                    f"{label}: client_keys: {decl.client} is bearer-only and never signs in"
+                )
+            keys = None
+            if module.folder is not None:
+                try:
+                    keys = ck.read_jwks(module.folder, decl.jwks_file, f"{label}, {decl.client}")
+                except ck.ClientKeyError as exc:
+                    raise RealmSyncError(str(exc)) from None
+            spec.authenticator = "client-jwt"
+            spec.key_file = decl.jwks_file
+            spec.jwks = keys or []
+            spec.key_missing = keys is None
+            if keys is None:
+                notes.append(
+                    f"{label}: no key file {decl.jwks_file} for {decl.client}; it cannot sign "
+                    "in until the module writes its public keys there"
+                )
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -2529,6 +2616,8 @@ class _Reconciler(_Actions):
             if spec.service_account:
                 # Created without a key: the key is registered as a change of its own.
                 self.credential(spec, current)
+            if spec.key_file is not None:
+                self.client_key(spec, current)
             return
 
         uid = current["id"]
@@ -2609,6 +2698,56 @@ class _Reconciler(_Actions):
         self.client_roles(spec, uid)
         if spec.service_account:
             self.credential(spec, dict(current, attributes=attributes))
+        if spec.key_file is not None:
+            # The settings drift above already covers the authenticator and attributes.
+            settled = {k: v for k, v in rep.items() if k not in ("attributes", "clientId")}
+            self.client_key(spec, dict(current, **settled, attributes=attributes))
+
+    # client keys ----------------------------------------------------------
+    def client_key(self, spec: ClientSpec, current: dict) -> None:
+        """Keycloak holds exactly the public keys of the client's declared key file, with
+        `client-jwt`. A missing file fails `--check`; the sync removes registered keys,
+        since none of them comes from a file any more (the client cannot sign in)."""
+        if spec.key_missing:
+            missing = Change(
+                "client", spec.client_id, f"no key file {spec.key_file}", "set_client_key",
+                KEY_EVENT,
+            )
+            if self.apply:
+                self._note(f"client {spec.client_id}: no key file {spec.key_file}")
+            else:
+                self.report(missing)
+        attributes = dict(current.get("attributes") or {})
+        try:
+            registered = json.loads(attributes.get("jwks.string") or "{}").get("keys") or []
+        except (ValueError, AttributeError):
+            registered = None
+        rep = spec.representation()
+        stale = current.get("clientAuthenticatorType") != "client-jwt" or any(
+            attributes.get(k) != v for k, v in rep["attributes"].items()
+        )
+        if registered == spec.jwks and not stale:
+            return
+        if registered == spec.jwks:
+            action, operation = "key settings corrected", "set_client_key"
+        elif spec.key_missing:
+            action, operation = "registered keys removed, no key file", "rotate_client_key"
+        elif not registered:
+            action, operation = f"public key registered from {spec.key_file}", "set_client_key"
+        else:
+            action = f"registered keys replaced by the keys of {spec.key_file}"
+            operation = "rotate_client_key"
+        attributes["jwks.string"] = (
+            json.dumps({"keys": spec.jwks}, sort_keys=True) if spec.jwks else ""
+        )
+        body = {k: v for k, v in rep.items() if k != "clientId"}
+        body["attributes"] = dict(attributes, **body["attributes"])
+        self.do(
+            Change("client", spec.client_id, action, operation, KEY_EVENT),
+            "PUT",
+            f"/clients/{current['id']}",
+            body,
+        )
 
     # service accounts -----------------------------------------------------
     def credential(self, spec: ClientSpec, current: dict) -> None:
@@ -3463,4 +3602,89 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
         )
         return 1
     print(f"Realm sync complete: {len(changes)} change(s).", flush=True)
+    return 0
+
+
+def apply_keys(tree: dict, config_dir: Path, repo_root: Path, module: str) -> int:
+    """`papaia-ctl realm keys apply <module>`: register the current key files of the
+    module's declared `client_keys` without a full sync. Every declaration is checked
+    as for `realm sync` first. 0: applied (or nothing to do), 1: Keycloak not reachable
+    or a client not created yet, 2: refused (nothing changed)."""
+    root = tree.get("", {})
+    if root.get("AUTH_PROVIDER", "internal_keycloak") != "internal_keycloak":
+        print("Client keys skipped: AUTH_PROVIDER is not internal_keycloak.", flush=True)
+        return 0
+    if not isinstance(module, str) or len(module) > 64 or not _NAME_RE.match(module):
+        print(f"Client keys refused: {module!r} is not a module name.", file=sys.stderr)
+        return 2
+    keycloak = tree.get(kcs._KEYCLOAK_NODE, {})
+    try:
+        register = load_register()
+        plan = build_plan(
+            register,
+            load_modules(config_dir, repo_root),
+            load_pairings(pairings_path(config_dir), register),
+        )
+    except RealmSyncError as exc:
+        print(f"Client keys refused: {exc}. Nothing was changed.", file=sys.stderr, flush=True)
+        return 2
+    specs = [
+        s for _, s in sorted(plan.clients.items()) if s.key_file is not None and s.owner == module
+    ]
+    if not specs:
+        print(
+            f"Client keys refused: {module} is not installed or declares no client_keys.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+    admin_password = kcs._compose_value(keycloak.get("KC_ADMIN_PASSWORD", ""))
+    secret = kcs._compose_value(keycloak.get(SYNC_SECRET_KEY, ""))
+    if kcs._unset(secret) or secret.startswith("GENERATE_"):
+        print(
+            f"Client keys skipped: {SYNC_SECRET_KEY} is not set. Run 'papaia-ctl setup' first.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+    base_url, ctx = kcs._admin_connection(root, config_dir)
+    try:
+        with AuditLog(audit_path(config_dir), new_correlation_id()) as audit:
+            kcs._wait_for_keycloak(base_url, ctx)
+            token, _, _ = sync_account_token(
+                base_url, ctx, admin_password, secret, audit, apply=True
+            )
+            if token is None:
+                print("Client keys failed: the sync account cannot sign in.", file=sys.stderr)
+                return 1
+            reconciler = _Reconciler(
+                AdminApi(base_url, ctx, token).call,
+                plan,
+                True,
+                audit,
+                keys=keystore(config_dir),
+                master=MasterAdmin(base_url, ctx, admin_password).call,
+            )
+            clients = reconciler._clients()
+            for spec in specs:
+                current = clients.get(spec.client_id)
+                if current is None:
+                    print(
+                        f"Client keys incomplete: {spec.client_id} does not exist yet; "
+                        "run 'papaia-ctl realm sync'.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return 1
+                reconciler.client_key(spec, current)
+    except (RealmSyncError, sak.KeyFileError, TimeoutError, OSError) as exc:
+        print(f"Client keys failed: {exc}", file=sys.stderr, flush=True)
+        return 1
+    except urllib.error.HTTPError as exc:
+        path = urllib.parse.urlsplit(exc.url or "").path
+        print(f"Client keys failed: HTTP {exc.code} on {path}", file=sys.stderr, flush=True)
+        return 1
+    print(
+        f"Client keys of {module} applied: {len(reconciler.changes)} change(s).", flush=True
+    )
     return 0

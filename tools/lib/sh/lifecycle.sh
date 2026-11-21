@@ -669,6 +669,46 @@ cmd_realm_sync() {
     py_cli realm-sync ${flags[@]+"${flags[@]}"}
 }
 
+# papaia-ctl realm keys apply <module>: register the public keys the module wrote to the
+# files it declares in client_keys[], without a full realm sync (a key rotation).
+cmd_realm_keys() {
+    local sub="${1:-}" config_dir="$DEFAULT_CONFIG_DIR" module=""
+    shift || true
+    if [ "$sub" != "apply" ]; then
+        error "Unknown 'realm keys' subcommand: '${sub:-<none>}'. Valid: apply."; exit 2
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option for realm keys apply: $1"; exit 2 ;;
+            *)
+                if [ -z "$module" ]; then
+                    module="$1"
+                else
+                    error "Unknown argument for realm keys apply: $1"; exit 2
+                fi ;;
+        esac
+        shift
+    done
+    if [ -z "$module" ]; then
+        error "realm keys apply needs a module: papaia-ctl realm keys apply <module>"; exit 2
+    fi
+    if ! [[ "$module" =~ ^[a-z][a-z0-9-]{0,63}$ ]]; then
+        error "'$module' is not a module name"; exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "In a distributed installation the realm sync runs on Keycloak's node: run 'papaia-ctl keycloak-role-sync'."
+        exit 2
+    fi
+    py_cli join-stack-network || true
+    py_cli realm-keys-apply --module "$module"
+}
+
 # papaia-ctl catalog render: platform/services.json from the exposes declarations of the
 # installed add-ons and the active core profiles. setup, start and every addon command
 # render it as well; this renders it alone, without touching anything else.

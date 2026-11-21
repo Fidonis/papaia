@@ -67,6 +67,8 @@
 #                            every web interface, the forwards of an external proxy
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl realm sync    [--check] [--config-dir=PATH]
+#   papaia-ctl realm keys apply <module> [--config-dir=PATH] — register the public keys
+#                            a module wrote for the clients in its client_keys
 #   papaia-ctl catalog render [--config-dir=PATH] — write platform/services.json from
 #                            the exposes declarations (setup, start and addon do it too)
 #   papaia-ctl privacy-pack  [--lang=de] [--out=DIR] [--check] — the data protection package
@@ -134,7 +136,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,127p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,129p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -266,7 +268,8 @@ case "$cmd" in
         sub="${1:-}"; shift || true
         case "$sub" in
             sync)      cmd_realm_sync "$@" ;;
-            *) error "Unknown 'realm' subcommand: '${sub:-<none>}'. Valid: sync."; exit 2 ;;
+            keys)      cmd_realm_keys "$@" ;;
+            *) error "Unknown 'realm' subcommand: '${sub:-<none>}'. Valid: sync, keys."; exit 2 ;;
         esac
         ;;
     catalog)
