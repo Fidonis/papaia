@@ -29,6 +29,14 @@ services:
         source: ${PAPAIA_CONFIG_DIR}/certs
         target: /certs
         read_only: true
+      # The platform halt (docs/halt.md): the folder, never the file, which is replaced
+      # by a rename. `render` makes it; Compose must not.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/state
+        target: /run/papaia-halt
+        read_only: true
+        bind:
+          create_host_path: false
     entrypoint: ["/bin/sh", "-c"]
     command:
       - "python -c 'import certifi,shutil; shutil.copy(certifi.where(), \"/tmp/ca-bundle.crt\")' && cat /certs/local-ca.crt >> /tmp/ca-bundle.crt && exec litellm --config=/app/config.yaml"

@@ -109,6 +109,17 @@ def test_the_state_of_a_remote_node_is_backed_up(distributed, tmp_path):
     assert len(states) == 2  # the proxy's database and its certificates
 
 
+def test_the_halt_folder_of_a_remote_node_is_created_there_but_never_backed_up(
+    distributed, tmp_path
+):
+    cluster = load(distributed)
+    # The model gateway on the edge node mounts the folder, so the node creates it.
+    assert "state" in cluster_data._node_manifest(cluster, "edge")["state_dirs"]
+    plan = cluster_data.build_plan(cluster, tmp_path / "backups")
+    states = [a for a in plan.artifacts if a.kind == cluster_data.NODESTATE]
+    assert all("litellm" not in a.services for a in states)
+
+
 def test_a_node_selector_takes_that_node_alone(distributed, tmp_path):
     plan = cluster_data.build_plan(load(distributed), tmp_path / "b", only="node:edge")
     assert plan.artifacts and {a.node for a in plan.artifacts} == {"edge"}

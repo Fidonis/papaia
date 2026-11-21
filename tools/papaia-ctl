@@ -54,6 +54,10 @@
 #                            configuration directory, for in-stack callers
 #   papaia-ctl post-restore  [--since=EPOCH] [--config-dir=PATH] — revoke the sessions
 #                            and delegations a restore brought back (restore runs it)
+#   papaia-ctl halt set      [--reason=TEXT] [--config-dir=PATH] — stop every write, send
+#                            and delete of the platform, without Keycloak (also: halt on)
+#   papaia-ctl halt clear    --reason=TEXT [--config-dir=PATH] — lift it (also: halt off)
+#   papaia-ctl halt status   [--json] [--config-dir=PATH]
 #   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl realm sync    [--check] [--config-dir=PATH]
@@ -114,7 +118,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,107p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,111p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -151,6 +155,8 @@ source "$SH_LIB/node.sh"
 source "$SH_LIB/librechat.sh"
 # shellcheck source=lib/sh/secrets.sh
 source "$SH_LIB/secrets.sh"
+# shellcheck source=lib/sh/halt.sh
+source "$SH_LIB/halt.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -209,6 +215,7 @@ case "$cmd" in
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
     post-restore)  cmd_post_restore "$@" ;;
+    halt)          cmd_halt "$@" ;;
     npm-provision) cmd_npm_provision "$@" ;;
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;

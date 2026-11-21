@@ -40,7 +40,7 @@ from pathlib import Path
 
 import yaml
 
-from . import backup, common, envtree, migrations, nodes, topology
+from . import backup, common, envtree, halt, migrations, nodes, topology
 from .cluster import Cluster, ClusterError, _say
 from .topology import CATALOGUE
 
@@ -120,6 +120,9 @@ def build_plan(
             )
         if not node.is_local:
             for index, rel in enumerate(manifest.get("state_dirs") or []):
+                if rel == halt.STATE_DIR:
+                    # The platform halt: a restore point neither lifts nor sets it.
+                    continue
                 mounting = [
                     s
                     for s in topology.services_of(cluster.repo_root, manifest.get("services") or [])

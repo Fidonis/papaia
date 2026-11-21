@@ -293,6 +293,9 @@ papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                      [--insecure-images] [-y] [--config-dir=PATH]
 papaia-ctl post-restore [--since=EPOCH] [--config-dir=PATH]
+papaia-ctl halt set  [--reason=TEXT] [--config-dir=PATH]
+papaia-ctl halt clear --reason=TEXT [--config-dir=PATH]
+papaia-ctl halt status [--json] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl keycloak-role-sync [--config-dir=PATH]
 papaia-ctl realm sync [--check] [--config-dir=PATH]
@@ -612,6 +615,8 @@ Archives the complete installation into a timestamped subdirectory of the backup
 
 - **`$PAPAIA_CONFIG_DIR`** in full — this also captures the Nginx Proxy Manager database and the
   Let's Encrypt certificates, which are bind mounts underneath it rather than named volumes.
+  The platform halt (`state/`, see [`halt`](#halt)) stays out, and `restore` keeps it as it is
+  on the host.
 - **every named volume of the core stack**, resolved from the compose files and prefixed with the
   configured `COMPOSE_PROJECT_NAME`.
 - **every named volume of an active add-on**, plus the host directories it bind-mounts for user
@@ -794,6 +799,22 @@ emptied delegation table, halted runs), which belong to each module. With
 `AUTH_PROVIDER=external_oidc` there is no bundled Keycloak and the step does nothing: revoke
 the sessions at the identity provider. It is not available in a distributed installation yet;
 `restore` there says so.
+
+### `halt`
+
+```bash
+tools/papaia-ctl halt set    [--reason=TEXT] [--config-dir=PATH]   # also: halt on
+tools/papaia-ctl halt clear  --reason=TEXT [--config-dir=PATH]     # also: halt off
+tools/papaia-ctl halt status [--json] [--config-dir=PATH]
+```
+
+The platform halt: one command on the host stops every write, send and delete of the
+installation within 10 s, and model calls and everything else within 60 s. It writes
+`$PAPAIA_CONFIG_DIR/state/halt.json`, needs neither Keycloak nor any other service and
+outlasts a restart of every container. The model gateway refuses every request while it is
+active; modules check it before each effect. Lifting it needs a reason. Setting, lifting and a
+refused lift are `papaia.audit/1` rows of the host account. `backup` leaves the halt out and
+`restore` keeps it as it is. Details: [docs/halt.md](docs/halt.md).
 
 ### `librechat clear-history`
 

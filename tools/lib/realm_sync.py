@@ -1390,10 +1390,17 @@ class AuditLog:
         return self._seq + 1
 
     def write(
-        self, change: Change, result: str, error_code: str | None = None, *, master: bool = False
+        self,
+        change: Change,
+        result: str,
+        error_code: str | None = None,
+        *,
+        master: bool = False,
+        host: bool = False,
     ) -> None:
         """One row. `master`: the write was made with the master admin (creating or
-        realigning the sync account), not with the sync account."""
+        realigning the sync account), not with the sync account. `host`: the host account
+        acted alone, without any identity of the realm (the platform halt)."""
         if self._fd is None:
             raise RealmSyncError("the audit log is closed")
         now = time.time()
@@ -1408,9 +1415,9 @@ class AuditLog:
             "writer": self.writer,
             "role": "caller",
             "sub": self.host_account,
-            "identity_kind": None if master else "service",
-            "service_account": None if master else SYNC_CLIENT,
-            "azp": "admin-cli" if master else SYNC_CLIENT,
+            "identity_kind": None if master or host else "service",
+            "service_account": None if master or host else SYNC_CLIENT,
+            "azp": None if host else "admin-cli" if master else SYNC_CLIENT,
             "aud": None,
             "origin_azp": None,
             "origin_source": None,

@@ -38,6 +38,7 @@ from . import (
     common,
     deployment,
     egress,
+    halt,
     hosted_model,
     keycloak_role_sync,
     knowledge_map,
@@ -241,6 +242,12 @@ def render(config_dir: Path, repo_root: Path) -> None:
 
     ensure_lifecycle_key(config_dir)
     ensure_lifecycle_journal(config_dir)
+    # The folder of the platform halt, mounted read-only by the services that act;
+    # Compose must not create it (docs/halt.md).
+    try:
+        halt.ensure_dir(config_dir)
+    except (halt.HaltError, OSError) as exc:
+        raise RenderError(f"the folder of the platform halt: {exc}") from exc
 
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean

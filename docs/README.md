@@ -17,6 +17,8 @@ Welcome to the papAIa documentation.
 - [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on
   deactivation, reconciliation independent of events, the signed revocation list, the
   erasure journal `identity`, its service account
+- [Platform halt](./halt.md) — `papaia-ctl halt`: stop every write, send and delete of the
+  installation with one host command
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
   only
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions

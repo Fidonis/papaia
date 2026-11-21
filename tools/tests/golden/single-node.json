@@ -2,7 +2,7 @@
   "default": {
     "backup_manifest": "75caa81f35c3088f77a4a990d1d6cd30974a4b650b7914418af282290222cded",
     "compose": {
-      "config": "347133dd055c52f49e7bcb6d1ac2dd8b7d2e3e8a9cb7f5922d82515047f7e39f",
+      "config": "962040d955d64d563a229824b36ff2ec190ed7fba9ffe3fd4315f492a4643ca3",
       "version": "5.6.0"
     },
     "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,egress,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
@@ -20,7 +20,7 @@
       "ai/librechat/.env": "49a538a2e47ac7b287a460e540f1287a5d951c2f9d6da5ecf0371e201306ce90",
       "ai/librechat/librechat.yaml": "d0302c99f6db769ef9a0503f63cb47845b6b948c4ac9cc2fc2366f323c8b5a13",
       "ai/litellm/.env": "5286d45ecd3b1a6217e814096df73f826c79d06836b29a264072f3d8450759cd",
-      "ai/litellm/config.yaml": "1f6088de0cbf5b6a31d47137da2fabce48481d482318b5a28af8021b0e8e1077",
+      "ai/litellm/config.yaml": "d49910221c95d33677217e551aeb74e7f590273f70b7bafea204a3b163789445",
       "ai/litellm/prometheus.yml": "e2760ad71502c8a52ebb96633d9b804b8956a38415c079f2dca9dbf817547f7e",
       "ai/localai/.env": "e9dd1090e485d9b7309761afa8da1c25f32b1775c964c140c55fc5bcac41135f",
       "ai/localai/models.txt": "0bd80c1d2ebc3bb1a17e3569d9c235fa71da189b4b25273afe60bee606342e36",
@@ -60,7 +60,7 @@
   "external-oidc": {
     "backup_manifest": "75caa81f35c3088f77a4a990d1d6cd30974a4b650b7914418af282290222cded",
     "compose": {
-      "config": "e12aaaa879093467ced18db47f0d7f9121ace42b13482cac5d025e8339318fcb",
+      "config": "ca8fe1fff6100715354020a9f81aec58ffebbcaf05c683c920eca7e39d444c2b",
       "version": "5.6.0"
     },
     "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=external_oidc\nREVERSE_PROXY_PROVIDER_STICKY=external_proxy\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=true\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=oauth2-proxy,librechat,litellm,egress\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
@@ -78,7 +78,7 @@
       "ai/librechat/.env": "4ea092dcf6bb0493af434ab28acff431ba10fcf8aee89cb0b68a69b3f45d9adc",
       "ai/librechat/librechat.yaml": "d0302c99f6db769ef9a0503f63cb47845b6b948c4ac9cc2fc2366f323c8b5a13",
       "ai/litellm/.env": "86876d7a06a70e93fc9996f90e0b454287cd91842e0ff4e4e41bf19651aa6c5a",
-      "ai/litellm/config.yaml": "1f6088de0cbf5b6a31d47137da2fabce48481d482318b5a28af8021b0e8e1077",
+      "ai/litellm/config.yaml": "d49910221c95d33677217e551aeb74e7f590273f70b7bafea204a3b163789445",
       "ai/litellm/prometheus.yml": "e2760ad71502c8a52ebb96633d9b804b8956a38415c079f2dca9dbf817547f7e",
       "ai/localai/.env": "a9f8000e418d65daf47d27ea85a7aa9e665d84318e1f1798becd4485eff0ddc3",
       "ai/localai/models.txt": "0bd80c1d2ebc3bb1a17e3569d9c235fa71da189b4b25273afe60bee606342e36",
@@ -119,7 +119,7 @@
   "full": {
     "backup_manifest": "75caa81f35c3088f77a4a990d1d6cd30974a4b650b7914418af282290222cded",
     "compose": {
-      "config": "703d26d660bd860b3a042553aee8fde0645adcb092c6219fa78bc65d179b12bd",
+      "config": "72c7fcbcd7433f8760b686126fe24df126a0732c791024ff1427425331c36eb1",
       "version": "5.6.0"
     },
     "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://chat.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://llm.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=true\nMANAGER_STICKY=true\nRAG_STICKY=true\nVOICE_STICKY=true\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=cpu\nSMTP_STICKY=true\nSMTP_HOST_STICKY=smtp.example.org\nSMTP_PORT_STICKY=587\nSMTP_SECURITY_STICKY=starttls\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=noreply@example.org\nSMTP_FROM_NAME_STICKY=papAIa\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=true\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,egress,librechat-websearch,localai,manager,rag,voice,smtp,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
@@ -139,7 +139,7 @@
       "ai/librechat/.env": "f73aeb7ac7d4c388ad92e5b6d00c5442a79d14b43bd6b4f202314d03136b3650",
       "ai/librechat/librechat.yaml": "a4ba34ee2da83fb3dc7470040cec4c51cf79598a17d02f75142a946667be455f",
       "ai/litellm/.env": "a0629575c589693db0e1c03c1a3193d427e25e2898a7d35d179b898accff3bdd",
-      "ai/litellm/config.yaml": "b2ecae6252ac3803e096e8a9562672d6e97e1132ef6f7b1e2be48a4578c058c0",
+      "ai/litellm/config.yaml": "5032c360f4b6a7781de40efcb3770b1ce313707957a8bd757240b1bf5551afa4",
       "ai/litellm/prometheus.yml": "e2760ad71502c8a52ebb96633d9b804b8956a38415c079f2dca9dbf817547f7e",
       "ai/localai/.env": "e9dd1090e485d9b7309761afa8da1c25f32b1775c964c140c55fc5bcac41135f",
       "ai/localai/models.txt": "0bd80c1d2ebc3bb1a17e3569d9c235fa71da189b4b25273afe60bee606342e36",

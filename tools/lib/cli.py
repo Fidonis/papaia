@@ -40,6 +40,7 @@ from . import (
     envtree,
     gen_override,
     gpu_detect,
+    halt,
     images,
     keycloak_role_sync,
     librechat_history,
@@ -1329,6 +1330,12 @@ def cmd_post_restore(args: argparse.Namespace) -> int:
     return post_restore.main(tree, config_dir, args.since)
 
 
+def cmd_halt(args: argparse.Namespace) -> int:
+    """The platform halt (lib/halt.py); reads no configuration but the folder itself, so it
+    works while every service, Keycloak included, is down."""
+    return halt.main(Path(args.config_dir), args.action, args.reason, as_json=args.json)
+
+
 def cmd_service_account_list(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
@@ -2217,6 +2224,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_post_restore = sub.add_parser("post-restore")
     p_post_restore.add_argument("--since", default=None)
     p_post_restore.set_defaults(func=cmd_post_restore)
+
+    p_halt = sub.add_parser("halt")
+    p_halt.add_argument("--action", required=True, choices=("set", "clear", "status"))
+    p_halt.add_argument("--reason", default=None)
+    p_halt.add_argument("--json", action="store_true")
+    p_halt.set_defaults(func=cmd_halt)
 
     p_sa_list = sub.add_parser("service-account-list")
     p_sa_list.add_argument("--json", action="store_true")

@@ -415,8 +415,11 @@ _backup_artifact() {
             fi
             # The key of the test stack's hosted model never goes into an archive
             # (lib/hosted_model.py KEY_FILE); a bind mount has no such file to leave out.
+            # Nor does the platform halt (state/, lib/halt.py): a restore must neither lift
+            # nor set it.
             local -a exclude=()
-            [ "$kind" = "configdir" ] && exclude=(--exclude=./ai/litellm/test-hosted.env)
+            [ "$kind" = "configdir" ] && exclude=(--exclude=./ai/litellm/test-hosted.env
+                --exclude=./state)
             _docker_run \
                 -v "$(_docker_hostpath "$source"):/src:ro" \
                 -v "${snapshot_mount}:/backup" \
@@ -1040,6 +1043,20 @@ _restore_teardown() {
     docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down ${extra[@]+"${extra[@]}"}
 }
 
+# Empties /target, except the entry named by $KEEP, and unpacks $ARCHIVE into it without
+# that entry. Runs in $BACKUP_IMAGE (busybox sh and tar).
+# shellcheck disable=SC2016  # expanded by the container's shell
+_RESTORE_UNPACK='for entry in /target/..?* /target/.[!.]* /target/*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    [ -n "$KEEP" ] && [ "$entry" = "/target/$KEEP" ] && continue
+    rm -rf "$entry"
+done
+if [ -n "$KEEP" ]; then
+    tar xzf "/backup/$ARCHIVE" -C /target --exclude="./$KEEP" --exclude="./$KEEP/*"
+else
+    tar xzf "/backup/$ARCHIVE" -C /target
+fi'
+
 # $1 snapshot, $2 kind, $3 archive, $4 target, $5 owner
 _restore_artifact() {
     local snapshot="$1" kind="$2" archive="$3" target="$4" owner="$5"
@@ -1071,12 +1088,16 @@ _restore_artifact() {
             fi
             info "  $([ "$kind" = configdir ] && echo 'config dir' || echo 'bind mount') $target ($owner)"
             mkdir -p "$target"
+            # The config dir keeps its platform halt (state/): the restore point neither
+            # lifts nor sets it, also when an archive holds one.
+            local keep=""
+            [ "$kind" = "configdir" ] && keep="state"
             _docker_run \
                 -e "ARCHIVE=$archive" \
+                -e "KEEP=$keep" \
                 -v "$(_docker_hostpath "$target"):/target" \
                 -v "${snapshot_mount}:/backup" \
-                "$BACKUP_IMAGE" sh -c \
-                'rm -rf /target/..?* /target/.[!.]* /target/* 2>/dev/null; tar xzf "/backup/$ARCHIVE" -C /target'
+                "$BACKUP_IMAGE" sh -c "$_RESTORE_UNPACK"
             ;;
         *)
             warn "  unknown artifact kind '$kind', skipping"
