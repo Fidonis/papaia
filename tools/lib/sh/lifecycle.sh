@@ -324,6 +324,33 @@ cmd_npm_provision() { _provisioning_step npm-provision "$@"; }
 
 cmd_keycloak_role_sync() { _provisioning_step keycloak-role-sync "$@"; }
 
+# `realm sync` also runs at the end of every keycloak-role-sync step; on its own it takes
+# --check, which compares the realm with the declarations and changes nothing.
+cmd_realm_sync() {
+    local config_dir="$DEFAULT_CONFIG_DIR" check=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --check) check=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for realm sync: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "In a distributed installation the realm sync runs on Keycloak's node: run 'papaia-ctl keycloak-role-sync'."
+        exit 2
+    fi
+    py_cli join-stack-network || true
+    local -a flags=()
+    [ "$check" -eq 1 ] && flags+=(--check)
+    py_cli realm-sync ${flags[@]+"${flags[@]}"}
+}
+
 # --node belongs to a distributed installation; on one host it is a mistake worth naming.
 _require_no_node() {
     if [ -n "$1" ]; then

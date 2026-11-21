@@ -45,6 +45,7 @@ from . import (
     modules,
     nodes,
     npm_provision,
+    realm_sync,
     render_core,
     reporting,
     resolve,
@@ -1003,7 +1004,15 @@ def cmd_keycloak_role_sync(args: argparse.Namespace) -> int:
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     if not keycloak_role_sync.sync_roles(tree, config_dir, repo_root):
         return 1
-    return 0
+    # The realm sync of declared clients, roles and exchange scopes follows on every start.
+    return 0 if realm_sync.sync(tree, config_dir, repo_root) == 0 else 1
+
+
+def cmd_realm_sync(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    return realm_sync.sync(tree, config_dir, repo_root, check=args.check)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1833,6 +1842,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_kc_role_sync = sub.add_parser("keycloak-role-sync")
     p_kc_role_sync.set_defaults(func=cmd_keycloak_role_sync)
+
+    p_realm_sync = sub.add_parser("realm-sync")
+    p_realm_sync.add_argument("--check", action="store_true")
+    p_realm_sync.set_defaults(func=cmd_realm_sync)
 
     p_override_nets = sub.add_parser("override-external-nets")
     p_override_nets.add_argument("--file", required=True)

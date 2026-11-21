@@ -556,6 +556,113 @@ with that node's bundle, which carries only the add-ons placed on that node.
 The clients of add-ons placed on other nodes are therefore not created by
 `start`; until that is supported, import them by hand as before.
 
+### Realm sync of declared clients
+
+The core is the only writer of realm-wide objects. `papaia-ctl realm sync` (also the
+last part of every `keycloak-role-sync` step, so of every `start`) reconciles the
+`papaia` realm with three sources:
+
+- the naming register `tools/lib/names_register.json`, a snapshot of the platform kit's
+  register (release and commit in its `source`): every client, audience, role and
+  service account with its owning repository and whether a client may exchange tokens;
+- the `exposes:` sections of the active add-ons (generation 7): the module is the
+  add-on's name in `deployment.yaml`, and the manifest's `name` must be the same (an
+  add-on installed as `foo` whose manifest says `papaia-flow` is refused); its `roles`, the
+  `audience` of each entry, `ui[].visible_for_roles`, `delegation` and `service_accounts`;
+- `$PAPAIA_CONFIG_DIR/security/pairings.yaml`, which client may exchange tokens for
+  which audience. The file grants exchange rights: it and its directory must belong to
+  the user running `papaia-ctl` (or root) and must not be writable by group or others; a
+  symbolic link is refused:
+
+```yaml
+format: papaia.pairings/1
+pairings:
+  - client: flow-engine        # a registered client with token exchange
+    audience: mcp-paperless    # a registered audience
+    effects: [r, w]            # r read, w write, d delete, x module interface
+    state: confirmed           # or pending: waiting for approval, assigns nothing
+```
+
+What the sync manages:
+
+| Object | Rule |
+|---|---|
+| Clients | Every register client of an installed module and the resource-server client of each registered audience a module declares. Attribute `papaia.managed=true` (a fixed value, no wildcard), `papaia.owner=<module>`, `fullScopeAllowed: false`, no implicit flow, no password grant; `standard.token.exchange.enabled` only where the register grants it; PKCE S256 for sign-in clients. Resource servers are bearer-only. A client-level mapper that adds an audience (audience mapper, audience resolve, any mapper writing `aud`) is removed: audiences come only from `aud-*` scopes. So is a client-level mapper that adds a role whatever the token scope says (hardcoded role, role name mapper, script mappers, any other mapper writing `roles`, `realm_access` or `resource_access`); Keycloak's own realm and client role mappers stay, they only show roles already in the token scope. Keycloak puts a client's own client roles, with their composites, into its token scope whatever `fullScopeAllowed` says; module roles are realm roles, so a client role of a managed client may include only other roles of that client, and every other composite (a realm role, a `realm-management` role) is removed, one audit row each. |
+| Exchange scopes | One client scope `aud-<audience>` with exactly one audience mapper per audience of a confirmed pairing whose two sides are installed; protocol `openid-connect`, `include.in.token.scope=true`, `display.on.consent.screen=false`. An exchange scope maps no role: Keycloak adds a scope's mapped roles to every token issued with it, also an exchanged one, so every realm or client role mapped into a managed `aud-*` scope is removed (one audit row each). An existing `aud-*` scope (for example from a module's own setup) is adopted, marked `papaia.managed=true` and stripped of its role mappings in the same run. A managed client's optional scopes are exactly its confirmed pairings, at most 12; an `aud-*` scope is never a default scope. It is also removed from the realm's default and optional scopes for new clients and from every unmanaged client that can obtain a token (pairings name only register clients, which are managed once their module is installed). A managed `aud-*` scope without a confirmed pairing is removed. |
+| `offline_access` | Only `flow-engine` and `assist-gate`, and only while Flow (`flow.*`) or the assistant (`assist.*`) is installed and declares `delegation` with purposes of its own. It is removed from every other client that can obtain a token, including a holder client whose module is not installed, and from the realm's default scopes for new clients. A manifest of any other module that declares `delegation`, or a purpose of the other holder, is refused. |
+| Roles | The declared module roles (registered, owned by the declaring module) and the platform roles `papaia-admin`, `papaia-auditor`, `papaia-confirm`. Each declared `<module>-admin` role joins the composite `papaia-admin`; `papaia-auditor`, `papaia-operator` and the admin role of a module that is gone are taken out of it. |
+| Token scope | A sign-in client's token carries its module's roles, every existing role of a `visible_for_roles` and `papaia-confirm`. `papaia-admin` never enters a module client's scope (it is a composite of every module's admin role and of `realm-management` roles); an admin gets the module's own admin role through it. A role whose composite reaches outside that set or into client roles is left out and named in a note, and client roles are removed from a module client's scope, so an admin's token of a module client carries nothing of `realm-management` and no other module's admin role. A `visible_for_roles` entry of a module that is not installed waits until its role exists. |
+| Shared scopes | Keycloak's default scopes (`basic`, `acr`, `profile`, `email`, `roles`, `web-origins`) and `offline_access`, which every managed client gets, map no role; `offline_access` maps only its own role, and that role is no composite. Any other role mapping, a composite of `offline_access`, a role-adding mapper and a mapper that adds an audience (audience mapper, any mapper writing `aud`; event `exchange_right_changed`) on these scopes are removed: they would put the role or a fixed audience into the token of every managed client, also an exchanged one. Keycloak's own audience resolve mapper of `roles` stays: it only adds clients whose client roles are in the token, and no client role reaches a managed client's token scope. Clients of the realm template share these scopes; their own settings are not changed. |
+| Service accounts | Checked, not yet created: `owner_sub` and `deputy_sub` may be a placeholder `${NAME}` resolved from the add-on's `.env`; an unresolved placeholder or one person in both fields refuses the sync. |
+
+Every input is checked before the first write: a refused declaration or pairings file
+changes nothing (exit 2). A second run reports 0 changes. `--check` lists each deviation
+as `fail: ...` and exits 1. A managed client whose module is gone is reported and left in
+place. Clients of the realm template (LibreChat, LiteLLM, oauth2-proxy, LocalAI, the
+manager, the RAG resource servers) are not managed here until their modules declare
+themselves.
+
+Credentials. Every `realm sync` and every `--check` reads `KC_ADMIN_PASSWORD` (master
+realm) from the Keycloak `.env` and signs in with it: it checks the sync account and,
+with `realm sync`, creates it or realigns its rights and secret. The `keycloak-role-sync`
+step before it on every `start` uses the master admin as well. The changes derived from
+declarations and pairings are then made as the service account `svc-papaia-realm-sync`
+of the `papaia` realm (client secret `KC_REALM_SYNC_CLIENT_SECRET` in the same `.env`),
+not with a master token. That is what the dedicated account limits: the reconcile code
+holds no token for the master realm or other realms, and its audit rows carry an identity
+of their own. It does not keep the master password off the start path.
+
+The account holds the `realm-management` roles `manage-clients` and `manage-realm` of the
+`papaia` realm and nothing in the master realm. This is **not** a narrow right:
+`manage-realm` is needed to create roles, add composites and map roles into a client's
+scope, and it also allows a partial import, through which the account can give itself
+`realm-admin` of the `papaia` realm. Its secret is therefore a second persistent secret
+with `realm-admin` reach over `papaia`, usable with `client_credentials` from anywhere
+that reaches Keycloak; treat it like `KC_ADMIN_PASSWORD`. Every run checks with the
+master admin that the account holds exactly these two roles, in its role mappings and in
+its token scope, with no full scope and no other realm or client role, that its user is
+in no group and that Keycloak's `service_account` scope (shared by every service-account
+client) maps no role; `--check` reports a deviation as `fail`, `realm sync` removes it.
+First, before any write, the composites of its target roles (`default-roles-papaia` and
+the two roles) are expanded: a `realm-management` role reached through them beyond these
+two fails `--check` and stops `realm sync` without any write (the role definitions are
+not changed). Keycloak 26.7.0 refuses changes to the
+composites of its own `realm-management` roles (HTTP 403, also for the master admin), so
+in practice this catches a grown `default-roles-papaia`.
+
+Open maintainer decision on this trade-off. The security condition of the ticket asks
+for "a dedicated admin service account with realm-management rights only for the papaia
+realm". Alternatives:
+
+- (a) Keep it as described: a separate audit identity and a papaia-realm token for the
+  reconcile, against a second secret with `realm-admin` reach.
+- (b) Keep the account, but check it only in `papaia-ctl setup` and a doctor step, not on
+  every run: the realm sync then reads no master password on `start`. This only pays off
+  if `keycloak-role-sync` also stops using the master admin on `start`.
+- (c) Drop the separate account and run the realm sync with the master token the run
+  already holds: one secret fewer, no separate audit identity, and the reconcile code
+  holds a master-realm token. This departs from the ticket's condition and needs that
+  decision.
+- (d) Split: do role, composite and role scope writes with the master token, and give the
+  sync account only `manage-clients` (its own reach to be measured before), or keep no
+  persistent sync secret at all.
+
+Every write is one `papaia.audit/1` line (submission form; `source`, `seq` and
+`prev_hash` are set by `papaia-audit`) in `$PAPAIA_CONFIG_DIR/audit/outbox/papaia-ctl.jsonl`
+(mode 0600) with one UUIDv7 correlation id per run, the host account that ran
+`papaia-ctl` as `sub`, and `result: error` for a write Keycloak refused
+(`http_<status>`) or one that failed on the way (`transport`; Keycloak may have applied
+it); event `exchange_right_changed` for exchange scopes (also their role mappings),
+audience mappers and `offline_access`, `config_changed` otherwise. The gapless
+`source_seq` is counted in `papaia-ctl.seq`
+next to the outbox, locked for the whole run, so a second run waits and the counter
+does not restart when the outbox has been delivered. The run opens the outbox for
+appending before the first change; if a row still cannot be written after Keycloak
+applied a change, the run stops and reports a failed sync. A change that names a client
+scope Keycloak does not know (on a managed client, an unmanaged one or the sync account)
+is skipped with a note, `realm sync` then ends with exit 1 ("incomplete") and `--check`
+keeps reporting it. No client secret is printed or written.
+
 ### Seam 3 — LibreChat-MCP
 
 The `mcpServers` and `allowedDomains` fragment from `integration/librechat/`
@@ -635,7 +742,8 @@ No Core changes required.
 | `papaia-ctl restore [--restore-point=ID] [--list] [--only=SEL[,SEL]]` | Restore a catalogued restore point. Containers are removed and recreated around the restore, not merely stopped. `--only` (`module:`, `addon:` or `volume:` selectors) scopes both the teardown and the restart to the selected units, leaving everything else running; it reads the `version: 2` manifest and is refused with `--restart-clean`, a config-directory selection, or the `manager` profile. |
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
-| `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role. Runs on every `start`; no-op with an external OIDC provider |
+| `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role, then run the realm sync. Runs on every `start`; no-op with an external OIDC provider |
+| `papaia-ctl realm sync [--check]` | Reconcile the clients, roles and exchange scopes the installed modules declare and `security/pairings.yaml` confirms (see "Realm sync of declared clients"). `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
 | `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), the native LocalAI of a Mac (`localai_native`), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |

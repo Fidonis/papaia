@@ -1,0 +1,27 @@
+# Throwaway Keycloak for tests/test_realm_sync_live.py: the version the stack pins
+# (src/infra/keycloak/docker-compose.yml), by digest, in development mode with an
+# in-memory database. Published on the loopback address only.
+#
+#   KEYCLOAK_TEST_PORT=58340 KEYCLOAK_TEST_ADMIN_PASSWORD=<random> \
+#     docker compose -p <project> -f tools/tests/fixtures/keycloak/docker-compose.yml up -d --wait
+name: papaia-realm-sync-test
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.0@sha256:0f198be292568439d700cdbfb893e69a6009bb43a94a06a945b1d3d506c76b13
+    command: ["start-dev", "--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_TEST_ADMIN_PASSWORD:?set a random admin password}
+    ports:
+      - "127.0.0.1:${KEYCLOAK_TEST_PORT:-58340}:8080"
+    networks: [keycloak]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+networks:
+  keycloak:
+    ipam:
+      config:
+        - subnet: ${KEYCLOAK_TEST_SUBNET:-10.210.17.0/24}
