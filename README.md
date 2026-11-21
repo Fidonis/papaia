@@ -292,6 +292,7 @@ papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...] [--backup-d
 papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                      [--insecure-images] [-y] [--config-dir=PATH]
+papaia-ctl post-restore [--since=EPOCH] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl keycloak-role-sync [--config-dir=PATH]
 papaia-ctl realm sync [--check] [--config-dir=PATH]
@@ -743,6 +744,56 @@ and touches no other node. A whole restore stops every node, puts the controller
 configuration back, hands every node its bundle and release, writes back each node's data and
 starts the installation. A restore point taken of a single host is refused in a distributed
 installation, and the other way round. `--restart-clean` is not available there.
+
+Once anything was written, [`post-restore`](#post-restore) is pending — for a scoped restore
+and with `--no-restart` as well, and so also for `addon rollback --restore-data`. `restore`
+records it in `$PAPAIA_CONFIG_DIR/post-restore.pending` and starts Keycloak and its database
+alone first, runs the step against them and starts the modules (core services and add-ons)
+only after it succeeded. While the step is pending, every `start` does the same before the
+first module, and `addon start` refuses. If the step fails (status 3), or the stack does not
+come up again before it ran (the restart's status), `restore` logs `post_restore=failed` or
+`post_restore=pending` in `backup.log` and prints the command that finishes it. With `--no-restart` the step runs
+against the running Keycloak, which may still serve the replaced database from its cache, so
+it stays pending and runs again at the next `start`.
+
+### `post-restore`
+
+```bash
+tools/papaia-ctl post-restore [--since=EPOCH] [--config-dir=PATH]
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--since=EPOCH` | _(now)_ | Unix time in seconds when the restore began, as `restore` prints it when the step failed |
+
+A restore point brings back the Keycloak database as it was: sessions and delegations that
+persons have revoked since are valid again. `post-restore` makes them unusable in the bundled
+Keycloak, with the master admin:
+
+1. The `papaia` realm's "not before" is set one second past the current time. Keycloak then
+   refuses every token issued before, offline (refresh) tokens included, for every client;
+   every person signs in again. A value that already lies past `--since` is left alone, and
+   `realm sync` never writes it, so a later sync does not revive old tokens.
+2. For every person, the consents of the two holders of delegations, `flow-engine` and
+   `assist-gate`, that predate `--since` are removed (`DELETE /users/{id}/consents/{client}`),
+   which also ends their offline sessions — a logout alone does not. A grant without a consent
+   is judged by the start of its offline sessions; a grant whose age cannot be read is removed.
+   Consents of other clients stay.
+
+A second run with the same `--since` finds nothing to do and writes nothing; a delegation
+granted after the restore survives it. Persons grant their delegations again. Every write is
+one `papaia.audit/1` row in `$PAPAIA_CONFIG_DIR/audit/outbox/papaia-ctl.jsonl` (operations
+`post_restore.not_before` and `post_restore.consent_delete`, one correlation id per run); a
+refused write is a row with `result: error` and stops the run with status 1.
+
+A successful run clears the pending step that `restore` recorded, unless `--since` lies before
+the second recorded there.
+
+The step does not replace the holders' own steps after a restore (a new sealing key, an
+emptied delegation table, halted runs), which belong to each module. With
+`AUTH_PROVIDER=external_oidc` there is no bundled Keycloak and the step does nothing: revoke
+the sessions at the identity provider. It is not available in a distributed installation yet;
+`restore` there says so.
 
 ### `librechat clear-history`
 

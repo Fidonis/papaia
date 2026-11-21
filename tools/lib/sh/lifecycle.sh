@@ -224,6 +224,112 @@ _core_override_files() {
     done
 }
 
+# ── post-restore before the first module ────────────────────────────────
+# The step is `papaia-ctl post-restore` (backup.sh, lib/post_restore.py). A restore that
+# wrote something leaves $CONFIG_DIR/post-restore.pending with the second it began, until
+# the step succeeded. While it exists, `start` brings up Keycloak alone, runs
+# the step and starts no module before it succeeded; `addon start` refuses. Whatever stops
+# a restore half-way, the restored delegations do not come back usable with the next start.
+
+# $1 = the time the restore began (empty: now). Returns the step's status.
+_post_restore() {
+    local -a flags=()
+    [ -n "${1:-}" ] && flags+=(--since="$1")
+    py_cli join-stack-network || true
+    py_cli post-restore ${flags[@]+"${flags[@]}"}
+}
+
+# shellcheck disable=SC2034  # read by restore (backup.sh)
+POST_RESTORE_STATUS=""  # ok | failed, set by _post_restore_before_modules
+
+_post_restore_marker() {
+    printf '%s/post-restore.pending' "$CONFIG_DIR"
+}
+
+# $1 = the second the restore began.
+_post_restore_mark() {
+    local marker
+    marker="$(_post_restore_marker)"
+    { printf '%s\n' "$1" > "$marker.tmp" && mv -f "$marker.tmp" "$marker"; } 2>/dev/null
+}
+
+_post_restore_clear() {
+    rm -f "$(_post_restore_marker)"
+}
+
+# Fails when nothing is pending; prints the recorded second, or nothing when the marker
+# cannot be read as one. The step then starts from now, which revokes more, never less.
+_post_restore_pending() {
+    local marker value=""
+    marker="$(_post_restore_marker)"
+    [ -f "$marker" ] || return 1
+    value="$(head -c 32 "$marker" 2>/dev/null | tr -d '[:space:]')" || value=""
+    [[ "$value" =~ ^[1-9][0-9]{0,9}$ ]] || value=""
+    printf '%s' "$value"
+}
+
+# $1 = the second the restore began (may be empty).
+_post_restore_hint() {
+    local since_flag=""
+    [ -n "${1:-}" ] && since_flag=" --since=$1"
+    error "Sessions and delegations from the restore point may still be usable."
+    error "'papaia-ctl start' runs the step before any module starts; with Keycloak"
+    error "running, finish it with:"
+    error "  papaia-ctl post-restore$since_flag --config-dir=$CONFIG_DIR"
+}
+
+# The pending step before the first module (BE-17): the images of the keycloak profile
+# checked, Keycloak and its database started alone, the step run against them. Returns 0
+# when nothing is pending or the step succeeded; otherwise non-zero, and the caller starts
+# nothing else. $1 = 1 for --insecure-images.
+# shellcheck disable=SC2034  # POST_RESTORE_STATUS is read by restore (backup.sh)
+_post_restore_before_modules() {
+    local insecure="${1:-0}" since
+    since="$(_post_restore_pending)" || return 0
+    POST_RESTORE_STATUS="failed"
+    local env_file="$REPO_ROOT/src/.env"
+    info "A restore left post-restore pending; running it before any module starts..."
+    # Without the keycloak profile (external_oidc) there is nothing to start: the step
+    # reports that the delegations live at the external provider.
+    # Captured first: under pipefail an early `grep -q` could fail the pipeline.
+    local services=""
+    services="$(docker compose -f "$COMPOSE_FILE" --env-file "$env_file" \
+        config --services 2>/dev/null)" || services=""
+    if grep -qx keycloak <<< "$services"; then
+        local list verified=0 up_rc=0
+        list="$(mktemp)"
+        ( _core_image_list "$list" keycloak "$env_file" \
+            && _verify_images restore "$REPO_ROOT" "$list" 0 "$insecure" ) || verified=$?
+        rm -f "$list"
+        if [ "$verified" -eq 0 ]; then
+            info "Starting Keycloak alone..."
+            docker compose -f "$COMPOSE_FILE" --env-file "$env_file" \
+                up -d --no-recreate keycloak || up_rc=$?
+        fi
+        if [ "$verified" -ne 0 ] || [ "$up_rc" -ne 0 ]; then
+            error "Keycloak could not be started on its own; no module was started."
+            [ -z "${_RESTORE_OPEN_ID:-}" ] && _post_restore_hint "$since"
+            return 3
+        fi
+    fi
+    if ! _post_restore "$since"; then
+        error "post-restore failed; no module was started."
+        [ -z "${_RESTORE_OPEN_ID:-}" ] && _post_restore_hint "$since"
+        return 3
+    fi
+    _post_restore_clear
+    POST_RESTORE_STATUS="ok"
+}
+
+# For commands that start a module without `start`: refuse while the step is pending.
+_require_no_pending_post_restore() {
+    local since
+    since="$(_post_restore_pending)" || return 0
+    error "A restore left post-restore pending; no module may start before it ran."
+    _post_restore_hint "$since"
+    exit 2
+}
+
 cmd_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
     local insecure_images=0
@@ -341,6 +447,10 @@ cmd_start() {
     rm -f "$image_list"
     _addon_image_files_remove
     [ "$verified" -eq 0 ] || return 2
+
+    # A restore left post-restore pending (see above): Keycloak alone, then the step, and
+    # no add-on or core module before it succeeded (BE-17).
+    _post_restore_before_modules "$insecure_images" || return 3
 
     if [ "$addons" -eq 1 ]; then
         info "Starting active addons..."

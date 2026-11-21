@@ -141,6 +141,11 @@ The signing key is made on the first start in the volume `papaia-lifecycle-key`,
 key from a backup can never sign lists again. Modules that keep a copy of the public key
 must take the new one then.
 
+The revocation list does not cover what a restore point brings back from before it: the
+realm's sessions and the consents behind delegations. `restore` runs `papaia-ctl
+post-restore` for that (realm "not before", consents of `flow-engine` and `assist-gate`); see
+the README.
+
 ## Health
 
 The container's health check runs `lifecycle.py health`, which prints for example

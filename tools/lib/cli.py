@@ -49,6 +49,7 @@ from . import (
     nodes,
     npm_provision,
     paperless_gate,
+    post_restore,
     realm_sync,
     render_core,
     reporting,
@@ -1322,6 +1323,12 @@ def cmd_realm_sync(args: argparse.Namespace) -> int:
     return realm_sync.sync(tree, config_dir, repo_root, check=args.check)
 
 
+def cmd_post_restore(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
+    return post_restore.main(tree, config_dir, args.since)
+
+
 def cmd_service_account_list(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
@@ -2197,6 +2204,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_realm_sync = sub.add_parser("realm-sync")
     p_realm_sync.add_argument("--check", action="store_true")
     p_realm_sync.set_defaults(func=cmd_realm_sync)
+
+    p_post_restore = sub.add_parser("post-restore")
+    p_post_restore.add_argument("--since", default=None)
+    p_post_restore.set_defaults(func=cmd_post_restore)
 
     p_sa_list = sub.add_parser("service-account-list")
     p_sa_list.add_argument("--json", action="store_true")

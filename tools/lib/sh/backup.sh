@@ -38,6 +38,7 @@ _unpause_all() {
 
 _backup_cleanup() {
     _unpause_all
+    _restore_close_pending
     local f
     if [ ${#_BACKUP_TMPFILES[@]} -gt 0 ]; then
         for f in ${_BACKUP_TMPFILES[@]+"${_BACKUP_TMPFILES[@]}"}; do
@@ -376,6 +377,9 @@ _restore_distributed() {
         partial) warn "restore completed with errors: $restore_id" ;;
         *)       error "restore failed: $restore_id"; exit 3 ;;
     esac
+    warn "post-restore does not run in a distributed installation yet: sessions and"
+    warn "delegations from the restore point stay usable until the realm's 'not before' is"
+    warn "set and the consents of flow-engine and assist-gate are removed in Keycloak."
 }
 
 # $1 snapshot, $2 kind, $3 archive (relative to snapshot), $4 source, $5 owner
@@ -652,6 +656,10 @@ cmd_restore() {
     fi
 
     local started=$SECONDS
+    # Every token issued before this second belongs to the stack the restore replaces;
+    # post-restore below revokes what the restore point brings back from before it.
+    local since
+    since="$(date +%s)"
 
     if [ "$no_restart" -eq 0 ]; then
         if [ -n "$only" ]; then
@@ -692,6 +700,33 @@ cmd_restore() {
     [ "$failed" -gt 0 ] && result="partial"
     [ "$failed" -eq "${#kinds[@]}" ] && result="failed"
 
+    local op="restore"
+    [ -n "$only" ] && op="restore-scoped"
+    local details="artifacts=$(( ${#kinds[@]} - failed ))/${#kinds[@]}"
+
+    # Any restore, scoped or not, may bring back Keycloak's sessions or a holder's
+    # delegations; once something was written, the step is pending until it succeeds
+    # (BE-17). The marker makes every later `start` run it before the first module, and
+    # the EXIT trap logs and names it should this command stop before it is done.
+    local post_restore="skipped"
+    POST_RESTORE_STATUS=""
+    if [ "$result" != "failed" ]; then
+        if ! _post_restore_mark "$since"; then
+            _backup_log "$backup_dir" "$op" "$restore_id" "$result" "$details" \
+                "post_restore=failed"
+            error "Could not record the pending post-restore step in $CONFIG_DIR; the stack"
+            error "was not started again."
+            _post_restore_hint "$since"
+            exit 3
+        fi
+        post_restore="pending"
+        _restore_open "$backup_dir" "$op" "$restore_id" "$result" "$details" "$since" "$started"
+    fi
+
+    # cmd_start and the scoped restart run the pending step themselves: Keycloak alone
+    # first, then the step, and no module before it succeeded. They are called plainly so
+    # `set -e` keeps applying inside them; when one fails or exits, the EXIT trap writes
+    # the log entry and names the way to finish the step (_restore_close_pending).
     if [ "$no_restart" -eq 0 ]; then
         if [ -n "$only" ]; then
             _restore_restart_scoped "$sel_profiles" "$sel_addons" "$insecure_images"
@@ -701,18 +736,126 @@ cmd_restore() {
             [ "$insecure_images" -eq 1 ] && start_flags+=(--insecure-images)
             cmd_start ${start_flags[@]+"${start_flags[@]}"}
         fi
+        if [ "$post_restore" = "pending" ]; then
+            case "$POST_RESTORE_STATUS" in
+                ok) post_restore="ok" ;;
+                failed) post_restore="failed" ;;
+            esac
+        fi
+    elif [ "$post_restore" = "pending" ]; then
+        # The running Keycloak may answer from its cache over the database replaced
+        # underneath it, so the marker stays and the next start runs the step again.
+        info "Revoking the sessions and delegations of the restore point (post-restore)..."
+        if _post_restore "$since"; then
+            post_restore="ok"
+        else
+            post_restore="failed"
+        fi
+        warn "--no-restart: Keycloak may still serve the replaced database from its cache;"
+        warn "post-restore runs again at the next start, before any module starts."
     fi
 
-    local op="restore"
-    [ -n "$only" ] && op="restore-scoped"
-    _backup_log "$backup_dir" "$op" "$restore_id" "$result" \
-        "artifacts=$(( ${#kinds[@]} - failed ))/${#kinds[@]} duration=$((SECONDS - started))s"
+    if [ "$post_restore" = "skipped" ]; then
+        _backup_log "$backup_dir" "$op" "$restore_id" "$result" \
+            "$details duration=$((SECONDS - started))s" "post_restore=skipped"
+    else
+        _restore_close "$post_restore"
+    fi
+
+    if [ "$post_restore" = "failed" ] || [ "$post_restore" = "pending" ]; then
+        error "Restore point $restore_id was written, but post-restore is $post_restore."
+        _post_restore_hint "$since"
+        exit 3
+    fi
 
     case "$result" in
         ok)      success "restore complete: $restore_id (${#kinds[@]} artifacts)" ;;
         partial) warn "restore completed with errors: $restore_id ($failed of ${#kinds[@]} artifacts failed)" ;;
         failed)  error "restore failed: $restore_id (no artifact could be restored)"; exit 3 ;;
     esac
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# post-restore
+# ─────────────────────────────────────────────────────────────────────────
+# papaia-ctl post-restore [--since=EPOCH]: the realm's "not before" past every token of
+# the restore point, and the consents of flow-engine and assist-gate that predate EPOCH
+# removed (lib/post_restore.py). `restore` runs it; on its own it finishes a restore whose
+# step failed. A second run with the same --since changes nothing.
+cmd_post_restore() {
+    local config_dir="$DEFAULT_CONFIG_DIR" since=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --since=*)
+                since="${1#*=}"
+                if ! [[ "$since" =~ ^[1-9][0-9]{0,9}$ ]]; then
+                    error "--since must be a Unix time in seconds, as restore prints it."
+                    exit 2
+                fi
+                ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for post-restore: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "post-restore is not available in a distributed installation yet."
+        exit 2
+    fi
+    local pending="" rc=0
+    pending="$(_post_restore_pending)" || pending="none"
+    _post_restore "$since" || rc=$?
+    # A run from an earlier second than the restore recorded leaves its marker alone.
+    if [ "$rc" -eq 0 ] && [ "$pending" != "none" ]; then
+        if [ -z "$since" ] || [ -z "$pending" ] || [ "$since" -ge "$pending" ]; then
+            _post_restore_clear
+        fi
+    fi
+    return "$rc"
+}
+
+# The open restore entry of backup.log: written by _restore_close, or by the EXIT trap
+# (_restore_close_pending) when the command stops first.
+_RESTORE_OPEN_ID=""
+_RESTORE_OPEN=()
+
+# $1 = backup dir, $2 = op, $3 = id, $4 = result, $5 = details, $6 = since, $7 = start
+_restore_open() {
+    _RESTORE_OPEN=("$@")
+    _RESTORE_OPEN_ID="$3"
+}
+
+# $1 = the post-restore field. Logs the open entry once.
+_restore_close() {
+    [ -n "$_RESTORE_OPEN_ID" ] || return 0
+    _RESTORE_OPEN_ID=""
+    _backup_log "${_RESTORE_OPEN[0]}" "${_RESTORE_OPEN[1]}" "${_RESTORE_OPEN[2]}" \
+        "${_RESTORE_OPEN[3]}" \
+        "${_RESTORE_OPEN[4]} duration=$((SECONDS - ${_RESTORE_OPEN[6]}))s" \
+        "post_restore=$1"
+}
+
+# The restart failed or exited: the step ran (ok), failed, or was never reached (pending).
+_restore_close_pending() {
+    [ -n "$_RESTORE_OPEN_ID" ] || return 0
+    local state="pending" id="$_RESTORE_OPEN_ID"
+    case "$POST_RESTORE_STATUS" in
+        ok|failed) state="$POST_RESTORE_STATUS" ;;
+    esac
+    _restore_close "$state"
+    if [ "$state" = "ok" ]; then
+        error "Restore point $id was written and post-restore ran, but the stack did not"
+        error "start again. Fix the cause and run 'papaia-ctl start'."
+        return 0
+    fi
+    error "Restore point $id was written, but the command stopped before post-restore was"
+    error "done (post-restore is $state)."
+    _post_restore_hint "${_RESTORE_OPEN[5]}"
 }
 
 # Tear the stack down before restoring. $1 = 1 to drop named volumes as well.
@@ -852,6 +995,9 @@ _restore_teardown_scoped() {
 _restore_restart_scoped() {
     local profiles="$1" addons="$2" insecure_images="${3:-0}"
     local addon_name addon_path
+
+    # Before the first add-on: Keycloak, then the pending post-restore step (BE-17).
+    _post_restore_before_modules "$insecure_images" || return $?
 
     while IFS= read -r addon_name; do
         [ -z "$addon_name" ] && continue

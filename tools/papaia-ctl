@@ -52,6 +52,8 @@
 #   papaia-ctl restore-scoped --only=SELECTOR[,SELECTOR] [as restore, minus
 #                            --restart-clean] — restore that cannot replace the
 #                            configuration directory, for in-stack callers
+#   papaia-ctl post-restore  [--since=EPOCH] [--config-dir=PATH] — revoke the sessions
+#                            and delegations a restore brought back (restore runs it)
 #   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl realm sync    [--check] [--config-dir=PATH]
@@ -112,7 +114,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,105p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,107p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -206,6 +208,7 @@ case "$cmd" in
     backup-delete) cmd_backup_delete "$@" ;;
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
+    post-restore)  cmd_post_restore "$@" ;;
     npm-provision) cmd_npm_provision "$@" ;;
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;

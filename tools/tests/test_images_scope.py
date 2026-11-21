@@ -624,6 +624,7 @@ def test_addon_rollback_with_data_passes_insecure_images_to_the_restore(tmp_path
 def _restore(tmp_path: Path, args: str):
     snapshot = tmp_path / "backups" / "2026-10-25_10-00-00"
     snapshot.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config").mkdir(exist_ok=True)
     addon = tmp_path / "addons" / "paperless"
     addon.mkdir(parents=True, exist_ok=True)
     (addon / "docker-compose.yml").write_text("services: {}\n", "utf-8")
@@ -644,7 +645,10 @@ _restore_artifact() {{ return 0; }}
 _containers_using_volume() {{ :; }}
 _backup_log() {{ :; }}
 _verify_images() {{ echo "image-verify $*" >> "{(tmp_path / 'calls.log').as_posix()}"; }}
-cmd_start() {{ echo "cmd_start $*" >> "{(tmp_path / 'calls.log').as_posix()}"; }}
+cmd_start() {{
+    echo "cmd_start $*" >> "{(tmp_path / 'calls.log').as_posix()}"
+    _post_restore_before_modules
+}}
 cmd_restore {args} -y
 """
     return backup_cli._run(tmp_path, body, py_cli=py_cli)

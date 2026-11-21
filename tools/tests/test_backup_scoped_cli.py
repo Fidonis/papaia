@@ -17,6 +17,7 @@ import pytest
 TOOLS = Path(__file__).resolve().parents[1]
 BACKUP_SH = TOOLS / "lib" / "sh" / "backup.sh"
 ADDON_SH = TOOLS / "lib" / "sh" / "addon.sh"
+LIFECYCLE_SH = TOOLS / "lib" / "sh" / "lifecycle.sh"
 BASH = shutil.which("bash")
 
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash is not available")
@@ -31,8 +32,6 @@ info() { echo "INFO: $*"; }
 warn() { echo "WARN: $*" >&2; }
 error() { echo "ERROR: $*" >&2; }
 success() { echo "OK: $*"; }
-_require_setup_done() { :; }
-_topology_mode() { echo single; }
 py_cli() {
     echo "py_cli $*" >> "@LOG@"
     case "$1" in
@@ -48,8 +47,12 @@ docker() {
         volume|ps|inspect) ;;
     esac
 }
+source "@LIFECYCLE@"
 source "@ADDON@"
 source "@BACKUP@"
+# After the libraries: these replace their own definitions.
+_require_setup_done() { :; }
+_topology_mode() { echo single; }
 """
 
 
@@ -66,6 +69,7 @@ def _run(tmp_path: Path, body: str, *, py_cli: str = "return 1") -> tuple[
         .replace("@LOG@", log.as_posix())
         .replace("@BACKUPS@", (tmp_path / "backups").as_posix())
         .replace("@ADDON_PATH@", (tmp_path / "addons" / "paperless").as_posix())
+        .replace("@LIFECYCLE@", LIFECYCLE_SH.as_posix())
         .replace("@ADDON@", ADDON_SH.as_posix())
         .replace("@BACKUP@", BACKUP_SH.as_posix())
         .replace("@PY_CLI@", py_cli)

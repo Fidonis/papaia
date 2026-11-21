@@ -322,6 +322,7 @@ cmd_addon_start() {
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    _require_no_pending_post_restore
     local -a extra=()
     [ "$force" -eq 1 ] && extra+=(--force)
     # Materialize .env from the config bundle into the checkout, then
