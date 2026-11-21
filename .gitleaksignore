@@ -1,0 +1,18 @@
+# Reviewed findings of the secret scan in the history of this repository. Each entry is
+# one fingerprint (commit:path:rule:line) with its reason. History is not rewritten; a new
+# finding is never added here without a review of the value.
+
+# SearXNG secret_key shipped as a fixed value by early releases. The value is burned: it
+# counts as public, is never used (every installation generates SEARXNG_SECRET, which
+# overrides it), and the shipped settings now carry SearXNG's placeholder only.
+0ad5faedc07556f51ad90250799adee17eac1d97:src/services/searxng/settings-example.yml:generic-api-key:98
+7a712e4eb38d6245ceea1c86eb33ff4f85d38c3e:src/services/searxng/settings.yml:generic-api-key:98
+61f5bae65b5426da80f2369bfb18d89a71f62853:src/services/searxng/settings.yml:generic-api-key:98
+1504dfeb41e5f1272748f0f62416bf3efd754a07:src/services/searxng/settings.yml:generic-api-key:98
+
+# No secret: the constant names the Keycloak directory of the stack ("infra/keycloak").
+9ac805b9be49a7238534167bece802085aaa8c0f:tools/lib/keycloak_role_sync.py:generic-api-key:32
+
+# No secret: an empty variable in an example file on a side branch (demo directory); the match
+# runs into the next line of the file.
+95bbff516ff7d2d1f3fb5d33471c2059b1596176:crm-demo/.env.example:generic-api-key:34

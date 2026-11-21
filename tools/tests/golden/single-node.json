@@ -60,7 +60,7 @@
       "security/protected-hosts.yaml": "18807f16fdaa4b628d1665f265bbe8ab8f35cae493b49200276079ef3a9780aa",
       "services/firecrawl/.env": "4446cb825ba079ab6db70b695f8cb63b08f81a23e10f97c674b2d276aa5296b6",
       "services/searxng/.env": "c3a48f8664e36a34020e55ef050493a55faf8c147bd36d58a8ef18d160e7c487",
-      "services/searxng/settings.yml": "94ca5687743ca260a9607844c43aaa2af36134c5537e88e567e4e543a640671b"
+      "services/searxng/settings.yml": "f1578b438784e53343e7f95b6fe9b75537c80b89a101e80be1f8c13e519996fc"
     }
   },
   "external-oidc": {
@@ -125,7 +125,7 @@
       "security/protected-hosts.yaml": "18807f16fdaa4b628d1665f265bbe8ab8f35cae493b49200276079ef3a9780aa",
       "services/firecrawl/.env": "4446cb825ba079ab6db70b695f8cb63b08f81a23e10f97c674b2d276aa5296b6",
       "services/searxng/.env": "c3a48f8664e36a34020e55ef050493a55faf8c147bd36d58a8ef18d160e7c487",
-      "services/searxng/settings.yml": "94ca5687743ca260a9607844c43aaa2af36134c5537e88e567e4e543a640671b"
+      "services/searxng/settings.yml": "f1578b438784e53343e7f95b6fe9b75537c80b89a101e80be1f8c13e519996fc"
     }
   },
   "full": {
@@ -192,7 +192,7 @@
       "security/protected-hosts.yaml": "18807f16fdaa4b628d1665f265bbe8ab8f35cae493b49200276079ef3a9780aa",
       "services/firecrawl/.env": "4446cb825ba079ab6db70b695f8cb63b08f81a23e10f97c674b2d276aa5296b6",
       "services/searxng/.env": "c3a48f8664e36a34020e55ef050493a55faf8c147bd36d58a8ef18d160e7c487",
-      "services/searxng/settings.yml": "94ca5687743ca260a9607844c43aaa2af36134c5537e88e567e4e543a640671b"
+      "services/searxng/settings.yml": "f1578b438784e53343e7f95b6fe9b75537c80b89a101e80be1f8c13e519996fc"
     }
   }
 }

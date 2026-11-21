@@ -1,0 +1,41 @@
+# License exceptions of this repository, read by `papaia-kit licenses check` (CI job
+# "License check"). The policy itself belongs to papaia-kit; see its README, "License policy".
+#
+# [[exception]] lets one package version pass in one scope although its license class
+# needs an exception there (reason, ADR, expiry, approval). [[verified]] replaces empty or
+# ambiguous package metadata with the license checked at the named https source; a new
+# version needs a new entry.
+
+version = 1
+
+# The following are locked for platforms the check does not run on (environment markers),
+# so their metadata is absent from the Python 3.12 environment of the check.
+
+# pytest's console colours, Windows only.
+[[verified]]
+package = "colorama"
+version = "0.4.6"
+license = "BSD-3-Clause"
+source = "https://github.com/tartley/colorama/blob/0.4.6/LICENSE.txt"
+
+# pytest backport, Python below 3.11 only.
+[[verified]]
+package = "exceptiongroup"
+version = "1.3.1"
+license = "MIT"
+source = "https://github.com/agronholm/exceptiongroup/blob/1.3.1/LICENSE"
+
+# pytest backport, Python below 3.11 only.
+[[verified]]
+package = "tomli"
+version = "2.5.0"
+license = "MIT"
+source = "https://pypi.org/project/tomli/2.5.0/"
+
+# Backport used by jsonschema's dependency referencing, Python below 3.13 only; present
+# in the Python 3.12 environment of the CI check, absent from a Python 3.13 environment.
+[[verified]]
+package = "typing-extensions"
+version = "4.16.0"
+license = "PSF-2.0"
+source = "https://pypi.org/project/typing-extensions/4.16.0/"

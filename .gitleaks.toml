@@ -1,0 +1,35 @@
+# Secret scan of this repository (CI job "Secret scan", gitleaks over the full history).
+# The default rules apply; .gitleaksignore lists the reviewed findings of the history,
+# one fingerprint each with its reason.
+
+title = "papAIa secret scan"
+
+[extend]
+useDefault = true
+
+# The golden snapshots record the SHA-256 digest of every rendered file. A digest is a
+# hash of a file, never a secret: the snapshot replaces every generated secret with a
+# marker before it hashes. Only a bare 64-digit hex value in those files is allowed.
+[[allowlists]]
+description = "file digests in the golden snapshots"
+condition = "AND"
+paths = ['''^tools/tests/golden/[^/]+\.json$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']
+
+# An unsigned token (header {"alg":"none"}) with empty claims grants nothing; test fixtures
+# use it to prove that token values are refused. Only this exact value is allowed.
+[[allowlists]]
+description = "unsigned test token with empty claims"
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJub25lIn0\.e30\.$''']
+
+# Backup and restore tests write labelled canary values into fake volumes and check that
+# they come back. A canary is a readable label with a number (for example
+# "canary-key-journal-93"), never a credential. Only that shape, only in Python test files.
+[[allowlists]]
+description = "canary labels in the tests"
+condition = "AND"
+paths = ['''^tools/tests/[^/]+\.py$''']
+regexTarget = "secret"
+regexes = ['''^canary-[a-z]+(-[a-z]+)*-[0-9]{1,6}$''']

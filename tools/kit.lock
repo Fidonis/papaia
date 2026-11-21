@@ -1,0 +1,18 @@
+# papaia-kit release for consumers that vendor the kit.
+# Copy the files into vendor/papaia-kit/<version>/, keep this file next to the
+# pyproject.toml that binds the wheel as a path source; uv.lock carries the
+# same sha256. Rebuild and compare with: make release-verify TAG=v<version>
+
+version = "0.1.1"
+commit = "fb8225c710df4bf104d04116dcec4a9259e525e4"
+source_date_epoch = 1795256988
+
+[[files]]
+name = "papaia_kit-0.1.1-py3-none-any.whl"
+path = "vendor/papaia-kit/0.1.1/papaia_kit-0.1.1-py3-none-any.whl"
+sha256 = "ebdcf13924f6dde300cfc36d5116fc695c5343b724ee5d7d71fae106195605ab"
+
+[[files]]
+name = "papaia_kit-0.1.1.tar.gz"
+path = "vendor/papaia-kit/0.1.1/papaia_kit-0.1.1.tar.gz"
+sha256 = "d7ff3d842d227d90927ea08a7c520b48e9912988c8669a821af24e8886be9681"

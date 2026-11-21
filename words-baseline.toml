@@ -1,0 +1,2740 @@
+# Frozen baseline of `papaia-kit repo words` for this repository.
+#
+# Each entry is one place that already held a denied term when the baseline
+# was frozen: the file (relative to the repository root), the term as found,
+# the SHA-256 fingerprint of the line text without surrounding white space,
+# the number of hits of this term on lines with this text in that file
+# (`count`, default 1; a line that holds the term twice counts twice) and the
+# reason. A listed hit passes, also after its line moved; any other hit fails.
+# An entry whose hit disappeared fails as stale until it is removed.
+#
+# The file is written once with `repo words --write-baseline`. Removing an
+# entry needs no review; adding or changing one does, in its own reviewed
+# change with a reason for that place.
+
+version = 1
+
+[[entry]]
+path = ".gitignore"
+term = "AI"
+fingerprint = "a1156472d77fbff9db80653ad46be5cef110ee2e96a2138a662a3792ed80f102"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "ADDON_API"
+term = "agents"
+fingerprint = "7adbcdc144940497e513c0438cebf231824d1fc0f799d484fa0f64521179f908"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "CHANGELOG.md"
+term = "agents"
+fingerprint = "ab47f25123cd3cc7a041dbf158593d8cf5b41eb7dbdd85a4a2a4f37895770edb"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "CHANGELOG.md"
+term = "agent"
+fingerprint = "fc6582b5a81dd1be2e088a7adb5f24853e998e74dce90df36fef625673b0f723"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "CHANGELOG.md"
+term = "agents"
+fingerprint = "9e6f9abdc812920af679d6b554794797702c1b6154f5139c1aadcd3b3ddd47ac"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "CHANGELOG.md"
+term = "agents"
+fingerprint = "da8df02090b8d7191ddc42469afd325a296df73a80d511d4443520c762ad6c83"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "CHANGELOG.md"
+term = "agents"
+fingerprint = "93493e297a86376846911c629c8c64d007490d1038c386ad20a14e67f124ee23"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "CHANGELOG.md"
+term = "agents"
+fingerprint = "3219a7d7be1a013751a6936d2a7e08ea6929b8c5f22a9ea3fe80b433679c8328"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "3370f719c07b03b19362a392a150299bbbb0c9b97b24d1e31ed37cc03e41f912"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "dcae48bda0a0c370a06cbe8b56d1d9677d86be0bd23d7d695e2a3294c4c69e7b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "81b42d585c9caa162a7afe083d6a539614d14b258f05ef21242d39816f90c448"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "536a8191b59aa458590fff035854c14ab5037c4e33336c491fa39945b9c14a5c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "agent"
+fingerprint = "b5ba055f8a77e3f0fee31a027ee3167719eb8323e9946bc9b07639d336e8f581"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "agents"
+fingerprint = "b5ba055f8a77e3f0fee31a027ee3167719eb8323e9946bc9b07639d336e8f581"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "Agent"
+fingerprint = "a375e9e779bbb863333a567515c4734c920837614f39b9bbae9121cd10d421b5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "724cd571b8a0035ab97e9e5f179b9e43fcef45ee70b17f15d84b71f93de45687"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "4c189c22e9af7458a6a4296258f593e8468873c3e5945ae2f08c28b0210e6a56"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "adfdde9f0efaad357a3037349f9b66bec7dc5e46dc0ba45c1bc1b1ec8711b9f3"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "98df2570bd99ead116038bcae45b4f421ea1a4b41dcf80bd7a5b10669eaf991c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "agent"
+fingerprint = "c25288fa5f4287c32bb3ac5dd3974ecac96cc84e8f6ee88180a6176226f1e7d6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "openai"
+fingerprint = "f5f8f6f0c90f2922f217d83aeab92a0d90da5aa68c657e6eba3f4ce0d27afb2d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "OpenAI"
+fingerprint = "6d1e1d25b11baf9d06312117488bfaa798f14cb005eae4f3aa99d31502a785b6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "1f288c803990baec53bdceea2d526b35393f0437b78542d1144dcbfb19e6fbc7"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "AI"
+fingerprint = "f3265274f4eeb72b9ff08a761ff921d26098f2dc53df575389cbbe571ed6c94f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "THIRD_PARTY_LICENSES.md"
+term = "AI"
+fingerprint = "d0e8f3259628eac688584b9885b74494c72d039de1051522fecb4b42ef516520"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "THIRD_PARTY_LICENSES.md"
+term = "AI"
+fingerprint = "968e0bd8c112a60a93f82029b831bf1aea58f7cb8479324c08242721ab93d191"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "TRADEMARK.md"
+term = "AI"
+fingerprint = "a3f1c9f3d0d0620c72fa466c6727b1f0249f0534fc1b53125787dc0c51f728b5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0001-record-architecture-decisions.md"
+term = "AI"
+fingerprint = "b05e648a4cee9edc4ee32ca437e0382f82a9b8eb2ba6e029be61d560c68897bf"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0001-record-architecture-decisions.md"
+term = "AI"
+fingerprint = "b3fbf8bdea26678be981fda6566c0fe6fbf9628be32be569d279f5fc43669142"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0001-record-architecture-decisions.md"
+term = "AI"
+fingerprint = "2708884f63db2a62a326d4062eff43b65494579130e0d5fdbfd654c6ab7488f8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0011-local-voice-as-an-optional-core-profile.md"
+term = "agents"
+fingerprint = "a46f3abf63fc4c497788f2faaf18553a3a10c1ba9d8fdba8ac085ba7fc400404"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0011-local-voice-as-an-optional-core-profile.md"
+term = "OpenAI"
+fingerprint = "a4f890359126c7bd61f90b79396135394aabc401866cbbd86f3af8b7d6767109"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0011-local-voice-as-an-optional-core-profile.md"
+term = "AI"
+fingerprint = "4c9e9353524d3ff358e1ca2924a02268a640b3c3e0a4388932dd06c0fe55f064"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agent"
+fingerprint = "2017d90c385cf711ac60aa7e73b9ab4e3df2b3d5a0700997f658cd1ec748e8b3"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agent"
+fingerprint = "53430652fc465cb59b9118e46ac866a48bf775b5a9766bec06d8329bd4145fd0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agents"
+fingerprint = "be5772e2c5589d7f9c96a18ae3d4485c36cca2eeda7a500b8048f28995a97fc8"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "Agents"
+fingerprint = "be5772e2c5589d7f9c96a18ae3d4485c36cca2eeda7a500b8048f28995a97fc8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agent"
+fingerprint = "a40dc87a1a968379e524b7234a9bc43b58dff58e991bb957abea4f8473762416"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agents"
+fingerprint = "2e7435d7266458b9731f3243daf1cdec8721c456dfc9fa441677250b029ae184"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agent"
+fingerprint = "c8fa440b14442e104c85bd710f9f5a5e76342a2ad775f7c4b71285ae0d6a8fde"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agent"
+fingerprint = "f6dce19b2070d2172b95c1379b8e9ffb187c4810d6b6152d02cee1fe11dcc0ea"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agents"
+fingerprint = "0ba392abd8703168d953922d5126881393669200167d506cca731014607800db"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "agent"
+fingerprint = "3827beddb9d986a09927f80ef66ca54305e931a9745ba27b3e2e572f6b52856e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "Agents"
+fingerprint = "3827beddb9d986a09927f80ef66ca54305e931a9745ba27b3e2e572f6b52856e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0015-knowledge-map-inventory-kinds-and-access-paths.md"
+term = "Agent"
+fingerprint = "605e2f125643e6c2497006a8fd0489766f2533cd8a7a3140b6c2ce69f14c0a81"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agent"
+fingerprint = "7c5787a8cbf443ddf0d125d85612a940db232f3f0a5b7c73aa9f4ee42ebfd9c9"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agent"
+fingerprint = "fe712a49aef50f5ae5e8780489d803c4fbb5836e6e4b7ee1cf75b1f8b31b3903"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agents"
+fingerprint = "34e5432aeda328e11ac44c75ab9c6fa233bc58833ea82c0f5998d6906d108f91"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agent"
+fingerprint = "882794c8e13ba5b0b792a02668f1ba5786c40f1ade76762dcaf18d3ab52ba7b4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agent"
+fingerprint = "12f02666cc408b7e32a0196a433af134297b7e81861611b1fe7474f47e44c58a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agent"
+fingerprint = "f0f8e0db8a4cfa7d69aca0a514427620c73de9a1db37fd28dc39a5647509566c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agent"
+fingerprint = "e50947d2912dbb3ff864aee0df6685c9f28e0c4ccaca6843d3b79772f29f53f0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/0016-knowledge-map-governance-metadata.md"
+term = "agent"
+fingerprint = "8be9baf55a5da15e8322317b9342bb7c2612183955a5a7a7f110d4568d487993"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/README.md"
+term = "AI"
+fingerprint = "2fc38de0bb36d293dbad868cbbd20e22b1f03d2366e2b3a78299308b8ced7a1a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/adr/README.md"
+term = "agent"
+fingerprint = "06d761fe7498e73d07a9d70e76591527cb11757f4c04c118e19f9f0388e67503"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "f3265274f4eeb72b9ff08a761ff921d26098f2dc53df575389cbbe571ed6c94f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "1cf673ee2cf096169fabf14debf4554ce537ba5d049cf40512f3f812f878898a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "d4117ab73f3ae2ac64f2b751fb35cd58c5697b06bb6b311d599bd1fd96d9f81b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "9ae30553bbea5ad11ce0ba9c8b3a707582f4f9d9ca782455a4a20e7a68cd9808"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "efe34c160a3e015a8c60d3b99c6b7448060aa89b2280cade1ed240ec80a6e286"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "0372e3703bc6867a30984909585a2b970affe34082c7996261db024857eeba4e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "8fb674e4c60b56b178a2043e92744ac8307f346f115ef222018aa41b9407041d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "Agents"
+fingerprint = "8fb674e4c60b56b178a2043e92744ac8307f346f115ef222018aa41b9407041d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "b49dacdedb505dc4ba535f327233859859dcb13993fa9ac98ffaeda2609d3a66"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "334ddd8cc596570fe219b2f66bc6718ff425c70169649c2e8fa6348c07c53245"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "7316d2468fa425c9a812b1a2335f4c71028a5ddc4aa3dbffcbb87c189bfa5784"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "38e02f6b3cba41a1e39fb333ddbe41043383fd074561e3b1de49e633f77ab8c5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "1858533c73dd8ac7c7d106de909407d811f6cf88a4d86058aba071db88369888"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "Agents"
+fingerprint = "e109756400abb9cc1f04a8014844f9ec62faecef23d2954b719a973a59cb10a5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "bb0a1d6085ea40798c2a1e1f5a3243edd1e2632e905ade3b0cb00ac3fa1b51d2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "5e88a24af5a16b0f1ec553d6a12a2fc4655531c3580cdc48760c9b382c084d18"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "7b622046a923c4db19ea5fe60cfc6d670cce2b89daae8676ded5d4b023855578"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "99a1169c20f7d1669325c5a74a1e5ce3ea01a807ced28aeee9684c7c4e25af6b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "120782b13b2c1d40415624f7f6f9074cdc0f9d29b5c82cf0b7b13cf97710045f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "02a9ecea1d0d544181e79ec8c495fc6f3382df93f7687d9e2ef79e7f2859d724"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "a7548e23e769ee63907aa50439f29c445e28835f1e72c32e1a7b13b6d9a50017"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "Agent"
+fingerprint = "4ef1e397a58d97df5f5ab8106a75715e5707f236bb9746f2e92e5272372944ba"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "b56363e0ba618da72bd0123d5767dfa19c98b998aef3f9a900dc7eca408efb4e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "31de5f25db66ca711aa70148e1cbe44e4840febe90427e2653c1cf5fd4a826b0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "2476b3f87f5a3a36df3d7bd5e0c026f06d31a332b972e98f36f30969b625f11a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "5c9463fdc838d8f4a58daf4bd249959bd96b7037b05e38d703dbd59423cc30c4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agent"
+fingerprint = "96ce7f02cc0f70e5f251407bab8878b44148935528472c7cb605e95756bf989b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "8720050dd5a19641b2d5b93958cebb013c0ee86893eb7c4c080ff5c7646ae5ff"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "2b5f4f2e72581afff1f713ff47166bce1dbd1152bc2fd6dcbd229e9027a751e7"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "d7511d5cacade09364b8efbbcc7cb6ace81281867b805191558463f872386238"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "ae2447fdc9c2d966c66a757b341ac8c2b54332bb2ec3301051626940a9475383"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "AI"
+fingerprint = "e3de36a9fdb108c8db2c36773ee1cc829adbf1aa734f4a9917de6ad5d0380224"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/configuration.md"
+term = "AI"
+fingerprint = "3ab50dca9f1c19dfcc58bf2a7ef5465fde1cd52b986cd56e674f2aa391768efd"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/deployment.md"
+term = "agents"
+fingerprint = "0b14d84374c024251c1eed29a2be9a9976e0f21d0e7cae3d31b1681e00ad2cf8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/distributed-validation.md"
+term = "agent"
+fingerprint = "b0dd491221695e1b30c8c0b7cb3824656ea287bb75dde1ee23484cb94806b242"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/hosted-test-model.md"
+term = "openai"
+fingerprint = "d861d285b013b5cd9707295f93d927d080e48994aff90482710057af6c181ca0"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/hosted-test-model.md"
+term = "openai"
+fingerprint = "f8690ed00205285a0a9b24fa6b9feb26a3a391e212ff862de6cc452d53252bec"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agents"
+fingerprint = "03e2ef2b9c67ba7716a480fcaff3166e15adc179123f8224b2d4755a788a0ce5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "Agents"
+fingerprint = "011aabc95525bfab2598250b3ec173088b79c9efdcc2db2b1b03e06a54f5aaa8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "AI"
+fingerprint = "8d30e5840366311847740d6d5681a1da33cacf700e8851d8363f6b13241977bc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "78f3f5b84f90d592842e268c6571b8ca0e6be07dc23d9d04aa0fe412ffc974fc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agents"
+fingerprint = "4624bb4a8a8b4a4dd1a82d832ed0c5818375e0339a7aa869ace9b5edf33ebcea"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "4624bb4a8a8b4a4dd1a82d832ed0c5818375e0339a7aa869ace9b5edf33ebcea"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "d62a88d1c8401e296b4d0312144f0aab69f8faaf8f2b402c2d829f65c91e20f4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agents"
+fingerprint = "f1b64a6b8d141f93000a9a92fc9c3a1d16b8775383d1e87102a771ad2fcaa198"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "f1b64a6b8d141f93000a9a92fc9c3a1d16b8775383d1e87102a771ad2fcaa198"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agents"
+fingerprint = "db01c7abdd00bf4ad1febbcd89527f1c12c1cee2520de014bb34961e5c95b9a0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "8d2fe8693b901d7917ae30dc856e61c4df9d61bbeabdcca7a8eab03b38fbfb45"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "56ef0e5baace162502bf3d98ec75090b86fc6128f5583703c84bc381f5a70624"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "81bc0c2721a50581b16b66c07719adc1ec4c77d6ac882ee1e3940e88b1e758fa"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "840769134484a655eae79f12d347f34d4180c8eeff33e4f63afa921343b639c6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "c281653089ca7dca909e88d013d409faafa0d0817958edcb114198d3499b93f9"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "790ba7dd78d7df638b47d0911c6fa090905ec627c4c9ee5f6ef413d25e45bd4b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "c23785a07ccc02e554c79634267b9bb50fd3a8b6d2d1e69541fb6b6d9c2d9944"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "8ea73130228f985d4b27b532b3ffcc96deb431021244e7b7b97b42e44fb24777"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agents"
+fingerprint = "6b6dde8f5f5b1f67cd11868e16f99cd303f9d46484e93f72d052339561e14d00"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "2f7fc6e2dc4208b561262e2f0dd6acb24f844a07ba72e24a7bf3dee60f0e9058"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "b4610c612d4bf8afb657454b0368e8e82d98b021c053addc0206fbe25a31a66c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "962b98ac2b2fc9353baaf4751a1d3534a4598cd0b8f30273e20596ad232c62a8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "d9be482ca5f7d586360456b4e5eca4b7cd13ca541f4d5f4a2dda8ec5e52a3700"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agents"
+fingerprint = "d9be482ca5f7d586360456b4e5eca4b7cd13ca541f4d5f4a2dda8ec5e52a3700"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agent"
+fingerprint = "ab7c538a8f88d89c9a5009ca547350a0bf67f12f34a84b9ef2f13548acd075ea"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/knowledge-map.md"
+term = "agents"
+fingerprint = "51eedcf0d9944ecd1ba484e0bb725aff8b1ba93da95828aaa73d1f45b55c1b6f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "docs/model-gateway.md"
+term = "openai"
+fingerprint = "cbf5e32ef54d6c519410d17dcb7b0e6fd3dd8c6097f168fe5b6cb20dde25e874"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/.env.example"
+term = "AI"
+fingerprint = "e9015f68df19f6f3a37e4a4756dea074851b0e45ddbb9a2e56bda0446bd748a5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/.env.example"
+term = "AI"
+fingerprint = "9cce558a9cf8b27edc3387df3b1a9af64dff7181c6f1c81bcd7677daff1faf06"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/.env.example"
+term = "AI"
+fingerprint = "4cb14e5005b294be6edae58ee8644867186ec430aaeaca01bcd55f882a45ac59"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/README.md"
+term = "AI"
+fingerprint = "04757e79ea21b1408c5347e930492ff3efb77142cf1be74535405cb2e1bcfaf0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/README.md"
+term = "AI"
+fingerprint = "21af077f0a59d52484b521029b52575556842057c4103096a565f9b5983ecfe7"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/README.md"
+term = "AI"
+fingerprint = "2d9190cecfc7e35a83543925204a3e245e3c728098f83ca91ffcab97761f88cb"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/README.md"
+term = "AI"
+fingerprint = "1577a1b882afcad9f4eeffa6c11aa3e011f8f338a04b048bad686c6fe47845dd"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/README.md"
+term = "AI"
+fingerprint = "b129fc1ca601c4aa10c0fdc78d6ffac9b9f2c87ba84daadbbdfdc8033c67e119"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/jinaai/docker-compose.yml"
+term = "AI"
+fingerprint = "f8d0ba98c3c872859a178b469c392ac52bc8b0f3d97b8fc78898355803eac2a2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/knowledge-map/.env.example"
+term = "agents"
+fingerprint = "e9377d3fdf6fd3bf808fd2a04c7ac136ecc4272a9fcd9a51f1a3757c159fda16"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/knowledge-map/governance.yaml.example"
+term = "agents"
+fingerprint = "a8b4dee0c77958b12061218680084bdaed872bbb1a2ddb168530aa854b0893b3"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/knowledge-map/governance.yaml.example"
+term = "agent"
+fingerprint = "3c0e181a4c76259102ada5b13a907e957fc36f3c57d95c3bcf9f7a548406a62b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/knowledge-map/navigator.agent.yaml.example"
+term = "agent"
+fingerprint = "04d12a616a4323dd58bc0ff50b12a0de19d27707c4ecf32966e9993f42b73f80"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/.env.example"
+term = "agents"
+fingerprint = "e0f7af4b7f2d619ec65f9ab13fd6022a62f229c1d2bb245945e1a51cbc87e9e5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/.env.example"
+term = "agents"
+fingerprint = "3c84306fc101634c373da54f852302dd5693ec4db8afc9c3715ade5d7a333a7c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/.env.example"
+term = "agents"
+fingerprint = "dc0034f741c1955895b7be84885419cf4f37a9d54707954716240b5ca03fb07d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/.env.example"
+term = "agent"
+fingerprint = "dc0034f741c1955895b7be84885419cf4f37a9d54707954716240b5ca03fb07d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/.env.example"
+term = "agents"
+fingerprint = "0bf2c611d1ccba0744b513e80bc453ea996df062f15113f245901a03923b2d4d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/.env.example"
+term = "agents"
+fingerprint = "51ab934b664aa0a6a4428b747fd20f3964b0ca8e2de662df40d8eb4504e57e33"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/agent.yaml.example"
+term = "agent"
+fingerprint = "ef46869f08ec0939363c5d2142370e8770bced75333c3fe66cc42aa7217f48b7"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "AI"
+fingerprint = "6617a86fa1fbda6607ec8b4627ffd674f5ed28d4f62bf9cc0c93a118f144ed63"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "agents"
+fingerprint = "e3ea3cebe5bd98949d06fb0c54b74675f8e1e7eb438db84bf373613732fcc7d5"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "agents"
+fingerprint = "083327618ea46ebeb70480a54757dc54a596458529f4a643e3d01fe6a6b418bb"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "agents"
+fingerprint = "6332d9ab9e25a34e0051b3845e64b1aa8d4bb797de0a0c4e540641a67ea7ffc2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "agents"
+fingerprint = "6849ad9fc6c180da2d669bad638b8442e9279af661270dfb0acc65fde6a9cec7"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "agent"
+fingerprint = "5125d73dcde4cf0600e3eb057c5f5f4909e326bfc091a3fbaafc7cb02ffce44a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "agents"
+fingerprint = "cba947382811f0c5ca52b5cee07a19d22f78c93905e453f11d2156e3442d1091"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/docker-compose.yml"
+term = "agents"
+fingerprint = "ec4f6f077a302c5d3ef114cd39d9093d37a43a14e39f16afe790d16f51422e2a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/librechat.yaml"
+term = "agent"
+fingerprint = "a707f6f611db0901352d7d249d635393e9bd13052746cd1c2cf042b6c56c81f9"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/librechat.yaml"
+term = "agent"
+fingerprint = "80159f27d4afa8ae47bb6fd5c76ddef19a24db7d647bfe96e3a9a6f84a9aef22"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "5f0175aef4fac4661f893c5b22c9d8d7f150e39cb9a2fdf5d182cd8ac4e85338"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "489f1208b06c198276bd510d0ce796948f2b535e276178a2f9e5fe190c1435c6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "8089d94248caf7901e57e31059ec3dcdfd018fb69319ec9668cb007f93c18acf"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "8089d94248caf7901e57e31059ec3dcdfd018fb69319ec9668cb007f93c18acf"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "bc681e57d5c2392b9597621d76ffa6c8cd42efaf68274feafbe58e2cf651b73c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "0d111562aa6e6a6c0865f890fe2ec152d6aec40de5e2eacefd841576036201d0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "8faad852315303d8bba4ed777f8b01fc3f826213c80c79d21c8d27f4304d0b55"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "6a7341d6d64dbc20bb5b3ef67412068e393447da4c10693902fd8adb46c61bae"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "6a7341d6d64dbc20bb5b3ef67412068e393447da4c10693902fd8adb46c61bae"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "Agents"
+fingerprint = "a5b1b0e33c8f54c571a5a42c98b8bec5e261b573a06be1e8d2eb4997aa613fa4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "9f9df61a12542cb5cec87e3f2225b924fc9cf5a56422fb27e8f9c44a690112bb"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "83700d78a0b3eb47139b0f1082f9f14dac02d164079e0b1cf6e35dc9ff38e4e1"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "Agents"
+fingerprint = "de2200d454da55f80f47adf5404a7f475a1f1fa1b85a3d80bbcd598aaf443e3a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "de2200d454da55f80f47adf5404a7f475a1f1fa1b85a3d80bbcd598aaf443e3a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "bd3b2cfbede0d547bdd03700f096b09adb148fcbe12cf2ea087067a712e1cfef"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "f4da809c1c899a57d66219e27c947edbe5838ea1975306e3d0ac2482afd2f523"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "6d82bb00970cf0296bff0fbe0558542ad63c7d8cad96de1f78bba29c06616caf"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "53d41838de89edc4dc94d66f1a3239bcbdd583f4c42dc4d6da219d144e3e7a97"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "95bc40b7a475b78001c11184a23d9569bf7fe1922ab1da896f604589f3a9a3cc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "Agents"
+fingerprint = "96eed222c0f7c08192d60fce82eba729fd7782ff36fda82aec3d508a015b881f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "f4b25c42299e752ae4f9366640645cefe91c2fc06c4d8175e90296b782e8e9be"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "e9623925a6b1a819b4a565721316a8d1b8c7d4493f13030aef02287d5b989f05"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "50c1bc32317318a2f389ffda25c6d9b3125ef8e71a6ff35977f72f2b8e201db5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "d784088f0c9ff7b2fb1f3734052a0062dcbc3bf4900f7f49045df914c830f001"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "b0f465bb4e58a95d64e89077adfa35e040f69307abda47839fcacd81c6e78a20"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "3f0ed60fe1da92dbd9008e6ea0151774c100e3ca7a11397ac4f7127869ae6d3e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "cc9032140448a3b60c46a9f73a3a512e564c05ac472d0c1f07e257a99772fcee"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "482e320673b94739e44ae0ca81d0abea029f0822fa405280308bbc0dabf16f46"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "482e320673b94739e44ae0ca81d0abea029f0822fa405280308bbc0dabf16f46"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "b8f0cfbe45b57ee183f4c5fa9b378833ef910d39324938a61598d8d5fa49318a"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "be28a537b8c941179dde4458d202ddb468c8d12ca15d91afca36c16ce95240a0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "5070234394f95d0719b99cd82186ee991fe6d2b366b3420e29f9f8c2b3953f8c"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "87c663d7cea6bc41df1fd0d35f5fa00109661fc4d6ac8452d24be9879558eb37"
+count = 4
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "b17a97ebf31cc1f3ded8be382ad657f1d94d0e4ebafb2a25f020136b12613d1d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "199cd9d12a1b9a488c5125a3d94c02e726c91c02c2571dd794839f73ef2a9e4e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "59cfaba132c7ca8d0902bceb188ba8b536369bab2af9123fda6c4b3c4ce84e8f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "c2557630fec0e67e7c6e8a03c0e4b54dd90a065cf57f4cdffc9778ab8d340751"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "38de5e8764aaa7921e4c6b886055bb407fc9f866bd602d47c87091dd0f5a4be7"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "6b8a01e8b794d3de5b74fa1697a3f585b218ce81376f4bf5a4bea23d7d3e8617"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "a66050f50157777db2cade61d4f2056367d230685ca8a041ea9f5ff278f0fbdc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "a20459354a5127797e1e43279eda13ff363959046cfedae099261b4ff7f1b0ee"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "953d3641d94491251b5c05f04bc799839036a498b1b6d6fcde391e0d8e2635b4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "6c8fc12cf8ac22444363fdc4f6c10df739ed0688098ca100c11048ae99538392"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "a4567f89d171e19688e0bec6525c46d916545341f4c59d2b4d0d8a2952b0a8f5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "Agents"
+fingerprint = "faab0c46307ae4e3078b34ca60e2c36511108a70b6c993ee364a3e3b044dc83d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "61b67dc68b8b51c1e097fcafba448ea1b527a35276e5e31327c81d87deb3cb0c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "366eaea52789b1f08dcc7c01945d8d1085d08cff00f586086d3f22119d341dff"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "1819db33bc3d647abab8f0aa6f831066424b10f2d252aadb3fc1360cfb790319"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "b0077759a7f1dbb6595bbdf5fde3f3ac6b1cae9b9cb6c73a544991f2c396e090"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "261134419afdde821c3cc01aea979343d6f49b9ef1472a7c4c11e77a0709cd75"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "03c670756967f7dec31651066e2351528e964c83f05827358ebfec6f07799a16"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agent"
+fingerprint = "03c670756967f7dec31651066e2351528e964c83f05827358ebfec6f07799a16"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/agents-init.js"
+term = "agents"
+fingerprint = "27910c4886751adf61e5731f7a1e6edfd13cdbe3fbfd0446218492174c9ebaba"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/entrypoint.sh"
+term = "agents"
+fingerprint = "d4e457db8711c05e7ed67c36f1276e31ddbb0cb1d08062a030b43a88e5ef6d95"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/entrypoint.sh"
+term = "agents"
+fingerprint = "dfe24d28de2ec643e69e4b04ce254c574cedc5e2a4a60b3cb4c3187cc42cfe94"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/patches/entrypoint.sh"
+term = "agent"
+fingerprint = "4b57fd5c1a346538d2af9417f5646dd9fb0471ec5a240d744ebcdd442accd749"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agents"
+fingerprint = "c48cd7bc637e4850f740f5c75a4650833e318050c42c2d4edb0be20f4f70692b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agent"
+fingerprint = "2cc6b501f1b279a12246ac1fbca41bc2a132af66e79eb02fbff7f1946c61e8ef"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agent"
+fingerprint = "fb31e7ff8581c1af1c1c53d81618d20fe5427615e6941bd761ea8a99c28c218f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agent"
+fingerprint = "a316caa932e582d775fd1b6ea49937c958a59129b85d0a9294439a709a4b71c5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agents"
+fingerprint = "bb8ab4737b2489cb8556c492d20b1cac6a3d40400a320b21d7c64f5aefe6df01"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agent"
+fingerprint = "09940f2cac1582706e4aa944d4fd0f7148a5fa71f3cd83acf59a48bdee125397"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agents"
+fingerprint = "f6a23e51b1c075d90875016a049111dee2fa422bed1a5d4212faa9df11fd107d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "Agent"
+fingerprint = "61e6dab2201d1032f20e2c60a67305b5a615b118feb1e165481e16bfb2c46be8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "Agent"
+fingerprint = "e347786e11cf786ed9e8bfaea8cdac4a2ae01c1943b80ea33c369ef57150f294"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agents"
+fingerprint = "e347786e11cf786ed9e8bfaea8cdac4a2ae01c1943b80ea33c369ef57150f294"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agents"
+fingerprint = "babf930efc4554fd97f341e079137805229ad6d9e7d213111b687c79e57c75bd"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agent"
+fingerprint = "babf930efc4554fd97f341e079137805229ad6d9e7d213111b687c79e57c75bd"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "agent"
+fingerprint = "b6e643811a19b4e8fe21d78cd7e456ae360dd7eebcc81558435ba42e24c78345"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "Agent"
+fingerprint = "9d4b2ff71e17472be28cb03bf9c66c21798560f9fadc534ee99b174ec216406e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/librechat/scripts/clear-history.js"
+term = "Agent"
+fingerprint = "2027dfe3c2e908ce2a59126c971e187770b12fac4f9667a58399d530dd6f35e6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/litellm/config.yaml"
+term = "openai"
+fingerprint = "32498abbefa7016fd194fd680a0cebf75b25a57a03dcbe6e0f3e577b63f3a07f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/litellm/config.yaml"
+term = "openai"
+fingerprint = "93d696a4337341c0f946f45fb347a983b7fad7b10e60f8c9204743651457a9b2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/litellm/docker-compose.yml"
+term = "AI"
+fingerprint = "3a2e14e00d49215b56ff755605bd4b477905c20609ed5df122f9424a701ec9bc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/docker-compose.yml"
+term = "OpenAI"
+fingerprint = "653db2af3fd0f6f424f7f7b7af45b794a807847b7515b7e8a9b846c90ca04cdc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/librechat/librechat.yaml"
+term = "openai"
+fingerprint = "484fbeb9dbdcbc1cb780377276a2512809d342028f25c9fb724036b7d1b59b6a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/librechat/librechat.yaml"
+term = "openai"
+fingerprint = "da4aa5f1c2959126577085f6bcd6ebe0ae1f44e3875390b3bc922c8cd16196a3"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/litellm/config.yaml"
+term = "openai"
+fingerprint = "12adbcc6ed262ef774cd219eb34b4360510b0efd7f7c0f1ea8df10e7d47c9f3b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/litellm/config.yaml"
+term = "openai"
+fingerprint = "fa8f0d668c847e8748a32f124b00407f348cd04c3ee245a6616ff64d8b1df010"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/litellm/config.yaml"
+term = "openai"
+fingerprint = "75746fbd68f29e1a2ae2e51dd5ccc6735cbda6c9922c3674271737b22f681d45"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/litellm/config.yaml"
+term = "OpenAI"
+fingerprint = "d2a754ba41d4b0cd4f1c79e794c8e06ebcfb526c75263d7362037a450e1e6c81"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/litellm/config.yaml"
+term = "openai"
+fingerprint = "feba2fbd1f50d9b8a0c643f23db6b4a63606c1acbc86b28345f955da39b7785d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/ai/voice/integration/ai/litellm/config.yaml"
+term = "OpenAI"
+fingerprint = "e38f10b3fe9267d3994b62268d3c339984756b19ce671d8800a48027f2adcf06"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/docker-compose.yml"
+term = "AI"
+fingerprint = "e9015f68df19f6f3a37e4a4756dea074851b0e45ddbb9a2e56bda0446bd748a5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/infra/audit/papaia_audit/__main__.py"
+term = "cursor"
+fingerprint = "12510e28a5fed210afa6fcb69c0635389e7ab78c58e2b68b989712414bf39d47"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/infra/audit/papaia_audit/__main__.py"
+term = "cursor"
+fingerprint = "f0e2d0334773b54b106e880a1787d2c08dd37c0db3d11ea2b201f0c3e26b04aa"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/infra/audit/papaia_audit/__main__.py"
+term = "cursor"
+fingerprint = "f658d3eee78c81b79fb3df1a9abd8e79a4dea3dd81935f19b1aa1ba374fc0556"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/infra/audit/papaia_audit/__main__.py"
+term = "cursor"
+fingerprint = "e098295375b41cb2d0f8985add243c96806206f50c1cec115ed30e57fabbd793"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/infra/keycloak/realm-import/papaia-realm.json.template"
+term = "AI"
+fingerprint = "8cc8d0ff0ce6aebd24c857dd94eb41a9d697002ff623f69a9762b3d28ae696f2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/infra/keycloak/realm-import/papaia-realm.json.template"
+term = "AI"
+fingerprint = "6fb826017e8c0805ed058c5c8597e25da1f5551ae6218158f53dd7d4527b64d3"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/manager/.env.example"
+term = "AI"
+fingerprint = "53be500d9ffae4686e526550b5a0bd3106bfb48f417b17a53688e9827526ec5d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/services/firecrawl/.env.example"
+term = "AI"
+fingerprint = "082b261d7b7fdc2f8a4e45fb2fff98da7349a22199ccecc2c7e7e7dd068859c2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/services/firecrawl/.env.example"
+term = "AI"
+fingerprint = "8c178d0b9aeeb07beb0dadc7d3b7534ab28f3b8247468c0bd3e5e880a46ad5e6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/services/firecrawl/.env.example"
+term = "OpenAI"
+fingerprint = "8c178d0b9aeeb07beb0dadc7d3b7534ab28f3b8247468c0bd3e5e880a46ad5e6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/services/firecrawl/.env.example"
+term = "OpenAI"
+fingerprint = "a600dcb2c4242c7759365d53101abdd9bc90dbbe925f20fd529bd7311f1c4bf3"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "src/services/searxng/settings.yml"
+term = "AI"
+fingerprint = "9a2389c4b901fc1b048d67037a47a3cefa67c379d7dc84c6a9a7c93f9412dfae"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/compat.py"
+term = "agents"
+fingerprint = "812982113bd2141a5e936d2546673fe2961d6578964469b8f3afa21725ada327"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/hosted_model.py"
+term = "openai"
+fingerprint = "a59f32aa2d6aaa7be0b67766869e5012c3a7b31c0604a071382511df2e98f71c"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "708d356bfc4d20a79db709afffdb493d4f2a5a32996ec6ca1d1b7e0610f8f11b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "Agents"
+fingerprint = "28060ec98d91fc0c5492dc146b7480d703ebd7d5f2b47309aed835dacf7c3412"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "54e525a0637ee9797790792348b5bbf85fc3251e4fc8fc7a42af276e3caaba1c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "04ec59ac796544cd7c648fc1860969c7efd72328239832a9bd7a111d56c1cbad"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "d36dd6744fc89f303a5cc72f4dd95423140ff9e04f3b487829b88ff78182916a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "db203758d2af5f62c6f35d6b36818521202a8a4cdee6077bd754ba1948f23734"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "9aca9d21e3bddecb7e228e1778ec274cc99566386af77a50f8d0a5c81dd45771"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "3471a59e66d2f7a50ba9cec900cc68598c3c07a2f83d27174c38ddd1a1b433bd"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "210993e6f535ac3799fc81e5b2aa1fa2ee054ab8ab8b38b818c262f2855e9067"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "a1fc0adc862006463b0950470c92f7d31c88871c2241432b15eb2ea8f2466ea1"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "b5cd2427b00bf5511c3132b55bda60e020cc0d11cd45e86aae56b6d675df1811"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "0abcd0f9641ee72d06bee9f0255011b9a3f2f5b6b5830e3006f44393418d08d1"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "86f981e30df786fe74e31395466d40630bf78875b70fc023aee80bbb91725c9f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "2ad8cf7f7c0d0ed08d04162b25c81f1e621cb752cfff25336f1de9c65632ed23"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "44dfe1d17d3e7f1560a08c32c36c5a255bd8734f40a3293a46e7fd7f3d1739de"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "34455261cd25707cc2387055f11497f1da41e7b73ca183e748cb7eb5e597d888"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "34818621d1764c3dc28b1138f929f8f3da4191342b5151321db1fcd2b936e55a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "955e9ad252b0d6443e99188fa7d3cd25c031ad93d0935b7515a9bfdd4820f84e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "bde0db349187bbb58cdea9559f9c24bf4d9899e12982bb58f50dc9f7b41d8faf"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "b36d8d74915708882e11429d0c7bdabc93ac375e27f2a64fafb09217f2c4b6da"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "9a706d30a14adf591dc39cab0245ad3e29bf40bacbd70948ef1f83c062d8d2fd"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "9a706d30a14adf591dc39cab0245ad3e29bf40bacbd70948ef1f83c062d8d2fd"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "d95f91e0011dd0e8fa0af28a6aa7a0c34962cbbb58ae7416ab026933bc22fb62"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "536c03b1bbaa9e5372c15ccfb3a14c496da4fa5a43f4077543d179933388dcf0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "c6b50fe1ae41c657bfa8a6d591fd381d8fd6daf852bdb325aadf3c3f0d12decc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "5f7042b72bee6f0bba367e6aadc457b3cd86b2f444ad81e64a06cbb8788a1f27"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "e8ff194b2e6afe1b7e5c94abcd4bb7d0e20f30879b63ae3766bd3b2035ed8f85"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "1b0ab70fcba20e61fd0163bfd07669f2a4663cba089f3a9b3b9dad82d2027605"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "1b0ab70fcba20e61fd0163bfd07669f2a4663cba089f3a9b3b9dad82d2027605"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "bc425324302e17abaf8dbf8fc0eff46061f1bfdea33dd761ede75f05d7bb87eb"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "9cf0efc8e9eef97e416e1a1ce466f09071aaa8b5fff7c7a122fa7c8bb1fb787f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "b78ddc1a133019373d141a9037565cd8a1dbec32a880643483dbd57eaab2ac4d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "9cc7c6dbb636018f38f36a950f6332cb78ed62b701ee9d6d7f21186a45b229fc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "8516e8c024518d8b78e9134ede8cc7f215ddbd77d013368d80066fd1c801b110"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "97ac826e9c492e8065278b405dbab78371338ccd3f75c1d0f743a8b13a9b9c1b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agent"
+fingerprint = "7c92da4ce636f2541058eab355fa2a7a1a59644705ed1837979423b4d45c4b9d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/knowledge_map.py"
+term = "agents"
+fingerprint = "12e71888b4aac34de204312ba0d9c8c528ece0569dbf6ea7041d3514b59dc411"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "OpenAI"
+fingerprint = "1d6a0882f756f51cb550f40691ce1342372cc7e663bc5cfcee992c0c1b91b8a5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "openai"
+fingerprint = "de42f54682b8d2370459b2e3e9abf1674d9caaf4a0b421dea7ea92a63186f89f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "Agents"
+fingerprint = "9c82b15d884671fcd3fa82456bc56ac40f72f2aaa9d33a99fd51ea34b0b67e0a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agents"
+fingerprint = "5a166bf0402b3346d011c6dfa63962a3e05365ba1de83cf265384927bb2cfd6e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agents"
+fingerprint = "4f4789d8afbc40c86f24db4c1b8c13d84e07fa6276f219cbf9ef2a0506684bd5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agents"
+fingerprint = "f3fe4527a69a171647e5778ea1cfc7b0917429fe5893da3370a1bf1120e73c54"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agent"
+fingerprint = "8fa4a897d1b09d5d8c6bb861d24854b50abf4fa86c406bd9afeecebc80024b51"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agents"
+fingerprint = "74633a2e13d3609f70624ade40d12910a31f6aa112d61a98d078029c13c1843e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agents"
+fingerprint = "85113c90fbee0afcf76ce8d8f3434ea2fdabdc40ce99542bc1082b55efbcdb08"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agent"
+fingerprint = "65dcd9c2196644c321c207e450e07fd271dcdce4543527816c5b38c073abd08d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/render_core.py"
+term = "agents"
+fingerprint = "8bf5ea0603f90b5c04b292f12629205e893765bc907adddbd1f1342ea89c56e4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "8aa5c7815ae97fd0b4c52613aeaf4c86a9a8bc4146dde629f3005c6c526b5090"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/sh/setup.sh"
+term = "AI"
+fingerprint = "97892a947a672a0385a05bbe316891fb68e8f8ab511b57671390e6c63b4ff1ab"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/lib/sh/setup.sh"
+term = "AI"
+fingerprint = "152d21be5e6ce0397047f5ba8c2327134823849a886adbe7c796e9ecda8a8587"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/fixtures/librechat_init_harness.js"
+term = "agents"
+fingerprint = "a35dd346598912dcab81d3ab901315b0264a144bee4b2cfa213ebd8dd3ccc51d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/fixtures/librechat_init_harness.js"
+term = "agent"
+fingerprint = "23251d3a93297a788266da764a6af60d0723cbd4ba007cda1f8ffedeb1743026"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/fixtures/librechat_init_harness.js"
+term = "cursor"
+fingerprint = "b80168d309fa0c62b839e5cdda922ac8a8bed913b460464336267989831737e6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/fixtures/librechat_init_harness.js"
+term = "cursor"
+fingerprint = "f34b6a6429985a2c77799eb5ac90e6a71b6db7c42179032eeb7b6d2490936540"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_contract_surface.py"
+term = "agents"
+fingerprint = "812982113bd2141a5e936d2546673fe2961d6578964469b8f3afa21725ada327"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_contract_surface.py"
+term = "agents"
+fingerprint = "af446c63400ad1e75804e5178da3eda8ebb584c30d200a7f1e6aa0ad09a9475c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_contract_surface.py"
+term = "agents"
+fingerprint = "f3fe4527a69a171647e5778ea1cfc7b0917429fe5893da3370a1bf1120e73c54"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_hosted_model.py"
+term = "openai"
+fingerprint = "d7a315a84e0fdd39ab99ab1d712b87e77f81649ea3e057052234ff28be7b5221"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_hosted_model.py"
+term = "openai"
+fingerprint = "029087546f0baed379d0ab8ae3f8f99c7a2ab5ed8de1ee7d4bbc86d6924df4b8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "bd0c9a4ccb0ad3961f0fa1674ec839a6e3c9b9219c2db04033727c1a4196d867"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "551678c5dfe8325e8e3055db0b9f20c3f5568432c1235fdd38a04386e5b1b27b"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "384c035d624d93f171f7757f32b9dd114ef36d572dcf51c2c62f171319d8fcc5"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "23eb263f894697cf5509b25d8f18738c4e71a4e96eac8b078864d9e46315a551"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "0db23fbb7699d6a49a382934054cf131f4d027f6c53b61f3e1d1c9d102f3a466"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "75d145cb1c81cf60b062a2d1bdf447954ec6e8fbf81b0ab164210990882cf920"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "4bc66835f95f67d2ef53467f647774604df475f7c1a7b4e4061e0c0a6fdb8bfa"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "33b1e47e24b572fa9b7c783aaee28c70e4a137b2f81c335f6ddc9b215e287b12"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "5fe9a814b9f4922e10d5cb833085dbb3a6fa62ddf4de618ae860801c04e66ac2"
+count = 6
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "d981f630221d9a55592f93e5a0801598172cb9b1ba4d2ec9dc857e7d31e16ad1"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "39b8ca2d4a848a4a90a6599a32519f75a0d51232d5f9cda2711ff66a14a5f446"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "b20325f922243e96f1222d5bd51b74554c8087f35c22065d0e68ff747d2de861"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "7932a87da4ef65e11009d90090cc1eda587fffe39ef27db0cf3e7146c36dc896"
+count = 4
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "feeda067edc6e2dac3b400b213633f93250f34f5ea77dcde13fa21f38e44c79a"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "88a679f771d86ae6cab31f01585df61f1565a5dedddc6f5295bf30c415d1ac54"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "bc3e75ec7daf3edd187c26c046f1474fe3900db6fe4764300b8b59bf99c9eed0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "2ac71d31a53fbba58a2230f8396b7c21f216a062aad2780fe724ab5cd418551a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "effacfd533ed9a849de756cc265acb24593c90840e4c34540d8c6a92b6570bc6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "effacfd533ed9a849de756cc265acb24593c90840e4c34540d8c6a92b6570bc6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "52392fa707e017412c4c1615a6a4da2a631b9d8ece68224fbb08591aa0a24a1c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "dca089badee60f4174c86f4ff691f844e874853b018dce18243531d4b9d0d535"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "4bda8d5de02875388df7685ccc43dccb4f9285686ecdd9349b5818dc115ce4f8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "32784c39c5e549a726ac566907dde532c82db4a6bf2847ba0d1d6e69749d31d1"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "36a7961a942a95d8d0704e76269d553174f276159248358b93352c93aa245d81"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "b1ea30572b6fc1a8b1bea3ee3651e6dc68ec483cf68d5dcefb8a50b711d7560b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "7354bb35a9d25532d273f4d975bb5d0177c1c4bc7cf66bcbb7001050b066a882"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "598180b3c6e4949d7c75850aad8bf6bf08d7c5af049aa695b39606366c60f91a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "6ba806dea59f547d6d0a98be599219c08b80ad2ce78bb97e6cc10f230fe79d97"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "7970ec798c0622d533f79cacf759b3d9c58cb14e25210000d900ba6c17d7448f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "9455b4b28fd2b2108d8c898abd1622fca07f5a6775c3d551830c22703238cdda"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "8e1495c4cdca6ac188f646775b944915c1a88a03cfa2e17fdb90996c4bafe01c"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "c0f0f0daa1564691e73455e57aac7127cfba1124e6acc2829b0824d98066b07e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "a826a2f374625d070ba85bf7c856837a070d07e7e2affa680ff512afd5e57dcc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "b07b80d07d86b44c24a410a34db0643784115a04e383dc0b11e84ce4639813a1"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "7deebc401ad3a9a5212baad1c7a0f9ea09f2810055a76d42e27a4dc405287881"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "a4f44faa7ee45674a6ac3f3fe38938614cee118970fbcfe856158d25eaaebf2a"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "a4f44faa7ee45674a6ac3f3fe38938614cee118970fbcfe856158d25eaaebf2a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "f31cddc38357a1b9aaf3fc838810e9f11af2addbcaadca0dba82431ac9eb0408"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "aa00608698e51b2a7d4c8bf8de9d9a5e8957e18e09f9ca48ea40fccf5e813d4f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "b25ff906d1db04c6319c6ad25786efb50119f26efb2fdb01fd5d8dff783fef68"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "7ec192a017108dfb59183e4f5564ff30dd7431d591ac61d565c5fa136e03c40f"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "0343e7f2185982cb2c6c571764c94cf9d48b6168985e17ed24be9b657bd97e75"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "0d822f6a5947f87bbe73766ecc3a6ccbad8e98b30eb3d71fef9019711fcffc34"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "3d86db0d2bd5e156b447e65a5421c06fdef9a80494661c2b080fb0080de2a4f9"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "3d86db0d2bd5e156b447e65a5421c06fdef9a80494661c2b080fb0080de2a4f9"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "fe8a593236dffd369b2d602731a72fc5ab07b70a4f2acfe0566503a7f3d88777"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "fe8a593236dffd369b2d602731a72fc5ab07b70a4f2acfe0566503a7f3d88777"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "4118195df3f0afcd354c0a555dacd2ebabb7ef16bc86c7d4cd31d8b6c158f25e"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "ac637e166688df19f34e0553d9cd64e9a2d3ca284ac00b9912248f0c188b64f9"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "ac637e166688df19f34e0553d9cd64e9a2d3ca284ac00b9912248f0c188b64f9"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "0420c4dfe3172203f631b3452a2cbff6b308553c724dc5a3f1e8dd8f84c19419"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "a14d5d085781d253363f76f6fe33d07656c3b1376c8be86b65106ac95c24d966"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "b56a395cc3ba941ee008e9a3f1316c3d236b0175ba9defb66a7b47de04f8bf4e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "f482009d7c4fdea2b83dd6e61c44c91b6c6dc51d1c1afc6c76d159a5c8a242bd"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "87b8f7c1c443b1e045b95bd86568443df78e4e6beac60293f8d7e0fd10294127"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "83904539d0acac88bd0e031889960210776d53f1a9741e0e14f2e562cb3d9d00"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "26ee33729cd618bb365b0f2a8b2f6533f546c4f5bf31975d92f5442b9a41963a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "898253a54bacf09442f69d8faefb8853bf3e321d0d23a61cfb3d572e3f8cea11"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "5cd0a08a0e62988ecfb4e77926558a80588ada8c70d8f03ba7a5bf1d2be72026"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "228e3c4461810c9133073153f8c8f67f2a8f9c3bc700a3ebe592cf27e5d86f2a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "4104be65a97c7be7caefb5ec25f518a3f24cb039f10d5329566cdaa0448299e8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "1401c3b67eb8d252c575d29703b9afe95de96e2dc781f21bde0e9e354ddf6b50"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "54ad5bf09c3ba533b5e664e4a15be544ef7051ab63ea750fed7a3a8df1236753"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "54ad5bf09c3ba533b5e664e4a15be544ef7051ab63ea750fed7a3a8df1236753"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "3be83a13b15ae085ddfc85dae5071fa89d9ca16e1147dd01d0cd64d0eb58e705"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agent"
+fingerprint = "061debaf001a33e8131dc733318b4b4064ca4192099097a552350ad42c6d5493"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "061debaf001a33e8131dc733318b4b4064ca4192099097a552350ad42c6d5493"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_knowledge_map.py"
+term = "agents"
+fingerprint = "d6f061d43b758351340d41809b58d3bb278b563ee366fec2ddc096c2bc45bcb7"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_history.py"
+term = "agents"
+fingerprint = "170092c03c92ff8152ba3a93bd2c35a335a7451ae757a1145f0cd6967eb891bc"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "b6887ec0d8e2f8f38de2c5c5f8fa5139a78b00fdeb6b6f05cc28a6f91d78bb4c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "c0b5d2d8653b0d23c229bc5adc00f2bdfd3eab132d8abd75ad3571182c86a3aa"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "bca2b7607a31c4aaca0db1f2c49bb94d2054d4b2919ece2596259d0fbdb2c4ac"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "71e402899e44253f2ce73e44cf5927f3225521b3324db01aaa01fc627da33e9b"
+count = 5
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "a546966d9f2f2c3df514fb5891ef10bd890b16a4da0dd4a4228b574d8b6fb84d"
+count = 13
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "66b676f2ff60cc1944b9bc9efc6183fe0ed8993c2c2f82095f3f9b4d574d802b"
+count = 4
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "bc37c8c64fae2a569b71f37f094889cf6f5c11e284a54dc24a1a9d3aac14c59e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "ca4c4c7dfc2ecfd57b3a343a399dfcfc70fb000fa277ccac0419c73ea8404401"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "d25b87b04a125dc796ecbcefc31b0f2bfe1710f34a950e770426715feab50893"
+count = 5
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "46f7ce3e5f1f397f124df7a5fbd20f87c970212796811ade04b7749760cddffe"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "e83c3011bda044e6c5ec36f994248b5326a9b41888cc572adfe20269f72a3226"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "a03fbebb9480526fd55a621f68faaf356bb328cd323b868878d424645ad42801"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "a03fbebb9480526fd55a621f68faaf356bb328cd323b868878d424645ad42801"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "405b8c6e1896ec3521c05b5936acc0c6821f67749b18629b3b5dab2743ac28cd"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "884f36b2724f90a8a8427064d62242925943a8cf01864f949c98d961c9792080"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "745d1a3f2d7d5e1b905d7bf8b26c8db7d039bda6262d9c120f42ce00d1faadb8"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "1b1d79ab5c4d66626743d2aa09f7d4e946c4fd805e993397c5256e2a0a489205"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "6f2b30f4db6927b8475ae4accf0bdf0c9e91ec746eedef21e2f3ebaedc240641"
+count = 3
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "f02ecb79e7ff525a4af3403f6b523823f40bcd08a00cbb3ba4f7584879cb94e9"
+count = 3
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "623fad9ef338e368415a6a436e69f3b034469672badb6a10c9c3b41437eb9f23"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "3d3d5e11d513888fe47375597483447ebdc497c845ef36824df884f6936c3266"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "ce0a4984eeacecb37230ce69c1c638932e350b95de39928aafc3b7e5fbd0bd0a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "b9449345ddcc228c3a7bf85ddae83c1ae9b8043414b3f43f6937868e646aa8c6"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "114ae9bc154e515e1b2628b9c0f08596898ed344a98f1ead09a28c732127b6a6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "bdc4fa689df230eeefc913409ea078bcafb7b8ea9fb6e46d177bb565c26205c1"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "c8cb1672ba260bed28772fafa4054f0002c9d4088a03bb67755227d0a6f57289"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "612595b194640cf37accd6a63364c6061fdc79664977fa1814acc132b6f45e94"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "f179d5d0ce8ce6e642142db1489b72945baa0776275ca71dedf3aa7b07407e44"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "9376335f24fc47d20208a92941124db893e891977d27d720d4bf446b4c8b93fb"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "3445ec1c5c364671d51a6d18e6ec41268046c73f2145fc7cd9a6dd77b8ace711"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "db3fd4f8bf82ed5b5a23f8232301d9f3de7651aa4406ac8c08276af4955e9b43"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agent"
+fingerprint = "6b38d22ae7a668b4a658ef6618af7474b364a0741deee78d8ac7dc685e505a94"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "fc6419e2ba5309c27244d33bdfd9ef7fd5330d6a302ca0acdaf55b86d1802e10"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "28a0250ad0f3455eb3c340a74119310c4a3eb4289f76b401dd157aee71fb7554"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_librechat_init_scripts.py"
+term = "agents"
+fingerprint = "9657e2a810dc40927a59874e307053418fcbe633b42d5fc3d124c91ce6d41a1b"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_model_gateway.py"
+term = "openai"
+fingerprint = "1c049a5323b5e2c827373bf7655a7beba767cce6aed011632a24ec11e21c399e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_model_gateway.py"
+term = "openai"
+fingerprint = "3575b877d296eaf45af022ce0f301ddf12b797e169c72bfb5c4ad6dc93ff330c"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_model_gateway.py"
+term = "openai"
+fingerprint = "fe069f6cab065366649ffc1c8f3db04169cfad304e384db0d60a9962baf99cfe"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_model_gateway.py"
+term = "openai"
+fingerprint = "214d3534c90501940216f9fd57667221e40cf1ffad76a8320288350467736705"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_model_gateway.py"
+term = "openai"
+fingerprint = "56d3b9e22e5b7bb1a2ef42bdb53a6a76040b28ba8c16b41f031fe43ee16bc8c4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_model_gateway.py"
+term = "openai"
+fingerprint = "8efc27f104356fd5abaf8b1e7756b5dd95e9cb75f153ba8f1e9e16c7bc077575"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_model_gateway_docker.py"
+term = "OpenAI"
+fingerprint = "693ac7d98ecc2c75a9973ec3b3b334fba07ddaffa08a13b7f6d9eee683fac18d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "0e436c78172286d06e3ec442352c2e3c91f564b123aec915303b36adc020807f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "5b6223bf88f997fd6ad3086c0592701d9bcb0a1c6d50ff3e8d30a012ca04857d"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "119ff974eb2ca23a396e2f4192d03878d31edbf248ce8afd7537fd36d511723f"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "fca8a66684779c004e2956b19ab1145ccc92477d0ea7186632acb2676c70cca4"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "b9eb8b280df33270817b77f23e6d88039e7b634cfafe6f40949722d4b3491490"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "95343a63955a333e0279d128c768a42f733bd92f17082a8474ce89580df8c7e2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "6bcb581fbc2c7fce54599777da6c8216e0867c390091fd2d8d6d68f91e4f2d2e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "8a21cfeb71aa4e23abc428913cc88ea09ed5eb2cf732e7d7d9776e049cf8a646"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "openai"
+fingerprint = "ef7dd2cf5395eb9440948442c64d52722633986b0779094328d0b48b72134e56"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "e6888d2ba8118361175c557b39c517d017e6a712a9922928cd5f039872181e81"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agent"
+fingerprint = "25f0c16bde7ed10d10a2e704987edb3802f18528d9b737c203d53e94daf6d7c2"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "c85eb18eed651de45ff1f15584ba73c981799a19b9a2b039d6d364a2fd49a74e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "8784ea1fda06692eb134575004e5d3fa118e111e186a652c76c1c7fa07218bb0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "692bbf62f8cae6ff40598da4c64e9d5eb1ed775c8e128239a0f79752a18a8b7f"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "7be61f70e14a447430dce9c0e86760eb1014624f9ebf0eab0f730fe11034069e"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "4ef0639ea3afed42befa7c9cdf42fc82831ff3035ab7b80db0107c2e333cb8c4"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "ed6bd8a2483c91e7077d4421ed0741d51d1aece984b7b0f4abd3fa30b14c655b"
+count = 3
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "9aceba3103177ce08b1b0e95cdd29f3b36a838ac062ac13ab8cb08e242b831d5"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agent"
+fingerprint = "9aceba3103177ce08b1b0e95cdd29f3b36a838ac062ac13ab8cb08e242b831d5"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agent"
+fingerprint = "10de9a10d72057863434f29dc9eb8aa70100e7d79bf4a11637f120eb07609416"
+count = 2
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agent"
+fingerprint = "565699779d44904cb7674e3cc695d43a9d0df2beb5aa17b699b2d43228640404"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agent"
+fingerprint = "9daccaa6f2bf4db856871f8a442b4c9a91e3170243d67913364d73c0f7532784"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "973ed124b3251c5e048cda1770adfec1d96844e124b3ebb2c583ee73f4ff6532"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_render_preview.py"
+term = "openai"
+fingerprint = "e75e2e23e98788a9573d2b43d4ffe2e3c5d0ca9caeec31128f92f792ff5645c0"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_reporting.py"
+term = "openai"
+fingerprint = "b7f7cd86c65633b3c478465503895b9f599e70d4e7f20c6cbc1261e057ade61a"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_resolve.py"
+term = "agents"
+fingerprint = "fcd6a0250224a2ac5e24675594e473ee5f3eebabeab5d1b5fbdc8794a66ab8b3"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "tools/tests/test_resolve.py"
+term = "agents"
+fingerprint = "ce571642433d5a63bac2a5ffd13bf26662099a47a31b45b0584bb9afd15578c6"
+reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
