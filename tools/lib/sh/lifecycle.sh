@@ -495,6 +495,67 @@ cmd_realm_sync() {
     py_cli realm-sync ${flags[@]+"${flags[@]}"}
 }
 
+# papaia-ctl service-account list [--json] | rotate <id> [--grace=SECONDS]
+# The declared service accounts; created and kept by the realm sync, so this runs where
+# the realm sync runs (Keycloak's node).
+cmd_service_account() {
+    local sub="${1:-}" config_dir="$DEFAULT_CONFIG_DIR" json=0 account="" grace=""
+    shift || true
+    case "$sub" in
+        list|rotate) ;;
+        *) error "Unknown 'service-account' subcommand: '${sub:-<none>}'. Valid: list, rotate."; exit 2 ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            --json)
+                if [ "$sub" != "list" ]; then
+                    error "Unknown option for service-account $sub: $1"; exit 2
+                fi
+                json=1 ;;
+            --grace=*)
+                if [ "$sub" != "rotate" ]; then
+                    error "Unknown option for service-account $sub: $1"; exit 2
+                fi
+                grace="${1#*=}"
+                if ! [[ "$grace" =~ ^[0-9]{1,2}$ ]] || [ "$grace" -gt 60 ]; then
+                    error "--grace must be 0 to 60 (seconds)"; exit 2
+                fi ;;
+            -*) error "Unknown option for service-account $sub: $1"; exit 2 ;;
+            *)
+                if [ "$sub" = "rotate" ] && [ -z "$account" ]; then
+                    account="$1"
+                else
+                    error "Unknown argument for service-account $sub: $1"; exit 2
+                fi ;;
+        esac
+        shift
+    done
+    if [ "$sub" = "rotate" ] && [ -z "$account" ]; then
+        error "service-account rotate needs an account: papaia-ctl service-account rotate <id>"
+        exit 2
+    fi
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "'service-account' is not available in a distributed installation yet; the realm sync on Keycloak's node keeps the accounts."
+        exit 2
+    fi
+    py_cli join-stack-network || true
+    if [ "$sub" = "list" ]; then
+        local -a flags=()
+        [ "$json" -eq 1 ] && flags+=(--json)
+        py_cli service-account-list ${flags[@]+"${flags[@]}"}
+    else
+        local -a flags=(--id "$account")
+        [ -n "$grace" ] && flags+=(--grace "$grace")
+        py_cli service-account-rotate ${flags[@]+"${flags[@]}"}
+    fi
+}
+
 # --node belongs to a distributed installation; on one host it is a mistake worth naming.
 _require_no_node() {
     if [ -n "$1" ]; then

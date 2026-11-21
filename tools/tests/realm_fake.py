@@ -9,7 +9,9 @@ service-account user for every client created with `serviceAccountsEnabled` (wit
 `offline_access` scope mapping the `offline_access` role, and the realm's client policies
 and profiles (empty, as in a fresh realm). Every write
 is counted in `writes`. A role that does not exist is a `NotFound`, as Keycloak answers
-with HTTP 404.
+with HTTP 404. Clients can be deleted; turning `serviceAccountsEnabled` on or off creates
+or removes the service-account user. The realm's event settings and stored sign-in
+events (`events`, newest first) are kept as well.
 """
 
 from __future__ import annotations
@@ -63,6 +65,14 @@ class FakeRealm:
         # realm-level client policies and profiles (Keycloak's global ones are not listed)
         self.policies: list[dict] = []
         self.profiles: list[dict] = []
+        self.events_config: dict = {
+            "eventsEnabled": False,
+            "eventsListeners": ["jboss-logging"],
+            "enabledEventTypes": [],
+            "adminEventsEnabled": False,
+            "adminEventsDetailsEnabled": False,
+        }
+        self.events: list[dict] = []
         for name in ("offline_access", "uma_authorization", "default-roles-papaia"):
             self._add_role(name)
         self.roles["default-roles-papaia"]["_composites"] = {"offline_access", "uma_authorization"}
@@ -306,18 +316,30 @@ class FakeRealm:
             client.setdefault("secret", "generated-by-keycloak")
         self.clients[client["id"]] = client
         if client.get("serviceAccountsEnabled"):
-            uid = self._id("user")
-            self.users[uid] = {
-                "id": uid,
-                "username": f"service-account-{client['clientId']}",
-                "enabled": True,
-                "serviceAccountClientLink": client["id"],
-                "_realm": {"default-roles-papaia"},
-                "_clients": {},
-                "_groups": set(),
-            }
-            client["_service_user"] = uid
-            client["_default"].append(self._scope_id("service_account"))
+            self._add_service_user(client)
+
+    def _add_service_user(self, client: dict) -> None:
+        uid = self._id("user")
+        self.users[uid] = {
+            "id": uid,
+            "username": f"service-account-{client['clientId']}",
+            "enabled": True,
+            "serviceAccountClientLink": client["id"],
+            "_realm": {"default-roles-papaia"},
+            "_clients": {},
+            "_groups": set(),
+        }
+        client["_service_user"] = uid
+        sid = self._scope_id("service_account")
+        if sid not in client["_default"]:
+            client["_default"].append(sid)
+
+    def sign_in(self, client_id: str, at_ms: int) -> None:
+        """A stored CLIENT_LOGIN event, as Keycloak records it when events are on."""
+        if self.events_config["eventsEnabled"] and "CLIENT_LOGIN" in (
+            self.events_config["enabledEventTypes"] or ["CLIENT_LOGIN"]
+        ):
+            self.events.insert(0, {"time": at_ms, "type": "CLIENT_LOGIN", "clientId": client_id})
 
     def client_rep(self, client: dict) -> dict:
         rep = {k: copy.deepcopy(v) for k, v in client.items() if not k.startswith("_")}
@@ -473,7 +495,29 @@ class FakeRealm:
             for key, value in body.items():
                 if key not in ("defaultClientScopes", "optionalClientScopes", "id"):
                     client[key] = copy.deepcopy(value)
+            if client.get("serviceAccountsEnabled") and "_service_user" not in client:
+                self._add_service_user(client)
+            elif not client.get("serviceAccountsEnabled") and "_service_user" in client:
+                del self.users[client.pop("_service_user")]
             return None
+        if m and method == "DELETE":
+            client = self.clients.pop(m.group(1))
+            if "_service_user" in client:
+                del self.users[client["_service_user"]]
+            return None
+        if route == "/events/config":
+            if method == "GET":
+                return copy.deepcopy(self.events_config)
+            self.events_config = copy.deepcopy(body)
+            return None
+        if route == "/events" and method == "GET":
+            rows = [
+                e
+                for e in self.events
+                if e["clientId"] == query.get("client", [e["clientId"]])[0]
+                and e["type"] in query.get("type", [e["type"]])
+            ]
+            return copy.deepcopy(rows[: int(query.get("max", ["100"])[0])])
         m = re.fullmatch(r"/clients/([^/]+)/protocol-mappers/models", route)
         if m and method == "POST":
             self.clients[m.group(1)]["protocolMappers"].append(dict(body, id=self._id("mapper")))

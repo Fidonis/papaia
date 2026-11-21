@@ -598,7 +598,7 @@ What the sync manages:
 | Person-only audiences | Data (`papaia-data`), the knowledge map (`mcp-knowledge-map`), every module API for Me (`kind: me`) and every audience whose entry declares `identity: [person]`. Two policies each, condition `client-scopes` of type Any (also a default scope): `papaia-person-<a>-client-credentials` (`client_credentials` → `reject-request`) and `papaia-person-<a>-exchange` (token exchange → `jwt-claim-enforcer` `sid` present; service tokens carry no `sid`). A manifest that lists `service` for Data, the knowledge map or a Me module API is refused; `identity` must be distinct values out of `person`, `service`. |
 | Never an audience | No exchange client of the register but `papaia-data` is an audience: a client scope `aud-<client>` (for example `aud-flow-engine`) is removed, and so is every audience mapper naming such a client, on any client scope and any unmanaged client. LibreChat's fixed audience mappers on resource servers stay. |
 | Claims parameter | A `oidc-claims-param-token-mapper` takes claims from the caller's request; on a managed client or a shared scope it is removed (event `exchange_right_changed`). |
-| Service accounts | Checked, not yet created: `owner_sub` and `deputy_sub` may be a placeholder `${NAME}` resolved from the add-on's `.env`; an unresolved placeholder or one person in both fields refuses the sync. |
+| Service accounts | One client `svc-<module>-<purpose>` per entry of `service_accounts[]` (see "Declared service accounts" below): a service account and nothing else, `private_key_jwt`, only the declared audiences and roles. Undeclared accounts are reported by `--check` and removed by the sync. |
 | Paperless name list | `$PAPAIA_CONFIG_DIR/security/paperless-gate/users.json`, see "Name list of the Paperless gate" below. |
 
 Every input is checked before the first write: a refused declaration or pairings file
@@ -716,6 +716,63 @@ names on a list that the realm sync writes on every run, also on every `start`:
 - Audit: each write or removal of the list is one `papaia.audit/1` row (operation
   `realm_sync.paperless_users.write` or `.delete`, `object_ref` type `file`, `azp`
   `admin-cli`), with the run's correlation id and without any user name.
+### Declared service accounts
+
+A module declares each service account it needs in `service_accounts[]` of an `exposes`
+entry, one account per purpose (security 1.9, kit schema `exposes.v1`):
+
+```yaml
+service_accounts:
+  - id: svc-flow-events              # registered in the naming register, owned by the module
+    purpose: {de: Rechnungseingang, en: Incoming invoices}
+    owner_sub: ${FLOW_EVENTS_OWNER}  # responsible person; ${NAME} comes from the add-on's .env
+    deputy_sub: ${FLOW_EVENTS_DEPUTY}
+    roles: []                        # realm roles, e.g. prefs-read
+    audiences: [mcp-paperless]
+    effects: [read]                  # read, write, send, delete, check
+    realm_management_roles: []
+    credential: private_key_jwt
+```
+
+Every field is checked before the first write; an unknown field, a credential other
+than `private_key_jwt`, a platform role (`papaia-*`) or an admin role (`*-admin`), an
+audience that exchanges tokens, an audience whose module accepts only persons
+(`identity` without `service`), an account declared twice or owner and deputy being the
+same person refuse the sync (exit 2, nothing changed). `realm_management_roles` must be
+empty: a module's account with `realm-management` rights needs a confirmation at
+installation, which the core does not offer yet.
+
+The realm sync creates one client per account and keeps it to the declaration:
+
+| Setting | Value |
+|---|---|
+| Flows | service account (`client_credentials`) only: no code flow, no implicit flow, no password grant, no token exchange, `fullScopeAllowed: false` |
+| Client authentication | `private_key_jwt` (`client-jwt`, ES256). Keycloak holds the public key as a JWK set in the client (`jwks.string`); the private key is in `$PAPAIA_CONFIG_DIR/security/service-accounts/<id>/private-key.pem` (mode 0600, folder 0700) and nowhere else. A missing key file gets a new key pair; any other registered key is removed. |
+| Audiences | One optional scope `aud-<audience>` per declared audience whose module is installed. The account asks for it with `client_credentials` and `scope=aud-<audience>`; an audience it does not declare is not assigned, and Keycloak refuses it (`invalid_scope`). Default scopes: `basic`, `roles` and Keycloak's own `service_account`. |
+| Roles | The declared realm roles that exist, in the client's token scope and in the service-account user's role mappings, and nothing else: no client role (so no `realm-management` role), no group, no role whose composite reaches further. |
+| Record | Attributes `papaia.owner_sub`, `papaia.deputy_sub`, `papaia.purpose`, `papaia.effects`, `papaia.rotation_days` (90) and `papaia.key_rotated_at`. |
+| Last use | Keycloak stores `CLIENT_LOGIN` events while any account is declared (added to the event types an operator chose; kept 180 days when the realm stored no events before). |
+
+Clients with an active service account are exactly the declared ones and the sync
+account. A managed account that no installed module declares any more (its module is
+removed or deactivated, or the declaration is gone) is reported by `--check` and deleted
+by the sync together with its key folder; another client's undeclared service account is
+turned off. The registered accounts that a module's own setup still creates outside the
+`svc-<module>-<purpose>` rule (`flow-directory`, `flow-control`) are named in a note and
+left as they are. The service-account users' role mappings, groups and the event
+settings are changed with the master admin: the sync account cannot (HTTP 403 in Keycloak
+26.7.0), and it gets no `manage-users`.
+
+`papaia-ctl service-account list [--json]` shows each account with module, owner,
+deputy, audiences, roles, effects, the last key rotation (marked due after 90 days) and
+the last use. `papaia-ctl service-account rotate <id> [--grace=SECONDS]` replaces the
+key pair: the new public key is registered (with `--grace`, at most 60 s, the old one
+stays registered as well), the new key file replaces the old one, then only the new key
+remains registered. The command checks with Keycloak that the new key signs in and that
+the old key is refused, at the latest 60 s after the rotation began; otherwise it exits 1.
+Measured against Keycloak 26.7.0: the old key is refused as soon as it is no longer
+registered. Every change is one `papaia.audit/1` row (`service_account_rotated` for key
+changes); the module reads its key file again after a rotation.
 
 ### Seam 3 — LibreChat-MCP
 
@@ -797,7 +854,9 @@ No Core changes required.
 | `papaia-ctl uninstall [--clean-up] [--addons]` | Core `down` → permanently delete `$PAPAIA_CONFIG_DIR`. With `--clean-up`: also delete volumes. With `--addons`: also stop active add-on containers. Warning + confirmation required. |
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role, then run the realm sync. Runs on every `start`; no-op with an external OIDC provider |
-| `papaia-ctl realm sync [--check]` | Reconcile the clients, roles and exchange scopes the installed modules declare and `security/pairings.yaml` confirms, and write the name list of the Paperless gate (see "Realm sync of declared clients"). `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
+| `papaia-ctl realm sync [--check]` | Reconcile the clients, roles, exchange scopes and service accounts the installed modules declare and `security/pairings.yaml` confirms, and write the name list of the Paperless gate (see "Realm sync of declared clients"). `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
+| `papaia-ctl service-account list [--json]` | Read-only. The declared service accounts with module, owner, deputy, audiences, roles, effects, last key rotation (due after 90 days) and last use (see "Declared service accounts") |
+| `papaia-ctl service-account rotate <id> [--grace=SECONDS]` | Replace an account's key pair; the old key is refused at the latest 60 s after the rotation began (checked against Keycloak, exit 1 otherwise). `--grace` (0 to 60, default 30) keeps the old key registered that long. Exit 2 for an account that is not declared |
 | `papaia-ctl status [--json] [--profiles=LIST] [--addons]` | Read-only. Match the services the Compose files declare for the active profiles against the containers Docker reports, per `de.fidonis.module` and per profile. A declared service without a container is `missing` ("not deployed"); an unreachable Docker daemon is reported as such, not as an outage. |
 | `papaia-ctl doctor [--json] [--skip=CHECK[,CHECK]]` | Read-only preflight and diagnostics: Docker/Compose version, disk space, what Docker's data takes (`docker_usage`, a report that never `warn`s or `fail`s), memory, CPU load, GPU (for a LocalAI GPU variant), the native LocalAI of a Mac (`localai_native`), published ports, DNS, clock synchronization, certificate expiry, the mail relay and its mail server (`smtp`, only while the `smtp` profile is on), add-on compatibility and container health, each `pass`, `warn`, `fail` or `skip`. Exit 2 if any check fails. Works before `setup`. |
 | `papaia-ctl addon install <name> --path=` | Seed config bundle → register in `deployment.yaml` → generate override → render Core → print Keycloak checklist. **Starts nothing.** |

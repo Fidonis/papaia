@@ -59,6 +59,12 @@ What it manages:
   deactivated or loses the role is gone after the next run, and removed when no module
   serves `mcp-paperless` any more. Keycloak's accounts are read with the master admin
   (the sync account holds no `view-users`); the list is the only thing that reads them.
+- one client per declared service account (`svc-<module>-<purpose>`): client_credentials
+  with `private_key_jwt` only, the key pair in the configuration directory, only the
+  declared audiences (`aud-*` optional scopes) and roles, owner, deputy and rotation
+  recorded; undeclared service accounts are removed. The service-account users' roles
+  and groups and the realm's event settings (last use = CLIENT_LOGIN events) are
+  changed with the master admin, which the sync account cannot.
 
 Every input is checked before the first write: a rejected declaration changes nothing. A
 second run reports 0 changes; `--check` compares without writing and reports every
@@ -111,6 +117,7 @@ import yaml
 
 from . import common, deployment
 from . import keycloak_role_sync as kcs
+from . import service_account_keys as sak
 
 REGISTER_PATH = Path(__file__).with_name("names_register.json")
 REGISTER_FORMAT = "papaia.names-register-snapshot/1"
@@ -195,6 +202,8 @@ _FLAGS = {
     "confidential": {"bearerOnly": False, "publicClient": False, "standardFlowEnabled": True},
     "exchange-only": {"bearerOnly": False, "publicClient": False, "standardFlowEnabled": False},
     "public": {"bearerOnly": False, "publicClient": True, "standardFlowEnabled": True},
+    # A declared service account: client_credentials with private_key_jwt, nothing else.
+    "service-account": {"bearerOnly": False, "publicClient": False, "standardFlowEnabled": False},
 }
 _COMMON_FLAGS = {
     "implicitFlowEnabled": False,
@@ -227,6 +236,39 @@ _ACCOUNT_KEYS = frozenset(
         "credential",
     }
 )
+_ACCOUNT_REQUIRED = _ACCOUNT_KEYS - {"roles", "realm_management_roles"}
+
+# Declared service accounts (security 1.9): one client per account, kind attribute below.
+KIND = "papaia.kind"
+SERVICE_ACCOUNT = "service-account"
+ACCOUNT_EFFECTS = ("read", "write", "send", "delete", "check")
+MAX_ACCOUNT_AUDIENCES = 12
+MAX_ACCOUNT_ROLES = 20
+# Days between key rotations the core asks for; `service-account list` marks an account
+# whose key is older as due.
+ROTATION_DAYS = 90
+ROTATED_AT = "papaia.key_rotated_at"
+# A service account gets `sub` (basic) and its realm roles (roles); Keycloak adds its own
+# `service_account` scope to every service-account client and puts it back when removed.
+ACCOUNT_DEFAULT_SCOPES = frozenset({"basic", "roles", "service_account"})
+# Last use of an account is Keycloak's CLIENT_LOGIN event (a client_credentials grant).
+# Kept 180 days, two rotation intervals, when the realm stores no events yet.
+LOGIN_EVENT = "CLIENT_LOGIN"
+EVENTS_EXPIRATION = 180 * 24 * 3600
+_ACCOUNT_ID_RE = re.compile(r"^svc-[a-z][a-z0-9]*-[a-z0-9]+(-[a-z0-9]+)*$")
+# Plain text as the kit's exposes schema defines it: no control, zero-width or
+# direction-changing characters, no markup, no links.
+_PLAIN_TEXT_RE = re.compile(
+    "[^\\x00-\\x1f\\x7f<>\\u200b-\\u200f\\u202a-\\u202e\\u2060-\\u2064\\ufeff]*"
+)
+_LINK_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://|[Ww]{3}\.|javascript:|\]\(", re.IGNORECASE)
+_ACCOUNT_FLAGS = {"serviceAccountsEnabled": True, "clientAuthenticatorType": "client-jwt"}
+_ACCOUNT_ATTRIBUTES = {
+    KIND: SERVICE_ACCOUNT,
+    "use.jwks.string": "true",
+    "use.jwks.url": "false",
+    "token.endpoint.auth.signing.alg": sak.ALGORITHM,
+}
 
 
 class RealmSyncError(Exception):
@@ -475,6 +517,12 @@ class ClientSpec:
     optional_scopes: set[str] = field(default_factory=set)
     default_scopes: set[str] = field(default_factory=set)
     role_scope: set[str] = field(default_factory=set)
+    # Recorded facts of a service account (owner, deputy, purpose, effects, rotation).
+    record: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def service_account(self) -> bool:
+        return self.kind == SERVICE_ACCOUNT
 
     def representation(self) -> dict:
         attributes = {
@@ -486,11 +534,14 @@ class ClientSpec:
             attributes["pkce.code.challenge.method"] = "S256"
         if self.kind == "public":
             attributes["oauth2.device.authorization.grant.enabled"] = "true"
+        if self.service_account:
+            attributes.update(_ACCOUNT_ATTRIBUTES, **self.record)
         return {
             "clientId": self.client_id,
             "protocol": "openid-connect",
             **_FLAGS[self.kind],
             **_COMMON_FLAGS,
+            **(_ACCOUNT_FLAGS if self.service_account else {}),
             "attributes": attributes,
         }
 
@@ -510,6 +561,10 @@ class Plan:
     profiles: dict[str, dict] = field(default_factory=dict)
     # exchange clients that are never an audience: no scope aud-<name>, no mapper to them
     never_audiences: set[str] = field(default_factory=set)
+    # Registered service accounts named outside svc-<module>-<purpose> (flow-directory,
+    # flow-control): a module's own setup creates them and they cannot be declared in
+    # service_accounts[] yet, so the sync names them and leaves them alone.
+    legacy_accounts: frozenset[str] = frozenset()
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -530,11 +585,49 @@ def _resolve_person(value: object, module: Module, label: str) -> str:
     return value
 
 
-def _check_accounts(accounts: object, module: Module, register: Register, label: str) -> None:
-    """Service accounts are created by their own step; here they are only checked, so a
+@dataclass(frozen=True)
+class Account:
+    """One declared service account, checked."""
+
+    id: str
+    module: str
+    purpose: dict[str, str]
+    owner_sub: str
+    deputy_sub: str
+    roles: tuple[str, ...]
+    audiences: tuple[str, ...]
+    effects: tuple[str, ...]
+
+
+def _names_list(value: object, limit: int, label: str) -> list:
+    if not isinstance(value, list) or len(value) > limit or len(set(map(str, value))) != len(value):
+        raise RealmSyncError(f"{label} must be a list of at most {limit} distinct names")
+    return value
+
+
+def _purpose(value: object, label: str) -> dict[str, str]:
+    if not isinstance(value, dict) or not value or set(value) - {"de", "en"}:
+        raise RealmSyncError(f"{label}: purpose must be a mapping with de and/or en")
+    for text in value.values():
+        if (
+            not isinstance(text, str)
+            or not 1 <= len(text) <= 80
+            or not _PLAIN_TEXT_RE.fullmatch(text)
+            or _LINK_RE.search(text)
+        ):
+            raise RealmSyncError(f"{label}: purpose must be plain text of 1 to 80 characters")
+    return dict(value)
+
+
+def _parse_accounts(
+    accounts: object, module: Module, register: Register, label: str
+) -> list[Account]:
+    """The service accounts of one exposes entry (security 1.9, kit exposes schema). A
     declaration that could never be created stops the sync before any change."""
-    if not isinstance(accounts, list):
-        raise RealmSyncError(f"{label}: service_accounts must be a list")
+    if not isinstance(accounts, list) or len(accounts) > 50:
+        raise RealmSyncError(f"{label}: service_accounts must be a list of at most 50")
+    parsed = []
+    exchange_clients = register.exchange_clients()
     for account in accounts:
         if not isinstance(account, dict):
             raise RealmSyncError(f"{label}: a service account must be a mapping")
@@ -545,10 +638,87 @@ def _check_accounts(accounts: object, module: Module, register: Register, label:
         name = register.check(account.get("id"), "service-account", sa_label)
         if register.service_accounts[name].owner != module.name:
             raise RealmSyncError(f"{sa_label}: belongs to {register.service_accounts[name].owner}")
+        if not _ACCOUNT_ID_RE.match(name):
+            raise RealmSyncError(f"{sa_label}: a declared account is named svc-<module>-<purpose>")
         owner = _resolve_person(account.get("owner_sub"), module, f"{sa_label}: owner_sub")
         deputy = _resolve_person(account.get("deputy_sub"), module, f"{sa_label}: deputy_sub")
         if owner == deputy:
             raise RealmSyncError(f"{sa_label}: owner_sub and deputy_sub are the same person")
+        missing = sorted(_ACCOUNT_REQUIRED - set(account))
+        if missing:
+            raise RealmSyncError(f"{sa_label}: missing field {', '.join(missing)}")
+        if account["credential"] != "private_key_jwt":
+            raise RealmSyncError(f"{sa_label}: credential must be private_key_jwt")
+        if _names_list(
+            account.get("realm_management_roles", []), 20, f"{sa_label}: realm_management_roles"
+        ):
+            raise RealmSyncError(
+                f"{sa_label}: realm-management roles for a module's service account need a "
+                "confirmation at installation, which the core does not offer yet; "
+                "declare realm_management_roles: []"
+            )
+        effects = account["effects"]
+        if (
+            not isinstance(effects, list)
+            or not effects
+            or len(set(map(str, effects))) != len(effects)
+            or not all(e in ACCOUNT_EFFECTS for e in effects)
+        ):
+            raise RealmSyncError(
+                f"{sa_label}: effects must be distinct values out of {', '.join(ACCOUNT_EFFECTS)}"
+            )
+        roles = []
+        for role in _names_list(account.get("roles", []), MAX_ACCOUNT_ROLES, f"{sa_label}: roles"):
+            role = register.check(role, "role", f"{sa_label}: roles")
+            if register.roles[role].owner == "papaia" or role.endswith("-admin"):
+                raise RealmSyncError(
+                    f"{sa_label}: {role} is a platform or admin role; a service account never "
+                    "holds one"
+                )
+            roles.append(role)
+        audiences = []
+        for audience in _names_list(
+            account["audiences"], MAX_ACCOUNT_AUDIENCES, f"{sa_label}: audiences"
+        ):
+            audience = register.check(audience, "audience", f"{sa_label}: audiences")
+            if audience in exchange_clients:
+                raise RealmSyncError(
+                    f"{sa_label}: audience {audience} exchanges tokens; a service account "
+                    "never reaches it"
+                )
+            audiences.append(audience)
+        parsed.append(
+            Account(
+                name,
+                module.name,
+                _purpose(account["purpose"], sa_label),
+                owner,
+                deputy,
+                tuple(roles),
+                tuple(audiences),
+                tuple(effects),
+            )
+        )
+    return parsed
+
+
+def _account_spec(account: Account, audiences: list[str]) -> ClientSpec:
+    return ClientSpec(
+        account.id,
+        account.module,
+        SERVICE_ACCOUNT,
+        False,
+        optional_scopes={exchange_scope(a) for a in audiences},
+        default_scopes=set(ACCOUNT_DEFAULT_SCOPES),
+        role_scope=set(account.roles),
+        record={
+            "papaia.owner_sub": account.owner_sub,
+            "papaia.deputy_sub": account.deputy_sub,
+            "papaia.purpose": json.dumps(account.purpose, sort_keys=True, ensure_ascii=False),
+            "papaia.effects": ",".join(account.effects),
+            "papaia.rotation_days": str(ROTATION_DAYS),
+        },
+    )
 
 
 def _check_delegation(delegation: object, module: Module, label: str) -> str:
@@ -773,6 +943,9 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
     holders: set[str] = set()
     audiences: set[str] = set()
     paperless_modules: set[str] = set()
+    # The identity kinds each installed audience accepts (exposes `identity`).
+    identities: dict[str, set[str]] = {}
+    accounts: list[Account] = []
     notes: list[str] = []
     product_clients = register.product_clients()
 
@@ -835,6 +1008,7 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
                     audiences.add(audience)
                     if audience == PAPERLESS_AUDIENCE:
                         paperless_modules.add(module.name)
+                    identities.setdefault(audience, set()).update(identity or ())
                     if audience in product_clients:
                         manage(audience, module.name)
                     person_only = audience in PERSON_ONLY_AUDIENCES or entry.get("kind") == "me"
@@ -869,7 +1043,9 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
             if "delegation" in entry:
                 holders.add(_check_delegation(entry["delegation"], module, entry_label))
             if "service_accounts" in entry:
-                _check_accounts(entry["service_accounts"], module, register, entry_label)
+                accounts += _parse_accounts(
+                    entry["service_accounts"], module, register, entry_label
+                )
         if module.name in register.owners:
             for client_id, entry in product_clients.items():
                 if entry.owner == module.name:
@@ -890,6 +1066,27 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
     for holder in holders:
         clients[holder].optional_scopes.add(OFFLINE)
 
+    # Service accounts: one client each, with the scopes of its installed audiences only.
+    # It obtains an audience with client_credentials and scope=aud-<a>; no exchange.
+    for account in accounts:
+        if account.id in clients:
+            raise RealmSyncError(f"service account {account.id} is declared twice")
+        active = []
+        for audience in account.audiences:
+            if audience not in audiences:
+                notes.append(
+                    f"service account {account.id}: audience {audience} is not installed; "
+                    "its scope is assigned once it is"
+                )
+            elif "service" not in identities.get(audience, set()):
+                raise RealmSyncError(
+                    f"service account {account.id}: audience {audience} accepts persons only"
+                )
+            else:
+                active.append(audience)
+                exchange_scopes[exchange_scope(audience)] = audience
+        clients[account.id] = _account_spec(account, active)
+
     roles = {name: "papaia" for name in PLATFORM_ROLES}
     for module_name, declared in own_roles.items():
         roles.update({name: module_name for name in declared})
@@ -901,8 +1098,14 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
             f"visible_for_roles: role {role} of {register.roles[role].owner} is not declared by "
             "an installed module; it enters the token scope once it exists"
         )
+    for account in accounts:
+        for role in sorted(set(account.roles) - set(roles)):
+            notes.append(
+                f"service account {account.id}: role {role} of {register.roles[role].owner} is "
+                "not declared by an installed module; it is mapped once it exists"
+            )
     for spec in clients.values():
-        if spec.kind != "bearer":
+        if spec.kind not in ("bearer", SERVICE_ACCOUNT):
             spec.default_scopes = set(DEFAULT_SCOPES)
             spec.role_scope = (
                 own_roles.get(spec.owner, set()) | visible | set(MODULE_PLATFORM_ROLES)
@@ -910,6 +1113,7 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
     admin_members = {
         name for declared in own_roles.values() for name in declared if name.endswith("-admin")
     }
+    legacy = frozenset(n for n in register.service_accounts if not _ACCOUNT_ID_RE.match(n))
     paperless_roles = None
     if paperless_modules:
         paperless_roles = frozenset().union(*(own_roles[m] for m in paperless_modules))
@@ -932,6 +1136,7 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
         policies=policies,
         profiles=profiles,
         never_audiences=never,
+        legacy_accounts=legacy,
     )
 
 
@@ -961,6 +1166,10 @@ def new_correlation_id() -> str:
     return str(uuid.UUID(int=value))
 
 
+def _now_iso(now: float | None = None) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+
 def _host_account() -> str:
     """The host account that runs papaia-ctl, as the subject of the audit rows."""
     uid = os.geteuid()
@@ -986,10 +1195,20 @@ class AuditLog:
     locked (flock) from construction to `close()`: a second papaia-ctl run waits, and
     two runs never append at the same time or reuse a number."""
 
-    def __init__(self, path: Path, correlation_id: str, *, host_account: str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        correlation_id: str,
+        *,
+        host_account: str | None = None,
+        writer: str = "papaia-ctl/realm-sync",
+    ) -> None:
         self.path = path
         self.correlation_id = correlation_id
         self.host_account = host_account or _host_account()
+        self.writer = writer
+        # realm-sync -> realm_sync.<operation>, service-account -> service_account.<...>
+        self.operation_prefix = writer.rsplit("/", 1)[-1].replace("-", "_")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._fd: int | None = os.open(
             seq_path(path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600
@@ -1076,7 +1295,7 @@ class AuditLog:
             "time": stamp,
             "source_seq": self._seq + 1,
             "correlation_id": self.correlation_id,
-            "writer": "papaia-ctl/realm-sync",
+            "writer": self.writer,
             "role": "caller",
             "sub": self.host_account,
             "identity_kind": None if master else "service",
@@ -1088,7 +1307,7 @@ class AuditLog:
             "origin_asserted_by": None,
             "context": None,
             "catalog_id": None,
-            "operation": f"realm_sync.{change.operation}",
+            "operation": f"{self.operation_prefix}.{change.operation}",
             "effect": change.effect,
             "object_ref": {"type": change.kind.replace("-", "_"), "id": change.name},
             "data_class": None,
@@ -1557,13 +1776,29 @@ def _is_managed(role: dict | None) -> bool:
 
 
 class _Reconciler(_Actions):
-    def __init__(self, call, plan: Plan, apply: bool, audit: AuditLog | None) -> None:
+    def __init__(
+        self,
+        call,
+        plan: Plan,
+        apply: bool,
+        audit: AuditLog | None,
+        *,
+        keys: sak.KeyStore | None = None,
+        master=None,
+    ) -> None:
         super().__init__(call, apply, audit)
         self.plan = plan
+        self.keys = keys
+        # The master admin: only it may change a service-account user's role mappings
+        # and groups and the realm's event settings (the sync account gets HTTP 403).
+        self.master = _Actions(master, apply, audit, master=True) if master else None
         self.role_info: dict[str, dict] = {}
         self.client_names: dict[str, str] = {}
         self._expanded: dict[str, tuple[set[str], set[str]]] = {}
         self._noted: set[str] = set()
+        self._accounts = [s for s in plan.clients.values() if s.service_account]
+        if self._accounts and (keys is None or master is None):
+            raise RealmSyncError("service accounts need the key folder and the master admin")
 
     def _note(self, text: str) -> None:
         if text not in self._noted:
@@ -1592,19 +1827,31 @@ class _Reconciler(_Actions):
         for client_id in sorted(self.plan.clients):
             self.client(self.plan.clients[client_id], clients.get(client_id), scopes)
         self.exchange_elsewhere(clients, scopes)
+        self.undeclared_accounts(clients)
         self.never_audience()
         # Policies before stale scopes: a policy may only name a scope that exists.
         self.client_policies()
         self.stale_exchange_scopes()
         for client_id, client in sorted(clients.items()):
-            managed = (client.get("attributes") or {}).get(MANAGED) == "true"
-            if managed and client_id not in self.plan.clients and client_id != SYNC_CLIENT:
+            attributes = client.get("attributes") or {}
+            managed = attributes.get(MANAGED) == "true"
+            if (
+                managed
+                and client_id not in self.plan.clients
+                and client_id != SYNC_CLIENT
+                and attributes.get(KIND) != SERVICE_ACCOUNT
+            ):
                 print(
                     f"WARNING: managed client {client_id} has no declaration any more; it is "
                     "left in place. Remove it in the admin console once its module is gone.",
                     file=sys.stderr,
                     flush=True,
                 )
+        if self.master:
+            self.account_users()
+            self.login_events()
+            self.changes += self.master.changes
+            self.skipped += self.master.skipped
         return self.changes
 
     # roles ----------------------------------------------------------------
@@ -1936,10 +2183,14 @@ class _Reconciler(_Actions):
                 "/clients",
                 rep,
             )
-            if not self.apply or not spec.role_scope:
+            if not self.apply:
                 return
             current = self._clients()[spec.client_id]
-            self.role_scope(spec, current["id"])
+            if spec.role_scope:
+                self.role_scope(spec, current["id"])
+            if spec.service_account:
+                # Created without a key: the key is registered as a change of its own.
+                self.credential(spec, current)
             return
 
         uid = current["id"]
@@ -2018,6 +2269,192 @@ class _Reconciler(_Actions):
                 )
         self.role_scope(spec, uid)
         self.client_roles(spec, uid)
+        if spec.service_account:
+            self.credential(spec, dict(current, attributes=attributes))
+
+    # service accounts -----------------------------------------------------
+    def credential(self, spec: ClientSpec, current: dict) -> None:
+        """Keycloak holds exactly the public key of the account's key file. A missing key
+        file gets a new key pair (the module must then read the new file); any other
+        registered key (a stranger's, or the old one of an interrupted rotation) goes."""
+        account = spec.client_id
+        jwk = self.keys.public_jwk(account)
+        attributes = dict(current.get("attributes") or {})
+        try:
+            registered = json.loads(attributes.get("jwks.string") or "{}").get("keys")
+        except (ValueError, AttributeError):
+            registered = None
+        if jwk is not None and registered == [jwk]:
+            return
+        if jwk is None:
+            action = "new key pair, no key file in the configuration directory"
+        elif not registered:
+            action = "public key registered"
+        else:
+            action = "registered keys set to the key file's public key"
+        change = Change(
+            SERVICE_ACCOUNT, account, action, "set_key", "service_account_rotated", "write"
+        )
+        if self.apply and jwk is None:
+            jwk = self.keys.generate(account)
+        attributes["jwks.string"] = json.dumps({"keys": [jwk]}, sort_keys=True) if jwk else ""
+        attributes[ROTATED_AT] = _now_iso()
+        body = {k: v for k, v in spec.representation().items() if k != "clientId"}
+        body["attributes"] = dict(attributes, **body["attributes"])
+        self.do(change, "PUT", f"/clients/{current['id']}", body)
+
+    def undeclared_accounts(self, clients: dict[str, dict]) -> None:
+        """Clients with an active service account are exactly the declared ones (and the
+        sync account). A managed account without declaration is deleted with its key
+        folder; another client loses its service account. `--check` reports both first.
+        A registered legacy account of a module's own setup is named, not changed."""
+        for client_id, client in sorted(clients.items()):
+            if client_id in self.plan.clients or client_id == SYNC_CLIENT:
+                continue
+            attributes = client.get("attributes") or {}
+            if attributes.get(MANAGED) == "true" and attributes.get(KIND) == SERVICE_ACCOUNT:
+                self.do(
+                    Change(
+                        SERVICE_ACCOUNT,
+                        client_id,
+                        "removed, no installed module declares it",
+                        "delete_service_account",
+                        effect="delete",
+                    ),
+                    "DELETE",
+                    f"/clients/{client['id']}",
+                )
+                if self.apply and self.keys:
+                    with contextlib.suppress(ValueError):
+                        self.keys.remove(client_id)
+            elif not client.get("serviceAccountsEnabled") or client.get("bearerOnly"):
+                continue
+            elif client_id in self.plan.legacy_accounts:
+                self._note(
+                    f"service account {client_id} is created by its module's own setup, not "
+                    "declared in service_accounts[]; it is left as it is"
+                )
+            else:
+                self.do(
+                    Change(
+                        "client",
+                        client_id,
+                        "service account turned off, it is not declared",
+                        "remove_service_account",
+                        effect="delete",
+                    ),
+                    "PUT",
+                    f"/clients/{client['id']}",
+                    {"serviceAccountsEnabled": False},
+                )
+
+    def account_users(self) -> None:
+        """A service-account user holds exactly the roles of its account's token scope
+        (and the realm's default roles), no client role and no group: Keycloak gives a
+        client_credentials token the user's roles within the client's scope."""
+        act = self.master
+        clients = self._clients() if self.apply else None
+        for spec in self._accounts:
+            current = (clients or {}).get(spec.client_id) or self._existing(spec.client_id)
+            if current is None or not current.get("serviceAccountsEnabled"):
+                continue
+            user = act.call("GET", f"/clients/{current['id']}/service-account-user")["id"]
+            for group in act.call("GET", f"/users/{user}/groups") or []:
+                act.do(
+                    Change(
+                        SERVICE_ACCOUNT,
+                        spec.client_id,
+                        f"left group {group.get('path') or group.get('name')}",
+                        "revoke_service_account_role",
+                        effect="delete",
+                    ),
+                    "DELETE",
+                    f"/users/{user}/groups/{group['id']}",
+                )
+            base = f"/users/{user}/role-mappings"
+            mappings = act.call("GET", base) or {}
+            wanted = self._token_scope(spec)
+            have = {r["name"]: r for r in mappings.get("realmMappings") or []}
+            allowed = wanted | {f"default-roles-{kcs._REALM}"}
+            extra = [have[n] for n in sorted(set(have) - allowed)]
+            if extra:
+                act.do(
+                    Change(
+                        SERVICE_ACCOUNT,
+                        spec.client_id,
+                        f"realm roles out of its rights: {_names(extra)}",
+                        "revoke_service_account_role",
+                        effect="delete",
+                    ),
+                    "DELETE",
+                    f"{base}/realm",
+                    extra,
+                )
+            missing = sorted(wanted - set(have))
+            if missing:
+                reps = (
+                    [act.call("GET", f"/roles/{urllib.parse.quote(n)}") for n in missing]
+                    if self.apply
+                    else []
+                )
+                act.do(
+                    Change(
+                        SERVICE_ACCOUNT,
+                        spec.client_id,
+                        f"realm roles granted: {', '.join(missing)}",
+                        "grant_service_account_role",
+                    ),
+                    "POST",
+                    f"{base}/realm",
+                    reps,
+                )
+            for client_id, entry in sorted((mappings.get("clientMappings") or {}).items()):
+                roles = entry.get("mappings") or []
+                if roles:
+                    act.do(
+                        Change(
+                            SERVICE_ACCOUNT,
+                            spec.client_id,
+                            f"{client_id} roles out of its rights: {_names(roles)}",
+                            "revoke_service_account_role",
+                            effect="delete",
+                        ),
+                        "DELETE",
+                        f"{base}/clients/{entry['id']}",
+                        roles,
+                    )
+
+    def _existing(self, client_id: str) -> dict | None:
+        found = self.call("GET", f"/clients?clientId={urllib.parse.quote(client_id)}") or []
+        return {k: v for k, v in found[0].items() if k != "secret"} if found else None
+
+    def login_events(self) -> None:
+        """Last use of a service account is its last CLIENT_LOGIN event: the realm stores
+        that event type while any account is declared. Event types an operator chose are
+        kept; with every type stored (an empty list) nothing changes."""
+        if not self._accounts:
+            return
+        config = self.master.call("GET", "/events/config") or {}
+        types = list(config.get("enabledEventTypes") or [])
+        enabled = bool(config.get("eventsEnabled"))
+        if enabled and (not types or LOGIN_EVENT in types):
+            return
+        body = dict(config)
+        body["eventsEnabled"] = True
+        body["enabledEventTypes"] = sorted(set(types if enabled else []) | {LOGIN_EVENT})
+        if not config.get("eventsExpiration"):
+            body["eventsExpiration"] = EVENTS_EXPIRATION
+        self.master.do(
+            Change(
+                "realm",
+                kcs._REALM,
+                f"sign-ins of service accounts recorded ({LOGIN_EVENT} events)",
+                "record_service_account_use",
+            ),
+            "PUT",
+            "/events/config",
+            body,
+        )
 
     def client_roles(self, spec: ClientSpec, uid: str) -> None:
         """Keycloak puts a client's own client roles into its token scope, with their
@@ -2117,6 +2554,9 @@ class _Reconciler(_Actions):
         for client_id, client in sorted(clients.items()):
             if client_id in self.plan.clients or client.get("bearerOnly"):
                 continue
+            attributes = client.get("attributes") or {}
+            if attributes.get(MANAGED) == "true" and attributes.get(KIND) == SERVICE_ACCOUNT:
+                continue  # an undeclared account is removed as a whole
             for kind in ("default", "optional"):
                 for name in sorted(client.get(f"{kind}ClientScopes") or []):
                     if name != OFFLINE and not name.startswith("aud-"):
@@ -2420,10 +2860,42 @@ def sync_paperless_users(
             os.close(dfd)
 
 
-def reconcile(call, plan: Plan, *, apply: bool, audit: AuditLog | None = None) -> list[Change]:
+def reconcile(
+    call,
+    plan: Plan,
+    *,
+    apply: bool,
+    audit: AuditLog | None = None,
+    keys: sak.KeyStore | None = None,
+    master=None,
+) -> list[Change]:
     """Compare the realm behind `call` with `plan`; with `apply`, correct every deviation.
-    Returns the deviations found (= the changes made when applying)."""
-    return _Reconciler(call, plan, apply, audit).run()
+    Returns the deviations found (= the changes made when applying). Declared service
+    accounts need `keys` (their key folder) and `master` (the master admin's call)."""
+    return _Reconciler(call, plan, apply, audit, keys=keys, master=master).run()
+
+
+def keystore(config_dir: Path) -> sak.KeyStore:
+    """The key pairs of the service accounts in the configuration directory."""
+    return sak.KeyStore(config_dir / "security" / "service-accounts")
+
+
+class MasterAdmin:
+    """The master admin's Admin API call, signing in again when the token may be near
+    its end (master tokens of admin-cli live 60 s by default)."""
+
+    REFRESH_AFTER = 30.0
+
+    def __init__(self, base_url: str, ctx, password: str) -> None:
+        self.base_url, self.ctx, self.password = base_url, ctx, password
+        self._api: AdminApi | None = None
+        self._since = 0.0
+
+    def call(self, method: str, path: str, body: object = None):
+        if self._api is None or time.monotonic() - self._since > self.REFRESH_AFTER:
+            token = kcs._get_admin_token(self.base_url, self.ctx, self.password)
+            self._api, self._since = AdminApi(self.base_url, self.ctx, token), time.monotonic()
+        return self._api.call(method, path, body)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -2489,10 +2961,17 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
                 master.call, plan, config_dir, apply=not check, audit=audit
             )
             api = AdminApi(base_url, ctx, token)
-            reconciler = _Reconciler(api.call, plan, not check, audit)
+            reconciler = _Reconciler(
+                api.call,
+                plan,
+                not check,
+                audit,
+                keys=keystore(config_dir),
+                master=MasterAdmin(base_url, ctx, admin_password).call,
+            )
             changes += reconciler.run()
             skipped += reconciler.skipped
-    except RealmSyncError as exc:
+    except (RealmSyncError, sak.KeyFileError) as exc:
         print(f"Realm sync stopped: {exc}", file=sys.stderr, flush=True)
         return 1
     except TimeoutError as exc:
