@@ -103,6 +103,7 @@ GENERATION_FEATURES: dict[str, int] = {
 
 INGRESS_AXIS = "integration.nginx"
 EXPOSES_AXIS = "exposes"
+KNOWLEDGE_AXIS = "knowledge"
 
 MODE_ENFORCE = "enforce"
 MODE_WARN = "warn"
@@ -433,6 +434,10 @@ def evaluate_addon(
             exposes.check(manifest["exposes"], name)
         except exposes.ExposesError as exc:
             return CompatResult(name, STATUS_ERROR, axis=EXPOSES_AXIS, reason=str(exc))
+        try:
+            exposes.check_key_tools(manifest.get("knowledge"), manifest["exposes"], name)
+        except exposes.ExposesError as exc:
+            return CompatResult(name, STATUS_ERROR, axis=KNOWLEDGE_AXIS, reason=str(exc))
 
     warnings: list[str] = []
     if features and generations is not None:

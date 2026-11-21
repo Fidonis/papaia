@@ -7,11 +7,12 @@ unit-testable without argparse plumbing.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
 
-from . import common, envtree, keycloak_role_sync, secrets, smtp
+from . import chat_servers, common, envtree, keycloak_role_sync, secrets, smtp
 
 
 def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:
@@ -170,9 +171,42 @@ def print_smtp_next_steps(tree: envtree.EnvTree) -> None:
     print("See README 'Outbound mail' for details.")
 
 
+def _mapper_audience(addon_path: Path, rel: object) -> str | None:
+    """The audience an add-on's mapper export adds, or None when it adds none, cannot be
+    read or lies outside the add-on (the step stays then)."""
+    if not isinstance(rel, str):
+        return None
+    path = (addon_path / rel).resolve()
+    if not path.is_relative_to(addon_path.resolve()):
+        return None
+    try:
+        mapper = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(mapper, dict) or mapper.get("protocolMapper") != "oidc-audience-mapper":
+        return None
+    audience = (mapper.get("config") or {}).get("included.client.audience")
+    return audience if isinstance(audience, str) else None
+
+
+def _declared_audiences(manifest: dict) -> set[str]:
+    section = manifest.get("exposes")
+    if not isinstance(section, list):
+        return set()
+    return {e["audience"] for e in section if isinstance(e, dict) and e.get("audience")}
+
+
 def print_keycloak_checklist(
-    name: str, manifest: dict, addon_path: Path, config_dir: Path
+    name: str,
+    manifest: dict,
+    addon_path: Path,
+    config_dir: Path,
+    generated: set[str] = frozenset(),
 ) -> None:
+    """`generated`: the audiences whose `librechat` mapper the core derives from the
+    catalog (chat_servers). With the bundled Keycloak the core creates them, so the
+    add-on's copy is no manual step; with an external provider the operator adds one per
+    audience, whether the add-on ships an export or not."""
     integration = manifest.get("integration") or {}
     keycloak_cfg = integration.get("keycloak") or {}
     # Clients named under `client_secrets` are created by `start` (keycloak_role_sync);
@@ -181,6 +215,18 @@ def print_keycloak_checklist(
     managed = [c["path"] for c in managed_entries]
     clients = [c for c in keycloak_cfg.get("clients") or [] if c not in managed]
     mappers = keycloak_cfg.get("client_mappers") or {}
+    root = common.parse_env_file(config_dir / ".env")
+    internal = root.get("AUTH_PROVIDER", "internal_keycloak") == "internal_keycloak"
+    own = _declared_audiences(manifest) & set(generated)
+    exports = mappers.get(chat_servers.LIBRECHAT_CLIENT) if isinstance(mappers, dict) else None
+    exports = exports if isinstance(exports, list) else []
+    shipped = {_mapper_audience(addon_path, rel) for rel in exports}
+    if internal and own and isinstance(mappers, dict):
+        kept = [rel for rel in exports if _mapper_audience(addon_path, rel) not in own]
+        mappers = {k: v for k, v in mappers.items() if k != chat_servers.LIBRECHAT_CLIENT}
+        if kept:
+            mappers[chat_servers.LIBRECHAT_CLIENT] = kept
+    missing = sorted(own - shipped) if not internal else []
     replace_secret_cfg = manifest.get("env_replace_secrets") or {}
 
     bundle_env = config_dir / "addons" / name / ".env"
@@ -209,7 +255,7 @@ def print_keycloak_checklist(
         for rel in managed:
             print(f"   {addon_path / rel}")
 
-    if not clients and not mappers and not replace_keys and not notes:
+    if not clients and not mappers and not missing and not replace_keys and not notes:
         return
 
     sep = "─" * 65
@@ -235,6 +281,14 @@ def print_keycloak_checklist(
                 print(f"   {client_name}: {addon_path / rel}")
         print()
         print("   Clients → <client> → Client scopes → Dedicated → Add mapper → By configuration.")
+        print()
+        step += 1
+    if missing:
+        print(f"{step}. Add an audience mapper to the access tokens of the 'librechat' client")
+        print("   for each of these audiences (the chat reaches the tool server with them):")
+        print()
+        for audience in missing:
+            print(f"   {audience}")
         print()
         step += 1
     if replace_keys:

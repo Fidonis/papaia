@@ -5,7 +5,8 @@ Renders the effective core configuration into $PAPAIA_CONFIG_DIR:
     repo base (src/<target>)
       + active-profile fragments (src/<module>/integration/<target>, PROFILE_FRAGMENTS)
       + active-addon fragments (addons/<name>/integration/<target>)
-      + generated fragments (the LocalAI models in LiteLLM's model_list)
+      + generated fragments (the LocalAI models in LiteLLM's model_list, the chat's
+        tool servers from the platform catalog)
       + customer overlay ($PAPAIA_CONFIG_DIR/overlay/<target>)
       --render--> $PAPAIA_CONFIG_DIR/<target>
 
@@ -36,6 +37,7 @@ import yaml
 
 from . import (
     catalog,
+    chat_servers,
     common,
     deployment,
     egress,
@@ -83,6 +85,8 @@ PROFILE_FRAGMENTS: dict[str, str] = {
 
 # LiteLLM's configuration, which takes the generated model_list of the LocalAI models.
 LITELLM_CONFIG = "ai/litellm/config.yaml"
+# LibreChat's configuration, which takes the tool servers of the catalog (chat_servers).
+LIBRECHAT_CONFIG = chat_servers.LIBRECHAT_FRAGMENT
 LOCALAI_PROFILE = "localai"
 LOCALAI_MODELS_FILE = "ai/localai/models.txt"
 LOCALAI_MODELS_DIR = "ai/localai/models"
@@ -191,6 +195,21 @@ def _localai_models(
             entry["model_info"] = {"mode": "embedding"}
         entries.append(entry)
     return sorted(entries, key=lambda e: e["model_name"])
+
+
+def _chat_servers(config_dir: Path, repo_root: Path) -> list[chat_servers.ChatServer]:
+    try:
+        return chat_servers.servers(config_dir, repo_root)
+    except catalog.CatalogError as exc:
+        raise RenderError(f"platform catalog: {exc}") from exc
+
+
+def _chat_layer(config_dir: Path, repo_root: Path) -> dict:
+    """The LibreChat entries of the catalog's tool servers whose module ships no fragment
+    of its own (V-10 step 13). Between the add-on layers and the overlay, so the operator
+    can still change or switch off an entry."""
+    shipped = chat_servers.shipping_fragments(config_dir, repo_root, PROFILE_FRAGMENTS)
+    return chat_servers.fragment(_chat_servers(config_dir, repo_root), shipped)
 
 
 def _without_overridden(generated: list[dict], overlay) -> list[dict]:
@@ -595,6 +614,10 @@ def _effective_text(
                 layer = _load_structured(overlay_path, overlay_label)
         elif overlay_text is not None:
             layer = _parse_structured(base_path.suffix, overlay_text, overlay_label)
+        if rel_path == LIBRECHAT_CONFIG:
+            generated_chat = _chat_layer(config_dir, repo_root)
+            if generated_chat:
+                merged = _merge_layer(merged, generated_chat, "platform catalog (generated)")
         if rel_path == LITELLM_CONFIG:
             generated = _localai_models(repo_root, config_dir, active_addons)
             if generated is not None:
@@ -771,6 +794,10 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
 
     resolved = re.sub(r"\$\{env\.([^}]+)\}", replace, template)
     realm = json.loads(resolved)  # validate the substitution didn't break the JSON
+
+    # The audience of every tool server the chat reaches from the catalog: the core is
+    # the one writer of these mappers (V-10 step 13), the add-ons ship none.
+    chat_servers.add_audience_mappers(realm, _chat_servers(config_dir, repo_root))
 
     # Realm settings of the security profile and the redirect URIs of the template's
     # sign-in clients from the configured hosts (realm_hardening); `realm sync` applies

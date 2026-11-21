@@ -608,7 +608,46 @@ def _sync_login_theme(base_url, ctx, token, realm_def: dict) -> int:
     return changed
 
 
-def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
+# Writer of the audit rows of this sync (realm_sync.AuditLog, `papaia.audit/1`).
+AUDIT_WRITER = "papaia-ctl/keycloak-role-sync"
+
+
+class _Audit:
+    """The audit log of one sync, opened on the first write: a run that changes nothing
+    leaves no outbox behind. It is opened before the first change is sent, so a change
+    that could not be audited is never made."""
+
+    def __init__(self, config_dir: Path) -> None:
+        self.config_dir = config_dir
+        self._log = None
+
+    def open(self):
+        if self._log is None:
+            from . import realm_sync  # it imports this module
+
+            try:
+                self._log = realm_sync.AuditLog(
+                    realm_sync.audit_path(self.config_dir),
+                    realm_sync.new_correlation_id(),
+                    writer=AUDIT_WRITER,
+                )
+            except realm_sync.RealmSyncError as exc:
+                # Reported like an unreachable outbox: the sync stops before the change.
+                raise OSError(f"the audit outbox cannot be written: {exc}") from None
+        return self._log
+
+    def close(self) -> None:
+        if self._log is not None:
+            self._log.close()
+            self._log = None
+
+
+def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict, audit=None) -> int:
+    """Create every mapper of the rendered realm that a client lacks (by name). With
+    `audit` (a realm_sync.AuditLog or _Audit), each creation is one `papaia.audit/1` row
+    made with the master admin."""
+    from . import realm_sync  # it imports this module
+
     added = 0
     for client in realm_def.get("clients", []):
         client_id = client["clientId"]
@@ -625,14 +664,28 @@ def _sync_protocol_mappers(base_url, ctx, token, realm_def: dict) -> int:
         for mapper in client.get("protocolMappers", []):
             if mapper["name"] in existing:
                 continue
-            _api(
-                base_url,
-                ctx,
-                token,
-                "POST",
-                f"/clients/{client_uuid}/protocol-mappers/models",
-                mapper,
+            log = audit.open() if isinstance(audit, _Audit) else audit
+            change = realm_sync.Change(
+                "protocol-mapper",
+                f"{client_id}/{mapper['name']}",
+                f"protocol mapper created on {client_id}",
+                "protocol_mapper_create",
             )
+            try:
+                _api(
+                    base_url,
+                    ctx,
+                    token,
+                    "POST",
+                    f"/clients/{client_uuid}/protocol-mappers/models",
+                    mapper,
+                )
+            except urllib.error.HTTPError as exc:
+                if log is not None:
+                    log.write(change, "error", f"http_{exc.code}", master=True)
+                raise
+            if log is not None:
+                log.write(change, "allowed", master=True)
             added += 1
             print(f"  protocol mapper created on {client_id}: {mapper['name']}", flush=True)
     return added
@@ -846,7 +899,11 @@ def sync_roles(tree: EnvTree, config_dir: Path, repo_root: Path | None = None) -
             clients_created += created
             secrets_updated += updated
         themes_set = _sync_login_theme(base_url, ctx, token, realm_def)
-        mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def)
+        audit = _Audit(config_dir)
+        try:
+            mappers_added = _sync_protocol_mappers(base_url, ctx, token, realm_def, audit)
+        finally:
+            audit.close()
         _sync_smtp(base_url, ctx, token, realm_def)
         _sync_hsts(base_url, ctx, token, realm_def)
         migrated = _migrate_legacy_admins(base_url, ctx, token, existing_roles)

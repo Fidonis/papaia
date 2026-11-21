@@ -255,9 +255,10 @@ integration:
       integration/keycloak/<client>.json:
         secret_env: KC_<CLIENT>_CLIENT_SECRET    # GENERATE_SECRET in .env.example
         root_url_env: <APP>_SERVER               # optional, replaces rootUrl
-    client_mappers:
+    client_mappers:                # not for an audience of a platform tool server
       librechat: [integration/keycloak/librechat-audience-mapper.json]
-  librechat: integration/librechat/<name>.yaml   # optional
+  librechat: integration/librechat/<name>.yaml   # optional; none needed for an
+                                                  # `exposes` entry of kind mcp
   nginx:     integration/nginx/<name>.conf        # optional; or, since addon_api 12,
                                                   # a list of ingress entries:
   # nginx:
@@ -838,7 +839,33 @@ the undeclared accounts. See [lifecycle.md](lifecycle.md).
 The `mcpServers` and `allowedDomains` fragment from `integration/librechat/`
 is **merged at render time** into the effective `librechat.yaml` in the config
 directory. Render process: base template + sum of active add-on fragments +
-customer overlay.
+the entries generated from the platform catalog + customer overlay.
+
+**Entries from the catalog.** A tool server declared in `exposes:` with
+`kind: mcp` needs no fragment and no audience mapper of its own. The core
+derives both from its catalog entry (`lib/chat_servers.py`), so address,
+audience and title are the catalog's:
+
+- Only entries with `trust: platform` (a module of the suite matrix, or a core
+  profile), identity `person`, an address and an audience qualify. LibreChat
+  sends one token that carries the audience of every such server; a server
+  outside the suite never receives it.
+- The `mcpServers` entry is named after the audience (`mcp-<system>`) and
+  calls the catalog address with the person's token (`startup: false`); its
+  origin joins `mcpSettings.allowedDomains`. It is generated only for a module
+  that ships no `integration/ai/librechat/librechat.yaml`: a shipped fragment
+  stays that module's description until the module drops it. The overlay can
+  still change or remove a generated entry.
+- The audience mapper `<audience>-audience` (`oidc-audience-mapper`, access
+  token only) is added to the `librechat` client of the rendered realm unless
+  that client maps the audience already. `start` creates it on an existing
+  realm (`keycloak-role-sync`, additive); each mapper it creates is one
+  `papaia.audit/1` row (`keycloak_role_sync.protocol_mapper_create`, master
+  administrator). With the bundled Keycloak the add-on checklist no longer
+  lists a `client_mappers.librechat` export for such an audience; with an
+  external identity provider it names the audiences to map by hand. Removing
+  the add-on removes entry and mapper from the rendered files; a mapper in the
+  live realm stays until it is deleted by hand.
 
 **Agents and prompts (addon_api 4).** An add-on may ship LibreChat agents and
 prompts in the same formats as `LIBRECHAT_AGENTS_DIR` / `LIBRECHAT_PROMPTS_DIR`
@@ -927,6 +954,13 @@ read-only; the core is their only writer.
   aside). Every write, the brand logo included, adds one `papaia.audit/1` row
   (`catalog.services_write`, `catalog.brand_logo_write`, `catalog.brand_logo_delete`,
   `platform_groups.write`) to the outbox, attributed to the host.
+- **Chat.** LibreChat's tool servers and their audience mappers are derived from
+  the catalog entries (Seam 3, "Entries from the catalog").
+- **`knowledge:` and `exposes`.** A module that declares `exposes` names only its
+  own operations in `knowledge.sources[].access[].key_tools`. `addon check` and
+  `addon install` refuse another name (axis `knowledge`), and the knowledge map
+  refuses one in a core profile's `knowledge.yaml`. The key `knowledge:` itself
+  stays (generation 6).
 
 ---
 

@@ -18,6 +18,7 @@ from . import (
     addon_upgrade,
     addons,
     catalog,
+    chat_servers,
     common,
     compat,
     components,
@@ -429,7 +430,10 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     deployment.save(config_dir, deployed)
     _render_integration(config_dir, repo_root)
 
-    reporting.print_keycloak_checklist(name, manifest, addon_path, config_dir)
+    reporting.print_keycloak_checklist(
+        name, manifest, addon_path, config_dir,
+        generated=chat_servers.generated_audiences(config_dir, repo_root),
+    )
     print(f"Addon installed: {name}")
     if components.parse(manifest):
         bundle_env = common.parse_env_file(bundle_env_path)

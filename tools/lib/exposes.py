@@ -58,3 +58,47 @@ def check(section: object, where: str) -> None:
                     f"{where}: exposes/{index}/operations/{number}/resource/id_field: "
                     f"'{field}' names no property of input_schema"
                 )
+
+
+def operation_names(section: list) -> set[str]:
+    """The operation names a checked section declares, over all of its entries."""
+    return {
+        operation["name"]
+        for entry in section
+        for operation in entry.get("operations") or ()
+    }
+
+
+def check_key_tools(knowledge: object, section: list, where: str) -> None:
+    """Refuse `key_tools` of a `knowledge:` declaration (contract generation 6) that are no
+    operation of the module's own `exposes:` section, which must have passed `check`.
+
+    Since generation 7 the operation names of `exposes` are the one description of the
+    tools; a knowledge source repeats them for the model's next step and may not invent
+    others (V-10 step 3). Only the shape this check reads is checked here; the rest of
+    the declaration is the knowledge map's to check. Raises ExposesError."""
+    if knowledge is None:
+        return
+    sources = knowledge.get("sources") if isinstance(knowledge, dict) else None
+    if sources is None:
+        return
+    if not isinstance(sources, list):
+        raise ExposesError(f"{where}: knowledge/sources: must be a list")
+    names = operation_names(section)
+    for number, source in enumerate(sources):
+        access = source.get("access") if isinstance(source, dict) else None
+        if not isinstance(access, list):
+            continue
+        for index, path in enumerate(access):
+            tools = path.get("key_tools") if isinstance(path, dict) else None
+            if tools is None:
+                continue
+            pointer = f"{where}: knowledge/sources/{number}/access/{index}/key_tools"
+            if not isinstance(tools, list):
+                raise ExposesError(f"{pointer}: must be a list of operation names")
+            for position, tool in enumerate(tools):
+                if not isinstance(tool, str) or tool not in names:
+                    raise ExposesError(
+                        f"{pointer}/{position}: {str(tool)[:80]!r} is no operation "
+                        "of the module's exposes"
+                    )

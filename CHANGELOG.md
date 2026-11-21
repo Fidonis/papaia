@@ -12,6 +12,18 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Removed
+
+Descriptions replaced by `exposes:` in this release (no parallel operation):
+
+- The hand-written LibreChat fragment and the `librechat` audience mapper of a tool
+  server declared in `exposes:` with `kind: mcp` and `trust: platform`: the core
+  generates both from the platform catalog. A `client_mappers.librechat` export for
+  such an audience is no longer a manual step with the bundled Keycloak. A fragment an
+  add-on still ships is kept for that add-on until the add-on drops it.
+- Free tool names in `knowledge.sources[].access[].key_tools` of a module that declares
+  `exposes`: they must be operation names of its `exposes`; `addon check` refuses others.
+
 ## [1.9.0] - 2026-11-20
 
 ### 🚀 Features

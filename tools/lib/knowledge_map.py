@@ -38,7 +38,7 @@ from urllib.parse import urlparse
 
 import yaml
 
-from . import common, deployment
+from . import common, deployment, exposes
 
 # Where the rendered map lands inside $PAPAIA_CONFIG_DIR.
 MAP_DIR = "knowledge-map"
@@ -405,6 +405,20 @@ def _merge_override(entry: dict, override: dict) -> dict:
     return merged
 
 
+def _check_key_tools(knowledge: dict, exposes_path: Path, where: str) -> None:
+    """A core module that declares `exposes.yaml` names only its own operations as
+    `key_tools` (V-10 step 3); a module without one keeps free names."""
+    if not exposes_path.is_file():
+        return
+    doc = _load_yaml(exposes_path)
+    section = doc.get("exposes") if isinstance(doc, dict) else None
+    try:
+        exposes.check(section, where)
+        exposes.check_key_tools(knowledge, section, where)
+    except exposes.ExposesError as exc:
+        raise KnowledgeMapError(str(exc)) from None
+
+
 def collect_sources(
     repo_root: Path,
     config_dir: Path,
@@ -463,6 +477,7 @@ def collect_sources(
                 f"{knowledge_path}: expected a mapping with a 'sources' key, "
                 f"got {type(data).__name__}"
             )
+        _check_key_tools(data, repo_root / module_path / "exposes.yaml", f"core:{profile}")
         _add(data.get("sources") or [], f"module:{profile}")
 
     for addon in active_addons:
@@ -480,6 +495,14 @@ def collect_sources(
                 f"{addon_path / 'papaia-app.yaml'}: 'knowledge' must be a "
                 f"mapping with a 'sources' key, got {type(knowledge).__name__}"
             )
+        if manifest.get("exposes") is not None:
+            try:
+                exposes.check(manifest["exposes"], str(manifest.get("name", addon_path.name)))
+                exposes.check_key_tools(
+                    knowledge, manifest["exposes"], str(manifest.get("name", addon_path.name))
+                )
+            except exposes.ExposesError as exc:
+                raise KnowledgeMapError(str(exc)) from None
         _add(
             knowledge.get("sources") or [],
             f"addon:{manifest.get('name', addon_path.name)}"
