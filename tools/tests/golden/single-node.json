@@ -29,7 +29,7 @@
       "ai/localai/models/nomic-embed-text.yaml": "4257e455fc32191b17e7e53930b5d521e2ffbd6a507e56b647757c59299a6691",
       "ai/localai/models/qwen2.5-1.5b-instruct.yaml": "bc3290970fdf12f6058168f0c82a4eb7733dad2c17fdf8137baf8e33dfbc4001",
       "ai/localai/models/qwen2.5-7b-instruct.yaml": "6b867071f7fa7ad4ea70383c5667c90dbe53237904dd1a444c7b363cf9f4e96d",
-      "ai/rag/.env": "f02a88bded56baef34f67fb190a8324348dfc95f988e86d869b7ea90216a8c3a",
+      "ai/rag/.env": "cdbc29619e3a00fc7292c1fb4ca74b6a7f40f650cebc103b2c1b14a61e5497d0",
       "ai/voice/.env": "877cff79748599cbfcf727966baf3ec70ae81a7d606fc1b6b47aad52a76d6ff7",
       "ai/voice/chatterbox.yaml": "c873695af3151e62adba39c71231c015bd62c50cc25d69a9520d2861b141541c",
       "deployed.lock": "8041404a831eb606e4ea02368496a6228c0b61811180e5b88895fd8e2adbb92a",
@@ -81,7 +81,7 @@
       "ai/localai/models/nomic-embed-text.yaml": "4257e455fc32191b17e7e53930b5d521e2ffbd6a507e56b647757c59299a6691",
       "ai/localai/models/qwen2.5-1.5b-instruct.yaml": "bc3290970fdf12f6058168f0c82a4eb7733dad2c17fdf8137baf8e33dfbc4001",
       "ai/localai/models/qwen2.5-7b-instruct.yaml": "6b867071f7fa7ad4ea70383c5667c90dbe53237904dd1a444c7b363cf9f4e96d",
-      "ai/rag/.env": "f02a88bded56baef34f67fb190a8324348dfc95f988e86d869b7ea90216a8c3a",
+      "ai/rag/.env": "cdbc29619e3a00fc7292c1fb4ca74b6a7f40f650cebc103b2c1b14a61e5497d0",
       "ai/voice/.env": "877cff79748599cbfcf727966baf3ec70ae81a7d606fc1b6b47aad52a76d6ff7",
       "ai/voice/chatterbox.yaml": "c873695af3151e62adba39c71231c015bd62c50cc25d69a9520d2861b141541c",
       "deployed.lock": "7b0ea66e7afeb12c5f7449eb4d493ec61b36f42754d0570642b6109a2019ed3e",
@@ -107,7 +107,7 @@
   "full": {
     "backup_manifest": "e20eff6f4eb28d2de0b11d11108cb3ae8be3737467a4300163a8023fc3bb766d",
     "compose": {
-      "config": "a04d30c255339fbd56f0af3e534e717242cb630a4151fed571d2b6cca56034a1",
+      "config": "16912c69bc98af40d996e1d358b34338f64c2674fa946404267609e875ef7ab3",
       "version": "5.6.0"
     },
     "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://chat.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://llm.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=true\nMANAGER_STICKY=true\nRAG_STICKY=true\nVOICE_STICKY=true\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=cpu\nSMTP_STICKY=true\nSMTP_HOST_STICKY=smtp.example.org\nSMTP_PORT_STICKY=587\nSMTP_SECURITY_STICKY=starttls\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=noreply@example.org\nSMTP_FROM_NAME_STICKY=papAIa\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=true\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,librechat-websearch,localai,manager,rag,voice,smtp,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
@@ -136,7 +136,7 @@
       "ai/localai/models/nomic-embed-text.yaml": "4257e455fc32191b17e7e53930b5d521e2ffbd6a507e56b647757c59299a6691",
       "ai/localai/models/qwen2.5-1.5b-instruct.yaml": "bc3290970fdf12f6058168f0c82a4eb7733dad2c17fdf8137baf8e33dfbc4001",
       "ai/localai/models/qwen2.5-7b-instruct.yaml": "6b867071f7fa7ad4ea70383c5667c90dbe53237904dd1a444c7b363cf9f4e96d",
-      "ai/rag/.env": "f02a88bded56baef34f67fb190a8324348dfc95f988e86d869b7ea90216a8c3a",
+      "ai/rag/.env": "cdbc29619e3a00fc7292c1fb4ca74b6a7f40f650cebc103b2c1b14a61e5497d0",
       "ai/voice/.env": "877cff79748599cbfcf727966baf3ec70ae81a7d606fc1b6b47aad52a76d6ff7",
       "ai/voice/chatterbox.yaml": "c873695af3151e62adba39c71231c015bd62c50cc25d69a9520d2861b141541c",
       "deployed.lock": "8041404a831eb606e4ea02368496a6228c0b61811180e5b88895fd8e2adbb92a",
