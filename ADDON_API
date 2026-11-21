@@ -31,5 +31,6 @@
 #      (ADR 0017 addendum)
 #   11  `pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)
 #   12  add-on ingress `integration.nginx` (ADR 0023)
-current=12
+#   13  `volumes[]` with `backup: include|exclude` and a reason, read by `backup`
+current=13
 min=1

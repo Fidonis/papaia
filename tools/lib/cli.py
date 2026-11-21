@@ -30,6 +30,7 @@ import yaml
 from . import (
     audit,
     backup,
+    backup_crypt,
     catalog,
     cli_addon,
     cli_node,
@@ -1491,6 +1492,11 @@ def cmd_backup_plan(args: argparse.Namespace) -> int:
         )
         if args.only:
             plan = backup.scope_plan(plan, args.only)
+        # Before anything is written: no recipient, no confirmed target or no room means
+        # no snapshot directory at all (BE-14, RE-33).
+        plan.recipients = backup_crypt.require_recipients(config_dir)
+        backup_crypt.check_target(config_dir, backup_dir)
+        backup_crypt.check_free_space(backup_dir)
         common.ensure_dir(plan.snapshot / "volumes")
         common.ensure_dir(plan.snapshot / "binds")
         backup.write_plan(plan)
@@ -1503,6 +1509,12 @@ def cmd_backup_plan(args: argparse.Namespace) -> int:
         return _fail(exc)
     for name in plan.skipped:
         print(f"WARNING: declared volume does not exist, skipping: {name}", file=sys.stderr)
+    if len(plan.recipients) == 1:
+        print(
+            "WARNING: only one backup recipient; a lost key makes every point unreadable."
+            " Add a second one (emergency key).",
+            file=sys.stderr,
+        )
     print(f"SNAPSHOT\t{plan.snapshot}")
     if plan.scope:
         print(f"SCOPE\t{','.join(plan.scope)}")
@@ -1523,6 +1535,13 @@ def cmd_backup_finish(args: argparse.Namespace) -> int:
             papaia_version=envtree.resolve_platform_version(Path(args.repo_root)),
         )
         entry = backup.record_backup(backup_dir, plan, manifest, args.result)
+        backup_crypt.audit(
+            Path(args.config_dir), "backup", "backup_written",
+            {"id": entry["id"], "result": args.result, "artifacts": entry["artifacts"],
+             "recipients": [r.name for r in plan.recipients],
+             "excluded": len(plan.excluded), "scope": plan.scope},
+            result="allowed" if args.result != "failed" else "error",
+        )
     except backup.BackupError as exc:
         return _fail(exc)
     # Intermediate state; the manifest supersedes it. results.tsv stays as the
@@ -1535,13 +1554,157 @@ def cmd_backup_finish(args: argparse.Namespace) -> int:
 
 
 def cmd_backup_prune(args: argparse.Namespace) -> int:
+    if (args.retention_period_days is None) == (args.keep is None):
+        print("ERROR: backup-prune needs --retention-period-days or --keep", file=sys.stderr)
+        return 2
     try:
         backup_dir = _resolve_backup_dir(Path(args.config_dir), args.backup_dir)
-        removed = backup.prune(backup_dir, args.retention_period_days)
+        if args.keep is not None:
+            removed = backup.prune_keep(backup_dir, args.keep)
+        else:
+            removed = backup.prune(backup_dir, args.retention_period_days)
+        for backup_id in removed:
+            backup_crypt.audit(
+                Path(args.config_dir), "backup-prune", "backup_deleted",
+                {"id": backup_id, "reason": "retention"}, effect="delete",
+            )
     except backup.BackupError as exc:
         return _fail(exc)
     for backup_id in removed:
         print(backup_id)
+    return 0
+
+
+def cmd_backup_seal(args: argparse.Namespace) -> int:
+    """Encrypt the tar.gz stream on standard input to <snapshot>/<archive>."""
+    snapshot = Path(args.snapshot)
+    try:
+        plan = backup.read_plan(snapshot)
+        if args.archive not in {a.archive for a in plan.artifacts}:
+            raise backup.BackupError(f"{args.archive!r} is not an archive of this plan")
+        if not plan.recipients:
+            raise backup.BackupError("The plan names no recipient; nothing is written")
+        digest = backup_crypt.seal(
+            sys.stdin.buffer, snapshot / args.archive, [r.key for r in plan.recipients]
+        )
+        backup_crypt.record_checksum(snapshot, args.archive, digest)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    return 0
+
+
+def cmd_backup_recipients(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    try:
+        if args.action == "add":
+            backup_crypt.add_recipient(config_dir, args.name or "", args.key or "")
+            print(f"Recipient {args.name} added; it applies from the next backup on.")
+        elif args.action == "remove":
+            removed = backup_crypt.remove_recipient(config_dir, args.name or "")
+            print(f"Recipient {removed.name} removed; the next backup is no longer readable "
+                  "with its key.")
+            try:
+                backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
+                points = backup_crypt.points_for_key(backup_dir, removed.key)
+            except backup.BackupError:
+                points = []
+            if points:
+                newest, taken = points[-1]
+                print(f"Restore points taken up to {taken or 'an unknown date'} stay readable "
+                      f"with it until retention or backup-delete removes them (the newest is "
+                      f"{newest}, taken {taken or 'at an unknown date'}): "
+                      f"{', '.join(point for point, _ in points)}")
+        recipients = backup_crypt.load_recipients(config_dir)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    if args.action == "list":
+        if not recipients:
+            print("No backup recipient is configured.")
+        for recipient in recipients:
+            print(f"{recipient.name}\t{recipient.key}")
+    return 0
+
+
+def cmd_backup_keygen(args: argparse.Namespace) -> int:
+    """Two key pairs (default names betrieb and notfall, for operations and emergencies):
+    shown once on the terminal, never stored.
+
+    Only the public keys are kept, and only after the operator typed back the last eight
+    characters of the first private key, which proves it was written down."""
+    config_dir = Path(args.config_dir)
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("ERROR: keys are shown only on a terminal, never into a log or a pipe."
+              " Run the command interactively.", file=sys.stderr)
+        return 2
+    try:
+        names = [n.strip() for n in args.names.split(",") if n.strip()]
+        if len(names) != 2 or len(set(names)) != 2:
+            raise backup.BackupError("--names needs two different names")
+        current = backup_crypt.load_recipients(config_dir)
+        pairs = [(name, *backup_crypt.generate_pair()) for name in names]
+        backup_crypt.parse_recipients(
+            backup_crypt.format_recipients(
+                [*current, *(backup.Recipient(n, r) for n, _i, r in pairs)]
+            )
+        )
+    except backup.BackupError as exc:
+        return _fail(exc)
+    print("Two backup keys. Write each private key down or print it and keep the two")
+    print("apart (operations at hand, emergency in a safe). They are shown only now and")
+    print("are not stored anywhere by papaia-ctl.\n")
+    for name, identity, recipient in pairs:
+        print(f"  {name}")
+        print(f"    private key: {identity}")
+        print(f"    public key:  {recipient}\n")
+    first_name, first_identity, _ = pairs[0]
+    for _attempt in range(3):
+        answer = input(f"Last eight characters of the private key '{first_name}': ").strip()
+        if answer.upper() == first_identity[-8:]:
+            break
+        print("That does not match; check the copy.")
+    else:
+        print("ERROR: not confirmed; no recipient was stored.", file=sys.stderr)
+        return 3
+    print("\033[2J\033[H", end="")  # clear the screen the keys were shown on
+    try:
+        for name, _identity, recipient in pairs:
+            backup_crypt.add_recipient(config_dir, name, recipient)
+    except backup.BackupError as exc:
+        return _fail(exc)
+    print(f"Recipients {', '.join(names)} stored. Check the emergency key now:")
+    print("  papaia-ctl backup key-check --identity=-   (paste the key, then Ctrl-D)")
+    return 0
+
+
+def cmd_backup_target(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    try:
+        backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
+        if args.action == "init":
+            installation = backup_crypt.init_target(config_dir, backup_dir)
+            print(f"{backup_dir} is the backup target of installation {installation}.")
+        else:
+            installation = backup_crypt.check_target(config_dir, backup_dir)
+            print(f"{backup_dir} is this installation's backup target ({installation}).")
+    except backup.BackupError as exc:
+        return _fail(exc)
+    return 0
+
+
+def cmd_backup_key_check(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    try:
+        backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
+        identities = backup_crypt.read_identities(args.identity)
+        point, names = backup_crypt.key_check(
+            config_dir, backup_dir, identities, args.restore_point
+        )
+        # A write: the check updates the record of checked keys (KEY_CHECK_FILE).
+        backup_crypt.audit(config_dir, "backup-key-check", "backup_key_checked",
+                           {"id": point, "recipients": names})
+    except backup.BackupError as exc:
+        return _fail(exc)
+    print(f"Key opens restore point {point} as recipient {', '.join(names) or '(unnamed)'}.")
     return 0
 
 
@@ -1602,7 +1765,8 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
         if not args.only:
             backup.require_whole_stack(manifest)
         selection = backup.resolve_selection(manifest, args.only) if args.only else None
-    except backup.ScopedRestorePointError as exc:
+        backup.require_plain(manifest)
+    except (backup.ScopedRestorePointError, backup.EncryptedRestorePointError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except backup.BackupError as exc:
@@ -1964,7 +2128,8 @@ def cmd_cluster_backup(args: argparse.Namespace) -> int:
     try:
         backup_dir = _resolve_backup_dir(found.config_dir, args.backup_dir)
         backup_id, outcome = cluster_data.run_backup(
-            found, backup_dir, only=args.only, retention_days=args.retention_period_days
+            found, backup_dir, only=args.only, retention_days=args.retention_period_days,
+            keep=args.keep,
         )
     except backup.SelectionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -1999,7 +2164,9 @@ def cmd_cluster_restore(args: argparse.Namespace) -> int:
             only=args.only,
             no_restart=args.no_restart,
         )
-    except (backup.ScopedRestorePointError, backup.SelectionError) as exc:
+    except (
+        backup.ScopedRestorePointError, backup.EncryptedRestorePointError, backup.SelectionError
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except (backup.BackupError, cluster.ClusterError, nodes.NodeError) as exc:
@@ -2176,6 +2343,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cluster_backup.add_argument("--backup-dir", default=None)
     p_cluster_backup.add_argument("--only", default=None)
     p_cluster_backup.add_argument("--retention-period-days", type=int, default=None)
+    p_cluster_backup.add_argument("--keep", type=int, default=None)
     p_cluster_backup.set_defaults(func=cmd_cluster_backup)
 
     p_cluster_restore = sub.add_parser("cluster-restore")
@@ -2437,8 +2605,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_backup_prune = sub.add_parser("backup-prune")
     p_backup_prune.add_argument("--backup-dir", default=None)
-    p_backup_prune.add_argument("--retention-period-days", type=int, required=True)
+    p_backup_prune.add_argument("--retention-period-days", type=int, default=None)
+    p_backup_prune.add_argument("--keep", type=int, default=None)
     p_backup_prune.set_defaults(func=cmd_backup_prune)
+
+    p_backup_seal = sub.add_parser("backup-seal")
+    p_backup_seal.add_argument("--snapshot", required=True)
+    p_backup_seal.add_argument("--archive", required=True)
+    p_backup_seal.set_defaults(func=cmd_backup_seal)
+
+    p_backup_recipients = sub.add_parser("backup-recipients")
+    p_backup_recipients.add_argument("action", choices=["list", "add", "remove"])
+    p_backup_recipients.add_argument("--name", default=None)
+    p_backup_recipients.add_argument("--key", default=None)
+    p_backup_recipients.add_argument("--backup-dir", default=None)
+    p_backup_recipients.set_defaults(func=cmd_backup_recipients)
+
+    p_backup_keygen = sub.add_parser("backup-keygen")
+    p_backup_keygen.add_argument("--names", default="betrieb,notfall")
+    p_backup_keygen.set_defaults(func=cmd_backup_keygen)
+
+    p_backup_target = sub.add_parser("backup-target")
+    p_backup_target.add_argument("action", choices=["init", "check"])
+    p_backup_target.add_argument("--backup-dir", default=None)
+    p_backup_target.set_defaults(func=cmd_backup_target)
+
+    p_backup_key_check = sub.add_parser("backup-key-check")
+    p_backup_key_check.add_argument("--backup-dir", default=None)
+    p_backup_key_check.add_argument("--identity", required=True)
+    p_backup_key_check.add_argument("--restore-point", default=None)
+    p_backup_key_check.set_defaults(func=cmd_backup_key_check)
 
     p_backup_list = sub.add_parser("backup-list")
     p_backup_list.add_argument("--backup-dir", default=None)

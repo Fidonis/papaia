@@ -8,16 +8,21 @@ one host only, and keeps the key out of the configuration, the backups and the m
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from lib import (
+    age,
+    backup,
     cluster_data,
     common,
     egress,
@@ -741,6 +746,7 @@ def test_the_config_dir_backup_leaves_the_key_file_out(tmp_path):
     log = tmp_path / "calls.log"
     source = tmp_path / "config"
     source.mkdir()
+    archive = "papaia-config.tar.gz.age"
     harness = f"""
 set -euo pipefail
 info() {{ :; }}
@@ -750,7 +756,8 @@ _docker_hostpath() {{ printf '%s' "$1"; }}
 _docker_run() {{ printf '%s\\n' "$*" >> "{log.as_posix()}"; }}
 _pause_containers() {{ :; }}
 _unpause_all() {{ :; }}
-_backup_artifact "{tmp_path.as_posix()}" configdir papaia-config.tar.gz "{source.as_posix()}" core
+py_cli() {{ cat >/dev/null; }}
+_backup_artifact "{tmp_path.as_posix()}" configdir {archive} "{source.as_posix()}" core
 """
     done = subprocess.run([BASH, "-c", harness], capture_output=True, text=True, timeout=30)
 
@@ -763,14 +770,21 @@ _backup_artifact "{tmp_path.as_posix()}" configdir papaia-config.tar.gz "{source
 def test_the_distributed_config_dir_backup_leaves_the_key_file_out(tmp_path, monkeypatch):
     calls: list[list[str]] = []
 
-    def run(argv, **_kwargs):
+    def run(argv, stdout=None, **_kwargs):
         calls.append(argv)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            tar.addfile(tarfile.TarInfo("./deployment.yaml"), io.BytesIO(b""))
+        stdout.write(buf.getvalue())
         return subprocess.CompletedProcess(argv, 0)
 
+    _identity, recipient = age.generate_identity()
+    plan = SimpleNamespace(recipients=[backup.Recipient("betrieb", recipient)])
+    monkeypatch.setattr(cluster_data.backup, "read_plan", lambda _snapshot: plan)
     monkeypatch.setattr(cluster_data.subprocess, "run", run)
     fake = type("Cluster", (), {"config_dir": tmp_path / "config"})()
 
-    assert cluster_data._archive_config_dir(fake, tmp_path, "papaia-config.tar.gz")
+    assert cluster_data._archive_config_dir(fake, tmp_path, "papaia-config.tar.gz.age")
     [argv] = calls
     exclude = f"--exclude=./{hosted_model.KEY_FILE}"
     assert exclude in argv

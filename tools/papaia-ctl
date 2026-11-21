@@ -39,8 +39,12 @@
 #   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
 #                            [--insecure-images] [--config-dir=PATH]
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
-#   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
+#   papaia-ctl backup        [--backup-dir=PATH] [--keep=N] [--retention-period-days=N]
 #                            [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
+#   papaia-ctl backup recipients list|add|remove [--name=NAME] [--key=age1...]
+#   papaia-ctl backup keys generate [--names=A,B]
+#   papaia-ctl backup target init|check [--backup-dir=PATH]
+#   papaia-ctl backup key-check --identity=FILE|- [--restore-point=ID]
 #   papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...]
 #                            [--backup-dir=PATH] [-y] [--config-dir=PATH]
 #                            --restore-point is repeatable or comma-separated
@@ -125,7 +129,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,118p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,122p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

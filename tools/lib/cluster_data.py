@@ -40,7 +40,7 @@ from pathlib import Path
 
 import yaml
 
-from . import backup, common, envtree, halt, migrations, nodes, topology
+from . import backup, backup_crypt, common, envtree, halt, migrations, nodes, topology
 from .cluster import Cluster, ClusterError, _say
 from .topology import CATALOGUE
 
@@ -108,7 +108,7 @@ def build_plan(
             plan.artifacts.append(
                 backup.Artifact(
                     kind="volume",
-                    archive=f"volumes/{volume}.tar.gz",
+                    archive=f"volumes/{volume}{backup.ARCHIVE_SUFFIX}",
                     source=volume,
                     owner="core",
                     project=project,
@@ -132,7 +132,7 @@ def build_plan(
                 plan.artifacts.append(
                     backup.Artifact(
                         kind=NODESTATE,
-                        archive=f"nodes/{name}/state-{index}.tar.gz",
+                        archive=f"nodes/{name}/state-{index}{backup.ARCHIVE_SUFFIX}",
                         source=str(index),
                         owner="core",
                         project=project,
@@ -148,12 +148,18 @@ def build_plan(
                 continue
             path = deployment.resolve_addon_path(entry, cluster.repo_root)
             plan.addons.append(addon)
-            for key in backup._top_level_volumes(path / "docker-compose.yml"):
+            keys = backup._top_level_volumes(path / "docker-compose.yml")
+            excluded = backup.addon_volume_exclusions(path, keys)
+            plan.excluded.extend(
+                {"volume": f"{path.name}_{key}", "reason": reason}
+                for key, reason in excluded.items()
+            )
+            for key in [k for k in keys if k not in excluded]:
                 volume = f"{path.name}_{key}"
                 plan.artifacts.append(
                     backup.Artifact(
                         kind="volume",
-                        archive=f"volumes/{volume}.tar.gz",
+                        archive=f"volumes/{volume}{backup.ARCHIVE_SUFFIX}",
                         source=volume,
                         owner=f"addon:{addon}",
                         project=path.name,
@@ -169,7 +175,7 @@ def build_plan(
                 plan.artifacts.append(
                     backup.Artifact(
                         kind="binddir",
-                        archive=f"binds/{name}--{addon}-{index}.tar.gz",
+                        archive=f"binds/{name}--{addon}-{index}{backup.ARCHIVE_SUFFIX}",
                         source=f"{addon}:{index}",
                         owner=f"addon:{addon}",
                         project=path.name,
@@ -223,30 +229,43 @@ def _stream_args(artifact: backup.Artifact) -> list[str]:
 def _archive_config_dir(cluster: Cluster, snapshot: Path, archive: str) -> bool:
     """The controller's configuration directory, through a throwaway container as on one
     host: files the services wrote belong to their users, not to this one. The key of the
-    test stack's hosted model is never archived."""
+    test stack's hosted model and the rollback keys (state/rollback/) are never archived;
+    the stream is sealed to the recipients of the plan on its way into the snapshot."""
     from . import hosted_model
 
-    done = subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            f"{cluster.config_dir}:/src:ro",
-            "-v",
-            f"{snapshot}:/backup",
-            backup_image(),
-            "tar",
-            "czf",
-            f"/backup/{archive}",
-            f"--exclude=./{hosted_model.KEY_FILE}",
-            "-C",
-            "/src",
-            ".",
-        ],
-        check=False,
-    )
-    return done.returncode == 0
+    recipients = [r.key for r in backup.read_plan(snapshot).recipients]
+
+    def produce(writer) -> bool:
+        done = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{cluster.config_dir}:/src:ro",
+                backup_image(),
+                "tar",
+                "czf",
+                "-",
+                f"--exclude=./{hosted_model.KEY_FILE}",
+                "--exclude=./state/rollback",
+                "-C",
+                "/src",
+                ".",
+            ],
+            stdout=writer,
+            check=False,
+        )
+        return done.returncode == 0
+
+    produced, digest, error = backup_crypt.seal_output(produce, snapshot / archive, recipients)
+    if error is not None:
+        print(f"WARNING: {error}", file=sys.stderr, flush=True)
+    if not produced or digest is None:
+        (snapshot / archive).unlink(missing_ok=True)
+        return False
+    backup_crypt.record_checksum(snapshot, archive, digest)
+    return True
 
 
 def backup_image() -> str:
@@ -274,10 +293,18 @@ def run_backup(
     *,
     only: str | None = None,
     retention_days: int | None = None,
+    keep: int | None = None,
 ) -> tuple[str, str]:
-    """Take a restore point of the whole installation (or of `only`). Returns (id, result)."""
+    """Take a restore point of the whole installation (or of `only`). Returns (id, result).
+
+    Refused before anything is written without a recipient or a confirmed target (BE-14,
+    RE-33); every archive is sealed to the recipients on its way in."""
     started = time.monotonic()
     plan = build_plan(cluster, backup_dir, only=only)
+    plan.recipients = backup_crypt.require_recipients(cluster.config_dir)
+    backup_crypt.check_target(cluster.config_dir, backup_dir)
+    backup_crypt.check_free_space(backup_dir)
+    recipients = [r.key for r in plan.recipients]
     common.ensure_dir(plan.snapshot / "volumes")
     backup.write_plan(plan)
     if plan.scope:
@@ -292,14 +319,27 @@ def run_backup(
             results[artifact.archive] = "ok" if ok else "failed"
             continue
         _say(f"  {artifact.kind} {artifact.source} ({artifact.node}, {artifact.owner})")
-        with open(target, "wb") as out:
-            result = cluster.executor(artifact.node).run(
-                ["backup-stream", *_stream_args(artifact)], stdout=out, capture=True
+        runs: list = []
+
+        def produce(writer, artifact=artifact, runs=runs) -> bool:
+            runs.append(
+                cluster.executor(artifact.node).run(
+                    ["backup-stream", *_stream_args(artifact)], stdout=writer, capture=True
+                )
             )
-        if result.returncode == 0:
+            return runs[-1].returncode == 0
+
+        produced, digest, error = backup_crypt.seal_output(produce, target, recipients)
+        result = runs[-1]
+        if produced and digest is not None:
+            backup_crypt.record_checksum(plan.snapshot, artifact.archive, digest)
             results[artifact.archive] = "ok"
             continue
         target.unlink(missing_ok=True)
+        if produced and error is not None:
+            print(f"WARNING: failed: {artifact.archive} ({error})", file=sys.stderr, flush=True)
+            results[artifact.archive] = "failed"
+            continue
         from . import node_shell
 
         if result.returncode == node_shell.EXIT_MISSING:
@@ -341,6 +381,14 @@ def run_backup(
         if item.get("id") == entry["id"]:
             item["nodes"] = list(cluster.topology.nodes)
     backup.save_index(backup_dir, index)
+    backup_crypt.audit(
+        cluster.config_dir, "backup", "backup_written",
+        {"id": entry["id"], "result": outcome, "artifacts": entry["artifacts"],
+         "recipients": [r.name for r in plan.recipients],
+         "excluded": len(plan.excluded), "scope": plan.scope,
+         "nodes": list(cluster.topology.nodes)},
+        result="allowed" if outcome != "failed" else "error",
+    )
     (plan.snapshot / backup.PLAN_NAME).unlink(missing_ok=True)
     for name in plan.skipped:
         print(f"WARNING: does not exist, skipped: {name}", file=sys.stderr, flush=True)
@@ -353,10 +401,23 @@ def run_backup(
         f" duration={int(time.monotonic() - started)}s nodes={','.join(cluster.topology.nodes)}"
         + (f" scope={','.join(plan.scope)}" if plan.scope else ""),
     )
+    if keep is not None:
+        for removed in backup.prune_keep(backup_dir, keep):
+            _say(f"  removed restore point: {removed}")
+            _log(backup_dir, "prune", removed, "ok", f"reason=retention keep={keep}")
+            backup_crypt.audit(
+                cluster.config_dir, "backup", "backup_deleted",
+                {"id": removed, "reason": "retention", "keep": keep}, effect="delete",
+            )
     if retention_days is not None:
         for removed in backup.prune(backup_dir, retention_days):
             _say(f"  removed restore point: {removed}")
             _log(backup_dir, "prune", removed, "ok", f"reason=retention days={retention_days}")
+            backup_crypt.audit(
+                cluster.config_dir, "backup", "backup_deleted",
+                {"id": removed, "reason": "retention", "retention_days": retention_days},
+                effect="delete",
+            )
     return plan.backup_id, outcome
 
 
@@ -400,6 +461,7 @@ def resolve(cluster: Cluster, backup_dir: Path, restore_point: str | None, only:
             f"Restore point {entry.get('id')} was taken of a single host; this installation"
             " is distributed. Restore it into a single-host installation."
         )
+    backup.require_plain(manifest)
     artifacts = backup.manifest_artifacts(manifest)
     if only:
         parsed = backup.parse_selectors(only, DISTRIBUTED_SELECTOR_KINDS)

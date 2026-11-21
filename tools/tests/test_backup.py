@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import backup, cli, envtree
+from lib import age, backup, backup_crypt, cli, envtree
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -416,8 +416,8 @@ def test_build_plan_archive_names_are_unique(tmp_path: Path):
     archives = [a.archive for a in plan.artifacts]
     assert len(archives) == len(set(archives))
     assert sorted(a.archive for a in plan.artifacts if a.kind == "binddir") == [
-        "binds/paperless--data-export.tar.gz",
-        "binds/paperless--data-media.tar.gz",
+        "binds/paperless--data-export.tar.gz.age",
+        "binds/paperless--data-media.tar.gz.age",
     ]
 
 
@@ -1070,8 +1070,18 @@ def _run(repo: Path, config_dir: Path, *args: str) -> int:
     return cli.main(["--repo-root", str(repo), "--config-dir", str(config_dir), *args])
 
 
+def _encrypted_target(config_dir: Path, backup_dir: Path) -> Path:
+    """A recipient and a confirmed target, which every backup needs (BE-14, RE-33)."""
+    _identity, recipient = age.generate_identity()
+    backup_crypt.add_recipient(config_dir, "betrieb", recipient)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_crypt.init_target(config_dir, backup_dir)
+    return backup_dir
+
+
 def test_backup_plan_with_a_selection_prints_scope_and_artifacts(tmp_path: Path, capsys):
     repo, config_dir = _scoped_stack(tmp_path)
+    _encrypted_target(config_dir, tmp_path / "b")
 
     code = _run(
         repo, config_dir, "backup-plan", f"--backup-dir={tmp_path / 'b'}", "--only=addon:paperless"
@@ -1105,6 +1115,7 @@ def test_backup_plan_exits_2_and_writes_nothing_for_an_unmatched_selector(tmp_pa
 
 def test_backup_plan_without_a_selection_still_covers_the_whole_stack(tmp_path: Path, capsys):
     repo, config_dir = _scoped_stack(tmp_path)
+    _encrypted_target(config_dir, tmp_path / "b")
 
     code = _run(repo, config_dir, "backup-plan", f"--backup-dir={tmp_path / 'b'}")
 

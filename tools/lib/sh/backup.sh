@@ -143,12 +143,16 @@ _resolve_backup_dir() {
 # backup
 # ─────────────────────────────────────────────────────────────────────────
 cmd_backup() {
-    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention="" only="" only_given=0
+    case "${1:-}" in
+        recipients|keys|target|key-check) _backup_admin "$@"; return ;;
+    esac
+    local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention="" keep="" only="" only_given=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --retention-period-days=*) retention="${1#*=}" ;;
+            --keep=*) keep="${1#*=}" ;;
             --only=*) only="${1#*=}"; only_given=1 ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for backup: $1"; exit 2 ;;
@@ -159,6 +163,10 @@ cmd_backup() {
         error "--retention-period-days must be a whole number of days (got: $retention)"
         exit 2
     fi
+    if [ -n "$keep" ] && ! [[ "$keep" =~ ^[1-9][0-9]{0,3}$ ]]; then
+        error "--keep must be the number of restore points to keep, 1 or more (got: $keep)"
+        exit 2
+    fi
     # An empty --only= is a mistake worth stopping on: quietly backing up the
     # whole stack is the opposite of what the caller asked for.
     if [ "$only_given" -eq 1 ] && [ -z "$only" ]; then
@@ -167,17 +175,25 @@ cmd_backup() {
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    # One correlation id for every audit row of this run (papaia.audit/1), across the
+    # separate py_cli calls below; a caller such as `upgrade` may already have set one.
+    if [ -z "${PAPAIA_CORRELATION_ID:-}" ]; then
+        PAPAIA_CORRELATION_ID="$(py_cli new-correlation-id | tr -d '\r')" || exit 3
+    fi
+    export PAPAIA_CORRELATION_ID
     local mode
     mode="$(_topology_mode)" || exit 3
     if [ "$mode" = "distributed" ]; then
-        _backup_distributed "$backup_dir" "$retention" "$only" "$only_given"
+        _backup_distributed "$backup_dir" "$retention" "$only" "$only_given" "$keep"
         return
     fi
 
     trap _backup_cleanup EXIT INT TERM
 
+    # No mkdir: there is no default target, and a missing directory (an unmounted share)
+    # must stop the backup instead of filling the local disk (RE-33). backup-plan checks
+    # the directory, its .papaia-target and the recipients before anything is written.
     backup_dir="$(_resolve_backup_dir "$backup_dir")" || exit 3
-    mkdir -p "$backup_dir"
     info "Backup target: $backup_dir"
 
     # One docker call yields every volume with its compose project label; the
@@ -270,6 +286,17 @@ cmd_backup() {
     _backup_log "$backup_dir" backup "$backup_id" "$result" \
         "artifacts=$artifacts/$total size_mb=$size_mb duration=$((SECONDS - started))s${scope:+ scope=$scope}"
 
+    if [ -n "$keep" ]; then
+        info "Applying retention: keeping the $keep newest restore points..."
+        local dropped
+        while IFS= read -r dropped; do
+            [ -z "$dropped" ] && continue
+            info "  removed restore point: $dropped"
+            _backup_log "$backup_dir" prune "$dropped" ok "reason=retention keep=$keep"
+        done < <(py_cli backup-prune --backup-dir="$backup_dir" --keep="$keep" \
+                    | tr -d '\r')
+    fi
+
     if [ -n "$retention" ]; then
         info "Applying retention: keeping backups newer than $retention day(s)..."
         local removed
@@ -278,7 +305,7 @@ cmd_backup() {
             info "  removed restore point: $removed"
             _backup_log "$backup_dir" prune "$removed" ok "reason=retention days=$retention"
         done < <(py_cli backup-prune --backup-dir="$backup_dir" \
-                    --retention-period-days="$retention" 2>/dev/null | tr -d '\r')
+                    --retention-period-days="$retention" | tr -d '\r')
     fi
 
     case "$result" in
@@ -292,9 +319,10 @@ cmd_backup() {
 # data streamed into it (lib/cluster_data.py). Sets LAST_BACKUP_ID like cmd_backup.
 # $1 backup dir (may be empty), $2 retention days, $3 selection, $4 1 if --only was given
 _backup_distributed() {
-    local backup_dir="$1" retention="$2" only="$3" only_given="$4"
+    local backup_dir="$1" retention="$2" only="$3" only_given="$4" keep="${5:-}"
     _cluster_require_unlocked
     local -a extra=()
+    [ -n "$keep" ] && extra+=(--keep="$keep")
     [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
     [ -n "$retention" ] && extra+=(--retention-period-days="$retention")
     [ "$only_given" -eq 1 ] && extra+=(--only="$only")
@@ -382,11 +410,17 @@ _restore_distributed() {
     warn "set and the consents of flow-engine and assist-gate are removed in Keycloak."
 }
 
+# The tar stream of the sidecar never touches the disk in clear: backup-seal encrypts it
+# to the recipients on the way into the snapshot and refuses key material in it
+# (lib/backup_crypt.py). pipefail is set, so a failing tar fails the artifact as well.
+# $1 snapshot, $2 archive (relative to snapshot)
+_backup_seal() {
+    py_cli backup-seal --snapshot="$1" --archive="$2"
+}
+
 # $1 snapshot, $2 kind, $3 archive (relative to snapshot), $4 source, $5 owner
 _backup_artifact() {
     local snapshot="$1" kind="$2" archive="$3" source="$4" owner="$5"
-    local snapshot_mount
-    snapshot_mount="$(_docker_hostpath "$snapshot")"
     local rc=0
 
     case "$kind" in
@@ -396,8 +430,8 @@ _backup_artifact() {
             _pause_containers $(_containers_using_volume "$source")
             _docker_run \
                 -v "${source}:/volume:ro" \
-                -v "${snapshot_mount}:/backup" \
-                "$BACKUP_IMAGE" tar czf "/backup/${archive}" -C /volume . || rc=$?
+                "$BACKUP_IMAGE" tar czf - -C /volume . \
+                | _backup_seal "$snapshot" "$archive" || rc=$?
             _unpause_all
             ;;
         configdir|binddir)
@@ -415,15 +449,16 @@ _backup_artifact() {
             fi
             # The key of the test stack's hosted model never goes into an archive
             # (lib/hosted_model.py KEY_FILE); a bind mount has no such file to leave out.
-            # Nor does the platform halt (state/, lib/halt.py): a restore must neither lift
-            # nor set it.
+            # Nor does state/ (lib/halt.py): a restore must neither lift
+            # nor set the platform halt, and the rollback keys of an upgrade (state/rollback/,
+            # BE-11) stay on this host. backup-seal refuses the archive should a key get through.
             local -a exclude=()
             [ "$kind" = "configdir" ] && exclude=(--exclude=./ai/litellm/test-hosted.env
                 --exclude=./state)
             _docker_run \
                 -v "$(_docker_hostpath "$source"):/src:ro" \
-                -v "${snapshot_mount}:/backup" \
-                "$BACKUP_IMAGE" tar czf "/backup/${archive}" ${exclude[@]+"${exclude[@]}"} -C /src . || rc=$?
+                "$BACKUP_IMAGE" tar czf - ${exclude[@]+"${exclude[@]}"} -C /src . \
+                | _backup_seal "$snapshot" "$archive" || rc=$?
             _unpause_all
             ;;
         *)
@@ -432,6 +467,72 @@ _backup_artifact() {
             ;;
     esac
     return "$rc"
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# backup recipients | keys | target | key-check
+# ─────────────────────────────────────────────────────────────────────────
+# Keys and the target are kept by lib/backup_crypt.py; this only maps the words of the
+# command line onto it. Private keys pass through standard input or a terminal only.
+_backup_admin() {
+    local area="$1"; shift
+    local config_dir="$DEFAULT_CONFIG_DIR" action="" name="" key="" identity="" point=""
+    local backup_dir="" names=""
+    case "$area" in
+        recipients|target|keys) action="${1:-}"; [ $# -gt 0 ] && shift ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --backup-dir=*) backup_dir="${1#*=}" ;;
+            --name=*) name="${1#*=}" ;;
+            --key=*) key="${1#*=}" ;;
+            --names=*) names="${1#*=}" ;;
+            --identity=*) identity="${1#*=}" ;;
+            --restore-point=*) point="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for backup $area: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local -a extra=()
+    [ -n "$backup_dir" ] && extra+=(--backup-dir="$backup_dir")
+    case "$area" in
+        recipients)
+            case "$action" in
+                list) ;;
+                add) extra+=(--name="$name" --key="$key") ;;
+                remove) extra+=(--name="$name") ;;
+                *) error "backup recipients list|add|remove"; exit 2 ;;
+            esac
+            py_cli backup-recipients "$action" ${extra[@]+"${extra[@]}"}
+            ;;
+        keys)
+            [ "$action" = "generate" ] || { error "backup keys generate [--names=A,B]"; exit 2; }
+            if [ -n "$names" ]; then
+                py_cli backup-keygen --names="$names"
+            else
+                py_cli backup-keygen
+            fi
+            ;;
+        target)
+            case "$action" in
+                init|check) ;;
+                *) error "backup target init|check [--backup-dir=PATH]"; exit 2 ;;
+            esac
+            py_cli backup-target "$action" ${extra[@]+"${extra[@]}"}
+            ;;
+        key-check)
+            if [ -z "$identity" ]; then
+                error "backup key-check needs --identity=FILE or --identity=- (standard input)."
+                exit 2
+            fi
+            [ -n "$point" ] && extra+=(--restore-point="$point")
+            py_cli backup-key-check --identity="$identity" ${extra[@]+"${extra[@]}"}
+            ;;
+    esac
 }
 
 # ─────────────────────────────────────────────────────────────────────────

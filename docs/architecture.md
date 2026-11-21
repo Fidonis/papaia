@@ -381,8 +381,10 @@ Only values that differ from the `.env.example` literal are written to the confi
 >
 > **Generation-gated keys.** From generation 7 on, a manifest key that needs a
 > newer core is never silently ignored: a manifest using `exposes` (7),
-> `personal_settings` (8), `pki` (11) or the ingress-entry list of
-> `integration.nginx` (12) is `INCOMPATIBLE` on a core whose window ends below
+> `personal_settings` (8), `pki` (11), the ingress-entry list of
+> `integration.nginx` (12) or `volumes` (13, the backup declaration: a core
+> below it would archive a volume the add-on leaves out) is `INCOMPATIBLE` on
+> a core whose window ends below
 > that generation, even when `requires.addon_api` lists an older generation
 > the core serves. The reason names every missing generation and its meaning,
 > for example against `papaia` v1.8.0 (window `[1..3]`):
@@ -398,7 +400,9 @@ meaning of every generation; `tools/lib/compat.py` (`ADDON_API_GENERATIONS`)
 and the contract snapshot `tools/tests/test_contract_surface.py` carry the
 same table. All generations are additive, so `min` stays 1. The decision
 records for generations 7 to 12 use the numbers reserved in
-[`docs/adr/README.md`](adr/README.md).
+[`docs/adr/README.md`](adr/README.md). Generation 13 (`volumes[]` with
+`backup: include|exclude` and a reason) is described with `backup` in the
+README.
 
 | Gen. | Meaning | ADR |
 |---|---|---|

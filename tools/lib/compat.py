@@ -83,6 +83,7 @@ ADDON_API_GENERATIONS: dict[int, str] = {
     ),
     11: "`pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)",
     12: "add-on ingress `integration.nginx` (ADR 0023)",
+    13: "`volumes[]` with `backup: include|exclude` and a reason, read by `backup`",
 }
 
 # Manifest keys that need a core of at least this generation. A core below it
@@ -96,6 +97,8 @@ GENERATION_FEATURES: dict[str, int] = {
     "personal_settings": 8,
     "pki": 11,
     "integration.nginx": 12,
+    # A core below 13 would put a volume the add-on excludes (a key) into the backup.
+    "volumes": 13,
 }
 
 INGRESS_AXIS = "integration.nginx"
@@ -312,7 +315,7 @@ def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
     `integration.nginx`; the other keys are only detected here, their schema
     is checked where they are rendered."""
     used: list[tuple[str, int]] = []
-    for key in ("exposes", "personal_settings", "pki"):
+    for key in ("exposes", "personal_settings", "pki", "volumes"):
         if manifest.get(key) is not None:
             used.append((key, GENERATION_FEATURES[key]))
     networks = manifest.get("networks")

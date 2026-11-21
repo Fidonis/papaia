@@ -4,7 +4,8 @@ Pure logic: works out *what* has to be archived and keeps the on-disk
 catalogue in order. Every `docker` invocation stays in tools/lib/sh/backup.sh,
 per the bash/Python split documented in cli.py.
 
-Three things are archived:
+Every archive is an age file encrypted to the operator's recipients (lib/backup_crypt.py,
+BE-14); a backup is never written unencrypted. Three things are archived:
 
   * `$PAPAIA_CONFIG_DIR` in full -- this also covers state that is not a named
     volume at all, most importantly the Nginx Proxy Manager database and the
@@ -42,7 +43,12 @@ MANIFEST_NAME = "manifest.yaml"
 PLAN_NAME = "plan.yaml"
 RESULTS_NAME = "results.tsv"
 
-CONFIG_ARCHIVE = "papaia-config.tar.gz"
+CHECKSUMS_NAME = "checksums.tsv"
+
+# Every archive is a gzip tar stream encrypted to the recipients (lib/age.py).
+ARCHIVE_SUFFIX = ".tar.gz.age"
+CONFIG_ARCHIVE = "papaia-config" + ARCHIVE_SUFFIX
+ENCRYPTION_FORMAT = "age-encryption.org/v1"
 
 # v2 added the per-artifact grouping fields a partial restore selects on.
 # v1 snapshots stay readable and restorable, but only as a whole.
@@ -70,9 +76,23 @@ class ScopedRestorePointError(BackupError):
     request does not fit it."""
 
 
+class EncryptedRestorePointError(BackupError):
+    """A restore of an encrypted point without the operator's key.
+
+    Exit 2: the point is fine, the key to open it was not given. Nothing is touched."""
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Plan model
 # ─────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Recipient:
+    """One public key a backup is encrypted to, with the operator's name for it."""
+
+    name: str
+    key: str
 
 
 @dataclass
@@ -120,6 +140,9 @@ class BackupPlan:
     # The `--only` selectors this plan was narrowed to, normalised to
     # `kind:name`. Empty for a plan of the whole stack.
     scope: list[str] = field(default_factory=list)
+    # Volumes deliberately left out, each as {"volume", "reason"} (RE-05, `volumes[].backup`).
+    excluded: list[dict] = field(default_factory=list)
+    recipients: list[Recipient] = field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -134,10 +157,90 @@ def _top_level_volumes(compose_path: Path) -> list[str]:
     return list((doc.get("volumes") or {}).keys())
 
 
-# Core volumes a backup never contains: the signing key of the revocation list
-# (papaia-lifecycle). A restored installation makes a new key and a new list, so an old
-# key cannot sign lists again after a restore (security 1.12 Nr. 3, RE-05).
-EXCLUDED_CORE_VOLUMES = frozenset({"papaia-lifecycle-key"})
+# Volumes no backup ever contains, core or add-on, whatever a manifest declares (BE-14,
+# RE-05): a restore must not bring back a key that signs delegations or revocation lists,
+# and the erasure journal lives at the backup target, not in an archive. A restored
+# installation makes new keys, so old delegations and lists stop being valid.
+KEY_VOLUMES: dict[str, str] = {
+    "assist-delegation-key": "delegation signing key of the assistant (RE-05)",
+    "flow-delegation-key": "delegation signing key of flow (RE-05)",
+    "papaia-lifecycle-key": "signing key of the revocation list (RE-05)",
+    "papaia-erasure": "local copy of the erasure journal; the journal is kept at the target",
+}
+EXCLUDED_CORE_VOLUMES = frozenset(KEY_VOLUMES)
+
+
+def _key_volume(name: str) -> str | None:
+    """The reason a volume key or a project-prefixed volume name is a key volume."""
+    for key, reason in KEY_VOLUMES.items():
+        if name == key or name.endswith(f"_{key}"):
+            return reason
+    return None
+
+
+_DECLARATION_FIELDS = {"name", "backup", "reason"}
+MAX_VOLUME_DECLARATIONS = 64
+
+
+def addon_volume_exclusions(addon_path: Path, declared_keys: list[str]) -> dict[str, str]:
+    """Volume key -> reason for every volume of an add-on a backup leaves out: the ones its
+    manifest declares as `volumes: [{name, backup: exclude, reason}]` (contract generation
+    13) and the key volumes of BE-14.
+
+    A declaration that does not parse stops the backup rather than being skipped: a typo in
+    the name of a key volume would otherwise put the key into the archive."""
+    excluded = {key: KEY_VOLUMES[key] for key in declared_keys if key in KEY_VOLUMES}
+    manifest_path = addon_path / "papaia-app.yaml"
+    if not manifest_path.is_file():
+        return excluded
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise BackupError(f"{manifest_path} is not valid YAML: {exc}") from exc
+    entries = manifest.get("volumes") if isinstance(manifest, dict) else None
+    if entries is None:
+        return excluded
+    where = f"{manifest_path}: volumes"
+    if not isinstance(entries, list) or len(entries) > MAX_VOLUME_DECLARATIONS:
+        raise BackupError(f"{where} must be a list of at most {MAX_VOLUME_DECLARATIONS} entries")
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        at = f"{where}[{index}]"
+        if not isinstance(entry, dict):
+            raise BackupError(f"{at} must be a mapping with name and backup")
+        unknown = sorted(str(k) for k in set(entry) - _DECLARATION_FIELDS)
+        if unknown:
+            raise BackupError(f"{at} has unknown field(s): {', '.join(unknown)}")
+        name, choice, reason = entry.get("name"), entry.get("backup"), entry.get("reason")
+        if not isinstance(name, str) or not _VOLUME_NAME_RE.match(name):
+            raise BackupError(f"{at}.name is not a volume name")
+        if name not in declared_keys:
+            raise BackupError(f"{at}.name {name!r} is not a volume of the add-on's compose file")
+        if name in seen:
+            raise BackupError(f"{at}.name {name!r} is declared twice")
+        seen.add(name)
+        if choice not in ("include", "exclude"):
+            raise BackupError(f"{at}.backup must be include or exclude")
+        if reason is not None and (not isinstance(reason, str) or not 0 < len(reason) <= 200):
+            raise BackupError(f"{at}.reason must be a text of at most 200 characters")
+        if choice == "exclude":
+            if reason is None:
+                raise BackupError(f"{at}: an excluded volume needs a reason")
+            excluded[name] = reason
+        elif name in KEY_VOLUMES:
+            raise BackupError(f"{at}: {name} never goes into a backup ({KEY_VOLUMES[name]})")
+    return excluded
+
+
+def _top_level_core_keys(repo_root: Path) -> list[str]:
+    """Every named volume key the core declares, the excluded ones included."""
+    root_compose = repo_root / "src" / "docker-compose.yml"
+    if not root_compose.is_file():
+        return []
+    keys: list[str] = []
+    for compose_path in compat.compose_files(root_compose):
+        _extend_unique(keys, _top_level_volumes(compose_path))
+    return keys
 
 
 def resolve_core_volumes(repo_root: Path) -> list[str]:
@@ -494,10 +597,16 @@ def build_plan(
     )
     owners = resolve_core_volume_owners(repo_root)
     prefix = f"{core_project}_" if core_project else ""
-    # The project label would bring an excluded volume back in.
-    core_names = [
-        n for n in core_names if n.removeprefix(prefix) not in EXCLUDED_CORE_VOLUMES
-    ]
+    # Declared key volumes never reach the plan (resolve_core_volumes); the project label
+    # would bring one back in, so the found names are checked as well.
+    for key in _top_level_core_keys(repo_root):
+        if key in KEY_VOLUMES:
+            plan.excluded.append({"volume": f"{prefix}{key}", "reason": KEY_VOLUMES[key]})
+    labelled_keys = [n for n in core_names if _key_volume(n)]
+    for name in labelled_keys:
+        if not any(e["volume"] == name for e in plan.excluded):
+            plan.excluded.append({"volume": name, "reason": _key_volume(name)})
+    core_names = [n for n in core_names if n not in labelled_keys]
     for name in core_names:
         # A volume that carries the project label but is no longer declared has
         # no owner record. It keeps its data and stays restorable by name; it is
@@ -507,7 +616,7 @@ def build_plan(
         plan.artifacts.append(
             Artifact(
                 kind="volume",
-                archive=f"volumes/{name}.tar.gz",
+                archive=f"volumes/{name}{ARCHIVE_SUFFIX}",
                 source=name,
                 owner="core",
                 project=core_project,
@@ -529,9 +638,20 @@ def build_plan(
         plan.addons.append(name)
         owner = f"addon:{name}"
 
+        declared_keys = _top_level_volumes(addon_path / "docker-compose.yml")
+        excluded = addon_volume_exclusions(addon_path, declared_keys)
         volume_names, skipped = _project_volumes(
-            project, _top_level_volumes(addon_path / "docker-compose.yml"), existing
+            project, [k for k in declared_keys if k not in excluded], existing
         )
+        left_out = {f"{project}_{key}": reason for key, reason in excluded.items()}
+        # A volume found through the project label is held to the same list.
+        for volume in volume_names:
+            reason = _key_volume(volume)
+            if reason and volume not in left_out:
+                left_out[volume] = reason
+        volume_names = [v for v in volume_names if v not in left_out]
+        skipped = [v for v in skipped if v not in left_out]
+        plan.excluded.extend({"volume": v, "reason": r} for v, r in left_out.items())
         # An add-on groups under its own name and carries no profiles: the
         # teardown unit is the whole add-on compose project, so per-service
         # precision would buy nothing a scoped restore could act on.
@@ -539,7 +659,7 @@ def build_plan(
             plan.artifacts.append(
                 Artifact(
                     kind="volume",
-                    archive=f"volumes/{volume}.tar.gz",
+                    archive=f"volumes/{volume}{ARCHIVE_SUFFIX}",
                     source=volume,
                     owner=owner,
                     project=project,
@@ -565,7 +685,7 @@ def build_plan(
             plan.artifacts.append(
                 Artifact(
                     kind="binddir",
-                    archive=f"binds/{slug}.tar.gz",
+                    archive=f"binds/{slug}{ARCHIVE_SUFFIX}",
                     source=str(bind),
                     owner=owner,
                     project=project,
@@ -639,6 +759,8 @@ def write_plan(plan: BackupPlan) -> None:
                 "addons": plan.addons,
                 "skipped": plan.skipped,
                 "scope": plan.scope,
+                "excluded": plan.excluded,
+                "recipients": [{"name": r.name, "key": r.key} for r in plan.recipients],
                 "artifacts": [
                     {
                         "kind": a.kind,
@@ -686,7 +808,30 @@ def read_plan(snapshot: Path) -> BackupPlan:
         addons=list(data.get("addons") or []),
         skipped=list(data.get("skipped") or []),
         scope=[str(s) for s in (data.get("scope") or [])],
+        excluded=[
+            {"volume": str(e.get("volume", "")), "reason": str(e.get("reason", ""))}
+            for e in (data.get("excluded") or [])
+            if isinstance(e, dict)
+        ],
+        recipients=[
+            Recipient(name=str(r.get("name", "")), key=str(r.get("key", "")))
+            for r in (data.get("recipients") or [])
+            if isinstance(r, dict)
+        ],
     )
+
+
+def read_checksums(snapshot: Path) -> dict[str, str]:
+    """SHA-256 of each sealed archive, as `backup-seal` recorded it: ARCHIVE<TAB>HEX."""
+    sums: dict[str, str] = {}
+    path = snapshot / CHECKSUMS_NAME
+    if not path.is_file():
+        return sums
+    for line in path.read_text(encoding="utf-8").splitlines():
+        archive, _, digest = line.strip().partition("\t")
+        if archive and re.fullmatch(r"[0-9a-f]{64}", digest.strip()):
+            sums[archive] = digest.strip()
+    return sums
 
 
 def read_results(snapshot: Path) -> dict[str, str]:
@@ -712,13 +857,15 @@ def write_manifest(
 
     Only artifacts that actually succeeded are listed: the manifest is what
     restore iterates, so a half-written archive must never be offered as
-    restorable."""
+    restorable. Each one carries the SHA-256 of its encrypted file (BE-14)."""
+    sums = read_checksums(snapshot)
     artifacts = [
         {
             "kind": a.kind,
             "archive": a.archive,
             "target": a.source,
             **_artifact_fields(a),
+            **({"sha256": sums[a.archive]} if a.archive in sums else {}),
         }
         for a in plan.artifacts
         if results.get(a.archive, "failed") == "ok"
@@ -733,6 +880,14 @@ def write_manifest(
         "addons": plan.addons,
         "artifacts": artifacts,
     }
+    if plan.recipients:
+        # Public keys only: which keys open this point, and the names the operator gave them.
+        manifest["encryption"] = {
+            "format": ENCRYPTION_FORMAT,
+            "recipients": [{"name": r.name, "key": r.key} for r in plan.recipients],
+        }
+    if plan.excluded:
+        manifest["excluded"] = plan.excluded
     if plan.scope:
         # A partial snapshot says so, because a restore of the whole stack
         # replaces the configuration directory from it and has none to use.
@@ -1072,6 +1227,8 @@ def record_backup(backup_dir: Path, plan: BackupPlan, manifest: dict, result: st
     }
     if plan.scope:
         entry["scope"] = plan.scope
+    if plan.recipients:
+        entry["recipients"] = [{"name": r.name, "key": r.key} for r in plan.recipients]
     index = load_index(backup_dir)
     index["backups"] = [b for b in index["backups"] if b.get("id") != plan.backup_id]
     index["backups"].append(entry)
@@ -1114,6 +1271,40 @@ def prune(backup_dir: Path, retention_days: int, *, now: datetime | None = None)
     return removed
 
 
+def prune_keep(backup_dir: Path, keep: int) -> list[str]:
+    """Keep the `keep` newest usable restore points and delete everything older.
+
+    Usable means not `failed`: a row of failed runs must not push the last good points
+    out. A failed run older than the oldest kept point goes with the rest; newer ones stay
+    for the operator to read. The same guard as prune(): only catalogued directories
+    inside backup_dir are removed."""
+    if keep < 1:
+        raise BackupError("--keep must be 1 or greater.")
+    index = load_index(backup_dir)
+    ordered = sorted(index["backups"], key=lambda b: str(b.get("created_at", "")))
+    usable = [b for b in ordered if b.get("result") != "failed"]
+    if len(usable) <= keep:
+        return []
+    oldest_kept = str(usable[-keep].get("created_at", ""))
+    doomed = [b for b in ordered if str(b.get("created_at", "")) < oldest_kept]
+    if not doomed:
+        return []
+    resolved_root = backup_dir.resolve()
+    for entry in doomed:
+        target = snapshot_path(backup_dir, entry)
+        if target.is_dir():
+            try:
+                resolved = target.resolve()
+            except OSError:
+                resolved = target
+            if resolved_root in resolved.parents:
+                shutil.rmtree(resolved, ignore_errors=True)
+    gone = {id(entry) for entry in doomed}
+    index["backups"] = [b for b in index["backups"] if id(b) not in gone]
+    save_index(backup_dir, index)
+    return [str(entry.get("id", "")) for entry in doomed]
+
+
 def entry_scope(entry: dict) -> list[str]:
     """The selectors a catalogue entry or manifest was narrowed to; empty for a
     backup of the whole stack, including every one made before scoping existed."""
@@ -1133,6 +1324,25 @@ def require_whole_stack(manifest: dict) -> None:
             f"Restore point {manifest.get('id')} only holds {', '.join(scope)}. "
             f"Restore it with 'papaia-ctl restore-scoped --only={','.join(scope)}'."
         )
+
+
+def require_plain(manifest: dict) -> None:
+    """Refuse to hand an encrypted point to a restore that reads archives as plain tar.
+
+    The point names its recipients; restoring it needs the private key of one of them,
+    and nothing starts with new keys in its place (BE-14)."""
+    encryption = manifest.get("encryption")
+    if not encryption:
+        return
+    recipients = ", ".join(
+        f"{r.get('name')} {r.get('key')}"
+        for r in encryption.get("recipients") or []
+        if isinstance(r, dict)
+    )
+    raise EncryptedRestorePointError(
+        f"The key for restore point {manifest.get('id')} is missing (recipients: {recipients})."
+        " This restore reads unencrypted points only; nothing was changed."
+    )
 
 
 def resolve_restore_point(

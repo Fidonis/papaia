@@ -95,7 +95,10 @@ _SURFACE_CHANGED = (
 # Gen 12 (additive): add-on ingress `integration.nginx` as a list of entries
 # `{host_key, service, port, websocket, max_body}`. The fragment path form of
 # `integration.nginx` stays generation 1. ADR 0023 (ingress and delivery).
-ADDON_API_WINDOW = (1, 12)
+#
+# Gen 13 (additive): `volumes[]` `{name, backup: include|exclude, reason}`; `backup` leaves
+# an excluded volume out of every archive (BE-14, RE-05).
+ADDON_API_WINDOW = (1, 13)
 
 # The binding meaning of every generation the core serves. Changing a line here is a
 # contract change, not a wording fix.
@@ -130,6 +133,7 @@ ADDON_API_GENERATIONS = {
     ),
     11: "`pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)",
     12: "add-on ingress `integration.nginx` (ADR 0023)",
+    13: "`volumes[]` with `backup: include|exclude` and a reason, read by `backup`",
 }
 
 # Manifest keys whose use requires a core of at least this generation.
@@ -140,6 +144,7 @@ GENERATION_FEATURES = {
     "personal_settings": 8,
     "pki": 11,
     "integration.nginx": 12,
+    "volumes": 13,
 }
 
 # Seam 1: core services an addon may attach to (and their profiles).

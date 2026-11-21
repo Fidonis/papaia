@@ -6,6 +6,7 @@ import io
 import json
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,9 @@ from install_helpers import Installation, run_cli
 from test_topology import FULL, dmz_split, write_topology
 
 from lib import (
+    age,
     backup,
+    backup_crypt,
     cli,
     cluster,
     cluster_data,
@@ -28,6 +31,45 @@ from lib import (
 from lib.executor import Result
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _tar(text: str) -> bytes:
+    buf = io.BytesIO()
+    data = text.encode()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("./data")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def _untar(archive: bytes) -> str:
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        return tar.extractfile("./data").read().decode()
+
+
+def _opened(path: Path, identity: str) -> str:
+    plain = io.BytesIO()
+    with open(path, "rb") as handle:
+        age.decrypt(handle, plain, [identity])
+    return _untar(plain.getvalue())
+
+
+def _plain(backup_dir: Path, backup_id: str, identity: str) -> None:
+    """Turn an encrypted point into the unencrypted kind the restore of this version reads:
+    every archive decrypted in place and the manifest without its encryption block."""
+    snapshot = backup_dir / backup_id
+    manifest = yaml.safe_load((snapshot / "manifest.yaml").read_text())
+    for artifact in manifest["artifacts"]:
+        path = snapshot / artifact["archive"]
+        if artifact["kind"] == "configdir":
+            continue
+        plain = io.BytesIO()
+        with open(path, "rb") as handle:
+            age.decrypt(handle, plain, [identity])
+        path.write_bytes(plain.getvalue())
+    manifest.pop("encryption")
+    (snapshot / "manifest.yaml").write_text(yaml.safe_dump(manifest))
 
 
 class FakeNode:
@@ -49,7 +91,7 @@ class FakeNode:
         if command[0] == "backup-stream":
             if command[-1] in self.missing:
                 return Result(node_shell.EXIT_MISSING, "", "no volume")
-            stdout.write(f"archive of {key} on {self.name}".encode())
+            stdout.write(_tar(f"archive of {key} on {self.name}"))
         if command[0] == "restore-put":
             data = stdin.read() if hasattr(stdin, "read") else stdin
             self.uploads[key] = data
@@ -78,11 +120,20 @@ def fake(distributed, monkeypatch):
 
     monkeypatch.setattr(cluster_data, "_archive_config_dir", archive)
     monkeypatch.setattr(cluster_data, "_restore_config_dir", lambda *a: True)
-    return {"log": log, "nodes": fakes, "inst": distributed}
+    identity, recipient = age.generate_identity()
+    backup_crypt.add_recipient(distributed.config, "betrieb", recipient)
+    return {"log": log, "nodes": fakes, "inst": distributed, "identity": identity}
 
 
 def load(inst: Installation) -> cluster.Cluster:
     return cluster.load(inst.config, inst.repo)
+
+
+def _backup(inst: Installation, backup_dir: Path, **kwargs) -> tuple[str, str]:
+    """run_backup into a confirmed target (RE-33)."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_crypt.init_target(inst.config, backup_dir)
+    return cluster_data.run_backup(load(inst), backup_dir, **kwargs)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -140,7 +191,7 @@ def test_a_selection_that_matches_nothing_is_refused(distributed, tmp_path):
 def test_a_backup_streams_every_node_into_one_restore_point(fake, tmp_path):
     inst = fake["inst"]
     backup_dir = tmp_path / "backups"
-    backup_id, outcome = cluster_data.run_backup(load(inst), backup_dir)
+    backup_id, outcome = _backup(inst, backup_dir)
     assert outcome == "ok"
     snapshot = backup_dir / backup_id
     manifest = yaml.safe_load((snapshot / "manifest.yaml").read_text())
@@ -148,7 +199,9 @@ def test_a_backup_streams_every_node_into_one_restore_point(fake, tmp_path):
     assert manifest["topology"]["controller"] == "internal"
     assert all(a.get("node") for a in manifest["artifacts"])
     keycloak = next(a for a in manifest["artifacts"] if a["target"] == "papaia_keycloak-postgresql")
-    assert (snapshot / keycloak["archive"]).read_bytes().endswith(b"on edge")
+    assert _opened(snapshot / keycloak["archive"], fake["identity"]).endswith("on edge")
+    assert manifest["encryption"]["recipients"][0]["name"] == "betrieb"
+    assert all(len(a["sha256"]) == 64 for a in manifest["artifacts"] if a["kind"] != "configdir")
     entry = backup.load_index(backup_dir)["backups"][0]
     assert entry["nodes"] == ["internal", "edge"] and entry["result"] == "ok"
     streamed = {node for node, cmd in fake["log"] if cmd[0] == "backup-stream"}
@@ -157,7 +210,7 @@ def test_a_backup_streams_every_node_into_one_restore_point(fake, tmp_path):
 
 def test_a_volume_that_does_not_exist_is_skipped_not_failed(fake, tmp_path):
     fake["nodes"]["internal"].missing = {"papaia_localai-models"}
-    backup_id, outcome = cluster_data.run_backup(load(fake["inst"]), tmp_path / "b")
+    backup_id, outcome = _backup(fake["inst"], tmp_path / "b")
     assert outcome == "ok"
     manifest = yaml.safe_load((tmp_path / "b" / backup_id / "manifest.yaml").read_text())
     assert "papaia_localai-models" not in {a["target"] for a in manifest["artifacts"]}
@@ -165,8 +218,92 @@ def test_a_volume_that_does_not_exist_is_skipped_not_failed(fake, tmp_path):
 
 def test_a_node_that_fails_makes_the_point_partial(fake, tmp_path):
     fake["nodes"]["edge"].fail = {"backup-stream volume"}
-    _backup_id, outcome = cluster_data.run_backup(load(fake["inst"]), tmp_path / "b")
+    _backup_id, outcome = _backup(fake["inst"], tmp_path / "b")
     assert outcome == "partial"
+
+
+def test_a_distributed_backup_refuses_without_a_recipient(fake, tmp_path):
+    (fake["inst"].config / ".env").write_text("COMPOSE_PROJECT_NAME=papaia\n")
+    with pytest.raises(backup.BackupError, match="never written unencrypted"):
+        _backup(fake["inst"], tmp_path / "b")
+    assert [p.name for p in (tmp_path / "b").iterdir()] == [backup_crypt.TARGET_FILE]
+
+
+def _audit_rows(inst: Installation) -> list[dict]:
+    path = inst.config / "audit" / "papaia-ctl.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _old_point(backup_dir: Path, backup_id: str) -> None:
+    """A catalogued restore point older than anything a run of today writes."""
+    (backup_dir / backup_id).mkdir(parents=True)
+    index = backup.load_index(backup_dir)
+    index["backups"].append(
+        {"id": backup_id, "path": str(backup_dir / backup_id),
+         "created_at": "2020-01-01T00:00:00Z", "result": "ok"}
+    )
+    backup.save_index(backup_dir, index)
+
+
+def test_a_distributed_backup_writes_one_audit_row_per_write_and_delete(
+    fake, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PAPAIA_CORRELATION_ID", "c0ffee00-1234-4abc-8def-0123456789ab")
+    backup_dir = tmp_path / "b"
+    backup_dir.mkdir()
+    _old_point(backup_dir, "2020-01-01_00-00-00")
+    _old_point(backup_dir, "2020-01-02_00-00-00")
+    backup_id, outcome = _backup(fake["inst"], backup_dir, keep=1)
+    assert outcome == "ok"
+    rows = [r for r in _audit_rows(fake["inst"]) if r["operation"] == "backup"]
+    written = [r for r in rows if r["event"] == "backup_written"]
+    assert len(written) == 1
+    assert written[0]["format"] == "papaia.audit/1"
+    assert written[0]["correlation_id"] == "c0ffee00-1234-4abc-8def-0123456789ab"
+    assert written[0]["effect"] == "write" and written[0]["result"] == "allowed"
+    assert written[0]["detail"]["id"] == backup_id
+    assert written[0]["detail"]["recipients"] == ["betrieb"]
+    assert written[0]["detail"]["nodes"] == ["internal", "edge"]
+    deleted = [r for r in rows if r["event"] == "backup_deleted"]
+    assert sorted(r["detail"]["id"] for r in deleted) == [
+        "2020-01-01_00-00-00", "2020-01-02_00-00-00"
+    ]
+    assert all(r["effect"] == "delete" and r["detail"]["reason"] == "retention" for r in deleted)
+    assert all(r["correlation_id"] == written[0]["correlation_id"] for r in deleted)
+    log = (fake["inst"].config / "audit" / "papaia-ctl.jsonl").read_text()
+    assert "AGE-SECRET-KEY" not in log.upper()
+
+
+def test_a_distributed_backup_removed_by_age_is_audited(fake, tmp_path, monkeypatch):
+    monkeypatch.delenv("PAPAIA_CORRELATION_ID", raising=False)
+    monkeypatch.setattr(backup_crypt, "_RUN_CORRELATION", None)
+    backup_dir = tmp_path / "b"
+    backup_dir.mkdir()
+    _old_point(backup_dir, "2020-01-01_00-00-00")
+    _backup(fake["inst"], backup_dir, retention_days=30)
+    rows = [r for r in _audit_rows(fake["inst"]) if r["operation"] == "backup"]
+    deleted = [r for r in rows if r["event"] == "backup_deleted"]
+    assert [r["detail"]["id"] for r in deleted] == ["2020-01-01_00-00-00"]
+    assert deleted[0]["detail"]["retention_days"] == 30
+    # Without a correlation id from the caller, one run still shares one.
+    assert len({r["correlation_id"] for r in rows}) == 1
+
+
+def test_a_failed_distributed_backup_is_audited_as_an_error(fake, tmp_path, monkeypatch):
+    for node in fake["nodes"].values():
+        node.fail = {"backup-stream"}
+    monkeypatch.setattr(cluster_data, "_archive_config_dir", lambda *a: False)
+    _backup_id, outcome = _backup(fake["inst"], tmp_path / "b")
+    assert outcome == "failed"
+    written = [r for r in _audit_rows(fake["inst"]) if r["event"] == "backup_written"]
+    assert len(written) == 1 and written[0]["result"] == "error"
+    assert written[0]["detail"]["result"] == "failed"
+
+
+def test_an_encrypted_distributed_point_is_not_restored_without_its_key(fake, tmp_path):
+    backup_id, _ = _backup(fake["inst"], tmp_path / "b")
+    with pytest.raises(backup.EncryptedRestorePointError, match=backup_id):
+        cluster_data.run_restore(load(fake["inst"]), tmp_path / "b", restore_point=backup_id)
 
 
 def test_a_single_host_manifest_is_unchanged_by_the_node_field(tmp_path):
@@ -189,7 +326,8 @@ def test_a_single_host_manifest_is_unchanged_by_the_node_field(tmp_path):
 def test_restoring_one_node_leaves_the_others_untouched(fake, tmp_path):
     inst = fake["inst"]
     backup_dir = tmp_path / "backups"
-    backup_id, _ = cluster_data.run_backup(load(inst), backup_dir)
+    backup_id, _ = _backup(inst, backup_dir)
+    _plain(backup_dir, backup_id, fake["identity"])
     fake["log"].clear()
     restore_id, outcome = cluster_data.run_restore(
         load(inst), backup_dir, restore_point=backup_id, only="node:edge"
@@ -201,13 +339,14 @@ def test_restoring_one_node_leaves_the_others_untouched(fake, tmp_path):
     assert commands[0][0] == "compose-down" and first_put > 0
     assert commands[-1][0] == "compose-up"
     upload = fake["nodes"]["edge"].uploads["restore-put volume papaia_keycloak-postgresql"]
-    assert upload.endswith(b"on edge")
+    assert _untar(upload).endswith("on edge")
 
 
 def test_a_whole_restore_stops_everything_puts_the_config_back_and_starts(fake, tmp_path):
     inst = fake["inst"]
     backup_dir = tmp_path / "backups"
-    backup_id, _ = cluster_data.run_backup(load(inst), backup_dir)
+    backup_id, _ = _backup(inst, backup_dir)
+    _plain(backup_dir, backup_id, fake["identity"])
     fake["log"].clear()
     _id, outcome = cluster_data.run_restore(load(inst), backup_dir, restore_point=backup_id)
     assert outcome == "ok"
@@ -239,7 +378,8 @@ def test_a_single_host_restore_point_is_refused(fake, tmp_path):
 
 def test_the_manager_is_never_restored_over_itself(fake, tmp_path):
     inst = fake["inst"]
-    backup_id, _ = cluster_data.run_backup(load(inst), tmp_path / "b")
+    backup_id, _ = _backup(inst, tmp_path / "b")
+    _plain(tmp_path / "b", backup_id, fake["identity"])
     with pytest.raises(backup.SelectionError):
         cluster_data.run_restore(
             load(inst), tmp_path / "b", restore_point=backup_id, only="module:manager"
@@ -248,7 +388,8 @@ def test_the_manager_is_never_restored_over_itself(fake, tmp_path):
 
 def test_the_restore_plan_names_what_it_overwrites(fake, tmp_path, capsys):
     inst = fake["inst"]
-    backup_id, _ = cluster_data.run_backup(load(inst), tmp_path / "b")
+    backup_id, _ = _backup(inst, tmp_path / "b")
+    _plain(tmp_path / "b", backup_id, fake["identity"])
     capsys.readouterr()
     code = cli.main(
         [

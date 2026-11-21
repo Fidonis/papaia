@@ -607,9 +607,20 @@ papaia checkout.
 ### `backup`
 
 ```bash
-tools/papaia-ctl backup [--backup-dir=PATH] [--retention-period-days=N]
+tools/papaia-ctl backup [--backup-dir=PATH] [--keep=N] [--retention-period-days=N]
                         [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
+tools/papaia-ctl backup recipients list|add|remove [--name=NAME] [--key=age1...]
+tools/papaia-ctl backup keys generate [--names=betrieb,notfall]
+tools/papaia-ctl backup target init|check [--backup-dir=PATH]
+tools/papaia-ctl backup key-check --identity=FILE|- [--restore-point=ID]
 ```
+
+Every archive is encrypted with [age](https://age-encryption.org/v1) to the public keys in
+`PAPAIA_BACKUP_RECIPIENTS` of the root `.env` before it reaches the target; a backup without a
+recipient is refused, never written unencrypted. The private keys are never stored by
+papaia-ctl: not in the configuration directory, not in an archive, not at the target. The
+encryption uses the OpenSSL library of the Python interpreter papaia-ctl already runs with, so
+nothing else has to be installed. See [Backup keys and target](#backup-keys-and-target) below.
 
 Archives the complete installation into a timestamped subdirectory of the backup location:
 
@@ -623,9 +634,35 @@ Archives the complete installation into a timestamped subdirectory of the backup
   data. An add-on that only talks to an existing external instance owns no volumes, so that
   external instance is never pulled into the backup.
 
+Never archived, whatever a manifest says: the delegation keys of the assistant and of flow
+(`assist-delegation-key`, `flow-delegation-key`), the signing key of the revocation list
+(`papaia-lifecycle-key`), the local copy of the erasure journal (`papaia-erasure`), the rollback
+keys of an upgrade (`state/rollback/` in the config directory) and the key of the test stack's
+hosted model. A restored installation therefore makes new keys, and delegations issued before
+the backup stop being valid. An add-on declares further volumes to leave out in its manifest
+(contract generation 13), each with a reason:
+
+```yaml
+volumes:
+  - name: flow-db
+    backup: include
+  - name: flow-cache
+    backup: exclude
+    reason: rebuilt from the database at start
+```
+
+A declaration that does not parse, names a volume the add-on's compose file does not declare,
+or includes one of the key volumes above stops the backup. While an archive is written, its
+stream is read once more: a file under `state/rollback/`, the hosted model's key, or any file
+holding a private age key (`AGE-SECRET-KEY-1...`, in any case) fails that archive and nothing
+of it is kept. This scan reads every file as stored, so a key inside a nested archive or
+compressed file is not seen; the exclusion by volume and path is the first line of defence.
+The manifest lists what was left out under `excluded`, with the reason.
+
 | Flag | Default | Purpose |
 |---|---|---|
-| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to write this backup |
+| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to write this backup; must be a confirmed target (`backup target init`) |
+| `--keep=N` | _(no pruning)_ | Keep the N newest usable restore points and delete older ones; failed runs never push a good point out. `--keep=7` with a daily run keeps a week |
 | `--retention-period-days=N` | _(no pruning)_ | Delete restore points older than N days and drop their catalogue entries |
 | `--only=SELECTOR[,SELECTOR]` | _(whole installation)_ | Archive only the selected units: the volumes and writable data directories owned by `addon:NAME`, the volumes of `module:NAME`, or one `volume:NAME`; the prefix is mandatory. In a distributed installation `node:NAME` selects everything of one node. The config directory is not part of it. A selector that matches nothing exits with code 2 and writes no archive |
 | `--config-dir=PATH` | `../papaia-config` | Config directory location |
@@ -645,14 +682,21 @@ The backup location holds one directory per restore point plus two shared files:
 
 ```
 $PAPAIA_BACKUP_DIR/
-├── backup.yaml                 # catalogue: id, path, size in MB, result
+├── .papaia-target              # this installation's id: confirms the directory as its target
+├── backup.yaml                 # catalogue: id, path, size in MB, result, recipients
 ├── backup.log                  # one line per backup / restore, with its result
 └── 2026-07-30_14-05-33/
-    ├── manifest.yaml           # which archive belongs to which volume or path
-    ├── papaia-config.tar.gz
-    ├── volumes/*.tar.gz
-    └── binds/*.tar.gz
+    ├── manifest.yaml           # archive per volume or path, its SHA-256, recipients, exclusions
+    ├── checksums.tsv           # SHA-256 of each encrypted archive as it was written
+    ├── papaia-config.tar.gz.age
+    ├── volumes/*.tar.gz.age
+    └── binds/*.tar.gz.age
 ```
+
+Each `.tar.gz.age` file opens with the `age` command and one of the private keys
+(`age -d -i key.txt FILE | tar tzf -`). `restore` in this version reads unencrypted restore
+points only; for an encrypted one it stops with exit code 2, names the point and its
+recipients, and changes nothing.
 
 Restore-point ids use local time, so they line up with what an incident timeline says;
 `created_at` in the catalogue is UTC so sorting and retention stay unambiguous.
@@ -669,6 +713,64 @@ The backup id is printed in the same line as for a full backup
 A run whose archives partly failed is recorded as `partial` and is never selected automatically
 by `restore`. Volumes that a compose file declares but that were never created (a disabled
 profile) are reported and skipped rather than failing the run.
+
+### Backup keys and target
+
+**Keys.** `backup keys generate` makes two key pairs, `betrieb` (operations) and `notfall`
+(emergency), on a terminal only. The private keys are shown once and not stored; the command
+stores the two public keys only after the last eight characters of the first private key were
+typed back. Keep the two apart (operations at hand, emergency in a safe). A key made elsewhere
+(`age-keygen`, a hardware token's recipient) is added with
+`backup recipients add --name=NAME --key=age1...`. Changes apply from the next backup on.
+`backup recipients remove --name=NAME` lists the restore points that stay readable with the
+removed key, with the date the newest of them was taken, until retention or `backup-delete`
+removes them; the last recipient cannot be removed. A run with a single recipient warns: a lost key then makes every point unreadable.
+
+**Key check.** `backup key-check --identity=-` reads a private key from standard input (or
+`--identity=FILE`, also a passphrase-protected identity file, whose passphrase is asked on the
+terminal), opens the header of the newest encrypted restore point with it and names the
+recipient it belongs to. Nothing is restored and the key is never written to disk; the date of
+the check is recorded per recipient in `backup-key-check.yaml` of the config directory. Check
+the emergency key right after generating it and then at least every 180 days.
+
+If a key is lost: add a new recipient at once, remove the lost one, take a new backup and run
+`key-check` with the new key. Older points stay readable only with the other recipient's key;
+without one they are lost.
+
+**Target.** There is no default target. A directory (local disk, NFS or SMB mount) becomes the
+backup target once `backup target init --backup-dir=PATH` wrote `.papaia-target` with this
+installation's id (`installation-id` in the config directory, made on first use). `backup`
+stops with exit code 3 and writes nothing when the directory does not exist, has no
+`.papaia-target` (an unmounted share looks like this), belongs to another installation, or has
+less free space than twice the last complete restore point. The id travels with the config
+directory, so a restore on another host recognises the same target. Keep a copy of the target
+off-site (3-2-1 rule); the keys are not needed to copy it.
+
+**Schedule.** papaia-manager schedules backups on its Backup page. Without the manager, a
+systemd timer runs one backup a day and keeps seven:
+
+```ini
+# /etc/systemd/system/papaia-backup.service
+[Unit]
+Description=papaia backup
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/papaia/workspace/papaia
+ExecStart=/srv/papaia/workspace/papaia/tools/papaia-ctl backup --keep=7
+
+# /etc/systemd/system/papaia-backup.timer
+[Unit]
+Description=papaia backup, daily at 02:30
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+Enable it with `systemctl enable --now papaia-backup.timer`. A failed run exits non-zero, which
+`systemctl status papaia-backup` and the journal show; `backup.log` at the target has one line
+per run with its result.
 
 ### `backup-delete`
 
