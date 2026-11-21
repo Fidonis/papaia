@@ -30,6 +30,7 @@ import yaml
 
 from lib import backup, render_core, topology
 from lib import lifecycle_account as la
+from lib import realm_sync as rs
 from tests.realm_fake import FakeRealm
 
 REPO = Path(__file__).resolve().parents[2]
@@ -40,6 +41,10 @@ THIRD = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 SERVICE_USER = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a"
 GROUP = "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918"
 CLIENT = "1f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b"
+
+
+# The two reads of every poll: admin events and user events.
+EVENT_READS = ("/admin-events?", "/events?")
 
 
 def _service_module():
@@ -237,11 +242,12 @@ def test_render_creates_the_account_key_only_with_the_profile(tmp_path):
 def test_render_creates_the_erasure_key_and_the_journal_folder_only_with_the_profile(tmp_path):
     config, backup_dir = tmp_path / "config", tmp_path / "backup"
     config.mkdir()
+    backup_dir.mkdir()
     env = f"PAPAIA_BACKUP_DIR={backup_dir}\nCOMPOSE_PROFILES=keycloak,egress"
     (config / ".env").write_text(env + "\n")
     render_core.ensure_lifecycle_journal(config)
     assert not (config / "security" / "erasure-hmac").exists()
-    assert not backup_dir.exists()
+    assert list(backup_dir.iterdir()) == []
     (config / ".env").write_text(env + ",lifecycle\n")
     render_core.ensure_lifecycle_journal(config)
     key = config / "security" / "erasure-hmac"
@@ -265,8 +271,62 @@ def test_render_refuses_a_lifecycle_without_a_backup_target(tmp_path):
         render_core.ensure_lifecycle_journal(tmp_path)
 
 
+def _journal_env(config: Path, backup_dir: Path) -> None:
+    config.mkdir(exist_ok=True)
+    (config / ".env").write_text(
+        f"PAPAIA_BACKUP_DIR={backup_dir}\nCOMPOSE_PROFILES=keycloak,lifecycle\n"
+    )
+
+
+def test_render_never_creates_the_backup_target(tmp_path):
+    """RE-06, betrieb BE-16a Nr. 2a (e): a backup target that is not there (an external
+    disk that is not mounted) must not turn into a folder on the host's own disk."""
+    config, backup_dir = tmp_path / "config", tmp_path / "mnt" / "backup"
+    _journal_env(config, backup_dir)
+    with pytest.raises(render_core.RenderError, match="does not exist"):
+        render_core.ensure_lifecycle_journal(config)
+    assert not backup_dir.exists() and not backup_dir.parent.exists()
+
+
+def test_render_refuses_a_journal_folder_that_went_missing(tmp_path):
+    """Once the journal is set up for a target, a missing folder means the target is not
+    mounted (its empty mount point is left): render stops instead of making a new,
+    empty journal, so the service does not start on the host's own disk."""
+    config, backup_dir = tmp_path / "config", tmp_path / "backup"
+    backup_dir.mkdir()
+    _journal_env(config, backup_dir)
+    render_core.ensure_lifecycle_journal(config)
+    folder = backup_dir / "erasure-journal"
+    assert folder.is_dir()
+    marker = config / "security" / "erasure-journal-target"
+    assert marker.read_text() == f"{backup_dir}\n"
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    folder.rmdir()  # the target was unmounted: the mount point is empty
+    with pytest.raises(render_core.RenderError, match="not mounted"):
+        render_core.ensure_lifecycle_journal(config)
+    assert not folder.exists()
+    # Mounted again: render goes on.
+    folder.mkdir(mode=0o700)
+    render_core.ensure_lifecycle_journal(config)
+
+
+def test_render_sets_up_the_journal_on_a_new_target(tmp_path):
+    """An operator who points PAPAIA_BACKUP_DIR at another (existing) target gets the
+    journal folder there; the service delivers its local copy into it."""
+    config, first, second = tmp_path / "config", tmp_path / "one", tmp_path / "two"
+    first.mkdir()
+    second.mkdir()
+    _journal_env(config, first)
+    render_core.ensure_lifecycle_journal(config)
+    _journal_env(config, second)
+    render_core.ensure_lifecycle_journal(config)
+    assert (second / "erasure-journal").is_dir()
+    assert (config / "security" / "erasure-journal-target").read_text() == f"{second}\n"
+
+
 def test_render_refuses_an_erasure_key_others_can_read(tmp_path):
     backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
     (tmp_path / ".env").write_text(
         f"PAPAIA_BACKUP_DIR={backup_dir}\nCOMPOSE_PROFILES=keycloak,lifecycle\n"
     )
@@ -292,6 +352,7 @@ class FakeKeycloak:
         self.users: dict[str, dict] = {}
         self.consents: dict[str, list[str]] = {}
         self.events: list[dict] = []
+        self.user_events: list[dict] = []
         self.calls: list[tuple[str, str]] = []
         self.forbidden: set[str] = set()
         self.fail_logout = False
@@ -358,17 +419,43 @@ class FakeKeycloak:
             row["authDetails"] = {"realmId": "papaia", "userId": actor}
         self.events.append(row)
 
+    def user_event(self, etype: str, uid: str, ms: int, *, client="account", details=None):
+        """A user event as Keycloak stores it (GET /events): no resource path."""
+        self.user_events.append(
+            {
+                "id": f"u{len(self.user_events):04d}",
+                "time": ms,
+                "type": etype,
+                "realmId": "papaia",
+                "clientId": client,
+                "userId": uid,
+                "sessionId": "s-1",
+                "ipAddress": "192.0.2.10",
+                "details": details,
+            }
+        )
+
     def call(self, method: str, path: str, body=None):
         self.calls.append((method, path))
         base, _, query = path.partition("?")
         parts = base.strip("/").split("/")
-        if parts == ["admin-events"]:
+        if parts in (["admin-events"], ["events"]):
             if self.events_error is not None:
                 raise self.events_error
-            q = dict(p.split("=", 1) for p in query.split("&") if p and "=" in p)
-            since = int(q.get("dateFrom", "0"))
-            first, size = int(q.get("first", "0")), int(q.get("max", "100"))
-            rows = sorted((e for e in self.events if e["time"] >= since), key=lambda e: e["time"])
+            q = urllib.parse.parse_qs(query)
+            since = int(q.get("dateFrom", ["0"])[0])
+            first, size = int(q.get("first", ["0"])[0]), int(q.get("max", ["100"])[0])
+            source = self.events if parts == ["admin-events"] else self.user_events
+            wanted = set(q.get("type", []))
+
+            # A malformed time (a broken answer) is handed over as it is.
+            def when(e):
+                return e["time"] if isinstance(e["time"], int) else since
+
+            rows = sorted(
+                (e for e in source if when(e) >= since and (not wanted or e["type"] in wanted)),
+                key=when,
+            )
             return rows[first : first + size]
         if parts == ["users"]:
             # As the live Keycloak answers svc-papaia-lifecycle: the group permission
@@ -750,6 +837,7 @@ def test_deactivation_deletion_and_role_removal_each_write_one_entry(stack):
 
 def test_every_role_and_group_removal_names_its_scope(stack):
     kc = stack.keycloak
+    kc.add_user(PERSON)
     stack.service.start()
     kc.admin_event(
         "DELETE",
@@ -776,6 +864,8 @@ def test_ended_sessions_and_reset_credentials_are_journaled(stack):
     administration. The service's own logout (it revokes after a deactivation) is not a
     second entry: the account_disable entry covers it."""
     kc = stack.keycloak
+    kc.add_user(PERSON)
+    kc.add_user(OTHER)
     kc.add_user(THIRD, enabled=False)
     stack.service.start()
     kc.admin_event("ACTION", "USER", f"users/{PERSON}/logout", _ms(stack, 10), actor=OTHER)
@@ -811,6 +901,230 @@ def test_the_service_asks_for_every_event_it_journals(stack):
     assert set(params["operationTypes"]) == {"UPDATE", "DELETE", "ACTION"}
 
 
+def test_a_persons_own_password_change_factor_removal_and_sign_out_are_journaled(stack):
+    """RE-103, sicherheit §4.9 (1) and §1.12 Nr. 1: what a person does on their own
+    account shows only in the user events. A restored snapshot must not bring back the
+    old password or the removed factor, so each is one entry, like the admin's."""
+    kc = stack.keycloak
+    kc.add_user(PERSON)
+    stack.service.start()
+    kc.user_event(
+        "UPDATE_PASSWORD",
+        PERSON,
+        _ms(stack, 10),
+        client="account-console",
+        details={"credential_type": "password", "username": "anna"},
+    )
+    kc.user_event(
+        "REMOVE_CREDENTIAL",
+        PERSON,
+        _ms(stack, 20),
+        details={"credential_type": "otp", "selected_credential_id": CLIENT},
+    )
+    # "Sign out all devices" ends every session: one LOGOUT per session, at one time.
+    for _ in range(3):
+        kc.user_event("LOGOUT", PERSON, _ms(stack, 30))
+    # Signing out of one application is not ending every session.
+    kc.user_event("LOGOUT", PERSON, _ms(stack, 40), client="flow-web")
+    stack.service.step()
+    ref = _ref(stack.erasure_key, PERSON)
+    lines = _lines(stack.target)
+    assert [(e["kind"], e["object_ref"], e["subject_ref"]) for e in lines] == [
+        ("credential_reset", "password", ref),
+        ("credential_reset", f"credential:{CLIENT}", ref),
+        ("session_revoke", "sessions", ref),
+    ]
+    assert [e["seq"] for e in lines] == [1, 2, 3]
+    journal = [r for r in _rows(stack.out) if r["operation"] == "lifecycle.journal"]
+    assert [r["detail"]["kind"] for r in journal] == [e["kind"] for e in lines]
+    assert len({r["correlation_id"] for r in journal}) == 3
+    text = stack.out.getvalue() + (stack.target / "identity.jsonl").read_text()
+    assert "192.0.2.10" not in text and "anna" not in text and PERSON not in text
+    # Nothing is revoked in Keycloak for these: they are journaled only.
+    assert not any(m != "GET" for m, _ in kc.calls)
+
+
+def test_a_removed_credential_without_its_id_still_writes_an_entry(stack):
+    kc = stack.keycloak
+    kc.add_user(PERSON)
+    stack.service.start()
+    kc.user_event("REMOVE_CREDENTIAL", PERSON, _ms(stack, 10), details={"x": "../y"})
+    kc.user_event("REMOVE_CREDENTIAL", PERSON, _ms(stack, 20), details=None)
+    stack.service.step()
+    assert [(e["kind"], e["object_ref"]) for e in _lines(stack.target)] == [
+        ("credential_reset", "credential"),
+        ("credential_reset", "credential"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"type": "LOGIN"},
+        {"type": "UPDATE_PASSWORD", "userId": "../users"},
+        {"type": "UPDATE_PASSWORD", "userId": None},
+        {"type": "UPDATE_PASSWORD", "time": "soon"},
+        {"type": "REMOVE_CREDENTIAL", "details": {"selected_credential_id": "a/b"}, "userId": 5},
+    ],
+)
+def test_malformed_user_events_are_ignored(stack, row):
+    kc = stack.keycloak
+    kc.add_user(PERSON)
+    stack.service.start()
+    kc.user_event("UPDATE_PASSWORD", PERSON, _ms(stack, 10))
+    kc.user_events[0].update(row)
+    stack.service.step()
+    assert _lines(stack.target) == []
+
+
+def test_the_service_asks_for_the_user_events_it_journals(stack):
+    stack.service.start()
+    stack.service.step()
+    query = next(p for _, p in stack.keycloak.calls if p.startswith("/events?"))
+    params = urllib.parse.parse_qs(query.partition("?")[2])
+    assert set(params["type"]) == {"UPDATE_PASSWORD", "REMOVE_CREDENTIAL", "LOGOUT"}
+    assert params["direction"] == ["asc"]
+    assert int(params["dateFrom"][0]) == int(stack.clock.now * 1000) - lc.FIRST_LOOKBACK_MS
+
+
+def test_a_full_page_of_one_stream_holds_back_later_events_of_the_other(stack, monkeypatch):
+    """Both streams share one read position: while one stream has more pages than one
+    poll reads, events of the other stream after its last one wait for the next poll."""
+    monkeypatch.setattr(lc, "EVENT_PAGE", 2)
+    monkeypatch.setattr(lc, "MAX_EVENT_PAGES", 1)
+    kc = stack.keycloak
+    for uid in (PERSON, OTHER, THIRD):
+        kc.add_user(uid)
+    stack.service.start()
+    for n, uid in enumerate((PERSON, OTHER, THIRD)):
+        kc.admin_event(
+            "DELETE", "GROUP_MEMBERSHIP", f"users/{uid}/groups/{GROUP}", _ms(stack, 10 * n + 10)
+        )
+    kc.user_event("UPDATE_PASSWORD", PERSON, _ms(stack, 25))
+    stack.service.step()
+    assert [e["kind"] for e in _lines(stack.target)] == ["role_revoke", "role_revoke"]
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    assert [e["kind"] for e in _lines(stack.target)] == [
+        "role_revoke",
+        "role_revoke",
+        "credential_reset",
+        "role_revoke",
+    ]
+
+
+def test_a_full_page_of_plain_sign_outs_does_not_stop_the_read_position(stack, monkeypatch):
+    """Rows read but not journaled (plain sign-outs of one application) still move the
+    read position: a later deletion is handled within the next polls."""
+    monkeypatch.setattr(lc, "EVENT_PAGE", 2)
+    monkeypatch.setattr(lc, "MAX_EVENT_PAGES", 1)
+    kc = stack.keycloak
+    kc.add_user(PERSON)
+    stack.service.start()
+    for n in range(3):
+        kc.user_event("LOGOUT", PERSON, _ms(stack, 10 * n + 10), client="flow-web")
+    kc.event("DELETE", PERSON, _ms(stack, 40))
+    for _ in range(3):
+        stack.service.step()
+        stack.clock.now += lc.POLL_SECONDS
+    assert [e["kind"] for e in _lines(stack.target)] == ["account_delete"]
+    assert PERSON in {e["sub"] for e in _published(stack.state_dir)["entries"]}
+
+
+def test_malformed_user_rows_do_not_stop_the_read_position(stack, monkeypatch):
+    monkeypatch.setattr(lc, "EVENT_PAGE", 2)
+    monkeypatch.setattr(lc, "MAX_EVENT_PAGES", 1)
+    kc = stack.keycloak
+    kc.add_user(PERSON)
+    stack.service.start()
+    for n in range(3):
+        kc.user_event("LOGOUT", PERSON, _ms(stack, 10 * n + 10))
+        kc.user_events[-1]["userId"] = "../users"
+    kc.event("DELETE", PERSON, _ms(stack, 40))
+    for _ in range(3):
+        stack.service.step()
+        stack.clock.now += lc.POLL_SECONDS
+    assert [e["kind"] for e in _lines(stack.target)] == ["account_delete"]
+
+
+def test_one_sign_out_of_all_devices_is_one_entry_across_milliseconds_and_polls(stack, monkeypatch):
+    """Keycloak's logout loop can cross a millisecond and a page boundary: the LOGOUTs
+    of one account close together are one entry; a later one is an entry again."""
+    monkeypatch.setattr(lc, "EVENT_PAGE", 2)
+    monkeypatch.setattr(lc, "MAX_EVENT_PAGES", 1)
+    kc = stack.keycloak
+    kc.add_user(PERSON)
+    kc.add_user(OTHER)
+    stack.service.start()
+    for offset in (30, 31, 33):
+        kc.user_event("LOGOUT", PERSON, _ms(stack, offset))
+    kc.user_event("LOGOUT", OTHER, _ms(stack, 34))
+    later = _ms(stack, 33) + lc.SIGN_OUT_MERGE_MS + 1
+    kc.user_event("LOGOUT", PERSON, later)
+    for _ in range(4):
+        stack.service.step()
+        stack.clock.now += lc.POLL_SECONDS
+    assert [(e["kind"], e["subject_ref"]) for e in _lines(stack.target)] == [
+        ("session_revoke", _ref(stack.erasure_key, PERSON)),
+        ("session_revoke", _ref(stack.erasure_key, OTHER)),
+        ("session_revoke", _ref(stack.erasure_key, PERSON)),
+    ]
+
+
+def test_journal_only_events_of_accounts_the_service_may_not_read_write_nothing(stack, capsys):
+    """Only persons (members of papaia-persons) are journaled: service and admin accounts
+    outside the group (403) write no entry, and neither does an account that is gone
+    (404; its deletion is an entry of its own)."""
+    kc = stack.keycloak
+    kc.add_user(OTHER)
+    kc.forbidden.add(OTHER)
+    stack.service.start()
+    for uid in (OTHER, PERSON):  # PERSON does not exist (any more)
+        kc.admin_event(
+            "DELETE", "REALM_ROLE_MAPPING", f"users/{uid}/role-mappings/realm", _ms(stack, 10)
+        )
+        kc.admin_event("ACTION", "USER", f"users/{uid}/logout", _ms(stack, 20), actor=THIRD)
+        kc.admin_event("ACTION", "USER", f"users/{uid}/reset-password", _ms(stack, 30))
+        kc.user_event("UPDATE_PASSWORD", uid, _ms(stack, 40))
+    stack.service.step()
+    assert _lines(stack.target) == []
+    assert "outside the group of persons" in capsys.readouterr().err
+    assert lc.Store(stack.key_dir).load()["parked"] == {}
+    # Nothing counts as a skipped revocation: nothing was to be revoked.
+    _, report = lc.health(stack.state_dir, stack.key_dir, now=stack.clock.now)
+    assert report["skipped_revocations"] == 0
+
+
+def test_an_account_that_stays_disabled_writes_one_entry(stack):
+    """Editing a disabled account again revokes again, but the journal already holds the
+    state; after a reactivation, the next deactivation is an entry again."""
+    kc = stack.keycloak
+    _settled(stack, PERSON)
+    kc.event("UPDATE", PERSON, _ms(stack, 10))
+    kc.event("UPDATE", PERSON, _ms(stack, 20))
+    stack.service.step()
+    assert [e["kind"] for e in _lines(stack.target)] == ["account_disable"]
+    assert kc.calls.count(("POST", f"/users/{PERSON}/logout")) == 2
+    kc.users[PERSON]["enabled"] = True
+    kc.event("UPDATE", PERSON, _ms(stack, 30))
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    kc.users[PERSON]["enabled"] = False
+    kc.event("UPDATE", PERSON, _ms(stack, 40_000))
+    stack.clock.now += lc.POLL_SECONDS
+    stack.service.step()
+    assert [e["kind"] for e in _lines(stack.target)] == ["account_disable", "account_disable"]
+
+
+def test_a_state_file_of_the_previous_version_is_read(stack):
+    stack.service.start()
+    path = stack.key_dir / lc.STATE_FILE
+    doc = json.loads(path.read_text())
+    del doc["journal_disabled"]
+    path.write_text(json.dumps(doc))
+    assert lc.Store(stack.key_dir).load()["journal_disabled"] == []
+
+
 def test_an_active_account_and_an_unreadable_one_write_no_entry(stack):
     kc = stack.keycloak
     kc.add_user(PERSON)
@@ -825,6 +1139,7 @@ def test_an_active_account_and_an_unreadable_one_write_no_entry(stack):
 
 def test_each_entry_is_one_audit_row_with_the_correlation_id_of_its_event(stack):
     kc = stack.keycloak
+    kc.add_user(OTHER)
     _settled(stack, PERSON)
     kc.event("UPDATE", PERSON, _ms(stack, 10))
     kc.admin_event(
@@ -942,6 +1257,7 @@ def test_a_broken_local_copy_parks_the_event_and_later_revocations_go_ahead(stac
     """Without a local copy no entry is safe: the event is retried and parked, while the
     revocation of later deactivations goes on."""
     kc = stack.keycloak
+    kc.add_user(PERSON)
     kc.add_user(OTHER, enabled=False)
     stack.service.start()
     (stack.local / "identity.jsonl").write_text("not json\n")
@@ -1349,3 +1665,69 @@ def test_no_or_an_unlimited_retention_is_replaced(value):
     fake.realm["attributes"] = {"adminEventsExpiration": value}
     _switches(fake)
     assert fake.realm["attributes"]["adminEventsExpiration"] == str(la.ADMIN_EVENTS_EXPIRATION)
+
+
+def test_the_realm_stores_the_user_events_the_service_journals():
+    """sicherheit §1.12 Nr. 1, RE-103: a person's own password change, removed factor and
+    ended sessions are user events; the realm stores those types (and no others for
+    the service), kept like the sign-ins of service accounts."""
+    fake = FakeRealm()
+    changes = _switches(fake)
+    assert any("user events" in c.action for c in changes)
+    assert fake.events_config["eventsEnabled"] is True
+    assert fake.events_config["enabledEventTypes"] == sorted(la.USER_EVENT_TYPES)
+    assert set(la.USER_EVENT_TYPES) == set(lc.USER_EVENT_TYPES)
+    assert fake.events_config["eventsExpiration"] == rs.EVENTS_EXPIRATION
+    assert _switches(fake, apply=False) == []
+
+
+def test_event_types_the_operator_chose_are_kept():
+    fake = FakeRealm()
+    fake.events_config.update(
+        eventsEnabled=True, enabledEventTypes=["CLIENT_LOGIN", "LOGOUT"], eventsExpiration=3600
+    )
+    _switches(fake)
+    assert fake.events_config["enabledEventTypes"] == sorted({"CLIENT_LOGIN", *la.USER_EVENT_TYPES})
+    assert fake.events_config["eventsExpiration"] == 3600
+    # The service-account sign-ins (realm sync) and these types live side by side.
+    assert _switches(fake, apply=False) == []
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# conformance with the kit's journal schema
+# ─────────────────────────────────────────────────────────────────────────
+
+KIT_DIR = os.environ.get("PAPAIA_KIT_DIR", "")
+
+
+@pytest.mark.skipif(
+    not KIT_DIR, reason="no papaia-kit checkout (PAPAIA_KIT_DIR) for the journal schema"
+)
+def test_every_line_the_writer_makes_matches_the_kit_schema(stack):
+    """GV-25: the writer's lines are lines of the kit's erasure-journal-entry.v1, for every
+    kind of every core source, also a renumbered entry with provisional_seq."""
+    import jsonschema
+
+    schema_path = Path(KIT_DIR) / "schemas" / "erasure-journal-entry.v1.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(schema)
+    validator = jsonschema.Draft202012Validator(schema)
+    key = lc.read_erasure_key(stack.key_file)
+    for source, kinds in lc.JOURNAL_KINDS.items():
+        journal = lc.ErasureJournal(source, key=key, target_dir=stack.target, local_dir=stack.local)
+        for kind in sorted(kinds):
+            journal.record(kind, object_ref="account", sub=PERSON, reason="probe")
+    # One renumbered entry: the local copy lost the target's last line.
+    (stack.local / "identity.jsonl").write_bytes(b"")
+    stack.target.rename(stack.target.with_name("away"))
+    stack.journal.record("account_delete", object_ref="account", sub=OTHER, reason="probe")
+    stack.target.with_name("away").rename(stack.target)
+    stack.journal.flush()
+    lines = [
+        line
+        for source in lc.JOURNAL_KINDS
+        for line in _lines(stack.target, source) + _lines(stack.local, source)
+    ]
+    assert any("provisional_seq" in line for line in lines)
+    for line in lines:
+        validator.validate(line)

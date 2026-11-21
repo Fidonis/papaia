@@ -21,7 +21,12 @@ While the Compose profile `lifecycle` is active, `papaia-ctl realm sync` makes s
 - admin events stored (`adminEventsEnabled`), without representations, and kept for
   7 days (realm attribute `adminEventsExpiration`; sicherheit §1.12, EXI-P08): they
   carry actor, address and resource path, and papaia-audit is the record that lasts.
-  A retention the operator set is kept.
+  A retention the operator set is kept;
+- user events stored for the types papaia-lifecycle journals from them (a person's own
+  password change, removed second factor and "sign out all devices": `UPDATE_PASSWORD`,
+  `REMOVE_CREDENTIAL`, `LOGOUT`; sicherheit §1.12 Nr. 1, RE-103). Types the operator or
+  the realm sync chose stay; with none set, user events are kept as long as the sign-ins
+  of service accounts (`EVENTS_EXPIRATION`).
 
 Without the profile the client, its key folder and the permission are removed; the
 group and the realm switches stay.
@@ -46,6 +51,8 @@ EVENT_ROLES = ("view-events",)
 PROFILE = "lifecycle"
 ADMIN_EVENTS_EXPIRATION = 7 * 24 * 3600
 EXPIRATION_ATTRIBUTE = "adminEventsExpiration"
+# The user event types papaia-lifecycle reads (src/infra/lifecycle/lifecycle.py).
+USER_EVENT_TYPES = ("LOGOUT", "REMOVE_CREDENTIAL", "UPDATE_PASSWORD")
 _PAGE = 100
 # Next to the account key: the id of PERSONS_GROUP for papaia-lifecycle, which may list
 # the group's members but not look the group up (same name in its lifecycle.py).
@@ -138,6 +145,8 @@ class _Align:
                 "/events/config",
                 body,
             )
+            config = body
+        self.user_events(config)
         attributes = dict(realm.get("attributes") or {})
         if _seconds(attributes.get(EXPIRATION_ATTRIBUTE)) <= 0:
             attributes[EXPIRATION_ATTRIBUTE] = str(ADMIN_EVENTS_EXPIRATION)
@@ -152,6 +161,29 @@ class _Align:
                 "",
                 {"attributes": attributes},
             )
+
+    def user_events(self, config: dict) -> None:
+        """The realm stores the user event types the service journals; other types that
+        are stored stay, and with every type stored (an empty list) nothing changes."""
+        types = list(config.get("enabledEventTypes") or [])
+        enabled = config.get("eventsEnabled") is True
+        if enabled and (not types or set(USER_EVENT_TYPES) <= set(types)):
+            return
+        body = dict(config, eventsEnabled=True)
+        body["enabledEventTypes"] = sorted(set(types if enabled else []) | set(USER_EVENT_TYPES))
+        if not config.get("eventsExpiration"):
+            body["eventsExpiration"] = rs.EVENTS_EXPIRATION
+        self.act.do(
+            _change(
+                "realm",
+                rs.kcs._REALM,
+                "user events stored (own password change, removed factor, sign-out)",
+                "user_events",
+            ),
+            "PUT",
+            "/events/config",
+            body,
+        )
 
     def group(self) -> str | None:
         query = urllib.parse.urlencode({"search": PERSONS_GROUP, "exact": "true"})

@@ -279,6 +279,8 @@ def ensure_lifecycle_key(config_dir: Path) -> None:
 
 ERASURE_KEY_FILE = Path("security") / "erasure-hmac"
 JOURNAL_FOLDER = "erasure-journal"
+# The backup target the journal folder was set up on; its folder must exist from then on.
+JOURNAL_TARGET_FILE = Path("security") / "erasure-journal-target"
 _ERASURE_KEY_TEXT = re.compile(rb"[0-9A-Fa-f]{64,2048}\r?\n?")
 
 
@@ -287,7 +289,12 @@ def ensure_lifecycle_journal(config_dir: Path) -> None:
     folder `$PAPAIA_BACKUP_DIR/erasure-journal` exist before `up`; the container mounts
     both and Compose must not create them (sicherheit §4.9). The key is made once and
     kept: a new key would cut every journal entry off from its person. It lives in the
-    configuration directory, so it is part of the backup, never next to the journal."""
+    configuration directory, so it is part of the backup, never next to the journal.
+
+    The backup target itself is never created, and the journal folder only once per
+    target (recorded in `security/erasure-journal-target`): a missing folder after that
+    is an unmounted target, whose empty mount point must not become an empty journal on
+    the host's own disk (RE-06, betrieb BE-16a Nr. 2a (e))."""
     if "lifecycle" not in _active_profiles(config_dir):
         return
     backup_dir = common.parse_env_file(config_dir / ".env").get("PAPAIA_BACKUP_DIR", "")
@@ -304,7 +311,39 @@ def ensure_lifecycle_journal(config_dir: Path) -> None:
     else:
         with os.fdopen(fd, "w", encoding="ascii") as fh:
             fh.write(secrets.token_hex(32) + "\n")
-    (Path(backup_dir) / JOURNAL_FOLDER).mkdir(mode=0o700, parents=True, exist_ok=True)
+    _ensure_journal_folder(config_dir, Path(backup_dir))
+
+
+def _ensure_journal_folder(config_dir: Path, backup_dir: Path) -> None:
+    folder = backup_dir / JOURNAL_FOLDER
+    marker = config_dir / JOURNAL_TARGET_FILE
+    try:
+        recorded = marker.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        recorded = None
+    if folder.is_dir():
+        if recorded != str(backup_dir):
+            _write_journal_target(marker, backup_dir)
+        return
+    if recorded == str(backup_dir):
+        raise RenderError(
+            f"the erasure journal {folder} is missing: the backup target is not mounted. "
+            "Mount it and run again. Only if the target was replaced by a new, empty one, "
+            "create the folder (mode 0700): papaia-lifecycle then writes its local copy "
+            "of the journal into it."
+        )
+    if not backup_dir.is_dir():
+        raise RenderError(
+            f"the backup target PAPAIA_BACKUP_DIR={backup_dir} does not exist: create or "
+            "mount it before the lifecycle profile is switched on (the erasure journal "
+            "lives there)"
+        )
+    folder.mkdir(mode=0o700)
+    _write_journal_target(marker, backup_dir)
+
+
+def _write_journal_target(marker: Path, backup_dir: Path) -> None:
+    common.atomic_write_private(marker, f"{backup_dir}\n")
 
 
 def _check_erasure_key(key: Path) -> None:

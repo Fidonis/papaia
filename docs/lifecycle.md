@@ -4,9 +4,10 @@
 account of the `papaia` realm is deactivated or deleted, it ends the person's sessions,
 removes every consent the person gave (offline sessions and with them the delegations of
 Flow and the assistant) and puts the person on a signed revocation list that every module
-reads. Every such change, and every removed role or group, ended session and reset
-credential, is a line of the erasure journal `identity` at the backup target, so a
-restored snapshot cannot bring it back (see [The erasure journal](#the-erasure-journal-identity)).
+reads. Every such change of a person, and every removed role or group, ended session and
+reset or changed credential, also those the person makes on their own account, is a line
+of the erasure journal `identity` at the backup target, so a restored snapshot cannot
+bring it back (see [The erasure journal](#the-erasure-journal-identity)).
 
 It is optional and needs the bundled Keycloak. Switch it on by adding `lifecycle` to
 `COMPOSE_PROFILES` in `src/.env` (or the root `.env` of the configuration directory) and
@@ -15,8 +16,9 @@ run `papaia-ctl start`. The realm sync then sets up its service account.
 ## What it does
 
 Every 10 s the service reads the admin events of the realm (`UPDATE`, `DELETE` and
-`ACTION` of an account, removed realm and client role mappings and group memberships).
-For an account that is now deactivated:
+`ACTION` of an account, removed realm and client role mappings and group memberships)
+and its user events of the types `UPDATE_PASSWORD`, `REMOVE_CREDENTIAL` and `LOGOUT`
+(what a person does on their own account). For an account that is now deactivated:
 
 1. the person goes on the revocation list, `since` = time of the event;
 2. `POST /users/{id}/logout` ends every session;
@@ -38,10 +40,10 @@ as well.
 Admin events are kept in Keycloak for 7 days (see below). If the service is stopped for
 longer, events are lost; the reconciliation independent of events closes that gap.
 
-Removed roles and groups, ended sessions and reset credentials are written to the
-journal only; the service does not act on them in Keycloak. Not handled here: federated
-directories, the signal to the modules' `/internal/lifecycle` and replaying the journal
-(the core start gate).
+Removed roles and groups, ended sessions and reset or changed credentials are written to
+the journal only; the service does not act on them in Keycloak. Not handled here:
+federated directories, the signal to the modules' `/internal/lifecycle` and replaying the
+journal (the core start gate).
 
 ## Reconciliation independent of events
 
@@ -121,7 +123,7 @@ erasure journals, and keeps a local copy in its own volume `papaia-lifecycle-key
 the reference: a snapshot of the host brings back an older local copy, not an older
 target.
 
-| Admin event | `kind` | `object_ref` | `reason` |
+| Event | `kind` | `object_ref` | `reason` |
 |---|---|---|---|
 | account updated and now disabled | `account_disable` | `account` | `account_disabled` |
 | account deleted (also: updated, then gone) | `account_delete` | `account` | `account_deleted` |
@@ -130,7 +132,23 @@ target.
 | account removed from a group | `role_revoke` | `group:<group id>` | `role_removed` |
 | sessions of an account ended by the administration | `session_revoke` | `sessions` | `sessions_ended` |
 | password reset by the administration | `credential_reset` | `password` | `credential_changed` |
-| credential (for example a second factor) removed | `credential_reset` | `credential:<credential id>` | `credential_changed` |
+| credential (for example a second factor) removed by the administration | `credential_reset` | `credential:<credential id>` | `credential_changed` |
+| user event `UPDATE_PASSWORD`: the person changed the password in the sign-in form (also when the account console or a mail leads there) | `credential_reset` | `password` | `credential_changed` |
+| user event `REMOVE_CREDENTIAL`: the person removed a second factor or another credential | `credential_reset` | `credential:<credential id>` (`credential` without one) | `credential_changed` |
+| user events `LOGOUT` of the account console (client `account`): "sign out all devices" or of one device | `session_revoke` | `sessions` | `sessions_ended` |
+
+Keycloak writes one `LOGOUT` per session for "sign out all devices"; they are one entry:
+`LOGOUT`s of the account console for one account less than 5 s apart (the window slides
+with each one) are merged. The service keeps this only in memory, so after a restart, or
+when a parked event is retried, a second `session_revoke` for the same sign-out is
+possible; a replay repeats it harmlessly. A plain sign-out of one application (`LOGOUT`
+of another client) is no entry, but like every user event read it moves the read
+position, so many such sign-outs never hold back a later deactivation or deletion. Keycloak
+also writes `UPDATE_CREDENTIAL` with every password change and `REMOVE_TOTP` with every
+removed one-time code; the service reads neither, so each change is one entry. Measured
+against Keycloak 26.7.0: a password change as a required action of the sign-in form, a
+one-time code removed through the account API and "sign out all devices"; the way
+through a forgot-password mail was not tried (no mail server in the test).
 
 Each line is `{id, module, seq, kind, object_ref, subject_ref, at, reason}`, without
 content. `module` is `identity`; `seq` rises by one per entry, without gaps;
@@ -141,23 +159,51 @@ and is part of the backup of the configuration directory, never next to the jour
 not replace it, or old entries can no longer be matched to an account. The admin events
 are stored without representations, so a role entry names the scope (realm roles, the
 client, the group), not the single role. The service's own logout after a deactivation
-is not a second entry. An admin event the service may not read the account of (outside
-`papaia-persons`) writes no entry.
+is not a second entry, and neither is a change to an account that stays disabled (it is
+revoked again, but the journal already holds its state; after a reactivation the next
+deactivation is an entry again).
+
+**Persons only.** Before a removed role, an ended session or a changed credential is
+written, the service reads the account (`GET /users/{id}`). An account it may not read,
+which is every account outside `papaia-persons` (service accounts, and an administrator
+someone took out of the group), writes no entry, with a note in the log; an account that
+is gone by then writes none either, its deletion is an entry of its own. The check is
+made when the event is processed, not when it happened: removing someone from
+`papaia-persons` writes no entry (afterwards the account can no longer be read), and
+neither does a role, session or credential change processed after that removal. A
+restored snapshot can therefore bring back such a membership and roles without an
+entry. This is no gain of rights: membership of `papaia-persons` only puts the account
+under lifecycle management. Deletions are
+the exception: a deleted account cannot be read any more, so its `account_delete` is
+written whatever group it was in.
 
 The journal is written after the revocation. If the backup target cannot be written (not
 mounted, full, damaged file), the revocation still goes ahead: the entry waits in the
 local copy and is delivered on the next poll; meanwhile health reports `journal_pending`
-and `journal_target` and warns. An entry the target receives under another `seq` than
-first handed out (the local copy was older than the target) keeps that first number as
-`provisional_seq`. If the local copy itself cannot be written, the event is tried again
+and `journal_target` and warns. For the operator both are a failure of the erasure
+journal, not a warning: until the entry is at the target, a restored snapshot can bring
+the account state back. `papaia-ctl doctor` has no check of the journal in this version;
+read the health output (`docker inspect` of `papaia-lifecycle`) and treat
+`journal_pending` above 0 or `journal_target` other than `ok` as `fail`. An entry the
+target receives under another `seq` than first handed out (the local copy was older than
+the target) keeps that first number as `provisional_seq`. If the local copy itself cannot be written, the event is tried again
 and parked like a failing revocation; later revocations go ahead, and health fails while
 the local copy is damaged.
 
-`render` also creates the folder `$PAPAIA_BACKUP_DIR/erasure-journal` (mode 0700) before
-the start. Compose does not create it (an empty folder in place of an unmounted backup
-target would look like an empty journal), so the container does not start while the
-folder is missing: mount the backup target and run `papaia-ctl start` again. Of the
-backup target the service sees this folder only. Each write is one audit line
+**The journal folder.** `render` (every `setup` and `start`) never creates the backup
+target `$PAPAIA_BACKUP_DIR`: switch the profile on only when it exists (created, or the
+external disk mounted). The first `render` with the profile creates the folder
+`$PAPAIA_BACKUP_DIR/erasure-journal` (mode 0700) and records the target in
+`$PAPAIA_CONFIG_DIR/security/erasure-journal-target`. From then on a missing folder means
+an unmounted target (its empty mount point is left), so `render`, and with it `setup` and
+`start`, stops with an error instead of making a new, empty journal on the host's own
+disk: mount the backup target and run again. Only if the target was replaced by a new,
+empty one, create the folder by hand (mode 0700); the service then writes its local copy
+of the journal into it. Mount an external target before the first `setup` with the
+profile: an empty mount point at that time cannot be told apart from a new target.
+Compose does not create the folder either (`create_host_path: false`), so a target that
+goes away between `render` and `up` keeps the container from starting. Of the backup
+target the service sees this folder only. Each write is one audit line
 (`lifecycle.journal`, object `erasure_journal` `identity:<seq>`, the correlation id of
 the event; `error`/`journal_unavailable` when the local copy fails).
 
@@ -242,10 +288,11 @@ While the profile is active, `papaia-ctl realm sync` (also run by every `start`)
 | Object | Setting |
 |---|---|
 | Client `svc-papaia-lifecycle` | `client_credentials` with `private_key_jwt` (ES256) only; no sign-in flow, no password grant, no token exchange, `fullScopeAllowed: false`. The private key is `$PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle/private-key.pem` (made by `setup`/`start` before the container starts; mounted read-only). Next to it `persons-group`: the id of `papaia-persons` for the reconciliation |
-| Its service-account user | `realm-management` `view-events` only (reading admin events), also in the client's token scope; no other role, no group, no `manage-users` |
+| Its service-account user | `realm-management` `view-events` only (reading admin and user events), also in the client's token scope; no other role, no group, no `manage-users` |
 | Group `papaia-persons` | a default group; every account except service accounts is a member |
 | Admin permissions | switched on for the realm (`adminPermissionsEnabled`); one permission on resource type Groups, scopes `view-members` and `manage-members`, for `papaia-persons`, granted to the client alone |
 | Admin events | stored (`adminEventsEnabled`), without representations, kept 7 days (realm attribute `adminEventsExpiration` = 604800; a retention the operator set is kept, none or 0 is replaced). They name actor, address and resource path; the lasting record is papaia-audit |
+| User events | stored (`eventsEnabled`) at least for `UPDATE_PASSWORD`, `REMOVE_CREDENTIAL` and `LOGOUT`; types already stored stay. Without a retention set, kept 180 days (`eventsExpiration`). Keycloak has one retention for all user events of a realm, and the sign-ins of service accounts (`CLIENT_LOGIN`, the last use of a service account) are kept that long, two rotation intervals, so the person events share it. They name account, client, address and session; the service reads type, account, time and the id of a removed credential only and needs them only until its next poll plus an outage buffer. If the evaluation of service sign-ins allows it, set a shorter `eventsExpiration`; a retention the operator set is kept. Record the retention in the records of processing |
 
 That permission is the smallest set with which logout and consent removal work in
 Keycloak 26.7.0. **Residual risk:** it is finer than `manage-users` by reach (members of
@@ -258,8 +305,9 @@ system without capabilities, the key is mounted read-only with mode 0600, and ev
 write is an audit line. The group includes person accounts holding `papaia-admin`:
 leaving them out would leave their delegations unrevoked. This residual risk is accepted
 as named here. Two further gaps belong to it: an account outside the group is not revoked
-(`skipped_revocations`, above), and the switches `adminPermissionsEnabled` and
-`adminEventsEnabled` and the group stay in the realm after the profile is switched off.
+(`skipped_revocations`, above), and the switches `adminPermissionsEnabled`,
+`adminEventsEnabled` and `eventsEnabled` (with the event types) and the group stay in the
+realm after the profile is switched off.
 
 Without the profile the realm sync removes the client, its key folder and the
 permission; the group and the realm switches stay. The account is not one of the

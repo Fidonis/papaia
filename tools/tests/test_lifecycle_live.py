@@ -14,10 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
+import http.cookiejar
 import io
 import json
 import os
+import re
 import secrets
+import struct
 import time
 import urllib.error
 import urllib.parse
@@ -175,6 +179,9 @@ def test_the_account_is_set_up_and_a_second_run_changes_nothing(realm):
     assert _master_call("GET", "/events/config")["adminEventsEnabled"] is True
     attributes = _master_call("GET", "").get("attributes") or {}
     assert attributes.get("adminEventsExpiration") == str(la.ADMIN_EVENTS_EXPIRATION)
+    config = _master_call("GET", "/events/config")
+    assert config["eventsEnabled"] is True
+    assert set(la.USER_EVENT_TYPES) <= set(config["enabledEventTypes"])
 
 
 def test_the_account_holds_only_view_events_and_the_group_permission(realm):
@@ -331,6 +338,158 @@ def test_deactivated_and_reactivated_while_stopped_ends_the_delegation(realm, se
     fresh = _offline_token("dora")
     again.step(force_poll=True)
     assert _refresh(fresh) == 200
+
+
+# ── a person's own actions (user events) ──────────────────────────────────
+
+CLI = "journal-cli"
+REDIRECT = "http://127.0.0.1:9/callback"
+
+
+class _AnyCookie(http.cookiejar.DefaultCookiePolicy):
+    """The throwaway Keycloak runs on http; its cookies are marked Secure."""
+
+    def return_ok_secure(self, cookie, request):
+        return True
+
+
+class _Browser:
+    """Just enough of a browser for Keycloak's sign-in forms (no redirect to the app)."""
+
+    def __init__(self) -> None:
+        jar = http.cookiejar.CookieJar(_AnyCookie())
+
+        class _Stop(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), _Stop)
+
+    def open(self, url: str, form: dict | None = None) -> str:
+        data = urllib.parse.urlencode(form).encode() if form is not None else None
+        try:
+            with self.opener.open(urllib.request.Request(url, data=data), timeout=20) as resp:
+                return resp.read().decode()
+        except urllib.error.HTTPError as exc:
+            location = exc.headers.get("Location") or ""
+            if exc.code in (302, 303) and location and not location.startswith(REDIRECT):
+                return self.open(urllib.parse.urljoin(url, location))
+            return ""
+
+    def sign_in(self, username: str, password: str) -> str:
+        query = urllib.parse.urlencode(
+            {"client_id": CLI, "response_type": "code", "redirect_uri": REDIRECT, "scope": "openid"}
+        )
+        page = self.open(f"{URL}/realms/papaia/protocol/openid-connect/auth?{query}")
+        return self.open(_form_action(page), {"username": username, "password": password})
+
+
+def _form_action(page: str, form_id: str | None = None) -> str:
+    pattern = r'<form[^>]*action="([^"]+)"'
+    if form_id:
+        pattern = rf'<form action="([^"]+)"[^>]*id="{form_id}"'
+    return html.unescape(re.search(pattern, page)[1])
+
+
+def _totp(secret: bytes) -> str:
+    digest = hmac.new(secret, struct.pack(">Q", int(time.time()) // 30), hashlib.sha1).digest()
+    offset = digest[-1] & 15
+    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(value % 1_000_000).zfill(6)
+
+
+def _account(method: str, path: str, token: str):
+    req = urllib.request.Request(
+        f"{URL}/realms/papaia/account{path}",
+        method=method,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        raw = resp.read()
+    return json.loads(raw) if raw else None
+
+
+def test_a_persons_own_password_change_factor_removal_and_sign_out_are_journaled(realm, service):
+    """RE-103 against the pinned Keycloak: the user events of a password change in the
+    sign-in form, a second factor removed in the account console and "sign out all
+    devices" each write one entry; signing out of one application writes none."""
+    _master_call(
+        "POST",
+        "/clients",
+        {
+            "clientId": CLI,
+            "publicClient": True,
+            "standardFlowEnabled": True,
+            "directAccessGrantsEnabled": True,
+            "redirectUris": [REDIRECT],
+        },
+    )
+    cleo = _person("cleo")
+    new_password = secrets.token_hex(16)
+    # The person changes the password (required action in the sign-in form).
+    _master_call("PUT", f"/users/{cleo}", {"requiredActions": ["UPDATE_PASSWORD"]})
+    browser = _Browser()
+    page = browser.sign_in("cleo", PERSON_PASSWORD)
+    browser.open(
+        _form_action(page), {"password-new": new_password, "password-confirm": new_password}
+    )
+    status, body = _token(
+        {"grant_type": "password", "client_id": CLI, "username": "cleo", "password": new_password}
+    )
+    assert status == 200, body
+    access = body["access_token"]
+    # The person sets up a second factor, then removes it in the account console.
+    _master_call("PUT", f"/users/{cleo}", {"requiredActions": ["CONFIGURE_TOTP"]})
+    browser = _Browser()
+    page = browser.sign_in("cleo", new_password)
+    secret = re.search(r'name="totpSecret" value="([^"]+)"', page)[1]
+    browser.open(
+        _form_action(page, "kc-totp-settings-form"),
+        {"totp": _totp(secret.encode()), "totpSecret": secret, "userLabel": "phone"},
+    )
+    otp = [
+        meta["credential"]["id"]
+        for group in _account("GET", "/credentials", access)
+        for meta in group.get("userCredentialMetadatas") or []
+        if meta["credential"]["type"] == "otp"
+    ]
+    assert len(otp) == 1
+    _account("DELETE", f"/credentials/{otp[0]}", access)
+    # "Sign out all devices" in the account console.
+    _account("DELETE", "/sessions?current=true", access)
+    service.step(force_poll=True)
+    assert _journal(service, cleo) == [
+        ("credential_reset", "password"),
+        ("credential_reset", f"credential:{otp[0]}"),
+        ("session_revoke", "sessions"),
+    ]
+    # Signing out of one application (a plain logout) is not "every session".
+    status, body = _token(
+        {
+            "grant_type": "password",
+            "client_id": CLI,
+            "username": "cleo",
+            "password": new_password,
+        }
+    )
+    assert status == 200, body
+    req = urllib.request.Request(
+        f"{URL}/realms/papaia/protocol/openid-connect/logout",
+        data=urllib.parse.urlencode(
+            {"client_id": CLI, "refresh_token": body["refresh_token"]}
+        ).encode(),
+    )
+    with urllib.request.urlopen(req, timeout=10):
+        pass
+    service.step(force_poll=True)
+    assert len(_journal(service, cleo)) == 3
+    rows = [json.loads(line) for line in service.out.getvalue().splitlines()]
+    journal = [r for r in rows if r["operation"] == "lifecycle.journal"]
+    assert [r["detail"]["kind"] for r in journal][-3:] == [
+        "credential_reset",
+        "credential_reset",
+        "session_revoke",
+    ]
 
 
 def test_the_account_cannot_reach_a_person_outside_the_group(realm, service):

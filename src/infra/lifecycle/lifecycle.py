@@ -1,7 +1,8 @@
 """papaia-lifecycle: revocation on account deactivation and the signed revocation list.
 
 Every 10 s the service reads the admin events of the `papaia` realm (account updated or
-deleted). For an account that is now deactivated it
+deleted, and the changes journaled below) and its user events (below). For an account
+that is now deactivated it
 
   1. puts the person on the revocation list (`since` = time of the event),
   2. ends every session (`POST /users/{id}/logout`) and
@@ -38,11 +39,14 @@ only records the new value in the state; the running service publishes it and wr
 the audit rows, so they reach the container log.
 
 Every deactivation and deletion, and every removed role or group membership, ended
-session and reset credential the admin events show, is one line of the erasure journal
-`identity` (`<backup target>/erasure-journal/identity.jsonl`, local copy in the key
-volume), in the format of the modules' erasure journals: `seq` gap-free per source, the
-person named only as `subject_ref` = HMAC-SHA256(erasure-hmac, sub). A restored snapshot
-therefore cannot bring an account state back unnoticed.
+session and reset credential of a person is one line of the erasure journal `identity`
+(`<backup target>/erasure-journal/identity.jsonl`, local copy in the key volume), in the
+format of the modules' erasure journals: `seq` gap-free per source, the person named only
+as `subject_ref` = HMAC-SHA256(erasure-hmac, sub). The service reads them from the admin
+events and, for what a person does on their own account (password change, removed
+second factor, "sign out all devices"), from the user events of the realm. Only persons
+are journaled: an account the service may not read (outside `papaia-persons`) writes no
+entry. A restored snapshot therefore cannot bring an account state back unnoticed.
 
 The signing key and the service's own state live in a volume of their own, which is
 not backed up. The service signs in as `svc-papaia-lifecycle` with a client assertion
@@ -144,6 +148,9 @@ _CREDENTIAL_PATH_RE = re.compile(rf"users/({_ID})/credentials/({_ID})")
 _REALM_ROLES_RE = re.compile(rf"users/({_ID})/role-mappings/realm")
 _CLIENT_ROLES_RE = re.compile(rf"users/({_ID})/role-mappings/clients/({_ID})")
 _GROUP_PATH_RE = re.compile(rf"users/({_ID})/groups/({_ID})")
+_OWN_PASSWORD_RE = re.compile(rf"users/({_ID})/password")
+_OWN_CREDENTIAL_RE = re.compile(rf"users/({_ID})/credentials(?:/({_ID}))?")
+_OWN_SESSIONS_RE = re.compile(rf"users/({_ID})/sessions")
 _SUB_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _GROUP_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
 _EVENT_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -163,6 +170,7 @@ _STATE_KEYS = {
     "mark_ms",
     "mark_ids",
     "last_poll",
+    "journal_disabled",
     "disabled",
     "last_reconcile",
     "disabled_with_consent",
@@ -188,6 +196,19 @@ _LEGACY_PARKED_KEYS = {"time", "sub", "op"}
 # of an account, removed roles and group memberships.
 EVENT_RESOURCE_TYPES = ("USER", "REALM_ROLE_MAPPING", "CLIENT_ROLE_MAPPING", "GROUP_MEMBERSHIP")
 EVENT_OPERATION_TYPES = ("UPDATE", "DELETE", "ACTION")
+# User events the service reads (sicherheit §1.12 Nr. 1, RE-103): what a person does on
+# their own account. Measured against Keycloak 26.7.0: a password change in the sign-in
+# form is UPDATE_PASSWORD (and UPDATE_CREDENTIAL, not read: one entry per change), a
+# removed second factor REMOVE_CREDENTIAL (and REMOVE_TOTP, not read), and "sign out all
+# devices" one LOGOUT per session of the account API's client `account`. The realm sync
+# makes the realm store these types (lib/lifecycle_account.py).
+USER_EVENT_TYPES = ("UPDATE_PASSWORD", "REMOVE_CREDENTIAL", "LOGOUT")
+ACCOUNT_API_CLIENT = "account"
+# LOGOUTs of one account this close together are one "sign out all devices": Keycloak
+# ends the sessions one after another, which can cross milliseconds and event pages.
+SIGN_OUT_MERGE_MS = 5000
+# A user event as the service keeps it (resourceType of the normalised event).
+USER_EVENT = "USER_EVENT"
 # Reason code of each identity journal entry.
 JOURNAL_REASONS = {
     "account_disable": "account_disabled",
@@ -726,13 +747,23 @@ def _new_state() -> dict:
         "mark_ms": None,
         "mark_ids": [],
         "last_poll": 0,
+        "journal_disabled": [],
         **json.loads(json.dumps(_RECONCILE_DEFAULTS)),
     }
 
 
 def _check_state(doc: object) -> dict:
+    if isinstance(doc, dict) and "journal_disabled" not in doc:
+        doc["journal_disabled"] = []  # a state written before the journal knew it
     if not isinstance(doc, dict) or set(doc) != _STATE_KEYS or doc["format"] != STATE_FORMAT:
         raise LifecycleError("state: unknown format or fields")
+    disabled = doc["journal_disabled"]
+    if (
+        not isinstance(disabled, list)
+        or len(disabled) > MAX_ENTRIES
+        or not all(isinstance(s, str) and _SUB_RE.match(s) for s in disabled)
+    ):
+        raise LifecycleError("state: journal_disabled is malformed")
     for name in ("seq", "issued_at", "last_poll"):
         _int(doc[name], name)
     for name in ("global_since", "audited_global_since"):
@@ -820,8 +851,49 @@ def _parked_event(eid: str, item: dict) -> dict:
     }
 
 
+def user_event(row: object) -> dict | None:
+    """A user event of the realm (GET /events) in the form of an admin event, so it is
+    classified, ordered and parked like one. A row the service does not journal (a plain
+    sign-out of one application, a malformed row) keeps only its id and time: it still
+    moves the read position, or a full page of such rows would hold it back for ever.
+    Only the type, the account, the time, the id and a removed credential's id are
+    kept: no address, session, user name or other detail. None for a row that is no
+    object."""
+    if not isinstance(row, dict):
+        return None
+    position_only = {
+        "id": row.get("id"),
+        "time": row.get("time"),
+        "operationType": "NONE",
+        "resourceType": USER_EVENT,
+        "resourcePath": "",
+    }
+    etype, uid = row.get("type"), row.get("userId")
+    if etype not in USER_EVENT_TYPES or not isinstance(uid, str) or not _SUB_RE.fullmatch(uid):
+        return position_only
+    if etype == "UPDATE_PASSWORD":
+        path = f"users/{uid}/password"
+    elif etype == "REMOVE_CREDENTIAL":
+        details = row.get("details")
+        cid = details.get("selected_credential_id") if isinstance(details, dict) else None
+        valid = isinstance(cid, str) and re.fullmatch(_ID, cid)
+        path = f"users/{uid}/credentials/{cid}" if valid else f"users/{uid}/credentials"
+    elif row.get("clientId") == ACCOUNT_API_CLIENT:
+        path = f"users/{uid}/sessions"  # sessions ended in the account console
+    else:
+        return position_only  # a plain sign-out of one application
+    return {
+        "id": row.get("id"),
+        "time": row.get("time"),
+        "operationType": etype,
+        "resourceType": USER_EVENT,
+        "resourcePath": path,
+    }
+
+
 def classify(event: object) -> tuple[str, str, str] | None:
-    """(action, account id, object_ref) of an admin event the service acts on, else None.
+    """(action, account id, object_ref) of an admin event, or of a user event in the form
+    `user_event` gives it, that the service acts on, else None.
 
     `account_update` is a changed account (revoked when it is now disabled); every other
     action is the kind of its identity journal entry. Paths are matched in full, so a
@@ -831,6 +903,14 @@ def classify(event: object) -> tuple[str, str, str] | None:
     rtype, op = event.get("resourceType"), event.get("operationType")
     path = event.get("resourcePath")
     if not isinstance(path, str):
+        return None
+    if rtype == USER_EVENT:
+        if op == "UPDATE_PASSWORD" and (m := _OWN_PASSWORD_RE.fullmatch(path)):
+            return "credential_reset", m[1], "password"
+        if op == "REMOVE_CREDENTIAL" and (m := _OWN_CREDENTIAL_RE.fullmatch(path)):
+            return "credential_reset", m[1], f"credential:{m[2]}" if m[2] else "credential"
+        if op == "LOGOUT" and (m := _OWN_SESSIONS_RE.fullmatch(path)):
+            return "session_revoke", m[1], "sessions"
         return None
     if rtype == "USER":
         if (m := _USER_PATH_RE.fullmatch(path)) and op in ("UPDATE", "DELETE"):
@@ -1063,6 +1143,9 @@ class Lifecycle:
         self._next_poll = 0.0
         # 0: reconcile on the first step (at start), then every RECONCILE_SECONDS.
         self._next_reconcile = 0.0
+        # account -> time of its last LOGOUT of "sign out all devices": Keycloak writes
+        # one LOGOUT per session, the journal one entry (see SIGN_OUT_MERGE_MS).
+        self._sign_outs: dict[str, int] = {}
 
     # audit ------------------------------------------------------------
     def _audit(
@@ -1253,26 +1336,50 @@ class Lifecycle:
         return True
 
     # events -----------------------------------------------------------
-    def _events(self, since_ms: int) -> list[dict]:
-        rows: list[dict] = []
+    def _read(self, path: str, params: list[tuple[str, str]]) -> tuple[list, bool]:
+        """The rows of one event stream, oldest first; True when more rows wait than one
+        poll reads."""
+        rows: list = []
         for page in range(MAX_EVENT_PAGES):
             query = urllib.parse.urlencode(
                 [
-                    *(("resourceTypes", t) for t in EVENT_RESOURCE_TYPES),
-                    *(("operationTypes", o) for o in EVENT_OPERATION_TYPES),
-                    ("dateFrom", str(since_ms)),
+                    *params,
                     ("direction", "asc"),
                     ("first", str(page * EVENT_PAGE)),
                     ("max", str(EVENT_PAGE)),
                 ]
             )
-            batch = self.api.call("GET", f"/admin-events?{query}")
+            batch = self.api.call("GET", f"{path}?{query}")
             if not isinstance(batch, list):
-                raise LifecycleError("admin events: not a list")
+                raise LifecycleError(f"{path.strip('/')}: not a list")
             rows.extend(batch)
             if len(batch) < EVENT_PAGE:
-                break
-        return rows
+                return rows, False
+        return rows, True
+
+    def _events(self, since_ms: int) -> list[dict]:
+        """Admin and user events from `since_ms` (both share one read position). While a
+        stream holds more than one poll reads, events after its last row read wait for
+        the next poll, so the position never passes an event not read yet."""
+        since = ("dateFrom", str(since_ms))
+        admin = self._read(
+            "/admin-events",
+            [
+                *(("resourceTypes", t) for t in EVENT_RESOURCE_TYPES),
+                *(("operationTypes", o) for o in EVENT_OPERATION_TYPES),
+                since,
+            ],
+        )
+        users = self._read("/events", [*(("type", t) for t in USER_EVENT_TYPES), since])
+        limits = [
+            max((t for t in map(_event_time, rows) if t is not None), default=since_ms)
+            for rows, more in (admin, users)
+            if more
+        ]
+        events = admin[0] + [e for e in map(user_event, users[0]) if e is not None]
+        if limits:
+            events = [e for e in events if (_event_time(e) or 0) <= min(limits)]
+        return events
 
     def poll(self) -> None:
         with self.store.locked():
@@ -1374,9 +1481,9 @@ class Lifecycle:
         )
 
     def _handle(self, event: dict, when_ms: int) -> None:
-        """Act on one admin event; every identity change it stands for is one journal
-        entry, written after the revocation (a failure retries both, which repeat
-        harmlessly)."""
+        """Act on one event; every identity change of a person it stands for is one
+        journal entry, written after the revocation (a failure retries both, which
+        repeat harmlessly)."""
         action = classify(event)
         if action is None:
             return
@@ -1394,6 +1501,9 @@ class Lifecycle:
                     raise
                 kind = "account_delete"
             else:
+                if not isinstance(user, dict) or user.get("enabled") is not False:
+                    # Not (or no longer) disabled: a later deactivation is journaled anew.
+                    self._disabled(sub, False)
                 if not isinstance(user, dict):
                     return
                 if user.get("enabled") is True:
@@ -1408,16 +1518,72 @@ class Lifecycle:
                 if seen < when_ms:  # else the reconciliation revoked it after this event
                     self.revoke(sub, since, "account_disabled", correlation)
                     self._seen_disabled(sub, int(self.clock() * 1000))
-                self._journal("account_disable", sub, object_ref, correlation)
+                if not self._disabled(sub, None):
+                    self._journal("account_disable", sub, object_ref, correlation)
+                    self._disabled(sub, True)
                 return
         if kind == "account_delete":
             self._list(sub, since, "account_deleted")
+            self._journal(kind, sub, object_ref, correlation)
+            self._disabled(sub, False)
+            return
         auth = event.get("authDetails")
         actor = auth.get("userId") if isinstance(auth, dict) else None
         own = getattr(self.api, "actor_id", None)
         if kind == "session_revoke" and own is not None and actor == own:
             return  # the service's own logout, covered by the entry that caused it
+        sign_out = kind == "session_revoke" and event.get("resourceType") == USER_EVENT
+        if sign_out and self._same_sign_out(sub, when_ms):
+            return  # one more session of the same "sign out all devices"
+        if not self._person(sub, kind):
+            return
         self._journal(kind, sub, object_ref, correlation)
+        if sign_out:
+            self._sign_outs[sub] = when_ms
+
+    def _same_sign_out(self, sub: str, when_ms: int) -> bool:
+        """Whether a LOGOUT of the account console follows one of the same account within
+        SIGN_OUT_MERGE_MS (the window slides with every merged LOGOUT). Kept in memory
+        only: after a restart or for a parked retry a second entry is possible, which a
+        replay repeats harmlessly (sessions that are gone stay gone)."""
+        horizon = when_ms - SIGN_OUT_MERGE_MS
+        self._sign_outs = {s: t for s, t in self._sign_outs.items() if t >= horizon}
+        last = self._sign_outs.get(sub)
+        if last is None or when_ms < last:
+            return False
+        self._sign_outs[sub] = when_ms
+        return True
+
+    def _person(self, sub: str, kind: str) -> bool:
+        """Only persons are journaled: an account the service may not read (outside
+        papaia-persons, 403: service and admin accounts) writes no entry, nor does one
+        that is gone (404: its deletion is an entry of its own)."""
+        try:
+            self.api.call("GET", f"/users/{sub}")
+        except HttpError as exc:
+            if exc.status == 403:
+                _log(f"account {sub} is outside the group of persons; {kind} not journaled")
+                return False
+            if exc.status == 404:
+                return False
+            raise
+        return True
+
+    def _disabled(self, sub: str, value: bool | None) -> bool:
+        """Whether the journal already holds the deactivation of `sub` (value None), or
+        record that it does (True) or no longer does (False). An account that stays
+        disabled is revoked again on every change, but journaled once."""
+        with self.store.locked():
+            state = self.store.load()
+            known = sub in state["journal_disabled"]
+            if value is None or value == known:
+                return known
+            if value and len(state["journal_disabled"]) >= MAX_ENTRIES:
+                return known
+            rest = set(state["journal_disabled"]) - {sub}
+            state["journal_disabled"] = sorted(rest | ({sub} if value else set()))
+            self.store.save(state)
+        return value
 
     def _list(self, sub: str, since: int, reason: str) -> None:
         with self.store.locked():
