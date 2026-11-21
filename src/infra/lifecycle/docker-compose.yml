@@ -1,0 +1,143 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Account lifecycle · papaia-lifecycle
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OPTIONAL — profile `lifecycle` (docs/lifecycle.md). Needs the bundled Keycloak
+# (profile `keycloak`); the realm sync sets up the service account
+# svc-papaia-lifecycle while the profile is active.
+#
+# What it does: when an account of the papaia realm is deactivated or deleted, it
+# ends the person's sessions, removes every consent (offline sessions, delegations)
+# and puts the person on the signed revocation list, which modules read from the
+# volume papaia-security-state. The list is issued again every 15 s.
+#
+# Safety:
+#   - No port is published. The only network is papaia-lifecycle-net (internal),
+#     shared with keycloak alone.
+#   - Signs in with private_key_jwt; the key is mounted read-only from
+#     $PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle.
+#   - The signing key of the list lives in papaia-lifecycle-key, which backups
+#     leave out. Only this service writes papaia-security-state.
+#   - Runs as the user that owns the config dir, read-only, without capabilities.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+services:
+
+  # Hands the two named volumes to the unprivileged user of the service; runs before
+  # every start of papaia-lifecycle and must succeed again on volumes it handed over.
+  papaia-lifecycle-init:
+    image: python:3.12.16-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    restart: "no"
+    user: "0:0"
+    # The mode is set only while root still owns a folder (a fresh volume): after the
+    # chown, root would need CAP_FOWNER to change it, and the mode is already set.
+    # The chown itself is repeated on every run, so a changed UID/GID takes effect.
+    command:
+      - sh
+      - -c
+      - >-
+        for spec in /var/lib/papaia-lifecycle:0700 /var/lib/papaia-security-state:0755; do
+        dir=$${spec%:*}; mode=$${spec#*:};
+        if [ "$$(stat -c %u "$$dir")" = 0 ]; then chmod "$$mode" "$$dir" || exit 1; fi;
+        done &&
+        chown ${UID:-1000}:${GID:-1000} /var/lib/papaia-lifecycle /var/lib/papaia-security-state
+    volumes:
+      - type: volume
+        source: papaia-lifecycle-key
+        target: /var/lib/papaia-lifecycle
+      - type: volume
+        source: papaia-security-state
+        target: /var/lib/papaia-security-state
+    network_mode: none
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    labels:
+      de.fidonis.module: papaia-lifecycle
+      de.fidonis.role:   init
+    profiles: [lifecycle]
+
+  papaia-lifecycle:
+    # One standard-library Python file next to this one; the image brings Python
+    # and the openssl command line (Ed25519, ES256). Pinned by digest.
+    image: python:3.12.16-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    restart: unless-stopped
+    depends_on:
+      papaia-lifecycle-init:
+        condition: service_completed_successfully
+    command:
+      - python3
+      - -I
+      - /opt/papaia-lifecycle/lifecycle.py
+      - run
+      - --keycloak-url=https://keycloak:8443
+      - --ca-file=/etc/papaia-lifecycle/local-ca.crt
+      - --account-dir=/run/papaia-lifecycle/account
+      - --key-dir=/var/lib/papaia-lifecycle
+      - --state-dir=/var/lib/papaia-security-state
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ./lifecycle.py
+        target: /opt/papaia-lifecycle/lifecycle.py
+        read_only: true
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/certs/local-ca.crt
+        target: /etc/papaia-lifecycle/local-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      # The folder, not the file: a rotation replaces the key file atomically.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/security/service-accounts/svc-papaia-lifecycle
+        target: /run/papaia-lifecycle/account
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: papaia-lifecycle-key
+        target: /var/lib/papaia-lifecycle
+      - type: volume
+        source: papaia-security-state
+        target: /var/lib/papaia-security-state
+    # openssl reads messages and signatures from files.
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    read_only: true
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -I
+        - /opt/papaia-lifecycle/lifecycle.py
+        - health
+        - --key-dir=/var/lib/papaia-lifecycle
+        - --state-dir=/var/lib/papaia-security-state
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - papaia-lifecycle-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-lifecycle
+      de.fidonis.role:   lifecycle
+    profiles: [lifecycle]
+
+networks:
+  # Admin API of Keycloak and nothing else: no route out, no other service.
+  papaia-lifecycle-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  # Signing key and state of the service; never backed up (lib/backup.py).
+  papaia-lifecycle-key:
+  # The revocation list for the modules, which mount it read-only.
+  papaia-security-state:

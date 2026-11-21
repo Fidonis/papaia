@@ -55,6 +55,8 @@ services:
     command: start --import-realm
     networks:
       - papaia-net
+      # Shared with papaia-lifecycle alone (profile `lifecycle`); internal.
+      - papaia-lifecycle-net
     labels:
       de.fidonis.module: papaia-keycloak
       de.fidonis.role:   identity-provider

@@ -143,6 +143,11 @@ REGISTER_FORMAT = "papaia.names-register-snapshot/1"
 PAIRINGS_FORMAT = "papaia.pairings/1"
 
 SYNC_CLIENT = "svc-papaia-realm-sync"
+# Core accounts the realm sync keeps outside the module declarations: its own and the
+# one of papaia-lifecycle (lib/lifecycle_account.py). Keycloak's `admin-permissions`
+# client (admin permissions switched on for papaia-lifecycle) carries a service account
+# Keycloak needs for its authorization settings.
+CORE_ACCOUNTS = frozenset({SYNC_CLIENT, "svc-papaia-lifecycle", "admin-permissions"})
 SYNC_SECRET_KEY = "KC_REALM_SYNC_CLIENT_SECRET"
 # Measured against Keycloak 26.7.0: manage-clients creates clients and client scopes and
 # changes the realm's default scopes; creating realm roles, adding composites and mapping
@@ -2634,7 +2639,7 @@ class _Reconciler(_Actions):
         folder; another client loses its service account. `--check` reports both first.
         A registered legacy account of a module's own setup is named, not changed."""
         for client_id, client in sorted(clients.items()):
-            if client_id in self.plan.clients or client_id == SYNC_CLIENT:
+            if client_id in self.plan.clients or client_id in CORE_ACCOUNTS:
                 continue
             attributes = client.get("attributes") or {}
             if attributes.get(MANAGED) == "true" and attributes.get(KIND) == SERVICE_ACCOUNT:
@@ -3371,6 +3376,15 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             )
             changes += reconciler.run()
             skipped += reconciler.skipped
+            from . import lifecycle_account  # it imports this module
+
+            changes += lifecycle_account.align(
+                MasterAdmin(base_url, ctx, admin_password).call,
+                keystore(config_dir),
+                enabled=lifecycle_account.enabled(tree),
+                apply=not check,
+                audit=audit,
+            )
     except (RealmSyncError, sak.KeyFileError) as exc:
         print(f"Realm sync stopped: {exc}", file=sys.stderr, flush=True)
         return 1

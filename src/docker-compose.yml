@@ -14,6 +14,7 @@ include:
   - path: ./infra/nginx/docker-compose.yml
   - path: ./infra/smtp-relay/docker-compose.yml
   - path: ./infra/egress/docker-compose.yml
+  - path: ./infra/lifecycle/docker-compose.yml
 
   # Application Services
   - path: ./manager/docker-compose.yml

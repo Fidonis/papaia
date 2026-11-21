@@ -40,6 +40,7 @@ from . import (
     knowledge_map,
     localai_native,
     realm_hardening,
+    service_account_keys,
     smtp,
 )
 
@@ -235,6 +236,8 @@ def render(config_dir: Path, repo_root: Path) -> None:
     except egress.EgressError as exc:
         raise RenderError(str(exc)) from exc
 
+    ensure_lifecycle_key(config_dir)
+
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
     # installation's output stays byte-identical.
@@ -251,6 +254,23 @@ def render(config_dir: Path, repo_root: Path) -> None:
             raise RenderError(str(exc)) from exc
         for warning in warnings:
             logger.warning("%s", warning)
+
+
+LIFECYCLE_ACCOUNT = "svc-papaia-lifecycle"
+
+
+def ensure_lifecycle_key(config_dir: Path) -> None:
+    """With the `lifecycle` profile, the key pair of svc-papaia-lifecycle exists before
+    `up`: the container mounts its folder and Compose must not create it. The realm sync
+    registers the public key after the start."""
+    if "lifecycle" not in _active_profiles(config_dir):
+        return
+    keys = service_account_keys.KeyStore(config_dir / "security" / "service-accounts")
+    try:
+        if keys.public_jwk(LIFECYCLE_ACCOUNT) is None:
+            keys.generate(LIFECYCLE_ACCOUNT)
+    except service_account_keys.KeyFileError as exc:
+        raise RenderError(str(exc)) from exc
 
 
 # Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under

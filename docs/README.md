@@ -14,6 +14,8 @@ Welcome to the papAIa documentation.
   the distributed mode on two machines
 - [The single exit](./egress.md) — papaia-egress: allow lists per add-on, protected hosts,
   corporate proxy
+- [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on
+  deactivation, the signed revocation list, its service account
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
   only
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions

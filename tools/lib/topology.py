@@ -216,6 +216,13 @@ CATALOGUE: dict[str, ServiceSpec] = {
             start_group=0,
         ),
         ServiceSpec(
+            "lifecycle",
+            "papaia-lifecycle (account revocation)",
+            ("lifecycle",),
+            (),
+            start_group=1,
+        ),
+        ServiceSpec(
             "manager",
             "papaia-manager",
             ("manager",),
@@ -236,8 +243,9 @@ CONTROLLER_ONLY = ("manager", "rag", "knowledge-map", "egress")
 # The bundled reverse proxy. Its profile, not the `nginx` service, says whether it runs.
 PROXY_PROFILE = "nginx"
 
-# Placed together: web search is a LibreChat feature and talks to nothing else.
-COLOCATED = (("websearch", "librechat"),)
+# Placed together: web search is a LibreChat feature and talks to nothing else;
+# papaia-lifecycle reaches Keycloak only over an internal network of that node.
+COLOCATED = (("websearch", "librechat"), ("lifecycle", "keycloak"))
 
 # The core overrides `setup` writes into $PAPAIA_CONFIG_DIR/overrides. Everything else in
 # that directory belongs to an add-on.

@@ -134,6 +134,12 @@ def _top_level_volumes(compose_path: Path) -> list[str]:
     return list((doc.get("volumes") or {}).keys())
 
 
+# Core volumes a backup never contains: the signing key of the revocation list
+# (papaia-lifecycle). A restored installation makes a new key and a new list, so an old
+# key cannot sign lists again after a restore (security 1.12 Nr. 3, RE-05).
+EXCLUDED_CORE_VOLUMES = frozenset({"papaia-lifecycle-key"})
+
+
 def resolve_core_volumes(repo_root: Path) -> list[str]:
     """Every named volume key declared by the core stack, walking the root
     compose's `include:` list. Mirrors compat.resolve_core_services.
@@ -147,7 +153,7 @@ def resolve_core_volumes(repo_root: Path) -> list[str]:
     volumes: list[str] = []
     for compose_path in compat.compose_files(root_compose):
         for key in _top_level_volumes(compose_path):
-            if key not in volumes:
+            if key not in volumes and key not in EXCLUDED_CORE_VOLUMES:
                 volumes.append(key)
     return volumes
 
@@ -488,6 +494,10 @@ def build_plan(
     )
     owners = resolve_core_volume_owners(repo_root)
     prefix = f"{core_project}_" if core_project else ""
+    # The project label would bring an excluded volume back in.
+    core_names = [
+        n for n in core_names if n.removeprefix(prefix) not in EXCLUDED_CORE_VOLUMES
+    ]
     for name in core_names:
         # A volume that carries the project label but is no longer declared has
         # no owner record. It keeps its data and stays restorable by name; it is

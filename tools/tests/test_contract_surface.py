@@ -172,6 +172,10 @@ ATTACHABLE_SERVICES = {
     # The single exit (always on). An add-on reaches it through `networks.egress`,
     # which joins it to the add-on's egress network; see lib/egress.py.
     "papaia-egress": ["egress"],
+    # Account revocation (optional). Add-ons read its list from the volume
+    # papaia-security-state; they do not attach to the service itself.
+    "papaia-lifecycle": ["lifecycle"],
+    "papaia-lifecycle-init": ["lifecycle"],
     "qdrant": ["rag"],
     "qdrant-ingest": ["rag"],
     "qdrant-ingest-tika": ["rag"],

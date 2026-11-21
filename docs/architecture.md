@@ -810,6 +810,12 @@ Measured against Keycloak 26.7.0: the old key is refused as soon as it is no lon
 registered. Every change is one `papaia.audit/1` row (`service_account_rotated` for key
 changes); the module reads its key file again after a rotation.
 
+The core's own account `svc-papaia-lifecycle` (profile `lifecycle`) is not declared in
+`service_accounts[]`: the realm sync keeps it in `lib/lifecycle_account.py`, with
+`view-events` and an admin permission on the group `papaia-persons` instead of
+`manage-users`; the realm sync leaves it and Keycloak's `admin-permissions` client out of
+the undeclared accounts. See [lifecycle.md](lifecycle.md).
+
 ### Seam 3 — LibreChat-MCP
 
 The `mcpServers` and `allowedDomains` fragment from `integration/librechat/`
