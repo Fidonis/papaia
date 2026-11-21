@@ -25,6 +25,8 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
+
 from . import (
     backup,
     cli_addon,
@@ -38,6 +40,7 @@ from . import (
     envtree,
     gen_override,
     gpu_detect,
+    images,
     keycloak_role_sync,
     librechat_history,
     localai_native,
@@ -76,8 +79,29 @@ def _apply_voice_gpu_override(config_dir: Path, repo_root: Path, tree: dict) -> 
     # helper deletes the override.
     active = "voice" in {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",")}
     gen_override.generate_voice_gpu_override(
-        config_dir, repo_root, root.get("VOICE_TTS_IMAGE_VARIANT", "") if active else ""
+        config_dir, repo_root, root.get("VOICE_TTS_IMAGE_VARIANT", "") if active else "",
+        mirror=_image_mirror(tree),
     )
+
+
+def _image_mirror(tree: dict) -> str:
+    """PAPAIA_IMAGE_MIRROR of the tree, validated (images.ImageError otherwise)."""
+    return images.validate_mirror(tree.get("", {}).get(images.MIRROR_VAR, "").strip())
+
+
+def _apply_image_overrides(config_dir: Path, repo_root: Path, tree: dict) -> str | None:
+    """The accelerator overrides and then the mirror override; the error text of an
+    invalid mirror setting, else None."""
+    try:
+        mirror = _image_mirror(tree)
+    except images.ImageError as exc:
+        return str(exc)
+    gen_override.generate_localai_gpu_override(
+        config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", ""), mirror=mirror
+    )
+    _apply_voice_gpu_override(config_dir, repo_root, tree)
+    gen_override.generate_image_mirror_override(config_dir, repo_root, mirror)
+    return None
 
 
 def cmd_defaults(args: argparse.Namespace) -> int:
@@ -344,9 +368,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
     gen_override.generate_addon_join_overrides(config_dir, repo_root)
-    gen_override.generate_localai_gpu_override(
-        config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
-    )
+    image_problem = _apply_image_overrides(config_dir, repo_root, tree)
+    if image_problem:
+        print(f"ERROR: {image_problem}", file=sys.stderr)
+        return 3
     runtime_problem = _localai_runtime_override(config_dir)
     if runtime_problem:
         print(f"ERROR: {runtime_problem}", file=sys.stderr)
@@ -365,7 +390,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print(f"Seeded the LocalAI model list for the native runtime: {seeded}")
             # The render above ran before the list existed.
             render_core.render(config_dir, repo_root)
-    _apply_voice_gpu_override(config_dir, repo_root, tree)
 
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
@@ -700,14 +724,14 @@ def cmd_render(args: argparse.Namespace) -> int:
     gen_override.generate_addon_join_overrides(config_dir, repo_root)
     # Also regenerated here, not just in cmd_setup: `papaia-ctl start` renders
     # before bringing the stack up, so a stale override would otherwise survive
-    # both an upgrade and a variant change.
-    gen_override.generate_localai_gpu_override(
-        config_dir, repo_root, tree.get("", {}).get("LOCALAI_IMAGE_VARIANT", "")
-    )
+    # an upgrade, a variant change and a change of the image mirror.
+    image_problem = _apply_image_overrides(config_dir, repo_root, tree)
+    if image_problem:
+        print(f"ERROR: {image_problem}", file=sys.stderr)
+        return 3
     runtime_problem = _localai_runtime_override(config_dir)
     if runtime_problem:
         print(f"WARNING: {runtime_problem}", file=sys.stderr)
-    _apply_voice_gpu_override(config_dir, repo_root, tree)
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
     print("Rendered.")
@@ -883,6 +907,255 @@ def cmd_suite_verify(args: argparse.Namespace) -> int:
     for repo in summary["repos"]:
         print(f"  {repo['name']:<24} {repo['role']:<9} {repo['version']:<12} {repo['commit']}")
     print(f"  containers: {doc['totals']['containers']}, images: {doc['totals']['images']}")
+    return 0
+
+
+_INSECURE_BANNER = """\
+==========================================================================
+ INSECURE: --insecure-images is set for this '{command}' only.
+ {count} image(s) are started although they are not verified against the
+ signed bill of materials: neither digest nor signature is checked. This is
+ recorded in the audit journal. The next command checks again.
+=========================================================================="""
+
+
+_IMAGE_COMMANDS = ("start", "upgrade", "addon-install", "addon-start", "addon-upgrade",
+                   "addon-rollback", "restore")
+
+
+def _read_image_lines(path: str) -> list[str]:
+    raw = suite._read_limited(Path(path), 64 * 1024, "image list")
+    return [line.strip() for line in raw.decode("utf-8", "replace").splitlines()
+            if line.strip()]
+
+
+def _image_groups(args: argparse.Namespace, repo_root: Path) -> list[tuple[str | None, list[str]]]:
+    """Every image to check, by owner: (None, the core's: the pins of the tree with
+    --from-checkout and the lines of --images-file) and (name, the add-on's) for each
+    --addon-images=NAME=FILE. Without duplicates inside a group. Raises ValueError or
+    images.ImageError on a bad source."""
+    core: list[str] = []
+    if args.from_checkout:
+        # Every pin of the tree: all profiles and accelerator variants.
+        core += [ref for _, ref in images.compose_image_refs(repo_root)]
+    if args.images_file is not None:
+        core += _read_image_lines(args.images_file)
+    groups: list[tuple[str | None, list[str]]] = []
+    if core:
+        groups.append((None, list(dict.fromkeys(core))))
+    seen: set[str] = set()
+    for spec in args.addon_images or []:
+        name, sep, path = spec.partition("=")
+        if not sep or not path or not images.ADDON_NAME_RE.match(name) or name in seen:
+            raise images.ImageError("--addon-images: NAME=FILE with a valid add-on name, "
+                                    "once per add-on, expected")
+        seen.add(name)
+        groups.append((name, list(dict.fromkeys(_read_image_lines(path)))))
+    return groups
+
+
+def _print_refusal(problems: list[images.Problem], total: int) -> None:
+    print(f"ERROR: {len(problems)} of {total} image(s) may not be started:", file=sys.stderr)
+    for problem in problems:
+        print(f"  {problem.ref}: {problem.reason}", file=sys.stderr)
+    if any(problem.transient for problem in problems):
+        print("The registry could not be asked (no connection, a rate limit or a server "
+              "error). Try again later; on Docker Hub, 'docker login' raises the limit.",
+              file=sys.stderr)
+
+
+def _write_pending(path: Path, refs: list[str]) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, ("\n".join(refs) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def _addon_unlisted(args: argparse.Namespace, problems: list[images.Problem],
+                    mirror: str) -> int:
+    """addon install with images from repositories the bill of materials does not list:
+    shown with what the add-on would bring and refused, or, with
+    --accept-unlisted-images, handed to --pending-file. Nothing is accepted here:
+    addon.sh records the acceptance with `image-accept` once the add-on is
+    registered, so a failed install leaves nothing accepted. Exit code."""
+    addon_path = Path(args.addon_path or ".")
+    manifest, error = deployment.load_addon_manifest(addon_path)
+    if manifest is None or not isinstance(manifest, dict):
+        print(f"ERROR: {error or 'add-on manifest is not a mapping'}", file=sys.stderr)
+        return 2
+    # Recorded under the name the bill of materials would list, not the mirror's.
+    refs = [problem.ref.removeprefix(mirror) if mirror else problem.ref
+            for problem in problems]
+    if not args.accept_unlisted_images:
+        print(f"ERROR: add-on {args.addon} uses image(s) outside the signed bill of "
+              "materials:", file=sys.stderr)
+        for line in images.addon_disclosure(args.addon, addon_path, manifest, refs):
+            print(line, file=sys.stderr)
+        print("Nothing was installed. If you trust this add-on, re-run 'papaia-ctl addon "
+              "install' with --accept-unlisted-images; exactly these digests are then "
+              "accepted for this add-on and the decision is audited.", file=sys.stderr)
+        return 2
+    for line in images.addon_disclosure(args.addon, addon_path, manifest, refs):
+        print(line)
+    _write_pending(Path(args.pending_file), refs)
+    print(f"{len(refs)} image(s) of add-on {args.addon} outside the bill of materials are "
+          "accepted once the add-on is registered.")
+    return 0
+
+
+def cmd_image_verify(args: argparse.Namespace) -> int:
+    """Check the images compose is about to start: listed with the same digest in the
+    signed bill of materials of this core, and signed with its key. Exit 0 when all
+    may start, 2 otherwise. `--insecure-images` skips the check for this one call,
+    with a banner and one audit row; nothing of it is stored.
+
+    The core's images come from --from-checkout and --images-file, each add-on's from
+    its own --addon-images=NAME=FILE: an image accepted outside the bill of materials
+    passes only for the add-on it was accepted for (images.load_accepted).
+
+    `--anchor-fingerprint` is the release key of the installed core when this tree is
+    the target of an upgrade (images.load_trusted_bom). At `addon install`, images from
+    repositories the bill of materials does not list at all are shown with what the
+    add-on brings and refused, unless `--accept-unlisted-images` hands exactly those
+    digests to `--pending-file` for `image-accept`."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    if args.images_file is None and not args.from_checkout and not args.addon_images:
+        print("ERROR: pass --images-file, --from-checkout or --addon-images", file=sys.stderr)
+        return 2
+    if (args.command == "addon-install") != bool(args.addon and args.addon_path):
+        print("ERROR: --addon and --addon-path go with --command=addon-install, and only "
+              "there", file=sys.stderr)
+        return 2
+    if args.accept_unlisted_images and args.command != "addon-install":
+        print("ERROR: --accept-unlisted-images is for addon install", file=sys.stderr)
+        return 2
+    if args.accept_unlisted_images != bool(args.pending_file):
+        print("ERROR: --accept-unlisted-images and --pending-file go together",
+              file=sys.stderr)
+        return 2
+    if args.addon and not images.ADDON_NAME_RE.match(args.addon):
+        print("ERROR: invalid add-on name", file=sys.stderr)
+        return 2
+    try:
+        correlation = images.correlation_id(args.correlation_id)
+        groups = _image_groups(args, repo_root)
+    except images.ImageError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except (suite.SuiteError, OSError, yaml.YAMLError) as exc:
+        print(f"ERROR: image list not readable: {exc}", file=sys.stderr)
+        return 2
+    total = sum(len(refs) for _, refs in groups)
+    if total > images.MAX_IMAGES:
+        print(f"ERROR: more than {images.MAX_IMAGES} images to check", file=sys.stderr)
+        return 2
+
+    if args.insecure_images:
+        print(_INSECURE_BANNER.format(command=args.command, count=total), file=sys.stderr)
+        row = images.append_audit(config_dir, images.audit_row(args.command, total, correlation))
+        print(f"Audit: {row} (correlation id {correlation})", file=sys.stderr)
+        return 0
+
+    problems: list[images.Problem] = []
+    owners: list[str | None] = []
+    try:
+        mirror, signatures = images.settings(common.parse_env_file(config_dir / ".env"),
+                                             repo_root)
+        bom = images.load_trusted_bom(repo_root, anchor=args.anchor_fingerprint)
+        cache = images.SignatureCache(config_dir / images.CACHE_PATH)
+        registry = images.Registry()
+        for owner, refs in groups:
+            # The core may use no acceptance; an add-on only its own.
+            accepted = images.load_accepted(config_dir, owner) if owner else frozenset()
+            found = images.verify_images(
+                images.mirrored(refs, mirror), bom, registry=registry, mirror=mirror,
+                signatures=signatures, cache=cache, accepted=accepted,
+            )
+            problems += found
+            owners += [owner] * len(found)
+        cache.save()
+    except images.ImageError as exc:
+        print(f"ERROR: image check: {exc}", file=sys.stderr)
+        print(f"Nothing was started. To start anyway for this one command, re-run "
+              f"'{_retry_hint(args.command)}' with --insecure-images.", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"ERROR: image check: {exc}", file=sys.stderr)
+        return 2
+    if (args.command == "addon-install" and problems
+            and all(p.unlisted for p in problems)
+            and all(owner == args.addon for owner in owners)):
+        return _addon_unlisted(args, problems, mirror)
+    if problems:
+        _print_refusal(problems, total)
+        print(f"Nothing was started. To start anyway for this one command, re-run "
+              f"'{_retry_hint(args.command)}' with --insecure-images.", file=sys.stderr)
+        return 2
+    print(f"{total} image(s) verified against the bill of materials of suite "
+          f"{bom['suite']} (digest and signature).")
+    return 0
+
+
+def _retry_hint(command: str) -> str:
+    """The papaia-ctl command an operator re-runs for an image check of `command`."""
+    return "papaia-ctl " + {
+        "addon-install": "addon install", "addon-start": "addon start",
+        "addon-upgrade": "addon upgrade", "addon-rollback": "addon rollback",
+    }.get(command, command)
+
+
+def cmd_image_accept(args: argparse.Namespace) -> int:
+    """Record the add-on images `addon install` showed and the operator accepted, once
+    the add-on is registered (`--pending-file`), with one audit row; or, with
+    `--forget`, drop what was accepted for an add-on that is uninstalled. The pending
+    images are checked again against the bill of materials: only pinned images from
+    repositories it does not list are recorded."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    if not images.ADDON_NAME_RE.match(args.addon):
+        print("ERROR: invalid add-on name", file=sys.stderr)
+        return 2
+    if args.forget == bool(args.pending_file):
+        print("ERROR: pass --pending-file or --forget", file=sys.stderr)
+        return 2
+    try:
+        correlation = images.correlation_id(args.correlation_id)
+        if args.forget:
+            dropped = images.forget_accepted(config_dir, args.addon)
+            if dropped:
+                row = images.append_audit(
+                    config_dir, images.forget_row(args.addon, dropped, correlation))
+                print(f"Dropped {len(dropped)} accepted image(s) of add-on {args.addon}. "
+                      f"Audit: {row}")
+            return 0
+        refs = _read_image_lines(args.pending_file)
+        for ref in refs:
+            images.parse_ref(ref)
+        bom = images.load_trusted_bom(repo_root)
+        images.accept_images(config_dir, args.addon, refs, bom)
+    except (images.ImageError, suite.SuiteError, OSError) as exc:
+        print(f"ERROR: image accept: {exc}", file=sys.stderr)
+        return 2
+    row = images.append_audit(config_dir, images.acceptance_row(args.addon, refs, correlation))
+    print(f"Accepted {len(refs)} image(s) of add-on {args.addon} outside the bill of "
+          f"materials. Audit: {row}")
+    return 0
+
+
+def cmd_image_trust_anchor(args: argparse.Namespace) -> int:
+    """Print the fingerprint of the release key pinned in this checkout; exit 2
+    without one. `upgrade` carries it into the check of the target."""
+    try:
+        print(images.anchor_fingerprint(Path(args.repo_root)))
+    except images.ImageError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_new_correlation_id(args: argparse.Namespace) -> int:
+    """Print a new correlation id for the audit rows of one operator action."""
+    print(images.correlation_id(None))
     return 0
 
 
@@ -1768,6 +2041,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_suite_verify.add_argument("--scope", choices=suite.SCOPES, default="delivery")
     p_suite_verify.add_argument("--json", action="store_true")
     p_suite_verify.set_defaults(func=cmd_suite_verify)
+
+    p_image_verify = sub.add_parser("image-verify")
+    p_image_verify.add_argument("--images-file", default=None)
+    p_image_verify.add_argument("--from-checkout", action="store_true")
+    p_image_verify.add_argument("--command", choices=_IMAGE_COMMANDS, required=True)
+    p_image_verify.add_argument("--insecure-images", action="store_true")
+    p_image_verify.add_argument("--anchor-fingerprint", default=None)
+    p_image_verify.add_argument("--correlation-id", default=None)
+    p_image_verify.add_argument("--addon", default=None)
+    p_image_verify.add_argument("--addon-path", default=None)
+    p_image_verify.add_argument("--accept-unlisted-images", action="store_true")
+    p_image_verify.add_argument("--pending-file", default=None)
+    p_image_verify.add_argument("--addon-images", action="append", default=None)
+    p_image_verify.set_defaults(func=cmd_image_verify)
+
+    p_image_accept = sub.add_parser("image-accept")
+    p_image_accept.add_argument("--addon", required=True)
+    p_image_accept.add_argument("--pending-file", default=None)
+    p_image_accept.add_argument("--forget", action="store_true")
+    p_image_accept.add_argument("--correlation-id", default=None)
+    p_image_accept.set_defaults(func=cmd_image_accept)
+
+    p_image_anchor = sub.add_parser("image-trust-anchor")
+    p_image_anchor.set_defaults(func=cmd_image_trust_anchor)
+
+    p_correlation = sub.add_parser("new-correlation-id")
+    p_correlation.set_defaults(func=cmd_new_correlation_id)
 
     p_addon_components = sub.add_parser("addon-components")
     p_addon_components.add_argument("--name", default=None)

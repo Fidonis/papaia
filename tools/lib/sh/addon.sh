@@ -11,7 +11,7 @@ _addon_path() {
 
 cmd_addon_install() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" addon_path="" addon_version="" force=0
-    local node=""
+    local node="" insecure_images=0 accept_unlisted=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
@@ -19,6 +19,8 @@ cmd_addon_install() {
             --path=*) addon_path="${1#*=}" ;;
             --version=*) addon_version="${1#*=}" ;;
             --force) force=1 ;;
+            --insecure-images) insecure_images=1 ;;
+            --accept-unlisted-images) accept_unlisted=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -31,12 +33,46 @@ cmd_addon_install() {
     fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    # One correlation id for the check, the registration and the acceptance.
+    IMAGES_CORRELATION_ID="$(py_cli new-correlation-id)"
+    # The add-on's images before it is registered: listed with digest and signature
+    # in the bill of materials, or shown and, with --accept-unlisted-images, kept in a
+    # pending file. Without --path the registered directory; an add-on that is neither
+    # is refused by addon-install below, before anything is written.
+    local image_path="$addon_path" pending=""
+    [ -z "$image_path" ] && image_path="$(_addon_path "$addon_name" 2>/dev/null || true)"
+    if [ -n "$image_path" ]; then
+        local -a image_flags=(--addon="$addon_name" --addon-path="$image_path")
+        if [ "$accept_unlisted" -eq 1 ]; then
+            pending="$(mktemp)"
+            _ADDON_TMPFILES+=("$pending")
+            trap _addon_cleanup EXIT INT TERM
+            image_flags+=(--accept-unlisted-images --pending-file="$pending")
+        fi
+        _verify_addon_images addon-install "$insecure_images" "$addon_name" "$image_path" \
+            ${image_flags[@]+"${image_flags[@]}"}
+    fi
     local -a extra=()
     [ -n "$addon_path" ]    && extra+=(--path="$addon_path")
     [ -n "$addon_version" ] && extra+=(--version="$addon_version")
     [ "$force" -eq 1 ]      && extra+=(--force)
     [ -n "$node" ]          && extra+=(--node="$node")
-    py_cli addon-install --name="$addon_name" ${extra[@]+"${extra[@]}"}
+    local rc=0
+    py_cli addon-install --name="$addon_name" ${extra[@]+"${extra[@]}"} || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ -s "$pending" ] && error "The add-on was not installed; no image was accepted."
+        exit "$rc"
+    fi
+    # Only now that the add-on is registered: the images the operator accepted, recorded
+    # and audited (checked once more against the bill of materials).
+    if [ -n "$pending" ] && [ -s "$pending" ]; then
+        if ! py_cli image-accept --addon="$addon_name" --pending-file="$pending" \
+                --correlation-id="$IMAGES_CORRELATION_ID"; then
+            error "The add-on is registered, but its images were not accepted; 'addon start'"
+            error "refuses them. Re-run 'papaia-ctl addon install $addon_name --accept-unlisted-images'."
+            exit 2
+        fi
+    fi
     success "addon install complete: $addon_name"
 }
 
@@ -84,6 +120,20 @@ _addon_compose() {
         _addon_compose_by_name "$verb" "$addon_name" "$addon_path" ${extra[@]+"${extra[@]}"}
         return
     fi
+    _addon_compose_files "$verb" "$addon_name" "$addon_path" ${extra[@]+"${extra[@]}"}
+}
+
+# `docker compose` for one add-on with its files, env files and project name on this
+# host (the body of _addon_compose). $1 verb, $2 addon_name, $3 addon_path, rest = args.
+_addon_compose_files() {
+    local verb="$1" addon_name="$2" addon_path="$3"; shift 3
+    _addon_compose_with_env "$verb" "$addon_name" "$addon_path" "$addon_path/.env" "$@"
+}
+
+# The same with the add-on env file $4 in place of the checkout's .env.
+_addon_compose_with_env() {
+    local verb="$1" addon_name="$2" addon_path="$3" addon_env="$4"; shift 4
+    local -a extra=("$@")
     local -a compose_files=(-f "$addon_path/docker-compose.yml")
     if [ -d "$CONFIG_DIR/overrides/addons" ]; then
         local f
@@ -94,7 +144,6 @@ _addon_compose() {
     local -a env_files=()
     local root_env="$REPO_ROOT/src/.env"
     [ -f "$root_env" ] && env_files+=(--env-file "$root_env")
-    local addon_env="$addon_path/.env"
     [ -f "$addon_env" ] && env_files+=(--env-file "$addon_env")
     # Pin the compose project name to the addon directory basename. Without this,
     # the root .env passed above carries COMPOSE_PROJECT_NAME=<core>, which would
@@ -140,6 +189,52 @@ _addon_compose_by_name() {
         unset COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES COMPOSE_ENV_FILES COMPOSE_PATH_SEPARATOR
         docker compose -p "$project" "$verb" "$@"
     )
+}
+
+# The add-on env `up` interpolates with: the bundle .env of the configuration, which
+# `start` (lib.addons.materialize_addon_env) and a node (lib/node_shell.py) copy over
+# the checkout's before `up`; the checkout's while the add-on has no bundle .env.
+_addon_env_for_up() {
+    local addon_name="$1" addon_path="$2"
+    local bundle_env="$CONFIG_DIR/addons/$addon_name/.env"
+    if [ -f "$bundle_env" ]; then
+        printf '%s\n' "$bundle_env"
+    else
+        printf '%s\n' "$addon_path/.env"
+    fi
+}
+
+# Append the images the add-on $1 at $2 starts to the list file $3, resolved by compose
+# with the same files and env files as `up`, the env being the one `up` will see (see
+# _addon_env_for_up). Read on this host also in a distributed installation: only the
+# files are needed, not the node.
+_addon_image_list() {
+    local addon_name="$1" addon_path="$2" out="$3" addon_env
+    if [ ! -f "$addon_path/docker-compose.yml" ]; then
+        error "Add-on $addon_name: $addon_path/docker-compose.yml not found; its images cannot be checked."
+        exit 2
+    fi
+    addon_env="$(_addon_env_for_up "$addon_name" "$addon_path")"
+    if ! _addon_compose_with_env config "$addon_name" "$addon_path" "$addon_env" \
+            --images >> "$out"; then
+        error "Could not list the images of add-on $addon_name. Nothing was started."
+        exit 2
+    fi
+}
+
+# Check the images of one add-on before it is registered or started (lib/images.py).
+# $1 command, $2 1 for --insecure-images, $3 addon_name, $4 addon_path,
+# rest = extra image-verify flags
+_verify_addon_images() {
+    local command="$1" insecure="$2" addon_name="$3" addon_path="$4"
+    shift 4
+    local list verified=0
+    list="$(mktemp)"
+    ( _addon_image_list "$addon_name" "$addon_path" "$list" &&
+        _verify_images "$command" "$REPO_ROOT" "" 0 "$insecure" \
+            --addon-images="$addon_name=$list" "$@" ) || verified=$?
+    rm -f "$list"
+    [ "$verified" -eq 0 ] || exit 2
 }
 
 _addon_compose_up() {
@@ -209,11 +304,12 @@ _egress_attach() {
 }
 
 cmd_addon_start() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" force=0
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" force=0 insecure_images=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --force) force=1 ;;
+            --insecure-images) insecure_images=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
             *) addon_name="$1" ;;
@@ -234,6 +330,7 @@ cmd_addon_start() {
     py_cli addon-start --name="$addon_name" ${extra[@]+"${extra[@]}"}
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
+    _verify_addon_images addon-start "$insecure_images" "$addon_name" "$addon_path"
     info "Starting addon $addon_name from $addon_path"
     _addon_compose_up "$addon_name" "$addon_path"
     _egress_attach "$addon_name"
@@ -453,9 +550,14 @@ _addon_backup() {
 
 # Recreate an add-on's containers from the directory it is now registered at.
 # --remove-orphans drops the services a newer version no longer has.
+# $1 addon name, $2 command for the image check (addon-upgrade, addon-rollback),
+# $3 1 for --insecure-images
 _addon_recreate() {
-    local addon_name="$1" addon_path
+    local addon_name="$1" command="${2:-addon-upgrade}" insecure="${3:-0}" addon_path
     addon_path="$(_addon_path "$addon_name")"
+    # The images of the version it now points at, before any of them starts; a refusal
+    # is a failed recreate, reported with the way back like any other.
+    ( _verify_addon_images "$command" "$insecure" "$addon_name" "$addon_path" ) || return 2
     info "Recreating addon $addon_name from $addon_path..."
     local up_flags=(-d --remove-orphans)
     if _pull_quietly; then
@@ -470,10 +572,11 @@ _addon_recreate() {
 # restore point is taken or a file is written.
 cmd_addon_upgrade() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" new_path="" answers_file=""
-    local dry_run=0 json=0 no_backup=0 no_restart=0 force=0 assume_yes=0
+    local dry_run=0 json=0 no_backup=0 no_restart=0 force=0 assume_yes=0 insecure_images=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --insecure-images) insecure_images=1 ;;
             --path=*) new_path="${1#*=}" ;;
             --answers-file=*) answers_file="${1#*=}" ;;
             --dry-run) dry_run=1 ;;
@@ -489,7 +592,7 @@ cmd_addon_upgrade() {
         shift
     done
     if [ -z "$addon_name" ] || [ -z "$new_path" ]; then
-        error "Usage: papaia-ctl addon upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart] [--answers-file=FILE] [--force] [-y]"
+        error "Usage: papaia-ctl addon upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart] [--answers-file=FILE] [--force] [--insecure-images] [-y]"
         exit 2
     fi
     if [ "$json" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
@@ -552,7 +655,7 @@ cmd_addon_upgrade() {
     py_cli addon-upgrade-apply ${target[@]+"${target[@]}"} ${apply_extra[@]+"${apply_extra[@]}"}
 
     if [ "$was_running" -eq 1 ]; then
-        if ! _addon_recreate "$addon_name"; then
+        if ! _addon_recreate "$addon_name" addon-upgrade "$insecure_images"; then
             error "The containers of $addon_name could not be recreated from the new version."
             error "Nothing was rolled back. To go back to the old version: papaia-ctl addon rollback $addon_name"
             exit 3
@@ -572,10 +675,11 @@ cmd_addon_upgrade() {
 # configuration directory).
 cmd_addon_rollback() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name=""
-    local restore_data=0 no_restart=0 force=0 assume_yes=0
+    local restore_data=0 no_restart=0 force=0 assume_yes=0 insecure_images=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --insecure-images) insecure_images=1 ;;
             --restore-data) restore_data=1 ;;
             --no-restart) no_restart=1 ;;
             --force) force=1 ;;
@@ -587,7 +691,7 @@ cmd_addon_rollback() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon rollback <name> [--restore-data] [--no-restart] [--force] [-y]"
+        error "Usage: papaia-ctl addon rollback <name> [--restore-data] [--no-restart] [--force] [--insecure-images] [-y]"
         exit 2
     fi
     if [ "$restore_data" -eq 1 ] && [ "$no_restart" -eq 1 ]; then
@@ -651,10 +755,12 @@ cmd_addon_rollback() {
     if [ "$restore_data" -eq 1 ]; then
         # Brings the add-on down, restores its volumes and starts it again from
         # the directory it is registered at now.
-        cmd_restore_scoped --only="addon:$addon_name" --restore-point="$restore_point" \
-            --config-dir="$CONFIG_DIR" -y
+        local -a restore_flags=(--only="addon:$addon_name" --restore-point="$restore_point"
+            --config-dir="$CONFIG_DIR" -y)
+        [ "$insecure_images" -eq 1 ] && restore_flags+=(--insecure-images)
+        cmd_restore_scoped ${restore_flags[@]+"${restore_flags[@]}"}
     elif [ "$was_running" -eq 1 ]; then
-        if ! _addon_recreate "$addon_name"; then
+        if ! _addon_recreate "$addon_name" addon-rollback "$insecure_images"; then
             error "The containers of $addon_name could not be recreated from the old version."
             exit 3
         fi
@@ -708,5 +814,12 @@ cmd_addon_uninstall() {
         _addon_compose down "$addon_name" "$addon_path"
     fi
     py_cli addon-uninstall --name="$addon_name"
+    # What was accepted for it outside the bill of materials goes with it (audited). The
+    # add-on is gone by now, so a file that cannot be updated is reported, not a failure.
+    if ! py_cli image-accept --addon="$addon_name" --forget; then
+        warn "Addon $addon_name is uninstalled, but its accepted images could not be removed from"
+        warn "$CONFIG_DIR/trust/accepted-images.json. Repair or remove the file; an acceptance"
+        warn "left in it applies only if an add-on named $addon_name is installed again."
+    fi
     success "addon uninstall complete: $addon_name"
 }

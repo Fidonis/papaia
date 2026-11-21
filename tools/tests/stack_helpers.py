@@ -92,6 +92,7 @@ class FakeDocker:
         tools: dict[str, CommandResult] | None = None,
         exec_failure: CommandResult | None = None,
         df: CommandResult | None = None,
+        running_images: dict[str, str] | None = None,
     ):
         self.ps_result = ps_result or CommandResult(0, "\n".join(ps or []) + "\n", "")
         self.exec_failure = exec_failure
@@ -105,6 +106,9 @@ class FakeDocker:
         self.runtimes = runtimes or CommandResult(0, RUNTIMES_RUNC_ONLY + "\n", "")
         self.tools = {"timedatectl": CommandResult(0, "yes\n", "")}
         self.tools.update(tools or {})
+        # Running container -> image reference, for doctor's image_signatures; none
+        # by default, so that check passes without a bill of materials.
+        self.running_images = running_images or {}
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, timeout):
@@ -112,6 +116,13 @@ class FakeDocker:
         self.calls.append(cmd)
         if cmd[:3] == ["docker", "ps", "-a"]:
             return self.ps_result
+        if cmd[:3] == ["docker", "ps", "--filter"]:
+            return CommandResult(0, "".join(f"{n}\n" for n in self.running_images), "")
+        if cmd[:2] == ["docker", "inspect"] and any("{{.Config.Image}}" in c for c in cmd):
+            names = [n for n in cmd if n in self.running_images]
+            return CommandResult(
+                0, "".join(f"/{n}\t{self.running_images[n]}\n" for n in names), ""
+            )
         if cmd[:2] == ["docker", "inspect"]:
             names = [n for n in cmd if n in self.policies]
             return CommandResult(0, "".join(f"/{n}\t{self.policies[n]}\n" for n in names), "")

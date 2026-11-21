@@ -2,12 +2,24 @@
 # papAIa — LocalAI · Local LLM Hosting
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Accelerator builds of the same LocalAI release as the CPU pin below, one per
+# variant of `papaia-ctl setup --localai-variant`. The override generator reads
+# this mapping on every render, so bumping the pins here carries through an
+# upgrade; each tag is the CPU tag plus the variant suffix.
+x-papaia-localai-gpu-images:
+  nvidia-cuda-12: localai/localai:v4.12.1-gpu-nvidia-cuda-12@sha256:d676068fa363a92e6aab3e199c28dd26b6b36afbb558ee31a1c7f8f06d662f07
+  nvidia-cuda-13: localai/localai:v4.12.1-gpu-nvidia-cuda-13@sha256:fb9a2bc78820b6e4e8b3a0f1366c46a7b7acbf6bc2267eb5fbb7d34b17fee7f8
+  intel: localai/localai:v4.12.1-gpu-intel@sha256:48865a8231014220585344c07b1f922c126149611899d245beadd1ffb0d4116b
+  hipblas: localai/localai:v4.12.1-gpu-hipblas@sha256:dd1780d582213e98b06ec90e4b7425e2d91a28170b6eb214529ff39d75839126
+  vulkan: localai/localai:v4.12.1-gpu-vulkan@sha256:34d1f9fe3acd8e93504a275e496a8f9bfc057faab5abc94914f74aee3f2b6dba
+
 services:
   # ═══════════════════════════════════════════════════════════════════════════
   # LocalAI Model Init
   # ═══════════════════════════════════════════════════════════════════════════
   localai-model-init:
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
     user: "0"
     restart: "no"
     volumes:
@@ -63,7 +75,7 @@ services:
     # CPU image. `papaia-ctl setup` rewrites this to the matching accelerator
     # tag (-gpu-nvidia-cuda-13, -gpu-intel, ...) via a generated override in
     # $PAPAIA_CONFIG_DIR/overrides/, reusing the version pinned right here.
-    image: localai/localai:v4.12.1
+    image: localai/localai:v4.12.1@sha256:c8556c4f7b6dd9b76e915d515ab5cfe5a765d8ea8fd3f0cf563f9c690b48a7f4
     restart: unless-stopped
     ports:
       - "${HOST_IP:-0.0.0.0}:${LOCALAI_EXT_PORT}:8080"

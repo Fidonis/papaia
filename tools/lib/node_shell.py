@@ -82,7 +82,9 @@ RUNTIME_OVERRIDE = "docker-compose.link-gateway-user.override.yml"
 
 # The image the volume archives are written and read with, the one `backup` uses on a
 # single host.
-BACKUP_IMAGE = "alpine:3"
+BACKUP_IMAGE = (
+    "alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
+)
 # A restore streams a volume through; it is bounded, not held in memory.
 RESTORE_LIMIT = 1024 * 1024 * MiB
 # `backup-stream` of a volume that does not exist: nothing to archive, not a failure.

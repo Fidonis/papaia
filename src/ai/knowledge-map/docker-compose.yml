@@ -22,7 +22,7 @@
 services:
 
   knowledge-map-mcp:
-    image: ghcr.io/fidonis/papaia-knowledge-map:0.2.0
+    image: ghcr.io/fidonis/papaia-knowledge-map:0.2.0@sha256:074ad9fc73ef1d25e01b0f7686e3751aadb15cddc3f2362aeafd302484ca3de9
     restart: unless-stopped
     environment:
       OIDC_ISSUER_URL:     ${OIDC_ISSUER}

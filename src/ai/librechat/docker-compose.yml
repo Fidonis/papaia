@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   librechat:
-    image: ghcr.io/librechat-ai/librechat:v0.8.8
+    image: ghcr.io/librechat-ai/librechat:v0.8.8@sha256:5b706bcee1ca154a1e2987303aaeca0eb27f97919cccee4bb604226c2f8abf61
     restart: unless-stopped
     depends_on:
       librechat-mongodb:
@@ -100,7 +100,7 @@ services:
 
   librechat-mongodb:
     restart: unless-stopped
-    image: mongo:8.3.17
+    image: mongo:8.3.17@sha256:747773029b84309981a3624a1af64ffc8c4d792283cc0834f26fe01fc6d28b34
     volumes:
       - librechat-mongodb:/data/db
     command: mongod --noauth
@@ -118,7 +118,7 @@ services:
     profiles: [librechat]
 
   librechat-meilisearch:
-    image: getmeili/meilisearch:v1.35.1
+    image: getmeili/meilisearch:v1.35.1@sha256:8b57fc3c7f46535ddef3828df1538465ac19d892eb57c9a10da6df0880bd5856
     restart: unless-stopped
     environment:
       MEILI_NO_ANALYTICS: true
@@ -133,7 +133,7 @@ services:
     profiles: [librechat]
 
   librechat-vectordb:
-    image: pgvector/pgvector:0.8.7-pg15-trixie
+    image: pgvector/pgvector:0.8.7-pg15-trixie@sha256:becac1db6f17dc1570335730f92a0c7670cf5b039722527c5850b8cae7670a3d
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${VECTORDB_NAME}
@@ -155,7 +155,7 @@ services:
     profiles: [librechat]
 
   librechat-ragapi:
-    image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.9.0
+    image: ghcr.io/librechat-ai/librechat-rag-api-dev-lite:v0.9.0@sha256:18a8dffa9316276b924bf3fd23bfb4544b0f68f8f6b14c048affb35c01721a35
     restart: unless-stopped
     environment:
       DB_HOST: librechat-vectordb

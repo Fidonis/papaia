@@ -37,6 +37,7 @@ _require_no_node() { :; }
 _stopped_containers_go_stale() { return 1; }
 _addon_path() { echo "/addons/$1"; }
 _addon_compose_up() { echo "compose-up $1"; }
+_addon_image_list() { :; }
 docker() { :; }
 py_cli() {
     echo "py_cli $*"

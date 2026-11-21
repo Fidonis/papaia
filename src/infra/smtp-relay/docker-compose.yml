@@ -39,7 +39,7 @@ services:
     # default tags are the Debian image, about 20 MB larger. Everything specific
     # to this image is in this file and in tools/lib/smtp.py, so swapping the
     # relay later touches nothing else.
-    image: boky/postfix:5.1.0-alpine
+    image: boky/postfix:5.1.0-alpine@sha256:6e761312e833947f77af755072c0e77b67d298d127595470a79e9454008dd594
     restart: unless-stopped
     environment:
       # Fails closed: without a host the relay has nowhere to deliver and never

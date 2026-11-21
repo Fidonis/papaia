@@ -160,15 +160,15 @@ def _localai_override(config_dir: Path) -> Path:
     return config_dir / "overrides" / "docker-compose.localai-gpu.override.yml"
 
 
-def test_localai_gpu_override_inherits_the_pinned_version(config_dir, repo_root):
+def test_localai_gpu_override_uses_the_pinned_variant_image(config_dir, repo_root):
     envtree.init(config_dir, repo_root, env_name="papaia")
     gen_override.generate_localai_gpu_override(config_dir, repo_root, "nvidia-cuda-13")
 
     override = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))
     localai = override["services"]["localai"]
-    # v9.9.9 is the fixture's pin — proof the version is read back from the
+    # The fixture's pin, with its digest — proof the image is read back from the
     # compose file rather than stored in the config dir.
-    assert localai["image"] == "localai/localai:v9.9.9-gpu-nvidia-cuda-13"
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-nvidia-cuda-13@sha256:" + "2" * 64
     device = localai["deploy"]["resources"]["reservations"]["devices"][0]
     assert device["driver"] == "nvidia"
 
@@ -180,7 +180,7 @@ def test_localai_gpu_override_intel_passes_dri(config_dir, repo_root):
     localai = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))["services"][
         "localai"
     ]
-    assert localai["image"] == "localai/localai:v9.9.9-gpu-intel"
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-intel@sha256:" + "3" * 64
     assert localai["devices"] == ["/dev/dri:/dev/dri"]
     assert "deploy" not in localai
 
@@ -192,7 +192,7 @@ def test_localai_gpu_override_hipblas_passes_kfd(config_dir, repo_root):
     localai = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))["services"][
         "localai"
     ]
-    assert localai["image"] == "localai/localai:v9.9.9-gpu-hipblas"
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-hipblas@sha256:" + "4" * 64
     assert localai["devices"] == ["/dev/dri:/dev/dri", "/dev/kfd:/dev/kfd"]
     assert localai["group_add"] == ["video"]
 
@@ -207,7 +207,7 @@ def test_localai_gpu_override_vulkan_uses_present_devices(config_dir, repo_root,
     localai = yaml.safe_load(_localai_override(config_dir).read_text(encoding="utf-8"))["services"][
         "localai"
     ]
-    assert localai["image"] == "localai/localai:v9.9.9-gpu-vulkan"
+    assert localai["image"] == "localai/localai:v9.9.9-gpu-vulkan@sha256:" + "5" * 64
     assert localai["devices"] == ["/dev/dri:/dev/dri"]
 
 

@@ -1,6 +1,14 @@
+# Pinned fake accelerator images: generate_localai_gpu_override reads this
+# mapping back out of here, proving the pins are never persisted elsewhere.
+x-papaia-localai-gpu-images:
+  nvidia-cuda-12: localai/localai:v9.9.9-gpu-nvidia-cuda-12@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  nvidia-cuda-13: localai/localai:v9.9.9-gpu-nvidia-cuda-13@sha256:2222222222222222222222222222222222222222222222222222222222222222
+  intel: localai/localai:v9.9.9-gpu-intel@sha256:3333333333333333333333333333333333333333333333333333333333333333
+  hipblas: localai/localai:v9.9.9-gpu-hipblas@sha256:4444444444444444444444444444444444444444444444444444444444444444
+  vulkan: localai/localai:v9.9.9-gpu-vulkan@sha256:5555555555555555555555555555555555555555555555555555555555555555
+
 services:
   localai:
-    # Pinned tag, not "stub": generate_localai_gpu_override reads the version
-    # back out of here to build the accelerator tag.
+    # Pinned tag, not "stub": the native LocalAI reads the version back out of here.
     image: localai/localai:v9.9.9
     profiles: [localai]

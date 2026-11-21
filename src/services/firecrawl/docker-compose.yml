@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   firecrawl:
-    image: ghcr.io/firecrawl/firecrawl:2.11.705
+    image: ghcr.io/firecrawl/firecrawl:2.11.705@sha256:7bd05a41f2400679e7916ca5d5d61d299535a637a29a2c9fdf7eeb90eea51025
     restart: unless-stopped
     environment:
       REDIS_URL: ${REDIS_URL:-redis://firecrawl-redis:6379}
@@ -108,7 +108,7 @@ services:
     profiles: [librechat-websearch]
 
   firecrawl-redis:
-    image: redis:8.8.0-alpine
+    image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     restart: unless-stopped
     command: redis-server --bind 0.0.0.0
     networks:
@@ -125,7 +125,7 @@ services:
     profiles: [librechat-websearch]
 
   firecrawl-rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:3.13.7-management@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
     restart: unless-stopped
     command: rabbitmq-server
     networks:

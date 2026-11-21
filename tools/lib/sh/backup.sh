@@ -4,8 +4,9 @@
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
 # Sidecar image used to tar/untar volumes and host directories. Pinned to a
-# major so a broken :latest cannot silently change archive behaviour.
-BACKUP_IMAGE="alpine:3"
+# version and its digest so neither a moved tag nor a new release can change
+# archive behaviour; lib/node_shell.py pins the same image.
+BACKUP_IMAGE="alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Pause bookkeeping
@@ -507,10 +508,11 @@ cmd_backup_delete() {
 # ─────────────────────────────────────────────────────────────────────────
 cmd_restore() {
     local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" restore_point="" only=""
-    local no_restart=0 restart_clean=0 list_only=0 assume_yes=0
+    local no_restart=0 restart_clean=0 list_only=0 assume_yes=0 insecure_images=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --insecure-images) insecure_images=1 ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --restore-point=*) restore_point="${1#*=}" ;;
             --only=*) only="${1#*=}" ;;
@@ -692,10 +694,12 @@ cmd_restore() {
 
     if [ "$no_restart" -eq 0 ]; then
         if [ -n "$only" ]; then
-            _restore_restart_scoped "$sel_profiles" "$sel_addons"
+            _restore_restart_scoped "$sel_profiles" "$sel_addons" "$insecure_images"
         else
             info "Starting the stack again..."
-            cmd_start --addons --config-dir="$CONFIG_DIR"
+            local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
+            [ "$insecure_images" -eq 1 ] && start_flags+=(--insecure-images)
+            cmd_start ${start_flags[@]+"${start_flags[@]}"}
         fi
     fi
 
@@ -837,7 +841,8 @@ _restore_teardown_scoped() {
     fi
 }
 
-# Bring back only what the selection took down. $1 = profiles, $2 = addon names.
+# Bring back only what the selection took down. $1 = profiles, $2 = addon names,
+# $3 = 1 for --insecure-images (the image checks of this restore only).
 #
 # Add-ons come up before the core on purpose: cmd_start only includes an
 # override from $CONFIG_DIR/overrides/ when its external network already
@@ -845,7 +850,7 @@ _restore_teardown_scoped() {
 # therefore lose its core-side integration until the next full start.
 # cmd_start --addons orders it the same way.
 _restore_restart_scoped() {
-    local profiles="$1" addons="$2"
+    local profiles="$1" addons="$2" insecure_images="${3:-0}"
     local addon_name addon_path
 
     while IFS= read -r addon_name; do
@@ -855,6 +860,7 @@ _restore_restart_scoped() {
             _restore_step restart "addon:$addon_name" missing
             continue
         fi
+        _verify_addon_images restore "$insecure_images" "$addon_name" "$addon_path"
         info "Starting addon $addon_name from $addon_path"
         _addon_compose_up "$addon_name" "$addon_path"
         _restore_step restart "addon:$addon_name" ok
@@ -865,7 +871,9 @@ _restore_restart_scoped() {
         _restore_step restart "$profiles" begin
         # No --addons: they were handled above, and starting the ones outside
         # the selection would turn a scoped restore into a stack-wide operation.
-        cmd_start --profiles="$profiles" --config-dir="$CONFIG_DIR"
+        local -a start_flags=(--profiles="$profiles" --config-dir="$CONFIG_DIR")
+        [ "$insecure_images" -eq 1 ] && start_flags+=(--insecure-images)
+        cmd_start ${start_flags[@]+"${start_flags[@]}"}
         _restore_step restart "$profiles" ok
     fi
 }

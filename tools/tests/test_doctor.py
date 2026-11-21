@@ -205,6 +205,7 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # smtp: the mail relay is not enabled
         PASS,  # addon_compat
         PASS,  # container_health
+        PASS,  # image_signatures: nothing runs in the fake
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -227,6 +228,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "smtp",
         "addon_compat",
         "container_health",
+        "image_signatures",
     )
 
 

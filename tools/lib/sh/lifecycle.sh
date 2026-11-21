@@ -114,11 +114,123 @@ _core_overrides() {
     done
 }
 
+# Internal to one command, never stored: the release key fingerprint of the installed
+# core while the target of an upgrade is checked, and the correlation id both phases
+# of an upgrade write their audit rows under. Set by upgrade.sh.
+IMAGES_ANCHOR="${IMAGES_ANCHOR:-}"
+IMAGES_CORRELATION_ID="${IMAGES_CORRELATION_ID:-}"
+
+# Refuse to go on unless every image to start is listed with its digest in the signed
+# bill of materials of the core tree $2 and signed with its key (lib/images.py).
+# $1 = command (start, upgrade, addon-start, ...), $2 = core tree,
+# $3 = core image list file or empty, $4 = 1 to check every image the tree pins (all
+# profiles and variants: the target of an upgrade, whose env files do not exist yet, and
+# a distributed installation, whose services start on other nodes),
+# $5 = 1 for --insecure-images (this command only, never stored), rest = extra flags,
+# among them one --addon-images=NAME=FILE per add-on (see _addon_image_flags)
+_verify_images() {
+    local command="$1" root="$2" list="$3" whole_tree="$4" insecure="$5"
+    shift 5
+    local -a flags=(--command="$command" "$@")
+    [ "$insecure" -eq 1 ] && flags+=(--insecure-images)
+    [ -n "$list" ] && flags+=(--images-file="$list")
+    [ "$whole_tree" -eq 1 ] && flags+=(--from-checkout)
+    [ -n "$IMAGES_ANCHOR" ] && flags+=(--anchor-fingerprint="$IMAGES_ANCHOR")
+    [ -n "$IMAGES_CORRELATION_ID" ] && flags+=(--correlation-id="$IMAGES_CORRELATION_ID")
+    local rc=0
+    info "Checking image digests and signatures against the bill of materials..."
+    if [ "$root" = "$REPO_ROOT" ]; then
+        py_cli image-verify ${flags[@]+"${flags[@]}"} || rc=$?
+    else
+        _py_cli_at "$root" image-verify ${flags[@]+"${flags[@]}"} || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        error "Image check failed; no container was started."
+        exit 2
+    fi
+}
+
+# One image list per active add-on, for a check of everything `start --addons` (or an
+# upgrade) runs: ADDON_IMAGE_FLAGS gets one --addon-images=NAME=FILE per add-on, so an
+# image accepted outside the bill of materials counts for its own add-on only;
+# ADDON_IMAGE_FILES the files, removed by _addon_image_files_remove. Uses the add-on
+# helpers of addon.sh.
+ADDON_IMAGE_FLAGS=()
+ADDON_IMAGE_FILES=()
+_addon_image_flags() {
+    local addon_name addon_path list
+    ADDON_IMAGE_FLAGS=()
+    ADDON_IMAGE_FILES=()
+    while IFS= read -r addon_name; do
+        [ -z "$addon_name" ] && continue
+        addon_path="$(_addon_path "$addon_name")"
+        list="$(mktemp)"
+        ADDON_IMAGE_FILES+=("$list")
+        _addon_image_list "$addon_name" "$addon_path" "$list"
+        ADDON_IMAGE_FLAGS+=(--addon-images="$addon_name=$list")
+    done < <(py_cli active-addons 2>/dev/null)
+}
+
+_addon_image_files_remove() {
+    local f
+    for f in ${ADDON_IMAGE_FILES[@]+"${ADDON_IMAGE_FILES[@]}"}; do
+        rm -f "$f"
+    done
+    ADDON_IMAGE_FILES=()
+}
+
+# Append the images compose starts for the core to the list file $1: the profiles
+# ($2, or the env file's COMPOSE_PROFILES when empty) with the override files that
+# follow, exactly as `up` gets them. $3 = env file, rest = -f args.
+_core_image_list() {
+    local out="$1" profiles="$2" env_file="$3"
+    shift 3
+    if ! (
+        if [ -n "$profiles" ]; then export COMPOSE_PROFILES="$profiles"; fi
+        docker compose -f "$COMPOSE_FILE" "$@" --env-file "$env_file" config --images
+    ) >> "$out"; then
+        error "Could not list the images to check. Nothing was started."
+        exit 2
+    fi
+}
+
+# Print the core override files `start` uses, one per line. An override that declares
+# add-on networks as external is skipped while such a network does not exist yet;
+# with $1 = 1 (--addons) the networks of the active add-ons count as present, because
+# their start in the same command creates them. The image check and `up` use this
+# one list, so the checked set is the started set.
+_core_override_files() {
+    local with_addons="$1" f net_name
+    [ -d "$CONFIG_DIR/overrides" ] || return 0
+    local -a coming=()
+    if [ "$with_addons" -eq 1 ]; then
+        while IFS= read -r net_name; do
+            [ -n "$net_name" ] && coming+=("$net_name")
+        done < <(py_cli addon-networks 2>/dev/null)
+    fi
+    for f in "$CONFIG_DIR"/overrides/docker-compose.*.override.yml; do
+        [ -f "$f" ] || continue
+        local nets_missing=0
+        while IFS= read -r net_name; do
+            [ -z "$net_name" ] && continue
+            case " ${coming[*]+${coming[*]}} " in *" $net_name "*) continue ;; esac
+            docker network inspect "$net_name" >/dev/null 2>&1 || { nets_missing=1; break; }
+        done < <(py_cli override-external-nets --file="$f" 2>/dev/null)
+        if [ "$nets_missing" -eq 0 ]; then
+            printf '%s\n' "$f"
+        else
+            warn "Addon not running — skipping override: $(basename "$f")"
+        fi
+    done
+}
+
 cmd_start() {
     local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
+    local insecure_images=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --insecure-images) insecure_images=1 ;;
             --addons) addons=1 ;;
             --profiles=*) profiles="${1#*=}" ;;
             --node=*) node="${1#*=}" ;;
@@ -142,7 +254,7 @@ cmd_start() {
             py_cli cluster-lock --clear
             UPGRADE_IN_PROGRESS=1
         fi
-        _start_distributed "$node" "$profiles" "$addons" "$force"
+        _start_distributed "$node" "$profiles" "$addons" "$force" "$insecure_images"
         return
     fi
     _require_no_node "$node"
@@ -187,25 +299,57 @@ cmd_start() {
         _require_profiles_resolve "$profiles" "$env_file" -f "$COMPOSE_FILE"
     fi
 
+    # The add-ons' env files and overrides as `up` will use them, before the image check:
+    # an add-on compose file picks its image through variables of the bundle .env that
+    # addon-start copies over the checkout's, and the re-render may change the overrides.
+    # --no-keycloak: Keycloak may not be up yet; the keycloak-role-sync step below
+    # creates the add-on clients. Nothing is started here.
+    local addon_name addon_path
+    local -a active_addons=()
     if [ "$addons" -eq 1 ]; then
-        info "Starting active addons..."
-        local addon_name addon_path
         while IFS= read -r addon_name; do
-            [ -z "$addon_name" ] && continue
-            addon_path="$(_addon_path "$addon_name")"
-            info "  addon $addon_name: materialising env + starting"
-            # --no-keycloak: Keycloak may not be up yet; the keycloak-role-sync step
-            # below creates the add-on clients.
-            py_cli addon-start --name="$addon_name" --no-keycloak ${check_flags[@]+"${check_flags[@]}"}
-            _addon_compose_up "$addon_name" "$addon_path"
+            [ -n "$addon_name" ] && active_addons+=("$addon_name")
         done < <(py_cli active-addons 2>/dev/null)
+        for addon_name in ${active_addons[@]+"${active_addons[@]}"}; do
+            info "  addon $addon_name: materialising env"
+            py_cli addon-start --name="$addon_name" --no-keycloak ${check_flags[@]+"${check_flags[@]}"}
+        done
     fi
 
-    # Overrides whose add-on network does not exist yet are skipped (see _core_overrides);
-    # once `addon start <name>` (or `start --addons`) runs, the network is Compose-owned
-    # and the override is included automatically on the next start.
-    _core_overrides warn
-    local -a compose_overrides=(${CORE_OVERRIDES[@]+"${CORE_OVERRIDES[@]}"})
+    # Overrides that declare add-on networks as external are skipped while such a
+    # network does not exist (see _core_override_files); built once, before the
+    # check, so the images checked are the images `up` starts.
+    local -a compose_overrides=()
+    local override_file
+    while IFS= read -r override_file; do
+        [ -n "$override_file" ] && compose_overrides+=(-f "$override_file")
+    done < <(_core_override_files "$addons")
+
+    # Before the first container of the core or an add-on: every image this command
+    # starts, core and active add-ons (each with its own list), in one check (digest
+    # and signature). A refusal is returned, not an exit, so a caller such as the
+    # second phase of an upgrade still reports it.
+    local image_list
+    image_list="$(mktemp)"
+    _core_image_list "$image_list" "$profiles" "$env_file" \
+        ${compose_overrides[@]+"${compose_overrides[@]}"}
+    ADDON_IMAGE_FLAGS=() ADDON_IMAGE_FILES=()
+    [ "$addons" -eq 1 ] && _addon_image_flags
+    local verified=0
+    ( _verify_images start "$REPO_ROOT" "$image_list" 0 "$insecure_images" \
+        ${ADDON_IMAGE_FLAGS[@]+"${ADDON_IMAGE_FLAGS[@]}"} ) || verified=$?
+    rm -f "$image_list"
+    _addon_image_files_remove
+    [ "$verified" -eq 0 ] || return 2
+
+    if [ "$addons" -eq 1 ]; then
+        info "Starting active addons..."
+        for addon_name in ${active_addons[@]+"${active_addons[@]}"}; do
+            addon_path="$(_addon_path "$addon_name")"
+            info "  addon $addon_name: starting"
+            _addon_compose_up "$addon_name" "$addon_path"
+        done
+    fi
 
     local up_flags=(-d)
     if _stopped_containers_go_stale; then
@@ -360,9 +504,10 @@ _require_no_node() {
 }
 
 # start in a distributed installation: the same gate and render as on one host, then the
-# nodes in order (lib/cluster.py). $1 node, $2 profiles, $3 1 for --addons, $4 1 for --force
+# nodes in order (lib/cluster.py). $1 node, $2 profiles, $3 1 for --addons, $4 1 for --force,
+# $5 1 for --insecure-images
 _start_distributed() {
-    local node="$1" profiles="$2" addons="$3" force="$4"
+    local node="$1" profiles="$2" addons="$3" force="$4" insecure_images="${5:-0}"
     _cluster_require_unlocked
     local -a check_flags=()
     [ "$force" -eq 1 ] && check_flags+=(--force)
@@ -373,6 +518,15 @@ _start_distributed() {
     py_cli sync-env
     info "Rendering the configuration and the node bundles..."
     py_cli render
+    # Every pin of the tree (the nodes start their own services) and the active add-ons,
+    # each add-on with its own list.
+    local verified=0
+    ADDON_IMAGE_FLAGS=() ADDON_IMAGE_FILES=()
+    [ "$addons" -eq 1 ] && _addon_image_flags
+    ( _verify_images start "$REPO_ROOT" "" 1 "$insecure_images" \
+        ${ADDON_IMAGE_FLAGS[@]+"${ADDON_IMAGE_FLAGS[@]}"} ) || verified=$?
+    _addon_image_files_remove
+    [ "$verified" -eq 0 ] || return 2
     local -a extra=()
     [ -n "$node" ] && extra+=(--node="$node")
     [ -n "$profiles" ] && extra+=(--profiles="$profiles")

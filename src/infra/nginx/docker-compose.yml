@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   nginx-proxy-manager:
-    image: jc21/nginx-proxy-manager:2.15.1
+    image: jc21/nginx-proxy-manager:2.15.1@sha256:52b2c59994f3d36acfcf70a1626f29734df0ed8c71bacc0269f78b6f939858bb
     restart: unless-stopped
     volumes:
       - ${PAPAIA_CONFIG_DIR}/infra/nginx/nginx-data:/data
@@ -37,7 +37,7 @@ services:
   # oauth2-proxy sidecar — protects the NPM admin UI with Keycloak authentication.
   # Exposed on NPM_ADMIN_EXT_PORT; NPM admin (port 81) is only reachable inside Docker.
   nginx-proxy-manager-auth:
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6@sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048
     restart: unless-stopped
     ports:
       - "${HOST_IP:-0.0.0.0}:${NPM_ADMIN_EXT_PORT:-8100}:4180"

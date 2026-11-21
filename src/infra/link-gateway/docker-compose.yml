@@ -13,7 +13,7 @@
 
 services:
   link-gateway:
-    image: haproxy:3.2.26-alpine
+    image: haproxy:3.2.26-alpine@sha256:1c3568e520453cc8ba98c39501febcf450429c80e6cc27ecad779961d76e597c
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]

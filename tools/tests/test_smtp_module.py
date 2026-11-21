@@ -73,10 +73,12 @@ def test_nothing_depends_on_anything_so_the_profile_stays_independent_of_keycloa
 
 def test_the_image_is_pinned_to_an_exact_tag_and_listed_with_its_license():
     image = _service()["image"]
-    repository, _, tag = image.rpartition(":")
+    reference, _, digest = image.partition("@")
+    repository, _, tag = reference.rpartition(":")
 
     assert tag and tag != "latest"
     assert re.fullmatch(r"\d+\.\d+\.\d+-alpine", tag), "the Alpine variant, pinned to a release"
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), "and to its digest"
     assert f"`{repository}`" in (REPO / "THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
 
 

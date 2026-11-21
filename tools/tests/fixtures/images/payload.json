@@ -1,0 +1,1 @@
+{"critical":{"identity":{"docker-reference":"registry:5000/test/busybox"},"image":{"docker-manifest-digest":"sha256:d82c2ab94640ded77cf76514ce6a84870761105058a4a9e51b05a8a79be97a6c"},"type":"cosign container image signature"},"optional":null}

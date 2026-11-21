@@ -78,6 +78,8 @@ cmd_backup() {
     esac
 }
 cmd_restore_scoped() { echo "cmd_restore_scoped $*" >> "@LOG@"; }
+# lifecycle.sh's image check (tests/test_images_trust.py covers it).
+_verify_images() { echo "image-verify $*" >> "@LOG@"; }
 source "@ADDON@"
 """
 
@@ -182,6 +184,8 @@ def test_an_upgrade_plans_backs_up_applies_and_recreates_in_that_order(tmp_path:
         "cmd_backup --only=addon:paperless",
         "py_cli addon-upgrade-apply",
         "py_cli addon-path",
+        "docker compose",  # config --images
+        "image-verify addon-upgrade",
         "docker compose",  # up
     ]
     apply_call = next(c for c in calls if c.startswith("py_cli addon-upgrade-apply"))
@@ -307,6 +311,8 @@ def test_a_rollback_without_data_repoints_and_recreates(tmp_path: Path) -> None:
         "docker compose",  # ps
         "py_cli addon-rollback-apply",
         "py_cli addon-path",
+        "docker compose",  # config --images
+        "image-verify addon-rollback",
         "docker compose",  # up
     ]
     assert " up -d --remove-orphans" in calls[-1]

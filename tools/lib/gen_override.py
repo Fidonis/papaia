@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, compat, deployment, egress, gpu_detect, hosted_model
+from . import common, compat, deployment, egress, gpu_detect, hosted_model, images
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
 # `networks.app_network` may use to scope its bridge name to the deployment
@@ -295,9 +295,10 @@ def _localai_base_image(repo_root: Path) -> tuple[str, str] | None:
     """The (name, version) of the LocalAI image pinned in the core compose file.
 
     The version is never persisted to the config dir: reading it back here on
-    every render means a release that bumps the pin carries straight through
-    into the GPU variant, instead of a stale tag surviving `papaia-ctl upgrade`
-    via sticky reuse.
+    every run means a release that bumps the pin carries straight through to the
+    native LocalAI, instead of a stale version surviving `papaia-ctl upgrade`
+    via sticky reuse. The accelerator images have their own pins
+    (_localai_gpu_images).
     """
     try:
         doc = yaml.safe_load((repo_root / _LOCALAI_COMPOSE).read_text(encoding="utf-8")) or {}
@@ -306,6 +307,8 @@ def _localai_base_image(repo_root: Path) -> tuple[str, str] | None:
     image = ((doc.get("services") or {}).get("localai") or {}).get("image")
     if not isinstance(image, str):
         return None
+    # `name:tag@sha256:...`: the version is the tag.
+    image = image.partition("@")[0]
     name, sep, version = image.rpartition(":")
     # No separator, or a colon that belongs to a registry:port rather than a
     # tag -- an unpinned image cannot be rewritten into a variant.
@@ -314,11 +317,25 @@ def _localai_base_image(repo_root: Path) -> tuple[str, str] | None:
     return name, version
 
 
+def _localai_gpu_images(repo_root: Path) -> dict[str, str]:
+    """The accelerator image per LocalAI variant, pinned with its digest in the core
+    compose file next to the CPU image and read back on every render."""
+    try:
+        doc = yaml.safe_load((repo_root / _LOCALAI_COMPOSE).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    pinned = doc.get("x-papaia-localai-gpu-images")
+    if not isinstance(pinned, dict):
+        return {}
+    return {k: v for k, v in pinned.items() if isinstance(v, str)}
+
+
 def generate_localai_gpu_override(
     config_dir: Path,
     repo_root: Path,
     variant: str,
     dev_root: Path = Path("/dev"),
+    mirror: str = "",
 ) -> None:
     """Write or remove the LocalAI accelerator override.
 
@@ -329,13 +346,12 @@ def generate_localai_gpu_override(
     out_path = config_dir / "overrides" / "docker-compose.localai-gpu.override.yml"
 
     suffix = gpu_detect.TAG_SUFFIX.get(variant)
-    base = _localai_base_image(repo_root) if suffix else None
-    if not suffix or base is None:
+    image = _localai_gpu_images(repo_root).get(variant) if suffix else None
+    if not suffix or image is None:
         out_path.unlink(missing_ok=True)
         return
 
-    name, version = base
-    service: dict = {"image": f"{name}:{version}{suffix}"}
+    service: dict = {"image": mirror + image}
     service.update(gpu_detect.compose_fragment(variant, dev_root))
 
     override = {"services": {"localai": service}}
@@ -412,6 +428,7 @@ def generate_voice_gpu_override(
     repo_root: Path,
     variant: str,
     dev_root: Path = Path("/dev"),
+    mirror: str = "",
 ) -> None:
     """Write or remove the voice TTS accelerator override.
 
@@ -433,10 +450,49 @@ def generate_voice_gpu_override(
 
     # The accelerator images are published for linux/amd64, same as the CPU
     # build, so the platform pin of the base service stays correct.
-    service: dict = {"image": image}
+    service: dict = {"image": mirror + image}
     service.update(gpu_detect.compose_fragment(fragment_variant, dev_root))
 
     override = {"services": {"chatterbox": service}}
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+
+
+IMAGE_MIRROR_OVERRIDE = "docker-compose.image-mirror.override.yml"
+_IMAGE_VARIANT_OVERRIDES = (
+    "docker-compose.localai-gpu.override.yml",
+    "docker-compose.voice-gpu.override.yml",
+)
+
+
+def generate_image_mirror_override(config_dir: Path, repo_root: Path, mirror: str) -> None:
+    """Write or remove the override that pulls every core image through a mirror.
+
+    Each service gets `<mirror><image>`, its pinned reference behind the mirror's
+    prefix; digests stay the same, so the image check still applies. A service an
+    accelerator override replaces gets that override's image, so the result does not
+    depend on the order in which Compose reads the override files. Run after the
+    accelerator overrides; they put the same prefix in front of their own image."""
+    out_path = config_dir / "overrides" / IMAGE_MIRROR_OVERRIDE
+    if not mirror:
+        out_path.unlink(missing_ok=True)
+        return
+    images.validate_mirror(mirror)
+    chosen = images.compose_services(repo_root)
+    for name in _IMAGE_VARIANT_OVERRIDES:
+        path = config_dir / "overrides" / name
+        if not path.is_file():
+            continue
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for service, body in (doc.get("services") or {}).items():
+            if isinstance(body, dict) and isinstance(body.get("image"), str):
+                chosen[service] = body["image"].removeprefix(mirror)
+    override = {
+        "services": {
+            service: {"image": mirror + image} for service, image in sorted(chosen.items())
+        }
+    }
     common.atomic_write(
         out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
     )

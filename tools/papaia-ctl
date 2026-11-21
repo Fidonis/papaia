@@ -33,11 +33,11 @@
 #                       [--controller=NAME] [--preset=dmz-split|dmz-edge] [--place=SERVICE=NODE]
 #                       [--link-port=PORT] [--topology-file=PATH]
 #   papaia-ctl start         [--addons] [--profiles=LIST] [--node=NAME] [--unlock] [--force]
-#                            [--config-dir=PATH]
+#                            [--insecure-images] [--config-dir=PATH]
 #   papaia-ctl stop          [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--node=NAME]
 #                            [--config-dir=PATH]
 #   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
-#                            [--config-dir=PATH]
+#                            [--insecure-images] [--config-dir=PATH]
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
 #                            [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
@@ -46,7 +46,7 @@
 #                            --restore-point is repeatable or comma-separated
 #   papaia-ctl restore       [--backup-dir=PATH] [--restore-point=ID] [--list]
 #                            [--only=SELECTOR[,SELECTOR]] [--restart-clean]
-#                            [--no-restart] [-y] [--config-dir=PATH]
+#                            [--no-restart] [--insecure-images] [-y] [--config-dir=PATH]
 #                            SELECTOR is module:NAME, addon:NAME or volume:NAME
 #                            (and node:NAME in a distributed installation)
 #   papaia-ctl restore-scoped --only=SELECTOR[,SELECTOR] [as restore, minus
@@ -72,16 +72,18 @@
 #   papaia-ctl node sync     <name>|--all [--checkout] [--config-dir=PATH]
 #   papaia-ctl node-shell    the forced command of a node's SSH key; never run by hand
 #   papaia-ctl addon install   <name> --path=PATH [--version=VER] [--node=NAME] [--force]
+#                              [--insecure-images] [--accept-unlisted-images]
 #                              [--config-dir=PATH]
-#   papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
+#   papaia-ctl addon start     <name> [--force] [--insecure-images] [--config-dir=PATH]
 #   papaia-ctl addon check     [--target-core=PATH] [--target-version=X.Y.Z]
 #                              [--target-addon-api=N [--target-min-addon-api=M]]
 #                              [--json] [--force] [--config-dir=PATH]
 #   papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 #   papaia-ctl addon upgrade   <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart]
-#                              [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
-#   papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force] [-y]
+#                              [--answers-file=FILE] [--force] [--insecure-images] [-y]
 #                              [--config-dir=PATH]
+#   papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force]
+#                              [--insecure-images] [-y] [--config-dir=PATH]
 #   papaia-ctl addon list      [--json] [--config-dir=PATH]
 #   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 #   papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
@@ -106,7 +108,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,99p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,101p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

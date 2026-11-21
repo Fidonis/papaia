@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from lib import node_shell
+
 TOOLS = Path(__file__).resolve().parents[1]
 SH = TOOLS / "lib" / "sh"
 BASH = shutil.which("bash")
@@ -123,7 +125,7 @@ def test_root_owned_leftovers_are_deleted_through_a_container(tmp_path):
     [call] = calls
     physical = config.resolve().as_posix()
     assert call == (
-        f"docker run --rm --network none -v {physical}:/target alpine:3 "
+        f"docker run --rm --network none -v {physical}:/target {node_shell.BACKUP_IMAGE} "
         "find /target -mindepth 1 -delete"
     )
 

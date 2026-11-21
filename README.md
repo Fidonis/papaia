@@ -289,7 +289,7 @@ papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...] [--backup-d
                      [-y] [--config-dir=PATH]
 papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
-                     [-y] [--config-dir=PATH]
+                     [--insecure-images] [-y] [--config-dir=PATH]
 papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl keycloak-role-sync [--config-dir=PATH]
 papaia-ctl realm sync [--check] [--config-dir=PATH]
@@ -298,9 +298,9 @@ papaia-ctl doctor    [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart]
-                     [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
-papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force] [-y]
-                     [--config-dir=PATH]
+                     [--answers-file=FILE] [--force] [--insecure-images] [-y] [--config-dir=PATH]
+papaia-ctl addon     rollback <name> [--restore-data] [--no-restart] [--force]
+                     [--insecure-images] [-y] [--config-dir=PATH]
 papaia-ctl addon     list [--json] [--config-dir=PATH]
 papaia-ctl librechat clear-history <email> [--before=YYYY-MM-DD] [--dry-run] [-y]
                      [--config-dir=PATH]
@@ -421,7 +421,7 @@ tools/papaia-ctl setup -y --app-host=https://papaia.example.org \
 ### `start`
 
 ```bash
-tools/papaia-ctl start [--addons] [--profiles=LIST] [--config-dir=PATH]
+tools/papaia-ctl start [--addons] [--profiles=LIST] [--insecure-images] [--config-dir=PATH]
 ```
 
 Adds any variable the checkout's `.env.example` files ship and the config directory's
@@ -447,6 +447,11 @@ start is aborted: an add-on the core no longer supports, or one whose required a
 (`requires.addons`) are not active or no longer in range. Pass `--force`, or set warn mode
 (`PAPAIA_COMPAT_MODE=warn` or `mode: dev` in `deployment.yaml`), to demote incompatibility to
 a warning and proceed.
+
+Before the first container starts, `start` checks every image it is about to run against the
+signed suite bill of materials of the checkout: see [Image pinning and
+signatures](#image-pinning-and-signatures). An image that is not listed with its digest, or
+not signed, aborts the start; nothing is started.
 
 `--profiles` takes a comma-separated list of Compose profiles and overrides `COMPOSE_PROFILES`
 for this invocation only. The selection is validated up front: a profile list that names no
@@ -519,7 +524,7 @@ holds a copy; for the others the module's generated values stay as they are.
 
 ```bash
 tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y] \
-  [--config-dir=PATH]
+  [--insecure-images] [--config-dir=PATH]
 ```
 
 Moves the installation to a release. Without `--version` the newest release is used;
@@ -538,6 +543,11 @@ The run, in order:
    tag. An incompatible add-on aborts the upgrade before anything is touched, and so
    does an add-on whose required add-ons (`requires.addons`) are not active or not in
    range; `--force` demotes it to a warning.
+   Then every image of the target release is checked against the target's signed
+   bill of materials, and that bill against the release key of the installed checkout
+   (digest and signature, see [Image pinning and
+   signatures](#image-pinning-and-signatures)); a mismatch aborts before anything is
+   changed. `--force` does not lift this; only `--insecure-images` does.
 4. Creates a restore point (`backup`) unless `--no-backup` is given, and stops the
    stack.
 5. Checks out the release tag and re-executes itself from the new tree, so the
@@ -678,7 +688,7 @@ disk. The running stack is not touched. Each deletion adds a `delete` line to `b
 ```bash
 tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
                          [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
-                         [-y] [--config-dir=PATH]
+                         [--insecure-images] [-y] [--config-dir=PATH]
 ```
 
 | Flag | Default | Purpose |
@@ -689,6 +699,7 @@ tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
 | `--only=SELECTOR[,SELECTOR]` | _(whole snapshot)_ | Restore only the selected units and scope the teardown and restart to them. Each `SELECTOR` is `module:NAME`, `addon:NAME` or `volume:NAME` (in a distributed installation also `node:NAME`); the prefix is mandatory. Cannot be combined with `--restart-clean`, and is refused for a selection that touches the config directory or resolves to the `manager` profile |
 | `--restart-clean` | — | Delete the named volumes during the teardown as well, so nothing survives that is not in the restore point |
 | `--no-restart` | — | Do not touch the running stack at all |
+| `--insecure-images` | — | Skip the image check of the containers this restore starts again, for this one command (single host; see [Image pinning and signatures](#image-pinning-and-signatures)) |
 | `-y` / `--yes` | — | Skip the confirmation prompt (required in non-interactive contexts) |
 
 By default the stack is **torn down before and brought up after** the restore: containers are
@@ -780,12 +791,12 @@ arguments (also an address or a date that is not one), 3 when the confirmation i
 
 ```bash
 tools/papaia-ctl addon install   <name> --path=PATH [--version=VER] [--node=NAME] [--force] \
-  [--config-dir=PATH]
-tools/papaia-ctl addon start     <name> [--force] [--config-dir=PATH]
+  [--insecure-images] [--accept-unlisted-images] [--config-dir=PATH]
+tools/papaia-ctl addon start     <name> [--force] [--insecure-images] [--config-dir=PATH]
 tools/papaia-ctl addon upgrade   <name> --path=DIR [--dry-run [--json]] [--no-backup] \
-  [--no-restart] [--answers-file=FILE] [--force] [-y] [--config-dir=PATH]
-tools/papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force] [-y] \
-  [--config-dir=PATH]
+  [--no-restart] [--answers-file=FILE] [--force] [--insecure-images] [-y] [--config-dir=PATH]
+tools/papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force] \
+  [--insecure-images] [-y] [--config-dir=PATH]
 tools/papaia-ctl addon list      [--json] [--config-dir=PATH]
 tools/papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 tools/papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
@@ -798,11 +809,11 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 
 | Command | Effect |
 |---|---|
-| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. A `--path` that re-points an installed add-on is refused, like `upgrade`, when the version there no longer meets a range another active add-on requires of it. |
-| `start` | Copies the add-on's `.env` into place, re-renders, and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. |
+| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Before anything is registered, the add-on's images are checked against the signed bill of materials; an add-on outside it needs `--accept-unlisted-images` (see [Image pinning and signatures](#image-pinning-and-signatures)). Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. A `--path` that re-points an installed add-on is refused, like `upgrade`, when the version there no longer meets a range another active add-on requires of it. |
+| `start` | Copies the add-on's `.env` into place, re-renders, checks the add-on's images (digest and signature) and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. `--insecure-images` skips the image check for this one command. |
 | `install --node=NAME` | Distributed installations only: the node the add-on runs on. Without it, the add-on goes to the node of the core services it attaches to. An add-on whose `networks.attach` names services on two nodes is **not placeable** and is refused whatever `--force` says: its network exists on one node only. On a remote node the add-on travels in the node's bundle, and `start`, `stop` and `start --addons` run it there. |
-| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. See [Upgrading an add-on](#upgrading-an-add-on). |
-| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. Refused, like `upgrade`, when the older version does not meet a range another active add-on requires of it. |
+| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. The images of the new version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. See [Upgrading an add-on](#upgrading-an-add-on). |
+| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. Refused, like `upgrade`, when the older version does not meet a range another active add-on requires of it. The images of the older version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. |
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
@@ -996,6 +1007,7 @@ raw values behind its summary in `details`.
 | `smtp` | Only while the `smtp` profile is on: the [mail relay](#outbound-mail) container runs, the mail server behind it answers (greeting, EHLO, STARTTLS or TLS and the login; no mail is sent), and how many messages wait in the relay's queue. Reports `not configured` while the profile is off. | `warn` for an unreachable mail server, a stopped relay or a non-empty queue; never `fail`; inside a container the mail server is not contacted (see below) |
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
+| `image_signatures` | Every running container of the core project runs an image pinned by digest, listed with that digest in the signed bill of materials of the checkout and signed with its key (see [Image pinning and signatures](#image-pinning-and-signatures)). | `fail` for an unpinned, unlisted or unsigned image, for a running image whose digest is not the pinned one, and while containers run without the pinned release key or bill of materials; `warn` if the registry cannot be asked (no connection, rate limit, server error) or Docker does not say what runs |
 
 Before `setup` has run, the checks that need the installation's configuration report `skip`
 instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as
@@ -2064,6 +2076,110 @@ the same commands (`start`, `stop`, `status`, `doctor`, `backup`, `restore`, `up
 `addon`), and adds [`topology`](#topology) and [`node`](#node). The operator guide covers
 planning, the firewall, backups, upgrades, add-ons, the security notes and recovery:
 [docs/distributed.md](docs/distributed.md).
+
+### Image pinning and signatures
+
+Every image in the compose files is pinned as `name:tag@sha256:<digest>`: a tag alone can be
+moved to other content, a digest cannot. A test (`tools/tests/test_images.py`) refuses an image
+without tag or digest, `latest`, a development tag such as `dev` or a branch name. An image
+whose upstream keeps no tag for the pinned build may stay digest-only through an entry in
+[`compat/image-exceptions.yaml`](compat/image-exceptions.yaml), with a reason and an expiry of
+at most 90 days. The sidecar image of `backup` is pinned the same way.
+
+**Check before `start` and `upgrade`.** Before any container starts, `papaia-ctl` lists the
+images Compose is about to run (with the active profiles and the same override files `up`
+gets) and checks each one:
+
+1. It is listed, with the same digest, in the signed suite bill of materials of the
+   checkout, `compat/suite-<VERSION>.yaml` with `compat/suite-<VERSION>.yaml.sig` (see
+   [`docs/compatibility.md`](docs/compatibility.md)). The bill of materials is trusted only
+   through the release key pinned in the checkout, `compat/release-key.pub`; it must have the
+   scope `delivery` and the version in `VERSION`, so an older or a test bill of materials is
+   refused.
+2. It carries a valid cosign signature (`cosign sign --key`, cosign 2.x) by the key of that
+   bill of materials. The signature is read from the repository the release names in
+   [`compat/image-signatures.yaml`](compat/image-signatures.yaml) (cosign's
+   `COSIGN_REPOSITORY`; tag `sha256-<digest>.sig`) and checked with `openssl`; no cosign
+   binary is needed on the host.
+
+Any mismatch aborts with the image and the reason, for example `digest differs from the bill
+of materials` or `no signature`, and no container is started. Without
+`compat/release-key.pub` or without the bill of materials the check refuses: images are
+never checked against a key taken from the file it vouches for.
+
+**Upgrade: the installed release vouches for the next one.** `upgrade` checks every image
+the target release pins before it backs up, stops or moves anything. The target's bill of
+materials must be signed with the release key of the *installed* checkout. A release that
+changes the key ships `compat/release-key-rotation.yaml`, a signature by the previous key
+over the new `compat/release-key.pub` (`cosign sign-blob --key <previous key>
+compat/release-key.pub`); without it a target with another key is refused, however
+consistent its own files are. The images of the active add-ons are checked in the same step, against the target's bill
+of materials. An installation without a pinned release key cannot upgrade without
+`--insecure-images`. The checkout is then moved to exactly the commit that was checked, and
+the second phase checks what it starts against the same anchor. The first upgrade from a
+core that pinned no release key is the exception: its first phase hands no anchor over, so
+the second phase checks against the target's own key and prints that key's fingerprint;
+compare it with the published one, obtained out of band (see
+[`docs/compatibility.md`](docs/compatibility.md#bootstrap-the-first-upgrade-to-a-pinned-key)).
+
+**Registry access.** The signatures are read with the host's Docker credentials when there
+are any (`docker login`, credential helpers); anonymously otherwise. A signature verified
+once is remembered per release key and digest in `$PAPAIA_CONFIG_DIR/cache/` (mode `0600`),
+so a repeated `start` does not ask the registry again; the bill of materials is checked every
+time. A rate limit (HTTP 429), a server error or no connection is reported as "registry not
+reachable": `start` and `upgrade` refuse, `doctor` warns. Docker Hub limits anonymous pulls
+tightly; log in on the host if the check runs into the limit.
+
+**`--insecure-images`** skips the check for this one command (`start`, `upgrade`, `restore`,
+`addon install`, `addon start`, `addon upgrade`, `addon rollback`). It prints a banner and writes one `papaia.audit/1` row (event
+`image_verification_skipped`, the command and the number of images; no image content) to
+`$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl` (mode `0600`). The flag is not stored anywhere:
+the next command checks again. `upgrade --insecure-images` writes two such rows, one when it
+skips the check of the target and one when its second phase starts the stack; both carry the
+same correlation id.
+
+**Mirror registry.** `PAPAIA_IMAGE_MIRROR` in the root `.env` (for example
+`registry.example.com/papaia/`, ending in `/`) pulls every core image through a mirror. The
+render writes `overrides/docker-compose.image-mirror.override.yml`, which puts the prefix in
+front of each pinned reference, for example
+`registry.example.com/papaia/quay.io/keycloak/keycloak:26.7.0@sha256:…`. The mirror must hold
+each image under that path and the signature repository under the same prefix
+(`registry.example.com/papaia/ghcr.io/fidonis/papaia-signatures`); the digests stay the same,
+so the check above still applies. `PAPAIA_IMAGE_SIGNATURES` overrides the signature
+repository for a mirror that keeps the signatures elsewhere.
+
+**Add-on images.** The images of an add-on are checked the same way before it starts:
+`start --addons` checks the core and every active add-on in one pass before the first
+container, `upgrade` checks the active add-ons with the target before anything changes, and
+`addon start`, `addon upgrade`, `addon rollback` and a scoped `restore` check the add-on they
+start. Each add-on is checked with the `.env` its containers start with: the one in
+`$PAPAIA_CONFIG_DIR/addons/<name>/`, which `start` copies into the add-on directory before the
+check and a node uses for its add-ons, so an image variable set there is the one checked.
+`addon install` checks the add-on's images before it is registered. A listed image
+with another digest, or without a valid signature, is refused. So is an image of a
+repository the bill of materials lists under another tag, or untagged with a digest it does
+not list: a repository of the delivery is never accepted from elsewhere.
+
+An add-on whose image repositories the bill of materials does not list at all (one that is
+not part of the delivery) is refused with its origin, the image digests, the operations it
+declares with their effect and the networks it asks for. `addon install
+--accept-unlisted-images` accepts exactly those digests for that add-on: once the add-on is
+registered (a failed install accepts nothing) they are recorded in
+`$PAPAIA_CONFIG_DIR/trust/accepted-images.json` (mode `0600`) with a `papaia.audit/1` row
+(event `addon_images_accepted`). An acceptance covers only the add-on it was given for, never
+another add-on or the core; another digest of that add-on is refused again, and an image
+without a digest cannot be accepted. `addon uninstall` drops the acceptance (event
+`addon_images_forgotten`); if the file cannot be read, the add-on is still uninstalled and a
+warning names the file to repair.
+
+**Who confirms.** Running `papaia-ctl` on the host is the `papaia-admin` role of the
+installation: whoever may run it can start, stop and restore the whole stack. The
+confirmation `--accept-unlisted-images` is therefore the `papaia-admin` confirmation, and the
+audit row records it as `"role": "papaia-admin"` with the host login in `confirmed_by` (the
+user behind `sudo` when there is one).
+
+**At run time** `doctor` reports `image_signatures`: every running core container must run an
+image that passes the same check, and the image it runs must have the pinned digest.
 
 ### Multi-environment setup
 

@@ -1,0 +1,10 @@
+# Where the release keeps the cosign signature of every image it ships (lib/images.py).
+#
+# One repository for all images, first-party and third-party alike: the project
+# cannot write into the repositories of upstream images (docker.io, quay.io, ...),
+# so their signatures cannot live next to them. The release process signs each
+# image digest of the bill of materials with the release key into this repository
+# (cosign's COSIGN_REPOSITORY). With PAPAIA_IMAGE_MIRROR the mirror serves it under
+# the same prefix as the images; PAPAIA_IMAGE_SIGNATURES overrides it.
+schema: papaia.image-signatures/1
+repository: ghcr.io/fidonis/papaia-signatures

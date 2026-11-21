@@ -67,8 +67,9 @@ _upgrade_print_migrations() {
 
 cmd_upgrade() {
     local config_dir="$DEFAULT_CONFIG_DIR" version="" no_backup=0 force=0
-    local assume_yes=0 dry_run=0
+    local assume_yes=0 dry_run=0 insecure_images=0
     local resume_from="" resume_target="" resume_restore_point=""
+    local resume_anchor="" resume_correlation=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
@@ -76,10 +77,13 @@ cmd_upgrade() {
             --no-backup) no_backup=1 ;;
             --force) force=1 ;;
             --dry-run) dry_run=1 ;;
+            --insecure-images) insecure_images=1 ;;
             -y|--yes) assume_yes=1 ;;
             --resume-from=*) resume_from="${1#*=}" ;;
             --resume-target=*) resume_target="${1#*=}" ;;
             --resume-restore-point=*) resume_restore_point="${1#*=}" ;;
+            --resume-anchor=*) resume_anchor="${1#*=}" ;;
+            --resume-correlation-id=*) resume_correlation="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for upgrade: $1"; exit 2 ;;
         esac
@@ -99,8 +103,16 @@ cmd_upgrade() {
             error "--resume-from requires --resume-target. Both are set by papaia-ctl itself."
             exit 2
         fi
+        # Handed over by the first phase, never stored: the second phase checks the
+        # images against the release key of the core that was installed, and audits
+        # under the same correlation id (lib/images.py validates both).
+        IMAGES_ANCHOR="$resume_anchor"
+        IMAGES_CORRELATION_ID="$resume_correlation"
+        if [ -z "$resume_anchor" ] && [ "$insecure_images" -eq 0 ]; then
+            _upgrade_bootstrap_notice "$resume_target"
+        fi
         _upgrade_apply "$resume_from" "$resume_target" "$resume_restore_point" "$force" \
-            "$distributed"
+            "$distributed" "$insecure_images"
         return 0
     fi
 
@@ -165,12 +177,36 @@ cmd_upgrade() {
 
     info "Upgrade: $current → $target ($tag)"
 
+    # --- trust anchor -------------------------------------------------------
+    # The release key of the installed core vouches for the target; the target's own
+    # key only counts when the installed one signed its rotation (lib/images.py).
+    if IMAGES_ANCHOR="$(py_cli image-trust-anchor)"; then
+        :
+    elif [ "$insecure_images" -eq 1 ]; then
+        IMAGES_ANCHOR=""
+        warn "This installation pins no release key; --insecure-images skips the image check."
+    else
+        error "This installation pins no release key ($REPO_ROOT/compat/release-key.pub),"
+        error "so the images of $target cannot be checked. Nothing has been changed."
+        error "Re-run with --insecure-images to upgrade without the image check."
+        exit 2
+    fi
+    IMAGES_CORRELATION_ID="$(py_cli new-correlation-id)"
+
+    # The commit the tag names now: what is checked below is what is checked out later.
+    local commit
+    if ! commit="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "$tag^{commit}")" ||
+            [ -z "$commit" ]; then
+        error "Could not resolve $tag. Does the tag exist?"
+        exit 3
+    fi
+
     # --- add-on gate + migration preview ----------------------------------
     # A worktree of the target tag is the honest way to answer both questions
     # before anything is touched: it carries the target's ADDON_API window and
     # its migration directory.
     local worktree="$_UPGRADE_TMPDIR/target"
-    if ! git -C "$REPO_ROOT" worktree add --detach --quiet "$worktree" "$tag" 2>/dev/null; then
+    if ! git -C "$REPO_ROOT" worktree add --detach --quiet "$worktree" "$commit" 2>/dev/null; then
         error "Could not check out $tag for inspection. Does the tag exist?"
         exit 3
     fi
@@ -182,6 +218,20 @@ cmd_upgrade() {
     if ! _py_cli_at "$worktree" addon-check ${check_flags[@]+"${check_flags[@]}"}; then
         error "Add-on compatibility check failed against $target. Nothing has been changed."
         error "Update the add-ons first, or re-run with --force to upgrade anyway."
+        exit 2
+    fi
+
+    # Stage 0: every image of the target and of the active add-ons against the target's
+    # bill of materials, that bill against the installed release key, before anything is
+    # backed up, stopped or moved. The second phase's start checks the ones it runs again
+    # after the render.
+    local verified=0
+    _addon_image_flags
+    ( _verify_images upgrade "$worktree" "" 1 "$insecure_images" \
+        ${ADDON_IMAGE_FLAGS[@]+"${ADDON_IMAGE_FLAGS[@]}"} ) || verified=$?
+    _addon_image_files_remove
+    if [ "$verified" -ne 0 ]; then
+        error "Nothing has been changed."
         exit 2
     fi
 
@@ -255,7 +305,7 @@ cmd_upgrade() {
     _upgrade_cleanup  # the EXIT trap does not fire across the exec below
 
     info "Moving the checkout to $tag..."
-    if ! git -C "$REPO_ROOT" checkout --detach --quiet "$tag"; then
+    if ! git -C "$REPO_ROOT" checkout --detach --quiet "$commit"; then
         # Nothing moved: no reason to keep the installation locked.
         [ "$distributed" -eq 1 ] && py_cli cluster-lock --clear
         error "Could not check out $tag. The stack is stopped and the checkout is unchanged."
@@ -273,6 +323,11 @@ cmd_upgrade() {
     )
     [ -n "$restore_point" ] && resume_flags+=(--resume-restore-point="$restore_point")
     [ "$force" -eq 1 ] && resume_flags+=(--force)
+    # This command's own second phase; the flag, the anchor and the correlation id are
+    # never written anywhere.
+    [ "$insecure_images" -eq 1 ] && resume_flags+=(--insecure-images)
+    [ -n "$IMAGES_ANCHOR" ] && resume_flags+=(--resume-anchor="$IMAGES_ANCHOR")
+    resume_flags+=(--resume-correlation-id="$IMAGES_CORRELATION_ID")
     # Hand off through the interpreter, not by executing the path: the git
     # checkout just above rewrote tools/papaia-ctl from the target tree, and it
     # is not guaranteed to carry the execute bit (nor is the checkout guaranteed
@@ -281,17 +336,30 @@ cmd_upgrade() {
     exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" upgrade ${resume_flags[@]+"${resume_flags[@]}"}
 }
 
+# The first upgrade from a core that pinned no release key: its first phase handed no
+# anchor over, so the images of the target are checked against the target's own key.
+# Name that key so the operator can compare it with the fingerprint published out of
+# band (docs/compatibility.md). $1 = target version.
+_upgrade_bootstrap_notice() {
+    local trusted
+    trusted="$(py_cli image-trust-anchor 2>/dev/null)" || return 0
+    warn "The installed release pinned no release key, so $1 is checked against its own"
+    warn "key $trusted. Compare this fingerprint with the one published for the release,"
+    warn "obtained out of band, before you rely on the check."
+}
+
 # Phase 2 — runs from the target release's checkout.
 # $1 = from version, $2 = target version, $3 = restore point (may be empty),
-# $4 = force flag, $5 = 1 for a distributed installation
+# $4 = force flag, $5 = 1 for a distributed installation, $6 = 1 for --insecure-images
 _upgrade_apply() {
     local from="$1" target="$2" restore_point="$3" force="$4" distributed="${5:-0}"
+    local insecure_images="${6:-0}"
     local previous_tag="v$from"
 
     info "Running $target's papaia-ctl from here on."
 
     if [ "$distributed" -eq 1 ]; then
-        _upgrade_apply_distributed "$from" "$target" "$restore_point" "$force"
+        _upgrade_apply_distributed "$from" "$target" "$restore_point" "$force" "$insecure_images"
         return 0
     fi
 
@@ -345,8 +413,11 @@ _upgrade_apply() {
 
     local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
     [ "$force" = "1" ] && start_flags+=(--force)
+    [ "$insecure_images" -eq 1 ] && start_flags+=(--insecure-images)
     info "Starting the stack..."
-    if ! cmd_start ${start_flags[@]+"${start_flags[@]}"}; then
+    # In a subshell: a start that ends with `exit` (a refused image check among others)
+    # still reaches the failure report below.
+    if ! ( cmd_start ${start_flags[@]+"${start_flags[@]}"} ); then
         error "The stack did not come up on $target."
         _upgrade_failed "$from" "$target" "$restore_point" "$previous_tag" \
             "the upgrade itself is complete — only the start failed, so 'papaia-ctl start --addons' may be all that is missing" \
@@ -365,7 +436,7 @@ _upgrade_apply() {
 # migrations run where their data lives, then the configuration is re-rendered and the
 # installation started in order. The lock is released at the very end.
 _upgrade_apply_distributed() {
-    local from="$1" target="$2" restore_point="$3" force="$4"
+    local from="$1" target="$2" restore_point="$3" force="$4" insecure_images="${5:-0}"
     local previous_tag="v$from"
     UPGRADE_IN_PROGRESS=1
     info "Installing $target on every node and running the migrations..."
@@ -381,6 +452,7 @@ _upgrade_apply_distributed() {
     fi
     local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
     [ "$force" = "1" ] && start_flags+=(--force)
+    [ "$insecure_images" -eq 1 ] && start_flags+=(--insecure-images)
     info "Starting every node..."
     if ! ( cmd_start ${start_flags[@]+"${start_flags[@]}"} ); then
         # Every node runs $target now; only the start is missing, so nothing to lock.

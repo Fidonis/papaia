@@ -130,3 +130,74 @@ a summary. `openssl` must be installed (it is already required by `setup`).
 
 The release key is not pinned yet; until `compat/release-key.pub` is added,
 pass `--key` or `--fingerprint` with a key obtained out of band.
+
+### Images: checked against the bill of materials before they start
+
+`start` and `upgrade` use the bill of materials of the checkout itself,
+`compat/suite-<VERSION>.yaml`, verified like `suite verify --suite=<VERSION>`
+with the pinned `compat/release-key.pub` and scope `delivery`. Each image
+Compose is about to run must be listed there with the same digest and carry a
+cosign signature (`cosign sign --key`, tag `sha256-<digest>.sig`) by the key
+of the bill of materials. A bill of materials therefore lists every core
+image, the accelerator variants of LocalAI and voice included, with the tag
+and digest the compose files pin. An image pinned without a tag
+(`compat/image-exceptions.yaml`) is matched by its digest.
+
+An upgrade verifies the target's bill of materials against the release key of
+the installed checkout. A release that replaces the key ships
+`compat/release-key-rotation.yaml` (schema `papaia.release-key-rotation/1`):
+one entry per previous key the release still accepts, each with that key
+(`previous_key`, PEM) and its signature over the new `compat/release-key.pub`
+(`signature`, `cosign sign-blob --key <previous key> compat/release-key.pub`).
+Without an entry for the installed key the upgrade is refused.
+
+A rotation signs the new key file only; it names no suite version and no date.
+It therefore cannot be revoked: an entry signed once stays valid in every later
+tree that carries it, and a key it vouched for can always be reached again
+from the key that signed it. Two rules follow for the release process. A key
+that was retired or may be compromised is never rotated to again, and no new
+rotation entry is ever signed over it. A compromised key is replaced by a new
+key pinned through a release that operators install with a fingerprint
+checked out of band, as in the bootstrap case below, not by a rotation.
+
+### Bootstrap: the first upgrade to a pinned key
+
+A core that pinned no release key (1.9.x and older) runs the first phase of
+its upgrade itself and hands no anchor to the second phase. On that first
+upgrade the second phase checks the images against the key the target brings,
+so the target vouches for itself; this cannot be avoided, because there is
+nothing installed to vouch for it. The second phase prints the fingerprint of
+that key. Before relying on the check, the operator compares it with the
+release key fingerprint published for the release, obtained out of band (not
+from the release notes of the same release). Every later upgrade is anchored
+in the key installed by this one.
+
+Until `compat/release-key.pub` and the bill of materials of a release are part
+of the checkout, `start` and `upgrade` refuse unless `--insecure-images` is
+given for that one command. See the README section "Image pinning and
+signatures".
+
+### Release gate: what every release must deliver for the image check
+
+The check works only with release data the release process produces. A
+release (and a hotfix) is not cut until all of the following hold:
+
+1. `compat/release-key.pub` is in the tagged tree; a key change comes with
+   `compat/release-key-rotation.yaml` signed by the previous key.
+2. `compat/suite-<VERSION>.yaml` and its `.sig` are in the tagged tree, scope
+   `delivery`, listing every core image with the tag and digest the compose
+   files pin, the accelerator variants of LocalAI and voice and the add-on and
+   module images of the delivery included.
+3. Every one of those digests is signed with the release key (`cosign sign
+   --key`) into the signature repository named by
+   [`compat/image-signatures.yaml`](../compat/image-signatures.yaml), i.e. with
+   `COSIGN_REPOSITORY=<that repository>`. Third-party images (docker.io,
+   quay.io, ghcr.io of other owners) cannot carry a signature in their own
+   repository, so the signature location is release data, not operator
+   configuration. `PAPAIA_IMAGE_SIGNATURES` exists only for mirrors that keep
+   signatures elsewhere.
+4. The tag exceptions in `compat/image-exceptions.yaml` are still valid on the
+   release date; they expire after at most 90 days and then fail CI on every
+   branch, so they are renewed or resolved before that.
+
+Without 1 to 3 every operator would need `--insecure-images`.

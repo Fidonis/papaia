@@ -57,6 +57,7 @@ from . import (
     deployment,
     envtree,
     gpu_detect,
+    images,
     localai_native,
     semver,
     smtp,
@@ -1792,6 +1793,117 @@ def check_container_health(ctx: Context) -> CheckResult:
     return CheckResult(name, overall, summary, {"modules": items})
 
 
+_IMAGE_INSPECT_FORMAT = "{{.Name}}\t{{.Config.Image}}\t{{.Image}}"
+_IMAGE_DIGESTS_FORMAT = "{{.Id}}\t{{json .RepoDigests}}"
+
+
+def _running_images(ctx: Context, names: list[str]) -> dict[str, tuple[str, str]] | None:
+    """{container: (reference it was created from, image id)}, or None when Docker
+    does not tell for every listed container."""
+    inspected = ctx.run(
+        ["docker", "inspect", "--format", _IMAGE_INSPECT_FORMAT, *names],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    if inspected.returncode != 0:
+        return None
+    running: dict[str, tuple[str, str]] = {}
+    for line in inspected.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[1].strip() and parts[2].strip():
+            running[parts[0].strip().lstrip("/")] = (parts[1].strip(), parts[2].strip())
+    return running if set(names) <= set(running) else None
+
+
+def _repo_digests(ctx: Context, image_ids: list[str]) -> dict[str, set[str]] | None:
+    """{image id: digests the local image is known under}, or None when unknown."""
+    done = ctx.run(
+        ["docker", "image", "inspect", "--format", _IMAGE_DIGESTS_FORMAT, *image_ids],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    if done.returncode != 0:
+        return None
+    found: dict[str, set[str]] = {}
+    for line in done.stdout.splitlines():
+        image_id, _, raw = line.partition("\t")
+        try:
+            digests = json.loads(raw) if raw.strip() else []
+        except ValueError:
+            continue
+        if isinstance(digests, list):
+            found[image_id.strip()] = {
+                d.rpartition("@")[2] for d in digests if isinstance(d, str) and "@" in d
+            }
+    return found if set(image_ids) <= set(found) else None
+
+
+def check_image_signatures(ctx: Context) -> CheckResult:
+    """Every running container of the core project runs an image that is listed with
+    its digest in the signed bill of materials and carries a valid signature, and the
+    image it runs is the one with that digest.
+
+    `fail` for an unpinned, unlisted or unsigned image, for a running image whose
+    digest is not the pinned one, and when there is no trust anchor while containers
+    run; `warn` when the registry cannot be asked (no connection, rate limit, server
+    error) or Docker does not say what runs, since then nothing is known."""
+    name = "image_signatures"
+    if not ctx.configured:
+        return _not_set_up(name)
+    project = status.compose_project(ctx.config_dir)
+    listed = ctx.run(
+        ["docker", "ps", "--filter", f"label=com.docker.compose.project={project}",
+         "--format", "{{.Names}}"],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    if listed.returncode != 0:
+        return CheckResult(name, WARN, "running containers unknown, Docker not reachable")
+    names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    if not names:
+        return CheckResult(name, PASS, "no running containers")
+    running = _running_images(ctx, names)
+    if running is None:
+        return CheckResult(name, WARN, f"running images unknown: docker inspect did not "
+                           f"describe all {len(names)} container(s)")
+    digests = _repo_digests(ctx, sorted({image_id for _, image_id in running.values()}))
+    if digests is None:
+        return CheckResult(name, WARN, "running images unknown: docker image inspect failed")
+    try:
+        mirror, signatures = images.settings(
+            common.parse_env_file(ctx.config_dir / ".env"), ctx.repo_root
+        )
+        bom = images.load_trusted_bom(ctx.repo_root)
+    except images.ImageError as exc:
+        return CheckResult(name, FAIL, f"{len(running)} running image(s) not verifiable: {exc}")
+
+    registry = images.Registry()
+    cache = images.SignatureCache(ctx.config_dir / images.CACHE_PATH)
+    items: list[dict[str, Any]] = []
+    for container, (ref, image_id) in sorted(running.items()):
+        problems = images.verify_images(
+            # Core containers only: an add-on acceptance never covers a core image.
+            [ref], bom, registry=registry, mirror=mirror, signatures=signatures, cache=cache,
+        )
+        reason, verdict = "", PASS
+        if problems:
+            reason = problems[0].reason
+            verdict = WARN if problems[0].transient else FAIL
+        else:
+            pinned = ref.partition("@")[2]
+            if pinned not in digests.get(image_id, set()):
+                reason = f"the running image is not the pinned digest {pinned}"
+                verdict = FAIL
+        items.append({"container": container, "image": ref, "status": verdict, "reason": reason})
+    try:
+        cache.save()
+    except OSError:
+        pass
+    bad = [i for i in items if i["status"] != PASS]
+    if bad:
+        summary = "; ".join(f"{i['container']}: {i['reason']}" for i in bad)
+    else:
+        summary = f"{len(items)} running image(s) signed and listed in suite {bom['suite']}"
+    return CheckResult(name, _worst(i["status"] for i in items), summary, {"images": items})
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -1807,6 +1919,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("smtp", check_smtp),
     ("addon_compat", check_addon_compat),
     ("container_health", check_container_health),
+    ("image_signatures", check_image_signatures),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

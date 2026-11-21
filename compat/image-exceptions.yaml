@@ -1,0 +1,29 @@
+# Images that may stay pinned by digest without a tag (lib/images.py).
+#
+# Only the tag rule can be excepted: each image is still pinned by its digest,
+# must be listed with that digest in the bill of materials and must be signed.
+# An entry names its reason and expires after at most 90 days; an expired entry
+# fails the pinning test until the image has a tagged pin again.
+schema: papaia.image-exceptions/1
+exceptions:
+  - image: ghcr.io/firecrawl/firecrawl-mcp-server
+    digest: sha256:d9015c8ced7fc4c7186e8c07d8cae206803252c381992534f05e4e15242f2164
+    rule: tag
+    reason: >-
+      upstream publishes this build under moving tags only (latest, sha-<commit>
+      of later builds); the pinned digest has no tag of its own any more
+    expires: "2027-02-15"
+  - image: ghcr.io/firecrawl/playwright-service
+    digest: sha256:6359b0d9070f27400b4a9b615509be06919e40121fc1fdc42d4efeddf02653d2
+    rule: tag
+    reason: >-
+      upstream publishes this build under moving tags only (latest, sha-<commit>
+      of later builds); the pinned digest has no tag of its own any more
+    expires: "2027-02-15"
+  - image: ghcr.io/firecrawl/nuq-postgres
+    digest: sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6
+    rule: tag
+    reason: >-
+      upstream publishes this build under moving tags only (latest, sha-<commit>
+      of later builds); the pinned digest has no tag of its own any more
+    expires: "2027-02-15"
