@@ -1,0 +1,14 @@
+# Certificates papaia-lifecycle requests from the platform PKI (docs/pki.md, contract
+# papaia.platform-pki/1): a server certificate for its internal endpoint and a client
+# certificate for mutual TLS to the module endpoints it calls. Its audit events go to
+# papaia-audit with a certificate of the audit ingest CA instead (docs/audit.md).
+# Issued while the profile `lifecycle` is on, into
+# $PAPAIA_CONFIG_DIR/pki/core/papaia-lifecycle/. No `uid`: the service runs as the user
+# that owns the configuration directory, the same user that runs papaia-ctl.
+profile: lifecycle
+pki:
+  services:
+    - name: papaia-lifecycle
+      server:
+        dns: [papaia-lifecycle]
+      client: true

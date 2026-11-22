@@ -39,6 +39,8 @@ See [`0000-template.md`](./0000-template.md).
 | [0014](./0014-knowledge-manifest-key-and-map-format.md) | Declare knowledge sources through a `knowledge:` manifest key | Proposed | 2026-11-13 |
 | [0015](./0015-knowledge-map-inventory-kinds-and-access-paths.md) | Inventory every reachable server and agent, and give sources several access paths | Proposed | 2026-11-14 |
 | [0016](./0016-knowledge-map-governance-metadata.md) | Keep governance metadata in a separate operator file and report model policy findings | Proposed | 2026-11-14 |
+| [0019](./0019-issue-internal-tls-from-one-platform-ca.md) | Issue the certificates for internal TLS from one platform CA | Proposed | 2026-11-21 |
+| [0022](./0022-one-security-profile-for-the-whole-installation.md) | Define one security profile for the whole installation in one place | Proposed | 2026-11-21 |
 
 ## Reserved numbers
 
@@ -52,10 +54,8 @@ Records in other repositories cite these decisions with the repository name, for
 |---|---|---|
 | 0017 | Add-on contract generations 7 to 12 | 7, 10 (addendum) |
 | 0018 | Identity: roles, exchange scopes and service accounts | 7 |
-| 0019 | Internal PKI | 11 |
 | 0020 | Personal area | 8 |
 | 0021 | Connection registry | 9 |
-| 0022 | Security profile | 11 |
 | 0023 | Add-on ingress and delivery | 12 |
 | 0024 | Design source | – |
 

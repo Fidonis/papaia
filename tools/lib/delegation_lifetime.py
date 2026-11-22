@@ -44,21 +44,27 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import common
+from . import common, security_profile
 from .keycloak_role_sync import _compose_value
 
 # realm_sync is imported where it is used: it imports realm_hardening, which imports this.
 
-PROFILE_KEY = "PAPAIA_SECURITY_PROFILE"
+PROFILE_KEY = security_profile.KEY
 SETTINGS_DIR = "settings"
 SETTINGS_FILE = "delegations.json"
 FORMAT = "papaia.delegation-lifetime/1"
 WRITER = "papaia-ctl/delegations"
 EVENT = "delegation_lifetime_changed"
 INPUT_REFUSED = "PK-INPUT-001"
-# (idle, max) in days per security profile.
-DEFAULTS = {"standard": (90, 180), "kritis": (7, 30)}
-UPPER = {"standard": (365, 365), "kritis": (7, 30)}
+# (idle, max) in days per security profile, from its one definition (security_profile).
+DEFAULTS = {
+    name: (profile.offline_idle_days, profile.offline_max_days)
+    for name, profile in security_profile.PROFILES.items()
+}
+UPPER = {
+    name: (profile.offline_idle_limit, profile.offline_max_limit)
+    for name, profile in security_profile.PROFILES.items()
+}
 _FIELDS = ("format", "idle_days", "max_days")
 MAX_FILE_BYTES = 4096
 # More digits than any accepted value has: refused before int() reads them.
@@ -87,10 +93,11 @@ def settings_path(config_dir: Path) -> Path:
 
 
 def profile_of(env: dict) -> str:
-    profile = _compose_value(str(env.get(PROFILE_KEY) or "")).strip() or "standard"
-    if profile not in DEFAULTS:
-        raise SettingError(f"{PROFILE_KEY}={profile!r}: must be standard or kritis")
-    return profile
+    raw = _compose_value(str(env.get(PROFILE_KEY) or "")).strip()
+    try:
+        return security_profile.name_of({PROFILE_KEY: raw})
+    except security_profile.ProfileError as exc:
+        raise SettingError(str(exc)) from None
 
 
 def _root_env(config_dir: Path) -> dict:

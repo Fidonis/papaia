@@ -59,6 +59,7 @@ from . import (
     gpu_detect,
     images,
     localai_native,
+    pki,
     semver,
     smtp,
     status,
@@ -1574,7 +1575,8 @@ def _certificate_files(config_dir: Path) -> list[Path]:
     files += sorted(
         (config_dir / "infra" / "nginx" / "nginx-letsencrypt" / "live").glob("*/fullchain.pem")
     )
-    return files
+    # The platform PKI: its CA, every service certificate and the trust bundle (OPS-17).
+    return files + pki.doctor_files(config_dir)
 
 
 def check_certs(ctx: Context) -> CheckResult:

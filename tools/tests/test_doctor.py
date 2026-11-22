@@ -1785,6 +1785,49 @@ def test_lets_encrypt_certificates_on_disk_are_included(stack):
     assert check.details["certificates"][0]["path"].endswith("live/npm-1/fullchain.pem")
 
 
+def add_pki_certs(stack) -> None:
+    """Files of the platform PKI (docs/pki.md) and the trust bundle, as `pki-issue` and
+    `pki-import-bundle` leave them."""
+    root = stack["config"] / "pki"
+    for rel in (
+        "ca/ca.crt",
+        "core/papaia-lifecycle/tls.crt",
+        "core/papaia-lifecycle/client.crt",
+        "core/papaia-lifecycle/ca.crt",
+    ):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
+    trust = stack["config"] / "certs" / "trust"
+    trust.mkdir(parents=True)
+    (trust / "ca-bundle.pem").write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
+
+
+def test_certificates_of_the_platform_pki_are_checked(stack):
+    add_pki_certs(stack)
+    check = result(run_doctor(stack), "certs")
+
+    paths = sorted(c["path"] for c in check.details["certificates"])
+    assert paths == [
+        "certs/trust/ca-bundle.pem",
+        "pki/ca/ca.crt",
+        "pki/core/papaia-lifecycle/client.crt",
+        "pki/core/papaia-lifecycle/tls.crt",
+    ]
+
+
+def test_an_expired_service_certificate_of_the_platform_pki_fails_the_check(stack):
+    add_pki_certs(stack)
+
+    def enddate(path, run):
+        days = -2 if path.name == "client.crt" else 300
+        return NOW + timedelta(days=days, hours=1)
+
+    check = result(run_doctor(stack, cert_enddate=enddate), "certs")
+
+    assert check.status == FAIL
+    assert "pki/core/papaia-lifecycle/client.crt expired 2 day(s) ago" in check.summary
+
+
 def test_no_certificates_means_skip(stack):
     assert result(run_doctor(stack), "certs").status == SKIP
 

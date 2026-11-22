@@ -189,3 +189,31 @@ _macos_local_tls_steps() {
         printf '  echo "127.0.0.1 %s" | sudo tee -a /etc/hosts\n' "$host" >&2
     fi
 }
+
+# papaia-ctl certs renew|status — the platform PKI (docs/pki.md). `start` issues and renews
+# on its own; `renew` is for a daily timer, `--force` issues every leaf again, `--ca`
+# replaces the platform CA (the old one stays trusted until its last leaf has ended).
+cmd_certs() {
+    local sub="${1:-}" config_dir="$DEFAULT_CONFIG_DIR"
+    shift || true
+    local -a flags=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --force) [ "$sub" = "renew" ] && flags+=(--force) || { error "Unknown option for certs $sub: $1"; exit 2; } ;;
+            --ca) [ "$sub" = "renew" ] && flags+=(--rotate-ca) || { error "Unknown option for certs $sub: $1"; exit 2; } ;;
+            --json) [ "$sub" = "status" ] && flags+=(--json) || { error "Unknown option for certs $sub: $1"; exit 2; } ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for certs $sub: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    # shellcheck disable=SC2034  # read by py_cli and _require_setup_done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    case "$sub" in
+        renew)  py_cli pki-issue ${flags[@]+"${flags[@]}"} ;;
+        status) py_cli pki-status ${flags[@]+"${flags[@]}"} ;;
+        *) error "Unknown 'certs' subcommand: '${sub:-<none>}'. Valid: renew, status."; exit 2 ;;
+    esac
+}

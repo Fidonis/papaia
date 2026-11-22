@@ -23,7 +23,7 @@
 #                       [--manager|--no-manager] [--manager-host=URL]
 #                       [--rag|--no-rag] [--qdrant-host=URL]
 #                       [--voice|--no-voice] [--voice-variant=cpu|nvidia|hipblas|auto]
-#                       [--knowledge-map|--no-knowledge-map]
+#                       [--knowledge-map|--no-knowledge-map] [--ca-bundle=FILE]
 #                       [--smtp|--no-smtp] [--smtp-host=HOST] [--smtp-port=PORT]
 #                       [--smtp-security=starttls|tls|none] [--smtp-user=NAME|--smtp-no-auth]
 #                       [--smtp-from=ADDRESS] [--smtp-from-name=NAME]
@@ -87,6 +87,8 @@
 #   papaia-ctl service-account list   [--json] [--config-dir=PATH]
 #   papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
 #   papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
+#   papaia-ctl certs renew   [--force] [--ca] [--config-dir=PATH]
+#   papaia-ctl certs status  [--json] [--config-dir=PATH]
 #   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
 #   papaia-ctl doctor        [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 #   papaia-ctl topology show [--json] [--config-dir=PATH]
@@ -153,7 +155,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,146p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,148p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -304,6 +306,7 @@ case "$cmd" in
         ;;
     privacy-pack)  cmd_privacy_pack "$@" ;;
     service-account) cmd_service_account "$@" ;;
+    certs)         cmd_certs "$@" ;;
     secrets)
         sub="${1:-}"; shift || true
         case "$sub" in

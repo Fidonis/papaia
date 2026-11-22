@@ -32,6 +32,7 @@ from . import (
     model_gateway,
     npm_provision,
     paperless_gate,
+    pki,
     realm_sync,
     render_core,
     reporting,
@@ -446,6 +447,12 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         node=node,
         dependents=existing is not None,
     ):
+        return 2
+    # Under the kritis security profile an add-on without a `pki:` request is refused
+    # here, before anything is recorded; a malformed request under every profile.
+    refusal = pki.addon_refusal(name, manifest, common.parse_env_file(config_dir / ".env"))
+    if refusal:
+        print(f"ERROR: {refusal}", file=sys.stderr)
         return 2
     try:
         addon_defaults = addons.resolve_addon_defaults(

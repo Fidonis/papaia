@@ -55,7 +55,7 @@ cmd_setup() {
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" localai_variant="" localai_runtime="" manager="" rag="" voice="" voice_variant="" reranker_model="" backup_dir=""
-    local knowledge_map=""
+    local knowledge_map="" ca_bundle=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0 approve_pairings=""
@@ -145,6 +145,7 @@ cmd_setup() {
             --voice) voice="true" ;;
             --no-voice) voice="false" ;;
             --knowledge-map) knowledge_map="true" ;;
+            --ca-bundle=*) ca_bundle="${1#*=}" ;;
             --no-knowledge-map) knowledge_map="false" ;;
             --smtp) smtp="true" ;;
             --no-smtp) smtp="false" ;;
@@ -193,6 +194,10 @@ cmd_setup() {
         shift
     done
     CONFIG_DIR="$config_dir"
+    # A company CA bundle is checked before anything is written (docs/pki.md).
+    if [ -n "$ca_bundle" ]; then
+        _check_ca_bundle_flag "$ca_bundle" || exit 3
+    fi
 
     # A distributed installation that is being upgraded, or whose nodes run another release
     # than this checkout, is re-rendered by `upgrade` only.
@@ -619,6 +624,10 @@ cmd_setup() {
         if [ "$smtp" = "true" ]; then
             _prompt_smtp
         fi
+        # Asked once per installation; `--ca-bundle` replaces an imported bundle later.
+        if [ -z "$ca_bundle" ] && [ ! -f "$CONFIG_DIR/certs/trust/company.pem" ]; then
+            ca_bundle="$(_prompt_ca_bundle)" || exit 3
+        fi
     else
         if [ -z "$app_host" ] && [ -z "$APP_HOST_STICKY" ]; then
             error "--app-host is required: no prior PAPAIA_HOST to reuse and not running interactively."
@@ -701,6 +710,7 @@ cmd_setup() {
         _ensure_keycloak_certs
         _macos_local_tls_steps "$non_interactive"
     fi
+    _ensure_platform_pki "$ca_bundle" || return 3
     local pairing_rc=0
     _setup_pairings "$non_interactive" "$approve_pairings" || pairing_rc=$?
     if [ "$pairing_rc" -ne 0 ]; then
@@ -715,6 +725,44 @@ cmd_setup() {
     # With an external proxy: the forwards to set up there (also 'papaia-ctl proxy list').
     py_cli proxy-list --if-external || warn "The list of forwards could not be built (see above)."
     success "setup complete. Run 'papaia-ctl start' to bring up the stack."
+}
+
+# The company CA bundle question (docs/pki.md). The answer is checked at once; a file that
+# cannot be used is asked for once more, a second one stops setup (returns 1). Prints the
+# accepted path on stdout, empty for no company CA; questions and reasons go to stderr.
+_prompt_ca_bundle() {
+    local attempt answer
+    for attempt in 1 2; do
+        answer="$(prompt_field "Company CA certificates" \
+            "PEM file with the root certificate(s) of your company PKI, trusted by every container (mail server, database, registry mirror, identity provider). Empty: none." \
+            "File" "")"
+        [ -z "$answer" ] && return 0
+        if py_cli pki-check-bundle --file="$answer" >/dev/null; then
+            printf '%s' "$answer"
+            return 0
+        fi
+        [ "$attempt" -eq 1 ] && warn "This file cannot be used; name it once more."
+    done
+    error "No usable company CA bundle; setup stops. Check the file and run setup again."
+    return 1
+}
+
+# --ca-bundle=FILE, checked before setup writes anything.
+_check_ca_bundle_flag() {
+    py_cli pki-check-bundle --file="$1" >/dev/null && return 0
+    error "--ca-bundle=$1 cannot be used; nothing was changed."
+    return 1
+}
+
+# The certificates of the platform PKI and, when given, the company CA bundle in the
+# trust bundle (docs/pki.md). `start` issues again; this makes them exist after setup.
+_ensure_platform_pki() {
+    local bundle="$1"
+    info "Issuing the certificates of the platform PKI..."
+    py_cli pki-issue || return 1
+    if [ -n "$bundle" ]; then
+        py_cli pki-import-bundle --file="$bundle" || return 1
+    fi
 }
 
 # Whether this config dir holds an installation that completed a setup: PAPAIA_VERSION is

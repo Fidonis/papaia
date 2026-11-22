@@ -51,6 +51,7 @@ from . import (
     exposes,
     hosted_model,
     schema_check,
+    security_profile,
     semver,
     suite,
 )
@@ -88,7 +89,6 @@ TEST_MODE_NOTICE = {
     },
 }
 
-SECURITY_PROFILES = ("standard", "kritis")
 TEXT_LIMIT = 200  # characters per language of a catalog text
 WRITER = "papaia-ctl/catalog"
 GROUP_PAGE = 100
@@ -516,7 +516,11 @@ def build(
             entries[declared["id"]] = _entry(source, index, declared, services)
 
     assert core.addon_api is not None  # skip_reason
-    profile = env.get("PAPAIA_SECURITY_PROFILE", "standard")
+    try:
+        profile = security_profile.name_of(env)
+    except security_profile.ProfileError:
+        # Setup and start refuse such a value; the catalog keeps the safe reading.
+        profile = security_profile.DEFAULT
     branding, _ = _branding(config_dir)
     try:
         # Both values always (kit platform-services 2.6): a partial block is filled per
@@ -528,7 +532,7 @@ def build(
         "format": SERVICES_FORMAT,
         "generated_at": _stamp(now),
         "addon_api": core.addon_api[1],
-        "security_profile": profile if profile in SECURITY_PROFILES else "standard",
+        "security_profile": profile,
         "identity": {
             "issuer": env["OIDC_ISSUER"],
             "token_endpoint_internal": env["OIDC_TOKEN_URL"],

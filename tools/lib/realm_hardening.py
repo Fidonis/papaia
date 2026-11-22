@@ -4,7 +4,8 @@ One target for two writers: `render_core.bake_realm_secrets` bakes it into the r
 realm of a new installation, and `papaia-ctl realm sync` applies it to an existing realm
 (Keycloak's `--import-realm` skips a realm that exists).
 
-Realm settings follow the security profile, `PAPAIA_SECURITY_PROFILE` in the root `.env`:
+Realm settings follow the security profile of the installation (security_profile.py, the
+one definition of its values):
 
 - `standard` (default): `sslRequired: external`;
 - `kritis`: `sslRequired: all`; every configured host must be https.
@@ -49,11 +50,11 @@ import json
 import urllib.parse
 from dataclasses import dataclass, field
 
-from . import common
+from . import common, security_profile
 from . import delegation_lifetime as dl
 from .keycloak_role_sync import _compose_value
 
-PROFILE_KEY = dl.PROFILE_KEY
+PROFILE_KEY = security_profile.KEY
 # Variables of 1.10.0 pre-releases; the lifetime is the setting of delegation_lifetime.
 RETIRED_KEYS = ("KC_OFFLINE_SESSION_IDLE_DAYS", "KC_OFFLINE_SESSION_MAX_DAYS")
 DAY = 86400
@@ -110,7 +111,7 @@ class Settings:
     def realm(self) -> dict:
         """The realm settings to enforce (Keycloak's realm representation)."""
         return {
-            "sslRequired": "all" if self.profile == "kritis" else "external",
+            "sslRequired": security_profile.PROFILES[self.profile].ssl_required,
             "registrationAllowed": False,
             "editUsernameAllowed": False,
             "accessTokenLifespan": 240,
@@ -146,7 +147,7 @@ class Hardening:
 
     @property
     def https_only(self) -> bool:
-        return self.settings.profile == "kritis"
+        return security_profile.PROFILES[self.settings.profile].https_only
 
 
 def _value(env: dict, key: str) -> str:

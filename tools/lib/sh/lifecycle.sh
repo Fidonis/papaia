@@ -389,6 +389,14 @@ cmd_start() {
     info "Rendering current configuration..."
     py_cli render
 
+    # The certificates of the platform PKI, before anything starts: a service that needs
+    # them must find them (docs/pki.md). Under the kritis profile this also refuses an
+    # active add-on without a `pki:` request.
+    if ! py_cli pki-issue; then
+        error "The platform PKI could not issue the certificates; nothing was started."
+        exit 2
+    fi
+
     # The audit store (profile `audit`, always on) needs its certificates and passwords
     # before `up`; existing ones are kept.
     py_cli audit-prepare

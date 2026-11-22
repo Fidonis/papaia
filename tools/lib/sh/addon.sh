@@ -329,6 +329,8 @@ cmd_addon_start() {
     # render. Gates on compatibility -- a non-zero exit (set -e) must
     # abort here, before _addon_compose_up brings containers up.
     py_cli addon-start --name="$addon_name" ${extra[@]+"${extra[@]}"}
+    # The add-on's certificates from its `pki:` request, before it starts.
+    py_cli pki-issue || exit 2
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
     _verify_addon_images addon-start "$insecure_images" "$addon_name" "$addon_path"
