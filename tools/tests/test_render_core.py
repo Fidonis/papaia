@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -736,6 +738,124 @@ def test_an_overlay_only_model_yaml_that_does_not_parse_is_named(repo_root, conf
     _localai_overlay(config_dir, "models/broken.yaml", "name: [unclosed\n")
     with pytest.raises(render_core.RenderError, match="overlay/ai/localai/models/broken.yaml"):
         render_core.render(config_dir, repo_root)
+
+
+def _litellm_label(config_dir) -> str:
+    override = yaml.safe_load(
+        (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).read_text(encoding="utf-8")
+    )
+    assert list(override["services"]) == ["litellm"]
+    return override["services"]["litellm"]["labels"]["org.papaia.config-hash"]
+
+
+def test_litellm_is_labelled_with_the_hash_of_its_rendered_configuration(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    content = (config_dir / "ai/litellm/config.yaml").read_bytes()
+    assert _litellm_label(config_dir) == hashlib.sha256(content).hexdigest()[:16]
+    # The pattern `start` collects the overrides with.
+    found = (config_dir / "overrides").glob("docker-compose.*.override.yml")
+    assert config_dir / render_core.LITELLM_CONFIG_OVERRIDE in found
+
+
+def test_the_litellm_label_goes_with_its_configuration(config_dir):
+    config = config_dir / "ai/litellm/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("model_list: []\n", encoding="utf-8")
+    render_core.render_litellm_config_label(config_dir)
+    assert (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).is_file()
+
+    config.unlink()
+    render_core.render_litellm_config_label(config_dir)
+    assert not (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).exists()
+
+
+# The hash of this configuration starts `0e` and has only digits after it, which Compose
+# reads as the number 0 unless it is quoted.
+_NUMBER_LIKE_HASH_CONFIG = b"litellm_settings:\n  request_timeout: 7668\n"
+
+
+def test_a_litellm_hash_that_looks_like_a_number_is_quoted(config_dir):
+    config = config_dir / "ai/litellm/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_bytes(_NUMBER_LIKE_HASH_CONFIG)
+    render_core.render_litellm_config_label(config_dir)
+    override = (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).read_text(encoding="utf-8")
+    assert '"0e17342021637129"' in override
+
+
+def test_an_unchanged_litellm_configuration_keeps_the_label(repo_root, config_dir):
+    _install_localai(repo_root)
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    render_core.render(config_dir, repo_root)
+    override = (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).read_bytes()
+    render_core.render(config_dir, repo_root)
+    assert (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).read_bytes() == override
+
+
+def test_an_activated_localai_model_line_changes_the_litellm_label(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    render_core.render(config_dir, repo_root)
+    before = _litellm_label(config_dir)
+
+    _localai_overlay(config_dir, "models.txt", _LOCALAI_MODELS)
+    render_core.render(config_dir, repo_root)
+
+    assert _model_names(config_dir) == ["nomic-embed-text", "qwen2.5-1.5b-instruct"]
+    assert _litellm_label(config_dir) != before
+
+
+def test_an_edit_of_the_litellm_overlay_changes_the_label(repo_root, config_dir):
+    _setup_minimal(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    before = _litellm_label(config_dir)
+
+    overlay = config_dir / "overlay" / "ai" / "litellm" / "config.yaml"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text("litellm_settings:\n  request_timeout: 42\n", encoding="utf-8")
+    render_core.render(config_dir, repo_root)
+
+    assert _litellm_label(config_dir) != before
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
+def test_the_litellm_label_changes_the_compose_hash(tmp_path):
+    """What makes `start` recreate LiteLLM: Compose compares the service hash, which covers
+    the labels but not the content of a bind-mounted file."""
+    probe = subprocess.run(["docker", "compose", "version"], capture_output=True, check=False)
+    if probe.returncode != 0:
+        pytest.skip("docker compose is not installed")
+    base = tmp_path / "docker-compose.yml"
+    base.write_text("services:\n  litellm:\n    image: example.org/litellm:1\n", encoding="utf-8")
+    config = tmp_path / "ai/litellm/config.yaml"
+    config.parent.mkdir(parents=True)
+    files = ["-f", str(base), "-f", str(tmp_path / render_core.LITELLM_CONFIG_OVERRIDE)]
+
+    def compose(*args: str) -> str:
+        done = subprocess.run(
+            ["docker", "compose", "-p", "hash-check", *files, "config", *args],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        return done.stdout
+
+    def service_hash(content: bytes) -> str:
+        config.write_bytes(content)
+        render_core.render_litellm_config_label(tmp_path)
+        service = json.loads(compose("--format", "json"))["services"]["litellm"]
+        label = service["labels"]["org.papaia.config-hash"]
+        assert label == hashlib.sha256(content).hexdigest()[:16]
+        return compose("--hash", "litellm").split()[-1]
+
+    empty = service_hash(b"model_list: []\n")
+    assert service_hash(b"model_list: []\n") == empty
+    assert service_hash(_NUMBER_LIKE_HASH_CONFIG) != empty
 
 
 def test_the_localai_key_is_named_but_never_written(repo_root, config_dir):

@@ -227,6 +227,7 @@ def render(config_dir: Path, repo_root: Path) -> None:
         else:
             _render_file(target, repo_root, config_dir, active_addons)
 
+    render_litellm_config_label(config_dir)
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
 
@@ -246,6 +247,38 @@ def render(config_dir: Path, repo_root: Path) -> None:
             raise RenderError(str(exc)) from exc
         for warning in warnings:
             logger.warning("%s", warning)
+
+
+# LiteLLM reads its configuration, a bind mount, only when it starts, and a changed file
+# leaves the service's Compose hash as it was. The override labels the service with a hash
+# of the rendered file, so `start` recreates LiteLLM when the configuration changes (a
+# LocalAI model line activated, an edit of the LiteLLM overlay) and leaves it running
+# otherwise.
+LITELLM_CONFIG_OVERRIDE = "overrides/docker-compose.litellm-config.override.yml"
+
+
+def render_litellm_config_label(config_dir: Path) -> None:
+    """Write the override that labels `litellm` with a hash of its rendered configuration,
+    or remove it while there is no rendered configuration."""
+    override_path = config_dir / LITELLM_CONFIG_OVERRIDE
+    try:
+        content = (config_dir / LITELLM_CONFIG).read_bytes()
+    except FileNotFoundError:
+        override_path.unlink(missing_ok=True)
+        return
+    override = {
+        "services": {
+            "litellm": {
+                "labels": {"org.papaia.config-hash": hashlib.sha256(content).hexdigest()[:16]}
+            }
+        }
+    }
+    # Quoted throughout: safe_dump leaves some number-like hashes plain, and Compose reads
+    # those as floats (`0e12...` becomes "0").
+    common.atomic_write(
+        override_path,
+        yaml.safe_dump(override, sort_keys=False, default_flow_style=False, default_style='"'),
+    )
 
 
 # Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under
