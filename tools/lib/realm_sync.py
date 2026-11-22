@@ -4,7 +4,8 @@ The core is the only writer of realm-wide objects. This module derives them from
 sources and reconciles the live `papaia` realm with them, idempotently:
 
 - the naming register (`names_register.json`, a snapshot of the platform kit's register:
-  every client, audience, role and service account with its owning repository);
+  every client, audience, role and service account with its owning repository, and the
+  exchange scope the kit builds for each audience, read through `kit_names`);
 - the `exposes:` sections of the installed modules (active add-ons): the roles they
   declare, the audiences they serve, `delegation` and `service_accounts`;
 - `$PAPAIA_CONFIG_DIR/security/pairings.yaml`: which client may exchange tokens for which
@@ -146,7 +147,7 @@ from pathlib import Path
 import yaml
 
 from . import client_keys as ck
-from . import common, delegation_lifetime, deployment, uninstall_journal
+from . import common, delegation_lifetime, deployment, kit_names, uninstall_journal
 from . import keycloak_role_sync as kcs
 from . import realm_hardening as rh
 from . import service_account_keys as sak
@@ -407,9 +408,10 @@ def load_register(path: Path = REGISTER_PATH) -> Register:
     return Register(json.loads(path.read_text(encoding="utf-8")))
 
 
-def exchange_scope(audience: str) -> str:
-    """The exchange scope of one audience; the only place the `aud-` prefix is added."""
-    return f"aud-{audience}"
+# Exchange scopes are built only by the platform kit (PLT-12): the kit-built scope of a
+# registered audience, and the kit's test of the exchange form for scopes found in the realm.
+exchange_scope = kit_names.exchange_scope
+is_exchange_scope = kit_names.has_exchange_prefix
 
 
 def _owner_value(owner: str) -> str:
@@ -1340,7 +1342,7 @@ def build_plan(
             )
         # No client with token exchange holds an aud-* default scope (security 1.2):
         # Keycloak would put that audience into every token of the client.
-        if spec.token_exchange and {s for s in spec.default_scopes if s.startswith("aud-")}:
+        if spec.token_exchange and {s for s in spec.default_scopes if is_exchange_scope(s)}:
             raise RealmSyncError(f"client {spec.client_id}: an aud-* scope as a default scope")
     admin_members = {
         name for declared in own_roles.values() for name in declared if name.endswith("-admin")
@@ -2084,7 +2086,7 @@ def _same_mapper(mapper: dict, wanted: dict) -> bool:
 def _exchange_event(scope_name: str) -> str:
     return (
         "exchange_right_changed"
-        if scope_name.startswith("aud-") or scope_name == OFFLINE
+        if is_exchange_scope(scope_name) or scope_name == OFFLINE
         else "config_changed"
     )
 
@@ -2092,7 +2094,7 @@ def _exchange_event(scope_name: str) -> str:
 def _scope_removed(kind: str, name: str, exchange: bool) -> str:
     """The action of removing a scope from a client; an `aud-*` default scope of an
     exchange client is named as what it is (security 1.2, ISB-G2.3)."""
-    if kind == "default" and exchange and name.startswith("aud-"):
+    if kind == "default" and exchange and is_exchange_scope(name):
         return f"default scope {name} removed (an exchange client holds no aud-* default scope)"
     return f"{kind} scope {name} removed"
 
@@ -2476,7 +2478,7 @@ class _Reconciler(_Actions):
         the client policies, which no longer name it by then."""
         for name, scope in sorted(self._scopes().items()):
             managed = (scope.get("attributes") or {}).get(MANAGED) == "true"
-            if managed and name.startswith("aud-") and name not in self.plan.exchange_scopes:
+            if managed and is_exchange_scope(name) and name not in self.plan.exchange_scopes:
                 self.do(
                     Change(
                         "client-scope",
@@ -2686,7 +2688,7 @@ class _Reconciler(_Actions):
         for kind in ("default", "optional"):
             for scope in self.call("GET", f"/default-{kind}-client-scopes") or []:
                 name = scope["name"]
-                if name == OFFLINE or name.startswith("aud-"):
+                if name == OFFLINE or is_exchange_scope(name):
                     self.do(
                         Change(
                             "realm",
@@ -3143,7 +3145,7 @@ class _Reconciler(_Actions):
                 continue  # an undeclared account is removed as a whole
             for kind in ("default", "optional"):
                 for name in sorted(client.get(f"{kind}ClientScopes") or []):
-                    if name != OFFLINE and not name.startswith("aud-"):
+                    if name != OFFLINE and not is_exchange_scope(name):
                         continue
                     self.by_id(
                         Change(
@@ -3170,13 +3172,14 @@ class _Reconciler(_Actions):
         if self.plan.person_scope:
             checked |= {PERSON_SCOPE}
         for name, scope in sorted(self._scopes().items()):
-            if name in {exchange_scope(n) for n in never}:
+            # An exchange client is never an audience, so the kit builds no scope for it;
+            # one found in the realm is recognised by its form.
+            if (holder := kit_names.exchange_audience(name)) in never:
                 self.do(
                     Change(
                         "client-scope",
                         name,
-                        f"removed, {name.removeprefix('aud-')} exchanges tokens and is never "
-                        "an audience",
+                        f"removed, {holder} exchanges tokens and is never an audience",
                         "delete_scope",
                         "exchange_right_changed",
                         "delete",

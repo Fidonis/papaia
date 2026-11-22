@@ -197,6 +197,35 @@ jobs:
           uv run --locked --extra dev --project tools papaia-kit repo words
           --root . --baseline words-baseline.toml
 
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      # The kit's static suite over the code that runs on an installation: no code
+      # execution with runtime commands, no query text assembled at runtime, exchange
+      # scopes only through the kit, no hard-coded model names. A finding passes only
+      # through an entry of static-exceptions.toml, and an entry only with the security
+      # officer's countersignature (--require-approved).
+      - name: Static suite of the kit with countersigned exceptions
+        run: >-
+          uv run --locked --extra dev --project tools papaia-kit conformance static
+          --root . --require-approved --junit static-report.xml
+          tools/lib tools/migrations src
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: static-report
+          path: static-report.xml
+          retention-days: 30
+
   secrets:
     name: Secret scan (full history)
     runs-on: ubuntu-latest

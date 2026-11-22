@@ -601,7 +601,10 @@ last part of every `keycloak-role-sync` step, so of every `start`) reconciles th
 
 - the naming register `tools/lib/names_register.json`, a snapshot of the platform kit's
   register (release and commit in its `source`): every client, audience, role and
-  service account with its owning repository and whether a client may exchange tokens;
+  service account with its owning repository and whether a client may exchange tokens,
+  and the exchange scope of every registered audience as the vendored kit's
+  `exchange_scope()` builds it (`exchange_scopes`, read by `tools/lib/kit_names.py`; the
+  sync never assembles a scope name itself);
 - the `exposes:` sections of the active add-ons (generation 7): the module is the
   add-on's name in `deployment.yaml`, and the manifest's `name` must be the same (an
   add-on installed as `foo` whose manifest says `papaia-flow` is refused); its `roles`, the

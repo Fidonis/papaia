@@ -26,6 +26,7 @@ import urllib.request
 from pathlib import Path
 
 from . import keycloak_role_sync as kcs
+from . import kit_names
 from . import realm_sync as rs
 from . import service_account_keys as sak
 
@@ -184,9 +185,9 @@ def describe(call, *, now: float | None = None) -> list[dict]:
                 "owner_sub": attributes.get("papaia.owner_sub"),
                 "deputy_sub": attributes.get("papaia.deputy_sub"),
                 "audiences": sorted(
-                    s.removeprefix("aud-")
+                    audience
                     for s in client.get("optionalClientScopes") or []
-                    if s.startswith("aud-")
+                    if (audience := kit_names.exchange_audience(s)) is not None
                 ),
                 "roles": sorted(r["name"] for r in scope.get("realmMappings") or []),
                 "effects": [e for e in (attributes.get("papaia.effects") or "").split(",") if e],

@@ -87,13 +87,13 @@ Please run them locally before pushing if you can. Configuration lives in `.gith
     uv run --locked --extra dev python -m ruff check lib tests
     uv run --locked --extra dev python -m pytest tests/
 
-The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker compose config` only with the Compose release it records; CI installs that release. Every image bump, including the ones Dependabot proposes, changes that snapshot: regenerate it on the pull request's branch with `PAPAIA_UPDATE_GOLDEN=1 uv run --locked --extra dev python -m pytest tests/test_golden_single_node.py` (from `tools/`) before merging. `ruff format` is not enforced.
+The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker compose config` only with the Compose release it records; CI installs that release. Every image bump, including the ones Dependabot proposes, changes that snapshot: regenerate it on the pull request's branch with `PAPAIA_UPDATE_GOLDEN=1 uv run --locked --extra dev python -m pytest tests/test_golden_single_node.py` (from `tools/`) before merging. The realm sync's output for fixed declarations (changes it reports, clients, scopes and realm defaults it leaves) is pinned the same way in `tools/tests/golden/realm-sync.json`; regenerate it with `PAPAIA_UPDATE_GOLDEN=1` and `tests/test_realm_sync_golden.py` only for an intended change of that output. `ruff format` is not enforced.
 
 The core's own images (`compat/own-images.yaml`) are pinned by the digest their inputs build to. A change to one of their declared inputs (Dockerfile, program, notice file), to `LICENSE` or to `VERSION` therefore needs a rebuild and a new pin in the same pull request: commit the change, then `tools/build-images build --registry=<prefix of a test registry> --out=builds.json` and `tools/build-images pin --builds=builds.json`, and commit the pins (see [`docs/compatibility.md`](docs/compatibility.md#own-images-of-the-core)). `tools/build-images check` runs without Docker.
 
 ### Repository checks
 
-More CI jobs guard every pull request. They use the platform's shared contract package `papaia-kit`, vendored as its release wheel under `tools/vendor/papaia-kit/<version>/` and pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; it is a development dependency only (Python 3.12) and never part of `papaia-ctl` or an image.
+Five more CI jobs guard every pull request. They use the platform's shared contract package `papaia-kit`, vendored as its release wheel under `tools/vendor/papaia-kit/<version>/` and pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; it is a development dependency only (Python 3.12) and never part of `papaia-ctl` or an image.
 
 - **License check** - every package of `tools/uv.lock` and the base image of the own images (`licenses/base-images.json`) against the kit's license policy. Packages with missing or ambiguous metadata carry a `[[verified]]` entry with its source in `license-exceptions.toml`; an exception for a weak-copyleft package needs an ADR and an approval. The job also checks that a seeded package under a forbidden license is rejected.
 
@@ -112,6 +112,11 @@ More CI jobs guard every pull request. They use the platform's shared contract p
       tools/build-images build --registry=127.0.0.1:5000/unpublished/ --out=builds.json
       tools/scan-images scan --builds=builds.json --out=scan/
       tools/scan-images check
+
+- **Static checks** - the kit's static suite over the code that runs on an installation (`tools/lib`, `tools/migrations`, `src`): no evaluation or subprocess with a command built at runtime, no query text assembled at runtime, no exchange scope (`aud-<audience>`) built from strings, no hard-coded model name. Exchange scopes come from the kit only: `papaia-ctl` runs on Python 3.10 and cannot import it, so the naming register snapshot `tools/lib/names_register.json` carries the scope of every registered audience as the vendored kit builds it (section `exchange_scopes`), `tools/lib/kit_names.py` reads it, and `tests/test_kit_names.py` checks it against the vendored kit. A remaining finding passes only through an entry of `static-exceptions.toml` that names its place (file, enclosing function, subject, count), where its input comes from (`fixed` or `operator-config`; a value a person, an event or a model feeds is never an exception), a reason and an expiry date. The job runs with `--require-approved`: an entry passes only once the security officer has countersigned it (`approved_by` names the security officer and no longer says pending). A stale, expired or miscounted entry fails as well.
+
+      uv run --locked --extra dev --project tools papaia-kit conformance static \
+          --root . --require-approved tools/lib tools/migrations src
 
 ## Local development
 

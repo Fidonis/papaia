@@ -138,5 +138,28 @@
     {"name": "svc-assist-prefs", "successor": "svc-assist-notify"},
     {"name": "svc-flow-prefs", "successor": "svc-flow-notify"},
     {"name": "flow", "successor": "aud-flow", "kinds": ["scope"]}
-  ]
+  ],
+  "exchange_scopes": {
+    "kit": "0.1.4",
+    "prefix": "aud-",
+    "scopes": [
+      {"audience": "flow", "scope": "aud-flow"},
+      {"audience": "assist-api", "scope": "aud-assist-api"},
+      {"audience": "papaia-connections", "scope": "aud-papaia-connections"},
+      {"audience": "papaia-data", "scope": "aud-papaia-data"},
+      {"audience": "papaia-studio", "scope": "aud-papaia-studio"},
+      {"audience": "papaia-studio-assist", "scope": "aud-papaia-studio-assist"},
+      {"audience": "papaia-studio-me", "scope": "aud-papaia-studio-me"},
+      {"audience": "papaia-studio-builder-mcp", "scope": "aud-papaia-studio-builder-mcp"},
+      {"audience": "papaia-prefs", "scope": "aud-papaia-prefs"},
+      {"audience": "papaia-audit", "scope": "aud-papaia-audit"},
+      {"audience": "papaia-people", "scope": "aud-papaia-people"},
+      {"audience": "mcp-paperless", "scope": "aud-mcp-paperless"},
+      {"audience": "mcp-qdrant", "scope": "aud-mcp-qdrant"},
+      {"audience": "mcp-qdrant-ingest", "scope": "aud-mcp-qdrant-ingest"},
+      {"audience": "mcp-knowledge-map", "scope": "aud-mcp-knowledge-map"},
+      {"audience": "mcp-mssql", "scope": "aud-mcp-mssql"},
+      {"audience": "mcp-wiki", "scope": "aud-mcp-wiki"}
+    ]
+  }
 }

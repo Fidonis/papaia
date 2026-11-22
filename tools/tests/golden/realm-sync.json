@@ -1,0 +1,3117 @@
+{
+ "accounts": {
+  "changes": [
+   {
+    "action": "settings corrected (accessTokenLifespan, bruteForceProtected, failureFactor, offlineSessionIdleTimeout, offlineSessionMaxLifespan, offlineSessionMaxLifespanEnabled, revokeRefreshToken)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "update_realm"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "flow-admin",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "flow-member",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-admin",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-auditor",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-confirm",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "prefs-read",
+    "operation": "create_role"
+   },
+   {
+    "action": "flow-admin added to the composite",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-admin",
+    "operation": "add_composite"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-flow",
+    "operation": "create_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-mcp-paperless",
+    "operation": "create_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-papaia-prefs",
+    "operation": "create_scope"
+   },
+   {
+    "action": "offline_access removed from the optional scopes of new clients",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "remove_default_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client-scope",
+    "name": "papaia-person",
+    "operation": "create_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-cli",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-cli",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "flow-console",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-console",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-engine",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-engine",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "mcp-paperless",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "mcp-qdrant",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-flow-mcp-chat",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-flow-mcp-chat",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-me",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: papaia-confirm, prefs-read",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-me",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-prefs",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "svc-flow-events",
+    "operation": "create_client"
+   },
+   {
+    "action": "new key pair, no key file in the configuration directory",
+    "effect": "write",
+    "event": "service_account_rotated",
+    "kind": "service-account",
+    "name": "svc-flow-events",
+    "operation": "set_key"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "svc-flow-notify",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: prefs-read",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "svc-flow-notify",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "new key pair, no key file in the configuration directory",
+    "effect": "write",
+    "event": "service_account_rotated",
+    "kind": "service-account",
+    "name": "svc-flow-notify",
+    "operation": "set_key"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "account",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "account-console",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "admin-cli",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "security-admin-console",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-profile",
+    "name": "papaia-person-subject",
+    "operation": "create_profile"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-profile",
+    "name": "papaia-reject",
+    "operation": "create_profile"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-policy",
+    "name": "papaia-person-flow-client-credentials",
+    "operation": "create_policy"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-policy",
+    "name": "papaia-person-flow-exchange",
+    "operation": "create_policy"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "account",
+    "operation": "harden_client"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "account-console",
+    "operation": "harden_client"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "admin-cli",
+    "operation": "harden_client"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "security-admin-console",
+    "operation": "harden_client"
+   },
+   {
+    "action": "client profile papaia-hardening set",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "set_client_profile"
+   },
+   {
+    "action": "client policy papaia-hardening set",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "set_client_policy"
+   },
+   {
+    "action": "realm roles granted: prefs-read",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "service-account",
+    "name": "svc-flow-notify",
+    "operation": "grant_service_account_role"
+   },
+   {
+    "action": "sign-ins of service accounts recorded (CLIENT_LOGIN events)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "record_service_account_use"
+   }
+  ],
+  "exchange_scopes": {
+   "aud-flow": "flow",
+   "aud-mcp-paperless": "mcp-paperless",
+   "aud-papaia-prefs": "papaia-prefs"
+  },
+  "list": [
+   {
+    "audiences": [
+     "mcp-paperless"
+    ],
+    "effects": [
+     "read"
+    ],
+    "id": "svc-flow-events",
+    "module": "flow",
+    "roles": []
+   },
+   {
+    "audiences": [
+     "papaia-prefs"
+    ],
+    "effects": [
+     "read"
+    ],
+    "id": "svc-flow-notify",
+    "module": "flow",
+    "roles": [
+     "prefs-read"
+    ]
+   }
+  ],
+  "plan": {
+   "flow": {
+    "default": [],
+    "optional": []
+   },
+   "flow-cli": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": []
+   },
+   "flow-console": {
+    "default": [
+     "papaia-person"
+    ],
+    "optional": [
+     "aud-flow"
+    ]
+   },
+   "flow-engine": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": []
+   },
+   "mcp-paperless": {
+    "default": [],
+    "optional": []
+   },
+   "mcp-qdrant": {
+    "default": [],
+    "optional": []
+   },
+   "papaia-flow-mcp-chat": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": []
+   },
+   "papaia-me": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": []
+   },
+   "papaia-prefs": {
+    "default": [],
+    "optional": []
+   },
+   "svc-flow-events": {
+    "default": [
+     "basic",
+     "roles",
+     "service_account"
+    ],
+    "optional": [
+     "aud-mcp-paperless"
+    ]
+   },
+   "svc-flow-notify": {
+    "default": [
+     "basic",
+     "roles",
+     "service_account"
+    ],
+    "optional": [
+     "aud-papaia-prefs"
+    ]
+   }
+  },
+  "realm": {
+   "clients": {
+    "account": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "account-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "admin-cli": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "broker": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "flow": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-cli": {
+     "attributes": {
+      "oauth2.device.authorization.grant.enabled": "true",
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-console": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "papaia-person"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-flow"
+     ]
+    },
+    "flow-engine": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "mcp-paperless": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "paperless",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "mcp-qdrant": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "qdrant",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-flow-mcp-chat": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-me": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "me",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-prefs": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "me",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "realm-management": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "security-admin-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "svc-flow-events": {
+     "attributes": {
+      "papaia.deputy_sub": "anna",
+      "papaia.effects": "read",
+      "papaia.kind": "service-account",
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "papaia.owner_sub": "dora",
+      "papaia.purpose": "{\"de\": \"Rechnungseingang\", \"en\": \"Incoming invoices\"}",
+      "papaia.rotation_days": "90",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false",
+      "token.endpoint.auth.signing.alg": "ES256",
+      "use.jwks.string": "true",
+      "use.jwks.url": "false"
+     },
+     "default": [
+      "basic",
+      "roles",
+      "service_account"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-mcp-paperless"
+     ]
+    },
+    "svc-flow-notify": {
+     "attributes": {
+      "papaia.deputy_sub": "anna",
+      "papaia.effects": "read",
+      "papaia.kind": "service-account",
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "papaia.owner_sub": "dora",
+      "papaia.purpose": "{\"en\": \"Notification preferences\"}",
+      "papaia.rotation_days": "90",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false",
+      "token.endpoint.auth.signing.alg": "ES256",
+      "use.jwks.string": "true",
+      "use.jwks.url": "false"
+     },
+     "default": [
+      "basic",
+      "roles",
+      "service_account"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-papaia-prefs"
+     ]
+    }
+   },
+   "realm_default_default": [
+    "acr",
+    "basic",
+    "email",
+    "profile",
+    "roles",
+    "web-origins"
+   ],
+   "realm_default_optional": [
+    "address",
+    "microprofile-jwt",
+    "organization",
+    "phone"
+   ],
+   "scopes": {
+    "acr": {
+     "attributes": {},
+     "mappers": []
+    },
+    "address": {
+     "attributes": {},
+     "mappers": []
+    },
+    "aud-flow": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "flow",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "aud-mcp-paperless": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "mcp-paperless",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "aud-papaia-prefs": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "papaia-prefs",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "basic": {
+     "attributes": {},
+     "mappers": []
+    },
+    "email": {
+     "attributes": {},
+     "mappers": []
+    },
+    "microprofile-jwt": {
+     "attributes": {},
+     "mappers": []
+    },
+    "offline_access": {
+     "attributes": {},
+     "mappers": []
+    },
+    "organization": {
+     "attributes": {},
+     "mappers": []
+    },
+    "papaia-person": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "auth_time",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "long",
+        "user.session.note": "AUTH_TIME",
+        "userinfo.token.claim": "true"
+       },
+       "name": "auth_time",
+       "protocolMapper": "oidc-usersessionmodel-note-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "email",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email",
+       "protocolMapper": "oidc-usermodel-attribute-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email_verified",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "boolean",
+        "user.attribute": "emailVerified",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email verified",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "groups",
+        "full.path": "true",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "groups",
+       "protocolMapper": "oidc-group-membership-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "person_id",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "id",
+        "userinfo.token.claim": "true"
+       },
+       "name": "person_id",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "roles",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "multivalued": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "roles",
+       "protocolMapper": "oidc-usermodel-realm-role-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "introspection.token.claim": "true"
+       },
+       "name": "sub",
+       "protocolMapper": "oidc-sub-mapper"
+      }
+     ]
+    },
+    "phone": {
+     "attributes": {},
+     "mappers": []
+    },
+    "profile": {
+     "attributes": {},
+     "mappers": []
+    },
+    "roles": {
+     "attributes": {},
+     "mappers": []
+    },
+    "service_account": {
+     "attributes": {},
+     "mappers": []
+    },
+    "web-origins": {
+     "attributes": {},
+     "mappers": []
+    }
+   }
+  }
+ },
+ "drift": {
+  "again": [],
+  "drift": [
+   {
+    "action": "aud-flow removed from the default scopes of new clients",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "remove_default_scope"
+   },
+   {
+    "action": "aud-mcp-paperless removed from the optional scopes of new clients",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "remove_default_scope"
+   },
+   {
+    "action": "default scope aud-flow removed (an exchange client holds no aud-* default scope)",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "papaia-studio-gateway",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "default scope aud-flow removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "librechat",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope aud-hand-made removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "librechat",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope aud-mcp-paperless removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "librechat",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "removed, flow-engine exchanges tokens and is never an audience",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-flow-engine",
+    "operation": "delete_scope"
+   },
+   {
+    "action": "removed, no confirmed pairing",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-mcp-wiki",
+    "operation": "delete_scope"
+   }
+  ],
+  "realm": {
+   "clients": {
+    "account": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "account-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "admin-cli": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "broker": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "flow": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-cli": {
+     "attributes": {
+      "oauth2.device.authorization.grant.enabled": "true",
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-console": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "papaia-person"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-flow"
+     ]
+    },
+    "flow-engine": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-mcp-paperless",
+      "offline_access"
+     ]
+    },
+    "librechat": {
+     "attributes": {},
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "mcp-paperless": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "paperless",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-flow-mcp-chat": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-assist": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-builder-mcp": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-gateway": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-flow",
+      "aud-mcp-paperless"
+     ]
+    },
+    "papaia-studio-me": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "realm-management": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "security-admin-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    }
+   },
+   "realm_default_default": [
+    "acr",
+    "basic",
+    "email",
+    "profile",
+    "roles",
+    "web-origins"
+   ],
+   "realm_default_optional": [
+    "address",
+    "microprofile-jwt",
+    "organization",
+    "phone"
+   ],
+   "scopes": {
+    "acr": {
+     "attributes": {},
+     "mappers": []
+    },
+    "address": {
+     "attributes": {},
+     "mappers": []
+    },
+    "aud-flow": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "flow",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "aud-hand-made": {
+     "attributes": {},
+     "mappers": []
+    },
+    "aud-mcp-paperless": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "mcp-paperless",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "basic": {
+     "attributes": {},
+     "mappers": []
+    },
+    "email": {
+     "attributes": {},
+     "mappers": []
+    },
+    "microprofile-jwt": {
+     "attributes": {},
+     "mappers": []
+    },
+    "offline_access": {
+     "attributes": {},
+     "mappers": []
+    },
+    "organization": {
+     "attributes": {},
+     "mappers": []
+    },
+    "papaia-person": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "auth_time",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "long",
+        "user.session.note": "AUTH_TIME",
+        "userinfo.token.claim": "true"
+       },
+       "name": "auth_time",
+       "protocolMapper": "oidc-usersessionmodel-note-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "email",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email",
+       "protocolMapper": "oidc-usermodel-attribute-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email_verified",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "boolean",
+        "user.attribute": "emailVerified",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email verified",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "groups",
+        "full.path": "true",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "groups",
+       "protocolMapper": "oidc-group-membership-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "person_id",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "id",
+        "userinfo.token.claim": "true"
+       },
+       "name": "person_id",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "roles",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "multivalued": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "roles",
+       "protocolMapper": "oidc-usermodel-realm-role-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "introspection.token.claim": "true"
+       },
+       "name": "sub",
+       "protocolMapper": "oidc-sub-mapper"
+      }
+     ]
+    },
+    "phone": {
+     "attributes": {},
+     "mappers": []
+    },
+    "profile": {
+     "attributes": {},
+     "mappers": []
+    },
+    "roles": {
+     "attributes": {},
+     "mappers": []
+    },
+    "service_account": {
+     "attributes": {},
+     "mappers": []
+    },
+    "web-origins": {
+     "attributes": {},
+     "mappers": []
+    }
+   }
+  },
+  "repair": [
+   {
+    "action": "aud-flow removed from the default scopes of new clients",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "remove_default_scope"
+   },
+   {
+    "action": "aud-mcp-paperless removed from the optional scopes of new clients",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "remove_default_scope"
+   },
+   {
+    "action": "default scope aud-flow removed (an exchange client holds no aud-* default scope)",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "papaia-studio-gateway",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "default scope aud-flow removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "librechat",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope aud-hand-made removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "librechat",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope aud-mcp-paperless removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "librechat",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "removed, flow-engine exchanges tokens and is never an audience",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-flow-engine",
+    "operation": "delete_scope"
+   },
+   {
+    "action": "removed, no confirmed pairing",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-mcp-wiki",
+    "operation": "delete_scope"
+   }
+  ]
+ },
+ "fresh": {
+  "again": [],
+  "changes": [
+   {
+    "action": "settings corrected (accessTokenLifespan, bruteForceProtected, failureFactor, offlineSessionIdleTimeout, offlineSessionMaxLifespan, offlineSessionMaxLifespanEnabled, revokeRefreshToken)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "update_realm"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "flow-admin",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "flow-member",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-admin",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-auditor",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-confirm",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "studio-admin",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "studio-member",
+    "operation": "create_role"
+   },
+   {
+    "action": "flow-admin added to the composite",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-admin",
+    "operation": "add_composite"
+   },
+   {
+    "action": "studio-admin added to the composite",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-admin",
+    "operation": "add_composite"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-flow",
+    "operation": "create_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-mcp-paperless",
+    "operation": "create_scope"
+   },
+   {
+    "action": "offline_access removed from the optional scopes of new clients",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "remove_default_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client-scope",
+    "name": "papaia-person",
+    "operation": "create_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-cli",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm, studio-member",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-cli",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "flow-console",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm, studio-member",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-console",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "flow-engine",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm, studio-member",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "flow-engine",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "mcp-paperless",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-flow-mcp-chat",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: flow-admin, flow-member, papaia-confirm, studio-member",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-flow-mcp-chat",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-studio",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-studio-assist",
+    "operation": "create_client"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-studio-builder-mcp",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: papaia-confirm, studio-admin, studio-member",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-studio-builder-mcp",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "papaia-studio-gateway",
+    "operation": "create_client"
+   },
+   {
+    "action": "roles in token scope: papaia-confirm, studio-admin, studio-member",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-studio-gateway",
+    "operation": "add_role_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "papaia-studio-me",
+    "operation": "create_client"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "account",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "account-console",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "admin-cli",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope offline_access removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "security-admin-console",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-profile",
+    "name": "papaia-person-subject",
+    "operation": "create_profile"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-profile",
+    "name": "papaia-reject",
+    "operation": "create_profile"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-policy",
+    "name": "papaia-one-aud-flow-mcp-paperless",
+    "operation": "create_policy"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-policy",
+    "name": "papaia-person-flow-client-credentials",
+    "operation": "create_policy"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "exchange_right_changed",
+    "kind": "client-policy",
+    "name": "papaia-person-flow-exchange",
+    "operation": "create_policy"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "account",
+    "operation": "harden_client"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "account-console",
+    "operation": "harden_client"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "admin-cli",
+    "operation": "harden_client"
+   },
+   {
+    "action": "hardened (directAccessGrantsEnabled, pkce.code.challenge.method)",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "client",
+    "name": "security-admin-console",
+    "operation": "harden_client"
+   },
+   {
+    "action": "client profile papaia-hardening set",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "set_client_profile"
+   },
+   {
+    "action": "client policy papaia-hardening set",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "realm",
+    "name": "papaia",
+    "operation": "set_client_policy"
+   }
+  ],
+  "realm": {
+   "clients": {
+    "account": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "account-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "admin-cli": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "broker": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "flow": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-cli": {
+     "attributes": {
+      "oauth2.device.authorization.grant.enabled": "true",
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-console": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "papaia-person"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-flow"
+     ]
+    },
+    "flow-engine": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-mcp-paperless",
+      "offline_access"
+     ]
+    },
+    "mcp-paperless": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "paperless",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-flow-mcp-chat": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-assist": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-builder-mcp": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-gateway": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-flow",
+      "aud-mcp-paperless"
+     ]
+    },
+    "papaia-studio-me": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "realm-management": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "security-admin-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    }
+   },
+   "realm_default_default": [
+    "acr",
+    "basic",
+    "email",
+    "profile",
+    "roles",
+    "web-origins"
+   ],
+   "realm_default_optional": [
+    "address",
+    "microprofile-jwt",
+    "organization",
+    "phone"
+   ],
+   "scopes": {
+    "acr": {
+     "attributes": {},
+     "mappers": []
+    },
+    "address": {
+     "attributes": {},
+     "mappers": []
+    },
+    "aud-flow": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "flow",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "aud-mcp-paperless": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "mcp-paperless",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "basic": {
+     "attributes": {},
+     "mappers": []
+    },
+    "email": {
+     "attributes": {},
+     "mappers": []
+    },
+    "microprofile-jwt": {
+     "attributes": {},
+     "mappers": []
+    },
+    "offline_access": {
+     "attributes": {},
+     "mappers": []
+    },
+    "organization": {
+     "attributes": {},
+     "mappers": []
+    },
+    "papaia-person": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "auth_time",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "long",
+        "user.session.note": "AUTH_TIME",
+        "userinfo.token.claim": "true"
+       },
+       "name": "auth_time",
+       "protocolMapper": "oidc-usersessionmodel-note-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "email",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email",
+       "protocolMapper": "oidc-usermodel-attribute-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email_verified",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "boolean",
+        "user.attribute": "emailVerified",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email verified",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "groups",
+        "full.path": "true",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "groups",
+       "protocolMapper": "oidc-group-membership-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "person_id",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "id",
+        "userinfo.token.claim": "true"
+       },
+       "name": "person_id",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "roles",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "multivalued": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "roles",
+       "protocolMapper": "oidc-usermodel-realm-role-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "introspection.token.claim": "true"
+       },
+       "name": "sub",
+       "protocolMapper": "oidc-sub-mapper"
+      }
+     ]
+    },
+    "phone": {
+     "attributes": {},
+     "mappers": []
+    },
+    "profile": {
+     "attributes": {},
+     "mappers": []
+    },
+    "roles": {
+     "attributes": {},
+     "mappers": []
+    },
+    "service_account": {
+     "attributes": {},
+     "mappers": []
+    },
+    "web-origins": {
+     "attributes": {},
+     "mappers": []
+    }
+   }
+  }
+ },
+ "plan": {
+  "clients": {
+   "flow": {
+    "default": [],
+    "optional": []
+   },
+   "flow-cli": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": []
+   },
+   "flow-console": {
+    "default": [
+     "papaia-person"
+    ],
+    "optional": [
+     "aud-flow"
+    ]
+   },
+   "flow-engine": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": [
+     "aud-mcp-paperless",
+     "offline_access"
+    ]
+   },
+   "mcp-paperless": {
+    "default": [],
+    "optional": []
+   },
+   "papaia-flow-mcp-chat": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": []
+   },
+   "papaia-studio": {
+    "default": [],
+    "optional": []
+   },
+   "papaia-studio-assist": {
+    "default": [],
+    "optional": []
+   },
+   "papaia-studio-builder-mcp": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": []
+   },
+   "papaia-studio-gateway": {
+    "default": [
+     "acr",
+     "basic",
+     "email",
+     "profile",
+     "roles",
+     "web-origins"
+    ],
+    "optional": [
+     "aud-flow",
+     "aud-mcp-paperless"
+    ]
+   },
+   "papaia-studio-me": {
+    "default": [],
+    "optional": []
+   }
+  },
+  "exchange_scopes": {
+   "aud-flow": "flow",
+   "aud-mcp-paperless": "mcp-paperless"
+  }
+ },
+ "revoked": {
+  "changes": [
+   {
+    "action": "optional scope aud-mcp-paperless removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "flow-engine",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "optional scope aud-mcp-paperless removed",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client",
+    "name": "papaia-studio-gateway",
+    "operation": "remove_scope"
+   },
+   {
+    "action": "removed, no longer planned",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client-policy",
+    "name": "papaia-one-aud-flow-mcp-paperless",
+    "operation": "delete_policy"
+   },
+   {
+    "action": "removed, no confirmed pairing",
+    "effect": "delete",
+    "event": "exchange_right_changed",
+    "kind": "client-scope",
+    "name": "aud-mcp-paperless",
+    "operation": "delete_scope"
+   }
+  ],
+  "realm": {
+   "clients": {
+    "account": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "account-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "admin-cli": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    },
+    "broker": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "flow": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-cli": {
+     "attributes": {
+      "oauth2.device.authorization.grant.enabled": "true",
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "flow-console": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "papaia-person"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-flow"
+     ]
+    },
+    "flow-engine": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "offline_access"
+     ]
+    },
+    "mcp-paperless": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "paperless",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-flow-mcp-chat": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "flow",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-assist": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-builder-mcp": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": []
+    },
+    "papaia-studio-gateway": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "true"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "aud-flow"
+     ]
+    },
+    "papaia-studio-me": {
+     "attributes": {
+      "papaia.managed": "true",
+      "papaia.owner": "studio",
+      "pkce.code.challenge.method": "S256",
+      "standard.token.exchange.enabled": "false"
+     },
+     "default": [],
+     "mappers": [],
+     "optional": []
+    },
+    "realm-management": {
+     "attributes": {},
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "offline_access",
+      "organization",
+      "phone"
+     ]
+    },
+    "security-admin-console": {
+     "attributes": {
+      "pkce.code.challenge.method": "S256"
+     },
+     "default": [
+      "acr",
+      "basic",
+      "email",
+      "profile",
+      "roles",
+      "web-origins"
+     ],
+     "mappers": [],
+     "optional": [
+      "address",
+      "microprofile-jwt",
+      "organization",
+      "phone"
+     ]
+    }
+   },
+   "realm_default_default": [
+    "acr",
+    "basic",
+    "email",
+    "profile",
+    "roles",
+    "web-origins"
+   ],
+   "realm_default_optional": [
+    "address",
+    "microprofile-jwt",
+    "organization",
+    "phone"
+   ],
+   "scopes": {
+    "acr": {
+     "attributes": {},
+     "mappers": []
+    },
+    "address": {
+     "attributes": {},
+     "mappers": []
+    },
+    "aud-flow": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "included.client.audience": "flow",
+        "introspection.token.claim": "true"
+       },
+       "name": "audience",
+       "protocolMapper": "oidc-audience-mapper"
+      }
+     ]
+    },
+    "basic": {
+     "attributes": {},
+     "mappers": []
+    },
+    "email": {
+     "attributes": {},
+     "mappers": []
+    },
+    "microprofile-jwt": {
+     "attributes": {},
+     "mappers": []
+    },
+    "offline_access": {
+     "attributes": {},
+     "mappers": []
+    },
+    "organization": {
+     "attributes": {},
+     "mappers": []
+    },
+    "papaia-person": {
+     "attributes": {
+      "display.on.consent.screen": "false",
+      "include.in.token.scope": "true",
+      "papaia.managed": "true"
+     },
+     "mappers": [
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "auth_time",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "long",
+        "user.session.note": "AUTH_TIME",
+        "userinfo.token.claim": "true"
+       },
+       "name": "auth_time",
+       "protocolMapper": "oidc-usersessionmodel-note-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "email",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email",
+       "protocolMapper": "oidc-usermodel-attribute-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "email_verified",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "boolean",
+        "user.attribute": "emailVerified",
+        "userinfo.token.claim": "true"
+       },
+       "name": "email verified",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "groups",
+        "full.path": "true",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "groups",
+       "protocolMapper": "oidc-group-membership-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "person_id",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "user.attribute": "id",
+        "userinfo.token.claim": "true"
+       },
+       "name": "person_id",
+       "protocolMapper": "oidc-usermodel-property-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "claim.name": "roles",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "jsonType.label": "String",
+        "multivalued": "true",
+        "userinfo.token.claim": "true"
+       },
+       "name": "roles",
+       "protocolMapper": "oidc-usermodel-realm-role-mapper"
+      },
+      {
+       "config": {
+        "access.token.claim": "true",
+        "introspection.token.claim": "true"
+       },
+       "name": "sub",
+       "protocolMapper": "oidc-sub-mapper"
+      }
+     ]
+    },
+    "phone": {
+     "attributes": {},
+     "mappers": []
+    },
+    "profile": {
+     "attributes": {},
+     "mappers": []
+    },
+    "roles": {
+     "attributes": {},
+     "mappers": []
+    },
+    "service_account": {
+     "attributes": {},
+     "mappers": []
+    },
+    "web-origins": {
+     "attributes": {},
+     "mappers": []
+    }
+   }
+  }
+ }
+}
