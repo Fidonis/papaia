@@ -431,7 +431,7 @@ def test_prepare_creates_the_ca_server_certificate_passwords_and_signing_key(tmp
     # service and the schema step as the user that owns the config dir.
     assert all(_mode(path) == 0o600 for path in (base / "secrets").iterdir())
     passwords = {p.read_text() for p in (base / "secrets").glob("db-*-password")}
-    assert len(passwords) == 3 and all(len(p) >= 40 for p in passwords)
+    assert len(passwords) == 4 and all(len(p) >= 40 for p in passwords)
     assert (
         "ED25519"
         in _openssl(

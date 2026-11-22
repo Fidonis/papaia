@@ -18,7 +18,17 @@ from pathlib import Path
 
 import yaml
 
-from . import common, compat, deployment, egress, gpu_detect, hosted_model, images, paperless_gate
+from . import (
+    audit,
+    common,
+    compat,
+    deployment,
+    egress,
+    gpu_detect,
+    hosted_model,
+    images,
+    paperless_gate,
+)
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
 # `networks.app_network` may use to scope its bridge name to the deployment
@@ -197,6 +207,10 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
     # LiteLLM behind papaia-egress while the test stack's hosted model is on.
     hosted = hosted_model.generate_override(config_dir, repo_root)
     written: list[Path] = [hosted] if hosted is not None else []
+    # papaia-audit behind papaia-egress while a SIEM target is set (lib/audit.py).
+    siem = audit.generate_siem_override(config_dir)
+    if siem is not None:
+        written.append(siem)
     deployed = deployment.load(config_dir)
     if not deployed:
         return written

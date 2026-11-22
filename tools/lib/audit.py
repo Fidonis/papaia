@@ -8,8 +8,13 @@ Everything lives under `$PAPAIA_CONFIG_DIR/infra/audit/`:
     service/sources.json          source -> fingerprints of its client certificates
     service/token-keys.json       the realm's issuer and signing keys, for the read API
     secrets/                      database passwords, the key that signs chain heads and
-                                  the key of the pseudonyms
+                                  the key of the pseudonyms (read API and SIEM export)
     clients/<source>/             client.crt, client.key and ca.crt of one source
+
+The signed chain heads go to `$PAPAIA_BACKUP_DIR/audit-heads/` (`ensure_heads_folder`).
+With a SIEM target over the network (`PAPAIA_AUDIT_SIEM_TARGET`), papaia-audit leaves the
+stack through papaia-egress only: `egress_source` allows that one host and port, and
+`generate_siem_override` puts the service on its own internal egress network.
 
 `prepare` creates what is missing and never replaces what exists, so it runs before
 every start. `issue_source_certificate` gives a source (one of SOURCES) a new client
@@ -35,6 +40,9 @@ import tempfile
 import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
+
+import yaml
 
 from . import common, status
 
@@ -69,6 +77,7 @@ SECRET_FILES = {
     "db-owner-password": 0o600,
     "db-ingest-password": 0o600,
     "db-read-password": 0o600,
+    "db-retention-password": 0o600,
 }
 HEADS_KEY = "heads-signing-key"
 # Never replaced: a new key gives every person a new pseudonym.
@@ -76,6 +85,11 @@ PSEUDONYM_KEY = "pseudonym-key"
 TOKEN_KEYS_FORMAT = "papaia.audit-token-keys/1"
 _TOKEN_KEY_FIELDS = ("kid", "kty", "alg", "use", "n", "e")
 _B64URL_RE = re.compile(r"^[A-Za-z0-9_-]{1,1024}$")
+HEADS_FOLDER = "audit-heads"
+# The backup target the heads folder was set up on; its folder must exist from then on.
+HEADS_TARGET_FILE = Path("infra") / "audit" / "heads-target"
+SIEM_KEY = "PAPAIA_AUDIT_SIEM_TARGET"
+SIEM_SCHEMES = {"syslog-tls": 6514, "https": 443}
 
 
 class AuditError(Exception):
@@ -289,6 +303,119 @@ def fetch_token_keys(base_url: str, ctx: ssl.SSLContext) -> tuple[object, object
         except (OSError, ValueError) as exc:
             raise AuditError(f"Keycloak did not answer at {base_url}: {exc}") from None
     return documents[0], documents[1]
+def ensure_heads_folder(config_dir: Path) -> Path:
+    """`$PAPAIA_BACKUP_DIR/audit-heads`, where papaia-audit appends the signed chain heads
+    every hour (K-15). The backup target itself is never created, and the folder only
+    once per target (recorded in infra/audit/heads-target): a missing folder after that
+    is an unmounted target, and its empty mount point must not take the heads instead."""
+    backup = common.parse_env_file(config_dir / ".env").get("PAPAIA_BACKUP_DIR", "")
+    if not backup or not Path(backup).is_absolute():
+        raise AuditError("PAPAIA_BACKUP_DIR must be set to an absolute path (the signed "
+                         "chain heads are kept there).")
+    backup_dir = Path(backup)
+    folder = backup_dir / HEADS_FOLDER
+    marker = config_dir / HEADS_TARGET_FILE
+    recorded = marker.read_text(encoding="utf-8").strip() if marker.is_file() else None
+    if not folder.is_dir():
+        if recorded == str(backup_dir):
+            raise AuditError(f"{folder} is missing: the backup target is not mounted. Mount "
+                             "it and run again; only for a new, empty target create the "
+                             "folder (mode 0700).")
+        if not backup_dir.is_dir():
+            raise AuditError(f"the backup target PAPAIA_BACKUP_DIR={backup_dir} does not "
+                             "exist: create or mount it (the signed chain heads are kept "
+                             "there).")
+        folder.mkdir(mode=0o700)
+    if recorded != str(backup_dir):
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        common.atomic_write_private(marker, f"{backup_dir}\n")
+    return folder
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SIEM target behind papaia-egress
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def siem_target(env: dict[str, str]) -> tuple[str, int] | None:
+    """Host and port of `PAPAIA_AUDIT_SIEM_TARGET`, or None when no target is set."""
+    raw = env.get(SIEM_KEY, "").strip()
+    if not raw:
+        return None
+    try:
+        parts = urlsplit(raw)
+        port = parts.port or SIEM_SCHEMES.get(parts.scheme)
+        host = egress_host(parts.hostname or "")
+    except ValueError as exc:
+        raise AuditError(f"{SIEM_KEY}: {exc}") from None
+    if parts.scheme not in SIEM_SCHEMES or port is None or parts.username or parts.query:
+        raise AuditError(f"{SIEM_KEY} must be syslog-tls://host[:port] or "
+                         "https://host[:port]/path")
+    return host, port
+
+
+def egress_host(value: str) -> str:
+    from . import egress
+
+    return egress.allowed_host(value)
+
+
+def siem_network(env: dict[str, str]) -> str:
+    project = env.get("PAPAIA_PROJECT") or env.get("COMPOSE_PROJECT_NAME") or "papaia"
+    return f"{project}-{SERVICE}-egress"
+
+
+def egress_source(config_dir: Path) -> dict | None:
+    """The source of papaia-audit at papaia-egress while a SIEM target is set."""
+    from . import egress
+
+    found = siem_target(common.parse_env_file(config_dir / ".env"))
+    if found is None:
+        return None
+    host, port = found
+    return {
+        "name": SERVICE,
+        "alias": egress.alias(SERVICE),
+        "allow": [{"host": host, "ports": [port]}],
+        "internal": egress.load_internal_targets(config_dir).get(SERVICE, []),
+    }
+
+
+def siem_override_path(config_dir: Path) -> Path:
+    return config_dir / "overrides" / f"docker-compose.{SERVICE}.siem.override.yml"
+
+
+def generate_siem_override(config_dir: Path) -> Path | None:
+    """Put papaia-audit on its own internal egress network, with papaia-egress as its only
+    way out, while a SIEM target is set; remove the override otherwise."""
+    from . import egress
+
+    out = siem_override_path(config_dir)
+    env = common.parse_env_file(config_dir / ".env")
+    if siem_target(env) is None:
+        out.unlink(missing_ok=True)
+        return None
+    net = siem_network(env)
+    override = {
+        "services": {
+            SERVICE: {
+                "environment": {
+                    "PAPAIA_AUDIT_SIEM_PROXY": f"http://{egress.alias(SERVICE)}:{egress.PORT}",
+                },
+                "networks": {"papaia-audit-net": {}, "papaia-audit-ingest-net": {}, net: {}},
+            },
+            egress.SERVICE: {
+                "networks": {
+                    egress.EGRESS_NETWORK: {},
+                    net: {"aliases": [egress.alias(SERVICE)]},
+                }
+            },
+        },
+        "networks": {net: {"name": net, "internal": True}},
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    common.atomic_write(out, yaml.safe_dump(override, sort_keys=False, default_flow_style=False))
+    return out
 
 
 def issue_source_certificate(config_dir: Path, source: str) -> Path:
@@ -344,7 +471,7 @@ def service_command(
     command: str, *, source: str | None = None, against: Path | None = None, as_json: bool = False
 ) -> tuple[list[str], str]:
     """Arguments for `python -m papaia_audit` in the container, and its stdin."""
-    if command not in ("verify", "heads"):
+    if command not in ("verify", "heads", "retention"):
         raise AuditError(f"unknown audit command '{command}'")
     args = [command]
     stdin = ""

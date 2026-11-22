@@ -453,6 +453,17 @@ def render(config_dir: Path, repo_root: Path | None = None) -> Path:
                 " model gateway while the hosted test model is on"
             )
         sources.append(gateway)
+    # papaia-audit to its SIEM target, while one is set (lib/audit.py).
+    from . import audit
+
+    try:
+        siem = audit.egress_source(config_dir)
+    except audit.AuditError as exc:
+        raise EgressError(str(exc)) from exc
+    if siem is not None:
+        if any(s["name"] == siem["name"] for s in sources):
+            raise EgressError(f"the source name '{siem['name']}' belongs to papaia-audit")
+        sources.append(siem)
     config = {
         "format": CONFIG_FORMAT,
         "sources": sources,

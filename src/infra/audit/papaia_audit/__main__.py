@@ -5,6 +5,7 @@ chain heads.
     python -I -m papaia_audit serve
     python -I -m papaia_audit verify [--source NAME] [--against FILE|-] [--json]
     python -I -m papaia_audit heads
+    python -I -m papaia_audit retention
 
 `serve` accepts `POST /v1/ingest` on port 8443. The source of a request is the client
 certificate: it must chain to the ingest CA and its fingerprint must be listed for that
@@ -17,6 +18,15 @@ bearer token checked against token-keys.json (re-read when it changes).
 (schema.sql next to this file) in one transaction when it does not exist yet, and sets
 the passwords of `audit_ingest` and `audit_read` from their secrets on every run, so a
 replaced password takes effect. The service itself never holds the owner's password.
+
+`serve` also runs the store's upkeep in one background thread: every full hour it signs
+the chain heads into the heads folder at the backup target and verifies every chain;
+daily at 03:30 UTC it runs retention (retention.py, role `audit_retention`); every few
+seconds it sends new events to the SIEM target, if one is set (siem.py). Each duty fails
+on its own (retention.Schedule): an unreachable SIEM target stops no heads, verification
+or retention. Settings are
+read from the environment at start; a malformed one stops the service. A changed setting
+is recorded as a `config_changed` event.
 
 `verify` and `heads` read with the role `audit_read`. `heads` prints one line that signs
 the last `seq` and hash of every source with the service's Ed25519 key; `verify
@@ -39,6 +49,7 @@ import signal
 import ssl
 import sys
 import threading
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,7 +60,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from psycopg import sql
 
-from papaia_audit import core, read
+from papaia_audit import core, read, retention, siem
 
 CONFIG_DIR = Path(os.environ.get("PAPAIA_AUDIT_CONFIG_DIR", "/etc/papaia-audit"))
 SECRETS_DIR = Path(os.environ.get("PAPAIA_AUDIT_SECRETS_DIR", "/run/secrets"))
@@ -61,7 +72,11 @@ REQUEST_TIMEOUT_SECONDS = 30
 CONTENT_TYPE = "application/x-ndjson"
 SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 SCHEMA_READ_SQL = Path(__file__).with_name("schema_read.sql")
-SERVICE_ROLES = ("ingest", "read")
+SCHEMA_RETENTION_SQL = Path(__file__).with_name("schema_retention.sql")
+SERVICE_ROLES = ("ingest", "read", "retention")
+HEADS_DIR = Path(os.environ.get("PAPAIA_AUDIT_HEADS_DIR", "/var/lib/papaia-audit/heads"))
+EXPORT_INTERVAL_SECONDS = 5
+CONFIG_WRITER = "papaia-audit/config"
 
 
 def log(message: str) -> None:
@@ -453,12 +468,13 @@ def serve() -> int:
     context.verify_mode = ssl.CERT_REQUIRED
     context.load_cert_chain(CONFIG_DIR / "server.crt", CONFIG_DIR / "server.key")
     context.load_verify_locations(cafile=str(CONFIG_DIR / "ca.crt"))
-    pseudonym_key = (SECRETS_DIR / "audit_pseudonym_key").read_bytes().strip()
+    settings = ServiceSettings(os.environ)
     check = core.SubmissionCheck()
     api = read.ReadApi(
-        PgReadStore(), TokenKeysFile(CONFIG_DIR / "token-keys.json"), pseudonym_key, check
+        PgReadStore(), TokenKeysFile(CONFIG_DIR / "token-keys.json"), _pseudonym_key(), check
     )
     server = IngestServer(context, Sources(CONFIG_DIR / "sources.json"), api)
+    Upkeep(settings).start()
     # PID 1 in the container: without a handler SIGTERM would be ignored.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     log(f"ingest listening on :{PORT}")
@@ -486,6 +502,11 @@ def schema() -> int:
         if not (queries and queries[0]):
             conn.execute(SCHEMA_READ_SQL.read_text(encoding="utf-8"))
             log("person queries added to the store")
+        upkeep = conn.execute("SELECT to_regclass('audit.anchor') IS NOT NULL").fetchone()
+        if not (upkeep and upkeep[0]):
+            # A new store, or one of a release without retention: added in place.
+            conn.execute(SCHEMA_RETENTION_SQL.read_text(encoding="utf-8"))
+            log("retention, deletion lock and export positions added")
         for role, password in passwords.items():
             # ALTER ROLE takes no parameters; the literal is quoted by the driver and the
             # statement is never logged.
@@ -546,25 +567,62 @@ def _read_heads(name: str) -> list[dict[str, Any]]:
     return heads
 
 
+def _anchors(conn: psycopg.Connection) -> dict[str, tuple[int, bytes]]:
+    rows = conn.execute("SELECT source, seq, hash FROM audit.anchor").fetchall()
+    return {source: (seq, bytes(digest)) for source, seq, digest in rows}
+
+
+def _attested(conn: psycopg.Connection, report: core.ChainReport | None) -> set[str]:
+    """Anchor ids named by retention_run events of papaia-audit, up to where its own
+    chain verified."""
+    if report is None:
+        return set()
+    upto = report.head_seq if report.valid else (report.broken_at or 1) - 1
+    rows = conn.execute(
+        "SELECT body -> 'object_ref' ->> 'id' FROM audit.event WHERE source = %s"
+        " AND event = 'retention_run' AND seq <= %s AND body -> 'object_ref' ->> 'type' = %s",
+        (retention.OWN_SOURCE, upto, retention.ANCHOR_REF),
+    ).fetchall()
+    return {row[0] for row in rows if isinstance(row[0], str)}
+
+
+def verify_all(
+    conn: psycopg.Connection, source: str | None, heads: list[dict[str, Any]]
+) -> dict[str, core.ChainReport]:
+    anchors = _anchors(conn)
+    names = (
+        [source]
+        if source
+        else [row[0] for row in conn.execute("SELECT DISTINCT source FROM audit.event")]
+    )
+    found = set(names)
+    if not source:
+        found |= {h["source"] for h in heads} | set(anchors)
+    reports = {}
+    for name in sorted(found):
+        wanted = [h["seq"] for h in heads if h["source"] == name]
+        reports[name] = core.verify_chain(name, _rows(conn, name), wanted, anchors.get(name))
+    own = reports.get(retention.OWN_SOURCE)
+    if own is None:
+        # Checking one source still needs the retention runs that attest its anchor.
+        own = core.verify_chain(
+            retention.OWN_SOURCE, _rows(conn, retention.OWN_SOURCE), (),
+            anchors.get(retention.OWN_SOURCE),
+        )
+    core.check_anchors(reports, anchors, _attested(conn, own))
+    core.check_heads(reports, heads)
+    return reports
+
+
 def verify(source: str | None, against: str | None, as_json: bool) -> int:
     if source is not None and not core.SOURCE_RE.match(source):
         raise SystemExit("papaia-audit: --source must be a source name")
     heads = _read_heads(against) if against else []
+    if source:
+        heads = [h for h in heads if h["source"] == source]
     with connect("read") as conn:
         conn.read_only = True
-        names = (
-            [source]
-            if source
-            else [
-                row[0] for row in conn.execute("SELECT DISTINCT source FROM audit.event ORDER BY 1")
-            ]
-        )
-        names = sorted(set(names) | {h["source"] for h in heads if not source})
-        reports = {}
-        for name in names:
-            wanted = [h["seq"] for h in heads if h["source"] == name]
-            reports[name] = core.verify_chain(name, _rows(conn, name), wanted)
-    core.check_heads(reports, heads)
+        reports = verify_all(conn, source, heads)
     if as_json:
         print(json.dumps({"sources": [r.as_dict() for r in reports.values()]}))
     for report in reports.values():
@@ -577,21 +635,269 @@ def verify(source: str | None, against: str | None, as_json: bool) -> int:
     return 0 if all(r.valid for r in reports.values()) else 1
 
 
-def heads() -> int:
-    key = _heads_key()
+def signed_heads(key: Ed25519PrivateKey) -> dict[str, Any]:
+    """The signed document of every source's last event (the anchor where none is left)."""
     with connect("read") as conn:
         conn.read_only = True
         rows = conn.execute(
             "SELECT DISTINCT ON (source) source, seq, hash FROM audit.event"
             " ORDER BY source, seq DESC"
         ).fetchall()
+        last = {source: (seq, bytes(digest)) for source, seq, digest in rows}
+        for source, anchor in _anchors(conn).items():
+            last.setdefault(source, anchor)
     document = core.heads_document(
-        [(source, seq, bytes(digest)) for source, seq, digest in rows],
+        [(source, seq, digest) for source, (seq, digest) in last.items()],
         _time_text(datetime.now(timezone.utc)),
     )
     signature = key.sign(core.heads_payload(document))
     document["signature"] = "ed25519:" + base64.b64encode(signature).decode("ascii")
-    print(json.dumps(document, separators=(",", ":")))
+    return document
+
+
+def heads() -> int:
+    print(json.dumps(signed_heads(_heads_key()), separators=(",", ":")))
+    return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# retention, settings and SIEM export
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class PgRetentionStore:
+    """Facts through `audit_read`, removal through `audit_retention` (audit.prune)."""
+
+    def sources(self) -> list[str]:
+        with connect("read") as conn:
+            rows = conn.execute(
+                "SELECT source FROM audit.event GROUP BY source"
+                " UNION SELECT source FROM audit.anchor"
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def facts(self, source: str, before: datetime) -> retention.Facts:
+        with connect("read") as conn:
+            row = conn.execute(
+                """
+                SELECT
+                  coalesce((SELECT min(seq) FROM audit.event WHERE source = %(s)s
+                            AND time >= %(t)s),
+                           (SELECT coalesce(max(seq), 0) + 1 FROM audit.event
+                            WHERE source = %(s)s)) - 1,
+                  coalesce((SELECT seq FROM audit.anchor WHERE source = %(s)s), 0),
+                  (SELECT min(e.seq) FROM audit.event e JOIN audit.legal_hold h
+                     ON h.sub = e.sub AND h.lifted_at IS NULL WHERE e.source = %(s)s),
+                  (SELECT min(coalesce(c.seq, 0)) FROM audit.export_target t
+                     LEFT JOIN audit.export_cursor c ON c.target = t.target
+                     AND c.source = %(s)s)
+                """,
+                {"s": source, "t": before},
+            ).fetchone()
+        assert row is not None
+        return retention.Facts(int(row[0]), int(row[1]), row[2], row[3])
+
+    def prune(self, source: str, upto: int, months: int,
+              build: Any) -> retention.Pruned:
+        with connect("retention") as conn, conn.transaction():
+            try:
+                row = conn.execute(
+                    "SELECT removed, anchor_seq, anchor_hash FROM audit.prune(%s, %s, %s)",
+                    (source, upto, months),
+                ).fetchone()
+            except psycopg.Error as error:
+                if error.sqlstate == "PA002":
+                    log(f"retention source={source} refused by the store")
+                    raise retention.PruneRefused(source) from None
+                raise
+            assert row is not None
+            result = retention.Pruned(
+                int(row[0]), int(row[1] or 0), bytes(row[2]) if row[2] is not None else None
+            )
+            seq_row = conn.execute(
+                "SELECT audit.next_seq(%s)", (retention.OWN_SOURCE,)
+            ).fetchone()
+            assert seq_row is not None
+            conn.execute("SELECT audit.append_own(%s)", (build(result, int(seq_row[0])),))
+        return result
+
+
+class PgExportStore:
+    """Events and read positions through `audit_read`; positions move through
+    `audit_ingest` (audit.export_advance)."""
+
+    def sources(self) -> list[str]:
+        with connect("read") as conn:
+            rows = conn.execute("SELECT DISTINCT source FROM audit.event ORDER BY 1").fetchall()
+        return [row[0] for row in rows]
+
+    def position(self, target: str, source: str) -> int:
+        with connect("read") as conn:
+            row = conn.execute(
+                "SELECT seq FROM audit.export_cursor WHERE target = %s AND source = %s",
+                (target, source),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def rows_after(self, source: str, seq: int, limit: int) -> list[siem.Row]:
+        with connect("read") as conn:
+            rows = conn.execute(
+                "SELECT seq, prev_hash, hash, body FROM audit.event WHERE source = %s"
+                " AND seq > %s ORDER BY seq LIMIT %s",
+                (source, seq, limit),
+            ).fetchall()
+        return [siem.Row(source, s, bytes(p), bytes(h), b) for s, p, h, b in rows]
+
+    def advance(self, target: str, source: str, seq: int) -> None:
+        with connect("ingest", autocommit=True) as conn:
+            conn.execute("SELECT audit.export_advance(%s, %s, %s)", (target, source, seq))
+
+
+class ServiceSettings:
+    """The environment of the service, checked at start."""
+
+    def __init__(self, env: Mapping[str, str]) -> None:
+        try:
+            self.months = retention.parse_months(env.get("PAPAIA_AUDIT_RETENTION_MONTHS"))
+            self.target = siem.parse_target(env.get("PAPAIA_AUDIT_SIEM_TARGET"))
+            self.pen = siem.parse_pen(env.get("PAPAIA_AUDIT_SIEM_PEN"))
+            self.identity, self.basis = siem.parse_identity(
+                env.get("PAPAIA_AUDIT_SIEM_IDENTITY"), env.get("PAPAIA_AUDIT_SIEM_BASIS")
+            )
+            self.proxy = siem.parse_proxy(env.get("PAPAIA_AUDIT_SIEM_PROXY"))
+        except ValueError as error:
+            raise SystemExit(f"papaia-audit: {error}") from None
+
+    def recorded(self) -> dict[str, str]:
+        """What the store keeps as `audit.setting`; a change of it is an event."""
+        return {
+            "audit.retention_months": str(self.months),
+            "audit.siem_target": self.target.name if self.target else "",
+            "audit.siem_identity": self.identity,
+            "audit.siem_basis": self.basis,
+        }
+
+
+def record_settings(settings: ServiceSettings, check: core.SubmissionCheck) -> None:
+    """Activate the SIEM target's read positions and record changed settings, each with a
+    `config_changed` event in the same transaction."""
+    with connect("ingest", autocommit=True) as conn:
+        conn.execute(
+            "SELECT audit.export_targets_set(%s)",
+            ([settings.target.name] if settings.target else [],),
+        )
+    with connect("read") as conn:
+        stored = dict(conn.execute("SELECT key, value FROM audit.setting").fetchall())
+    changed = retention.changed_settings(settings.recorded(), stored)
+    if not changed:
+        return
+    correlation_id = "config-" + os.urandom(12).hex()
+    with connect("retention") as conn, conn.transaction():
+        for key in changed:
+            seq_row = conn.execute(
+                "SELECT audit.next_seq(%s)", (retention.OWN_SOURCE,)
+            ).fetchone()
+            assert seq_row is not None
+            event = retention.own_event(
+                check, event="config_changed", moment=datetime.now(timezone.utc),
+                source_seq=int(seq_row[0]), correlation_id=correlation_id,
+                writer=CONFIG_WRITER, effect="write",
+                object_ref={"type": "setting", "id": key}, operation=None,
+            )
+            conn.execute("SELECT audit.append_own(%s)", (event,))
+            conn.execute("SELECT audit.setting_put(%s, %s)", (key, settings.recorded()[key]))
+    log(f"settings recorded changed={','.join(changed)}")
+
+
+def _pseudonym_key() -> bytes:
+    return (SECRETS_DIR / "audit_pseudonym_key").read_bytes().strip()
+
+
+def _siem_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    extra = CONFIG_DIR / "siem-ca.crt"
+    if extra.is_file():
+        context.load_verify_locations(cafile=str(extra))
+    return context
+
+
+def make_exporter(settings: ServiceSettings) -> siem.Exporter | None:
+    if settings.target is None:
+        return None
+    sender_type = siem.SyslogSender if settings.target.kind == "syslog" else siem.HttpsSender
+    sender = sender_type(settings.target, _siem_context(), settings.proxy)
+    return siem.Exporter(
+        PgExportStore(), sender,
+        siem.Settings(settings.target, settings.pen, settings.identity), _pseudonym_key(),
+    )
+
+
+def store_heads(document: dict[str, Any]) -> Path:
+    """Append the signed heads to `<backup target>/audit-heads/YYYY-MM-DD.jsonl`."""
+    path = HEADS_DIR / f"{document['signed_at'][:10]}.jsonl"
+    line = (json.dumps(document, separators=(",", ":")) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o640)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
+    return path
+
+
+def run_retention(settings: ServiceSettings, check: core.SubmissionCheck) -> retention.RunReport:
+    report = retention.run(
+        PgRetentionStore(), check, settings.months, lambda: datetime.now(timezone.utc)
+    )
+    for current in report.plans:
+        held = f" held_back={current.held_back}" if current.held_back else ""
+        log(f"retention source={current.source} removed="
+            f"{report.removed.get(current.source, 0)}{held}")
+    return report
+
+
+def verify_chains() -> None:
+    """Every chain, one log line per source (the hourly check of the service)."""
+    with connect("read") as conn:
+        conn.read_only = True
+        for report in verify_all(conn, None, []).values():
+            state = "valid" if report.valid else f"broken at seq {report.broken_at}"
+            log(f"verify source={report.source} {state}")
+
+
+class Upkeep(threading.Thread):
+    """The schedule of retention.Schedule with the service's duties, every few seconds."""
+
+    def __init__(self, settings: ServiceSettings) -> None:
+        super().__init__(name="upkeep", daemon=True)
+        self.stop = threading.Event()
+        check = core.SubmissionCheck()
+        exporter = make_exporter(settings)
+        duties = retention.Duties(
+            # Before anything is removed: a new SIEM target must hold events back.
+            record=lambda: record_settings(settings, check),
+            export=exporter.run_once if exporter else None,
+            sign=lambda: signed_heads(_heads_key()),
+            keep=store_heads,
+            verify=verify_chains,
+            send_heads=exporter.send_heads if exporter else None,
+            retain=lambda: run_retention(settings, check),
+        )
+        target = settings.target.name if settings.target else ""
+        self.schedule = retention.Schedule(duties, datetime.now(timezone.utc), log, target)
+
+    def run(self) -> None:
+        while not self.stop.wait(EXPORT_INTERVAL_SECONDS):
+            self.schedule.tick(datetime.now(timezone.utc))
+
+
+def retention_now() -> int:
+    """`retention`: one run now, as the daily one would (operator command)."""
+    settings = ServiceSettings(os.environ)
+    check = core.SubmissionCheck()
+    record_settings(settings, check)
+    report = run_retention(settings, check)
+    print(json.dumps({"months": settings.months, "removed": report.removed,
+                      "held_back": {p.source: p.held_back for p in report.plans if p.held_back}}))
     return 0
 
 
@@ -605,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.add_argument("--against", help="file of signed heads, or - for stdin")
     p_verify.add_argument("--json", action="store_true")
     commands.add_parser("heads")
+    commands.add_parser("retention")
     args = parser.parse_args(argv)
     if args.command == "serve":
         return serve()
@@ -613,6 +920,8 @@ def main(argv: list[str] | None = None) -> int:
             return schema()
         if args.command == "verify":
             return verify(args.source, args.against, args.json)
+        if args.command == "retention":
+            return retention_now()
         return heads()
     except psycopg.Error as error:
         raise SystemExit(f"papaia-audit: database not reachable ({type(error).__name__})") from None

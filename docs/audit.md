@@ -10,14 +10,14 @@ The service is always on (profile `audit`, like the single exit). `papaia-ctl se
 the profile in `COMPOSE_PROFILES`; `papaia-ctl start` creates the certificates, passwords and
 the signing key before the containers start and never replaces existing ones.
 
-Reading is described under [Reading](#reading). Retention, the SIEM export and the scheduled
-signing of chain heads are separate features and not part of this page.
+Reading is described under [Reading](#reading), retention and the deletion lock under
+[Retention](#retention), the export under [SIEM](#siem).
 
 ## Containers, networks, ports
 
 | Container | Networks | Purpose |
 |---|---|---|
-| `papaia-audit` | `papaia-audit-net`, `papaia-audit-ingest-net` | ingest and read API on `:8443` (mutual TLS), `verify`, `heads` |
+| `papaia-audit` | `papaia-audit-net`, `papaia-audit-ingest-net` (and its egress network while a SIEM target is set) | ingest and read API on `:8443` (mutual TLS), `verify`, `heads`, retention, SIEM export |
 | `papaia-audit-schema` | `papaia-audit-net` | one shot before `papaia-audit`: creates the store and sets the role passwords |
 | `papaia-audit-db` | `papaia-audit-net` | PostgreSQL 17, volume `papaia-audit-pgdata` |
 
@@ -106,12 +106,17 @@ Roles in `papaia-audit-db`:
 | Role | May |
 |---|---|
 | `audit_ingest` | execute `audit.append(source, event)` (security definer) — nothing else, no `SELECT`, no `INSERT` |
-| `audit_read` | `SELECT` on `audit.event` |
+| `audit_read` | `SELECT` on `audit.event` and on the tables of retention and export |
+| `audit_retention` | execute `audit.prune`, and write the retention run's own events (`audit.next_seq`, `audit.append_own`, `audit.setting_put`) — nothing else |
 | `audit_owner` | owns the database; its password is a secret of the database container and of `papaia-audit-schema` only |
 
-Triggers refuse every `UPDATE`, `DELETE` and `TRUNCATE` on `audit.event`, also for the
-owner. The owner can switch the triggers off; such an intervention is not prevented but
-found by verification.
+Triggers refuse every `UPDATE` and `TRUNCATE` on `audit.event`, also for the owner, and
+every `DELETE` outside `audit.prune` (see [Retention](#retention)). The owner can switch the
+triggers off; such an intervention is not prevented but found by verification.
+
+`audit_ingest` additionally executes the functions that move the SIEM read positions
+(`audit.export_targets_set`, `audit.export_advance`). No service role executes
+`audit.legal_hold_set` or `audit.legal_hold_lift` (see [Deletion lock](#deletion-lock)).
 
 ## Verification and signed heads
 
@@ -136,6 +141,25 @@ installation did not sign is rejected. Without a copy outside the host, someone 
 on the host can rewrite chain and heads together.
 
 Both commands run inside the `papaia-audit` container with the `audit_read` role.
+
+The service does both on its own every full hour: it verifies every chain (one log line per
+source, `valid` or `broken at seq n`) and appends a signed heads line to
+`$PAPAIA_BACKUP_DIR/audit-heads/YYYY-MM-DD.jsonl` at the backup target, and sends it to the
+SIEM target (`MSGID` `chain_head`) when one is set. The heads line is written and the
+chains verified before it is sent; an unreachable SIEM target or a failure of one duty
+(export, heads, verification, retention) is logged and stops none of the others. Keep the
+backup target off the host, or use a SIEM: only then can a rewrite by someone with root on
+the host be shown.
+
+`papaia-ctl start` creates `audit-heads/` once per backup target and never creates the
+target itself: the start stops while `PAPAIA_BACKUP_DIR` does not exist, and once the
+folder was made, a missing folder means the target is not mounted.
+
+After a retention run, a chain starts at its anchor (the last removed event): `verify`
+checks the first remaining event against the anchor's hash, and the anchor against the
+`retention_run` event that recorded it. An anchor that no such event names (moved by hand
+to hide removed events) breaks the chain at the event after it. Heads signed before the
+anchor are skipped; a head at the anchor must match it.
 
 ## Reading
 
@@ -235,6 +259,102 @@ the requester as well.
 or export with a ticket about that person: time, the role `papaia-auditor` (never the name
 of the auditor) and the period read. "Mein Bereich → Aktivität" shows it.
 
+## Retention
+
+Events are kept for `PAPAIA_AUDIT_RETENTION_MONTHS` months (default 12, 6 to 36), counted
+from their `time`. Every day at 03:30 UTC `papaia-audit` runs retention for every source,
+with the role `audit_retention`; `papaia-ctl audit retention` runs it at once. A run
+removes, per source, the longest run of events from the start of the chain that are all
+older than the limit, and stops
+
+- before the oldest event of a person under a deletion lock, and
+- after the last event a SIEM target has taken (see [SIEM](#siem) for a target that is
+  no longer configured).
+
+`audit.prune` in the database checks all three limits again and refuses otherwise, so the
+role can never remove a younger, locked or undelivered event. The last removed event is
+kept as the source's anchor (`audit.anchor`); a source whose events were all removed
+continues its chain from there, and a repeated delivery of a removed event is acknowledged
+with its old `seq`.
+
+Each run writes one `retention_run` event per source that has an anchor or was held back
+into the chain of `papaia-audit` (writer `papaia-audit/retention`, `effect` `delete`,
+`detail.count` the number removed). `object_ref` is `audit_anchor` with
+`<source>:<seq>:<hash>`; `operation` says what limited the run: `retention.prune`,
+`retention.held_back.legal_hold`, `retention.held_back.siem_undelivered`, or
+`retention.held_back.store_refused` when `audit.prune` refused the removal (for example a
+lock set during the run); such a source keeps all its events until the next run, and the
+run goes on with the other sources.
+
+A changed retention or SIEM setting is recorded with one `config_changed` event per setting
+(writer `papaia-audit/config`, `object_ref` `setting` with the name, such as
+`audit.retention_months`), before the next run.
+
+### Deletion lock
+
+A deletion lock (`audit.legal_hold`) keeps every event of one person (`sub`). It is set and
+lifted by two different persons with a reason of 20 to 1000 characters; the database
+refuses a lock or a lift confirmed by the person who asked for it. Lock rows are never
+deleted, a lift is recorded in the row. Retention already honours locks. Setting and
+lifting comes with the person-authenticated API of the store, which takes both persons
+from their verified tokens and writes the `legal_hold_set` and `legal_hold_lifted` events
+in the same transaction; until then no service role may call `audit.legal_hold_set` or
+`audit.legal_hold_lift`, and no host command sets a lock.
+
+## SIEM
+
+`papaia-audit` is the only component that sends audit events out of the stack. Set the
+target in the root `.env`:
+
+| Variable | Meaning |
+|---|---|
+| `PAPAIA_AUDIT_SIEM_TARGET` | `syslog-tls://host[:6514]` (syslog RFC 5424 over TLS RFC 5425, octet counting) or `https://host[:port]/path` (`POST` of up to 500 JSON lines; 2xx means taken). Empty: no export |
+| `PAPAIA_AUDIT_SIEM_PEN` | private enterprise number in the structured data, default `32473` (the example number of RFC 5612) |
+| `PAPAIA_AUDIT_SIEM_IDENTITY` | `pseudonym` (default) or `sub` |
+| `PAPAIA_AUDIT_SIEM_BASIS` | with `sub`: the agreement the clear-text export rests on (required) |
+
+A syslog message carries `APP-NAME` `papaia`, `MSGID` the event name and
+`[papaia@<PEN> source="…" seq="…"]`; the message is the event in its stored form (with
+`source`, `seq`, `prev_hash`, `hash`). With `pseudonym`, `sub` and person ids in
+`object_ref` leave as `P-` and 8 characters of base32(HMAC-SHA-256(key, sub)), with the key
+`secrets/pseudonym-key` that never leaves `papaia-audit`, and `client_ip` is left out;
+`hash` stays that of the stored event.
+
+The queue is the store: each target keeps a read position per source
+(`audit.export_cursor`) that moves only after the target took a batch. After an outage or a
+restart the export resumes from there, so an event can arrive twice but is never skipped;
+receivers recognise a repeat by `source` and `seq`. Retention keeps events a target has
+not taken.
+
+A target that is removed from or replaced in the configuration is no longer sent to, but
+it keeps holding back every event it has not taken: removing it is not a decision to
+discard them. Only `papaia-ctl audit siem skip` releases them, with a reason recorded as an
+event. Until then, retention records such a source as `siem_undelivered`.
+
+A syslog connection is reused only while it is alive. Before every batch `papaia-audit`
+checks whether the receiver or `papaia-egress` closed it and opens a new one if so; a
+connection idle for 240 s is opened afresh as well (`papaia-egress` closes idle tunnels
+after 300 s). RFC 5425 has no acknowledgement, though: a batch written into a connection
+that breaks while the batch is underway counts as taken, and is lost if the receiver had
+not read it. Where that matters, use an `https://` target, whose 2xx answer confirms each
+batch.
+
+The target is reached through `papaia-egress` only: while a target is set, `papaia-ctl`
+puts `papaia-audit` on its own internal network `<project>-papaia-audit-egress` and allows
+exactly that host and port at the exit (source `papaia-audit`). A target inside the stack is
+refused; an internal address must be opened for the source `papaia-audit` like for an
+add-on ([egress.md](egress.md)). A private CA of the target goes to
+`service/siem-ca.crt`.
+
+## Backup and restore
+
+`papaia-audit-pgdata` is a volume of the core and part of every backup (the database is
+paused while its volume is archived); `audit-heads/` lives at the backup target itself. After
+a restore the chains are at the state of the restore point: `verify --against` with heads
+signed later names the events that are missing, and sources deliver again what they still
+hold. SIEM read positions return to the restore point too, so a target may receive events
+again.
+
 ## Certificates of the sources
 
 ```sh
@@ -259,14 +379,18 @@ Under `$PAPAIA_CONFIG_DIR/infra/audit/`:
 | `service/server.crt`, `server.key`, `ca.crt`, `sources.json`, `token-keys.json` | mounted read-only into `papaia-audit` | key 0600 |
 | `secrets/db-owner-password` | Docker secret of `papaia-audit-db` and `papaia-audit-schema` | dir 0700, 0600 |
 | `secrets/db-ingest-password`, `db-read-password` | Docker secrets of `papaia-audit-schema` (sets them) and `papaia-audit` (logs in with them) | 0600 |
+| `secrets/db-retention-password` | Docker secret of `papaia-audit-schema` (sets it) and `papaia-audit` (retention) | 0600 |
 | `secrets/heads-signing-key` | Ed25519 key that signs chain heads | 0600 |
-| `secrets/pseudonym-key` | key of the pseudonyms of the read API; never replaced | 0600 |
+| `secrets/pseudonym-key` | key of the pseudonyms of the read API and the SIEM export; never replaced | 0600 |
+| `service/siem-ca.crt` | optional CA of the SIEM target | 0644 |
+| `heads-target` | the backup target `audit-heads/` was set up on | 0600 |
 | `clients/<source>/` | certificate and key of one source | dir 0700, key 0600 |
 
 The database schema, function, triggers and roles are created by `papaia-audit-schema`
 from `schema.sql` in the image (`src/infra/audit/papaia_audit/schema.sql`), in one
 transaction, when the schema `audit` does not exist yet; `schema_read.sql` adds the person
-queries of the read API in the same way when `audit.person_query` does not exist yet (also
-on a store of an earlier release). On every start it sets the
-passwords of `audit_ingest` and `audit_read` from their secrets, so a replaced password
-takes effect with the next start.
+queries of the read API in the same way when `audit.person_query` does not exist yet, and
+`schema_retention.sql` adds retention, deletion lock and export positions when
+`audit.anchor` does not exist yet (both also on a store of an earlier release). On every
+start it sets the passwords of `audit_ingest`, `audit_read` and `audit_retention` from
+their secrets, so a replaced password takes effect with the next start.

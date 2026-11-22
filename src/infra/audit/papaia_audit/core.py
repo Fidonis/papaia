@@ -333,6 +333,8 @@ class ChainReport:
     head_seq: int = 0
     broken_at: int | None = None
     reason: str | None = None
+    # seq of the last event a retention run removed; the chain is checked from there.
+    anchor_seq: int = 0
     # Hashes at the positions a heads file names, for the comparison.
     seen: dict[int, bytes] = field(default_factory=dict)
 
@@ -344,6 +346,7 @@ class ChainReport:
             "head_seq": self.head_seq,
             "broken_at": self.broken_at,
             "reason": self.reason,
+            "anchor_seq": self.anchor_seq,
         }
 
 
@@ -351,11 +354,22 @@ def derived_columns(body: Mapping[str, Any]) -> dict[str, Any]:
     return {name: body.get(name) for name in DERIVED_COLUMNS}
 
 
-def verify_chain(source: str, rows: Iterable[StoredRow], wanted: Iterable[int] = ()) -> ChainReport:
-    """Walk one source's rows in `seq` order: gapless `seq` from 1, links, hashes, columns."""
+def verify_chain(
+    source: str,
+    rows: Iterable[StoredRow],
+    wanted: Iterable[int] = (),
+    anchor: tuple[int, bytes] | None = None,
+) -> ChainReport:
+    """Walk one source's rows in `seq` order: gapless `seq` from 1, or from the event after
+    the anchor `(seq, hash)` a retention run left; links, hashes, columns."""
     wanted_seqs = set(wanted)
     report = ChainReport(source, valid=True)
     expected, prev = 1, ZERO_HASH
+    if anchor is not None:
+        report.anchor_seq, prev = anchor
+        expected = report.anchor_seq + 1
+        report.head_seq = report.anchor_seq
+        report.seen[report.anchor_seq] = prev
     for row in rows:
         reason = None
         if row.seq != expected:
@@ -437,9 +451,29 @@ def check_heads(reports: Mapping[str, ChainReport], heads: Iterable[Mapping[str,
         seq = head["seq"]
         if not report.valid and report.broken_at is not None and report.broken_at <= seq:
             continue
+        if seq < report.anchor_seq:
+            # Removed by a retention run; the anchor itself is checked by check_anchors.
+            continue
         if seq not in report.seen:
             report.valid, report.reason = False, "events after a signed head are missing"
             report.broken_at = min(report.head_seq + 1, report.broken_at or seq)
         elif hash_text(report.seen[seq]) != head["hash"]:
             report.valid, report.reason = False, "chain differs from a signed head"
             report.broken_at = min(seq, report.broken_at or seq)
+
+
+def check_anchors(
+    reports: Mapping[str, ChainReport], anchors: Mapping[str, tuple[int, bytes]], attested: set[str]
+) -> None:
+    """Mark a chain broken whose anchor no `retention_run` event of papaia-audit names.
+
+    `attested` holds the `object_ref` ids (`<source>:<seq>:<hash hex>`) of the
+    `retention_run` events in the verified chain of papaia-audit. An anchor that was set or
+    moved by hand, to hide removed events, has none."""
+    for source, (seq, digest) in anchors.items():
+        report = reports.get(source)
+        if report is None or not report.valid:
+            continue
+        if f"{source}:{seq}:{digest.hex()}" not in attested:
+            report.valid, report.broken_at = False, seq + 1
+            report.reason = "anchor not recorded by a retention run"

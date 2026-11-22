@@ -59,7 +59,9 @@ next to it, even when it has an inline `:-` default.
 | `PAPAIA_PROJECT` | Mirrors `COMPOSE_PROJECT_NAME` under a key Compose does not special-case; scopes add-on Seam-1 networks per deployment (`${PAPAIA_PROJECT:-papaia}-<addon>-net`) |
 | `PAPAIA_CONFIG_DIR` | Absolute host path holding all generated state and operator-editable config |
 | `PAPAIA_WORKSPACE_DIR` | Parent directory containing the papaia checkout and add-ons, stamped by setup |
-| `PAPAIA_BACKUP_DIR` | Directory `papaia-ctl backup` writes to; derived by setup as `$PAPAIA_WORKSPACE_DIR/backup` unless `--backup-dir` was passed. A backup only runs once the directory was confirmed with `papaia-ctl backup target init` |
+| `PAPAIA_BACKUP_DIR` | Directory `papaia-ctl backup` writes to; derived by setup as `$PAPAIA_WORKSPACE_DIR/backup` unless `--backup-dir` was passed. A backup only runs once the directory was confirmed with `papaia-ctl backup target init`. It must exist before `start`: the audit store keeps its signed chain heads in `audit-heads/` there |
+| `PAPAIA_AUDIT_RETENTION_MONTHS` | Months the audit store keeps events, 6 to 36, default 12 ([audit.md](audit.md#retention)) |
+| `PAPAIA_AUDIT_SIEM_TARGET`, `_PEN`, `_IDENTITY`, `_BASIS` | SIEM export of the audit store; empty target: none ([audit.md](audit.md#siem)) |
 | `PAPAIA_BACKUP_RECIPIENTS` | Public age keys every backup archive is encrypted to (`NAME:age1...`, comma-separated); empty means `backup` refuses to run. Set with `papaia-ctl backup keys generate` or `backup recipients add` |
 | `UID` / `GID` | Host ownership for bind-mounted files (Linux only) |
 | `HOST_IP` | Bind address for published ports — the network layer |

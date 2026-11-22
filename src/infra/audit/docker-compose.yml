@@ -20,6 +20,11 @@
 #     (may only read). The owner's password is used only by the database container and
 #     by the one-shot papaia-audit-schema, which creates the store and sets the role
 #     passwords; the service never holds it.
+#   - Retention (role audit_retention, only audit.prune) shortens a chain only at its
+#     start and never past a deletion lock or an event a SIEM target has not taken.
+#   - The only way out is the SIEM export through papaia-egress (generated override,
+#     only while PAPAIA_AUDIT_SIEM_TARGET is set); the signed chain heads go to
+#     $PAPAIA_BACKUP_DIR/audit-heads, the one folder of the backup target it sees.
 #   - papaia-audit and papaia-audit-schema run the core's own image
 #     ghcr.io/fidonis/papaia-audit; nothing of the checkout is mounted.
 #   - Runs as the user that owns the config dir, read-only, without capabilities.
@@ -64,6 +69,7 @@ services:
       - audit_db_owner_password
       - audit_db_ingest_password
       - audit_db_read_password
+      - audit_db_retention_password
     read_only: true
     depends_on:
       papaia-audit-db:
@@ -84,9 +90,18 @@ services:
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
     command: ["serve"]
+    environment:
+      # Retention in months (6 to 36) and the SIEM export (docs/audit.md); checked at
+      # start, a malformed value stops the service.
+      PAPAIA_AUDIT_RETENTION_MONTHS: ${PAPAIA_AUDIT_RETENTION_MONTHS:-12}
+      PAPAIA_AUDIT_SIEM_TARGET: ${PAPAIA_AUDIT_SIEM_TARGET:-}
+      PAPAIA_AUDIT_SIEM_PEN: ${PAPAIA_AUDIT_SIEM_PEN:-32473}
+      PAPAIA_AUDIT_SIEM_IDENTITY: ${PAPAIA_AUDIT_SIEM_IDENTITY:-pseudonym}
+      PAPAIA_AUDIT_SIEM_BASIS: ${PAPAIA_AUDIT_SIEM_BASIS:-}
     secrets:
       - audit_db_ingest_password
       - audit_db_read_password
+      - audit_db_retention_password
       - audit_heads_key
       - audit_pseudonym_key
     volumes:
@@ -98,6 +113,14 @@ services:
         source: ${PAPAIA_CONFIG_DIR}/infra/audit/service
         target: /etc/papaia-audit
         read_only: true
+        bind:
+          create_host_path: false
+      # The signed chain heads, appended every hour, at the backup target (K-15).
+      # `papaia-ctl` creates the folder once; Compose must not, so an unmounted target
+      # stops the start instead of taking the heads on the host's own disk.
+      - type: bind
+        source: ${PAPAIA_BACKUP_DIR}/audit-heads
+        target: /var/lib/papaia-audit/heads
         bind:
           create_host_path: false
     read_only: true
@@ -128,9 +151,12 @@ secrets:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-ingest-password
   audit_db_read_password:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-read-password
+  audit_db_retention_password:
+    file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-retention-password
   audit_heads_key:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/heads-signing-key
-  # Key of the pseudonyms the read API shows instead of persons; only papaia-audit holds it.
+  # Key of the pseudonyms the read API shows instead of persons and the SIEM export
+  # sends; only papaia-audit holds it.
   audit_pseudonym_key:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/pseudonym-key
 

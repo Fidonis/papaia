@@ -2168,6 +2168,7 @@ def cmd_audit_prepare(args: argparse.Namespace) -> int:
     """Create the missing keys, certificates and passwords of papaia-audit."""
     try:
         audit.prepare(Path(args.config_dir))
+        audit.ensure_heads_folder(Path(args.config_dir))
     except (audit.AuditError, OSError) as exc:
         print(f"ERROR: audit store: {exc}", file=sys.stderr)
         return 1
@@ -2212,7 +2213,8 @@ def cmd_audit_token_keys(args: argparse.Namespace) -> int:
 
 
 def cmd_audit_run(args: argparse.Namespace) -> int:
-    """`verify` or `heads` inside the running papaia-audit; its exit status passes through."""
+    """`verify`, `heads` or `retention` inside the running papaia-audit; its exit status
+    passes through."""
     against = Path(args.against) if getattr(args, "against", None) else None
     try:
         argv, stdin = audit.service_command(
@@ -2970,6 +2972,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_audit_heads = sub.add_parser("audit-heads")
     p_audit_heads.set_defaults(func=cmd_audit_run, audit_command="heads")
+    p_audit_retention = sub.add_parser("audit-retention")
+    p_audit_retention.set_defaults(func=cmd_audit_run, audit_command="retention")
 
     return parser
 
