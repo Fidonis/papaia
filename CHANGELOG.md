@@ -12,6 +12,38 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Upgrade notice: installations with Paperless
+
+This is the first release that puts the gate `paperless-gate` in front of Paperless.
+Copy this notice into the release notes of the release.
+
+- **Who is affected.** Installations up to 1.9.x that run the Paperless add-on.
+- **Effect.** In those installations, Paperless could accept a request that did not come
+  through the platform's sign-in as a request of a signed-in person. Documents could then
+  be read or changed under another person's name.
+- **Remedy.** Install this upgrade soon: the core release and the Paperless add-on from
+  papaia-addons 1.4.0 or later, both together. The add-on releases before papaia-addons
+  1.4.0 do not have the gate, and that includes Paperless add-on version 2.0.0: an
+  installation on 2.0.0 is affected. After the upgrade, Paperless answers only requests
+  that come through the platform's proxy or its MCP server, and the person's name is
+  accepted only for accounts the platform knows.
+  1. `tools/papaia-ctl upgrade --identity=<file>` moves the core; its setup step
+     creates the proxy's own secret for the gate.
+  2. `tools/papaia-ctl addon upgrade paperless --path=<directory of the add-on from
+     papaia-addons 1.4.0 or later>` moves the add-on. `addon install`, `addon upgrade`
+     and `addon rollback` refuse a Paperless add-on whose `docker-compose.yml` has no
+     service `paperless-gate`.
+  3. Check that the gate runs: `docker ps --filter name=paperless-gate --format
+     '{{.Names}} {{.Status}}'` must list one running container. If it lists none, the
+     installation is still affected.
+  4. `tools/papaia-ctl doctor` must end with exit 0.
+- **Until the upgrade is installed**, keep the Paperless add-on stopped
+  (`tools/papaia-ctl addon stop paperless`) if it can be reached from anywhere but the
+  platform's proxy.
+- **Release check.** `setup` offers Paperless only when the signed bill of materials of
+  the release lists the gate (`component: paperless-gate`); a release without it does
+  not offer Paperless at all.
+
 ### Changed
 
 - Mail relay: every mail leaves `smtp-relay` with one sender, the name of the

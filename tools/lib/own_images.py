@@ -701,7 +701,7 @@ def bom_entries(repo_root: Path, sboms: dict[str, Path]) -> list[dict]:
             "delivery": "shipped",
         }
         try:
-            suite._validate_image(entry, image.name, "delivery")
+            suite._validate_image(entry, image.name, "delivery", "core")
         except suite.SuiteError as exc:
             raise OwnImageError(str(exc)) from exc
         entries.append(entry)

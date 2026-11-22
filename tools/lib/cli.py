@@ -56,6 +56,7 @@ from . import (
     librechat_history,
     localai_native,
     migrations,
+    module_offer,
     modules,
     nodes,
     npm_provision,
@@ -2626,6 +2627,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cli_node.add_parsers(sub)
     pairing_approval.add_parsers(sub)
+    module_offer.add_parsers(sub)
     cli_pki.add_parsers(sub)
 
     p_cluster_start = sub.add_parser("cluster-start")

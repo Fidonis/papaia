@@ -717,6 +717,7 @@ cmd_setup() {
     if [ "$pairing_rc" -ne 0 ]; then
         return "$pairing_rc"
     fi
+    _setup_module_offer || return 3
     local mode
     mode="$(_topology_mode)" || return 3
     if [ "$mode" = "distributed" ]; then
@@ -757,6 +758,15 @@ _check_ca_bundle_flag() {
 
 # The certificates of the platform PKI and, when given, the company CA bundle in the
 # trust bundle (docs/pki.md). `start` issues again; this makes them exist after setup.
+# The modules this release offers: Paperless only with its gate in the signed bill of
+# materials (lib/module_offer.py). A bill of materials that does not verify stops setup.
+_setup_module_offer() {
+    if ! py_cli module-offer; then
+        error "The modules of the bill of materials cannot be shown (see above)."
+        return 3
+    fi
+}
+
 _ensure_platform_pki() {
     local bundle="$1"
     info "Issuing the certificates of the platform PKI..."

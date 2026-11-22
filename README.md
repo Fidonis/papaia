@@ -422,6 +422,11 @@ untouched rather than reset to a default.
   list and prints the command to confirm it later. Each decision is an audit row with
   the host account and the time. See "Pairing approval" in
   [`docs/architecture.md`](docs/architecture.md).
+- **Modules offered** — `setup` then names the modules this release offers (Studio, Data,
+  Flow, Assistant, Paperless). Paperless is offered only when the signed bill of materials of the checkout lists
+  its gate (an image with `component: paperless-gate`); without it, or in a checkout
+  without a bill of materials, `setup` says that Paperless is not offered and why. A bill
+  of materials that does not verify stops `setup`.
 
 **Distributed setup.** A distributed installation is set up once, as a new installation.
 `setup` asks for it interactively ("on this machine" or "on several machines": names and
@@ -1155,8 +1160,8 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Before anything is registered, the add-on's images are checked against the signed bill of materials; an add-on outside it needs `--accept-unlisted-images` (see [Image pinning and signatures](#image-pinning-and-signatures)). Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. Refused, whatever `--force` says, when the add-on would put a second server under an address the installation already has (see [Module selection](#module-selection)), and `paperless` only with its gate. A `--path` that re-points an installed add-on is refused, like `upgrade`, when the version there no longer meets a range another active add-on requires of it. |
 | `start` | Copies the add-on's `.env` into place, re-renders, checks the add-on's images (digest and signature) and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. A second server under an existing address is refused here too, not forcible. `--insecure-images` skips the image check for this one command. |
 | `install --node=NAME` | Distributed installations only: the node the add-on runs on. Without it, the add-on goes to the node of the core services it attaches to. An add-on whose `networks.attach` names services on two nodes is **not placeable** and is refused whatever `--force` says: its network exists on one node only. On a remote node the add-on travels in the node's bundle, and `start`, `stop` and `start --addons` run it there. |
-| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. The images of the new version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. See [Upgrading an add-on](#upgrading-an-add-on). |
-| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. Refused, like `upgrade`, when the older version does not meet a range another active add-on requires of it. The images of the older version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. |
+| `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. A `paperless` version without its gate is refused, not forcible (see [Module selection](#module-selection)). The images of the new version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. See [Upgrading an add-on](#upgrading-an-add-on). |
+| `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. Refused, like `upgrade`, when the older version does not meet a range another active add-on requires of it, and for a `paperless` version without its gate. The images of the older version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. |
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
@@ -1184,8 +1189,13 @@ Modules are chosen freely; the core only refuses what cannot work next to the re
 - **Order.** `start --addons` and `upgrade` bring add-ons up after the add-ons they require,
   optional ones included: Data before Studio.
 - **Paperless only with its gate.** Paperless takes the person from a request header, so
-  `addon install paperless` is refused unless the add-on's compose file has the service
-  `paperless-gate` in Paperless' network namespace (`network_mode: service:paperless`).
+  `addon install paperless`, `addon upgrade paperless` and `addon rollback paperless` are
+  refused, whatever `--force` says, unless the version they would put in place has the
+  service `paperless-gate` in Paperless' network namespace (`network_mode:
+  service:paperless`) in its compose file. When the checkout carries a signed bill of
+  materials, they are also refused unless that bill of materials lists the gate as
+  `component: paperless-gate`, the same rule by which `setup` offers Paperless (see
+  "Modules offered" under [`setup`](#setup)).
 - **Uninstall.** What lives outside the configuration directory (the add-on's proxy hosts
   and realm clients) is recorded in `security/uninstalled-modules.json` (names and host
   names only, mode 0600) and removed by the step that owns it; each removal leaves one audit

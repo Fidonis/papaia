@@ -97,6 +97,7 @@
         "license_class": {"enum": ["P", "W", "S", "N", "Q", "X"]},
         "sbom_digest": {"$ref": "#/$defs/digest"},
         "source_archive": {"type": "string"},
+        "component": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$", "description": "The role the image plays where its name does not say it, for example `paperless-gate` for the gate in front of Paperless. `setup` offers Paperless only when the bill of materials names that component. `paperless-gate` counts only on a shipped image of the add-on repo; the validator in lib/suite.py refuses it anywhere else."},
         "delivery": {"enum": ["shipped", "customer-pulled", "test-only"]}
       }
     }

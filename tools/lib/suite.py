@@ -249,8 +249,15 @@ _REPO_OPTIONAL = {"addon_api", "min_core", "schema_version", "snapshot_sha256"}
 _IMAGE_REQUIRED = {"name", "tag", "digest", "license", "license_class", "sbom_digest", "delivery"}
 
 
-def _validate_image(image: object, where: str, scope: str) -> None:
-    _mapping(image, where, _IMAGE_REQUIRED, {"source_archive"})
+# Components that mean something to the core, with the one place a bill of materials may
+# name them: the repo role and the delivery class. `paperless-gate` is the gate the
+# Paperless add-on ships in front of Paperless (lib/module_offer.py); it counts only on a
+# shipped image of the add-on repo. Other component names are free labels.
+COMPONENT_HOMES = {"paperless-gate": ("addon", "shipped")}
+
+
+def _validate_image(image: object, where: str, scope: str, role: str) -> None:
+    _mapping(image, where, _IMAGE_REQUIRED, {"source_archive", "component"})
     _text(image["name"], f"{where}.name", _IMAGE_RE)
     _text(image["tag"], f"{where}.tag", _TAG_RE)
     _text(image["digest"], f"{where}.digest", _DIGEST_RE)
@@ -260,6 +267,14 @@ def _validate_image(image: object, where: str, scope: str) -> None:
     _choice(image["delivery"], f"{where}.delivery", DELIVERY)
     if "source_archive" in image:
         _text(image["source_archive"], f"{where}.source_archive", _IMAGE_RE)
+    if "component" in image:
+        component = _text(image["component"], f"{where}.component", _NAME_RE)
+        home = COMPONENT_HOMES.get(component)
+        if home is not None and (role, image["delivery"]) != home:
+            raise SuiteError(
+                f"{where}.component: '{component}' belongs on a {home[1]} image of the"
+                f" {home[0]} repo"
+            )
     if scope == "delivery" and image["delivery"] == "test-only":
         raise SuiteError(f"{where}: test-only image in a delivery bill of materials")
 
@@ -286,7 +301,7 @@ def _validate_repo(repo: object, where: str, scope: str) -> None:
     if not isinstance(repo["images"], list) or len(repo["images"]) > 256:
         raise SuiteError(f"{where}.images: must be a list of at most 256 entries")
     for index, image in enumerate(repo["images"]):
-        _validate_image(image, f"{where}.images[{index}]", scope)
+        _validate_image(image, f"{where}.images[{index}]", scope, role)
 
 
 def _validate_pairings(value: object) -> None:
@@ -364,6 +379,18 @@ def validate_bom(doc: object) -> None:
     images = len({image["digest"] for repo in repos for image in repo["images"]})
     if _count(totals["images"], "totals.images") != images:
         raise SuiteError(f"totals.images: {totals['images']} != {images} distinct digests")
+
+
+def components(doc: dict) -> set[str]:
+    """The components a validated bill of materials names on its images (`component`):
+    the role an image plays where its name alone does not say it, such as the gate in
+    front of Paperless, which runs a generic proxy image."""
+    return {
+        image["component"]
+        for repo in doc["repos"]
+        for image in repo["images"]
+        if "component" in image
+    }
 
 
 def image_refs(doc: dict) -> list[str]:

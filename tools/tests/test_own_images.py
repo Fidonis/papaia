@@ -604,7 +604,7 @@ def test_the_bill_of_materials_entries_list_every_own_image_with_its_pinned_dige
             "delivery": "shipped",
         }
     ]
-    suite._validate_image(entries[0], "images[0]", "delivery")
+    suite._validate_image(entries[0], "images[0]", "delivery", "core")
 
 
 def test_the_bill_of_materials_entries_need_an_sbom_per_image(tmp_path: Path):

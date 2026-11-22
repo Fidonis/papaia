@@ -67,6 +67,12 @@ lists:
 - every image with tag, digest, SPDX license, license class, SBOM digest and
   delivery (`shipped`, `customer-pulled`, `test-only`; a `delivery` bill of
   materials holds no `test-only` image);
+- optionally per image the `component` it is where its name does not say it:
+  `paperless-gate` marks the gate in front of Paperless, which runs a generic
+  proxy image. It counts only on a `shipped` image of the add-on repo (role
+  `addon`); anywhere else the bill of materials is refused. `setup` offers
+  Paperless, and `addon install`, `addon upgrade` and `addon rollback` put it in
+  place, only when the bill of materials names that component;
 - the number of containers per repo and the totals of containers and distinct
   images;
 - in a `delivery` bill of materials at least one module, one add-on repo (the

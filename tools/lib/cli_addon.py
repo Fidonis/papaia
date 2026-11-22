@@ -31,6 +31,7 @@ from . import (
     keycloak_admin_path,
     keycloak_role_sync,
     model_gateway,
+    module_offer,
     npm_provision,
     paperless_gate,
     pki,
@@ -369,6 +370,26 @@ def _paperless_gate_missing(name: str, addon_path: Path) -> bool:
     return True
 
 
+def _bom_withholds(name: str, repo_root: Path) -> bool:
+    """A module the signed bill of materials of this checkout does not offer is not
+    put in place by another route either: Paperless only when the bill of materials
+    lists its gate (lib/module_offer.py). Not forcible."""
+    reason = module_offer.install_refusal(name, repo_root)
+    if reason is None:
+        return False
+    print(f"ERROR: addon '{name}' is not offered: {reason}.", file=sys.stderr)
+    print("Nothing was changed; deployment.yaml is unchanged.", file=sys.stderr)
+    return True
+
+
+def _gate_refuses(name: str, addon_path: Path, repo_root: Path) -> bool:
+    """The one check `addon install`, `addon upgrade` and `addon rollback` run on the
+    version they would put in place: Paperless only with its gate in the add-on's
+    compose file and, with a signed bill of materials in the checkout, in that bill too.
+    Not forcible."""
+    return _paperless_gate_missing(name, addon_path) or _bom_withholds(name, repo_root)
+
+
 def _catalog_refuses(config_dir: Path, repo_root: Path, deployed: dict, name: str) -> bool:
     """Check the catalog of the installation `deployed` describes before it is saved.
     A declaration can be valid on its own and still clash with the installation (an id
@@ -432,7 +453,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         print(f"ERROR: {manifest_error}", file=sys.stderr)
         return 2
 
-    if _paperless_gate_missing(name, addon_path):
+    if _gate_refuses(name, addon_path, repo_root):
         return 2
 
     node = getattr(args, "node", None)
@@ -832,6 +853,8 @@ def _upgrade_candidate(args: argparse.Namespace) -> tuple[dict, addon_upgrade.Ca
     except addon_upgrade.UpgradeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return None
+    if _gate_refuses(args.name, candidate.new_path, Path(args.repo_root)):
+        return None
     return deployed, candidate
 
 
@@ -981,6 +1004,8 @@ def _rollback_target(args: argparse.Namespace) -> tuple[dict, dict, Path, dict] 
         entry, target, manifest = addon_upgrade.rollback_target(deployed, repo_root, args.name)
     except addon_upgrade.UpgradeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        return None
+    if _gate_refuses(args.name, target, repo_root):
         return None
     if _compat_gate_addon(
         args.name, manifest, deployed, repo_root, force=args.force, dependents=True
