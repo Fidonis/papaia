@@ -1076,8 +1076,8 @@ for every `.env` file:
 
 | Moment | What happens |
 |---|---|
-| First `setup` | Seeds one `.env` per service directory from the shipped `src/**/.env.example`, plus `deployment.yaml`. Existing files are left alone unless `--force`. |
-| Every `setup` | Resolves all values, fills `GENERATE_*` secrets, and writes each `.env` to **both** the config directory and the checkout. |
+| First `setup` | Starts from the shipped `src/**/.env.example` and creates one `.env` per service directory, plus `deployment.yaml`. What a root `.env` prepared by hand sets (`PAPAIA_WORKSPACE_DIR`, a port, a URL) is kept; a service URL that still has the template's value is derived from the server URL. |
+| Every `setup` | Resolves all values and fills `GENERATE_*` secrets, checks them, and only then writes each `.env` to **both** the config directory and the checkout, the root `.env` last. A `setup` refused by these checks writes nothing. |
 | Every `start` | Copies the config directory's `.env` files into the checkout. A clean checkout — or a manually deleted `src/.env` — can therefore never start the stack with stale values. |
 | `addon start` | Copies `addons/<name>/.env` from the config directory into the add-on's own directory. |
 

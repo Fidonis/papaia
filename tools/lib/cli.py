@@ -195,13 +195,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if isinstance(requested_topology, int):
         return requested_topology
 
-    fresh_init = not (config_dir / ".env").is_file()
-    # The native LocalAI lives below the workspace. Checked before the config directory is
-    # seeded or anything is written, so a refused run leaves neither LOCALAI_RUNTIME=native
-    # in the root .env nor, on a fresh config directory, template files a later setup would
-    # take for an existing installation. It needs only the requested or stored runtime, the
-    # stored PAPAIA_WORKSPACE_DIR and the checkout name.
-    stored_root = {} if fresh_init else common.parse_env_file(config_dir / ".env")
+    # The native LocalAI lives below the workspace. Checked first: it needs only the
+    # requested or stored runtime, the stored PAPAIA_WORKSPACE_DIR and the checkout name.
+    stored_root = common.parse_env_file(config_dir / ".env")
     wanted_runtime = args.localai_runtime or localai_native.runtime(stored_root)
     if wanted_runtime == localai_native.NATIVE:
         workspace = envtree.stamp_workspace_dir({"": dict(stored_root)}, repo_root)
@@ -210,9 +206,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         except localai_native.InstallError as exc:
             print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
             return 3
-    envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    # Nothing is written before the whole configuration is resolved and checked, so a
+    # refused setup has nothing to take back.
+    tree, set_up = envtree.load_setup_tree(
+        config_dir, repo_root, auth_provider=args.auth_provider
+    )
+    fresh_init = not set_up
     runtime_before = localai_native.runtime(tree.get("", {})) if not fresh_init else ""
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
@@ -329,7 +329,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
     tree = envtree.stamp_host_uid_gid(tree)
-    envtree.persist_tree(tree, config_dir, repo_root)
+    # The first writes. The root .env goes last: until it is there, the next setup is still
+    # a first one and derives every URL again. The relay's password follows the revision
+    # that announces it, so a run cut short in between raises the revision once more
+    # instead of hiding the change from Compose.
+    envtree.init(config_dir, repo_root, env_name=args.env, env_files=False)
+    envtree.persist_tree(
+        tree,
+        config_dir,
+        repo_root,
+        before_root=lambda: resolve.store_smtp_password(setup_args),
+    )
     deployment.sync_manifest(config_dir, tree, repo_root)
     if requested_topology is not None:
         manifest = deployment.load(config_dir)

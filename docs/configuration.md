@@ -180,7 +180,8 @@ needs no login) and the relay mounts that file read-only. An `.env` file is writ
 quotes and Compose reads `$` and ` #` in it, so a password stored there would not survive; a file
 keeps it byte for byte. A non-interactive `setup` takes it from the environment variable
 `PAPAIA_SMTP_PASSWORD`, which is not a stack variable and is removed from the process environment
-as soon as it has been read.
+as soon as it has been read. The file is written only after the whole setup has passed its checks:
+a refused `setup` leaves the stored password as it was.
 
 ## Where values come from
 

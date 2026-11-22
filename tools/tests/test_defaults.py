@@ -3,6 +3,14 @@ from __future__ import annotations
 from lib import common, defaults, envtree
 
 
+def _set_up(config_dir, repo_root):
+    """A config dir whose root .env a setup wrote, with the template's values."""
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    values = common.parse_env_file(config_dir / ".env")
+    values["PAPAIA_VERSION"] = "0.8.0"
+    common.write_env_file(config_dir / ".env", values)
+
+
 def test_compute_defaults_unseeded_config_dir_gates_sticky_values(repo_root, config_dir):
     out = defaults.compute_defaults(config_dir, repo_root)
 
@@ -24,7 +32,7 @@ def test_compute_defaults_unseeded_config_dir_gates_sticky_values(repo_root, con
 
 
 def test_compute_defaults_seeded_config_dir_surfaces_sticky_values(repo_root, config_dir):
-    envtree.init(config_dir, repo_root, env_name="papaia")
+    _set_up(config_dir, repo_root)
 
     out = defaults.compute_defaults(config_dir, repo_root)
 
@@ -45,7 +53,7 @@ def test_compute_defaults_seeded_config_dir_surfaces_sticky_values(repo_root, co
 
 
 def test_compute_defaults_placeholder_values_are_not_sticky(repo_root, config_dir):
-    envtree.init(config_dir, repo_root, env_name="papaia")
+    _set_up(config_dir, repo_root)
     librechat_env = config_dir / "ai" / "librechat" / ".env"
     values = common.parse_env_file(librechat_env)
     values["DOMAIN_SERVER"] = "GENERATE_DOMAIN_SERVER"

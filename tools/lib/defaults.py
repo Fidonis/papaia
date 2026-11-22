@@ -8,16 +8,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, envtree, resolve, smtp
+from . import common, envtree, localai_native, resolve, smtp
 
 
 def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    # The same rule as setup: a root .env without a configuration to keep pre-fills nothing.
+    tree, config_seeded = envtree.load_setup_tree(config_dir, repo_root)
     root = tree.get("", {})
     librechat = tree.get("ai/librechat", {})
     app_host = root.get("PAPAIA_HOST", "")
     keycloak_port = root.get("KEYCLOAK_EXT_PORT", "8110")
-    config_seeded = (config_dir / ".env").is_file()
     # The rules of resolve_hostnames: the prompt pre-fills a stored AUTH_HOST only when
     # setup would keep it, else the derivation from the app host the operator enters.
     stored_app_host = app_host if config_seeded and not common.is_placeholder(app_host) else ""
@@ -28,6 +28,7 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         keycloak_ext_port=keycloak_port,
     )
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
+    localai_runtime = root.get("LOCALAI_RUNTIME", "").strip()
     # Only surface a sticky LibreChat URL once the config dir is actually seeded:
     # on a fresh checkout the tree falls back to the shipped .env.example, whose
     # DOMAIN_SERVER (host.docker.internal:8000) differs from the localhost-based
@@ -76,8 +77,9 @@ def compute_defaults(config_dir: Path, repo_root: Path) -> dict[str, str]:
         "LOCALAI_HOST_STICKY": localai_sticky,
         "LOCALAI_EXT_PORT": root.get("LOCALAI_EXT_PORT", "8080"),
         "LOCALAI_VARIANT_STICKY": localai_variant_sticky,
+        # A hand-set `native` counts before the first setup too: the host check needs it.
         "LOCALAI_RUNTIME_STICKY": (
-            root.get("LOCALAI_RUNTIME", "").strip() if config_seeded else ""
+            localai_runtime if config_seeded or localai_runtime == localai_native.NATIVE else ""
         ),
         "LITELLM_HOST_STICKY": litellm_sticky,
         "LITELLM_EXT_PORT": root.get("LITELLM_EXT_PORT", "8200"),
