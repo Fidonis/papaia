@@ -17,8 +17,9 @@
 # `librechat-vectordb` in the librechat profile). Both can run side by side.
 #
 # All four join papaia-net, so LibreChat reaches qdrant-mcp:8000 and
-# qdrant-ingest:8300 by service name. Only the Qdrant REST port and the ingest
-# port are published (see the notes at each ports: block).
+# qdrant-ingest:8300 by service name. None of them publishes a host port: the
+# Qdrant dashboard is served by the edge proxy; direct port access (no_proxy)
+# publishes Qdrant and the ingester through the generated direct-ports override.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env
 # merged with ai/rag/.env. qdrant and qdrant-mcp take their values only through
@@ -36,10 +37,11 @@ services:
   #  the per-request tokens qdrant-mcp derives. Both services therefore read
   #  QDRANT_JWT_SECRET; a drift between them rejects every derived token.
   #
-  #  The published port is the administration and ingestion path (dashboard at
-  #  /dashboard). It grants unrestricted access to whoever holds the api-key and
-  #  bypasses the RBAC layer, so keep it on a trusted interface via HOST_IP.
-  #  gRPC (6334) is not published.
+  #  The REST port is the administration and ingestion path (dashboard at
+  #  /dashboard), served by the edge proxy. It grants unrestricted access to
+  #  whoever holds the api-key and bypasses the RBAC layer. No port is published;
+  #  direct port access binds it to HOST_IP (default 127.0.0.1). gRPC (6334) is
+  #  never published.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant:
     image: qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
@@ -49,8 +51,6 @@ services:
       QDRANT__SERVICE__JWT_RBAC: "true"
     volumes:
       - qdrant-storage:/qdrant/storage
-    ports:
-      - "${HOST_IP:-127.0.0.1}:${QDRANT_EXT_PORT:-6333}:6333"
     healthcheck:
       # No curl or wget in the image; probe the port with bash's /dev/tcp.
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
@@ -140,9 +140,9 @@ services:
   #  embedding, the Qdrant writes and the SQLite state. One port carries REST
   #  (/v1, a mutation API guarded by a static token) and MCP (/mcp, OIDC). There
   #  is no web interface: jobs, runs, connections and source credentials are
-  #  managed in papaia-manager (profile `manager`). It is a control plane, so
-  #  the published port falls back to loopback when HOST_IP is missing; keep it
-  #  on a trusted interface and do not put it behind a public reverse proxy.
+  #  managed in papaia-manager (profile `manager`). It is a control plane: it
+  #  publishes no port and is not served by the edge; direct port access binds
+  #  it to HOST_IP (default 127.0.0.1). Do not put it behind a public proxy.
   #
   #  The ingester writes to Qdrant directly (not through qdrant-mcp), because
   #  the MCP server refuses writes to its system collections. papaia-manager
@@ -204,8 +204,6 @@ services:
       - ${QI_LOCAL_MOUNT:-${PAPAIA_CONFIG_DIR}/ai/rag/documents}:/data/local:ro
     depends_on:
       - qdrant-ingest-tika
-    ports:
-      - "${HOST_IP:-127.0.0.1}:${QDRANT_INGEST_EXT_PORT:-8300}:8300"
     # No healthcheck here on purpose: the image ships one. /health answers 200
     # whenever the process can serve; a degraded container reports its reason in
     # the body instead of restart-looping.

@@ -1,10 +1,11 @@
 """Published ports of the rendered core compose, per proxy provider and module set.
 
 `setup` runs against a copy of this checkout, then `docker compose config` renders the
-project the way `start` assembles it. In every combination the published ports are a
-subset of the edge ports plus the legacy list in `security/published-ports.yaml`, and
-the edge -- present only with the bundled proxy -- listens on HOST_IP with the edge
-port variables.
+project the way `start` assembles it. Behind a proxy the published ports are the edge
+ports plus the legacy list in `security/published-ports.yaml` (the NPM API on loopback),
+and the edge -- present only with the bundled proxy -- listens on HOST_IP with the edge
+port variables. Only `no_proxy` publishes the ports of the core services, through the
+generated direct-ports override.
 
 Rendering needs the Docker CLI with Compose. Without it the test skips, except in CI,
 where PAPAIA_REQUIRE_GOLDEN_COMPOSE is set and a missing Compose fails.
@@ -22,7 +23,7 @@ from pathlib import Path
 import pytest
 from install_helpers import Installation
 
-from lib import common, envtree, published_ports
+from lib import common, direct_ports, envtree, published_ports
 
 REPO = Path(__file__).resolve().parents[2]
 REQUIRE_COMPOSE = os.environ.get("PAPAIA_REQUIRE_GOLDEN_COMPOSE") == "1"
@@ -119,7 +120,7 @@ def _module_env(config: Path, entry: published_ports.AllowEntry) -> dict[str, st
 
 @pytest.mark.parametrize("modules", sorted(MODULE_SETS))
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_rendered_ports_are_the_edge_plus_the_legacy_list(
+def test_rendered_ports_are_the_edge_plus_the_legacy_list_or_the_direct_ports(
     tmp_path: Path, provider: str, modules: str
 ) -> None:
     if not _have_compose():
@@ -147,13 +148,23 @@ def test_rendered_ports_are_the_edge_plus_the_legacy_list(
         for e in published_ports.load_allow_list(REPO)
         if e.source == "compose"
     }
+    direct = {
+        (p.service, p.target): p
+        for p in direct_ports.CORE_DIRECT_PORTS
+        if provider == "no_proxy"
+    }
     edge = published_ports.EDGE_SERVICE
     edge_seen: set[tuple[int, str, str]] = set()
+    direct_seen: set[str] = set()
     for name, body in services.items():
         for port in body.get("ports") or []:
             target, published, host_ip = port["target"], str(port["published"]), port["host_ip"]
             if name == edge and target in (80, 443):
                 edge_seen.add((target, published, host_ip))
+                continue
+            if (name, target) in direct:
+                assert host_ip == HOST_IP, f"{provider}/{modules}: '{name}' binds {host_ip}"
+                direct_seen.add(name)
                 continue
             entry = allow.get((name, target))
             assert entry is not None, (
@@ -169,6 +180,14 @@ def test_rendered_ports_are_the_edge_plus_the_legacy_list(
                     f"{entry.variable} is {value}"
                 )
 
+    if provider == "no_proxy":
+        # Direct ports only for the services of the active profiles, Keycloak among them.
+        assert "keycloak" in direct_seen
+        assert direct_seen == {
+            p.service for p in direct_ports.CORE_DIRECT_PORTS if p.service in services
+        }
+    else:
+        assert not direct_seen
     if provider == "internal_nginx":
         assert edge in services
         assert edge_seen == {(80, EDGE_HTTP, HOST_IP), (443, EDGE_HTTPS, HOST_IP)}
@@ -209,5 +228,5 @@ def test_the_edge_binds_its_own_address_when_set(tmp_path: Path) -> None:
         (443, "192.0.2.10"),
         (81, "127.0.0.1"),
     }
-    keycloak = services["keycloak"]["ports"]
-    assert [p["host_ip"] for p in keycloak] == [HOST_IP]
+    # Keycloak sits behind the edge: no port of its own, also not on loopback.
+    assert not services["keycloak"].get("ports")

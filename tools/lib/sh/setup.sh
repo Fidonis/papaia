@@ -431,6 +431,7 @@ cmd_setup() {
         fi
         if [ "$reverse_proxy_provider" = "internal_nginx" ] && [ -z "$npm_admin_host" ]; then
             local npm_admin_default="${NPM_ADMIN_HOST_STICKY:-}"
+            [ -z "$npm_admin_default" ] && npm_admin_default="$(_derive_edge_default npm "$app_host")"
             [ -z "$npm_admin_default" ] && npm_admin_default="${NPM_ADMIN_HOST_DERIVED:-}"
             npm_admin_host="$(prompt_field "Public URL of NPM admin UI" \
                 "Where browsers reach the Nginx Proxy Manager admin interface." \
@@ -886,13 +887,23 @@ _derive_auth_default() {
 }
 
 _derive_litellm_default() {
-    local host="$1" port="${LITELLM_EXT_PORT:-8200}" base
+    local host="$1" port="${LITELLM_EXT_PORT:-8200}" base edge
+    edge="$(_derive_edge_default litellm "$host")"
+    if [ -n "$edge" ]; then
+        printf '%s' "$edge"
+        return 0
+    fi
     base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
     printf '%s:%s' "$base" "$port"
 }
 
 _derive_localai_default() {
-    local host="$1" port="${LOCALAI_EXT_PORT:-8080}" base
+    local host="$1" port="${LOCALAI_EXT_PORT:-8080}" base edge
+    edge="$(_derive_edge_default localai "$host")"
+    if [ -n "$edge" ]; then
+        printf '%s' "$edge"
+        return 0
+    fi
     base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
     printf '%s:%s' "$base" "$port"
 }
@@ -1184,7 +1195,12 @@ _derive_manager_default() {
 _derive_qdrant_default() {
     # Best-effort bash-side prefill for the Qdrant URL prompt; the authoritative
     # derivation lives in resolve.derive_qdrant_url_default.
-    local host="$1" port="${QDRANT_EXT_PORT:-6333}" base
+    local host="$1" port="${QDRANT_EXT_PORT:-6333}" base edge
+    edge="$(_derive_edge_default qdrant "$host")"
+    if [ -n "$edge" ]; then
+        printf '%s' "$edge"
+        return 0
+    fi
     base="$(printf '%s' "$host" | sed -E 's#^(https?://[^:/]+).*#\1#')"
     printf '%s:%s' "$base" "$port"
 }

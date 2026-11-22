@@ -158,6 +158,19 @@ def test_redirect_uris_and_origins_follow_the_configured_hosts():
             assert origin.startswith("https://") and origin.count("/") == 2
 
 
+def test_oauth2_proxy_signs_in_on_its_edge_name_when_it_has_one():
+    # Behind the edge oauth2-proxy publishes no port: its callback is on `oauth2.<domain>`.
+    hosts = {**HOSTS, "OAUTH2_PROXY_PUBLIC_URL": "https://oauth2.example.org"}
+    clients = rh.load(hosts, LIBRECHAT).clients
+    assert clients["oauth2-proxy"] == rh.ClientUris(
+        (
+            "https://oauth2.example.org/oauth2/callback",
+            "https://npm.example.org/oauth2/callback",
+        ),
+        ("https://oauth2.example.org", "https://npm.example.org"),
+    )
+
+
 def test_a_service_on_a_sub_path_gets_redirects_below_that_path():
     clients = rh.load({"LITELLM_PUBLIC_URL": "https://papaia.example.org/llm/"}).clients
     assert clients["litellm"].redirects == ("https://papaia.example.org/llm/*",)

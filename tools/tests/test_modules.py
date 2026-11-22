@@ -480,7 +480,11 @@ def test_a_url_the_operator_chose_is_kept_and_not_asked_again(real_repo, config_
     _setup(real_repo, config_dir, "--qdrant-host=https://qdrant.example.org")
     [question] = modules.questions(config_dir, "rag")
     assert (question["ask"], question["value"]) == (False, "https://qdrant.example.org")
-    assert question["default"] == "https://papaia.test:6333"
+    # Behind the bundled edge the default is Qdrant's own name, not a published port.
+    assert question["default"] == "https://qdrant.papaia.test"
+
+
+EDGE_NAME = {"localai": "localai", "rag": "qdrant"}
 
 
 @pytest.mark.parametrize(
@@ -503,7 +507,8 @@ def test_a_url_that_is_empty_or_the_one_the_release_ships_is_asked(
         [question] = modules.questions(config_dir, name)
         assert question["ask"] is True, value
         assert question["value"] == ""
-        assert question["default"].startswith("https://papaia.test:")
+        # The service's own name on the bundled edge.
+        assert question["default"] == f"https://{EDGE_NAME[name]}.papaia.test"
 
 
 def test_resetting_the_settings_opens_the_question_again(real_repo, config_dir) -> None:
@@ -516,7 +521,7 @@ def test_resetting_the_settings_opens_the_question_again(real_repo, config_dir) 
     [question] = modules.questions(config_dir, "rag")
     assert question["ask"] is True
     assert _env(config_dir)["QDRANT_PUBLIC_URL"] == "http://host.docker.internal:6333"
-    assert question["default"] == "https://papaia.test:6333"
+    assert question["default"] == "https://qdrant.papaia.test"
 
 
 def test_resetting_localai_opens_its_question_and_leaves_the_other_modules_urls(

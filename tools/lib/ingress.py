@@ -66,6 +66,12 @@ CORE_PROXY_HOSTS: list[tuple[str, str, str, str, str, int, str, bool, bool]] = [
     ("localai", "", "LOCALAI_PUBLIC_URL", "localai", "localai", 8080, "http", True, False),
     ("manager", "", "MANAGER_PUBLIC_URL", "manager", "papaia-manager", 8000, "http", True, False),
     ("rag", "", "QDRANT_PUBLIC_URL", "qdrant", "qdrant", 6333, "http", True, False),
+    # The forward-auth proxy (its callback has no port of its own) and the NPM admin UI
+    # behind its login sidecar; the NPM API itself stays on 127.0.0.1 (BE-06).
+    ("oauth2-proxy", "", "OAUTH2_PROXY_PUBLIC_URL", "oauth2", "oauth2-proxy", 4180, "http",
+     True, False),
+    ("nginx", "", "NPM_ADMIN_HOST", "npm", "nginx-proxy-manager-auth", 4180, "http", True,
+     False),
 ]
 
 # On a node of a distributed installation the proxy's node does not have LibreChat's

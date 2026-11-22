@@ -43,8 +43,7 @@ services:
     depends_on:
       litellm-db:
         condition: service_healthy
-    ports:
-      - "${HOST_IP:-0.0.0.0}:${LITELLM_EXT_PORT}:4000"
+    # No host port: served by the edge proxy (or an external one, papaia-ctl proxy list).
     networks:
       - papaia-net
     labels:

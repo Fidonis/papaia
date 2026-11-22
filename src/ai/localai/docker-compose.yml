@@ -77,8 +77,7 @@ services:
     # $PAPAIA_CONFIG_DIR/overrides/, reusing the version pinned right here.
     image: localai/localai:v4.12.1@sha256:c8556c4f7b6dd9b76e915d515ab5cfe5a765d8ea8fd3f0cf563f9c690b48a7f4
     restart: unless-stopped
-    ports:
-      - "${HOST_IP:-0.0.0.0}:${LOCALAI_EXT_PORT}:8080"
+    # No host port: served by the edge proxy (or an external one, papaia-ctl proxy list).
     # Per-service variables (LOCALAI_OIDC_CLIENT_SECRET, log level, healthcheck
     # timings). LOCALAI_OIDC_CLIENT_SECRET must not appear in environment: below
     # or compose would override env_file with the empty root-env resolution.

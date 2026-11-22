@@ -79,8 +79,7 @@ services:
       # - ./librechat/logo.svg:/app/client/dist/assets/logo.svg
       # - ./librechat/favicon-32x32.png:/app/client/dist/assets/favicon-32x32.png
       # - ./librechat/favicon-16x16.png:/app/client/dist/assets/favicon-16x16.png
-    ports:
-      - "${HOST_IP:-0.0.0.0}:${LIBRECHAT_EXT_PORT}:3080"
+    # No host port: served by the edge proxy (or an external one, papaia-ctl proxy list).
     networks:
       - papaia-net
     labels:

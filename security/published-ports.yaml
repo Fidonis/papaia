@@ -5,9 +5,13 @@
 # bound to HOST_IP through INGRESS_HTTP_EXT_PORT / INGRESS_HTTPS_EXT_PORT.
 #
 # This file is a frozen inventory, not a permission. It lists the ports that
-# were published before that rule existed. Entries are only ever removed —
-# when a service moves behind the edge, its port and its entry go in the same
-# change. The test suite (tools/tests/test_published_ports.py) fails on
+# were published before that rule existed and are still there. Entries are
+# only ever removed — when a service moves behind the edge, its port and its
+# entry go in the same change. The core services moved behind the edge; what
+# is left is the loopback API of the bundled proxy. Direct port access
+# (no_proxy, --allow-direct-port-access) publishes ports only through the
+# generated overrides/docker-compose.direct-ports.override.yml
+# (tools/lib/direct_ports.py), never through these compose files. The test suite (tools/tests/test_published_ports.py) fails on
 #   - a ports: entry of any core compose fragment that is neither the edge
 #     nor listed here,
 #   - an entry here whose port no longer exists (remove it), and
@@ -33,87 +37,6 @@ entries:
       Nginx Proxy Manager API, used by papaia-ctl to provision proxy hosts.
       Loopback only; stays while Nginx Proxy Manager is the edge.
     removed_by: replacement of Nginx Proxy Manager as the edge
-
-  - service: nginx-proxy-manager-auth
-    source: compose
-    file: src/infra/nginx/docker-compose.yml
-    variable: NPM_ADMIN_EXT_PORT
-    target: 4180
-    bind: HOST_IP
-    reason: Login-protected Nginx Proxy Manager admin UI on its own port.
-    removed_by: move of the admin UI behind the edge
-
-  - service: oauth2-proxy
-    source: compose
-    file: src/infra/oauth2-proxy/docker-compose.yml
-    variable: OAUTH2_PROXY_EXT_PORT
-    target: 4180
-    bind: HOST_IP
-    reason: Forward-auth endpoint, published for external reverse proxies.
-    removed_by: target list for external reverse proxies
-
-  - service: keycloak
-    source: compose
-    file: src/infra/keycloak/docker-compose.yml
-    variable: KEYCLOAK_EXT_PORT
-    target: 8443
-    bind: HOST_IP
-    reason: Login service; browsers reach it directly until it sits behind the edge.
-    removed_by: Keycloak reachable through the edge only
-
-  - service: papaia-manager
-    source: compose
-    file: src/manager/docker-compose.yml
-    variable: MANAGER_EXT_PORT
-    target: 8000
-    bind: HOST_IP
-    reason: Manager UI, published for direct access and external reverse proxies.
-    removed_by: host scheme behind the edge
-
-  - service: librechat
-    source: compose
-    file: src/ai/librechat/docker-compose.yml
-    variable: LIBRECHAT_EXT_PORT
-    target: 3080
-    bind: HOST_IP
-    reason: Chat UI, published for direct access and external reverse proxies.
-    removed_by: host scheme behind the edge
-
-  - service: litellm
-    source: compose
-    file: src/ai/litellm/docker-compose.yml
-    variable: LITELLM_EXT_PORT
-    target: 4000
-    bind: HOST_IP
-    reason: Model gateway UI and API, published for direct access and external reverse proxies.
-    removed_by: host scheme behind the edge
-
-  - service: localai
-    source: compose
-    file: src/ai/localai/docker-compose.yml
-    variable: LOCALAI_EXT_PORT
-    target: 8080
-    bind: HOST_IP
-    reason: Local inference UI, published for direct access and external reverse proxies.
-    removed_by: host scheme behind the edge
-
-  - service: qdrant
-    source: compose
-    file: src/ai/rag/docker-compose.yml
-    variable: QDRANT_EXT_PORT
-    target: 6333
-    bind: HOST_IP
-    reason: Vector store REST API and dashboard, api-key protected.
-    removed_by: host scheme behind the edge
-
-  - service: qdrant-ingest
-    source: compose
-    file: src/ai/rag/docker-compose.yml
-    variable: QDRANT_INGEST_EXT_PORT
-    target: 8300
-    bind: HOST_IP
-    reason: Ingest REST and MCP endpoint, token protected.
-    removed_by: host scheme behind the edge
 
   - service: link-gateway
     source: generated

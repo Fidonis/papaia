@@ -369,12 +369,14 @@ def test_voice_tts_on_the_cpu_needs_no_hardware():
 
 
 def test_the_link_port_must_not_collide_with_a_published_port():
-    env = {"LIBRECHAT_EXT_PORT": "7443", "HOST_IP": "0.0.0.0"}
+    # Only the edge proxy publishes ports (CORE-007b): its NPM API port on the edge node.
+    env = {"NPM_API_LOCAL_PORT": "7443", "HOST_IP": "0.0.0.0"}
     topo = two_nodes(**topology.preset_placement("dmz-split", "edge"))
     found = errors(topo, env=env, repo_root=REPO)
     assert any(
-        "collides with the port 'librechat' publishes on node 'internal'" in e for e in found
-    )
+        "collides with the port 'nginx-proxy-manager' publishes on node 'edge'" in e
+        for e in found
+    ), found
 
 
 PUBLISHED_MANAGER = {"MANAGER_PUBLIC_URL": "https://manager.example.org"}

@@ -67,8 +67,9 @@ The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 > Everything else — document management, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
 
-> **Tip:** all `*_EXT_PORT` variables are listed in `src/.env.example`, grouped per service.
-> Change a single number to relocate a port.
+> **Tip:** behind the bundled proxy only the edge publishes ports (see
+> [Published ports](#published-ports)); the ports in the table and the `*_EXT_PORT` variables
+> in `src/.env.example` apply with direct port access only.
 
 **Authentication coverage**
 
@@ -350,14 +351,14 @@ tools/papaia-ctl setup [OPTIONS]
 | `--litellm-host=URL` | _(derived)_ | Public LiteLLM URL if it differs from `--app-host` |
 | `--localai-host=URL` | _(derived)_ | Public LocalAI URL if it differs from `--app-host` |
 | `--manager-host=URL` | _(derived)_ | Public papaia-manager URL if it differs from `--app-host` |
-| `--qdrant-host=URL` | _(derived)_ | Public Qdrant URL if it differs from `--app-host`; derived as `<app-host>:6333` |
+| `--qdrant-host=URL` | _(derived)_ | Public Qdrant URL; derived as `qdrant.<domain>` on the edge, `<app-host>:6333` with direct port access |
 | `--npm-admin-host=URL` | _(derived)_ | Public URL of the Nginx PM admin UI |
 | `--auth-provider=VALUE` | `internal_keycloak` | `internal_keycloak` or `external_oidc` |
 | `--oidc-issuer=URL` | _(required for `external_oidc`)_ | External OIDC issuer URL |
 | `--reverse-proxy-provider=VALUE` | _(auto-detected)_ | `internal_nginx`, `external_proxy`, or `no_proxy` |
 | `--external-reverse-proxy` | _(auto from URL scheme)_ | Legacy alias for `--reverse-proxy-provider=external_proxy` |
 | `--no-external-reverse-proxy` | — | Legacy alias for `--reverse-proxy-provider=internal_nginx` |
-| `--allow-direct-port-access` | — | Skip the reverse proxy entirely; services expose ports directly (expert) |
+| `--allow-direct-port-access` | — | Skip the reverse proxy entirely; the core services publish ports directly through a generated override (expert, development only) |
 | `--web-search` / `--no-web-search` | _(prompted, default on)_ | Toggle the `librechat-websearch` profile |
 | `--reranker-model=NAME` | _(prompted, optional)_ | LiteLLM model name used for reranking |
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
@@ -1808,30 +1809,53 @@ All core containers share one bridge network, `papaia-net` (or `papaia-<env>-net
 
 ### Published ports
 
-Only the edge proxy is meant to publish ports. It listens on `HOST_IP` on
-`INGRESS_HTTP_EXT_PORT` and `INGRESS_HTTPS_EXT_PORT` (default 80 and 443), so a second stack
-can run next to one that already holds 80/443 — set other values in `.env` and put the port
-into the public URLs. `INGRESS_HOST_IP` binds the edge alone to another address; leave it
-empty on a single host.
+Only the edge proxy publishes ports. It listens on `HOST_IP` on `INGRESS_HTTP_EXT_PORT` and
+`INGRESS_HTTPS_EXT_PORT` (default 80 and 443), so a second stack can run next to one that
+already holds 80/443 — set other values in `.env` and put the port into the public URLs.
+`INGRESS_HOST_IP` binds the edge alone to another address; leave it empty on a single host.
+The Nginx Proxy Manager API stays on `127.0.0.1` (`NPM_API_LOCAL_PORT`) for `papaia-ctl`.
 
-The other ports the core still publishes (Keycloak, LibreChat, LiteLLM, LocalAI,
-oauth2-proxy, papaia-manager, Qdrant, the NPM admin UI and the loopback-only NPM API) are a
-frozen legacy inventory in [`security/published-ports.yaml`](security/published-ports.yaml),
-each with its reason and the change that removes it. The test suite fails on any published
-port that is neither the edge nor on that list, and the list only ever shrinks. The link port
-of a distributed installation is the one documented exception: it is published on the node's
-address and accepts mutual TLS only.
+Keycloak, LibreChat, LiteLLM, LocalAI, oauth2-proxy, papaia-manager, Qdrant and the NPM admin
+UI publish no port of their own: browsers reach them by host name through the edge (below),
+the services reach each other on `papaia-net`. [`security/published-ports.yaml`](security/published-ports.yaml)
+lists the two ports outside the edge (the NPM API on loopback and the link port of a
+distributed installation, which is published on the node's address and accepts mutual TLS
+only). The test suite fails on any other published port, and the list only ever shrinks.
 
-> **Upgrade note.** Earlier releases published 80/443 on every interface regardless of
-> `HOST_IP`. The edge now follows `HOST_IP`: an installation with the bundled proxy and
-> `HOST_IP=127.0.0.1` answers on loopback only after the upgrade. Set `INGRESS_HOST_IP=0.0.0.0`
-> (or the host's address) in `.env` to keep the edge reachable from the network.
+- **Keycloak's admin API** is never routed through the edge: the proxy host of `auth.<domain>`
+  answers `/admin` with 403. Each `start` and `npm-provision` restores that host's forward
+  target and its advanced configuration (with the block), so put your own nginx lines on
+  that host into a custom location, not into the advanced field; a certificate, forced SSL,
+  HSTS and custom locations you set in the NPM UI are kept. The steps that call it (`keycloak-role-sync`, `realm-sync`,
+  `post-restore`, the service accounts, the clients of an add-on) run on the stack network:
+  on the host `papaia-ctl` starts them in a one-shot container with the papaia-manager image
+  (read-only, no capabilities, no Docker socket), which is removed when the step ends.
+- **Direct port access** (`--reverse-proxy-provider=no_proxy`, or `--allow-direct-port-access`)
+  is the only way to publish the core ports again. `setup` writes them into the generated
+  `overrides/docker-compose.direct-ports.override.yml` (with a digest; `doctor` fails on a
+  hand-edited copy and on one left behind the edge). It refuses direct port access while an
+  add-on with a header identity (`exposes` with `header_identity: true`), `me-web` or an
+  add-on with delegation is active, and refuses any such service that publishes a port, also
+  on `127.0.0.1`.
+
+> **Upgrade note (1.10).** The core ports listed above are no longer published behind the
+> bundled proxy. `setup` moves the addresses an earlier release derived
+> (`https://<host>:8110` and the like) to the service's host name on the edge; an address you
+> chose yourself is kept and must then be served by your proxy. A LAN address or a bare host
+> name as `PAPAIA_HOST` needs `INGRESS_DOMAIN` (a domain whose names resolve to the host).
+> Scripts that called a port directly (for example Qdrant on 6333) use the host name or run on
+> `papaia-net`.
 >
-> In a distributed installation the node running the bundled proxy now listens on its node
+> Earlier releases published 80/443 on every interface regardless of `HOST_IP`. The edge
+> follows `HOST_IP`: an installation with the bundled proxy and `HOST_IP=127.0.0.1` answers on
+> loopback only. Set `INGRESS_HOST_IP=0.0.0.0` (or the host's address) in `.env` to keep the
+> edge reachable from the network.
+>
+> In a distributed installation the node running the bundled proxy listens on its node
 > `address` only, no longer on every interface. If users reach that node on another
 > interface than the one the other nodes use (a dual-homed DMZ host), set `ingress_ip` on
 > the node in the topology (`--node=NAME=ADDR,ingress_ip=IP` or `node add --ingress-ip=IP`)
-> before upgrading; it moves only the edge and leaves the other published ports on loopback.
+> before upgrading; it moves only the edge.
 
 ### Host names and add-on interfaces
 
@@ -1841,16 +1865,17 @@ Every web interface gets a host name of one scheme; no proxy host is created by 
 |---|---|---|
 | Server domain (`PAPAIA_HOST` is a fully qualified name, or `INGRESS_DOMAIN`) | `<name>.<domain>`, with the edge port when it is not the default | `https://flow.example.org` |
 | Local (`localhost`, `host.docker.internal`, a loopback address), behind the bundled proxy | `<name>.<env>.papaia.localhost` with the edge port | `https://auth.itest.papaia.localhost:57143` |
-| LAN address or bare host name | no host names: the core keeps its ports, an add-on interface needs `INGRESS_DOMAIN` | – |
+| LAN address or bare host name | refused behind the bundled proxy: set `INGRESS_DOMAIN` | – |
 | `no_proxy` or `--allow-direct-port-access` | `host.docker.internal` (or the app host) with a port per service | `https://host.docker.internal:8110` |
 
 `<env>` is the `--env` of the installation (`papaia-itest` gives `itest`; the default
 project `papaia` has none). Browsers resolve every name below `localhost` to the loopback
 address without an `/etc/hosts` entry (RFC 6761, section 6.3); Safari on macOS may not, so
 use a Chromium-based browser or Firefox for a local installation. A fresh local setup
-behind the bundled proxy derives Keycloak (`auth`), LibreChat (`chat`) and papaia-manager
-(`manager`) this way; an installation that already stores other addresses keeps them, so
-saved links stay valid. The edge port follows `INGRESS_HTTPS_EXT_PORT` (443 is left out of
+behind the bundled proxy derives Keycloak (`auth`), LibreChat (`chat`), LiteLLM (`litellm`),
+LocalAI (`localai`), papaia-manager (`manager`), Qdrant (`qdrant`), oauth2-proxy (`oauth2`)
+and the NPM admin UI (`npm`) this way. A port address an earlier release derived moves to
+the host name; an address the operator chose is kept. The edge port follows `INGRESS_HTTPS_EXT_PORT` (443 is left out of
 the URL). The proxy hosts `papaia-ctl` creates carry no certificate of their own, like the
 ones it created before; a certificate for these names is set up in Nginx Proxy Manager.
 
@@ -2036,23 +2061,35 @@ tools/papaia-ctl setup --reverse-proxy-provider=external_proxy \
 This drops the `nginx` profile, so there is no port conflict. `setup` auto-detects this case
 when `--app-host` is HTTPS; pass the flag explicitly to be sure.
 
-Your proxy must map two public URLs onto the published container ports:
+No core service publishes a port for your proxy. `papaia-ctl proxy list` lists every public
+URL with its internal target (`--json` for a machine-readable list); `setup` prints the same
+list at its end. A target is a service name and port inside a Docker network on this host
+(the column `NETWORK`), for example `keycloak:8443` (HTTPS) and `librechat:3080` on
+`papaia-net`:
 
-| Public URL | Target | Scheme on the target |
-|---|---|---|
-| `${AUTH_HOST}` | `HOST_IP:KEYCLOAK_EXT_PORT` (default 8110) | **HTTPS** |
-| `${LIBRECHAT_HOST}` | `HOST_IP:LIBRECHAT_EXT_PORT` (default 8000) | HTTP |
+- **Proxy on the same host:** attach the proxy container to that network
+  (`docker network connect papaia-net <proxy>`) and forward to the target by name.
+- **Proxy on another host:** do not choose `external_proxy`; keep the bundled proxy
+  (`internal_nginx`) as the edge and let your proxy forward every host name to it
+  (`HOST_IP:INGRESS_HTTPS_EXT_PORT`) with the original `Host` header. There is no port per
+  service to forward to.
 
-The web interfaces of add-ons and the core interfaces served by host name are listed with
-their internal targets by `papaia-ctl proxy list` (`--json` for a machine-readable list);
-`setup` prints the same list at its end. A target is a service name and port inside a
-Docker network on this host (the column `NETWORK`): a proxy on the same host joins that
-network to reach it. Include the app host's second domain with its subdomains.
+Do not route `/admin` of the Keycloak host: the admin API stays on the stack network. Include
+the app host's second domain with its subdomains.
+
+The forward-auth proxy (`oauth2-proxy:4180`) signs in under a host name of its own, without a
+port: `setup` derives `OAUTH2_PROXY_PUBLIC_URL` as `oauth2.<domain>` (with
+`--app-host=https://chat.example.com` that is `https://oauth2.chat.example.com`, with
+`INGRESS_DOMAIN=example.com` it is `https://oauth2.example.com`) and sets oauth2-proxy's
+callback and its Keycloak redirect URI from it. Serve that host name on your proxy. To use
+another URL, set `OAUTH2_PROXY_PUBLIC_URL` in the root `.env`; `setup` keeps a value you chose.
+An app host without a domain (an IP address) needs one of the two, otherwise `setup` stops
+with a message that names them.
 
 Keycloak terminates TLS itself, on port 8443 inside the container, using the self-signed
 certificate `papaia-ctl` generated. Its plain-HTTP listener is never published. **Your proxy
 must therefore speak HTTPS to Keycloak and skip certificate verification on that hop** — a
-plain-HTTP `proxy_pass` to port 8110 will fail.
+plain-HTTP `proxy_pass` to `keycloak:8443` will fail.
 
 Keycloak runs with `KC_PROXY_HEADERS=xforwarded`, so the `X-Forwarded-*` headers are
 mandatory. Without them Keycloak treats the request as plain HTTP, drops the `Secure` flag
@@ -2062,7 +2099,9 @@ from its cookies, and cross-origin OIDC POSTs silently lose their state.
 
 ```caddy
 auth.example.com {
-    reverse_proxy https://10.0.0.10:8110 {
+    @admin path /admin /admin/*
+    respond @admin 403
+    reverse_proxy https://keycloak:8443 {
         transport http {
             tls_insecure_skip_verify
         }
@@ -2070,11 +2109,12 @@ auth.example.com {
 }
 
 chat.example.com {
-    reverse_proxy 10.0.0.10:8000
+    reverse_proxy librechat:3080
 }
 ```
 
-Caddy sets `X-Forwarded-*` on its own.
+Caddy runs on the same host and is attached to `papaia-net`; it sets `X-Forwarded-*` on its
+own.
 
 #### nginx
 
@@ -2084,8 +2124,10 @@ server {
     server_name auth.example.com;
     # ssl_certificate / ssl_certificate_key ...
 
+    location ~ ^/admin(/|$) { return 403; }   # the admin API stays on the stack network
+
     location / {
-        proxy_pass              https://10.0.0.10:8110;
+        proxy_pass              https://keycloak:8443;
         proxy_ssl_verify        off;          # Keycloak serves a self-signed certificate
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
@@ -2101,7 +2143,7 @@ server {
     # ssl_certificate / ssl_certificate_key ...
 
     location / {
-        proxy_pass              http://10.0.0.10:8000;
+        proxy_pass              http://librechat:3080;
         proxy_http_version      1.1;
         proxy_set_header Upgrade           $http_upgrade;   # LibreChat uses WebSockets
         proxy_set_header Connection        "upgrade";
@@ -2115,13 +2157,15 @@ server {
 
 **Related settings**
 
-- `HOST_IP=127.0.0.1` keeps every published port off the LAN when the proxy runs on the same
-  host.
+- The nginx container resolves `keycloak` and `librechat` only while it is attached to
+  `papaia-net`.
 - `OAUTH2_PROXY_COOKIE_SECURE` must match the scheme of `PAPAIA_HOST`: `true` for HTTPS,
   `false` for plain HTTP. Browsers ignore `Secure` cookies over HTTP, so a mismatch breaks
   login without an obvious error.
-- `--reverse-proxy-provider=no_proxy` together with `--allow-direct-port-access` runs the stack
-  with no proxy and no TLS at all. `setup` asks for confirmation. Development only.
+- `--reverse-proxy-provider=no_proxy` runs the stack with no proxy and no TLS at all and
+  publishes the core ports through the generated direct-ports override. `setup` asks for
+  confirmation and refuses it while a protected add-on is active
+  ([Published ports](#published-ports)). Development only.
 
 ### RAG system
 
@@ -2134,13 +2178,14 @@ LibreChat's built-in file search; `librechat-ragapi` and `librechat-vectordb` be
 
 | Service | Port | Reachable from |
 |---|---|---|
-| `qdrant` | 6333 (`QDRANT_EXT_PORT`) | Published on `HOST_IP`. REST and the dashboard under `/dashboard`; every request needs the api-key. |
+| `qdrant` | 6333 | `qdrant.<domain>` through the edge, and `papaia-net`. REST and the dashboard under `/dashboard`; every request needs the api-key. With direct port access published on `127.0.0.1:QDRANT_EXT_PORT`. |
 | `qdrant-mcp` | 8000 | `papaia-net` only. LibreChat calls it with the signed-in user's token. |
-| `qdrant-ingest` | 8300 (`QDRANT_INGEST_EXT_PORT`) | Published on `HOST_IP`. REST under `/v1` (static token) and MCP under `/mcp`; it has no web interface. |
+| `qdrant-ingest` | 8300 | `papaia-net` only (papaia-manager). REST under `/v1` (static token) and MCP under `/mcp`; it has no web interface. With direct port access published on `127.0.0.1:QDRANT_INGEST_EXT_PORT`. |
 | `qdrant-ingest-tika` | 9998 | `papaia-net` only. |
 
 **Enable it** with `papaia-ctl setup`: the wizard asks whether to install the RAG system and, on
-yes, for the public URL of Qdrant, pre-filled with `<app-host>:6333`. Non-interactively:
+yes, for the public URL of Qdrant, pre-filled with `qdrant.<domain>` on the edge
+(`<app-host>:6333` with direct port access). Non-interactively:
 
 ```bash
 tools/papaia-ctl setup -y --rag --qdrant-host=https://qdrant.example.com

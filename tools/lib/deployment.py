@@ -46,6 +46,42 @@ def resolve_addon_path(addon: dict, repo_root: Path) -> Path:
     return p.resolve()
 
 
+ADDON_OVERRIDES = Path("overrides") / "addons"
+
+
+def addon_override_files(config_dir: Path, name: str, deployed: dict | None = None) -> list[Path]:
+    """The overrides/addons/ compose files of one add-on, the files `addon start` hands
+    docker compose after its own docker-compose.yml.
+
+    Files there are named docker-compose.<segment>.override.yml, where <segment> is the
+    add-on name, optionally followed by a "-<suffix>" tag (the generated "-ssl-cert", or
+    an operator's own e.g. "-ports"). Add-on names contain hyphens themselves, so a bare
+    "<name>-*" glob cannot tell add-on "qdrant" apart from "qdrant-ingest". Each file is
+    attributed to the longest registered add-on name that equals <segment> or is a
+    prefix of it before a "-"; only the files owned by `name` are returned."""
+    folder = config_dir / ADDON_OVERRIDES
+    if not folder.is_dir():
+        return []
+    if deployed is None:
+        deployed = load(config_dir) or {}
+    names = {a.get("name") for a in (deployed.get("addons") or []) if a.get("name")}
+    # The add-on being started is registered by then, but tolerate a caller that races
+    # an install.
+    names.add(name)
+    prefix, suffix = "docker-compose.", ".override.yml"
+    owned = []
+    for path in sorted(folder.glob(f"{prefix}*{suffix}")):
+        segment = path.name[len(prefix) : -len(suffix)]
+        owner = max(
+            (n for n in names if segment == n or segment.startswith(f"{n}-")),
+            key=len,
+            default=None,
+        )
+        if owner == name:
+            owned.append(path)
+    return owned
+
+
 def load_addon_manifest(addon_path: Path) -> tuple[dict | None, str | None]:
     """Load an addon's papaia-app.yaml. Returns (manifest, None) on success,
     (None, reason) when the file is missing or not valid YAML."""

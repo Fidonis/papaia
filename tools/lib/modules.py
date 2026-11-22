@@ -50,7 +50,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, common, envtree, knowledge_map, localai_native, resolve, secrets
+from . import (
+    backup,
+    common,
+    direct_ports,
+    envtree,
+    knowledge_map,
+    localai_native,
+    resolve,
+    secrets,
+)
 
 
 class ModuleError(Exception):
@@ -67,6 +76,7 @@ class Question:
     derive: Callable[[str, str], str]  # (app host, port) -> the default
     port_key: str
     default_port: str
+    edge_label: str = ""  # the service's name on the bundled edge (resolve.EDGE_LABELS)
 
 
 @dataclass(frozen=True)
@@ -109,6 +119,7 @@ MODULES: dict[str, ModuleSpec] = {
                 derive=resolve.derive_localai_url_default,
                 port_key="LOCALAI_EXT_PORT",
                 default_port="8080",
+                edge_label="localai",
             ),
         ),
     ),
@@ -133,6 +144,7 @@ MODULES: dict[str, ModuleSpec] = {
                 derive=resolve.derive_qdrant_url_default,
                 port_key="QDRANT_EXT_PORT",
                 default_port="6333",
+                edge_label="qdrant",
             ),
         ),
     ),
@@ -231,6 +243,26 @@ def _native_localai_home(config_dir: Path, name: str) -> Path | None:
         raise ModuleError(f"the native LocalAI has no directory: {exc}") from exc
 
 
+def _default(question: Question, root: dict[str, str], app_host: str, port: str) -> str:
+    """What `setup` derives: the name on the bundled edge where that applies (no service
+    publishes a port there), else the app host with the service's port."""
+    if question.edge_label:
+        try:
+            edge = resolve.edge_url_default(
+                question.edge_label,
+                app_host,
+                root.get("COMPOSE_PROJECT_NAME", ""),
+                root,
+                provider=root.get("REVERSE_PROXY_PROVIDER") or None,
+                allow_direct=direct_ports.direct_mode(root) == direct_ports.ALLOW_FLAG,
+            )
+        except resolve.SetupError:
+            edge = None
+        if edge:
+            return edge
+    return question.derive(app_host, port)
+
+
 def questions(config_dir: Path, name: str) -> list[dict]:
     """What `setup` asks for the module, with the default and whether it is still open.
 
@@ -252,7 +284,7 @@ def questions(config_dir: Path, name: str) -> list[dict]:
                 "key": question.key,
                 "option": question.option,
                 "label": question.label,
-                "default": question.derive(app_host, port),
+                "default": _default(question, root, app_host, port),
                 "value": kept,
                 "ask": not kept,
             }

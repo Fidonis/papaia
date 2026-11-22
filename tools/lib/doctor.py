@@ -56,6 +56,7 @@ from . import (
     common,
     compat,
     deployment,
+    direct_ports,
     egress,
     envtree,
     federation,
@@ -1472,6 +1473,43 @@ def check_ports(ctx: Context) -> CheckResult:
     return CheckResult(name, overall, summary, {"ports": items})
 
 
+def check_direct_ports(ctx: Context) -> CheckResult:
+    """The generated direct-ports override: present only with direct port access, never
+    edited by hand, equal to what setup writes for the configuration (BE-06)."""
+    name = "direct_ports"
+    if not ctx.configured:
+        return _not_set_up(name)
+    root = common.parse_env_file(ctx.config_dir / ".env")
+    findings = direct_ports.verify(ctx.config_dir, root)
+    mode = direct_ports.direct_mode(root)
+    details: dict[str, Any] = {"mode": mode or "edge", "findings": findings}
+    if direct_ports.missing(ctx.config_dir, root):
+        return CheckResult(name, WARN, "; ".join(findings), details)
+    if findings:
+        return CheckResult(name, FAIL, "; ".join(findings), details)
+    if mode is None:
+        return CheckResult(name, PASS, "only the edge proxy publishes ports", details)
+    return CheckResult(
+        name, PASS, f"direct port access ({mode}) through the generated override", details
+    )
+
+
+def check_addon_ports(ctx: Context) -> CheckResult:
+    """Services that never publish a port (header identity, me-web, modules with
+    delegation): no port in any mode, and no direct port access while one is installed
+    (RE-21, ISB-P10)."""
+    name = "addon_ports"
+    if not ctx.configured:
+        return _not_set_up(name)
+    root = common.parse_env_file(ctx.config_dir / ".env")
+    findings = direct_ports.refusals(root, ctx.config_dir, ctx.repo_root)
+    if findings:
+        return CheckResult(name, FAIL, "; ".join(findings), {"findings": findings})
+    return CheckResult(
+        name, PASS, "no service with header identity, me-web or delegation publishes a port"
+    )
+
+
 # Which env key holds a public URL, and the profile that makes it relevant.
 _HOST_KEYS: tuple[tuple[str | None, str], ...] = (
     (None, "PAPAIA_HOST"),
@@ -2350,6 +2388,8 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("gpu", check_gpu),
     ("localai_native", check_localai_native),
     ("ports", check_ports),
+    ("direct_ports", check_direct_ports),
+    ("addon_ports", check_addon_ports),
     ("dns", check_dns),
     ("time_sync", check_time_sync),
     ("certs", check_certs),

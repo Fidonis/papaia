@@ -7,10 +7,13 @@ entry of a core compose fragment must stand on the legacy list in
 `security/published-ports.yaml`, and no core service may use the host network.
 
 The legacy list is a frozen inventory, not a permission. It records the ports that were
-published before the edge rule existed, each with its reason and the change that removes
-it. Entries are only removed: the list must equal `FROZEN_INVENTORY` below, so removing a
-port removes its key here in the same change, and bringing a port back means growing this
-inventory in code, which review refuses. The single
+published before the edge rule existed and remain, each with its reason and the change that
+removes it; the core services have moved behind the edge, the loopback API of the bundled
+proxy remains. Direct port access publishes ports only through a generated override
+(lib/direct_ports.py), never through the compose fragments checked here. Entries are only
+removed: the list must equal `FROZEN_INVENTORY` below, so removing a port removes its key
+here in the same change, and bringing a port back means growing this inventory in code,
+which review refuses. The single
 documented exception is the link gateway of a distributed installation, whose port is
 written into the node's generated override (`link.gateway_override`) and is reached with
 mutual TLS only.
@@ -53,15 +56,6 @@ BIND_NODE_ADDRESS = "node-address"
 FROZEN_INVENTORY: frozenset[tuple[str, str, str, int | None, str]] = frozenset(
     {
         (SOURCE_COMPOSE, "nginx-proxy-manager", "NPM_API_LOCAL_PORT", 81, BIND_LOOPBACK),
-        (SOURCE_COMPOSE, "nginx-proxy-manager-auth", "NPM_ADMIN_EXT_PORT", 4180, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "oauth2-proxy", "OAUTH2_PROXY_EXT_PORT", 4180, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "keycloak", "KEYCLOAK_EXT_PORT", 8443, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "papaia-manager", "MANAGER_EXT_PORT", 8000, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "librechat", "LIBRECHAT_EXT_PORT", 3080, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "litellm", "LITELLM_EXT_PORT", 4000, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "localai", "LOCALAI_EXT_PORT", 8080, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "qdrant", "QDRANT_EXT_PORT", 6333, BIND_HOST_IP),
-        (SOURCE_COMPOSE, "qdrant-ingest", "QDRANT_INGEST_EXT_PORT", 8300, BIND_HOST_IP),
         (SOURCE_GENERATED, "link-gateway", "topology.link.port", None, BIND_NODE_ADDRESS),
     }
 )

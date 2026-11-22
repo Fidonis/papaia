@@ -64,7 +64,7 @@ next to it, even when it has an inline `:-` default.
 | `PAPAIA_AUDIT_SIEM_TARGET`, `_PEN`, `_IDENTITY`, `_BASIS` | SIEM export of the audit store; empty target: none ([audit.md](audit.md#siem)) |
 | `PAPAIA_BACKUP_RECIPIENTS` | Public age keys every backup archive is encrypted to (`NAME:age1...`, comma-separated); empty means `backup` refuses to run. Set with `papaia-ctl backup keys generate` or `backup recipients add` |
 | `UID` / `GID` | Host ownership for bind-mounted files (Linux only) |
-| `HOST_IP` | Bind address for published ports — the network layer |
+| `HOST_IP` | Bind address of the edge ports and, with direct port access, of the core ports — the network layer |
 | `INGRESS_HTTP_EXT_PORT` / `INGRESS_HTTPS_EXT_PORT` | Host ports of the edge proxy (`internal_nginx`), default 80/443; bound to `HOST_IP` |
 | `INGRESS_HOST_IP` | Bind address of the edge ports only; empty falls back to `HOST_IP`. Set per node of a distributed installation |
 | `INGRESS_DOMAIN` | Domain of the web interfaces (`<name>.<domain>`) when it differs from the one of `PAPAIA_HOST`; empty for a local installation, which uses `<name>.<env>.papaia.localhost` |
@@ -78,13 +78,14 @@ next to it, even when it has an inline `:-` default.
 | `OIDC_AUTH_URL` | Browser-facing login redirect |
 | `OIDC_TOKEN_URL` | Server-side token exchange (internal Docker DNS) |
 | `OIDC_JWKS_URL` | Server-side JWKS fetch (internal Docker DNS) |
-| `OAUTH2_PROXY_EXT_PORT` | External port of the standalone forward-auth proxy |
+| `OAUTH2_PROXY_EXT_PORT` | Host port of the standalone forward-auth proxy with direct port access only |
+| `OAUTH2_PROXY_PUBLIC_URL` | Browser-facing URL of the forward-auth proxy (its sign-in callback), derived by setup: `oauth2.<domain>` on the edge and behind an external proxy (no port), `PAPAIA_HOST:OAUTH2_PROXY_EXT_PORT` with direct port access only; a value set by hand is kept in every mode |
 | `OAUTH2_PROXY_CLIENT_ID` | OIDC client ID shared by all three sidecars |
 | `OAUTH2_PROXY_CLIENT_SECRET` | Matching client secret (generated) |
 | `OAUTH2_PROXY_COOKIE_SECRET` | Session cookie key, 32 bytes base64 (generated) |
 | `OAUTH2_PROXY_COOKIE_SECURE` | Re-derived every run from the `PAPAIA_HOST` scheme |
 | `REVERSE_PROXY_PROVIDER` | `internal_nginx`, `external_proxy` or `no_proxy` |
-| `*_EXT_PORT` | External port allocation — kept together to stay collision-free |
+| `*_EXT_PORT` | Host ports of the core services with direct port access only (`no_proxy` or `--allow-direct-port-access`, written to the generated `overrides/docker-compose.direct-ports.override.yml`); behind the edge no core service publishes a port |
 | `LOCALAI_PUBLIC_URL` | Browser-facing LocalAI URL, derived by setup |
 | `LOCALAI_IMAGE_VARIANT` | LocalAI accelerator image chosen during setup (`cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`); drives the generated GPU override |
 | `PAPAIA_DEFAULT_MODEL` | Model the aliases `papaia-chat` and `papaia-structured` map onto (a `model_name` of LiteLLM's model list). `setup --local-ai` names the shipped default model when it is empty (`qwen2.5-7b-instruct-q4`, or `qwen2.5-7b-instruct-q8` with an accelerator variant), and the render adds its download to LocalAI's list; `--no-local-ai` drops a shipped default. See [model gateway](./model-gateway.md) |
@@ -92,11 +93,11 @@ next to it, even when it has an inline `:-` default.
 | `LOCALAI_RUNTIME` | Where LocalAI runs: `container` (default) or `native`, a process on an Apple Silicon Mac with Docker Desktop (ADR 0012); drives the generated runtime override |
 | `VOICE_TTS_IMAGE_VARIANT` | Voice TTS accelerator image chosen during setup (`cpu`, `nvidia`, `hipblas`; set via `setup --voice-variant`); drives the generated GPU override, which only materializes while the `voice` profile is active — the image pins live in `src/ai/voice/docker-compose.yml` |
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |
-| `MANAGER_EXT_PORT` | External port the manager (profile `manager`) is published on |
+| `MANAGER_EXT_PORT` | Host port of the manager (profile `manager`) with direct port access only |
 | `MANAGER_PUBLIC_URL` | Browser-facing papaia-manager URL, derived by setup — interpolated as `MANAGER_HOST` in `src/manager/docker-compose.yml` |
-| `QDRANT_EXT_PORT` | Host port of the Qdrant REST API and dashboard (profile `rag`) |
+| `QDRANT_EXT_PORT` | Host port of the Qdrant REST API and dashboard (profile `rag`) with direct port access only, on `127.0.0.1` |
 | `QDRANT_PUBLIC_URL` | Browser-facing Qdrant URL — the dashboard lives under `/dashboard` |
-| `QDRANT_INGEST_EXT_PORT` | Host port of the ingester's REST API and MCP endpoint (profile `rag`); the ingester has no web interface, papaia-manager manages it |
+| `QDRANT_INGEST_EXT_PORT` | Host port of the ingester's REST API and MCP endpoint (profile `rag`) with direct port access only, on `127.0.0.1`; the ingester has no web interface, papaia-manager manages it |
 
 The `OIDC_*` endpoint variables are provider-independent: they apply to
 `AUTH_PROVIDER=external_oidc` exactly as they do to the bundled Keycloak. Do not
@@ -291,8 +292,8 @@ Clients: no client has the password grant or the implicit flow; a public client 
 code flow uses PKCE S256. The redirect URIs, web origins and post-logout redirects of
 LibreChat, LiteLLM, LocalAI, papaia-manager and oauth2-proxy are computed from
 `DOMAIN_CLIENT` / `DOMAIN_SERVER`, `LITELLM_PUBLIC_URL`, `LOCALAI_PUBLIC_URL`,
-`MANAGER_PUBLIC_URL`, and `PAPAIA_HOST:OAUTH2_PROXY_EXT_PORT` and `NPM_ADMIN_HOST` (exact
-`/oauth2/callback`): `<URL>/*`, never `*` or `+`. Any other client keeps only entries with
+`MANAGER_PUBLIC_URL`, and `OAUTH2_PROXY_PUBLIC_URL` (with direct port access
+`PAPAIA_HOST:OAUTH2_PROXY_EXT_PORT`) and `NPM_ADMIN_HOST` (exact `/oauth2/callback`): `<URL>/*`, never `*` or `+`. Any other client keeps only entries with
 a fully named host and a wildcard at most as the last character of the path. A client
 policy `papaia-hardening` enforces PKCE and rejects the password grant and the implicit
 flow at every client with `papaia.managed=true`; Keycloak then refuses an update of such a
@@ -386,7 +387,9 @@ previous `PAPAIA_HOST`: it follows a changed `--app-host` (or a new answer to th
 For a local host the match ignores the scheme, since older releases derived those as
 `http`; a domain name must match with its scheme. A value stored while an external OIDC
 provider was in use is not kept either: switching back to the bundled Keycloak derives it
-again. The interactive prompt pre-fills by the same rules. After changing
+again. The interactive prompt pre-fills by the same rules. Behind the bundled proxy a value
+that is the port address an earlier release derived (`https://<host>:8110`) moves to the
+edge name, since that port is no longer published. With direct port access, after changing
 `KEYCLOAK_EXT_PORT` on a local host, pass `--auth-host` with the new port.
 
 When a plain-http browser URL (`PAPAIA_HOST`, `MANAGER_PUBLIC_URL`,

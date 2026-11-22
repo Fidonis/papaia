@@ -258,11 +258,13 @@ def test_resolve_hostnames_derives_oidc_and_domain_vars(repo_root):
     assert tree[""]["AUTH_HOST"] == "https://auth.papaia.example.com"
     assert tree["infra/keycloak"]["KC_HOSTNAME"] == "https://auth.papaia.example.com"
     assert tree[""]["OIDC_ISSUER"] == "https://auth.papaia.example.com/realms/papaia"
-    assert tree["ai/librechat"]["DOMAIN_SERVER"] == "https://papaia.example.com:8000"
+    # Behind the bundled edge every service has a name of its own, no port.
+    assert tree["ai/librechat"]["DOMAIN_SERVER"] == "https://chat.papaia.example.com"
     assert (
-        tree["ai/litellm"]["GENERIC_REDIRECT_URI"] == "https://papaia.example.com:8200/sso/callback"
+        tree["ai/litellm"]["GENERIC_REDIRECT_URI"]
+        == "https://litellm.papaia.example.com/sso/callback"
     )
-    assert tree[""]["LOCALAI_PUBLIC_URL"] == "https://papaia.example.com:8080"
+    assert tree[""]["LOCALAI_PUBLIC_URL"] == "https://localai.papaia.example.com"
     assert tree[""]["OAUTH2_PROXY_COOKIE_SECURE"] == "true"
     # internal Docker DNS endpoints use https because Keycloak now terminates
     # TLS natively (port 8443); they must never be derived from the public host
@@ -405,7 +407,8 @@ def test_resolve_hostnames_external_oidc_first_time_prompts_for_issuer(repo_root
     # LibreChat is provider-independent: its URL is prompted and resolved even
     # under external OIDC (derived default kept here).
     assert any("librechat" in m.lower() for m in prompts)
-    assert tree["ai/librechat"]["DOMAIN_SERVER"] == "https://papaia.example.com:8000"
+    # Behind the bundled edge every service has a name of its own, no port.
+    assert tree["ai/librechat"]["DOMAIN_SERVER"] == "https://chat.papaia.example.com"
     # AUTH_HOST is Keycloak-specific and meaningless without the bundled
     # Keycloak -- left untouched (still the seed default).
     assert tree[""]["AUTH_HOST"] == "http://host.docker.internal:8110"
@@ -508,7 +511,7 @@ def test_resolve_hostnames_external_oidc_derives_litellm_endpoints(repo_root):
         f"{issuer}/protocol/openid-connect/userinfo"
     )
     assert tree["ai/litellm"]["GENERIC_REDIRECT_URI"] == (
-        "https://papaia.example.com:8200/sso/callback"
+        "https://litellm.papaia.example.com/sso/callback"
     )
     assert "idp.customer.com" in tree["ai/litellm"]["PROXY_LOGOUT_URL"]
     # Bundled-Keycloak internals must not appear in any of these values
@@ -843,7 +846,8 @@ def test_resolve_hostnames_npm_admin_host_derived_from_app_host(repo_root):
         non_interactive=True,
     )
     tree = resolve.resolve_hostnames(tree, args)
-    assert tree[""]["NPM_ADMIN_HOST"] == "http://localhost:8100"
+    # Behind the bundled edge: the NPM admin UI's own name on the edge, not port 8100.
+    assert tree[""]["NPM_ADMIN_HOST"] == "https://npm.papaia.localhost"
 
 
 def test_resolve_hostnames_npm_admin_host_arg_wins(repo_root):
@@ -881,8 +885,8 @@ def test_resolve_hostnames_npm_admin_host_fresh_init_uses_derived(repo_root):
         fresh_init=True,
     )
     tree = resolve.resolve_hostnames(tree, args)
-    # host.docker.internal over plain HTTP is rewritten to localhost
-    assert tree[""]["NPM_ADMIN_HOST"] == "http://localhost:8100"
+    # A fresh run derives the edge name again (CORE-021 host scheme).
+    assert tree[""]["NPM_ADMIN_HOST"] == "https://npm.papaia.localhost"
 
 
 def test_resolve_reverse_proxy_no_proxy_excludes_nginx(repo_root):

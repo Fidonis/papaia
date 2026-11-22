@@ -231,10 +231,20 @@ def load(
             if not _unset(raw):
                 origin, path = _base(key, raw, https_only)
                 add(client_id, key, raw, f"{origin}{path}/*")
-    # oauth2-proxy signs in on its own port of PAPAIA_HOST and names its exact callback
-    # (src/infra/oauth2-proxy/docker-compose.yml: --redirect-url).
+    # oauth2-proxy names its exact callback (src/infra/oauth2-proxy/docker-compose.yml:
+    # --redirect-url): its own name on the edge (OAUTH2_PROXY_PUBLIC_URL), else, with
+    # direct port access, its own port of PAPAIA_HOST.
+    public = _value(env, "OAUTH2_PROXY_PUBLIC_URL")
     host, port = _value(env, "PAPAIA_HOST"), _value(env, "OAUTH2_PROXY_EXT_PORT")
-    if not _unset(host) and not _unset(port):
+    if not _unset(public):
+        origin, path = _base("OAUTH2_PROXY_PUBLIC_URL", public, https_only)
+        add(
+            "oauth2-proxy",
+            "OAUTH2_PROXY_PUBLIC_URL",
+            public,
+            f"{origin}{path}/oauth2/callback",
+        )
+    elif not _unset(host) and not _unset(port):
         _base("PAPAIA_HOST", host, https_only)
         callback = f"{host.rstrip('/')}:{port}/oauth2/callback"
         try:

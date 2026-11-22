@@ -28,6 +28,7 @@ from . import (
     egress,
     envtree,
     gen_override,
+    keycloak_admin_path,
     keycloak_role_sync,
     model_gateway,
     npm_provision,
@@ -41,6 +42,17 @@ from . import (
     topology,
     uninstall_journal,
 )
+
+
+def _sync_addon_clients(tree, config_dir: Path, repo_root: Path, names: set[str]) -> bool:
+    """The managed Keycloak clients of `names`. On the host Keycloak publishes no port, so
+    the step runs in the one-shot container on the stack network
+    (lib/keycloak_admin_path.py); in a container or with direct ports it runs here."""
+    root = tree.get("", {})
+    if keycloak_admin_path.needs_oneshot(root):
+        command = ["addon-clients-sync", f"--names={','.join(sorted(names))}"]
+        return keycloak_admin_path.run(root, config_dir, repo_root, command) == 0
+    return keycloak_role_sync.sync_addon_clients(tree, config_dir, repo_root, names)
 
 
 def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bool) -> None:
@@ -571,7 +583,7 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
         )
         if not args.no_keycloak:
             tree = envtree.load_config_dir_tree(config_dir, repo_root)
-            if not keycloak_role_sync.sync_addon_clients(tree, config_dir, repo_root, {name}):
+            if not _sync_addon_clients(tree, config_dir, repo_root, {name}):
                 print(
                     f"WARNING: the Keycloak clients of '{name}' are not in place yet. "
                     "Run 'papaia-ctl keycloak-role-sync' once Keycloak is up.",
@@ -941,7 +953,7 @@ def cmd_addon_upgrade_apply(args: argparse.Namespace) -> int:
     clients_synced = True
     if keycloak_role_sync.managed_clients(candidate.new_manifest):
         tree = envtree.load_config_dir_tree(config_dir, repo_root)
-        clients_synced = keycloak_role_sync.sync_addon_clients(
+        clients_synced = _sync_addon_clients(
             tree, config_dir, repo_root, {name}
         )
     _print_upgrade_followups(
@@ -1418,39 +1430,11 @@ def cmd_addon_path(args: argparse.Namespace) -> int:
 
 def cmd_addon_override_files(args: argparse.Namespace) -> int:
     """Print the overrides/addons/ compose files that belong to one addon,
-    one absolute path per line.
-
-    Files there are named docker-compose.<segment>.override.yml, where
-    <segment> is the addon name, optionally followed by a "-<suffix>" tag
-    (the generated "-ssl-cert", or an operator's own e.g. "-ports"). Addon
-    names contain hyphens themselves, so a bare "<name>-*" glob cannot tell
-    addon "qdrant" apart from addon "qdrant-ingest" -- starting the former
-    would otherwise sweep in the latter's overrides and hand docker compose
-    a service with no image. Each file is attributed to the longest
-    registered addon name that equals <segment> or is a prefix of it before
-    a "-"; only the files owned by `name` are printed.
-    """
-    config_dir = Path(args.config_dir)
-    addons_dir = config_dir / "overrides" / "addons"
-    if not addons_dir.is_dir():
-        return 0
-
-    deployed = deployment.load(config_dir) or {}
-    names = {a.get("name") for a in (deployed.get("addons") or []) if a.get("name")}
-    # The addon being started is always registered by the time bash reaches
-    # here, but tolerate a caller that races an install.
-    names.add(args.name)
-
-    prefix, suffix = "docker-compose.", ".override.yml"
-    for path in sorted(addons_dir.glob(f"{prefix}*{suffix}")):
-        segment = path.name[len(prefix) : -len(suffix)]
-        owner = max(
-            (n for n in names if segment == n or segment.startswith(f"{n}-")),
-            key=len,
-            default=None,
-        )
-        if owner == args.name:
-            print(path)
+    one absolute path per line (deployment.addon_override_files): starting
+    "qdrant" must not sweep in the overrides of "qdrant-ingest" and hand
+    docker compose a service with no image."""
+    for path in deployment.addon_override_files(Path(args.config_dir), args.name):
+        print(path)
     return 0
 
 

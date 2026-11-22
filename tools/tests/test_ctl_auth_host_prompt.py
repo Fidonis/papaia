@@ -69,11 +69,17 @@ def _prefill(app_host: str, port: str | None, tmp_path: Path, provider: str = ""
 def test_the_prompt_pre_fills_what_setup_derives(
     app_host: str, provider: str, tmp_path: Path
 ) -> None:
-    # A fresh local installation behind the bundled proxy (the default provider) gets
-    # the edge name; every other case the port derivation, as `setup -y` does.
-    expected = resolve.edge_url_default(
-        "auth", app_host, "papaia", {}, provider=provider or None, allow_direct=False
-    ) or resolve.derive_auth_host_default(app_host, "18334")
+    # A fresh installation behind the bundled proxy (the default provider) gets the
+    # edge name; every other case the port derivation, as `setup -y` does. A LAN address
+    # without a domain keeps the port pre-fill: `setup` refuses it afterwards and asks
+    # for INGRESS_DOMAIN.
+    try:
+        edge = resolve.edge_url_default(
+            "auth", app_host, "papaia", {}, provider=provider or None, allow_direct=False
+        )
+    except resolve.NoEdgeDomain:
+        edge = None
+    expected = edge or resolve.derive_auth_host_default(app_host, "18334")
     assert _prefill(app_host, "18334", tmp_path, provider) == expected
 
 

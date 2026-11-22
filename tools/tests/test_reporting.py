@@ -229,3 +229,18 @@ def test_keycloak_checklist_without_manual_steps_for_a_managed_placeholder(tmp_p
     reporting.print_keycloak_checklist("wiki", manifest, addon_path, config_dir)
 
     assert "manual steps required" not in capsys.readouterr().out
+
+
+def test_external_oidc_checklist_names_the_oauth2_proxy_callback(repo_root, config_dir, capsys):
+    # oauth2-proxy's --redirect-url comes from OAUTH2_PROXY_PUBLIC_URL; the provider must
+    # know exactly that callback.
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["OIDC_ISSUER"] = "https://idp.customer.com/realms/foo"
+    tree[""]["PAPAIA_HOST"] = "https://papaia.example.com"
+    tree[""]["OAUTH2_PROXY_PUBLIC_URL"] = "https://oauth2.papaia.example.com"
+
+    reporting.print_external_oidc_checklist(config_dir, tree)
+
+    out = capsys.readouterr().out
+    assert "https://oauth2.papaia.example.com/oauth2/callback" in out
+    assert "https://papaia.example.com/oauth2/callback" not in out

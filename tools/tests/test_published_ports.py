@@ -66,9 +66,15 @@ def _add_entry(repo: Path, entry: dict) -> None:
     _save(path, doc)
 
 
-KEYCLOAK = "src/infra/keycloak/docker-compose.yml"
-KEYCLOAK_PORT = "${HOST_IP:-0.0.0.0}:${KEYCLOAK_EXT_PORT}:8443"
 NGINX = "src/infra/nginx/docker-compose.yml"
+# The one compose entry left on the legacy list: the NPM API on loopback.
+LEGACY = "nginx-proxy-manager"
+LEGACY_PORT = "127.0.0.1:${NPM_API_LOCAL_PORT:-8181}:81"
+
+
+def _set_legacy(repo: Path, ports: list) -> None:
+    """The edge service's ports: the edge entries, then `ports` instead of the NPM API."""
+    _set_ports(repo, NGINX, LEGACY, [*published_ports.EDGE_ENTRIES, *ports])
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -171,10 +177,9 @@ def test_a_new_port_on_a_service_without_one_fails(tmp_path: Path):
 
 def test_a_second_port_on_a_listed_service_fails(tmp_path: Path):
     repo = _copy(tmp_path)
-    second = "${HOST_IP:-0.0.0.0}:${KC_MGMT:-9000}:9000"
-    _set_ports(repo, KEYCLOAK, "keycloak", [KEYCLOAK_PORT, second])
+    _set_legacy(repo, [LEGACY_PORT, "127.0.0.1:${NPM_ALT:-9000}:9000"])
     found = published_ports.lint(repo)
-    assert len(found) == 1 and "keycloak" in found[0] and "9000" in found[0]
+    assert len(found) == 1 and LEGACY in found[0] and "9000" in found[0]
 
 
 def test_a_port_in_a_compose_file_outside_the_include_list_fails(tmp_path: Path):
@@ -187,54 +192,69 @@ def test_a_port_in_a_compose_file_outside_the_include_list_fails(tmp_path: Path)
     assert len(found) == 1 and "newcomer" in found[0]
 
 
+@pytest.mark.parametrize(
+    "service",
+    ["keycloak", "oauth2-proxy", "papaia-manager", "librechat", "litellm", "localai", "qdrant"],
+)
+def test_a_removed_core_port_that_comes_back_fails(tmp_path: Path, service: str):
+    """The core services moved behind the edge: none of them may publish again."""
+    repo = _copy(tmp_path)
+    for path in published_ports.compose_fragments(repo):
+        doc = _load(path)
+        if service in (doc.get("services") or {}):
+            doc["services"][service]["ports"] = ["${HOST_IP:-0.0.0.0}:${X_EXT_PORT}:1234"]
+            _save(path, doc)
+            break
+    else:
+        pytest.fail(f"no fragment declares {service}")
+    found = published_ports.lint(repo)
+    assert len(found) == 1 and service in found[0]
+
+
 def test_a_long_syntax_port_fails(tmp_path: Path):
     repo = _copy(tmp_path)
-    _set_ports(
-        repo, KEYCLOAK, "keycloak", [{"target": 8443, "published": "${KEYCLOAK_EXT_PORT}"}]
-    )
+    _set_legacy(repo, [{"target": 81, "published": "${NPM_API_LOCAL_PORT}"}])
     found = published_ports.lint(repo)
-    assert any("keycloak" in f and "short syntax" in f for f in found)
+    assert any(LEGACY in f and "short syntax" in f for f in found)
 
 
 def test_a_listed_port_moved_to_all_interfaces_fails(tmp_path: Path):
     repo = _copy(tmp_path)
-    _set_ports(repo, KEYCLOAK, "keycloak", ["0.0.0.0:${KEYCLOAK_EXT_PORT}:8443"])
+    _set_legacy(repo, ["0.0.0.0:${NPM_API_LOCAL_PORT:-8181}:81"])
     found = published_ports.lint(repo)
-    assert any("keycloak" in f and "0.0.0.0" in f for f in found)
+    assert any(LEGACY in f and "0.0.0.0" in f for f in found)
 
 
 def test_a_listed_port_with_a_fixed_host_port_fails(tmp_path: Path):
     repo = _copy(tmp_path)
-    _set_ports(repo, KEYCLOAK, "keycloak", ["${HOST_IP:-0.0.0.0}:8110:8443"])
+    _set_legacy(repo, ["127.0.0.1:8181:81"])
     found = published_ports.lint(repo)
-    assert any("keycloak" in f for f in found)
+    assert any(LEGACY in f and "8181:81" in f for f in found)
 
 
 def test_a_listed_port_without_a_bind_address_fails(tmp_path: Path):
     repo = _copy(tmp_path)
-    _set_ports(repo, KEYCLOAK, "keycloak", ["${KEYCLOAK_EXT_PORT}:8443"])
+    _set_legacy(repo, ["${NPM_API_LOCAL_PORT:-8181}:81"])
     found = published_ports.lint(repo)
-    assert any("keycloak" in f for f in found)
+    assert any(LEGACY in f for f in found)
 
 
 def test_a_listed_port_in_another_file_fails(tmp_path: Path):
     repo = _copy(tmp_path)
-    _set_ports(repo, KEYCLOAK, "keycloak", None)
-    _set_ports(repo, "src/infra/oauth2-proxy/docker-compose.yml", "oauth2-proxy", [
-        "${HOST_IP:-0.0.0.0}:${OAUTH2_PROXY_EXT_PORT}:4180",
-    ])
-    doc = _load(repo / "src/infra/oauth2-proxy/docker-compose.yml")
-    doc["services"]["keycloak"] = {"image": "x", "ports": [KEYCLOAK_PORT]}
-    _save(repo / "src/infra/oauth2-proxy/docker-compose.yml", doc)
+    _set_legacy(repo, [])
+    other = "src/infra/oauth2-proxy/docker-compose.yml"
+    doc = _load(repo / other)
+    doc["services"][LEGACY] = {"image": "x", "ports": [LEGACY_PORT]}
+    _save(repo / other, doc)
     found = published_ports.lint(repo)
-    assert any("keycloak" in f for f in found)
+    assert any(other in f and LEGACY in f for f in found)
 
 
 def test_removing_a_legacy_entry_fails_while_the_port_remains(tmp_path: Path):
     repo = _copy(tmp_path)
-    _drop_entry(repo, "keycloak")
+    _drop_entry(repo, LEGACY)
     found = published_ports.lint(repo)
-    assert len(found) == 2 and all("keycloak" in f for f in found)
+    assert len(found) == 2 and all(LEGACY in f for f in found)
     assert any("neither an edge port nor on the legacy list" in f for f in found)
     assert any("FROZEN_INVENTORY" in f for f in found)
 
@@ -247,25 +267,25 @@ def _shrink_inventory(monkeypatch: pytest.MonkeyPatch, service: str) -> None:
 
 def test_removing_entry_and_port_without_shrinking_the_inventory_fails(tmp_path: Path):
     repo = _copy(tmp_path)
-    _drop_entry(repo, "keycloak")
-    _set_ports(repo, KEYCLOAK, "keycloak", None)
+    _drop_entry(repo, LEGACY)
+    _set_legacy(repo, [])
     found = published_ports.lint(repo)
     assert len(found) == 1
-    assert "keycloak" in found[0] and "FROZEN_INVENTORY" in found[0]
+    assert LEGACY in found[0] and "FROZEN_INVENTORY" in found[0]
 
 
 def test_removing_a_legacy_entry_and_re_adding_the_port_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     repo = _copy(tmp_path)
-    _drop_entry(repo, "keycloak")
-    _set_ports(repo, KEYCLOAK, "keycloak", None)
-    _shrink_inventory(monkeypatch, "keycloak")
+    _drop_entry(repo, LEGACY)
+    _set_legacy(repo, [])
+    _shrink_inventory(monkeypatch, LEGACY)
     # Entry, port and inventory key removed together: the inventory shrank.
     assert published_ports.lint(repo) == []
-    _set_ports(repo, KEYCLOAK, "keycloak", [KEYCLOAK_PORT])
+    _set_legacy(repo, [LEGACY_PORT])
     found = published_ports.lint(repo)
-    assert len(found) == 1 and "keycloak" in found[0]
+    assert len(found) == 1 and LEGACY in found[0]
 
 
 def test_re_adding_a_removed_entry_and_its_port_fails(
@@ -274,18 +294,17 @@ def test_re_adding_a_removed_entry_and_its_port_fails(
     """Once a port is gone from list, compose and inventory, putting the list entry and
     the port back is not enough: the inventory in the code would have to grow too."""
     repo = _copy(tmp_path)
-    keycloak = next(
-        e for e in _load(repo / published_ports.ALLOW_LIST)["entries"]
-        if e["service"] == "keycloak"
+    entry = next(
+        e for e in _load(repo / published_ports.ALLOW_LIST)["entries"] if e["service"] == LEGACY
     )
-    _drop_entry(repo, "keycloak")
-    _set_ports(repo, KEYCLOAK, "keycloak", None)
-    _shrink_inventory(monkeypatch, "keycloak")
+    _drop_entry(repo, LEGACY)
+    _set_legacy(repo, [])
+    _shrink_inventory(monkeypatch, LEGACY)
     assert published_ports.lint(repo) == []
-    _add_entry(repo, keycloak)
-    _set_ports(repo, KEYCLOAK, "keycloak", [KEYCLOAK_PORT])
+    _add_entry(repo, entry)
+    _set_legacy(repo, [LEGACY_PORT])
     found = published_ports.lint(repo)
-    assert any("frozen inventory" in f and "keycloak" in f for f in found)
+    assert any("frozen inventory" in f and LEGACY in f for f in found)
 
 
 def test_adding_a_new_entry_to_the_list_fails(tmp_path: Path):
@@ -313,9 +332,9 @@ def test_adding_a_new_entry_to_the_list_fails(tmp_path: Path):
 
 def test_a_legacy_entry_without_its_port_is_stale(tmp_path: Path):
     repo = _copy(tmp_path)
-    _set_ports(repo, KEYCLOAK, "keycloak", None)
+    _set_legacy(repo, [])
     found = published_ports.lint(repo)
-    assert len(found) == 1 and "keycloak" in found[0] and "remove" in found[0]
+    assert len(found) == 1 and LEGACY in found[0] and "remove" in found[0]
 
 
 def test_the_fixed_edge_ports_fail(tmp_path: Path):
@@ -424,8 +443,8 @@ def test_a_malformed_entry_is_refused(tmp_path: Path, change, message):
     repo = _copy(tmp_path)
     path = repo / published_ports.ALLOW_LIST
     doc = _load(path)
-    keycloak = next(e for e in doc["entries"] if e["service"] == "keycloak")
-    change(keycloak)
+    entry = next(e for e in doc["entries"] if e["service"] == LEGACY)
+    change(entry)
     _save(path, doc)
     with pytest.raises(published_ports.AllowListError, match=message):
         published_ports.load_allow_list(repo)
@@ -447,7 +466,7 @@ def test_a_duplicate_entry_is_refused(tmp_path: Path):
     repo = _copy(tmp_path)
     path = repo / published_ports.ALLOW_LIST
     doc = _load(path)
-    doc["entries"].append(dict(next(e for e in doc["entries"] if e["service"] == "keycloak")))
+    doc["entries"].append(dict(next(e for e in doc["entries"] if e["service"] == LEGACY)))
     _save(path, doc)
     with pytest.raises(published_ports.AllowListError, match="duplicate"):
         published_ports.load_allow_list(repo)

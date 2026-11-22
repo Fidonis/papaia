@@ -6,8 +6,8 @@ services:
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6@sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048
     restart: unless-stopped
-    ports:
-      - "${HOST_IP:-0.0.0.0}:${OAUTH2_PROXY_EXT_PORT}:4180"
+    # No host port: the edge proxy serves it under its own host name, and an external
+    # proxy reaches oauth2-proxy:4180 on the stack network (papaia-ctl proxy list).
     command:
       # OIDC provider — discovery is skipped to allow split URLs:
       #   browser-facing calls use KC_HOSTNAME (host.docker.internal / external)
@@ -36,7 +36,9 @@ services:
       # Forward-auth mode: returns 202 for authenticated, 401 for not authenticated
       - --upstream=static://202
       - --http-address=0.0.0.0:4180
-      - --redirect-url=${PAPAIA_HOST}:${OAUTH2_PROXY_EXT_PORT}/oauth2/callback
+      # Its own host name on the edge (setup derives it); with direct port access the
+      # app host and its port, as before.
+      - --redirect-url=${OAUTH2_PROXY_PUBLIC_URL:-${PAPAIA_HOST}:${OAUTH2_PROXY_EXT_PORT}}/oauth2/callback
       # Access control
       - --email-domain=*
       - --scope=${OIDC_SCOPES}

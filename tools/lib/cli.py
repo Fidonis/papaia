@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -42,6 +43,7 @@ from . import (
     defaults,
     delegation_lifetime,
     deployment,
+    direct_ports,
     doctor,
     envtree,
     gen_override,
@@ -49,6 +51,7 @@ from . import (
     halt,
     images,
     ingress,
+    keycloak_admin_path,
     keycloak_role_sync,
     librechat_history,
     localai_native,
@@ -147,6 +150,11 @@ def cmd_derive_edge_url(args: argparse.Namespace) -> int:
             provider=args.provider or None,
             allow_direct=args.allow_direct == "1",
         )
+    except resolve.NoEdgeDomain as exc:
+        # The prompt keeps its port pre-fill; `setup` refuses the address afterwards
+        # with the same message, unless INGRESS_DOMAIN is set by then.
+        print(f"WARNING: {exc}", file=sys.stderr)
+        url = None
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -385,6 +393,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
             if not findings.ok:
                 return SETUP_REFUSED
 
+    # Before anything is written: direct port access is refused while a service with
+    # header identity, me-web or a module with delegation is installed (RE-21).
+    refused = direct_ports.refusals(tree.get("", {}), config_dir, repo_root)
+    if refused:
+        for message in refused:
+            print(f"ERROR: {message}", file=sys.stderr)
+        return SETUP_REFUSED
+
     tree = envtree.stamp_platform_version(tree, repo_root)
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
@@ -401,6 +417,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     render_core.render(config_dir, repo_root)
     gen_override.generate_overrides(config_dir, repo_root)
+    # Ports of the core services only with direct port access; removed otherwise.
+    direct_ports.write(config_dir, common.parse_env_file(config_dir / ".env"))
     gen_override.generate_ssl_cert_override(config_dir, effective_auth_provider)
     gen_override.generate_addon_ssl_cert_overrides(config_dir, effective_auth_provider, repo_root)
     gen_override.generate_addon_join_overrides(config_dir, repo_root)
@@ -2794,6 +2812,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_realm_keys.add_argument("--module", required=True)
     p_realm_keys.set_defaults(func=cmd_realm_keys_apply)
 
+    p_addon_clients = sub.add_parser("addon-clients-sync")
+    p_addon_clients.add_argument("--names", required=True)
+    p_addon_clients.add_argument(
+        "--wait", type=int, default=keycloak_role_sync.ADDON_CLIENTS_WAIT_SECONDS
+    )
+    p_addon_clients.set_defaults(func=cmd_addon_clients_sync)
+
     p_post_restore = sub.add_parser("post-restore")
     p_post_restore.add_argument("--since", default=None)
     p_post_restore.set_defaults(func=cmd_post_restore)
@@ -2981,10 +3006,47 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_ADDON_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+def _admin_step_elsewhere(args: argparse.Namespace, argv: list[str]) -> int | None:
+    """Run a Keycloak admin step in the one-shot container on the stack network when this
+    process cannot reach the admin API: on the host, where Keycloak publishes no port.
+    None when the step runs here."""
+    if args.command not in keycloak_admin_path.ADMIN_COMMANDS:
+        return None
+    config_dir = Path(args.config_dir)
+    root = common.parse_env_file(config_dir / ".env")
+    if not keycloak_admin_path.needs_oneshot(root):
+        return None
+    command = argv[len(argv) - 1 - argv[::-1].index(args.command):]
+    return keycloak_admin_path.run(root, config_dir, Path(args.repo_root), command)
+
+
+def cmd_addon_clients_sync(args: argparse.Namespace) -> int:
+    """The managed Keycloak clients of the named add-ons (`addon start` and `addon upgrade`
+    on the host run this in the one-shot container)."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    names = {n for n in args.names.split(",") if n}
+    if not names or not all(_ADDON_NAME.match(n) for n in names) or not 0 <= args.wait <= 300:
+        print("ERROR: --names takes add-on names, --wait 0 to 300 seconds", file=sys.stderr)
+        return 2
+    ok = keycloak_role_sync.sync_addon_clients(
+        tree, config_dir, repo_root, names, wait=args.wait
+    )
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw)
     try:
+        elsewhere = _admin_step_elsewhere(args, raw)
+        if elsewhere is not None:
+            return elsewhere
         return args.func(args)
     except render_core.RenderError as exc:
         # A layer that does not parse (a typo in a hand-edited overlay), or a realm

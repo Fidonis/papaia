@@ -86,3 +86,78 @@ def test_provision_returns_false_on_timeout(monkeypatch, capsys):
     assert result is False
     captured = capsys.readouterr()
     assert "NPM" in captured.err
+
+
+def test_the_identity_provider_host_refuses_the_admin_api():
+    """Keycloak's admin API is never routed through the edge (CORE-007b); the admin steps
+    reach it on the stack network."""
+    body = npm_provision.core_host_body("auth.example.org", "keycloak", 8443, "https", False, True)
+    advanced = body["advanced_config"]
+    assert npm_provision.IDP_ADMIN_BLOCK in advanced
+    assert "return 403;" in advanced and "^/admin(/|$)" in advanced
+    assert "proxy_ssl_verify off;" in advanced
+
+
+@pytest.mark.parametrize("service", ["librechat", "litellm", "papaia-manager"])
+def test_other_core_hosts_carry_no_admin_block(service):
+    body = npm_provision.core_host_body("x.example.org", service, 8000, "http", True, True)
+    assert npm_provision.IDP_ADMIN_BLOCK not in (body.get("advanced_config") or "")
+
+
+def _idp_tree() -> dict[str, dict[str, str]]:
+    tree = _tree("correct-password")
+    tree[""].update({"COMPOSE_PROFILES": "keycloak,nginx", "AUTH_HOST": "https://auth.example.org"})
+    return tree
+
+
+def _provision_with_hosts(monkeypatch, hosts: list[dict]) -> list[tuple[str, object, dict]]:
+    """Run provision_npm_hosts against a fake NPM API holding `hosts`; the writes made."""
+    writes: list[tuple[str, object, dict]] = []
+    monkeypatch.setattr(npm_provision, "_wait_for_npm", lambda base_url, timeout=60: None)
+    monkeypatch.setattr(npm_provision, "_get_token", lambda base_url, email, password: "t")
+    monkeypatch.setattr(npm_provision, "_list_proxy_hosts", lambda base_url, token: hosts)
+    monkeypatch.setattr(
+        npm_provision, "_put_proxy_host",
+        lambda base_url, token, host_id, body: writes.append(("PUT", host_id, body)),
+    )
+    monkeypatch.setattr(
+        npm_provision, "_post_proxy_host",
+        lambda base_url, token, body: writes.append(("POST", None, body)),
+    )
+    assert npm_provision.provision_npm_hosts(_idp_tree()) is True
+    return writes
+
+
+def _operator_idp_host(**fields) -> dict:
+    """The identity provider's host as an operator left it in the NPM UI: a certificate,
+    forced SSL, HSTS and an extra location of their own."""
+    wanted = npm_provision.core_host_body(
+        "auth.example.org", "keycloak", 8443, "https", False, False
+    )
+    return {
+        **wanted,
+        "id": 7,
+        "certificate_id": 3,
+        "ssl_forced": True,
+        "hsts_enabled": True,
+        "http2_support": True,
+        "locations": [{"path": "/health", "forward_host": "keycloak", "forward_port": 9000}],
+        **fields,
+    }
+
+
+def test_the_identity_provider_host_keeps_the_operators_certificate_and_settings(monkeypatch):
+    assert _provision_with_hosts(monkeypatch, [_operator_idp_host()]) == []
+
+
+def test_a_drifted_identity_provider_host_gets_back_only_the_fields_setup_owns(monkeypatch):
+    host = _operator_idp_host(advanced_config="", forward_host="elsewhere")
+    writes = _provision_with_hosts(monkeypatch, [host])
+    assert len(writes) == 1
+    method, host_id, body = writes[0]
+    assert (method, host_id) == ("PUT", 7)
+    assert npm_provision.IDP_ADMIN_BLOCK in body["advanced_config"]
+    assert body["forward_host"] == "keycloak" and body["forward_port"] == 8443
+    # Nothing the operator owns is sent back, so NPM keeps it.
+    for key in ("certificate_id", "ssl_forced", "hsts_enabled", "http2_support", "locations"):
+        assert key not in body

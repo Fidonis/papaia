@@ -26,7 +26,7 @@ services:
       retries: 3
       start_period: 40s
     # The edge: the only service that publishes ports (security/published-ports.yaml
-    # lists the legacy exceptions). Bound to HOST_IP; INGRESS_HOST_IP overrides that
+    # lists the one loopback exception, the API below). Bound to HOST_IP; INGRESS_HOST_IP overrides that
     # for the edge alone. The host ports come from INGRESS_HTTP_EXT_PORT and
     # INGRESS_HTTPS_EXT_PORT, so a second stack runs next to one holding 80/443.
     ports:
@@ -49,12 +49,11 @@ services:
     profiles: [nginx]
 
   # oauth2-proxy sidecar — protects the NPM admin UI with Keycloak authentication.
-  # Exposed on NPM_ADMIN_EXT_PORT; NPM admin (port 81) is only reachable inside Docker.
+  # No host port: the edge serves it under its own host name (NPM_ADMIN_HOST);
+  # NPM admin (port 81) is only reachable inside Docker and on 127.0.0.1 for the API.
   nginx-proxy-manager-auth:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6@sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048
     restart: unless-stopped
-    ports:
-      - "${HOST_IP:-0.0.0.0}:${NPM_ADMIN_EXT_PORT:-8100}:4180"
     command:
       - --provider=oidc
       - --oidc-issuer-url=${OIDC_ISSUER}

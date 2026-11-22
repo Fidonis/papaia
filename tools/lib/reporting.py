@@ -53,6 +53,8 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
     app_host = root.get("PAPAIA_HOST", "<PAPAIA_HOST>")
     librechat_url = librechat.get("DOMAIN_SERVER") or app_host
     litellm_redirect = litellm.get("GENERIC_REDIRECT_URI", "")
+    # oauth2-proxy's --redirect-url base (src/infra/oauth2-proxy/docker-compose.yml).
+    oauth2_url = (root.get("OAUTH2_PROXY_PUBLIC_URL") or "").rstrip("/") or app_host
 
     # Collect env files that still contain REPLACE_WITH_VALID_SECRET
     placeholder = secrets._EXTERNAL_SECRET_PLACEHOLDER
@@ -66,7 +68,7 @@ def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> No
     clients = [
         ("librechat", f"{librechat_url}/oauth/openid/callback"),
         ("litellm", litellm_redirect or f"{app_host}/sso/callback"),
-        ("oauth2-proxy", f"{app_host}/oauth2/callback"),
+        ("oauth2-proxy", f"{oauth2_url}/oauth2/callback"),
     ]
     active_profiles = _active_profiles(root)
     rag_active = "rag" in active_profiles

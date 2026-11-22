@@ -92,16 +92,15 @@ def test_the_other_services_do_not_receive_the_whole_env_file():
         assert "env_file" not in services[name], name
 
 
-def test_only_the_two_documented_ports_are_published():
+def test_no_rag_service_publishes_a_port():
+    # Qdrant is reached through the edge (`qdrant.<domain>`) and over papaia-net; with
+    # direct port access the generated override publishes it (lib/direct_ports.py).
     published = {
         name: service["ports"]
         for name, service in _compose()["services"].items()
         if service.get("ports")
     }
-    assert published == {
-        "qdrant": ["${HOST_IP:-127.0.0.1}:${QDRANT_EXT_PORT:-6333}:6333"],
-        "qdrant-ingest": ["${HOST_IP:-127.0.0.1}:${QDRANT_INGEST_EXT_PORT:-8300}:8300"],
-    }
+    assert published == {}
 
 
 def test_root_env_example_carries_the_derivable_urls_and_ports():

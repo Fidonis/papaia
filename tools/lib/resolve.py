@@ -25,6 +25,10 @@ class SetupError(Exception):
     """A user-facing, non-traceback-worthy setup failure."""
 
 
+class NoEdgeDomain(SetupError):
+    """The bundled edge needs host names, and the app host names no domain."""
+
+
 @dataclass
 class SetupArgs:
     config_dir: Path
@@ -194,8 +198,9 @@ def derive_npm_admin_host_default(app_host: str, npm_admin_ext_port: str) -> str
     return f"{host}:{npm_admin_ext_port}"
 
 
-# The core interfaces whose fresh local default moves onto the edge (E-35).
-EDGE_LABELS = ("auth", "chat", "manager")
+# The core interfaces whose default moves onto the edge (E-35, BE-06): the bundled proxy
+# serves each one under `<label>.<domain>`; none of them publishes a host port any more.
+EDGE_LABELS = ("auth", "chat", "manager", "litellm", "localai", "qdrant", "npm", "oauth2")
 
 
 def _effective_proxy_provider(root: dict[str, str], args: SetupArgs) -> str:
@@ -206,10 +211,12 @@ def _effective_proxy_provider(root: dict[str, str], args: SetupArgs) -> str:
         return args.reverse_proxy_provider
     if args.external_reverse_proxy is not None:
         return "external_proxy" if args.external_reverse_proxy else "internal_nginx"
-    stored = root.get("REVERSE_PROXY_PROVIDER", "") if not args.fresh_init else ""
+    # Like resolve_reverse_proxy, the stored value counts on a fresh run too: there it is
+    # the shipped default (internal_nginx), which that function settles on as well.
+    stored = root.get("REVERSE_PROXY_PROVIDER", "")
     if stored:
         return stored
-    if not args.fresh_init and "nginx" in root.get("COMPOSE_PROFILES", "").split(","):
+    if "nginx" in root.get("COMPOSE_PROFILES", "").split(","):
         return "internal_nginx"
     return "external_proxy" if _is_https(root.get("PAPAIA_HOST", "")) else "internal_nginx"
 
@@ -222,19 +229,35 @@ def local_edge(
     provider: str | None,
     allow_direct: bool,
 ) -> ingress.HostScheme | None:
-    """The local edge scheme (E-35) when it applies: a local app host behind the
-    bundled proxy. None for a server domain, an external proxy, no proxy and direct
-    port access: there the earlier derivation stays. SetupError for an unusable edge
-    port or project name."""
+    """The edge scheme when it applies: the bundled proxy without direct port access.
+    A local app host gets `.localhost` names (E-35), a server domain (or INGRESS_DOMAIN)
+    `<label>.<domain>`. None for an external proxy, no proxy and direct port access:
+    there the earlier derivation stays. SetupError for an unusable edge port or project
+    name, and for an app host without a domain (a LAN address or a bare host name): no
+    service publishes a port of its own, so its interfaces need host names."""
     if allow_direct or (provider or "internal_nginx") != "internal_nginx":
         return None
     hostname = (urlsplit(app_host).hostname or "").lower()
-    if not hostname or not ingress.is_local_host(hostname):
+    if not hostname:
         return None
+    view = {
+        **root,
+        "PAPAIA_HOST": app_host,
+        "REVERSE_PROXY_PROVIDER": "internal_nginx",
+        "COMPOSE_PROJECT_NAME": project,
+    }
     try:
-        return ingress.local_scheme(project, root)
+        scheme = ingress.host_scheme(view)
     except ingress.IngressError as exc:
         raise SetupError(str(exc)) from exc
+    if scheme.domain is None:
+        raise NoEdgeDomain(
+            f"PAPAIA_HOST={app_host} names no domain, and only the edge proxy publishes"
+            f" ports: set {ingress.DOMAIN_KEY} in the root .env to a domain whose names"
+            " resolve to this host, or choose --reverse-proxy-provider=no_proxy or"
+            " --allow-direct-port-access for direct ports"
+        )
+    return scheme
 
 
 def edge_url_default(
@@ -260,15 +283,87 @@ def is_edge_derivation(value: str, label: str) -> bool:
     return bool(re.fullmatch(pattern, value or ""))
 
 
-def _edge_default(edge: ingress.HostScheme | None, label: str, stored: str) -> str | None:
+def _edge_default(
+    edge: ingress.HostScheme | None, label: str, stored: str, legacy: tuple[str, ...] = ()
+) -> str | None:
     """The edge derivation for `label` when `stored` is no choice of the operator's:
-    empty, a placeholder or an earlier edge derivation. An installation that stores
-    the earlier addresses keeps them, so saved addresses stay valid."""
+    empty, a placeholder, an earlier edge derivation, or the port address an earlier
+    release derived (`legacy`): that port is no longer published. Any other stored
+    address is kept."""
     if edge is None:
         return None
-    if not stored or common.is_placeholder(stored) or is_edge_derivation(stored, label):
+    if (
+        not stored
+        or common.is_placeholder(stored)
+        or is_edge_derivation(stored, label)
+        or stored.rstrip("/") in legacy
+    ):
         return edge.url(label)
     return None
+
+
+def _legacy(derive, port: str, *hosts: str) -> tuple[str, ...]:
+    """The port addresses earlier releases derived for these app hosts."""
+    return tuple(derive(h, port) for h in dict.fromkeys(hosts) if h)
+
+
+def _external_proxy_url(root: dict[str, str], label: str, *app_hosts: str) -> list[str]:
+    """`<label>.<domain>` under an external proxy for each of these app hosts (the
+    CORE-021 host scheme, no port of its own): what `papaia-ctl proxy list` names. An app
+    host without a domain gives nothing."""
+    urls = []
+    for host in dict.fromkeys(h for h in app_hosts if h):
+        view = {**root, "PAPAIA_HOST": host, "REVERSE_PROXY_PROVIDER": "external_proxy"}
+        try:
+            scheme = ingress.host_scheme(view)
+        except ingress.IngressError as exc:
+            raise SetupError(str(exc)) from exc
+        if scheme.domain is not None:
+            urls.append(scheme.url(label))
+    return urls
+
+
+def _oauth2_public_url(
+    root: dict[str, str],
+    args: SetupArgs,
+    edge: ingress.HostScheme | None,
+    app_host: str,
+    sticky_app_host: str,
+) -> str:
+    """OAUTH2_PROXY_PUBLIC_URL, the browser-facing base of oauth2-proxy's callback
+    (src/infra/oauth2-proxy/docker-compose.yml: --redirect-url).
+
+    A value the operator chose is kept in every mode. A derived one follows the mode:
+    `oauth2.<domain>` on the edge and behind an external proxy (no port of its own, since
+    oauth2-proxy publishes none there), the app host with OAUTH2_PROXY_EXT_PORT only with
+    direct port access. Derived means empty, a placeholder, an edge derivation or one of
+    the addresses an earlier run derived for this or the previous app host."""
+    port = root.get("OAUTH2_PROXY_EXT_PORT", "4180")
+    hosts = (app_host, sticky_app_host)
+    legacy = _legacy(lambda h, p: f"{h.rstrip('/')}:{p}", port, *hosts)
+    stored = "" if args.fresh_init else root.get("OAUTH2_PROXY_PUBLIC_URL", "")
+    if edge is not None:
+        return _edge_default(edge, "oauth2", stored, legacy) or stored
+    external = _external_proxy_url(root, "oauth2", *hosts)
+    derived = (
+        not stored
+        or common.is_placeholder(stored)
+        or is_edge_derivation(stored, "oauth2")
+        or stored.rstrip("/") in (*legacy, *external)
+    )
+    if not derived:
+        return stored
+    provider = _effective_proxy_provider(root, args)
+    if args.allow_direct_port_access or provider == "no_proxy":
+        return legacy[0] if legacy else ""
+    current = _external_proxy_url(root, "oauth2", app_host)
+    if current:
+        return current[0]
+    raise SetupError(
+        f"PAPAIA_HOST={app_host} names no domain for the forward-auth proxy behind the"
+        f" external proxy: set {ingress.DOMAIN_KEY} in the root .env, or set"
+        " OAUTH2_PROXY_PUBLIC_URL there to the URL your proxy serves oauth2-proxy:4180 at"
+    )
 
 
 def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
@@ -345,6 +440,14 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     sticky_litellm = "" if args.fresh_init else root.get("LITELLM_PUBLIC_URL", "")
     if sticky_litellm and common.is_placeholder(sticky_litellm):
         sticky_litellm = ""
+    edge_litellm = _edge_default(
+        edge,
+        "litellm",
+        sticky_litellm,
+        _legacy(derive_litellm_url_default, litellm_port, app_host, sticky_app_host),
+    )
+    if edge_litellm:
+        derived_litellm, sticky_litellm = edge_litellm, ""
     litellm_url = args.litellm_host or sticky_litellm or derived_litellm
     if not args.litellm_host and not args.non_interactive and args.prompt is not None:
         litellm_url = args.prompt(
@@ -396,7 +499,12 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             stored_app_host=sticky_app_host,
             keycloak_ext_port=keycloak_port,
         )
-        edge_auth = _edge_default(edge, "auth", stored_auth_host)
+        edge_auth = _edge_default(
+            edge,
+            "auth",
+            stored_auth_host,
+            _legacy(derive_auth_host_default, keycloak_port, app_host, sticky_app_host),
+        )
         if edge_auth:
             derived_auth_host, sticky_auth = edge_auth, ""
         auth_host = args.auth_host or sticky_auth or derived_auth_host
@@ -450,7 +558,12 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     sticky_librechat = "" if args.fresh_init else librechat.get("DOMAIN_SERVER", "")
     if sticky_librechat and common.is_placeholder(sticky_librechat):
         sticky_librechat = ""
-    edge_chat = _edge_default(edge, "chat", sticky_librechat)
+    edge_chat = _edge_default(
+        edge,
+        "chat",
+        sticky_librechat,
+        _legacy(derive_librechat_url_default, librechat_port, app_host, sticky_app_host),
+    )
     if edge_chat:
         derived_librechat, sticky_librechat = edge_chat, ""
     librechat_url = args.librechat_host or sticky_librechat or derived_librechat
@@ -475,6 +588,14 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     sticky_localai = "" if args.fresh_init else root.get("LOCALAI_PUBLIC_URL", "")
     if sticky_localai and common.is_placeholder(sticky_localai):
         sticky_localai = ""
+    edge_localai = _edge_default(
+        edge,
+        "localai",
+        sticky_localai,
+        _legacy(derive_localai_url_default, localai_port, app_host, sticky_app_host),
+    )
+    if edge_localai:
+        derived_localai, sticky_localai = edge_localai, ""
     localai_url = args.localai_host or sticky_localai or derived_localai
     if not args.localai_host and not args.non_interactive and args.prompt is not None:
         localai_url = args.prompt(
@@ -494,7 +615,12 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     sticky_manager = "" if args.fresh_init else root.get("MANAGER_PUBLIC_URL", "")
     if sticky_manager and common.is_placeholder(sticky_manager):
         sticky_manager = ""
-    edge_manager = _edge_default(edge, "manager", sticky_manager)
+    edge_manager = _edge_default(
+        edge,
+        "manager",
+        sticky_manager,
+        _legacy(derive_manager_url_default, manager_port, app_host, sticky_app_host),
+    )
     if edge_manager:
         derived_manager, sticky_manager = edge_manager, ""
     manager_url = args.manager_host or sticky_manager or derived_manager
@@ -515,6 +641,14 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     sticky_npm_admin = "" if args.fresh_init else root.get("NPM_ADMIN_HOST", "")
     if sticky_npm_admin and common.is_placeholder(sticky_npm_admin):
         sticky_npm_admin = ""
+    edge_npm = _edge_default(
+        edge,
+        "npm",
+        sticky_npm_admin,
+        _legacy(derive_npm_admin_host_default, npm_admin_port, app_host, sticky_app_host),
+    )
+    if edge_npm:
+        derived_npm_admin, sticky_npm_admin = edge_npm, ""
     npm_admin_url = args.npm_admin_host or sticky_npm_admin or derived_npm_admin
     if not args.npm_admin_host and not args.non_interactive and args.prompt is not None:
         npm_admin_url = args.prompt(
@@ -522,6 +656,11 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             sticky_npm_admin or derived_npm_admin,
         )
     root["NPM_ADMIN_HOST"] = npm_admin_url
+
+    # --- oauth2-proxy public URL (its callback) ---
+    root["OAUTH2_PROXY_PUBLIC_URL"] = _oauth2_public_url(
+        root, args, edge, app_host, sticky_app_host
+    )
 
     # --- Cookie-secure: always re-derived, never sticky ---
     root["OAUTH2_PROXY_COOKIE_SECURE"] = "true" if _is_https(app_host) else "false"
@@ -869,6 +1008,20 @@ def resolve_rag_hosts(tree: EnvTree, args: SetupArgs) -> EnvTree:
             root.get("QDRANT_PUBLIC_URL", ""), derive_qdrant_url_default, port
         )
     )
+    edge = local_edge(
+        app_host,
+        root.get("COMPOSE_PROJECT_NAME", ""),
+        root,
+        provider=root.get("REVERSE_PROXY_PROVIDER") or None,
+        allow_direct=args.allow_direct_port_access,
+    )
+    # The sticky value, not the raw one: what sticky_service_url drops (the value
+    # .env.example ships) is no choice of the operator's either.
+    edge_qdrant = _edge_default(
+        edge, "qdrant", sticky, _legacy(derive_qdrant_url_default, port, app_host)
+    )
+    if edge_qdrant:
+        derived, sticky = edge_qdrant, ""
     url = args.qdrant_host or sticky or derived
     if not args.qdrant_host and not args.non_interactive and args.prompt is not None:
         url = args.prompt("Public URL of Qdrant (QDRANT_PUBLIC_URL)", sticky or derived)

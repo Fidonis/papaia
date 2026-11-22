@@ -201,6 +201,8 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # gpu: LocalAI is not enabled
         SKIP,  # localai_native: LocalAI runs in its container
         PASS,  # ports
+        PASS,  # direct_ports: only the edge publishes ports
+        PASS,  # addon_ports: no protected service publishes one
         SKIP,  # dns: only local hostnames configured
         PASS,  # time_sync
         PASS,  # certs
@@ -227,6 +229,8 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "gpu",
         "localai_native",
         "ports",
+        "direct_ports",
+        "addon_ports",
         "dns",
         "time_sync",
         "certs",

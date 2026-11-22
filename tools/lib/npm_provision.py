@@ -122,6 +122,46 @@ def proxy_host_body(
     }
 
 
+# The admin console and admin REST API of the identity provider are never served by the
+# public edge (BE-06): the papaia-ctl steps reach them on the stack network
+# (lib/keycloak_admin_path.py), papaia-manager with the signed-in account's own token.
+IDP_SERVICE = "keycloak"
+IDP_ADMIN_BLOCK = "location ~ ^/admin(/|$) {\n    return 403;\n}\n"
+# The fields of the identity provider's host that setup owns and corrects: where it
+# forwards to and the advanced config with the admin block. A certificate, forced SSL,
+# HSTS or a location the operator added in the NPM UI stays as it is.
+IDP_OWNED_FIELDS = (
+    "forward_scheme",
+    "forward_host",
+    "forward_port",
+    "allow_websocket_upgrade",
+    "advanced_config",
+)
+
+
+def core_host_body(
+    domain: str, service: str, port: int, scheme: str, ssl_verify: bool, websocket: bool
+) -> dict:
+    """The NPM API body of a core interface; the identity provider's host refuses its
+    admin paths."""
+    advanced = None
+    if service == IDP_SERVICE:
+        advanced = (
+            paperless_gate.strip_config()
+            + ("" if ssl_verify else "proxy_ssl_verify off;\n")
+            + IDP_ADMIN_BLOCK
+        )
+    return proxy_host_body(
+        domain,
+        service,
+        port,
+        scheme,
+        ssl_verify=ssl_verify,
+        allow_websocket=websocket,
+        advanced_config=advanced,
+    )
+
+
 def route_body(route: ingress.Route) -> dict:
     """The NPM API body of an add-on interface (lib/ingress.py): its host names to its
     service, the identity and gate headers cleared, the upload limit of `max_body`."""
@@ -140,26 +180,43 @@ def route_body(route: ingress.Route) -> dict:
     )
 
 
+def _correct_host(
+    base_url: str,
+    token: str,
+    route: ingress.Route,
+    body: dict,
+    hosts: list[dict] | None = None,
+    owned: tuple[str, ...] | None = None,
+) -> bool:
+    """Create the proxy host of `route`, or correct one that differs from `body`. With
+    `owned`, an existing host is compared and corrected in those fields only, and the
+    others keep what they have. True when something was written."""
+    if hosts is None:
+        hosts = _list_proxy_hosts(base_url, token)
+    current = next(
+        (h for h in hosts if set(route.hostnames) & set(h.get("domain_names") or [])), None
+    )
+    if current is None:
+        _post_proxy_host(base_url, token, body)
+        print(f"  created proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
+        return True
+    if owned is not None:
+        body = {key: body[key] for key in owned}
+    if any(current.get(key) != value for key, value in body.items()):
+        _put_proxy_host(base_url, token, current.get("id"), body)
+        print(f"  updated proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
+    else:
+        return False
+    return True
+
+
 def _ingress_hosts(base_url: str, token: str, found: list[ingress.Route]) -> int:
     """Create or correct the proxy host of every add-on interface; the count of hosts
     created or corrected. A host that already matches is left as it is."""
     hosts = _list_proxy_hosts(base_url, token)
-    changed = 0
-    for route in found:
-        body = route_body(route)
-        current = next(
-            (h for h in hosts if set(route.hostnames) & set(h.get("domain_names") or [])), None
-        )
-        if current is None:
-            _post_proxy_host(base_url, token, body)
-            print(f"  created proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
-        elif any(current.get(key) != value for key, value in body.items()):
-            _put_proxy_host(base_url, token, current.get("id"), body)
-            print(f"  updated proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
-        else:
-            continue
-        changed += 1
-    return changed
+    return sum(
+        1 for route in found if _correct_host(base_url, token, route, route_body(route), hosts)
+    )
 
 
 def _delete_proxy_host(base_url: str, token: str, host_id: int) -> None:
@@ -403,7 +460,7 @@ def provision_npm_hosts(
     edge = ingress.edge_ports(root)
     served: set[str] = set()  # host names an installed interface serves
     for spec in ingress.CORE_PROXY_HOSTS:
-        profile, node, key, _label, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws = spec
+        profile, node, key, label, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws = spec
         if profile not in active_profiles:
             continue
         url = _public_url(tree, node, key)
@@ -412,6 +469,18 @@ def provision_npm_hosts(
             skipped_port_based += 1
             continue
         domain = urlsplit(url).hostname or ""
+        if fwd_host == IDP_SERVICE:
+            # Created or corrected, so an earlier host without the admin block gets it.
+            body = core_host_body(domain, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws)
+            route = ingress.Route(
+                "core", label, (domain,), url, fwd_host, fwd_port, fwd_scheme, "",
+            )
+            if _correct_host(base_url, token, route, body, owned=IDP_OWNED_FIELDS):
+                existing.add(domain)
+                created += 1
+            else:
+                skipped_existing += 1
+            continue
         if domain in existing:
             skipped_existing += 1
             continue

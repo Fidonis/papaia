@@ -929,7 +929,7 @@ def test_an_upgrade_generates_a_managed_secret_before_the_env_reaches_the_checko
         calls.append(names)
         return synced
 
-    monkeypatch.setattr(cli_addon.keycloak_role_sync, "sync_addon_clients", _sync)
+    monkeypatch.setattr(cli_addon, "_sync_addon_clients", _sync)
     capsys.readouterr()
 
     assert _apply(

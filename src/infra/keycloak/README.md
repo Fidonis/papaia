@@ -14,22 +14,23 @@ without changing any application code.
 ## Architecture Overview
 
 ```
-Browser / Client
+Browser / Client ──▶ edge (Nginx Proxy Manager, HOST_IP:443)
       │
-      ├──▶  LibreChat (8000)      ─── native OIDC ──▶  Keycloak (8110)
-      │
-      ├──▶  LocalAI (8080)        ─── native OIDC ──▶  Keycloak (8110)
-      │
-      ├──▶  papaia-manager (8120) ─── native OIDC ──▶  Keycloak (8110)
-      │
-      ├──▶  LiteLLM UI (8200)     ── generic OIDC ──▶  Keycloak (8110)
-      │
-      ├──▶  Nginx Proxy Manager   ─── forward auth ──▶  oauth2-proxy (4180)
-      │         │                                              │
-      │         └──▶  NPM admin UI (8100)              Keycloak (8110)
-      │
-      └──▶  Keycloak Admin (8110)
+      ├──▶  chat.<domain>     LibreChat       ─── native OIDC ──▶  auth.<domain>  Keycloak
+      ├──▶  localai.<domain>  LocalAI         ─── native OIDC ──▶  auth.<domain>
+      ├──▶  manager.<domain>  papaia-manager  ─── native OIDC ──▶  auth.<domain>
+      ├──▶  litellm.<domain>  LiteLLM UI      ── generic OIDC ──▶  auth.<domain>
+      ├──▶  oauth2.<domain>   oauth2-proxy    ─── forward auth callback
+      └──▶  npm.<domain>      NPM admin UI behind its oauth2-proxy sidecar
+
+papaia-ctl (role sync, realm sync, service accounts) ──▶ keycloak:8443 on papaia-net
 ```
+
+Behind the bundled proxy Keycloak publishes no host port; `/admin` is answered with 403 at
+the edge, so its admin API and console are reachable only on the stack network. The admin
+steps of `papaia-ctl` run there (in a one-shot container when started on the host). With
+direct port access (`no_proxy`, development only) Keycloak is published on
+`KEYCLOAK_EXT_PORT` (default 8110) as before.
 
 Addon services attach to the same picture: each either speaks OIDC natively against
 the `papaia` realm or is routed through oauth2-proxy by an Nginx fragment.
@@ -88,7 +89,7 @@ about on a local install.
 
 | URL | Credentials |
 |-----|-------------|
-| `https://host.docker.internal:8110` | `admin` / see `KC_ADMIN_PASSWORD` |
+| `https://host.docker.internal:8110` (direct port access only) | `admin` / see `KC_ADMIN_PASSWORD` |
 
 > Read the current password with:
 > `grep KC_ADMIN_PASSWORD "$PAPAIA_CONFIG_DIR/infra/keycloak/.env" | cut -d= -f2`
@@ -98,7 +99,7 @@ about on a local install.
 | Item | Value |
 |------|-------|
 | Realm | `papaia` |
-| OIDC Discovery | `http://host.docker.internal:8110/realms/papaia/.well-known/openid-configuration` |
+| OIDC Discovery | `${AUTH_HOST}/realms/papaia/.well-known/openid-configuration` |
 
 **Clients**
 

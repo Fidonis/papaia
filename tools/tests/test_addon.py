@@ -295,7 +295,8 @@ def test_start_fills_a_managed_secret_before_it_materializes_the_env(
         calls.append(names)
         return False  # Keycloak not reachable
 
-    monkeypatch.setattr(cli_addon.keycloak_role_sync, "sync_addon_clients", _sync)
+    # The step itself, here or in the one-shot container on the stack network.
+    monkeypatch.setattr(cli_addon, "_sync_addon_clients", _sync)
     capsys.readouterr()
 
     assert cmd_addon_start(_name_args(config_dir, repo_root, no_keycloak=no_keycloak)) == 0
