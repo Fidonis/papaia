@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from jsonschema import Draft202012Validator
 from stack_helpers import (
     NOW,
@@ -209,6 +210,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # image_signatures: nothing runs in the fake
         SKIP,  # lifecycle: the lifecycle profile is off
         SKIP,  # network: no SQL source, no direct route
+        SKIP,  # identity: no federation
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -234,6 +236,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "image_signatures",
         "lifecycle",
         "network",
+        "identity",
     )
 
 
@@ -2672,6 +2675,108 @@ def test_cli_doctor_lifecycle_exits_2_on_fail(stack, monkeypatch, capsys):
     code = _run_cli(stack, monkeypatch, lifecycle_docker(report, code=1), "lifecycle")
     assert code == 2
     assert "lifecycle" in capsys.readouterr().out
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# identity (federation, docs/federation.md)
+# ─────────────────────────────────────────────────────────────────────────
+
+FEDERATED_OK = dict(LIFECYCLE_OK, status_sync_age_seconds=20, status_sync_failing_seconds=0)
+
+
+def federate(stack) -> None:
+    for name, doc in (
+        (
+            "idp.yaml",
+            {
+                "format": "papaia.idp/1",
+                "issuer": "https://login.firma.example/realms/firma",
+                "authorization_url": "https://login.firma.example/auth",
+                "token_url": "https://login.firma.example/token",
+                "jwks_url": "https://login.firma.example/certs",
+                "client_id": "papaia-broker",
+                "acr_values": ["1"],
+                "contact": "IT-Service",
+                "status_sync": {
+                    "kind": "keycloak",
+                    "url": "https://login.firma.example",
+                    "realm": "firma",
+                    "client_id": "papaia-status-sync",
+                },
+            },
+        ),
+        (
+            "idp-group-map.yaml",
+            {"format": "papaia.idp-group-map/1", "groups": []},
+        ),
+    ):
+        path = stack["config"] / "security" / name
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.parent.chmod(0o700)
+        path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+        path.chmod(0o600)
+
+
+def identity_result(stack, docker: FakeDocker, *, profile: bool = True) -> doctor.CheckResult:
+    federate(stack)
+    if profile:
+        set_env(stack, COMPOSE_PROFILES=f"{PROFILES},lifecycle")
+    return result(run_doctor(stack, docker=docker), "identity")
+
+
+def test_identity_is_skipped_without_federation(stack):
+    found = result(run_doctor(stack, docker=lifecycle_docker()), "identity")
+    assert found.status == SKIP
+    assert "idp.yaml" in found.summary
+
+
+def test_identity_passes_with_a_recent_status_sync(stack):
+    found = identity_result(stack, lifecycle_docker(FEDERATED_OK))
+    assert found.status == PASS, found.summary
+    assert found.details["status_sync_age_seconds"] == 20
+
+
+def test_identity_fails_when_the_status_sync_fails_for_longer_than_300_seconds(stack):
+    report = dict(FEDERATED_OK, status="fail", status_sync_failing_seconds=301,
+                  status_sync_age_seconds=361)
+    found = identity_result(stack, lifecycle_docker(report, code=1))
+    assert found.status == FAIL
+    assert "federation disturbed" in found.summary
+
+
+def test_identity_fails_without_a_successful_round_in_300_seconds(stack):
+    report = dict(FEDERATED_OK, status_sync_age_seconds=301)
+    assert identity_result(stack, lifecycle_docker(report)).status == FAIL
+
+
+def test_identity_fails_when_the_status_sync_never_ran(stack):
+    found = identity_result(stack, lifecycle_docker(LIFECYCLE_OK))
+    assert found.status == FAIL
+    assert "has not run" in found.summary
+
+
+def test_identity_fails_without_the_lifecycle_profile(stack):
+    found = identity_result(stack, lifecycle_docker(FEDERATED_OK), profile=False)
+    assert found.status == FAIL
+    assert "lifecycle profile" in found.summary
+
+
+def test_identity_fails_when_the_service_does_not_run(stack):
+    assert identity_result(stack, lifecycle_docker(state="exited")).status == FAIL
+
+
+def test_identity_fails_for_an_unusable_idp_yaml(stack):
+    federate(stack)
+    (stack["config"] / "security" / "idp.yaml").write_text("format: nope\n", encoding="utf-8")
+    found = result(run_doctor(stack, docker=lifecycle_docker(FEDERATED_OK)), "identity")
+    assert found.status == FAIL
+    assert "not usable" in found.summary
+
+
+@pytest.mark.parametrize("value", ["soon", -1, True])
+def test_identity_refuses_a_malformed_health_report(stack, value):
+    report = dict(FEDERATED_OK, status_sync_failing_seconds=value)
+    assert identity_result(stack, lifecycle_docker(report)).status == FAIL
 
 
 def test_cli_doctor_with_an_unknown_check_name_exits_2(stack, monkeypatch, capsys):

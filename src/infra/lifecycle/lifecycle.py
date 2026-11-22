@@ -64,6 +64,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import email.message
 import fcntl
 import hashlib
 import hmac
@@ -74,6 +75,7 @@ import math
 import os
 import re
 import signal
+import smtplib
 import ssl
 import stat
 import subprocess
@@ -139,6 +141,20 @@ MAX_PARKED = 1000
 GLOBAL_SINCE_SKEW_SECONDS = 300
 # How long `global-since` waits for the running service to publish the new value.
 GLOBAL_SINCE_WAIT_SECONDS = 20
+# Status sync with the upstream directory (federation, security 1.13): every 60 s; failing
+# for longer than 300 s is `fail`, one `status_sync_failed` row and one warning mail.
+STATUS_SYNC_SECONDS = 60
+STATUS_SYNC_FAIL_SECONDS = 300
+# Accounts found not federated are looked at again once a day (with the full refresh).
+FULL_SYNC_SECONDS = 24 * 3600
+STATUS_FILE = "status-sync.json"
+FEDERATION_ALIAS = "upstream"
+STATUS_FORMAT = "papaia.status-sync/1"
+MAX_MAPPED_GROUPS = 500
+# Marker roles of the last federated sign-in (lib/federation.py sets the mappers).
+GROUPS_ROLE = "papaia-idp-groups"
+OVERAGE_ROLE = "papaia-idp-group-overage"
+MAX_REFUSALS_KEPT = 1000
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")
 
 _ID = r"[A-Za-z0-9-]{1,64}"
@@ -154,6 +170,9 @@ _OWN_SESSIONS_RE = re.compile(rf"users/({_ID})/sessions")
 _SUB_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _GROUP_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
 _EVENT_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_MAIL_RE = re.compile(r"[^@\s,;<>\"']{1,64}@[A-Za-z0-9.-]{1,253}")
+# Keycloak's id of one sign-in attempt (`code_id` of an event).
+_ATTEMPT_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 _REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _STATE_KEYS = {
@@ -177,6 +196,7 @@ _STATE_KEYS = {
     "gap_pending",
     "gap_revoke_at",
     "started_at",
+    "federation",
 }
 # Added with the reconciliation; a state written before it gets them on load.
 _RECONCILE_DEFAULTS = {
@@ -188,6 +208,19 @@ _RECONCILE_DEFAULTS = {
     # The first start of a version with the reconciliation (seconds); health counts from
     # it while no round has succeeded.
     "started_at": None,
+    # The status sync with the upstream directory (federation); see StatusSync.
+    "federation": {
+        "configured": False,
+        "started": None,
+        "last_ok": 0,
+        "failing_since": None,
+        "reported": False,
+        "links": {},
+        "disabled": {},
+        "not_before": {},
+        "members": {},
+        "last_full": 0,
+    },
 }
 _PARKED_KEYS = {"time", "op", "type", "path"}
 # A parked event as CORE-012 stored it (account events only).
@@ -203,6 +236,10 @@ EVENT_OPERATION_TYPES = ("UPDATE", "DELETE", "ACTION")
 # devices" one LOGOUT per session of the account API's client `account`. The realm sync
 # makes the realm store these types (lib/lifecycle_account.py).
 USER_EVENT_TYPES = ("UPDATE_PASSWORD", "REMOVE_CREDENTIAL", "LOGOUT")
+# A sign-in through the upstream provider that the post sign-in flow refused (federation,
+# docs/federation.md): read to write `idp_group_overflow`, never journaled.
+IDP_ERROR_TYPES = ("IDENTITY_PROVIDER_POST_LOGIN_ERROR",)
+IDP_REFUSED = "IDP_REFUSED"
 ACCOUNT_API_CLIENT = "account"
 # LOGOUTs of one account this close together are one "sign out all devices": Keycloak
 # ends the sessions one after another, which can cross milliseconds and event pages.
@@ -778,6 +815,7 @@ def _check_state(doc: object) -> dict:
             _int(doc[name], name)
     if not isinstance(doc["gap_pending"], bool):
         raise LifecycleError("state: gap_pending must be true or false")
+    _check_federation(doc["federation"])
     disabled = doc["disabled"]
     if not isinstance(disabled, dict) or len(disabled) > MAX_ENTRIES:
         raise LifecycleError("state: disabled is malformed")
@@ -841,6 +879,44 @@ def _check_state(doc: object) -> dict:
     return doc
 
 
+def _check_federation(fed: object) -> None:
+    keys = set(_RECONCILE_DEFAULTS["federation"])
+    if not isinstance(fed, dict) or set(fed) != keys:
+        raise LifecycleError("state: federation is malformed")
+    for name in ("configured", "reported"):
+        if not isinstance(fed[name], bool):
+            raise LifecycleError(f"state: federation.{name} must be true or false")
+    for name in ("last_ok", "last_full"):
+        _int(fed[name], f"federation.{name}")
+    for name in ("started", "failing_since"):
+        if fed[name] is not None:
+            _int(fed[name], f"federation.{name}")
+    links = fed["links"]
+    if not isinstance(links, dict) or len(links) > MAX_ENTRIES:
+        raise LifecycleError("state: federation.links is malformed")
+    for sub, upstream in links.items():
+        if not _SUB_RE.match(sub) or not (upstream == "" or _SUB_RE.match(str(upstream))):
+            raise LifecycleError("state: federation.links is malformed")
+    for name in ("disabled", "not_before"):
+        if not isinstance(fed[name], dict) or len(fed[name]) > MAX_ENTRIES:
+            raise LifecycleError(f"state: federation.{name} is malformed")
+        for sub, value in fed[name].items():
+            if not _SUB_RE.match(sub):
+                raise LifecycleError(f"state: federation.{name} is malformed")
+            _int(value, f"federation.{name}")
+    members = fed["members"]
+    if not isinstance(members, dict) or len(members) > MAX_MAPPED_GROUPS:
+        raise LifecycleError("state: federation.members is malformed")
+    for gid, ids in members.items():
+        if (
+            not _SUB_RE.match(gid)
+            or not isinstance(ids, list)
+            or len(ids) > MAX_ENTRIES
+            or not all(isinstance(i, str) and _SUB_RE.match(i) for i in ids)
+        ):
+            raise LifecycleError("state: federation.members is malformed")
+
+
 def _parked_event(eid: str, item: dict) -> dict:
     return {
         "id": eid,
@@ -869,6 +945,8 @@ def user_event(row: object) -> dict | None:
         "resourcePath": "",
     }
     etype, uid = row.get("type"), row.get("userId")
+    if etype in IDP_ERROR_TYPES:
+        return _idp_refusal(row, position_only)
     if etype not in USER_EVENT_TYPES or not isinstance(uid, str) or not _SUB_RE.fullmatch(uid):
         return position_only
     if etype == "UPDATE_PASSWORD":
@@ -889,6 +967,28 @@ def user_event(row: object) -> dict | None:
         "resourceType": USER_EVENT,
         "resourcePath": path,
     }
+
+
+def _idp_refusal(row: dict, position_only: dict) -> dict:
+    """A sign-in through the upstream provider that the post sign-in flow refused
+    (`access_denied`): the upstream user name and the attempt's id are kept in memory
+    for StatusSync.refused, nothing else. Any other broker error moves the position."""
+    details = row.get("details") if isinstance(row.get("details"), dict) else {}
+    name, code = details.get("identity_provider_identity"), details.get("code_id")
+    if (
+        row.get("error") != "access_denied"
+        or details.get("identity_provider") != FEDERATION_ALIAS
+        or not isinstance(name, str)
+        or not 0 < len(name) <= 255
+        or _CONTROL_RE.search(name)
+    ):
+        return position_only
+    return dict(
+        position_only,
+        operationType=IDP_REFUSED,
+        identity=name,
+        attempt=code if isinstance(code, str) and _ATTEMPT_RE.fullmatch(code) else None,
+    )
 
 
 def classify(event: object) -> tuple[str, str, str] | None:
@@ -976,9 +1076,11 @@ class Store:
 
 
 class AccountKey:
-    """The P-256 key of `svc-papaia-lifecycle`, mounted from the configuration dir."""
+    """The P-256 key of `svc-papaia-lifecycle` (or of the status sync account at the
+    upstream provider), mounted from the configuration dir."""
 
-    def __init__(self, folder: Path) -> None:
+    def __init__(self, folder: Path, client_id: str = CLIENT_ID) -> None:
+        self.client_id = client_id
         self.path = folder / ACCOUNT_KEY_FILE
         _read_private(self.path)
         der = _openssl(["pkey", "-in", str(self.path), "-pubout", "-outform", "DER"])
@@ -991,8 +1093,8 @@ class AccountKey:
         issued = int(time.time() if now is None else now)
         header = {"alg": "ES256", "kid": self.kid, "typ": "JWT"}
         claims = {
-            "iss": CLIENT_ID,
-            "sub": CLIENT_ID,
+            "iss": self.client_id,
+            "sub": self.client_id,
             "aud": audience,
             "jti": str(uuid.uuid4()),
             "iat": issued,
@@ -1034,6 +1136,20 @@ def _raw_signature(der: bytes) -> bytes:
     return parts[0] + parts[1]
 
 
+def _open_json(req: urllib.request.Request, ctx: ssl.SSLContext | None):
+    """One request; the JSON answer, None for an empty one. The body of an error answer
+    is never read."""
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            raw = resp.read(MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise HttpError(exc.code) from None
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise LifecycleError("answer too large")
+    return json.loads(raw) if raw else None
+
+
 class AccountClient:
     """The `papaia` realm's Admin API as `svc-papaia-lifecycle`."""
 
@@ -1048,15 +1164,7 @@ class AccountClient:
         self.actor_id: str | None = None
 
     def _open(self, req: urllib.request.Request):
-        try:
-            with urllib.request.urlopen(req, timeout=15, context=self.ctx) as resp:
-                raw = resp.read(MAX_RESPONSE_BYTES + 1)
-        except urllib.error.HTTPError as exc:
-            exc.close()
-            raise HttpError(exc.code) from None
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise LifecycleError("answer of Keycloak too large")
-        return json.loads(raw) if raw else None
+        return _open_json(req, self.ctx)
 
     def persons_group(self) -> str:
         """The id of papaia-persons from the account folder, read on every round so a
@@ -1134,8 +1242,13 @@ class Lifecycle:
         out=None,
         clock=time.time,
         journal: ErasureJournal | None = None,
+        federation: StatusSync | None = None,
     ) -> None:
         self.api, self.store, self.publisher = api, store, publisher
+        # The status sync with the upstream directory; None without federation.
+        self.federation = federation
+        if federation is not None:
+            federation.service = self
         self.out = out or sys.stdout
         self.clock = clock
         # The journal `identity` (sicherheit §4.9 (1)); only `global-since` runs without.
@@ -1184,19 +1297,25 @@ class Lifecycle:
         }
         print(json.dumps(row, sort_keys=True), file=self.out, flush=True)
 
-    def _write(self, method, path, operation, event, correlation, sub, detail=None) -> None:
+    def _write(
+        self, method, path, operation, event, correlation, sub, detail=None, *,
+        body=None, effect="delete",
+    ) -> None:
         ref = {"type": "user", "id": sub}
         try:
-            self.api.call(method, path)
+            if body is None:
+                self.api.call(method, path)
+            else:
+                self.api.call(method, path, body)
         except HttpError as exc:
             self._audit(
-                operation, "delete", event, correlation, ref, "error", f"http_{exc.status}", detail
+                operation, effect, event, correlation, ref, "error", f"http_{exc.status}", detail
             )
             raise
         except Exception:
-            self._audit(operation, "delete", event, correlation, ref, "error", "transport", detail)
+            self._audit(operation, effect, event, correlation, ref, "error", "transport", detail)
             raise
-        self._audit(operation, "delete", event, correlation, ref, detail=detail)
+        self._audit(operation, effect, event, correlation, ref, detail=detail)
 
     def _journal(self, kind: str, sub: str, object_ref: str, correlation: str) -> None:
         """One entry in the journal `identity`, one audit row with the event's correlation
@@ -1248,6 +1367,11 @@ class Lifecycle:
                 state["mark_ms"] = max(0, int(self.clock() * 1000) - FIRST_LOOKBACK_MS)
             if state["started_at"] is None:
                 state["started_at"] = int(self.clock())
+            if self.federation is None and state["federation"] != _RECONCILE_DEFAULTS["federation"]:
+                # Started without the federation folder (idp.yaml removed): the status
+                # sync state goes, so health does not wait for a sync that no longer runs.
+                state["federation"] = json.loads(json.dumps(_RECONCILE_DEFAULTS["federation"]))
+                _log("no federation: the status sync state is removed")
             # last_poll is left alone: a restart must not hide a poll that keeps failing
             # (the health check's start period covers the first poll).
             self._note_gap(state)
@@ -1370,7 +1494,8 @@ class Lifecycle:
                 since,
             ],
         )
-        users = self._read("/events", [*(("type", t) for t in USER_EVENT_TYPES), since])
+        types = USER_EVENT_TYPES + (IDP_ERROR_TYPES if self.federation is not None else ())
+        users = self._read("/events", [*(("type", t) for t in types), since])
         limits = [
             max((t for t in map(_event_time, rows) if t is not None), default=since_ms)
             for rows, more in (admin, users)
@@ -1393,6 +1518,11 @@ class Lifecycle:
                 continue
             if when < mark or (when == mark and eid in seen):
                 continue
+            if event.get("operationType") == IDP_REFUSED and self.federation is not None:
+                try:
+                    self.federation.refused(event)
+                except RETRYABLE as exc:
+                    _log(f"a refused federated sign-in could not be told apart ({exc!r})")
             try:
                 self._handle(event, when)
             except RETRYABLE as exc:
@@ -1608,8 +1738,14 @@ class Lifecycle:
     def _users(self, *, enabled: bool | None) -> list[str]:
         """Ids of the members of the persons group (the accounts the service may see),
         all of them or by state. The members endpoint has no filter by state."""
+        return [
+            uid for uid, on in self.members() if enabled is None or on is enabled
+        ]
+
+    def members(self) -> list[tuple[str, bool | None]]:
+        """(id, enabled) of every member of the persons group, in the order listed."""
         group = urllib.parse.quote(self.api.persons_group(), safe="-")
-        ids: list[str] = []
+        found: dict[str, bool | None] = {}
         for page in range(MAX_USER_PAGES):
             params = [
                 ("briefRepresentation", "true"),
@@ -1625,11 +1761,10 @@ class Lifecycle:
                 uid = user.get("id") if isinstance(user, dict) else None
                 if not isinstance(uid, str) or not _SUB_RE.match(uid):
                     continue
-                if enabled is not None and user.get("enabled") is not enabled:
-                    continue
-                ids.append(uid)
+                on = user.get("enabled")
+                found.setdefault(uid, on if isinstance(on, bool) else None)
             if len(batch) < USER_PAGE:
-                return list(dict.fromkeys(ids))
+                return list(found.items())
         raise LifecycleError(f"more than {MAX_USER_PAGES * USER_PAGE} accounts")
 
     def _consents(self, sub: str) -> list[tuple[str, int]]:
@@ -1815,6 +1950,8 @@ class Lifecycle:
         now = self.clock()
         if now >= self._next_reconcile:
             self._reconcile_now(now)
+        if self.federation is not None and (force_poll or self.federation.due(now)):
+            self.federation.run()
         if force_poll or now >= self._next_poll:
             self._next_poll = now + POLL_SECONDS
             try:
@@ -1825,6 +1962,454 @@ class Lifecycle:
                 self._reconcile_now(now)
             self._flush_journal()
         self.reissue()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# status sync with the upstream directory (federation)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def read_status_file(folder: Path) -> dict:
+    """`status-sync.json` as lib/federation.py writes it, checked field by field."""
+    try:
+        doc = json.loads(_read_private(folder / STATUS_FILE, 1 << 20))
+    except ValueError:
+        raise LifecycleError("status-sync.json: not JSON") from None
+    keys = {"format", "alias", "kind", "url", "realm", "client_id", "groups"}
+    if not isinstance(doc, dict) or set(doc) != keys or doc["format"] != STATUS_FORMAT:
+        raise LifecycleError("status-sync.json: unknown format or fields")
+    if doc["alias"] != FEDERATION_ALIAS or doc["kind"] != "keycloak":
+        raise LifecycleError("status-sync.json: only the kind keycloak is supported")
+    keycloak_url(doc["url"])
+    if not isinstance(doc["realm"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}",
+                                                           doc["realm"]):
+        raise LifecycleError("status-sync.json: realm is malformed")
+    if not isinstance(doc["client_id"], str) or not _CLIENT_ID_RE.match(doc["client_id"]):
+        raise LifecycleError("status-sync.json: client_id is malformed")
+    groups = doc["groups"]
+    if (
+        not isinstance(groups, list)
+        or len(groups) > MAX_MAPPED_GROUPS
+        or not all(isinstance(g, str) and _SUB_RE.match(g) for g in groups)
+    ):
+        raise LifecycleError("status-sync.json: groups is malformed")
+    return doc
+
+
+class UpstreamDirectory:
+    """The directory of the upstream provider, read with the status sync account: a
+    Keycloak realm's Admin API (RS-F), where the account holds `view-users` and
+    `query-groups` and nothing else. Lists only, no request per account: every user
+    (state and "sessions valid from") and the members of every mapped group, by id."""
+
+    def __init__(self, folder: Path, ctx: ssl.SSLContext | None) -> None:
+        self.folder, self.ctx = folder, ctx
+        doc = read_status_file(folder)
+        self.base_url = keycloak_url(doc["url"])
+        self.realm, self.client_id = doc["realm"], doc["client_id"]
+        self.groups = list(doc["groups"])
+        self._token: str | None = None
+        self._until = 0.0
+
+    def _realm(self) -> str:
+        return f"{self.base_url}/realms/{urllib.parse.quote(self.realm)}"
+
+    def token(self) -> str:
+        if self._token and time.monotonic() < self._until:
+            return self._token
+        issuer = _open_json(
+            urllib.request.Request(f"{self._realm()}/.well-known/openid-configuration"), self.ctx
+        )
+        if not isinstance(issuer, dict) or not isinstance(issuer.get("issuer"), str):
+            raise LifecycleError("upstream discovery document without issuer")
+        key = AccountKey(self.folder, self.client_id)
+        form = urllib.parse.urlencode(
+            {
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": key.assertion(issuer["issuer"]),
+            }
+        ).encode()
+        body = _open_json(
+            urllib.request.Request(f"{self._realm()}/protocol/openid-connect/token", data=form),
+            self.ctx,
+        )
+        if not isinstance(body, dict) or not isinstance(body.get("access_token"), str):
+            raise LifecycleError("upstream token answer without access token")
+        lifetime = body.get("expires_in")
+        lifetime = lifetime if isinstance(lifetime, int) and lifetime > 0 else 60
+        self._token, self._until = body["access_token"], time.monotonic() + max(5, lifetime - 30)
+        return self._token
+
+    def _get(self, path: str):
+        req = urllib.request.Request(
+            f"{self.base_url}/admin/realms/{urllib.parse.quote(self.realm)}{path}",
+            headers={"Authorization": f"Bearer {self.token()}"},
+        )
+        try:
+            return _open_json(req, self.ctx)
+        except HttpError as exc:
+            if exc.status == 401:
+                self._token = None
+            raise
+
+    def _paged(self, path: str) -> list:
+        rows: list = []
+        sep = "&" if "?" in path else "?"
+        for page in range(MAX_USER_PAGES):
+            batch = self._get(f"{path}{sep}first={page * USER_PAGE}&max={USER_PAGE}")
+            if not isinstance(batch, list):
+                raise LifecycleError("upstream directory: not a list")
+            rows.extend(batch)
+            if len(batch) < USER_PAGE:
+                return rows
+        raise LifecycleError(f"upstream directory: more than {MAX_USER_PAGES * USER_PAGE} rows")
+
+    def snapshot(self) -> dict:
+        """{"users": {id: {"enabled", "not_before", "username"}}, "members": {group: set}}.
+        A mapped group the directory no longer knows has no members."""
+        users: dict[str, dict] = {}
+        for row in self._paged("/users?briefRepresentation=false"):
+            uid = row.get("id") if isinstance(row, dict) else None
+            if not isinstance(uid, str) or not _SUB_RE.match(uid):
+                continue
+            nb = row.get("notBefore")
+            name = row.get("username")
+            users[uid] = {
+                "enabled": row.get("enabled") is True,
+                "not_before": nb if isinstance(nb, int) and not isinstance(nb, bool) and nb > 0
+                else 0,
+                "username": name if isinstance(name, str) and len(name) <= 255 else None,
+            }
+        members: dict[str, set[str]] = {}
+        for gid in self.groups:
+            try:
+                rows = self._paged(f"/groups/{gid}/members?briefRepresentation=true")
+            except HttpError as exc:
+                if exc.status != 404:
+                    raise
+                _log(f"mapped upstream group {gid} does not exist; it has no members")
+                rows = []
+            members[gid] = {
+                r["id"] for r in rows if isinstance(r, dict) and _SUB_RE.match(str(r.get("id")))
+            }
+        return {"users": users, "members": members}
+
+
+class Mailer:
+    """The warning mail to the operations address through the mail relay of the stack
+    (plain SMTP inside the stack, no login, as every service sends)."""
+
+    def __init__(self, relay: str, to: str, sender: str) -> None:
+        host, _, port = relay.rpartition(":")
+        if not host or not port.isdigit() or not to or not sender:
+            raise LifecycleError("the mail relay must be host:port, with a sender and a recipient")
+        # Each address goes into a header line: one address, no line break, no list.
+        for value in (to, sender):
+            if not _MAIL_RE.fullmatch(value):
+                raise LifecycleError("the warning mail needs one plain address per field")
+        self.host, self.port, self.to, self.sender = host, int(port), to, sender
+
+    def send(self, subject: str, text: str) -> None:
+        message = email.message.EmailMessage()
+        message["From"], message["To"], message["Subject"] = self.sender, self.to, subject
+        message.set_content(text)
+        with smtplib.SMTP(self.host, self.port, timeout=15) as smtp:
+            smtp.send_message(message, from_addr=self.sender, to_addrs=[self.to])
+
+
+class StatusSync:
+    """Compares the federated persons of the realm with the upstream directory every
+    60 s (security 1.13). The link between an account of the realm and its person
+    upstream is Keycloak's federated identity (the provider's `sub`), read once per
+    account and kept. A person disabled or deleted upstream is disabled here and revoked
+    (list, sessions, consents); enabled upstream again, the account is enabled again,
+    and its consents from before go. A newer "sessions valid from" upstream revokes the
+    sessions and delegations without disabling. A changed membership of a mapped group
+    ends the sessions, so the next sign-in maps anew; a removed one is journaled. A round
+    that fails (an error, a refused or throttled request) leaves the state as it was;
+    failing for longer than 300 s writes one `status_sync_failed` row, sends one warning
+    mail and makes health `fail` until a round succeeds."""
+
+    def __init__(self, directory, *, mailer: Mailer | None = None, clock=time.time) -> None:
+        self.directory, self.mailer, self.clock = directory, mailer, clock
+        self.service: Lifecycle | None = None
+        self._next = 0.0
+        # Upstream user name -> id, from the last snapshot; only in memory.
+        self._names: dict[str, str] = {}
+        # A refused sign-in by a name the map lacks reads the directory again at most
+        # once between two rounds.
+        self._names_refreshed = False
+        self._attempts: list[str] = []
+
+    def due(self, now: float) -> bool:
+        return now >= self._next
+
+    # state ------------------------------------------------------------
+    def _update(self, change) -> dict:
+        svc = self.service
+        with svc.store.locked():
+            state = svc.store.load()
+            change(state["federation"])
+            svc.store.save(state)
+            return state["federation"]
+
+    # links ------------------------------------------------------------
+    def _links(self, members: list[tuple[str, bool | None]], now: int) -> dict[str, str]:
+        """Account id of the realm -> id of its person upstream ("" when not federated:
+        the break-glass account, an account made before the federation)."""
+        svc = self.service
+        with svc.store.locked():
+            fed = svc.store.load()["federation"]
+        links = dict(fed["links"])
+        full = now - fed["last_full"] >= FULL_SYNC_SECONDS
+        current = {uid for uid, _ in members}
+        links = {uid: up for uid, up in links.items() if uid in current and (up or not full)}
+        for uid in current - set(links):
+            rows = svc.api.call("GET", f"/users/{uid}/federated-identity") or []
+            found = ""
+            for row in rows if isinstance(rows, list) else []:
+                if isinstance(row, dict) and row.get("identityProvider") == FEDERATION_ALIAS:
+                    value = row.get("userId")
+                    found = value if isinstance(value, str) and _SUB_RE.match(value) else ""
+            links[uid] = found
+
+        def keep(f: dict) -> None:
+            f["links"] = links
+            if full:
+                f["last_full"] = now
+
+        self._update(keep)
+        return links
+
+    # round ------------------------------------------------------------
+    def run(self) -> None:
+        now = int(self.clock())
+        self._next = self.clock() + STATUS_SYNC_SECONDS
+
+        def configured(f: dict) -> None:
+            f["configured"] = True
+            if f["started"] is None:
+                f["started"] = now
+
+        self._update(configured)
+        try:
+            snap = self.directory.snapshot()
+            members = self.service.members()
+            links = self._links(members, now)
+            self._compare(snap, members, links, now)
+        except RETRYABLE as exc:
+            self._failed(now, exc)
+            return
+        self._names = {
+            u["username"]: uid for uid, u in snap["users"].items() if u["username"] is not None
+        }
+        self._names_refreshed = False
+
+        def ok(f: dict) -> None:
+            if f["failing_since"] is not None:
+                _log("status sync with the upstream directory works again")
+            f["last_ok"], f["failing_since"], f["reported"] = now, None, False
+
+        self._update(ok)
+
+    def _compare(self, snap: dict, members, links: dict[str, str], now: int) -> None:
+        svc = self.service
+        with svc.store.locked():
+            fed = svc.store.load()["federation"]
+        disabled = dict(fed["disabled"])
+        before = dict(fed["not_before"])
+        was = {gid: set(ids) for gid, ids in fed["members"].items()}
+        seen_nb: dict[str, int] = {}
+        done: set[str] = set()
+        current = set(links)
+        try:
+            for uid, enabled in members:
+                upstream = links.get(uid)
+                if not upstream:
+                    continue
+                self._account(uid, enabled, upstream, snap, disabled, before, was, seen_nb, now)
+                done.add(upstream)
+        except Exception:
+            # A round that breaks off keeps what it did for the accounts it finished, so
+            # the next round does not disable, revoke and audit them again.
+            def partial(f: dict) -> None:
+                f["disabled"] = {u: t for u, t in disabled.items() if u in current}
+                f["not_before"] = {
+                    u: t for u, t in before.items() if u not in done
+                } | seen_nb
+                kept = {gid: set(ids) for gid, ids in was.items()}
+                for gid, ids in snap["members"].items():
+                    if gid not in kept:
+                        kept[gid] = set(ids)
+                        continue
+                    for up in done:
+                        if up in ids:
+                            kept[gid].add(up)
+                        else:
+                            kept[gid].discard(up)
+                f["members"] = {gid: sorted(ids) for gid, ids in kept.items()}
+
+            self._update(partial)
+            raise
+
+        def keep(f: dict) -> None:
+            f["disabled"] = {u: t for u, t in disabled.items() if u in current}
+            f["not_before"] = seen_nb
+            f["members"] = {gid: sorted(ids) for gid, ids in snap["members"].items()}
+
+        self._update(keep)
+
+    def _account(
+        self, uid: str, enabled: bool | None, upstream: str, snap: dict, disabled: dict,
+        before: dict, was: dict, seen_nb: dict, now: int,
+    ) -> None:
+        """One federated account against its person upstream. `disabled` holds the
+        accounts the status sync disabled itself: only those it enables again."""
+        svc = self.service
+        person = snap["users"].get(upstream)
+        correlation = _uuid7()
+        if person is None or not person["enabled"]:
+            if enabled is False and uid not in disabled:
+                # Deactivated by papaia's own administration (PLT-60-A2): not a lock of
+                # the status sync, so it is neither revoked again nor lifted from upstream.
+                return
+            if uid not in disabled or enabled:
+                self._enable(uid, False, correlation)
+                # Recorded as the sync's own lock as soon as the account is disabled: a
+                # revocation that fails after this must not turn it into a local
+                # deactivation that is never lifted. The revocation itself is still
+                # covered by reconcile() and the admin-event path.
+                disabled[uid] = now
+                reason = "upstream_deleted" if person is None else "upstream_disabled"
+                svc.revoke(uid, now, reason, correlation)
+            return
+        if uid in disabled:
+            # Dropped only once the account is enabled and its old consents are gone, so
+            # a round that breaks off on the way back retries it.
+            since = disabled[uid]
+            if enabled is False:
+                self._enable(uid, True, correlation)
+            for client, created in svc._consents(uid):
+                if created < since * 1000:
+                    svc._delete_consent(uid, client, correlation)
+            del disabled[uid]
+        nb = person["not_before"]
+        seen_nb[upstream] = nb
+        if upstream in before and nb > before[upstream]:
+            svc.revoke(uid, nb, "upstream_sessions_revoked", correlation)
+        changed = [
+            gid
+            for gid, ids in snap["members"].items()
+            if gid in was and (upstream in was[gid]) != (upstream in ids)
+        ]
+        if changed:
+            svc._write(
+                "POST", f"/users/{uid}/logout", "logout", "role_changed", correlation, uid,
+                {"upstream_groups": len(changed)},
+            )
+            for gid in changed:
+                if upstream in was[gid]:
+                    svc._journal("role_revoke", uid, f"upstream-group:{gid}", correlation)
+
+    def _enable(self, uid: str, on: bool, correlation: str) -> None:
+        self.service._write(
+            "PUT",
+            f"/users/{uid}",
+            "account_enable" if on else "account_disable",
+            "operation",
+            correlation,
+            uid,
+            {"source": "upstream_directory"},
+            body={"enabled": on},
+            effect="write",
+        )
+
+    def _failed(self, now: int, exc: Exception) -> None:
+        _log(f"status sync with the upstream directory failed ({exc!r})")
+        state = self._update(
+            lambda f: f.update(failing_since=f["failing_since"] if f["failing_since"] else now)
+        )
+        since = state["failing_since"]
+        if now - since <= STATUS_SYNC_FAIL_SECONDS or state["reported"]:
+            return
+        self._update(lambda f: f.update(reported=True))
+        code = f"http_{exc.status}" if isinstance(exc, HttpError) else "unreachable"
+        self.service._audit(
+            "status_sync",
+            "check",
+            "status_sync_failed",
+            _uuid7(),
+            {"type": "identity_provider", "id": FEDERATION_ALIAS},
+            "error",
+            code,
+            {"failing_seconds": now - since},
+        )
+        self._alert(now - since, code)
+
+    def _alert(self, seconds: int, code: str) -> None:
+        if self.mailer is None:
+            _log("no mail relay or operations address: no warning mail sent")
+            return
+        correlation = _uuid7()
+        ref = {"type": "mail", "id": "operations"}
+        try:
+            self.mailer.send(
+                "papaia: Statusabgleich mit dem Firmenverzeichnis gestört",
+                f"Der Statusabgleich von papaia-lifecycle mit dem vorgelagerten Verzeichnis "
+                f"scheitert seit {seconds // 60} Minuten (Ursache: {code}). Sperren im "
+                "Firmenverzeichnis wirken in papaia erst wieder, wenn der Abgleich gelingt. "
+                "'papaia-ctl doctor' zeigt den Zustand; docs/federation.md beschreibt die "
+                "Störung.",
+            )
+        except (OSError, smtplib.SMTPException) as exc:
+            _log(f"warning mail not sent ({exc!r})")
+            self.service._audit("alert_mail", "send", "operation", correlation, ref, "error",
+                                "mail_failed")
+            return
+        self.service._audit("alert_mail", "send", "operation", correlation, ref)
+
+    # refused sign-ins -------------------------------------------------
+    def refused(self, event: dict) -> None:
+        """A federated sign-in the post sign-in flow refused: `idp_group_overflow` when
+        the marker roles of the account show no groups claim or an overage reference,
+        else (the `acr` check) a denied sign-in row. Keycloak writes one event per
+        attempt more than once; an attempt is counted once."""
+        attempt = event.get("attempt")
+        if attempt is not None:
+            if attempt in self._attempts:
+                return
+            self._attempts = [*self._attempts, attempt][-MAX_REFUSALS_KEPT:]
+        svc = self.service
+        upstream = self._names.get(event["identity"])
+        if upstream is None and not self._names_refreshed:
+            self._names_refreshed = True
+            self._names = {
+                u["username"]: uid
+                for uid, u in self.directory.snapshot()["users"].items()
+                if u["username"] is not None
+            }
+            upstream = self._names.get(event["identity"])
+        uid = None
+        if upstream is not None:
+            links = self._links(svc.members(), int(self.clock()))
+            uid = next((u for u, up in links.items() if up == upstream), None)
+        if uid is None:
+            _log("a refused federated sign-in names no account of the realm")
+            return
+        roles = svc.api.call("GET", f"/users/{uid}/role-mappings/realm") or []
+        names = {r.get("name") for r in roles if isinstance(r, dict)}
+        overflow = OVERAGE_ROLE in names or GROUPS_ROLE not in names
+        svc._audit(
+            "sign_in",
+            "check",
+            "idp_group_overflow" if overflow else "operation",
+            _uuid7(),
+            {"type": "user", "id": uid},
+            "denied",
+            "idp_group_overflow" if overflow else "idp_acr_refused",
+        )
 
 
 def _event_time(event: object) -> int | None:
@@ -1881,6 +2466,18 @@ def health(
     report["gap_revoke_age_seconds"] = (
         max(0, int(now - state["gap_revoke_at"])) if state["gap_revoke_at"] is not None else None
     )
+    fed = state["federation"]
+    federation_failing = False
+    if fed["configured"]:
+        failing = max(0, int(now - fed["failing_since"])) if fed["failing_since"] else 0
+        since = fed["last_ok"] or fed["started"] or 0
+        report["status_sync_age_seconds"] = max(0, int(now - since)) if since else None
+        report["status_sync_failing_seconds"] = failing
+        # Failing for longer than 300 s, or no round at all for that long (the service
+        # hangs): new locks upstream do not reach papaia.
+        federation_failing = failing > STATUS_SYNC_FAIL_SECONDS or (
+            bool(since) and now - since > STATUS_SYNC_FAIL_SECONDS + STATUS_SYNC_SECONDS
+        )
     journal_ok = True
     if journal is not None:
         place = journal.status()
@@ -1897,6 +2494,7 @@ def health(
         reconcile_age = max(0, int(now - state["started_at"]))
     if (
         worst > FAIL_AGE_SECONDS
+        or federation_failing
         or state["disabled_with_consent"]
         or (reconcile_age is not None and reconcile_age > RECONCILE_FAIL_SECONDS)
     ):
@@ -1924,6 +2522,12 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--ca-file", type=Path)
             cmd.add_argument("--account-dir", type=Path, required=True)
             cmd.add_argument("--once", action="store_true")
+            # Federation (docs/federation.md): the status sync folder, the mail relay and
+            # the operations address for the warning mail.
+            cmd.add_argument("--federation-dir", type=Path)
+            cmd.add_argument("--mail-relay")
+            cmd.add_argument("--alert-to")
+            cmd.add_argument("--alert-from")
         if name == "global-since":
             cmd.add_argument("--at", type=int)
     return parser
@@ -1984,8 +2588,21 @@ def main(argv: list[str] | None = None) -> int:
         target_dir=args.journal_dir,
         local_dir=args.journal_local_dir,
     )
+    federation = None
+    if args.federation_dir is not None:
+        mailer = None
+        if args.mail_relay and args.alert_to and args.alert_from:
+            mailer = Mailer(args.mail_relay, args.alert_to, args.alert_from)
+        # The upstream directory is outside the stack: the system's trust store.
+        federation = StatusSync(
+            UpstreamDirectory(args.federation_dir, ssl.create_default_context()), mailer=mailer
+        )
     service = Lifecycle(
-        AccountClient(args.keycloak_url, ctx, args.account_dir), store, publisher, journal=journal
+        AccountClient(args.keycloak_url, ctx, args.account_dir),
+        store,
+        publisher,
+        journal=journal,
+        federation=federation,
     )
     service.start()
     if args.once:

@@ -41,9 +41,10 @@ Admin events are kept in Keycloak for 7 days (see below). If the service is stop
 longer, events are lost; the reconciliation independent of events closes that gap.
 
 Removed roles and groups, ended sessions and reset or changed credentials are written to
-the journal only; the service does not act on them in Keycloak. Not handled here:
-federated directories, the signal to the modules' `/internal/lifecycle` and replaying the
-journal (the core start gate).
+the journal only; the service does not act on them in Keycloak. Locks in a federated
+company directory reach the service through its status sync
+([federation.md](federation.md)). Not handled here: the signal to the modules'
+`/internal/lifecycle` and replaying the journal (the core start gate).
 
 ## Reconciliation independent of events
 

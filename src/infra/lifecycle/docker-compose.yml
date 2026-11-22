@@ -72,7 +72,7 @@ services:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base, which brings the openssl
     # command line (Ed25519, ES256). Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-lifecycle:1.9.0@sha256:61c12688b2e9bbf7caaf683b43cce72adfee6cb0ddb1f521fe3059d71ce072bf
+    image: ghcr.io/fidonis/papaia-lifecycle:1.9.0@sha256:1955cfaba747e508ecd7c5ee850266bc69474bb7df9d6a202d86bfeaf9d21e9a
     restart: unless-stopped
     depends_on:
       papaia-lifecycle-init:

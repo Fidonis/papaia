@@ -19,6 +19,8 @@ Welcome to the papAIa documentation.
 - [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on
   deactivation, reconciliation independent of events, the signed revocation list, the
   erasure journal `identity`, its service account
+- [Federation with the company directory](./federation.md) — sign-in through an upstream
+  OpenID Connect provider, groups mapped by immutable id, the status sync of locks
 - [Model gateway](./model-gateway.md) — LiteLLM for the modules: aliases, the default model,
   one key per module, no stored contents
 - [Platform halt](./halt.md) — `papaia-ctl halt`: stop every write, send and delete of the

@@ -58,6 +58,7 @@ from . import (
     deployment,
     egress,
     envtree,
+    federation,
     gpu_detect,
     images,
     localai_native,
@@ -150,6 +151,9 @@ LIFECYCLE_TIMEOUT_SECONDS = 20.0
 # events (people grant their delegations anew in that time).
 LIFECYCLE_RECONCILE_FAIL_SECONDS = 2 * 3600
 LIFECYCLE_GAP_WARN_SECONDS = 7 * 24 * 3600
+# security 1.13: the status sync with the upstream directory failing for longer than
+# 300 s is `fail` (and papaia-lifecycle sends the warning mail).
+STATUS_SYNC_FAIL_SECONDS = 300
 VOICE_GPU_OVERRIDE = Path("overrides") / "docker-compose.voice-gpu.override.yml"
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
@@ -2269,6 +2273,74 @@ def check_network(ctx: Context) -> CheckResult:
     )
 
 
+def _lifecycle_report(ctx: Context, container: str) -> dict[str, Any] | None:
+    done = ctx.run(["docker", "exec", container, *LIFECYCLE_HEALTH_COMMAND],
+                   LIFECYCLE_TIMEOUT_SECONDS)
+    try:
+        report = json.loads(status.first_line(done.stdout))
+    except ValueError:
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def check_identity(ctx: Context) -> CheckResult:
+    """The federation with the upstream provider (`doctor identity`; security 1.13):
+    `fail` when papaia-lifecycle's status sync with the upstream directory has failed
+    for longer than 300 s or never ran, or the service does not run; locks in the
+    company directory then do not reach papaia. Skipped without `security/idp.yaml`."""
+    name = "identity"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        fed = federation.load(ctx.config_dir)
+    except federation.FederationError as exc:
+        return CheckResult(name, FAIL, f"the federation is not usable: {exc}")
+    if fed is None:
+        return CheckResult(name, SKIP, "no federation (no security/idp.yaml)")
+    if LIFECYCLE_PROFILE not in ctx.active_profiles:
+        return CheckResult(
+            name, FAIL,
+            "federation without the lifecycle profile: no status sync, locks in the company "
+            "directory do not reach papaia",
+        )
+    found = _lifecycle_container(ctx)
+    if found is None:
+        return CheckResult(name, SKIP, "papaia-lifecycle does not run on this host")
+    container, state = found
+    if container is None or state != "running":
+        return CheckResult(
+            name, FAIL, f"papaia-lifecycle is {state or 'not created'}: no status sync",
+            {"state": state},
+        )
+    report = _lifecycle_report(ctx, container)
+    try:
+        if report is None:
+            raise ValueError("report")
+        age = _count_field(report, "status_sync_age_seconds", optional=True)
+        failing = _count_field(report, "status_sync_failing_seconds", optional=True)
+    except ValueError:
+        return CheckResult(name, FAIL, "the health report of papaia-lifecycle cannot be read")
+    details = {"status_sync_age_seconds": age, "status_sync_failing_seconds": failing}
+    if failing is None:
+        return CheckResult(
+            name, FAIL, "the status sync has not run (papaia-lifecycle without the federation "
+            "folder; 'papaia-ctl start' applies it)", details,
+        )
+    if failing > STATUS_SYNC_FAIL_SECONDS:
+        return CheckResult(
+            name, FAIL,
+            f"federation disturbed: the status sync with the upstream directory fails for "
+            f"{failing // 60} min; locks in the company directory do not reach papaia",
+            details,
+        )
+    if age is None or age > STATUS_SYNC_FAIL_SECONDS:
+        return CheckResult(
+            name, FAIL, "federation disturbed: no successful status sync in the last 5 min",
+            details,
+        )
+    return CheckResult(name, PASS, f"last status sync {age} s ago", details)
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -2287,6 +2359,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
     ("network", check_network),
+    ("identity", check_identity),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

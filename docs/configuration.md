@@ -217,6 +217,15 @@ Root `.env`, read by `papaia-ctl` when a SQL source is configured ([network.md](
 |---|---|
 | `PAPAIA_SQL_UPLINK_SUBNET` | Fixed range of the network `<project>-sql-uplink`, the direct route of `mcp-mssql` to the SQL source. A private IPv4 range from /24 to /29 that overlaps no SQL source; empty means `10.255.254.0/29`. The host rules are written for this range |
 
+## Federation variable
+
+Root `.env`, read by `papaia-ctl` while `$PAPAIA_CONFIG_DIR/security/idp.yaml` exists
+([federation.md](federation.md)). Empty by default.
+
+| Variable | Purpose |
+|---|---|
+| `PAPAIA_OPERATIONS_MAIL` | The operations address. `papaia-lifecycle` sends one warning mail to it through the mail relay (profile `smtp`) when the status sync with the upstream directory fails for longer than 300 s. One address; anything else stops the render. Empty sends no mail; `doctor identity` reports the failure either way |
+
 ## Hosted test model variable
 
 Root `.env`, read by `papaia-ctl` when it renders LiteLLM's configuration

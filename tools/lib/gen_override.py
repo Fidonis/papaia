@@ -24,6 +24,7 @@ from . import (
     compat,
     deployment,
     egress,
+    federation,
     gpu_detect,
     hosted_model,
     images,
@@ -212,6 +213,12 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
     siem = audit.generate_siem_override(config_dir)
     if siem is not None:
         written.append(siem)
+    # papaia-lifecycle behind papaia-egress while the federation's status sync is on.
+    federated = federation.generate_override(
+        config_dir, repo_root if repo_root is not None else Path.cwd()
+    )
+    if federated is not None:
+        written.append(federated)
     deployed = deployment.load(config_dir)
     if not deployed:
         return written

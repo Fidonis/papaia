@@ -22,7 +22,6 @@ import copy
 import itertools
 import json
 import re
-import urllib.error
 import urllib.parse
 
 BUILTIN_DEFAULT = ["web-origins", "acr", "profile", "roles", "basic", "email"]
@@ -767,4 +766,12 @@ class FakeRealm:
             if method == "DELETE" and m.group(2) in target:
                 target.remove(m.group(2))
             return None
+        # A realm without a federation (lib/federation.py reads these to find nothing
+        # left to remove): no identity provider, only the built-in flows.
+        if method == "GET" and route == "/authentication/flows":
+            return [{"id": "flow-browser", "alias": "browser"}]
+        if method == "GET" and route == "/authentication/flows/browser/executions":
+            return []
+        if method == "GET" and route == "/identity-provider/instances":
+            return []
         raise AssertionError(f"unexpected call {method} {path}")

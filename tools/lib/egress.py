@@ -478,6 +478,20 @@ def render(config_dir: Path, repo_root: Path | None = None) -> Path:
         if any(s["name"] == siem["name"] for s in sources):
             raise EgressError(f"the source name '{siem['name']}' belongs to papaia-audit")
         sources.append(siem)
+    # The federation's status sync: papaia-lifecycle to the host of the directory.
+    from . import federation
+
+    try:
+        status_sync = federation.egress_source(config_dir)
+    except federation.FederationError as exc:
+        raise EgressError(str(exc)) from exc
+    if status_sync is not None:
+        if any(s["name"] == status_sync["name"] for s in sources):
+            raise EgressError(
+                f"add-on '{status_sync['name']}': networks.egress: the name is the source of "
+                "papaia-lifecycle while the federation is on"
+            )
+        sources.append(status_sync)
     config = {
         "format": CONFIG_FORMAT,
         "sources": sources,

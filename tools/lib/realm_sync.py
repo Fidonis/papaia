@@ -3616,6 +3616,9 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             lifetime=delegation_lifetime.stored(config_dir),
         )
         removed = _uninstalled(config_dir, plan)
+        from . import federation  # it imports this module
+
+        upstream = federation.load(config_dir)
     except (RealmSyncError, rh.HardeningError, delegation_lifetime.LifetimeError) as exc:
         print(f"Realm sync refused: {exc}. Nothing was changed.", file=sys.stderr, flush=True)
         return 2
@@ -3684,6 +3687,12 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
                 MasterAdmin(base_url, ctx, admin_password).call,
                 keystore(config_dir),
                 enabled=lifecycle_account.enabled(tree),
+                apply=not check,
+                audit=audit,
+            )
+            changes += federation.align(
+                MasterAdmin(base_url, ctx, admin_password).call,
+                upstream,
                 apply=not check,
                 audit=audit,
             )

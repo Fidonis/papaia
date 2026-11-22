@@ -42,6 +42,7 @@ from . import (
     delegation_lifetime,
     deployment,
     egress,
+    federation,
     halt,
     hosted_model,
     keycloak_role_sync,
@@ -285,6 +286,12 @@ def render(config_dir: Path, repo_root: Path) -> None:
         halt.ensure_dir(config_dir)
     except (halt.HaltError, OSError) as exc:
         raise RenderError(f"the folder of the platform halt: {exc}") from exc
+    # The status sync of the federation (security/idp.yaml): its key and the file
+    # papaia-lifecycle reads, both in the folder the container mounts.
+    try:
+        federation.render(config_dir)
+    except (federation.FederationError, service_account_keys.KeyFileError) as exc:
+        raise RenderError(str(exc)) from exc
     ensure_people_key(config_dir)
 
     # The knowledge map is a generated artifact like the baked realm, not a

@@ -1,0 +1,58 @@
+# Two throwaway Keycloaks for tests/test_federation_live.py (RS-F): `upstream` holds the
+# realm `firma` of the upstream provider, `keycloak` the realm `papaia`. Both are the
+# version the stack pins (src/infra/keycloak/docker-compose.yml), by digest, in
+# development mode with an in-memory database, published on the loopback address only.
+#
+#   FEDERATION_TEST_ADMIN_PASSWORD=<random> \
+#     docker compose -p <project> -f tools/tests/fixtures/keycloak-federation/docker-compose.yml \
+#     up -d --wait
+#
+# `keycloak` shares the network of `upstream` (HTTP 8081 and management 9001 next to
+# 8080 and 9000), so each reaches the other on the loopback address, as the federation
+# allows plain http only there. Browsers and the tests use the published ports, which
+# are also the issuers (`--hostname`); the back channel answers on the loopback address
+# of the shared network (`--hostname-backchannel-dynamic`).
+services:
+  upstream:
+    image: quay.io/keycloak/keycloak:26.7.0@sha256:0f198be292568439d700cdbfb893e69a6009bb43a94a06a945b1d3d506c76b13
+    command:
+      - start-dev
+      - --health-enabled=true
+      - --hostname=http://127.0.0.1:${FEDERATION_TEST_UPSTREAM_PORT:-60801}
+      - --hostname-backchannel-dynamic=true
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${FEDERATION_TEST_ADMIN_PASSWORD:?set a random admin password}
+    ports:
+      - "127.0.0.1:${FEDERATION_TEST_UPSTREAM_PORT:-60801}:8080"
+      - "127.0.0.1:${FEDERATION_TEST_PORT:-60800}:8081"
+    networks: [federation]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.0@sha256:0f198be292568439d700cdbfb893e69a6009bb43a94a06a945b1d3d506c76b13
+    command:
+      - start-dev
+      - --health-enabled=true
+      - --http-port=8081
+      - --http-management-port=9001
+      - --hostname=http://127.0.0.1:${FEDERATION_TEST_PORT:-60800}
+      - --hostname-backchannel-dynamic=true
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${FEDERATION_TEST_ADMIN_PASSWORD:?set a random admin password}
+    network_mode: service:upstream
+    depends_on: [upstream]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9001 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+networks:
+  federation:
+    ipam:
+      config:
+        - subnet: ${FEDERATION_TEST_SUBNET:-10.210.140.0/24}
