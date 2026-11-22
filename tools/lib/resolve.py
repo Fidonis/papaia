@@ -52,6 +52,7 @@ class SetupArgs:
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
     enable_voice: bool | None = None  # None = sticky / no change
+    enable_knowledge_map: bool | None = None  # None = sticky / no change
     # Voice TTS accelerator image variant ("cpu", "nvidia", "hipblas"); None = sticky
     voice_variant: str | None = None
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
@@ -809,6 +810,17 @@ def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_voice is None:
         return tree
     return _toggle_profile(tree, "voice", args.enable_voice)
+
+
+def resolve_knowledge_map(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `knowledge-map` Compose profile based on the operator's choice.
+
+    When `enable_knowledge_map` is None the call is a no-op -- whatever was already written
+    to COMPOSE_PROFILES on a prior run is preserved (sticky). The module's secrets need no
+    step of their own: `setup` generates the missing ones of every module before this runs."""
+    if args.enable_knowledge_map is None:
+        return tree
+    return _toggle_profile(tree, "knowledge-map", args.enable_knowledge_map)
 
 
 def resolve_voice_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:

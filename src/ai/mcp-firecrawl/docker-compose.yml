@@ -16,7 +16,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   mcp-firecrawl:
-    image: ghcr.io/firecrawl/firecrawl-mcp-server@sha256:d9015c8ced7fc4c7186e8c07d8cae206803252c381992534f05e4e15242f2164
+    image: ghcr.io/firecrawl/firecrawl-mcp-server@sha256:92feb480268c790c122359a8d875d763ac274f6e40ede5462e106fc964ca14e0
     # Upstream publishes this image for linux/amd64 only. Pinning the platform lets an
     # arm64 host run it emulated (Rosetta on Docker Desktop, QEMU/binfmt on Linux arm64)
     # instead of failing the pull. Drop it once a multi-arch image exists.
@@ -25,18 +25,23 @@ services:
     environment:
       FIRECRAWL_API_URL: ${FIRECRAWL_API_URL:-http://firecrawl:3002}
       FIRECRAWL_API_KEY: "sk-not-used"
-      # Enable HTTP streamable transport so Node.js binds port 3000 for nginx.
-      # Without this the process starts in stdio mode and nginx returns 502.
+      # Without this the process starts in stdio mode and serves no HTTP at all.
       HTTP_STREAMABLE_SERVER: "true"
-      # Force IPv4 binding — Node.js resolves "localhost" to ::1 (IPv6) by
-      # default; nginx upstream is 127.0.0.1 (IPv4), causing a 502.
-      HOST: "127.0.0.1"
+      # The image runs Node.js directly, with no reverse proxy in front of it.
+      # It has to listen on all interfaces so LibreChat can reach it over
+      # papaia-net; the port is pinned because librechat.yaml and the
+      # healthcheck depend on it.
+      HOST: "0.0.0.0"
+      PORT: "3000"
+      # The server rejects any Host header it does not know (DNS-rebinding
+      # protection, answers 403). LibreChat calls it by its service name.
+      FIRECRAWL_MCP_ALLOWED_HOSTS: "mcp-firecrawl"
     networks:
       - papaia-net
     healthcheck:
-      # /mcp only accepts POST (GET returns 405) — /health is the status
-      # endpoint served by the same internal nginx.
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      # /mcp only accepts POST (GET returns 405), so probe /health. The image
+      # ships busybox wget but no curl.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
