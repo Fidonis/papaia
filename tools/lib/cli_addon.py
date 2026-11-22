@@ -31,6 +31,7 @@ from . import (
     keycloak_admin_path,
     keycloak_role_sync,
     model_gateway,
+    module_actions,
     module_offer,
     npm_provision,
     paperless_gate,
@@ -1187,6 +1188,13 @@ def cmd_addon_action(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
         return 2
+    if module_actions.is_reserved(args.action):
+        print(
+            f"ERROR: '{args.action}' of addon '{args.name}' is a restore step: only restore runs"
+            " it, before the add-on starts.",
+            file=sys.stderr,
+        )
+        return 2
     action = actions.get(args.action)
     if action is None:
         declared = ", ".join(sorted(actions)) or "none"
@@ -1224,6 +1232,8 @@ def cmd_addon_actions(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
         return 2
+    # The restore steps are not maintenance actions: neither a button nor `addon run`.
+    actions = {n: a for n, a in actions.items() if not module_actions.is_reserved(n)}
     if args.json:
         print(
             json.dumps(

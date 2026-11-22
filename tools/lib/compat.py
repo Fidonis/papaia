@@ -84,6 +84,10 @@ ADDON_API_GENERATIONS: dict[int, str] = {
     11: "`pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)",
     12: "add-on ingress `integration.nginx` (ADR 0023)",
     13: "`volumes[]` with `backup: include|exclude` and a reason, read by `backup`",
+    14: (
+        "reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the"
+        " add-on starts"
+    ),
 }
 
 # Manifest keys that need a core of at least this generation. A core below it
@@ -99,6 +103,9 @@ GENERATION_FEATURES: dict[str, int] = {
     "integration.nginx": 12,
     # A core below 13 would put a volume the add-on excludes (a key) into the backup.
     "volumes": 13,
+    # A core below 14 would start a restored add-on without applying its erasure journal.
+    "actions.erasure-replay": 14,
+    "actions.post-restore": 14,
 }
 
 INGRESS_AXIS = "integration.nginx"
@@ -337,6 +344,11 @@ def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
         raise ValueError(
             "integration.nginx must be a fragment path or a list of ingress entries"
         )
+    actions = manifest.get("actions")
+    if isinstance(actions, dict):
+        for name in ("erasure-replay", "post-restore"):
+            if name in actions:
+                used.append((f"actions.{name}", GENERATION_FEATURES[f"actions.{name}"]))
     return used
 
 

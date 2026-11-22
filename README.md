@@ -890,7 +890,7 @@ disk. The running stack is not touched. Each deletion adds a `delete` line to `b
 ### `restore`
 
 ```bash
-tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
+tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list] [--identity=FILE|-]
                          [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                          [--insecure-images] [-y] [--config-dir=PATH]
 ```
@@ -900,6 +900,7 @@ tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list]
 | `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to read restore points from |
 | `--restore-point=ID` | _(most recent usable)_ | Which restore point to restore, as listed by `--list` |
 | `--list` | — | Print the available restore points and exit |
+| `--identity=FILE\|-` | — | The private backup key (`AGE-SECRET-KEY-1...`) of one recipient of the restore point, from a key file or, with `-`, from standard input; a passphrase-protected key file asks for its passphrase once. Required for an encrypted restore point |
 | `--only=SELECTOR[,SELECTOR]` | _(whole snapshot)_ | Restore only the selected units and scope the teardown and restart to them. Each `SELECTOR` is `module:NAME`, `addon:NAME` or `volume:NAME` (in a distributed installation also `node:NAME`); the prefix is mandatory. Cannot be combined with `--restart-clean`, and is refused for a selection that touches the config directory or resolves to the `manager` profile |
 | `--restart-clean` | — | Delete the named volumes during the teardown as well, so nothing survives that is not in the restore point |
 | `--no-restart` | — | Do not touch the running stack at all |
@@ -943,6 +944,64 @@ and touches no other node. A whole restore stops every node, puts the controller
 configuration back, hands every node its bundle and release, writes back each node's data and
 starts the installation. A restore point taken of a single host is refused in a distributed
 installation, and the other way round. `--restart-clean` is not available there.
+
+**Encrypted restore points.** A restore point written to recipients (every backup since
+encryption, see [Backup keys and target](#backup-keys-and-target)) is restored only with the
+private key of one of them. Without `--identity` the restore stops with exit code 2 and
+`The key for restore point <id> is missing (recipients: <name> <age1...>, ...)`, before anything
+is touched; it never starts with new keys in place of the old ones. With a key, every archive the
+restore will unpack is checked first: the key opens it, and the file still has the SHA-256 the
+manifest recorded. A key that is no recipient (exit 2) or a changed or missing archive (exit 3)
+stops the restore at that point, again with nothing changed. Each archive is then decrypted into
+the stream the sidecar unpacks, so neither the key nor a decrypted archive is written to disk;
+the key is not put into an argument, the environment or a log either. With `--identity=-`
+standard input carries the key and cannot answer the confirmation, so the restore needs `-y`
+and otherwise stops with exit code 2 before the key is read:
+
+```bash
+tools/papaia-ctl restore --restore-point=<ID> --identity=- -y   # paste the key, then Ctrl-D
+```
+
+**Deletions survive the restore.** A restore point brings back everything a module deleted after
+it was taken. Each module therefore keeps an erasure journal at the backup target
+(`$PAPAIA_BACKUP_DIR/erasure-journal/<module>.jsonl`, references only, no content), and the
+restore has every module apply it again before the module serves anything. A module declares
+this as the reserved action `erasure-replay` under `actions:` (contract generation 14); a holder
+of delegations also declares `post-restore` (new sealing key, emptied delegations, halted
+triggers and runs). After writing the restore point, `restore` records the actions of every
+active add-on of the restore (a scoped restore: of the selected add-ons) in
+`$PAPAIA_CONFIG_DIR/module-actions.pending`. Before an add-on starts — in `start`, in the
+restart of a scoped restore and in `addon start` — each due action runs as `docker compose run
+--rm <service> <args>` in the add-on's project, which starts the add-on's databases and no other
+service, with `PAPAIA_ERASURE_TRIGGER` (`restore`, or `rollback` for `addon rollback
+--restore-data`) and the restore's `PAPAIA_CORRELATION_ID` in its environment. The journal runs
+first, then the holder's step, then the add-on starts. An action that fails keeps its add-on down
+and stays due: the next `start --addons` or `addon start <name>` runs it again first (the actions
+are idempotent). A pending file that cannot be read keeps every add-on with a pending step down;
+a scoped restore does not replace it either (it may hold steps of add-ons outside the selection)
+and stops with exit code 3 without starting the stack. Only a whole restore replaces it.
+`addon run` neither lists nor runs these two actions. Each run is one `papaia.audit/1` row
+(`module_action_run`, with add-on, action, trigger, restore point and exit code) in the host's
+audit journal `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`. The journals of the core itself
+(accounts, chat, model gateway) are applied by the core start gate, not here.
+
+**How long it took.** `restore` prints `Restore took N s` (from the confirmation to the stack
+being up again: the measured recovery time), logs `duration=Ns` and
+`module_actions=ok|pending|none` in `backup.log`, and writes one audit row `restore_applied`
+with `duration_s`, the result, the artifact count and the state of `post-restore` and of the
+module actions.
+
+**Restoring next to the running installation (second compose project).** To try a restore point
+without touching the installation it was taken of, restore it into a second installation in its
+own Docker engine (a second host or a virtual machine), with its own checkout and configuration
+directory: `setup` there without `start`, then
+`restore --backup-dir=<copy of the target> --restore-point=<ID> --identity=- -y`, then `doctor`.
+The time from the restore command to `doctor` passing is the recovery time. The restore writes
+the volumes under the names recorded in the point and takes over the configuration of the
+point, including `COMPOSE_PROJECT_NAME`, host names and ports, so it must not share a Docker
+engine with the original: on the same engine it would write into that installation's volumes.
+After a whole teardown, a volume still in use by a container (of another project) is therefore
+skipped with a warning rather than overwritten, and the restore ends `partial`.
 
 Once anything was written, [`post-restore`](#post-restore) is pending — for a scoped restore
 and with `--no-restart` as well, and so also for `addon rollback --restore-data`. `restore`
@@ -1165,7 +1224,7 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `list` | Read-only. Every registered add-on with its path, version (from the manifest), bundled components, the compatibility verdict `check` would give, and the `previous` version a rollback would go back to. `--json` prints `{"schema_version": 1, "core": {...}, "addons": [...]}`, described by [`tools/schemas/addon-list.schema.json`](tools/schemas/addon-list.schema.json). |
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
-| `run` | Runs a maintenance action the add-on declares under `actions:` — `docker compose run --rm <service> <args>` in the add-on's project, with the files and env of `addon start` — and exits with the action's code. Only declared actions with their fixed arguments run; without an action, lists the declared ones (`--json` for tools). Single host only. |
+| `run` | Runs a maintenance action the add-on declares under `actions:` — `docker compose run --rm <service> <args>` in the add-on's project, with the files and env of `addon start` — and exits with the action's code. Only declared actions with their fixed arguments run; without an action, lists the declared ones (`--json` for tools). The restore steps `erasure-replay` and `post-restore` are neither listed nor run here: only [`restore`](#restore) runs them. Single host only. |
 | `uninstall` | Removes the add-on's containers and networks, its override files, config bundle and entry in `deployment.yaml`. Its proxy hosts and its clients in the realm go right after, through `npm-provision` and `keycloak-role-sync` (or at the next `start` when the stack is down); its service accounts and `aud-*` scopes go with them, since no installed module declares them any more. `--purge-data` (formerly `--clean-up`) also removes its volumes; without it the volumes stay and a later `install` uses them again. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. An add-on that uses it optionally does not refuse it and is named. Leaves one audit row. |
 | `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. When the core ships the suite matrix `compat/suite.yaml`, every add-on it names must have a version of the core's suite or the suite before it (axis `matrix`, see [`docs/compatibility.md`](docs/compatibility.md)). `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). An add-on built against a newer contract generation than the target serves is reported with every missing generation and its meaning, for example `missing generations 4, 5, 6, 7, 8, 9, 10, 11, 12; 12: add-on ingress integration.nginx (ADR 0023)`; see the generation table in [`ADDON_API`](ADDON_API). |

@@ -56,6 +56,7 @@ from . import (
     librechat_history,
     localai_native,
     migrations,
+    module_actions,
     module_offer,
     modules,
     nodes,
@@ -1932,7 +1933,16 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
         if not args.only:
             backup.require_whole_stack(manifest)
         selection = backup.resolve_selection(manifest, args.only) if args.only else None
-        backup.require_plain(manifest)
+        identities = backup_crypt.read_identities(args.identity) if args.identity else None
+        encrypted = backup_crypt.require_key(manifest, identities)
+        if encrypted:
+            chosen = selection.artifacts if selection is not None else (
+                backup.manifest_artifacts(manifest)
+            )
+            # Before the stack is touched: the key opens every archive and none changed.
+            backup_crypt.verify_archives(
+                snapshot, manifest, [a.archive for a in chosen], identities or []
+            )
     except (backup.ScopedRestorePointError, backup.EncryptedRestorePointError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -1942,6 +1952,8 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
         print(f"WARNING: {warning}", file=sys.stderr)
     print(f"SNAPSHOT\t{snapshot}")
     print(f"ID\t{entry.get('id')}")
+    if encrypted:
+        print("ENCRYPTED\t1")
     if selection is not None:
         # The teardown scope travels as its own line kinds rather than as extra
         # columns: bash reads artifact rows with `read -r kind archive target
@@ -1964,6 +1976,121 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
             # a host that keeps its bundle somewhere else.
             target = str(config_dir)
         print(f"{artifact.kind}\t{artifact.archive}\t{target}\t{artifact.owner}")
+    return 0
+
+
+def _refuse_terminal(what: str) -> bool:
+    if sys.stdout.isatty():
+        print(f"ERROR: {what} is written into a pipe only, never onto a terminal.",
+              file=sys.stderr)
+        return True
+    return False
+
+
+def cmd_backup_identities(args: argparse.Namespace) -> int:
+    """The age identities of --identity=FILE|-, one per line, for the restore in bash to
+    hand to each archive it opens; read once, so a passphrase is asked for once. The key
+    stays in memory: it is never written to a file or onto a terminal."""
+    if _refuse_terminal("A backup key"):
+        return 2
+    try:
+        identities = backup_crypt.read_identities(args.identity)
+    except backup.BackupError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    sys.stdout.write("".join(f"{i}\n" for i in identities))
+    return 0
+
+
+def cmd_restore_open(args: argparse.Namespace) -> int:
+    """Decrypt one archive of a restore point to standard output, for `restore` to unpack.
+    Exit 1 when the key does not open it or the file differs from the manifest."""
+    if _refuse_terminal("An archive"):
+        return 2
+    snapshot = Path(args.snapshot)
+    try:
+        identities = backup_crypt.read_identities(args.identity)
+        manifest = backup.read_manifest(snapshot)
+        backup_crypt.open_archive(snapshot, manifest, args.archive, identities,
+                                  sys.stdout.buffer)
+        sys.stdout.buffer.flush()
+    except backup.BackupError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except BrokenPipeError:
+        print(f"ERROR: {args.archive}: the unpacking side stopped reading", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _addon_list(raw: str | None) -> list[str] | None:
+    if raw is None:
+        return None
+    return [part for part in raw.split(",") if part]
+
+
+def cmd_module_actions_mark(args: argparse.Namespace) -> int:
+    """After a restore wrote something: record the reserved actions due before each add-on
+    of the restore starts (lib/module_actions.py). Prints `<add-on>\t<actions>` per add-on."""
+    try:
+        marked = module_actions.mark(
+            Path(args.config_dir), Path(args.repo_root),
+            addons=_addon_list(args.addons), trigger=args.trigger,
+            restore_point=args.restore_point,
+            correlation_id=module_actions.env_correlation(),
+        )
+    except (module_actions.ModuleActionError, images.ImageError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    for name, actions in marked.items():
+        print(f"{name}\t{','.join(actions)}")
+    return 0
+
+
+def cmd_module_actions_pending(args: argparse.Namespace) -> int:
+    """What is due before add-on --name starts: `TRIGGER\t<trigger>\t<cid>`, then one
+    `ACTION\t<action>\t<service>\t<arg>...` line per action; nothing when nothing is due.
+    Exit 3 when the pending file or the manifest cannot be read: the add-on stays down."""
+    try:
+        trigger, cid, steps = module_actions.pending(
+            Path(args.config_dir), Path(args.repo_root), args.name
+        )
+    except module_actions.ModuleActionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    if steps:
+        print(f"TRIGGER\t{trigger}\t{cid}")
+        for action, service, arguments in steps:
+            print("\t".join(["ACTION", action, service, *arguments]))
+    return 0
+
+
+def cmd_module_actions_done(args: argparse.Namespace) -> int:
+    try:
+        module_actions.done(Path(args.config_dir), args.name, args.action, args.exit_code)
+    except (module_actions.ModuleActionError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    return 0
+
+
+def cmd_module_actions_state(args: argparse.Namespace) -> int:
+    print(module_actions.state(Path(args.config_dir), args.marked))
+    return 0
+
+
+def cmd_restore_record(args: argparse.Namespace) -> int:
+    try:
+        module_actions.record_restore(
+            Path(args.config_dir), restore_point=args.restore_point,
+            operation=args.operation, result=args.result, duration_s=args.duration,
+            post_restore=args.post_restore, module_actions_state=args.module_actions,
+            artifacts=args.artifacts, encrypted=args.encrypted,
+            correlation_id=module_actions.env_correlation(),
+        )
+    except (module_actions.ModuleActionError, images.ImageError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
     return 0
 
 
@@ -3039,7 +3166,49 @@ def build_parser() -> argparse.ArgumentParser:
     p_restore_resolve.add_argument("--backup-dir", default=None)
     p_restore_resolve.add_argument("--restore-point", default=None)
     p_restore_resolve.add_argument("--only", default=None)
+    p_restore_resolve.add_argument("--identity", default=None)
     p_restore_resolve.set_defaults(func=cmd_restore_resolve)
+
+    p_backup_identities = sub.add_parser("backup-identities")
+    p_backup_identities.add_argument("--identity", required=True)
+    p_backup_identities.set_defaults(func=cmd_backup_identities)
+
+    p_restore_open = sub.add_parser("restore-open")
+    p_restore_open.add_argument("--snapshot", required=True)
+    p_restore_open.add_argument("--archive", required=True)
+    p_restore_open.add_argument("--identity", required=True)
+    p_restore_open.set_defaults(func=cmd_restore_open)
+
+    p_restore_record = sub.add_parser("restore-record")
+    p_restore_record.add_argument("--restore-point", required=True)
+    p_restore_record.add_argument("--operation", required=True)
+    p_restore_record.add_argument("--result", required=True)
+    p_restore_record.add_argument("--duration", type=int, required=True)
+    p_restore_record.add_argument("--post-restore", required=True)
+    p_restore_record.add_argument("--module-actions", required=True)
+    p_restore_record.add_argument("--artifacts", required=True)
+    p_restore_record.add_argument("--encrypted", action="store_true")
+    p_restore_record.set_defaults(func=cmd_restore_record)
+
+    p_ma_mark = sub.add_parser("module-actions-mark")
+    p_ma_mark.add_argument("--trigger", required=True)
+    p_ma_mark.add_argument("--restore-point", required=True)
+    p_ma_mark.add_argument("--addons", default=None)
+    p_ma_mark.set_defaults(func=cmd_module_actions_mark)
+
+    p_ma_pending = sub.add_parser("module-actions-pending")
+    p_ma_pending.add_argument("--name", required=True)
+    p_ma_pending.set_defaults(func=cmd_module_actions_pending)
+
+    p_ma_done = sub.add_parser("module-actions-done")
+    p_ma_done.add_argument("--name", required=True)
+    p_ma_done.add_argument("--action", required=True)
+    p_ma_done.add_argument("--exit-code", type=int, required=True)
+    p_ma_done.set_defaults(func=cmd_module_actions_done)
+
+    p_ma_state = sub.add_parser("module-actions-state")
+    p_ma_state.add_argument("--marked", action="store_true")
+    p_ma_state.set_defaults(func=cmd_module_actions_state)
 
     p_restore_selectors = sub.add_parser("restore-selectors")
     p_restore_selectors.add_argument("--backup-dir", default=None)

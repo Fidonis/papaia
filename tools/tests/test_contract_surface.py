@@ -98,7 +98,10 @@ _SURFACE_CHANGED = (
 #
 # Gen 13 (additive): `volumes[]` `{name, backup: include|exclude, reason}`; `backup` leaves
 # an excluded volume out of every archive (BE-14, RE-05).
-ADDON_API_WINDOW = (1, 13)
+#
+# Gen 14 (additive): the reserved `actions` `erasure-replay` and `post-restore`; `restore`
+# runs them before the add-on starts, never `addon run` (RE-06, BE-16, BE-17).
+ADDON_API_WINDOW = (1, 14)
 
 # The binding meaning of every generation the core serves. Changing a line here is a
 # contract change, not a wording fix.
@@ -134,6 +137,10 @@ ADDON_API_GENERATIONS = {
     11: "`pki:`, internal TLS under the `kritis` security profile (ADR 0019, 0022)",
     12: "add-on ingress `integration.nginx` (ADR 0023)",
     13: "`volumes[]` with `backup: include|exclude` and a reason, read by `backup`",
+    14: (
+        "reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the"
+        " add-on starts"
+    ),
 }
 
 # Manifest keys whose use requires a core of at least this generation.
@@ -145,6 +152,8 @@ GENERATION_FEATURES = {
     "pki": 11,
     "integration.nginx": 12,
     "volumes": 13,
+    "actions.erasure-replay": 14,
+    "actions.post-restore": 14,
 }
 
 # Seam 1: core services an addon may attach to (and their profiles).

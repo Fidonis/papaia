@@ -314,6 +314,12 @@ actions:                           # optional (addon_api 4): maintenance actions
     description: "Restore the initial data"  # service a compose profile (e.g.
                                    # `profiles: [actions]`) so `addon start` skips it.
     destructive: true              # optional: callers (papaia-manager) confirm first
+  erasure-replay:                  # reserved (addon_api 14): run by `restore` before the
+    service: migrate               # add-on starts, with PAPAIA_ERASURE_TRIGGER and
+    args: ["erasure-replay"]       # PAPAIA_CORRELATION_ID; never by `addon run`
+  post-restore:                    # reserved (addon_api 14): the holder's own step after a
+    service: migrate               # restore, after erasure-replay
+    args: ["post-restore"]
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -409,7 +415,8 @@ same table. All generations are additive, so `min` stays 1. The decision
 records for generations 7 to 12 use the numbers reserved in
 [`docs/adr/README.md`](adr/README.md). Generation 13 (`volumes[]` with
 `backup: include|exclude` and a reason) is described with `backup` in the
-README.
+README, generation 14 (the reserved actions `erasure-replay` and
+`post-restore`) with `restore`.
 
 | Gen. | Meaning | ADR |
 |---|---|---|
@@ -425,6 +432,8 @@ README.
 | 10 | Install-time approval hook: approval at install up to the highest declared class | 0017 (addendum) |
 | 11 | `pki:`, internal TLS under the `kritis` security profile | 0019, 0022 |
 | 12 | Add-on ingress `integration.nginx` | 0023 |
+| 13 | `volumes[]` with `backup: include\|exclude` and a reason, read by `backup` | — |
+| 14 | Reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the add-on starts | — |
 
 This table fixes what each generation means. The rendering and runtime
 behaviour behind generations 7 to 12 arrive with their own changes; until a

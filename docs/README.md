@@ -37,6 +37,8 @@ Welcome to the papAIa documentation.
   renewal, company CA certificates, the security profile `kritis`
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
   only
+- [Wiederherstellung](./de/wiederherstellung.md) — the operator steps of a restore, in
+  German, like the data protection package under `de/`
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions
 - [Parallel Search MCP in LibreChat](./parallel-search-mcp.md) — opt-in hosted web search
   through the customer overlay

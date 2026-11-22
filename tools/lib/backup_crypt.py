@@ -13,6 +13,11 @@
   goes into a backup (the rollback keys, an age identity, the hosted model's key).
 * Key check: `backup key-check --identity=-` opens the header of the newest point with a
   key, without restoring anything, and records the date per recipient.
+* Restore: `restore --identity=FILE|-` checks before it changes anything that the key opens
+  every archive it will restore and that each file still has the SHA-256 the manifest
+  recorded; it then decrypts each archive into the stream bash unpacks, so the plain
+  archive is never on disk either. Without a key an encrypted point is refused, never
+  started with new keys in its place (STU-37-A6).
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from . import age, common, images
 from .backup import (
     CHECKSUMS_NAME,
     BackupError,
+    EncryptedRestorePointError,
     Recipient,
     load_index,
     read_manifest,
@@ -576,3 +582,120 @@ def key_check(
             checked[key] = stamp
     common.atomic_write(record_path, yaml.safe_dump({"checked": checked}, sort_keys=True))
     return str(entry.get("id")), matched
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# restore
+# ─────────────────────────────────────────────────────────────────────────
+
+_SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
+
+
+def _recipient_names(manifest: dict) -> str:
+    return ", ".join(
+        f"{r.get('name')} {r.get('key')}"
+        for r in (manifest.get("encryption") or {}).get("recipients") or []
+        if isinstance(r, dict)
+    ) or "none recorded"
+
+
+def require_key(manifest: dict, identities: list[str] | None) -> bool:
+    """Whether the point is encrypted; refuses an encrypted point without a key."""
+    if not manifest.get("encryption"):
+        return False
+    if not identities:
+        raise EncryptedRestorePointError(
+            f"The key for restore point {manifest.get('id')} is missing (recipients: "
+            f"{_recipient_names(manifest)}). Pass --identity=FILE or --identity=- (the key "
+            "on standard input); nothing was changed."
+        )
+    return True
+
+
+def _archive(snapshot: Path, manifest: dict, archive: str) -> tuple[Path, str]:
+    """The file of an archive the manifest lists, and the SHA-256 it recorded for it."""
+    entry = next(
+        (a for a in manifest.get("artifacts") or []
+         if isinstance(a, dict) and a.get("archive") == archive),
+        None,
+    )
+    if entry is None:
+        raise BackupError(f"{archive!r} is not an archive of restore point {manifest.get('id')}")
+    path = snapshot / archive
+    if not path.resolve().is_relative_to(snapshot.resolve()):
+        raise BackupError(f"Refusing archive path {archive!r} from the manifest")
+    digest = entry.get("sha256")
+    if not isinstance(digest, str) or not _SHA256_RE.match(digest):
+        raise BackupError(f"{archive}: the manifest records no checksum; nothing was changed.")
+    return path, digest
+
+
+class _HashingReader:
+    def __init__(self, handle: BinaryIO) -> None:
+        self._handle = handle
+        self.digest = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._handle.read(size)
+        self.digest.update(data)
+        return data
+
+    def readline(self, size: int = -1) -> bytes:
+        data = self._handle.readline(size)
+        self.digest.update(data)
+        return data
+
+
+def verify_archives(
+    snapshot: Path, manifest: dict, archives: list[str], identities: list[str]
+) -> None:
+    """Before a restore touches anything: every archive is there, unchanged (SHA-256 of
+    the manifest) and opened by one of the keys."""
+    for archive in archives:
+        path, expected = _archive(snapshot, manifest, archive)
+        try:
+            with open(path, "rb") as handle:
+                age.open_header(handle, identities)
+                handle.seek(0)
+                digest = hashlib.sha256()
+                for block in iter(lambda: handle.read(SCAN_BLOCK), b""):
+                    digest.update(block)
+        except age.NoIdentityError:
+            raise EncryptedRestorePointError(
+                f"The key for restore point {manifest.get('id')} is missing: the key given "
+                f"is not a recipient (recipients: {_recipient_names(manifest)}). Nothing was "
+                "changed."
+            ) from None
+        except FileNotFoundError:
+            raise BackupError(f"{archive}: missing in the restore point; nothing was changed.") \
+                from None
+        except (OSError, age.AgeError) as exc:
+            raise BackupError(f"{archive}: {exc}; nothing was changed.") from None
+        if digest.hexdigest() != expected:
+            raise BackupError(
+                f"{archive}: the checksum does not match the manifest, the file was changed;"
+                " nothing was changed."
+            )
+
+
+def open_archive(
+    snapshot: Path, manifest: dict, archive: str, identities: list[str], out: BinaryIO
+) -> int:
+    """Decrypt one archive to `out` (the tar.gz stream bash unpacks). Fails when the file
+    differs from the manifest's checksum; the caller then discards what it unpacked."""
+    path, expected = _archive(snapshot, manifest, archive)
+    try:
+        with open(path, "rb") as handle:
+            reader = _HashingReader(handle)
+            size = age.decrypt(reader, out, identities)
+            while reader.read(SCAN_BLOCK):
+                pass
+    except age.NoIdentityError:
+        raise EncryptedRestorePointError(
+            f"The key for restore point {manifest.get('id')} is missing"
+        ) from None
+    except (OSError, age.AgeError) as exc:
+        raise BackupError(f"{archive}: {exc}") from None
+    if reader.digest.hexdigest() != expected:
+        raise BackupError(f"{archive}: the checksum does not match the manifest")
+    return size

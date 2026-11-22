@@ -54,7 +54,7 @@
 #                            [--backup-dir=PATH] [-y] [--config-dir=PATH]
 #                            --restore-point is repeatable or comma-separated
 #   papaia-ctl restore       [--backup-dir=PATH] [--restore-point=ID] [--list]
-#                            [--only=SELECTOR[,SELECTOR]] [--restart-clean]
+#                            [--identity=FILE|-] [--only=SELECTOR[,SELECTOR]] [--restart-clean]
 #                            [--no-restart] [--insecure-images] [-y] [--config-dir=PATH]
 #                            SELECTOR is module:NAME, addon:NAME or volume:NAME
 #                            (and node:NAME in a distributed installation)

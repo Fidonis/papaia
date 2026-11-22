@@ -237,7 +237,56 @@ _verify_addon_images() {
     [ "$verified" -eq 0 ] || exit 2
 }
 
+# What a restore left due before add-on $1 (at $2) starts (lib/module_actions.py): its
+# erasure journal applied again (`erasure-replay`) and the holder's own step
+# (`post-restore`), each as `docker compose run --rm` of the service the add-on declares,
+# which starts its databases first and no other service. A failed or unreadable step keeps
+# the add-on down and stays due for its next start. Returns 0 when nothing is due.
+_module_actions_before_up() {
+    local addon_name="$1" addon_path="$2"
+    local marker="$CONFIG_DIR/module-actions.pending"
+    [ -e "$marker" ] || [ -L "$marker" ] || return 0
+    local plan="" rc=0
+    plan="$(py_cli module-actions-pending --name="$addon_name")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        error "Add-on $addon_name was not started: the steps a restore left due before its"
+        error "start cannot be read ($marker)."
+        return 3
+    fi
+    [ -n "$plan" ] || return 0
+    local trigger="" cid="" action status
+    local -a parts=()
+    while IFS=$'\t' read -r -a parts; do
+        case "${parts[0]:-}" in
+            TRIGGER) trigger="${parts[1]:-}"; cid="${parts[2]:-}" ;;
+            ACTION)
+                action="${parts[1]}"
+                info "  addon $addon_name: $action of the $trigger before it starts"
+                status=0
+                # Standard input closed: the step reads nothing from the operator, and the
+                # loop's own input must stay with the loop.
+                _addon_compose run "$addon_name" "$addon_path" --rm -T \
+                    -e "PAPAIA_ERASURE_TRIGGER=$trigger" -e "PAPAIA_CORRELATION_ID=$cid" \
+                    "${parts[@]:2}" < /dev/null || status=$?
+                if ! py_cli module-actions-done --name="$addon_name" --action="$action" \
+                        --exit-code="$status"; then
+                    error "Could not record $action of add-on $addon_name; it was not started."
+                    return 3
+                fi
+                if [ "$status" -ne 0 ]; then
+                    error "$action of add-on $addon_name failed (exit $status); the add-on was"
+                    error "not started. The step stays due: 'papaia-ctl start --addons' or"
+                    error "'papaia-ctl addon start $addon_name' runs it again first."
+                    return 3
+                fi
+                ;;
+        esac
+    done <<< "$plan"
+    return 0
+}
+
 _addon_compose_up() {
+    _module_actions_before_up "$1" "$2" || return $?
     local up_flags=(-d)
     if _stopped_containers_go_stale; then
         up_flags+=(--force-recreate)
@@ -764,6 +813,8 @@ cmd_addon_rollback() {
         local -a restore_flags=(--only="addon:$addon_name" --restore-point="$restore_point"
             --config-dir="$CONFIG_DIR" -y)
         [ "$insecure_images" -eq 1 ] && restore_flags+=(--insecure-images)
+        # shellcheck disable=SC2034  # read by cmd_restore (backup.sh)
+        RESTORE_TRIGGER="rollback"
         cmd_restore_scoped ${restore_flags[@]+"${restore_flags[@]}"}
     elif [ "$was_running" -eq 1 ]; then
         if ! _addon_recreate "$addon_name" addon-rollback "$insecure_images"; then

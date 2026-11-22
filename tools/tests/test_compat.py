@@ -604,4 +604,4 @@ def test_well_formed_ingress_entry_with_optional_fields_is_accepted():
 
 
 def test_generation_table_reaches_the_current_generation():
-    assert sorted(compat.ADDON_API_GENERATIONS) == list(range(1, 14))
+    assert sorted(compat.ADDON_API_GENERATIONS) == list(range(1, 15))

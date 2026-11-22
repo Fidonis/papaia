@@ -614,12 +614,24 @@ cmd_backup_delete() {
 # ─────────────────────────────────────────────────────────────────────────
 # restore
 # ─────────────────────────────────────────────────────────────────────────
+# Why the add-ons' restore steps run (lib/module_actions.py): `restore`, or `rollback` when
+# an add-on rollback restores its data through restore-scoped.
+RESTORE_TRIGGER="restore"
+
 cmd_restore() {
     local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" restore_point="" only=""
     local no_restart=0 restart_clean=0 list_only=0 assume_yes=0 insecure_images=0
+    local identity=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            --identity=*)
+                identity="${1#*=}"
+                if [ -z "$identity" ]; then
+                    error "--identity needs a key file or - (the key on standard input)."
+                    exit 2
+                fi
+                ;;
             --insecure-images) insecure_images=1 ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
             --restore-point=*) restore_point="${1#*=}" ;;
@@ -633,10 +645,21 @@ cmd_restore() {
         esac
         shift
     done
+    # Standard input carries the key, so it cannot also carry the answer to the
+    # confirmation; refuse before the key is read.
+    if [ "$identity" = "-" ] && [ "$assume_yes" -eq 0 ] && [ "$list_only" -eq 0 ]; then
+        error "--identity=- reads the key from standard input, which then cannot answer"
+        error "the confirmation. Add -y to confirm the restore, or pass --identity=FILE."
+        exit 2
+    fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
     local mode
     mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ] && [ -n "$identity" ]; then
+        error "--identity is not available in a distributed installation yet."
+        exit 2
+    fi
     if [ "$mode" = "distributed" ] && [ "$list_only" -eq 0 ]; then
         _restore_distributed "$backup_dir" "$restore_point" "$only" "$no_restart" \
             "$restart_clean" "$assume_yes"
@@ -668,9 +691,24 @@ cmd_restore() {
         restart_clean=0
     fi
 
+    # One correlation id for every audit row of this run and for the add-ons' restore steps.
+    if [ -z "${PAPAIA_CORRELATION_ID:-}" ]; then
+        PAPAIA_CORRELATION_ID="$(py_cli new-correlation-id | tr -d '\r')" || exit 3
+    fi
+    export PAPAIA_CORRELATION_ID
+
+    # The operator's key is read once (a protected key file asks for its passphrase once)
+    # and stays in this process: piped to each Python step, never into a file, an argument
+    # or the environment.
+    _RESTORE_IDENTITIES=""
+    if [ -n "$identity" ]; then
+        _RESTORE_IDENTITIES="$(py_cli backup-identities --identity="$identity")" || exit 2
+    fi
+
     local -a extra=()
     [ -n "$restore_point" ] && extra+=(--restore-point="$restore_point")
     [ -n "$only" ] && extra+=(--only="$only")
+    [ -n "$_RESTORE_IDENTITIES" ] && extra+=(--identity=-)
     local plan_file
     plan_file="$(mktemp)"
     _BACKUP_TMPFILES+=("$plan_file")
@@ -679,9 +717,17 @@ cmd_restore() {
     # otherwise end up inside a snapshot path or a docker volume name.
     # Status 2 is a request that does not fit the restore point (a scoped backup
     # asked for as a whole); the reason is already on stderr.
+    # With a key, restore-resolve also checks that it opens every archive and that none
+    # changed, before anything below touches the stack.
     local resolve_rc=0
-    py_cli restore-resolve --backup-dir="$backup_dir" ${extra[@]+"${extra[@]}"} \
+    if [ -n "$_RESTORE_IDENTITIES" ]; then
+        printf '%s\n' "$_RESTORE_IDENTITIES" \
+            | py_cli restore-resolve --backup-dir="$backup_dir" ${extra[@]+"${extra[@]}"} \
             | tr -d '\r' > "$plan_file" || resolve_rc=$?
+    else
+        py_cli restore-resolve --backup-dir="$backup_dir" ${extra[@]+"${extra[@]}"} \
+            | tr -d '\r' > "$plan_file" || resolve_rc=$?
+    fi
     if [ "$resolve_rc" -eq 2 ]; then
         exit 2
     elif [ "$resolve_rc" -ne 0 ]; then
@@ -690,6 +736,8 @@ cmd_restore() {
     fi
 
     local snapshot="" restore_id="" sel_profiles="" sel_addons="" has_configdir=0
+    _RESTORE_ENCRYPTED=0
+    _RESTORE_MARKED=0
     local kind archive target owner
     local -a kinds=() archives=() targets=() owners=()
     while IFS=$'\t' read -r kind archive target owner; do
@@ -699,6 +747,7 @@ cmd_restore() {
             ID) restore_id="$archive"; continue ;;
             PROFILES) sel_profiles="$archive"; continue ;;
             ADDONS) sel_addons="$archive"; continue ;;
+            ENCRYPTED) _RESTORE_ENCRYPTED=1; continue ;;
         esac
         [ "$kind" = "configdir" ] && has_configdir=1
         kinds+=("$kind"); archives+=("$archive"); targets+=("$target"); owners+=("$owner")
@@ -778,9 +827,12 @@ cmd_restore() {
         _restore_step artifact "${targets[$i]}" begin
         # A scoped teardown leaves most of the stack up, so a volume can still
         # have a user here -- an override outside the selected profiles, or a
-        # container the teardown could not reach. Wiping it underneath a live
-        # process corrupts both sides, so skip it and say which containers hold it.
-        if [ -n "$only" ] && [ "${kinds[$i]}" = "volume" ] && [ "$no_restart" -eq 0 ]; then
+        # container the teardown could not reach. After a whole teardown a user is a
+        # container of another compose project on the same Docker engine, such as the
+        # installation this point was taken of while it is restored next to it (RS-2).
+        # Wiping it underneath a live process corrupts both sides, so skip it and say
+        # which containers hold it.
+        if [ "${kinds[$i]}" = "volume" ] && [ "$no_restart" -eq 0 ]; then
             local holders
             holders="$(_containers_using_volume "${targets[$i]}")"
             if [ -n "$holders" ]; then
@@ -799,6 +851,9 @@ cmd_restore() {
             _restore_step artifact "${targets[$i]}" ok
         fi
     done
+
+    # The key is not needed after the last archive.
+    _RESTORE_IDENTITIES=""
 
     local result="ok"
     [ "$failed" -gt 0 ] && result="partial"
@@ -824,6 +879,24 @@ cmd_restore() {
             exit 3
         fi
         post_restore="pending"
+        # The erasure journal of every add-on of this restore, and the holders' own step,
+        # before that add-on starts (lib/module_actions.py); _addon_compose_up runs them.
+        local -a mark_flags=(--trigger="$RESTORE_TRIGGER" --restore-point="$restore_id")
+        [ -n "$only" ] && mark_flags+=(--addons="$sel_addons")
+        local marked="" name actions
+        if ! marked="$(py_cli module-actions-mark ${mark_flags[@]+"${mark_flags[@]}"})"; then
+            _backup_log "$backup_dir" "$op" "$restore_id" "$result" "$details" \
+                "post_restore=pending module_actions=failed"
+            error "Could not record the erasure journals due before the add-ons start; the"
+            error "stack was not started again. Fix the reason above, then run the restore again."
+            exit 3
+        fi
+        _RESTORE_MARKED=0
+        while IFS=$'\t' read -r name actions; do
+            [ -n "$name" ] || continue
+            _RESTORE_MARKED=1
+            info "  add-on $name: $actions due before it starts"
+        done <<< "$marked"
         _restore_open "$backup_dir" "$op" "$restore_id" "$result" "$details" "$since" "$started"
     fi
 
@@ -862,8 +935,17 @@ cmd_restore() {
     if [ "$post_restore" = "skipped" ]; then
         _backup_log "$backup_dir" "$op" "$restore_id" "$result" \
             "$details duration=$((SECONDS - started))s" "post_restore=skipped"
+        _restore_record "$op" "$restore_id" "$result" "$((SECONDS - started))" skipped none \
+            "$(( ${#kinds[@]} - failed ))/${#kinds[@]}"
     else
         _restore_close "$post_restore"
+    fi
+    if [ "$result" != "failed" ]; then
+        info "Restore took $((SECONDS - started)) s (from the confirmation to the stack being up)."
+    fi
+    if [ "$no_restart" -eq 1 ] && [ "${_RESTORE_MARKED:-0}" -eq 1 ]; then
+        warn "--no-restart: the add-ons' erasure journals are applied at their next start,"
+        warn "before they serve anything."
     fi
 
     if [ "$post_restore" = "failed" ] || [ "$post_restore" = "pending" ]; then
@@ -927,6 +1009,20 @@ cmd_post_restore() {
 # (_restore_close_pending) when the command stops first.
 _RESTORE_OPEN_ID=""
 _RESTORE_OPEN=()
+_RESTORE_MARKED=0
+_RESTORE_ENCRYPTED=0
+_RESTORE_IDENTITIES=""
+
+# The audit row of the restore with its duration (the measured RTO). A failure to write
+# it is reported; the restore itself is done by then.
+# $1 op, $2 id, $3 result, $4 seconds, $5 post-restore, $6 module actions, $7 artifacts
+_restore_record() {
+    local -a flags=(--operation="$1" --restore-point="$2" --result="$3" --duration="$4"
+        --post-restore="$5" --module-actions="$6" --artifacts="$7")
+    [ "${_RESTORE_ENCRYPTED:-0}" -eq 1 ] && flags+=(--encrypted)
+    py_cli restore-record ${flags[@]+"${flags[@]}"} \
+        || warn "The audit row of restore $2 could not be written."
+}
 
 # $1 = backup dir, $2 = op, $3 = id, $4 = result, $5 = details, $6 = since, $7 = start
 _restore_open() {
@@ -938,10 +1034,18 @@ _restore_open() {
 _restore_close() {
     [ -n "$_RESTORE_OPEN_ID" ] || return 0
     _RESTORE_OPEN_ID=""
+    local -a marked=()
+    [ "${_RESTORE_MARKED:-0}" -eq 1 ] && marked+=(--marked)
+    local actions_state
+    actions_state="$(py_cli module-actions-state ${marked[@]+"${marked[@]}"})" \
+        || actions_state="pending"
+    local seconds=$((SECONDS - ${_RESTORE_OPEN[6]}))
     _backup_log "${_RESTORE_OPEN[0]}" "${_RESTORE_OPEN[1]}" "${_RESTORE_OPEN[2]}" \
         "${_RESTORE_OPEN[3]}" \
-        "${_RESTORE_OPEN[4]} duration=$((SECONDS - ${_RESTORE_OPEN[6]}))s" \
-        "post_restore=$1"
+        "${_RESTORE_OPEN[4]} duration=${seconds}s" \
+        "post_restore=$1 module_actions=${actions_state:-pending}"
+    _restore_record "${_RESTORE_OPEN[1]}" "${_RESTORE_OPEN[2]}" "${_RESTORE_OPEN[3]}" \
+        "$seconds" "$1" "${actions_state:-pending}" "${_RESTORE_OPEN[4]#artifacts=}"
 }
 
 # The restart failed or exited: the step ran (ok), failed, or was never reached (pending).
@@ -1145,18 +1249,33 @@ _restore_teardown() {
 }
 
 # Empties /target, except the entry named by $KEEP, and unpacks $ARCHIVE into it without
-# that entry. Runs in $BACKUP_IMAGE (busybox sh and tar).
+# that entry; ARCHIVE=- reads the stream from standard input (an encrypted archive opened
+# by papaia-ctl). Runs in $BACKUP_IMAGE (busybox sh and tar).
 # shellcheck disable=SC2016  # expanded by the container's shell
-_RESTORE_UNPACK='for entry in /target/..?* /target/.[!.]* /target/*; do
+_RESTORE_UNPACK='src="/backup/$ARCHIVE"; [ "$ARCHIVE" = - ] && src=-
+for entry in /target/..?* /target/.[!.]* /target/*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     [ -n "$KEEP" ] && [ "$entry" = "/target/$KEEP" ] && continue
     rm -rf "$entry"
 done
 if [ -n "$KEEP" ]; then
-    tar xzf "/backup/$ARCHIVE" -C /target --exclude="./$KEEP" --exclude="./$KEEP/*"
+    tar xzf "$src" -C /target --exclude="./$KEEP" --exclude="./$KEEP/*"
 else
-    tar xzf "/backup/$ARCHIVE" -C /target
+    tar xzf "$src" -C /target
 fi'
+# The same for a named volume, which keeps nothing.
+# shellcheck disable=SC2016  # expanded by the container's shell
+_RESTORE_VOLUME='src="/backup/$ARCHIVE"; [ "$ARCHIVE" = - ] && src=-
+rm -rf /volume/..?* /volume/.[!.]* /volume/* 2>/dev/null
+tar xzf "$src" -C /volume'
+
+# The plain tar.gz stream of an encrypted archive, for `docker run -i` to unpack: the key
+# goes in on standard input, the archive never lies on disk in clear.
+# $1 snapshot, $2 archive
+_restore_open_archive() {
+    printf '%s\n' "$_RESTORE_IDENTITIES" \
+        | py_cli restore-open --snapshot="$1" --archive="$2" --identity=-
+}
 
 # $1 snapshot, $2 kind, $3 archive, $4 target, $5 owner
 _restore_artifact() {
@@ -1168,17 +1287,24 @@ _restore_artifact() {
         warn "  archive missing in snapshot, skipping: $archive"
         return 1
     fi
+    # The archive arrives on standard input (ARCHIVE=-) when it is encrypted.
+    local encrypted="${_RESTORE_ENCRYPTED:-0}"
 
     case "$kind" in
         volume)
             info "  volume $target ($owner)"
             docker volume inspect "$target" >/dev/null 2>&1 || docker volume create "$target" >/dev/null
-            _docker_run \
-                -e "ARCHIVE=$archive" \
-                -v "${target}:/volume" \
-                -v "${snapshot_mount}:/backup" \
-                "$BACKUP_IMAGE" sh -c \
-                'rm -rf /volume/..?* /volume/.[!.]* /volume/* 2>/dev/null; tar xzf "/backup/$ARCHIVE" -C /volume'
+            if [ "$encrypted" -eq 1 ]; then
+                _restore_open_archive "$snapshot" "$archive" \
+                    | _docker_run -i -e "ARCHIVE=-" -v "${target}:/volume" "$BACKUP_IMAGE" \
+                        sh -c "$_RESTORE_VOLUME"
+            else
+                _docker_run \
+                    -e "ARCHIVE=$archive" \
+                    -v "${target}:/volume" \
+                    -v "${snapshot_mount}:/backup" \
+                    "$BACKUP_IMAGE" sh -c "$_RESTORE_VOLUME"
+            fi
             ;;
         configdir|binddir)
             if [ "$kind" = "binddir" ] && [ ! -d "$target" ]; then
@@ -1193,12 +1319,19 @@ _restore_artifact() {
             # lifts nor sets it, also when an archive holds one.
             local keep=""
             [ "$kind" = "configdir" ] && keep="state"
-            _docker_run \
-                -e "ARCHIVE=$archive" \
-                -e "KEEP=$keep" \
-                -v "$(_docker_hostpath "$target"):/target" \
-                -v "${snapshot_mount}:/backup" \
-                "$BACKUP_IMAGE" sh -c "$_RESTORE_UNPACK"
+            if [ "$encrypted" -eq 1 ]; then
+                _restore_open_archive "$snapshot" "$archive" \
+                    | _docker_run -i -e "ARCHIVE=-" -e "KEEP=$keep" \
+                        -v "$(_docker_hostpath "$target"):/target" \
+                        "$BACKUP_IMAGE" sh -c "$_RESTORE_UNPACK"
+            else
+                _docker_run \
+                    -e "ARCHIVE=$archive" \
+                    -e "KEEP=$keep" \
+                    -v "$(_docker_hostpath "$target"):/target" \
+                    -v "${snapshot_mount}:/backup" \
+                    "$BACKUP_IMAGE" sh -c "$_RESTORE_UNPACK"
+            fi
             ;;
         *)
             warn "  unknown artifact kind '$kind', skipping"
