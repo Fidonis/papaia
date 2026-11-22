@@ -888,5 +888,9 @@ def test_a_native_localai_is_refused_in_a_distributed_installation():
     assert not any("LOCALAI_RUNTIME" in e for e in container)
 
 
+def test_the_models_override_belongs_to_the_core():
+    assert "docker-compose.localai-models.override.yml" in topology.CORE_OVERRIDES
+
+
 def test_the_runtime_override_belongs_to_the_core():
     assert "docker-compose.localai-runtime.override.yml" in topology.CORE_OVERRIDES

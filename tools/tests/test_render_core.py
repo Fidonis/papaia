@@ -612,12 +612,66 @@ def test_only_model_yamls_are_removed_from_the_rendered_models(repo_root, config
     for name in ("notes.txt", "model.gguf", "old.yml", ".hidden.yaml"):
         (rendered / name).write_text("x", encoding="utf-8")
     (rendered / "gone.yaml").write_text("name: gone\n", encoding="utf-8")
+    (config_dir / render_core.LOCALAI_MODELS_RECORD).write_text(
+        "gone.yaml\nnotes.txt\nmodel.gguf\nold.yml\n.hidden.yaml\n", encoding="utf-8"
+    )
     render_core.render(config_dir, repo_root)
 
     assert not (rendered / "gone.yaml").exists()
     for name in ("notes.txt", "model.gguf", "old.yml", ".hidden.yaml"):
         assert (rendered / name).is_file(), name
     assert (rendered / "stub.yaml").is_file()
+
+
+def test_a_model_yaml_the_render_did_not_write_is_kept(repo_root, config_dir):
+    """Until 1.8 the rendered directory was the only place for a model YAML of one's own, so
+    such a file can be the only copy there is."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    rendered = config_dir / "ai" / "localai" / "models"
+    rendered.mkdir(parents=True)
+    (rendered / "handmade.yaml").write_text("name: handmade\n", encoding="utf-8")
+
+    render_core.render(config_dir, repo_root)
+    render_core.render(config_dir, repo_root)
+
+    assert (rendered / "handmade.yaml").read_text() == "name: handmade\n"
+    assert not (config_dir / render_core.LOCALAI_MODELS_OVERRIDE).exists()
+
+
+def test_a_model_yaml_that_is_no_longer_shipped_leaves_the_render(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+
+    (repo_root / "src" / "ai" / "localai" / "models" / "stub.yaml").unlink()
+    render_core.render(config_dir, repo_root)
+
+    assert not (config_dir / "ai" / "localai" / "models" / "stub.yaml").exists()
+
+
+def test_each_removal_changes_the_localai_label(repo_root, config_dir):
+    """LocalAI forgets a model only when it starts, so `start` has to recreate it. An added
+    model must not: LocalAI would be down for as long as its download takes."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    override = config_dir / render_core.LOCALAI_MODELS_OVERRIDE
+    written = [None]
+    for _ in range(2):
+        _localai_overlay(config_dir, "models/own.yaml", "name: own\n")
+        render_core.render(config_dir, repo_root)
+        assert (override.read_text() if override.exists() else None) == written[-1]
+
+        (config_dir / "overlay" / "ai" / "localai" / "models" / "own.yaml").unlink()
+        render_core.render(config_dir, repo_root)
+        written.append(override.read_text())
+        render_core.render(config_dir, repo_root)
+        assert override.read_text() == written[-1]
+
+    assert written[1] != written[2]
+    services = yaml.safe_load(written[1])["services"]
+    assert list(services) == ["localai"]
+    assert list(services["localai"]) == ["labels"]
 
 
 _NOT_UTF8 = b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00\xff\xfe\x89PNG\r\n\x1a\n"

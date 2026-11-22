@@ -17,7 +17,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "src" / "ai" / "localai" / "docker-compose.yml"
-RECORD = ".papaia-model-configs"
+RECORD = ".papaia-model-configs.txt"
 
 _FAKE_CURL = """#!/bin/sh
 # Writes the URL into the file named by -o, as a stand-in for the download.
@@ -154,3 +154,35 @@ def test_a_rerun_with_the_same_set_changes_nothing(tmp_path):
     assert "removed" not in log
     assert sorted(p.name for p in volume.iterdir()) == [RECORD, "a.yaml", "b.yaml"]
     assert (volume / RECORD).read_text() == "a.yaml\nb.yaml\n"
+
+
+def test_the_job_leaves_nothing_localai_would_list_as_a_model(tmp_path):
+    """LocalAI lists a file of its models directory as a model, a dotfile too, unless it skips
+    the suffix; .yaml, .gguf and .txt are suffixes it skips."""
+    volume = _volume(tmp_path)
+    _rendered(tmp_path, {"a.yaml": "name: a\n"}, "https://example.org/x/a.gguf\n")
+    _run(tmp_path)
+
+    assert {p.suffix for p in volume.iterdir()} <= {".yaml", ".gguf", ".txt"}
+
+
+def test_a_removal_that_fails_is_reported_and_tried_again(tmp_path):
+    volume = _volume(tmp_path)
+    _rendered(tmp_path, {"a.yaml": "name: a\n", "my model.yaml": "name: m\n", "z.yaml": "z\n"})
+    _run(tmp_path)
+
+    _rendered(tmp_path, {"a.yaml": "name: a\n"})
+    rm = tmp_path / "bin" / "rm"
+    rm.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    rm.chmod(0o755)
+    log = _run(tmp_path)
+
+    assert "could not remove my model.yaml" in log
+    assert "removed my model.yaml" not in log
+    assert (volume / RECORD).read_text() == "a.yaml\nmy model.yaml\nz.yaml\n"
+
+    rm.unlink()
+    _run(tmp_path)
+    assert not (volume / "my model.yaml").exists()
+    assert not (volume / "z.yaml").exists()
+    assert (volume / RECORD).read_text() == "a.yaml\n"

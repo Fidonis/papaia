@@ -30,10 +30,17 @@ services:
         # last run are candidates, so yamls LocalAI wrote itself and the
         # model files stay untouched.
         #
+        # The record ends in .txt because LocalAI lists a file as a model,
+        # a dotfile too, unless it skips the suffix.
+        #
         # The rendered set comes from the directory listing: on a bind
         # mount of Docker Desktop, a lookup by name can still find a file
         # the render deleted a moment ago.
-        installed=/models/.papaia-model-configs
+        installed=/models/.papaia-model-configs.txt
+        pending=/models/.papaia-model-configs.new.txt
+        # Names whose removal failed, each after a slash, which no name
+        # contains. They stay in the record for the next run.
+        kept=""
         rendered=$$(for f in /models-config/configs/*.yaml; do
           if test -f "$$f"; then basename "$$f"; fi
         done)
@@ -48,8 +55,12 @@ services:
               continue
             fi
             if test -f "/models/$$name"; then
-              rm -f "/models/$$name"
-              echo "[model-init] removed $$name (no longer rendered)"
+              if rm -f "/models/$$name"; then
+                echo "[model-init] removed $$name (no longer rendered)"
+              else
+                echo "[model-init] could not remove $$name" >&2
+                kept="$$kept/$$name"
+              fi
             fi
           done < "$$installed"
         fi
@@ -60,9 +71,10 @@ services:
         cp /models-config/configs/*.yaml /models/ 2>/dev/null \
           && echo "[model-init] copied model yamls into /models/" \
           || echo "[model-init] no model yamls found in /models-config/configs"
-        if test -n "$$rendered"; then
-          printf '%s\n' "$$rendered"
-        fi > "$$installed.tmp" && mv "$$installed.tmp" "$$installed"
+        {
+          if test -n "$$rendered"; then printf '%s\n' "$$rendered"; fi
+          if test -n "$$kept"; then printf '%s\n' "$${kept#/}" | tr / '\n'; fi
+        } > "$$pending" && mv "$$pending" "$$installed"
 
         grep -v '^\s*#' /models-config/models.txt | grep -v '^\s*$$' | while IFS= read -r url; do
           filename=$$(basename "$$url")
