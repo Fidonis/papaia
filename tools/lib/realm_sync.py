@@ -141,7 +141,7 @@ from pathlib import Path
 import yaml
 
 from . import client_keys as ck
-from . import common, deployment
+from . import common, delegation_lifetime, deployment
 from . import keycloak_role_sync as kcs
 from . import realm_hardening as rh
 from . import service_account_keys as sak
@@ -243,7 +243,10 @@ EXCHANGE_LIMITS = {"flow-console": ("papaia-data", "papaia-studio")}
 HOLDERS = {"flow": ("papaia-flow", "flow-engine"), "assist": ("papaia-assist", "assist-gate")}
 HOLDER_CLIENTS = frozenset(client for _, client in HOLDERS.values())
 PURPOSES = frozenset({"flow.run", "assist.event", "assist.room-check", "assist.tools"})
-MAX_IDLE_DAYS, MAX_AGE_DAYS = 30, 180
+# Bounds of a manifest's `delegation.max_idle_days` / `max_age_days` (exposes.v1 1.2.0):
+# what a module is built for. The lifetime in effect is the installation setting
+# (delegation_lifetime), never these values.
+MAX_IDLE_DAYS, MAX_AGE_DAYS = 365, 365
 
 # How each client signs in (security 1.2); the register gives name, owner and exchange
 # right. A registered audience is a bearer-only resource server unless it signs persons
@@ -1535,8 +1538,8 @@ class AuditLog:
         """One row. `master`: the write was made with the master admin (creating or
         realigning the sync account), not with the sync account. `host`: the host account
         acted alone, without any identity of the realm and with no token (the platform halt,
-        or a file write in the configuration directory). `detail`: counters and hashes only
-        (`papaia.audit/1`), never content."""
+        or a file write in the configuration directory). `detail`: counters, hashes or values
+        the event's schema allows (papaia.audit/1 `detail`), never content."""
         if self._fd is None:
             raise RealmSyncError("the audit log is closed")
         now = time.time()
@@ -1567,7 +1570,7 @@ class AuditLog:
             "result": result,
             "error_code": error_code,
             "client_ip": None,
-            "detail": detail,
+            "detail": dict(detail) if detail else None,
             "event": change.event,
         }
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
@@ -3552,8 +3555,12 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             load_modules(config_dir, repo_root),
             load_pairings(pairings_path(config_dir), register),
         )
-        plan.hardening = rh.load({**root, **keycloak}, tree.get("ai/librechat", {}))
-    except (RealmSyncError, rh.HardeningError) as exc:
+        plan.hardening = rh.load(
+            {**root, **keycloak},
+            tree.get("ai/librechat", {}),
+            lifetime=delegation_lifetime.stored(config_dir),
+        )
+    except (RealmSyncError, rh.HardeningError, delegation_lifetime.LifetimeError) as exc:
         print(f"Realm sync refused: {exc}. Nothing was changed.", file=sys.stderr, flush=True)
         return 2
     for note in plan.notes + plan.hardening.notes:

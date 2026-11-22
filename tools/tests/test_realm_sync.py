@@ -336,15 +336,33 @@ def test_a_flow_manifest_with_a_purpose_of_the_assistant_is_rejected():
     [
         {"purposes": ["flow.fly"]},
         {"purposes": []},
-        {"purposes": ["flow.run"], "max_idle_days": 31},
+        {"purposes": ["flow.run"], "max_idle_days": 366},
         {"purposes": ["flow.run"], "max_idle_days": 30, "max_age_days": 20},
-        {"purposes": ["flow.run"], "max_age_days": 181},
+        {"purposes": ["flow.run"], "max_age_days": 366},
+        {"purposes": ["flow.run"], "max_idle_days": 0},
+        {"purposes": ["flow.run"], "max_idle_days": True},
         {"purposes": ["flow.run"], "holder": "flow-console"},
     ],
 )
 def test_a_malformed_delegation_is_rejected(delegation):
     with pytest.raises(rs.RealmSyncError, match="delegation"):
         _plan([_flow(delegation=delegation)])
+
+
+@pytest.mark.parametrize(
+    "delegation",
+    [
+        {"purposes": ["flow.run"], "max_idle_days": 90, "max_age_days": 180},
+        {"purposes": ["flow.run"], "max_idle_days": 365, "max_age_days": 365},
+        {"purposes": ["flow.run"], "max_idle_days": 7, "max_age_days": 30},
+        {"purposes": ["flow.run"]},
+    ],
+)
+def test_a_manifest_may_declare_a_delegation_lifetime_up_to_365_days(delegation):
+    """exposes.v1 1.2.0 (kit KIT-045): the declared values say what the module is built
+    for; the lifetime in effect is the installation setting."""
+    plan = _plan([_flow(delegation=delegation)])
+    assert "flow-engine" in plan.clients
 
 
 def test_after_a_sync_only_the_holders_have_offline_access():

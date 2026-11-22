@@ -70,11 +70,20 @@ is never closed by `papaia-audit`: it means that rows were removed from a source
 The service logs reason codes, sources and line counts only, never an event.
 
 The schema file `src/infra/audit/papaia_audit/audit.v1.schema.json` is a copy of the
-`papaia.audit/1` schema of the platform kit, schema version 1.1.0 (kit 0.1.1); the test suite
-runs the kit's submission vectors against the ingest. Revision 1.1.0 adds the optional token
-time fields `token_iat`, `token_auth_time` and `token_remaining_s` (integers from 0, or
-`null`); a value other than `null` is accepted only in the server's row of an operation
-(`role` `server`, `event` `operation`). Rows of revision 1.0.0 stay valid.
+`papaia.audit/1` schema of the platform kit, schema version 1.3.0 (kit 0.1.2 and the
+unreleased delegation lifetime revision); the test suite runs the kit's submission vectors
+against the ingest. Revision 1.1.0 adds the optional token time fields `token_iat`,
+`token_auth_time` and `token_remaining_s` (integers from 0, or `null`); a value other than
+`null` is accepted only in the server's row of an operation (`role` `server`, `event`
+`operation`). Revision 1.2.0 adds the events of the erasure journal and their `detail` fields.
+Revision 1.3.0 adds the event `delegation_lifetime_changed` and its `detail` fields
+`idle_days_old`, `idle_days_new`, `max_days_old`, `max_days_new` (whole days from 1 to
+365, all four or none, only in that event, required when the change was allowed); the
+core writes it for every change of the delegation lifetime
+([configuration.md](configuration.md#delegation-lifetime)), before the settings file; a
+change whose file could not be written is followed by a row of the same correlation id with
+`result: error` and `error_code: io`. Rows of earlier revisions stay
+valid.
 
 ## Hash chain and database
 

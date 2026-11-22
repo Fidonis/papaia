@@ -109,7 +109,7 @@ An account outside the group `papaia-persons` (see below) cannot be read by the 
 (Keycloak answers 403), so it is **not revoked**: for example a person someone removed
 from the group by hand. The service writes one audit row (`lifecycle.revoke`, `result:
 denied`, `error_code: http_403`), logs a note and counts the account in health
-(`skipped_revocations`, accounts of the last 181 days). This gap is part of the residual
+(`skipped_revocations`, accounts of the last 366 days). This gap is part of the residual
 risk below: check the count, put the person back into the group (the next realm sync
 does this) and deactivate the account again.
 
@@ -226,8 +226,8 @@ or before `since` of a listed `sub`. `reason` is `account_disabled` or `account_
 The list is issued again every 15 s, also without a change, with a new `seq` and
 `issued_at`; `revocations_age_seconds` = now − `issued_at` tells a module how fresh it
 is. The list is written first, then the signature: a reader that finds a pair that does
-not verify keeps its previous list and reads again. Entries older than 181 days are
-dropped (no token can be older).
+not verify keeps its previous list and reads again. Entries older than 366 days are
+dropped (no delegation lives longer than 365 days, so no token can be older).
 
 `global_since` invalidates every token issued before it, for everyone. It only moves
 forward, so a time more than 300 s in the future is refused:

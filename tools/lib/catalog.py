@@ -13,7 +13,8 @@ tools/schemas/kit:
   the catalog while stopped; add-ons that are not installed are absent. Fields that
   serve the core alone (`service_accounts`, `storage`, `requires`, ...) stay out: the
   catalog is mounted into every consuming module. On top: `identity`, `branding`,
-  `platform_notices` and the model aliases.
+  `platform_notices`, the model aliases and `delegations`, the delegation lifetime in
+  effect (delegation_lifetime; holders compute expiry dates from it).
 - `groups.json` (`papaia.platform-groups/1`): the realm's groups with `id`, `path`,
   `display_name` and `technical` only, written by `realm sync` from the identity
   provider; no member lists, no personal data.
@@ -42,7 +43,17 @@ from pathlib import Path
 
 import yaml
 
-from . import common, compat, deployment, exposes, hosted_model, schema_check, semver, suite
+from . import (
+    common,
+    compat,
+    delegation_lifetime,
+    deployment,
+    exposes,
+    hosted_model,
+    schema_check,
+    semver,
+    suite,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -507,6 +518,12 @@ def build(
     assert core.addon_api is not None  # skip_reason
     profile = env.get("PAPAIA_SECURITY_PROFILE", "standard")
     branding, _ = _branding(config_dir)
+    try:
+        # Both values always (kit platform-services 2.6): a partial block is filled per
+        # field by the reader and may then contradict itself.
+        delegations = delegation_lifetime.catalog_block(config_dir, env)
+    except delegation_lifetime.LifetimeError as exc:
+        raise CatalogError(f"delegation lifetime: {exc}") from None
     return {
         "format": SERVICES_FORMAT,
         "generated_at": _stamp(now),
@@ -521,6 +538,7 @@ def build(
         "models": [],
         "branding": branding,
         "platform_notices": [TEST_MODE_NOTICE] if hosted_model.enabled(env) else [],
+        "delegations": delegations,
     }
 
 

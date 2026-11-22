@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.papaia.dev/audit.v1.schema.json",
-  "x-papaia-schema-version": "1.1.0",
+  "x-papaia-schema-version": "1.3.0",
   "title": "papaia.audit/1 event (stored form)",
   "description": "One audit event as papaia-audit stores and exports it: the submitted body plus source, seq, prev_hash and hash, which only papaia-audit assigns. A source submits the form '#/$defs/submission'. Events never carry tokens, payloads, titles, search texts, form values or SQL literals; every string is limited to identifiers, and unknown fields are rejected at every level. Rules in contract/audit.md.",
   "type": "object",
@@ -201,6 +201,25 @@
             "required": ["role", "event"],
             "properties": {"role": {"const": "server"}, "event": {"const": "operation"}}
           }
+        },
+        {
+          "description": "The old and new lifetime values belong to delegation_lifetime_changed only.",
+          "if": {
+            "properties": {"detail": {"type": "object", "required": ["idle_days_old"]}},
+            "required": ["detail"]
+          },
+          "then": {"required": ["event"], "properties": {"event": {"const": "delegation_lifetime_changed"}}}
+        },
+        {
+          "description": "An allowed change of the delegation lifetime records the old and the new values.",
+          "if": {
+            "properties": {"event": {"const": "delegation_lifetime_changed"}, "result": {"const": "allowed"}},
+            "required": ["event", "result"]
+          },
+          "then": {
+            "required": ["detail"],
+            "properties": {"detail": {"type": "object", "required": ["idle_days_old"]}}
+          }
         }
       ]
     },
@@ -210,6 +229,7 @@
         "delegation_granted",
         "delegation_redeemed",
         "delegation_revoked",
+        "delegation_lifetime_changed",
         "approval_changed",
         "exchange_right_changed",
         "role_changed",
@@ -245,6 +265,9 @@
         "person_request_confirmed",
         "person_request_rejected",
         "erasure_replayed",
+        "erasure_journaled",
+        "erasure_journal_flushed",
+        "erasure_renumbering_acknowledged",
         "post_restore_applied",
         "lifecycle_request_rejected",
         "state_epoch_behind",
@@ -323,7 +346,7 @@
       "additionalProperties": false
     },
     "detail": {
-      "description": "Counters and hashes only; never statement text, rows or values.",
+      "description": "Counters, hashes, the fixed codes of the erasure journal and the day values of a delegation lifetime change only; never statement text, rows or values.",
       "type": "object",
       "properties": {
         "objects": {
@@ -343,9 +366,95 @@
         "count": {"$ref": "#/$defs/amount"},
         "duration_ms": {"$ref": "#/$defs/amount"},
         "spid": {"$ref": "#/$defs/amount"},
-        "statement_hash": {"$ref": "#/$defs/sha256"}
+        "statement_hash": {"$ref": "#/$defs/sha256"},
+        "seq": {
+          "description": "Erasure journal: seq of the entry written, or the last seq applied by a replay.",
+          "$ref": "#/$defs/counter"
+        },
+        "kind": {
+          "description": "Erasure journal: kind of the entry written.",
+          "$ref": "#/$defs/journal_kind"
+        },
+        "delivered": {
+          "description": "Erasure journal: entries the backup target received in this call.",
+          "$ref": "#/$defs/amount"
+        },
+        "renumbered": {
+          "description": "Erasure journal: delivered entries that reached the target under a later seq than first handed out.",
+          "$ref": "#/$defs/amount"
+        },
+        "renumbered_from": {
+          "description": "Erasure journal: the renumbering mark cleared by the acknowledgement.",
+          "$ref": "#/$defs/counter"
+        },
+        "trigger": {
+          "description": "Erasure replay: the caller of erasure-replay.",
+          "enum": ["restore", "rollback", "recover-snapshot", "lifecycle"]
+        },
+        "by_kind": {
+          "description": "Erasure replay: entries applied per kind.",
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/journal_kind"},
+          "additionalProperties": {"$ref": "#/$defs/amount"},
+          "maxProperties": 10
+        },
+        "replayed_from": {
+          "description": "Erasure replay: the seq after which entries were applied.",
+          "$ref": "#/$defs/amount"
+        },
+        "journal_end": {
+          "description": "Erasure replay: highest seq in the journal.",
+          "$ref": "#/$defs/amount"
+        },
+        "journal_behind": {
+          "description": "Erasure replay: the journal ends before the module state (journal_end below the applied seq).",
+          "type": "boolean"
+        },
+        "idle_days_old": {
+          "description": "Delegation lifetime change: days without use before the change.",
+          "$ref": "#/$defs/lifetime_days"
+        },
+        "idle_days_new": {
+          "description": "Delegation lifetime change: days without use after the change.",
+          "$ref": "#/$defs/lifetime_days"
+        },
+        "max_days_old": {
+          "description": "Delegation lifetime change: maximum age in days before the change.",
+          "$ref": "#/$defs/lifetime_days"
+        },
+        "max_days_new": {
+          "description": "Delegation lifetime change: maximum age in days after the change.",
+          "$ref": "#/$defs/lifetime_days"
+        }
+      },
+      "dependentRequired": {
+        "idle_days_old": ["idle_days_new", "max_days_old", "max_days_new"],
+        "idle_days_new": ["idle_days_old", "max_days_old", "max_days_new"],
+        "max_days_old": ["idle_days_old", "idle_days_new", "max_days_new"],
+        "max_days_new": ["idle_days_old", "idle_days_new", "max_days_old"]
       },
       "additionalProperties": false
+    },
+    "lifetime_days": {
+      "description": "A delegation lifetime value in days (platform-services.v1 delegations).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 365
+    },
+    "journal_kind": {
+      "description": "Kind of an erasure journal entry (schemas/erasure-journal-entry.v1.schema.json).",
+      "enum": [
+        "erase",
+        "erase_subject",
+        "delivery",
+        "revoke",
+        "account_disable",
+        "account_delete",
+        "role_revoke",
+        "session_revoke",
+        "credential_reset",
+        "key_revoke"
+      ]
     },
     "ip_address": {
       "anyOf": [

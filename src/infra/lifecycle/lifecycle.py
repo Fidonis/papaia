@@ -108,9 +108,9 @@ FAIL_AGE_SECONDS = 300
 # On the very first start, events this far back are read as well (clock skew between
 # the host and Keycloak); handling an event twice changes nothing.
 FIRST_LOOKBACK_MS = 60_000
-# Longest life of a delegation (offline session, at most 180 days) plus one day: older
-# entries can no longer match a token.
-ENTRY_RETENTION_SECONDS = 181 * 24 * 3600
+# Longest life of a delegation (offline session; delegations.max_days, at most 365 days)
+# plus one day: older entries can no longer match a token.
+ENTRY_RETENTION_SECONDS = 366 * 24 * 3600
 EVENT_PAGE = 100
 MAX_EVENT_PAGES = 20
 MAX_ENTRIES = 100_000

@@ -1,9 +1,10 @@
 """Realm hardening: realm settings, sign-in clients and the client policy (security 1.7).
 
-The settings come from the security profile (`standard` or `kritis`) and two optional
-offline-session settings; the redirect URIs and web origins of the realm template's
-clients come from the configured hosts. The same target is baked into the rendered realm
-for a new installation and applied by `papaia-ctl realm sync` to an existing one.
+The settings come from the security profile (`standard` or `kritis`) and the delegation
+lifetime of the installation (test_delegation_lifetime.py); the redirect URIs and web
+origins of the realm template's clients come from the configured hosts. The same target is
+baked into the rendered realm for a new installation and applied by `papaia-ctl realm sync`
+to an existing one.
 """
 
 from __future__ import annotations
@@ -69,7 +70,7 @@ def test_the_standard_profile_hardens_the_realm():
     assert realm["maxFailureWaitSeconds"] == 900
     assert realm["ssoSessionIdleTimeout"] == 1800
     assert realm["ssoSessionMaxLifespan"] == 36000
-    assert realm["offlineSessionIdleTimeout"] == 30 * DAY
+    assert realm["offlineSessionIdleTimeout"] == 90 * DAY
     assert realm["offlineSessionMaxLifespanEnabled"] is True
     assert realm["offlineSessionMaxLifespan"] == 180 * DAY
 
@@ -82,41 +83,21 @@ def test_the_kritis_profile_requires_tls_everywhere_and_shortens_offline_session
     assert realm["offlineSessionMaxLifespan"] == 30 * DAY
 
 
-@pytest.mark.parametrize(
-    ("env", "idle", "age"),
-    [
-        ({rh.PROFILE_KEY: "kritis", rh.IDLE_KEY: "3", rh.MAX_KEY: "14"}, 3, 14),
-        # the handbook's recommendation for every federated installation
-        ({rh.PROFILE_KEY: "standard", rh.IDLE_KEY: "7", rh.MAX_KEY: "30"}, 7, 30),
-        ({rh.IDLE_KEY: '"10"'}, 10, 180),
-        ({rh.IDLE_KEY: "", rh.MAX_KEY: ""}, 30, 180),
-    ],
-)
-def test_offline_session_limits_are_a_setting_without_code_change(env, idle, age):
-    settings = rh.load(env).settings
-    assert (settings.idle_days, settings.max_days) == (idle, age)
-    assert settings.realm()["offlineSessionIdleTimeout"] == idle * DAY
-    assert settings.realm()["offlineSessionMaxLifespan"] == age * DAY
+def test_the_offline_session_limits_are_no_longer_read_from_the_keycloak_env():
+    """The lifetime is the installation setting `papaia-ctl delegations lifetime`; the
+    variables of 1.10.0 pre-releases are named in a note and otherwise ignored."""
+    hardening = rh.load({"KC_OFFLINE_SESSION_IDLE_DAYS": "3", "KC_OFFLINE_SESSION_MAX_DAYS": ""})
+    assert (hardening.settings.idle_days, hardening.settings.max_days) == (90, 180)
+    assert any(
+        "KC_OFFLINE_SESSION_IDLE_DAYS" in note and "delegations lifetime" in note
+        for note in hardening.notes
+    )
+    assert not any("KC_OFFLINE_SESSION_MAX_DAYS" in note for note in hardening.notes)
 
 
-@pytest.mark.parametrize(
-    ("env", "message"),
-    [
-        ({rh.PROFILE_KEY: "strict"}, "standard or kritis"),
-        ({rh.IDLE_KEY: "31"}, "1 to 30"),
-        ({rh.MAX_KEY: "181"}, "1 to 180"),
-        ({rh.PROFILE_KEY: "kritis", rh.IDLE_KEY: "8"}, "1 to 7"),
-        ({rh.PROFILE_KEY: "kritis", rh.MAX_KEY: "31"}, "1 to 30"),
-        ({rh.IDLE_KEY: "0"}, "1 to 30"),
-        ({rh.IDLE_KEY: "-1"}, "1 to 30"),
-        ({rh.IDLE_KEY: "7.5"}, "whole number"),
-        ({rh.MAX_KEY: "abc"}, "whole number"),
-        ({rh.IDLE_KEY: "20", rh.MAX_KEY: "10"}, "below"),
-    ],
-)
-def test_settings_outside_the_profile_are_refused(env, message):
-    with pytest.raises(rh.HardeningError, match=message):
-        rh.load(env)
+def test_an_unknown_profile_is_refused():
+    with pytest.raises(rh.HardeningError, match="standard or kritis"):
+        rh.load({rh.PROFILE_KEY: "strict"})
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -562,7 +543,8 @@ def test_the_sync_applies_the_values_of_the_kritis_profile():
 def test_an_offline_session_setting_is_applied_without_code_change():
     realm = FakeRealm()
     _run(realm, _hardened_plan({rh.PROFILE_KEY: "kritis"}))
-    plan = _hardened_plan({rh.PROFILE_KEY: "kritis", rh.IDLE_KEY: "5", rh.MAX_KEY: "20"})
+    plan = _hardened_plan({rh.PROFILE_KEY: "kritis"})
+    plan.hardening = rh.load({rh.PROFILE_KEY: "kritis"}, lifetime=(5, 20))
     _run(realm, plan)
     assert realm.realm["offlineSessionIdleTimeout"] == 5 * DAY
     assert realm.realm["offlineSessionMaxLifespan"] == 20 * DAY

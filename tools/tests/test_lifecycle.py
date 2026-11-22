@@ -1521,6 +1521,19 @@ def test_a_state_file_with_unknown_fields_is_refused(stack):
         lc.Store(stack.key_dir).load()
 
 
+def test_an_entry_outlives_the_longest_delegation(stack):
+    """A delegation may live 365 days (delegations.max_days, E-22): a revoked person stays
+    on the list at least that long, so no token of such a delegation is accepted again."""
+    assert lc.ENTRY_RETENTION_SECONDS >= 366 * 24 * 3600
+    stack.keycloak.add_user(PERSON, enabled=False)
+    stack.service.start()
+    stack.keycloak.event("UPDATE", PERSON, int(stack.clock.now * 1000) + 10)
+    stack.service.step()
+    stack.clock.now += 365 * 24 * 3600
+    stack.service.step()
+    assert [e["sub"] for e in _published(stack.state_dir)["entries"]] == [PERSON]
+
+
 def test_old_entries_are_dropped_after_the_retention(stack):
     stack.keycloak.add_user(PERSON, enabled=False)
     stack.service.start()

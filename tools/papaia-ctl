@@ -67,6 +67,9 @@
 #                            and delete of the platform, without Keycloak (also: halt on)
 #   papaia-ctl halt clear    --reason=TEXT [--config-dir=PATH] — lift it (also: halt off)
 #   papaia-ctl halt status   [--json] [--config-dir=PATH]
+#   papaia-ctl delegations lifetime [--idle-days=N] [--max-days=N] [--json] [--config-dir=PATH]
+#                            — how long delegations live: without values show them; with
+#                            values set them (1-365 days, idle <= max; kritis at most 7 / 30)
 #   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl proxy list    [--json] [--config-dir=PATH] — host name -> internal target of
 #                            every web interface, the forwards of an external proxy
@@ -148,7 +151,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,141p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,144p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -191,6 +194,8 @@ source "$SH_LIB/halt.sh"
 source "$SH_LIB/audit.sh"
 # shellcheck source=lib/sh/pairing.sh
 source "$SH_LIB/pairing.sh"
+# shellcheck source=lib/sh/delegations.sh
+source "$SH_LIB/delegations.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -250,6 +255,7 @@ case "$cmd" in
     restore-scoped) cmd_restore_scoped "$@" ;;
     post-restore)  cmd_post_restore "$@" ;;
     halt)          cmd_halt "$@" ;;
+    delegations)   cmd_delegations "$@" ;;
     npm-provision) cmd_npm_provision "$@" ;;
     proxy)         cmd_proxy "$@" ;;
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;

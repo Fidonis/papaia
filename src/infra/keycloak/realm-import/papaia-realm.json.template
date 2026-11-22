@@ -16,7 +16,7 @@
   "refreshTokenMaxReuse": 0,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 36000,
-  "offlineSessionIdleTimeout": 2592000,
+  "offlineSessionIdleTimeout": 7776000,
   "offlineSessionMaxLifespanEnabled": true,
   "offlineSessionMaxLifespan": 15552000,
   "bruteForceProtected": true,

@@ -578,14 +578,19 @@ def test_the_schema_file_holds_plain_sql_without_a_password():
     assert "CREATE ROLE audit_ingest" in text and "CREATE ROLE audit_read" in text
 
 
-def test_the_vendored_schema_is_the_revision_with_token_times():
+def test_the_vendored_schema_is_the_revision_with_the_delegation_lifetime():
     schema = json.loads(
         (SERVICE_DIR / "papaia_audit" / "audit.v1.schema.json").read_text(encoding="utf-8")
     )
     names = {v["name"] for v in VECTORS["valid"]}
 
-    assert schema["x-papaia-schema-version"] == "1.1.0"
-    assert "operation_at_server_with_token_times" in names
+    assert schema["x-papaia-schema-version"] == "1.3.0"
+    assert "delegation_lifetime_changed" in schema["$defs"]["event"]["enum"]
+    assert {
+        "operation_at_server_with_token_times",
+        "delegation_lifetime_change",
+        "delegation_lifetime_change_refused",
+    } <= names
 
 
 def test_token_times_are_stored_only_in_the_server_row_of_an_operation():

@@ -692,5 +692,9 @@
   "branding": {
     "name": "papAIa"
   },
-  "platform_notices": []
+  "platform_notices": [],
+  "delegations": {
+    "idle_days": 90,
+    "max_days": 180
+  }
 }

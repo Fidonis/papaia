@@ -39,6 +39,7 @@ from . import (
     common,
     compat,
     defaults,
+    delegation_lifetime,
     deployment,
     doctor,
     envtree,
@@ -1498,6 +1499,19 @@ def cmd_halt(args: argparse.Namespace) -> int:
     return halt.main(Path(args.config_dir), args.action, args.reason, as_json=args.json)
 
 
+def cmd_delegation_lifetime(args: argparse.Namespace) -> int:
+    """The delegation lifetime of the installation (lib/delegation_lifetime.py): shown
+    without values, set with them. Reads the root .env and the settings file only, so it
+    works while Keycloak is down; realm sync and catalog render apply a change."""
+    return delegation_lifetime.main(
+        Path(args.config_dir),
+        args.idle_days,
+        args.max_days,
+        show=args.show,
+        as_json=args.json,
+    )
+
+
 def cmd_service_account_list(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
@@ -2764,6 +2778,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_halt.add_argument("--reason", default=None)
     p_halt.add_argument("--json", action="store_true")
     p_halt.set_defaults(func=cmd_halt)
+
+    p_lifetime = sub.add_parser("delegation-lifetime")
+    p_lifetime.add_argument("--idle-days", default=None)
+    p_lifetime.add_argument("--max-days", default=None)
+    p_lifetime.add_argument("--show", action="store_true")
+    p_lifetime.add_argument("--json", action="store_true")
+    p_lifetime.set_defaults(func=cmd_delegation_lifetime)
 
     p_sa_list = sub.add_parser("service-account-list")
     p_sa_list.add_argument("--json", action="store_true")

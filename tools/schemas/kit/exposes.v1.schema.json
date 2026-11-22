@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.papaia.dev/exposes.v1.schema.json",
-  "x-papaia-schema-version": "1.0.0",
+  "x-papaia-schema-version": "1.2.0",
   "title": "papaia manifest section exposes",
   "description": "Value of the manifest key exposes: (add-on manifest papaia-app.yaml) or of the file exposes.yaml of a core profile. Each entry declares one surface a module offers to the platform. Normative description: contract/exposes.md.",
   "type": "array",
@@ -76,6 +76,11 @@
           "items": {"$ref": "#/$defs/ServiceAccount"}
         },
         "delegation": {"$ref": "#/$defs/Delegation"},
+        "header_identity": {
+          "type": "boolean",
+          "default": false,
+          "description": "true: the service accepts a person's identity from a request header set by the edge or a gate. The core never publishes a port of such a service, also not on 127.0.0.1. Missing means false."
+        },
         "models": {"$ref": "#/$defs/Models"},
         "requires": {"$ref": "#/$defs/Requires"},
         "volumes": {
@@ -94,6 +99,11 @@
         {
           "if": {"properties": {"kind": {"enum": ["mcp", "rest"]}}},
           "then": {"required": ["operations"]}
+        },
+        {
+          "$comment": "A header carries a person's identity, so an entry with header_identity serves persons.",
+          "if": {"required": ["header_identity"], "properties": {"header_identity": {"const": true}}},
+          "then": {"properties": {"identity": {"contains": {"const": "person"}}}}
         },
         {
           "$comment": "Personal-area interfaces accept only persons (PLT-15-A3); the realm sync binds their audience to persons.",
@@ -485,8 +495,18 @@
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/DelegationPurpose"}
         },
-        "max_idle_days": {"type": "integer", "minimum": 1, "maximum": 30},
-        "max_age_days": {"type": "integer", "minimum": 1, "maximum": 180}
+        "max_idle_days": {
+          "description": "Days without use the module is built to hold a delegation; at most 365 and not greater than max_age_days (conformance check). The lifetime in effect is the installation setting delegations.idle_days of the platform catalog.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        },
+        "max_age_days": {
+          "description": "Days since the grant the module is built to hold a delegation; at most 365. The lifetime in effect is the installation setting delegations.max_days of the platform catalog.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        }
       }
     },
     "Models": {

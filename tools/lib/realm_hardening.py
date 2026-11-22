@@ -6,16 +6,16 @@ realm of a new installation, and `papaia-ctl realm sync` applies it to an existi
 
 Realm settings follow the security profile, `PAPAIA_SECURITY_PROFILE` in the root `.env`:
 
-- `standard` (default): `sslRequired: external`; offline sessions (the delegations of Flow
-  and the assistant) idle at most 30 days, at most 180 days old;
-- `kritis`: `sslRequired: all`; offline sessions idle at most 7 days, at most 30 days old;
-  every configured host must be https.
+- `standard` (default): `sslRequired: external`;
+- `kritis`: `sslRequired: all`; every configured host must be https.
 
-`KC_OFFLINE_SESSION_IDLE_DAYS` and `KC_OFFLINE_SESSION_MAX_DAYS` in the Keycloak `.env`
-lower the offline-session limits without a code change; a value above the profile's limit
-is refused. Both profiles: access tokens live 240 s, refresh tokens are replaced on every
-use, brute-force protection is on (5 failures, a wait from 60 s rising to 15 min, no
-permanent lockout), usernames cannot be changed, self-registration is off.
+Offline sessions (the delegations of Flow and the assistant) idle and live as long as the
+installation's delegation lifetime says (delegation_lifetime: default 90 / 180 days, up to
+365 days each; `kritis` 7 / 30 days at most), with the maximum age always switched on; a
+value above the profile's bound is refused. Both profiles: access tokens live 240 s,
+refresh tokens are replaced on every use, brute-force protection is on (5 failures, a
+wait from 60 s rising to 15 min, no permanent lockout), usernames cannot be changed,
+self-registration is off.
 
 Clients (all but the bearer-only ones, which never obtain a token): no password grant, no
 implicit flow; a public client with the code flow uses PKCE S256. The redirect URIs, web
@@ -50,13 +50,12 @@ import urllib.parse
 from dataclasses import dataclass, field
 
 from . import common
+from . import delegation_lifetime as dl
 from .keycloak_role_sync import _compose_value
 
-PROFILE_KEY = "PAPAIA_SECURITY_PROFILE"
-IDLE_KEY = "KC_OFFLINE_SESSION_IDLE_DAYS"
-MAX_KEY = "KC_OFFLINE_SESSION_MAX_DAYS"
-# Upper limits (and defaults) of the offline sessions per profile, in days.
-OFFLINE_LIMITS = {"standard": (30, 180), "kritis": (7, 30)}
+PROFILE_KEY = dl.PROFILE_KEY
+# Variables of 1.10.0 pre-releases; the lifetime is the setting of delegation_lifetime.
+RETIRED_KEYS = ("KC_OFFLINE_SESSION_IDLE_DAYS", "KC_OFFLINE_SESSION_MAX_DAYS")
 DAY = 86400
 PKCE = "pkce.code.challenge.method"
 MANAGED = "papaia.managed"
@@ -105,8 +104,8 @@ class HardeningError(ValueError):
 @dataclass(frozen=True)
 class Settings:
     profile: str = "standard"
-    idle_days: int = 30
-    max_days: int = 180
+    idle_days: int = dl.DEFAULTS["standard"][0]
+    max_days: int = dl.DEFAULTS["standard"][1]
 
     def realm(self) -> dict:
         """The realm settings to enforce (Keycloak's realm representation)."""
@@ -158,18 +157,6 @@ def _unset(value: str) -> bool:
     return not value or common.is_placeholder(value) or value.startswith(("CHANGE_ME", "GENERATE_"))
 
 
-def _days(env: dict, key: str, limit: int) -> int:
-    raw = _value(env, key)
-    if not raw:
-        return limit
-    if not raw.lstrip("-").isdigit():
-        raise HardeningError(f"{key}={raw!r}: must be a whole number of days")
-    days = int(raw)
-    if not 1 <= days <= limit:
-        raise HardeningError(f"{key}={days}: must be 1 to {limit} days in this security profile")
-    return days
-
-
 def _base(key: str, raw: str, https_only: bool) -> tuple[str, str]:
     """The origin and the path (without a trailing slash) of a configured public URL."""
     parts = urllib.parse.urlsplit(raw)
@@ -195,18 +182,25 @@ def _base(key: str, raw: str, https_only: bool) -> tuple[str, str]:
     return origin, parts.path.rstrip("/")
 
 
-def load(env: dict, librechat: dict | None = None) -> Hardening:
-    """The hardening target from the root `.env` merged with the Keycloak `.env` (`env`)
-    and LibreChat's `.env`. HardeningError for a value that cannot be used."""
-    profile = _value(env, PROFILE_KEY) or "standard"
-    if profile not in OFFLINE_LIMITS:
-        raise HardeningError(f"{PROFILE_KEY}={profile!r}: must be standard or kritis")
-    idle_limit, max_limit = OFFLINE_LIMITS[profile]
-    idle = _days(env, IDLE_KEY, idle_limit)
-    age = _days(env, MAX_KEY, max_limit)
-    if age < idle:
-        raise HardeningError(f"{MAX_KEY}={age} is below {IDLE_KEY}={idle}")
-    hardening = Hardening(Settings(profile, idle, age))
+def load(
+    env: dict, librechat: dict | None = None, *, lifetime: tuple[int, int] | None = None
+) -> Hardening:
+    """The hardening target from the root `.env` merged with the Keycloak `.env` (`env`),
+    LibreChat's `.env` and the stored delegation lifetime (`lifetime`, from
+    delegation_lifetime.stored; None: the profile's default). HardeningError for a value
+    that cannot be used."""
+    try:
+        profile = dl.profile_of(env)
+        offline = dl.resolve(profile, lifetime)
+    except dl.LifetimeError as exc:
+        raise HardeningError(str(exc)) from None
+    hardening = Hardening(Settings(profile, offline.idle_days, offline.max_days))
+    for key in RETIRED_KEYS:
+        if _value(env, key):
+            hardening.notes.append(
+                f"{key} is no longer read; set the delegation lifetime with "
+                "'papaia-ctl delegations lifetime'"
+            )
     password = _value(env, REALM_ADMIN_PASSWORD_KEY)
     if not _unset(password):
         if len(password) < MIN_PASSWORD or password in TEMPLATE_USERS:

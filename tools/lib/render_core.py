@@ -39,6 +39,7 @@ from . import (
     catalog,
     chat_servers,
     common,
+    delegation_lifetime,
     deployment,
     egress,
     halt,
@@ -804,8 +805,11 @@ def bake_realm_secrets(repo_root: Path, config_dir: Path) -> None:
     # the same target to a realm that exists already.
     librechat = common.parse_env_file(config_dir / "ai/librechat/.env")
     try:
-        realm_hardening.apply_to_realm(realm, realm_hardening.load(env, librechat))
-    except realm_hardening.HardeningError as exc:
+        lifetime = delegation_lifetime.stored(config_dir)
+        realm_hardening.apply_to_realm(
+            realm, realm_hardening.load(env, librechat, lifetime=lifetime)
+        )
+    except (realm_hardening.HardeningError, delegation_lifetime.LifetimeError) as exc:
         raise RenderError(f"Realm hardening: {exc}") from exc
 
     # The mail relay is optional, so its block cannot sit in the template: a
