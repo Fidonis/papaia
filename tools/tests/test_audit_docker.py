@@ -124,10 +124,12 @@ class Stack:
         self.config = root / "config"
         self.foreign = root / "foreign"
         self.certs = root / "certs"
+        self.backup = root / "backup"
         self.override = root / "networks.override.yml"
         self.env = {
             **os.environ,
             "PAPAIA_CONFIG_DIR": str(self.config),
+            "PAPAIA_BACKUP_DIR": str(self.backup),
             "UID": str(os.getuid()),
             "GID": str(os.getgid()),
         }
@@ -211,6 +213,11 @@ def stack(tmp_path_factory) -> Iterator[Stack]:
     root = tmp_path_factory.mktemp("audit")
     st = Stack(root)
     audit.prepare(st.config)
+    # The signed chain heads go to the backup target, whose folder papaia-ctl creates
+    # before the start; Compose itself must not create it.
+    st.backup.mkdir()
+    (st.config / ".env").write_text(f"PAPAIA_BACKUP_DIR={st.backup}\n", encoding="utf-8")
+    audit.ensure_heads_folder(st.config)
     clients = st.config / "infra" / "audit" / "clients"
     for source in ("papaia-flow", "papaia-data", "papaia-me"):
         audit.issue_source_certificate(st.config, source)
@@ -317,12 +324,12 @@ def test_the_schema_step_runs_again_without_touching_the_store(stack: Stack):
     assert again.returncode == 0, again.stderr
     assert "store created" not in again.stderr
     assert stack.psql("read", "SELECT count(*) FROM audit.event").stdout.split()[2] == before
-    # The service holds the role passwords, the signing key and the pseudonym key, never
-    # the owner's password.
+    # The service holds the role passwords (ingest, read, retention), the signing key and
+    # the pseudonym key, never the owner's password.
     secrets = stack.compose("exec", "-T", "papaia-audit", "ls", "/run/secrets").stdout.split()
     assert sorted(secrets) == [
-        "audit_db_ingest_password", "audit_db_read_password", "audit_heads_key",
-        "audit_pseudonym_key",
+        "audit_db_ingest_password", "audit_db_read_password", "audit_db_retention_password",
+        "audit_heads_key", "audit_pseudonym_key",
     ]
     tables = stack.psql("read", "SELECT count(*) FROM audit.person_query")
     assert tables.returncode == 0, tables.stderr
@@ -355,19 +362,23 @@ def test_the_verification_job_finds_a_tampered_row_and_a_cut_chain(stack: Stack)
         "head_seq": 4,
         "broken_at": None,
         "reason": None,
+        "anchor_seq": 0,
     }
     heads = stack.service("heads", check=True).stdout
     assert stack.service("verify", "--against", "-", stdin=heads).returncode == 0
 
-    # A test intervention with the owner's rights: change event 2 of papaia-flow.
+    # A test intervention with the owner's rights, past the update and delete triggers:
+    # change event 2 of papaia-flow and remove the only event of papaia-data.
     tamper = stack.psql(
         "owner",
         (
-            "ALTER TABLE audit.event DISABLE TRIGGER event_append_only;"
+            "ALTER TABLE audit.event DISABLE TRIGGER event_no_update;"
+            "ALTER TABLE audit.event DISABLE TRIGGER event_delete_only_by_prune;"
             "UPDATE audit.event SET body = jsonb_set(body, '{result}', '\"denied\"'),"
             " result = 'denied' WHERE source = 'papaia-flow' AND seq = 2;"
             "DELETE FROM audit.event WHERE source = 'papaia-data' AND seq = 1;"
-            "ALTER TABLE audit.event ENABLE TRIGGER event_append_only;"
+            "ALTER TABLE audit.event ENABLE TRIGGER event_delete_only_by_prune;"
+            "ALTER TABLE audit.event ENABLE TRIGGER event_no_update;"
         ),
     )
     assert tamper.returncode == 0, tamper.stderr
