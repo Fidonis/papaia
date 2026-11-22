@@ -213,7 +213,8 @@ tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run]
 All nodes move to the same release in one run ("stop the world"):
 
 1. Every node has to answer, or nothing starts.
-2. A restore point of the whole installation is taken (unless `--no-backup`).
+2. A restore point of the whole installation is taken (R0; mandatory) and the write lock of
+   the staged upgrade is switched on (see the README, `upgrade`).
 3. The installation is **locked**, then stopped on every node, and the controller's checkout
    moves to the release.
 4. Every node gets the release. Each migration runs where its data lives: a migration that
@@ -233,9 +234,10 @@ checkout fails. A retried `upgrade` is not held up by it.
 
 If the upgrade fails, it prints the way back for the controller and for each node:
 `git checkout` of the previous tag and `restore --restore-point=ID`. The restore puts the
-configuration back, and with it every node's previous release. After an upgrade with
-`--no-backup` there is no restore point; `start --addons --unlock` releases the lock and puts
-the checkout's release back on every node.
+configuration back, and with it every node's previous release; `upgrade --release-lock -y`
+then ends the write lock. `start --addons --unlock` still releases the installation lock of an
+upgrade that was abandoned without a restore point (an upgrade from a release before the
+staged upgrade).
 
 ## Add-ons
 

@@ -37,6 +37,7 @@ from . import (
     cluster,
     cluster_data,
     common,
+    compat,
     defaults,
     deployment,
     doctor,
@@ -68,6 +69,7 @@ from . import (
     suite,
     topology,
     upgrade,
+    upgrade_stages,
 )
 
 
@@ -1957,6 +1959,124 @@ def cmd_upgrade_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage_requires(deployed: dict, repo_root: Path) -> dict[str, list[str]]:
+    """`requires.addons` names of every active add-on; a malformed manifest is a refusal."""
+    requires: dict[str, list[str]] = {}
+    for addon in deployment.active_addons(deployed):
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        try:
+            names = [n for n, _ in compat.required_addons(manifest or {})]
+        except ValueError as exc:
+            raise upgrade_stages.StageError(f"{addon.get('name')}: {exc}") from None
+        requires[str(addon.get("name"))] = names
+    return requires
+
+
+def cmd_upgrade_stage(args: argparse.Namespace) -> int:
+    """The staged upgrade's state, plan, write lock and key check (lib/upgrade_stages.py).
+
+    Exit 2 is a refusal before any change; the message is on stderr."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    us = upgrade_stages
+    try:
+        if args.action == "plan":
+            deployed = deployment.load(config_dir)
+            versions = cli_addon.active_addon_versions(deployed, repo_root)
+            requires = _stage_requires(deployed, repo_root)
+            stages = us.select_stages(args.stage, None, requires)
+            raw = Path(args.check_file).read_text(encoding="utf-8")
+            # An add-on check that crashed leaves nothing behind; that is no "all kept".
+            results = json.loads(raw) if raw.strip() else None
+            if not isinstance(results, list):
+                raise us.StageError("the add-on check gave no result list")
+            matrix = suite.load_matrix(Path(args.target_core))
+            paths = us.parse_addon_paths(args.addon_path or [], set(versions))
+            steps, warnings = us.plan_modules(
+                results, versions, matrix, upgrade.normalize_version(args.target), paths,
+                args.force,
+            )
+            for warning in warnings:
+                print(f"WARN: {warning}", file=sys.stderr)
+            for line in us.describe(steps, stages):
+                print(line)
+            if args.out:
+                common.atomic_write(Path(args.out), json.dumps(steps))
+        elif args.action == "identity-check":
+            if not args.identity:
+                raise us.StageError(
+                    f"{us.NO_KEY_MESSAGE} Pass the backup key of a recipient with "
+                    "--identity=FILE, or --identity=- to read it from standard input."
+                )
+            names = us.check_identity(
+                config_dir, backup_crypt.read_identities(args.identity)
+            )
+            print(f"Backup key of {', '.join(names) or 'a recipient'} confirmed.")
+        elif args.action == "restore-point":
+            point = us.restore_point_for(config_dir, upgrade.normalize_version(args.target))
+            if point:
+                print(point)
+        elif args.action == "begin":
+            steps = json.loads(Path(args.steps_file).read_text(encoding="utf-8"))
+            us.begin(config_dir, source=args.from_version, target=args.to_version,
+                     restore_point=args.restore_point, steps=steps)
+        elif args.action == "block":
+            for name in us.block_addons(config_dir):
+                print(name)
+        elif args.action == "record":
+            us.record(config_dir, args.stage, args.result, args.seconds)
+        elif args.action == "resume-check":
+            state = us.load_state(config_dir)
+            if state is None or state["finished"] is not None or state["abandoned"] is not None:
+                raise us.StageError("No upgrade is in progress; nothing to resume.")
+            if state["stages"]["core"]["status"] != "ok":
+                raise us.StageError(
+                    f"The core stage of the upgrade to {state['to']} has not completed; run "
+                    f"'papaia-ctl upgrade --version={state['to']}' again."
+                )
+            checkout = envtree.resolve_platform_version(repo_root)
+            if checkout != state["to"]:
+                raise us.StageError(
+                    f"The checkout is at {checkout}, the upgrade in progress goes to "
+                    f"{state['to']}."
+                )
+            print(f"FROM\t{state['from']}")
+            print(f"TO\t{state['to']}")
+            print(f"RESTORE_POINT\t{state['restore_point']}")
+        elif args.action == "steps":
+            deployed = deployment.load(config_dir)
+            state, stages = us.steps_to_run(
+                config_dir, args.stage, _stage_requires(deployed, repo_root)
+            )
+            if "core" in stages:
+                raise us.StageError(
+                    f"The core stage is still due; run 'papaia-ctl upgrade "
+                    f"--version={state['to']}'."
+                )
+            by_stage = {s["stage"]: s for s in state["steps"] if s["stage"] != "finish"}
+            for stage in stages:
+                step = by_stage.get(stage) or {"addon": "-", "action": "-", "path": "-"}
+                print(f"STAGE\t{stage}\t{step['addon']}\t{step['action']}\t"
+                      f"{step['path'] or '-'}")
+        elif args.action == "finish":
+            for line in us.report(us.finish(config_dir)):
+                print(line)
+        elif args.action == "release-lock":
+            bundle = upgrade.resolve_current_version(config_dir, repo_root)
+            checkout = envtree.resolve_platform_version(repo_root)
+            state = us.release_lock(config_dir, bundle_version=bundle, checkout_version=checkout)
+            print(f"Write lock of the upgrade to {state['to']} released.")
+        else:
+            raise us.StageError(f"unknown action {args.action!r}")
+    except (us.StageError, backup_crypt.BackupError, suite.SuiteError, upgrade.UpgradeError,
+            ValueError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # status and doctor
 #
@@ -2739,6 +2859,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_upgrade_record.add_argument("--migration-id", required=True)
     p_upgrade_record.add_argument("--duration", type=int, default=0)
     p_upgrade_record.set_defaults(func=cmd_upgrade_record)
+
+    p_upgrade_stage = sub.add_parser("upgrade-stage")
+    p_upgrade_stage.add_argument(
+        "action",
+        choices=["plan", "identity-check", "restore-point", "begin", "block", "record",
+                 "resume-check", "steps", "finish", "release-lock"],
+    )
+    p_upgrade_stage.add_argument("--check-file", default=None)
+    p_upgrade_stage.add_argument("--target", default=None)
+    p_upgrade_stage.add_argument("--target-core", default=None)
+    p_upgrade_stage.add_argument("--addon-path", action="append", default=None)
+    p_upgrade_stage.add_argument("--force", action="store_true")
+    p_upgrade_stage.add_argument("--stage", default=None)
+    p_upgrade_stage.add_argument("--out", default=None)
+    p_upgrade_stage.add_argument("--identity", default=None)
+    p_upgrade_stage.add_argument("--from", dest="from_version", default=None)
+    p_upgrade_stage.add_argument("--to", dest="to_version", default=None)
+    p_upgrade_stage.add_argument("--restore-point", default=None)
+    p_upgrade_stage.add_argument("--steps-file", default=None)
+    p_upgrade_stage.add_argument("--result", default=None)
+    p_upgrade_stage.add_argument("--seconds", type=int, default=None)
+    p_upgrade_stage.set_defaults(func=cmd_upgrade_stage)
 
     p_restore_resolve = sub.add_parser("restore-resolve")
     p_restore_resolve.add_argument("--backup-dir", default=None)

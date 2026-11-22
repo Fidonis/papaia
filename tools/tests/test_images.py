@@ -868,6 +868,8 @@ py_cli() {
     case "$1" in
         image-trust-anchor) echo "sha256:@ANCHOR@"; return ;;
         new-correlation-id) echo "0b5a4c84-6f0a-4f36-9a4e-0d0c5a7d1e11"; return ;;
+        # No unfinished staged upgrade: no restore point to keep.
+        upgrade-stage) [ "$2" = restore-point ] && return 0; echo "py_cli $*"; return ;;
         active-addons) return ;;
     esac
     echo "py_cli $*"

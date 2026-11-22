@@ -6,9 +6,15 @@
 # ─────────────────────────────────────────────────────────────────────────
 # The upgrade runs in two phases, split by the checkout:
 #
-#   phase 1 (this release)  preflight, target resolution, add-on gate,
-#                           backup, stop, `git checkout <tag>`
-#   phase 2 (target release) migrations, re-render, start
+#   phase 1 (this release)  stage 0 (target resolution, add-on and suite-matrix
+#                           check, stage plan, image check, operator key check),
+#                           stage 1 (restore point R0, write lock), stop,
+#                           `git checkout <tag>`
+#   phase 2 (target release) stage 2 (migrations, re-render, start), module
+#                           stages 3-7 (`addon upgrade` per module), stage 8
+#                           (write lock off, stage durations)
+#
+# The stage state and the write lock are kept by lib/upgrade_stages.py.
 #
 # Between them the script re-executes itself from the new tree. That is not
 # cosmetic: bash reads the running script lazily, so replacing papaia-ctl
@@ -20,6 +26,8 @@
 
 _UPGRADE_TMPDIR=""
 _UPGRADE_WORKTREE=""
+# The stage a failure is recorded against.
+_UPGRADE_STAGE="core"
 
 _upgrade_cleanup() {
     if [ -n "$_UPGRADE_WORKTREE" ]; then
@@ -65,16 +73,63 @@ _upgrade_print_migrations() {
     return "$found"
 }
 
+# One correlation id for every audit row of this run (lib/backup_crypt.py reads it).
+_upgrade_correlation() {
+    if [ -z "${PAPAIA_CORRELATION_ID:-}" ]; then
+        PAPAIA_CORRELATION_ID="$(py_cli new-correlation-id | tr -d '\r')" || exit 3
+    fi
+    export PAPAIA_CORRELATION_ID
+}
+
+# Stage 0 without a rollback key: the operator's backup key must open a check block
+# encrypted to the backup recipients (lib/upgrade_stages.py). The key is read by the
+# Python side and never written anywhere. $1 = --identity value, may be empty.
+_upgrade_check_key() {
+    local -a flags=()
+    [ -n "$1" ] && flags+=(--identity="$1")
+    py_cli upgrade-stage identity-check ${flags[@]+"${flags[@]}"} || return 2
+}
+
+# The add-on check of a core tree as JSON, for the stage plan. A refusal (exit 2) still
+# writes its verdicts; anything else, or no output at all, means the check itself failed,
+# and its error output is shown instead of planning on an empty result.
+# $1 = core tree, $2 = output file, $3 = target version
+_upgrade_addon_check() {
+    local root="$1" out="$2" target="$3" rc=0 line
+    _py_cli_at "$root" addon-check --json > "$out" 2> "$out.err" || rc=$?
+    if { [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; } && [ -s "$out" ]; then
+        rm -f "$out.err"
+        return 0
+    fi
+    error "The add-on check against $target gave no result (exit $rc):"
+    while IFS= read -r line; do
+        error "    $line"
+    done < "$out.err"
+    rm -f "$out.err"
+    return 1
+}
+
 cmd_upgrade() {
-    local config_dir="$DEFAULT_CONFIG_DIR" version="" no_backup=0 force=0
+    local config_dir="$DEFAULT_CONFIG_DIR" version="" force=0
     local assume_yes=0 dry_run=0 insecure_images=0
+    local identity="" stage_sel="" resume=0 release_lock=0
+    local -a addon_paths=()
     local resume_from="" resume_target="" resume_restore_point=""
-    local resume_anchor="" resume_correlation=""
+    local resume_anchor="" resume_correlation="" resume_stages="" resume_started=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --version=*) version="${1#*=}" ;;
-            --no-backup) no_backup=1 ;;
+            --no-backup)
+                error "--no-backup is no longer accepted: the upgrade always takes restore point"
+                error "R0 first, so that a failed stage can go back to it. Nothing has been changed."
+                exit 2
+                ;;
+            --identity=*) identity="${1#*=}" ;;
+            --stage=*) stage_sel="${1#*=}" ;;
+            --addon-path=*) addon_paths+=(--addon-path="${1#*=}") ;;
+            --resume) resume=1 ;;
+            --release-lock) release_lock=1 ;;
             --force) force=1 ;;
             --dry-run) dry_run=1 ;;
             --insecure-images) insecure_images=1 ;;
@@ -84,6 +139,8 @@ cmd_upgrade() {
             --resume-restore-point=*) resume_restore_point="${1#*=}" ;;
             --resume-anchor=*) resume_anchor="${1#*=}" ;;
             --resume-correlation-id=*) resume_correlation="${1#*=}" ;;
+            --resume-stages=*) resume_stages="${1#*=}" ;;
+            --resume-started=*) resume_started="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for upgrade: $1"; exit 2 ;;
         esac
@@ -98,6 +155,39 @@ cmd_upgrade() {
     # a retry by the lock an earlier attempt left).
     [ "$distributed" -eq 1 ] && UPGRADE_IN_PROGRESS=1
 
+    if [ "$release_lock" -eq 1 ]; then
+        if [ "$assume_yes" -eq 0 ]; then
+            if ! is_tty; then
+                error "Refusing to release the write lock without confirmation. Re-run with -y."
+                exit 2
+            fi
+            if ! confirm "Release the write lock of the unfinished upgrade?" "N"; then
+                error "Aborted."
+                exit 3
+            fi
+        fi
+        _upgrade_correlation
+        py_cli upgrade-stage release-lock || exit 2
+        return 0
+    fi
+
+    if [ "$resume" -eq 1 ]; then
+        _upgrade_correlation
+        local resumed key value r_from="" r_to="" r_point=""
+        resumed="$(py_cli upgrade-stage resume-check | tr -d '\r')" || exit 2
+        while IFS=$'\t' read -r key value; do
+            case "$key" in
+                FROM) r_from="$value" ;;
+                TO) r_to="$value" ;;
+                RESTORE_POINT) r_point="$value" ;;
+            esac
+        done <<< "$resumed"
+        _upgrade_check_key "$identity" || exit 2
+        _upgrade_module_stages "$r_from" "$r_to" "$r_point" "$stage_sel" "$force" \
+            "$insecure_images"
+        return 0
+    fi
+
     if [ -n "$resume_from" ]; then
         if [ -z "$resume_target" ]; then
             error "--resume-from requires --resume-target. Both are set by papaia-ctl itself."
@@ -108,11 +198,17 @@ cmd_upgrade() {
         # under the same correlation id (lib/images.py validates both).
         IMAGES_ANCHOR="$resume_anchor"
         IMAGES_CORRELATION_ID="$resume_correlation"
+        [ -n "$resume_correlation" ] && PAPAIA_CORRELATION_ID="$resume_correlation"
+        _upgrade_correlation
         if [ -z "$resume_anchor" ] && [ "$insecure_images" -eq 0 ]; then
             _upgrade_bootstrap_notice "$resume_target"
         fi
+        if ! [[ "$resume_started" =~ ^[0-9]{1,12}$ ]]; then
+            resume_started="$(date +%s)"
+        fi
+        _upgrade_adopt "$resume_from" "$resume_target" "$resume_restore_point" "$force"
         _upgrade_apply "$resume_from" "$resume_target" "$resume_restore_point" "$force" \
-            "$distributed" "$insecure_images"
+            "$distributed" "$insecure_images" "$resume_stages" "$resume_started"
         return 0
     fi
 
@@ -177,6 +273,11 @@ cmd_upgrade() {
 
     info "Upgrade: $current → $target ($tag)"
 
+    # An unfinished run to the same target keeps its restore point; one to another target
+    # has to be finished or abandoned first.
+    local kept_point
+    kept_point="$(py_cli upgrade-stage restore-point --target="$target" | tr -d '\r')" || exit 2
+
     # --- trust anchor -------------------------------------------------------
     # The release key of the installed core vouches for the target; the target's own
     # key only counts when the installed one signed its rotation (lib/images.py).
@@ -192,6 +293,8 @@ cmd_upgrade() {
         exit 2
     fi
     IMAGES_CORRELATION_ID="$(py_cli new-correlation-id)"
+    PAPAIA_CORRELATION_ID="$IMAGES_CORRELATION_ID"
+    export PAPAIA_CORRELATION_ID
 
     # The commit the tag names now: what is checked below is what is checked out later.
     local commit
@@ -211,6 +314,25 @@ cmd_upgrade() {
         exit 3
     fi
     _UPGRADE_WORKTREE="$worktree"
+
+    # Stage 0: the stage plan. Each module either gets the checkout named with
+    # --addon-path, stays (the target still accepts it), or stops the upgrade here;
+    # with --force such a module is stopped and blocked instead.
+    local check_file="$_UPGRADE_TMPDIR/addon-check.json" steps_file="$_UPGRADE_TMPDIR/steps.json"
+    if ! _upgrade_addon_check "$worktree" "$check_file" "$target"; then
+        error "Nothing has been changed."
+        exit 2
+    fi
+    local -a plan_flags=(--check-file="$check_file" --target="$target" \
+        --target-core="$worktree" --out="$steps_file")
+    [ "$force" -eq 1 ] && plan_flags+=(--force)
+    [ -n "$stage_sel" ] && plan_flags+=(--stage="$stage_sel")
+    local plan_text
+    if ! plan_text="$(py_cli upgrade-stage plan ${plan_flags[@]+"${plan_flags[@]}"} \
+            ${addon_paths[@]+"${addon_paths[@]}"} | tr -d '\r')"; then
+        error "Nothing has been changed."
+        exit 2
+    fi
 
     local -a check_flags=()
     [ "$force" -eq 1 ] && check_flags+=(--force)
@@ -251,17 +373,32 @@ cmd_upgrade() {
             >/dev/null || exit 3
     fi
 
+    info "Upgrade stages:"
+    local line
+    while IFS= read -r line; do
+        [ -n "$line" ] && info "    $line"
+    done <<< "$plan_text"
+
     if [ "$dry_run" -eq 1 ]; then
+        if [ -n "$identity" ]; then
+            _upgrade_check_key "$identity" || exit 2
+        else
+            info "Stage 0 needs the backup key of a recipient: there is no rollback key for"
+            info "this upgrade, so pass --identity=FILE (or --identity=- for standard input)."
+        fi
         _upgrade_cleanup
         success "dry run complete — nothing was changed."
         return 0
     fi
 
+    # Stage 0, last check: without the key nothing is started.
+    _upgrade_check_key "$identity" || exit 2
+
     # --- confirm ----------------------------------------------------------
     warn "The upgrade will remove and recreate the containers (volumes are kept),"
     warn "move the checkout to $tag, run the migrations above, re-render the"
     warn "configuration and start the stack again."
-    [ "$no_backup" -eq 1 ] && warn "  --no-backup: no restore point is created beforehand."
+    warn "From the restore point on, every module accepts reads only until the upgrade ends."
     if [ "$assume_yes" -eq 0 ]; then
         if ! is_tty; then
             error "Refusing to upgrade without confirmation. Re-run with -y in non-interactive contexts."
@@ -273,13 +410,25 @@ cmd_upgrade() {
         fi
     fi
 
-    # --- backup -----------------------------------------------------------
+    # --- stage 1: restore point R0 and write lock --------------------------
     local restore_point=""
-    if [ "$no_backup" -eq 0 ]; then
-        info "Creating a restore point before the upgrade..."
+    if [ -n "$kept_point" ]; then
+        restore_point="$kept_point"
+        info "Restore point $restore_point of the unfinished upgrade to $target is kept as R0."
+    else
+        info "Stage 1: creating restore point R0..."
         cmd_backup --config-dir="$CONFIG_DIR"
         restore_point="$LAST_BACKUP_ID"
+        if [ -z "$restore_point" ]; then
+            error "No restore point was created. Nothing has been changed."
+            exit 3
+        fi
     fi
+    py_cli upgrade-stage begin --from="$current" --to="$target" \
+        --restore-point="$restore_point" --steps-file="$steps_file" || exit 3
+    info "Write lock on: every module accepts reads only until the upgrade ends."
+    local stage_started
+    stage_started="$(date +%s)"
 
     # --- stop + move the checkout -----------------------------------------
     # --clean-up, i.e. `docker compose down`: the containers are REMOVED, not
@@ -293,6 +442,13 @@ cmd_upgrade() {
     # recreated container resolves its binds afresh. Volumes are untouched.
     info "Stopping and removing the containers (volumes are kept)..."
     cmd_stop --clean-up --addons --config-dir="$CONFIG_DIR"
+
+    # Modules the target does not accept (--force): stopped above, kept out from here on.
+    local blocked
+    blocked="$(py_cli upgrade-stage block | tr -d '\r')" || exit 3
+    while IFS= read -r line; do
+        [ -n "$line" ] && warn "$line is stopped and blocked until a version the target accepts is installed."
+    done <<< "$blocked"
 
     # --- lock ---------------------------------------------------------------
     # From the moment the releases can differ until the upgrade has finished, a distributed
@@ -308,8 +464,10 @@ cmd_upgrade() {
     if ! git -C "$REPO_ROOT" checkout --detach --quiet "$commit"; then
         # Nothing moved: no reason to keep the installation locked.
         [ "$distributed" -eq 1 ] && py_cli cluster-lock --clear
+        py_cli upgrade-stage record --stage=core --result=failed >/dev/null 2>&1 || true
         error "Could not check out $tag. The stack is stopped and the checkout is unchanged."
-        error "Start it again with 'papaia-ctl start --addons'."
+        error "Start it again with 'papaia-ctl start --addons', then end the write lock with"
+        error "'papaia-ctl upgrade --release-lock -y'."
         _upgrade_log "$current" "$target" failed "stage=checkout"
         exit 3
     fi
@@ -322,6 +480,8 @@ cmd_upgrade() {
         --resume-target="$target"
     )
     [ -n "$restore_point" ] && resume_flags+=(--resume-restore-point="$restore_point")
+    [ -n "$stage_sel" ] && resume_flags+=(--resume-stages="$stage_sel")
+    resume_flags+=(--resume-started="$stage_started")
     [ "$force" -eq 1 ] && resume_flags+=(--force)
     # This command's own second phase; the flag, the anchor and the correlation id are
     # never written anywhere.
@@ -334,6 +494,82 @@ cmd_upgrade() {
     # to sit on an exec-permitting mount). This mirrors how the manager and every
     # migration invoke the script.
     exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" upgrade ${resume_flags[@]+"${resume_flags[@]}"}
+}
+
+# Phase 2, before the core stage: a first phase of this release began the run (stage
+# state, R0, write lock). The first upgrade INTO this release runs the first phase of the
+# installed one, which knows no stages: it took a restore point (unless it ran with
+# --no-backup), stopped the stack and moved the checkout, but kept no state, took no write
+# lock and checked no backup key. Take the run over here with the restore point it handed
+# on; without one, stop before anything is migrated.
+# $1 = from version, $2 = target version, $3 = restore point (may be empty), $4 = force flag
+_upgrade_adopt() {
+    local from="$1" target="$2" restore_point="$3" force="$4" kept
+    if ! kept="$(py_cli upgrade-stage restore-point --target="$target" | tr -d '\r')"; then
+        _upgrade_adopt_refused "$from" "$target" "another upgrade is unfinished"
+    fi
+    [ -n "$kept" ] && return 0
+    if [ -z "$restore_point" ]; then
+        error "The release you upgraded from took no restore point (it ran with --no-backup),"
+        error "and $target runs its stages only with a restore point R0 to go back to."
+        _upgrade_adopt_refused "$from" "$target" "no restore point"
+    fi
+    warn "The installed release ran the first phase of this upgrade: restore point"
+    warn "$restore_point was taken, but there was no key check and no write lock before the"
+    warn "checkout moved. $target takes the run over with R0 = $restore_point."
+    local tmpdir check_file steps_file
+    tmpdir="$(mktemp -d)"
+    check_file="$tmpdir/addon-check.json"
+    steps_file="$tmpdir/steps.json"
+    # The checkout already is the target: its add-on check and suite matrix decide. No
+    # module has a new checkout yet; each stays, or is blocked with --force.
+    if ! _upgrade_addon_check "$REPO_ROOT" "$check_file" "$target"; then
+        rm -rf "$tmpdir"
+        _upgrade_adopt_refused "$from" "$target" "add-on check failed"
+    fi
+    local -a plan_flags=(--check-file="$check_file" --target="$target" \
+        --target-core="$REPO_ROOT" --out="$steps_file")
+    [ "$force" = "1" ] && plan_flags+=(--force)
+    local plan_text line
+    if ! plan_text="$(py_cli upgrade-stage plan ${plan_flags[@]+"${plan_flags[@]}"} | tr -d '\r')"; then
+        rm -rf "$tmpdir"
+        _upgrade_adopt_refused "$from" "$target" "stage plan refused"
+    fi
+    if ! py_cli upgrade-stage begin --from="$from" --to="$target" \
+            --restore-point="$restore_point" --steps-file="$steps_file"; then
+        rm -rf "$tmpdir"
+        _upgrade_adopt_refused "$from" "$target" "stage state not written"
+    fi
+    rm -rf "$tmpdir"
+    info "Write lock on: every module accepts reads only until the upgrade ends."
+    info "Upgrade stages:"
+    while IFS= read -r line; do
+        [ -n "$line" ] && info "    $line"
+    done <<< "$plan_text"
+    local blocked
+    blocked="$(py_cli upgrade-stage block | tr -d '\r')" || exit 3
+    while IFS= read -r line; do
+        [ -n "$line" ] && warn "$line is stopped and blocked until a version the target accepts is installed."
+    done <<< "$blocked"
+    return 0
+}
+
+# The run could not be taken over: nothing has been migrated and the configuration is
+# still the one of $1, so the way back is the checkout and a start.
+# $1 = from version, $2 = target version, $3 = reason for the log
+_upgrade_adopt_refused() {
+    local from="$1" target="$2"
+    _upgrade_log "$from" "$target" failed "stage=handover reason=${3// /-}"
+    error "Nothing has been migrated; the stack is stopped and $CONFIG_DIR is still at $from."
+    error "To go back to $from:"
+    error "    git -C $REPO_ROOT checkout v$from"
+    error "    papaia-ctl start --addons --config-dir=$CONFIG_DIR"
+    if [ "${UPGRADE_IN_PROGRESS:-0}" = "1" ]; then
+        error "    papaia-ctl start --addons --unlock --config-dir=$CONFIG_DIR  (distributed)"
+    fi
+    error "Then run 'papaia-ctl upgrade --version=$target' again: from $from on the upgrade"
+    error "is staged, takes restore point R0 itself and checks the backup key first."
+    exit 3
 }
 
 # The first upgrade from a core that pinned no release key: its first phase handed no
@@ -350,16 +586,21 @@ _upgrade_bootstrap_notice() {
 
 # Phase 2 — runs from the target release's checkout.
 # $1 = from version, $2 = target version, $3 = restore point (may be empty),
-# $4 = force flag, $5 = 1 for a distributed installation, $6 = 1 for --insecure-images
+# $4 = force flag, $5 = 1 for a distributed installation, $6 = 1 for --insecure-images,
+# $7 = stage selection (may be empty), $8 = epoch the stack was stopped at
 _upgrade_apply() {
     local from="$1" target="$2" restore_point="$3" force="$4" distributed="${5:-0}"
-    local insecure_images="${6:-0}"
+    local insecure_images="${6:-0}" selection="${7:-}" stopped_at="${8:-$(date +%s)}"
     local previous_tag="v$from"
+    _UPGRADE_STAGE="core"
 
     info "Running $target's papaia-ctl from here on."
 
     if [ "$distributed" -eq 1 ]; then
         _upgrade_apply_distributed "$from" "$target" "$restore_point" "$force" "$insecure_images"
+        _upgrade_core_done "$stopped_at"
+        _upgrade_module_stages "$from" "$target" "$restore_point" "$selection" "$force" \
+            "$insecure_images"
         return 0
     fi
 
@@ -426,10 +667,77 @@ _upgrade_apply() {
 
     _upgrade_log "$from" "$target" ok \
         "migrations=${#ids[@]} restore_point=${restore_point:-none}"
-    success "upgrade complete: $from → $target"
-    if [ -n "$restore_point" ]; then
-        info "Restore point taken before the upgrade: $restore_point"
+    _upgrade_core_done "$stopped_at"
+    success "core and manager at $target (stage 2)"
+    _upgrade_module_stages "$from" "$target" "$restore_point" "$selection" "$force" \
+        "$insecure_images"
+}
+
+# Stage 2 done. $1 = epoch the stack was stopped at: the stage's downtime.
+_upgrade_core_done() {
+    local seconds=$(( $(date +%s) - $1 ))
+    [ "$seconds" -lt 0 ] && seconds=0
+    py_cli upgrade-stage record --stage=core --result=ok --seconds="$seconds" || exit 3
+}
+
+# Stages 3-8 of a run in progress: the module stages that are due (or the ones named in
+# $4, in that order), then the finish stage, which ends the write lock.
+# $1 from, $2 target, $3 restore point, $4 stage selection (may be empty), $5 force flag,
+# $6 1 for --insecure-images
+_upgrade_module_stages() {
+    local from="$1" target="$2" restore_point="$3" selection="$4" force="${5:-0}"
+    local insecure_images="${6:-0}"
+    local -a sel=()
+    [ -n "$selection" ] && sel+=(--stage="$selection")
+    local steps
+    steps="$(py_cli upgrade-stage steps ${sel[@]+"${sel[@]}"} | tr -d '\r')" || exit 2
+    local tag stage addon action path started finish=0
+    while IFS=$'\t' read -r -u 3 tag stage addon action path; do
+        [ "$tag" = "STAGE" ] || continue
+        if [ "$stage" = "finish" ]; then
+            finish=1
+            continue
+        fi
+        _UPGRADE_STAGE="$stage"
+        started=$SECONDS
+        case "$action" in
+            upgrade)
+                info "Stage $stage: upgrading $addon from $path..."
+                local -a flags=("$addon" --path="$path" --no-backup -y --config-dir="$CONFIG_DIR")
+                [ "$force" = "1" ] && flags+=(--force)
+                [ "$insecure_images" = "1" ] && flags+=(--insecure-images)
+                # The restore point R0 covers the module; its own migrations run when the
+                # new version starts. In a subshell, so a refusal that exits still lands here.
+                if ! ( cmd_addon_upgrade ${flags[@]+"${flags[@]}"} ); then
+                    error "Stage $stage: the upgrade of $addon did not complete."
+                    _upgrade_failed "$from" "$target" "$restore_point" "v$from" \
+                        "$addon did not complete its upgrade" "stage=$stage addon=$addon"
+                fi
+                py_cli upgrade-stage record --stage="$stage" --result=ok \
+                    --seconds="$((SECONDS - started))" || exit 3
+                ;;
+            keep)
+                info "Stage $stage: $addon stays at its version."
+                py_cli upgrade-stage record --stage="$stage" --result=kept --seconds=0 || exit 3
+                ;;
+            block)
+                warn "Stage $stage: $addon is blocked (stopped, its data untouched)."
+                py_cli upgrade-stage record --stage="$stage" --result=blocked --seconds=0 || exit 3
+                ;;
+            *)
+                py_cli upgrade-stage record --stage="$stage" --result=skipped --seconds=0 || exit 3
+                ;;
+        esac
+    done 3<<< "$steps"
+    if [ "$finish" -eq 0 ]; then
+        warn "The write lock stays on until the remaining stages ran:"
+        warn "    papaia-ctl upgrade --resume --identity=FILE [--stage=NAME[,NAME]]"
+        return 0
     fi
+    _UPGRADE_STAGE="finish"
+    py_cli upgrade-stage finish || exit 3
+    success "upgrade complete: $from → $target; the write lock is off."
+    info "Restore point taken before the upgrade: $restore_point"
 }
 
 # Phase 2 of a distributed installation: every node gets the target release, the
@@ -465,10 +773,7 @@ _upgrade_apply_distributed() {
     py_cli cluster-lock --clear
     UPGRADE_IN_PROGRESS=0
     _upgrade_log "$from" "$target" ok "restore_point=${restore_point:-none} distributed=1"
-    success "upgrade complete: $from → $target on every node"
-    if [ -n "$restore_point" ]; then
-        info "Restore point taken before the upgrade: $restore_point"
-    fi
+    success "core and manager at $target on every node (stage 2)"
 }
 
 # Abort the upgrade with the exact commands needed to get back. No automatic
@@ -481,13 +786,17 @@ _upgrade_failed() {
     local from="$1" target="$2" restore_point="$3" previous_tag="$4" situation="$5"
     shift 5
     _upgrade_log "$from" "$target" failed "$*"
+    py_cli upgrade-stage record --stage="${_UPGRADE_STAGE:-core}" --result=failed \
+        >/dev/null 2>&1 || true
     error ""
     error "The checkout is on v$target and $situation."
+    error "The write lock stays on: every module accepts reads only, so going back loses no data."
     error ""
     error "To go back to $from:"
     error "    git -C $REPO_ROOT checkout $previous_tag"
     if [ -n "$restore_point" ]; then
         error "    papaia-ctl restore --restore-point=$restore_point --config-dir=$CONFIG_DIR"
+        error "    papaia-ctl upgrade --release-lock -y --config-dir=$CONFIG_DIR"
     elif [ "${UPGRADE_IN_PROGRESS:-0}" = "1" ]; then
         error "    papaia-ctl start --addons --unlock --config-dir=$CONFIG_DIR"
         error "  (no restore point was created — the upgrade ran with --no-backup; --unlock"
@@ -511,8 +820,14 @@ _upgrade_failed() {
         error "  configuration back."
     fi
     error ""
-    error "To retry after fixing the cause, run 'papaia-ctl upgrade --version=$target'"
-    error "again: migrations that already succeeded are recorded and will be skipped."
+    if [ "${_UPGRADE_STAGE:-core}" = "core" ]; then
+        error "To retry after fixing the cause, run 'papaia-ctl upgrade --version=$target'"
+        error "again: migrations that already succeeded are recorded and will be skipped, and"
+        error "restore point $restore_point is kept."
+    else
+        error "To continue after fixing the cause:"
+        error "    papaia-ctl upgrade --resume --identity=FILE --config-dir=$CONFIG_DIR"
+    fi
     exit 3
 }
 

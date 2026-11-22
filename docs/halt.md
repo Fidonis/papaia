@@ -105,3 +105,20 @@ keeps the folder as it is on the host: a restore point neither lifts nor sets th
 - The command is not available in a distributed installation yet.
 - Root on the host can change or remove the file; neither its mode nor the audit row
   protects against that.
+
+## Write lock of an upgrade
+
+`papaia-ctl upgrade` puts a second file into the same folder: `state/write-lock.json`, present
+from restore point R0 until the upgrade's finish stage (see the README, `upgrade`). Unlike the
+halt it only stops writes; reads, sign-ins and model calls go on.
+
+```json
+{"active": true, "from": "1.8.0", "message": "The installation is being updated. Your change was not saved. Please try again once the update has finished.", "schema": "papaia.write-lock/1", "since": 1790000000, "to": "1.10.0", "upgrade_id": "0b9a4c0e-8d47-4b0a-9a51-1f2c3d4e5f60"}
+```
+
+A reader checks it like the halt file: before each write, one stat call, the file parsed only
+when it changed. While it is active the write is refused with `message`, and nothing is
+stored. A missing file is no lock; a file that cannot be read, is not a regular file, is
+larger than 64 KiB or does not have exactly these fields with `schema` `papaia.write-lock/1`
+counts as an active lock (fails closed). The reference reader is `read_lock` in
+`tools/lib/upgrade_stages.py`.

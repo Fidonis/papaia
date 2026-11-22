@@ -282,8 +282,9 @@ values unchanged.
 papaia-ctl setup     [OPTIONS]
 papaia-ctl start     [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl stop      [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--config-dir=PATH]
-papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
-                     [--config-dir=PATH]
+papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--force] [-y] --identity=FILE|-
+                     [--stage=NAME[,NAME]] [--addon-path=NAME=DIR] [--config-dir=PATH]
+papaia-ctl upgrade   --resume --identity=FILE|- [--stage=NAME[,NAME]] | --release-lock [-y]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N]
                      [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
@@ -546,8 +547,11 @@ holds a copy; for the others the module's generated values stay as they are.
 ### `upgrade`
 
 ```bash
-tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y] \
-  [--insecure-images] [--config-dir=PATH]
+tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--force] [-y] \
+  [--insecure-images] --identity=FILE|- [--stage=NAME[,NAME]] \
+  [--addon-path=NAME=DIR ...] [--config-dir=PATH]
+tools/papaia-ctl upgrade --resume --identity=FILE|- [--stage=NAME[,NAME]] [-y]
+tools/papaia-ctl upgrade --release-lock [-y]
 ```
 
 Moves the installation to a release. Without `--version` the newest release is used;
@@ -571,18 +575,83 @@ The run, in order:
    (digest and signature, see [Image pinning and
    signatures](#image-pinning-and-signatures)); a mismatch aborts before anything is
    changed. `--force` does not lift this; only `--insecure-images` does.
-4. Creates a restore point (`backup`) unless `--no-backup` is given, and stops the
-   stack.
+   Then the backup key of the operator is checked (see *Stages* below); without a
+   matching key nothing is started.
+4. Creates restore point R0 (`backup`, encrypted to the backup recipients), switches
+   the write lock on and stops the stack. A restore point is mandatory; `--no-backup`
+   is refused.
 5. Checks out the release tag and re-executes itself from the new tree, so the
    migrations, the render logic and the setup pass of the target release are the ones
    that run.
 6. Runs the pending migration scripts (see below), re-renders the configuration
    through the sticky setup pass — every answered question is kept — and starts the
    stack again.
+7. Runs the module stages and ends the write lock.
 
-`--dry-run` stops after step 3 and prints the current version, the target version and
-the migrations that would run. `-y` skips the confirmation prompt; without a TTY it is
-required.
+`--dry-run` stops after step 3 and prints the current version, the target version, the
+migrations that would run and every stage with what it does to each module. It needs no
+key. `-y` skips the confirmation prompt; without a TTY it is required.
+
+**Stages.** The upgrade runs in stages, in this order:
+
+| Stage | What happens |
+|---|---|
+| 0 `preflight` | add-on check against the target and its suite matrix, image check, backup key check |
+| 1 `restore-point` | restore point R0; from here on the write lock is on |
+| 2 `core` | core and manager: tag change, migrations, render, start |
+| 3 `me`, 4 `data`, 5 `studio`, 6 `flow`, 7 `assist` | `addon upgrade` of the module from the checkout given with `--addon-path=NAME=DIR` |
+| 8 `finish` | write lock off; the duration of each stage is printed |
+
+`--stage=core` runs stages 0 to 2 only; after stage 2 the module stages may run one at a
+time and in any order with `upgrade --resume --stage=NAME`, as long as a module that
+another one requires (`requires.addons`) comes first. Without `--stage` every stage that
+is still due runs in the order above (Data before Studio).
+
+A module without `--addon-path` stays at its version when the target core still accepts it
+(its version is in the target's suite or the one before it, `compat/suite.yaml`); the plan
+then says that an update is recommended. A module the target does not accept stops the
+upgrade before anything changes, naming the module and the versions the target accepts.
+With `--force` the upgrade goes ahead, and that module is stopped, set inactive and marked
+`blocked` in `deployment.yaml` (with the reason); its data is not touched. Install a version
+the target accepts with `addon install` and start it to bring it back. A module that is not
+installed is not installed by the upgrade.
+
+**Backup key (stage 0).** Until the upgrade has a rollback key of its own, the way back
+needs the backup key of a recipient in `PAPAIA_BACKUP_RECIPIENTS`. Stage 0 therefore asks
+for it with `--identity=FILE` (or `--identity=-` to read it from standard input) and opens a
+check block encrypted to those recipients with it. If that fails, the upgrade stops with
+"Without a matching backup key there is no way back; the upgrade was not started." and
+nothing has changed. The key is only held in memory; it is never written to disk.
+
+**Write lock.** From restore point R0 until the finish stage, `$PAPAIA_CONFIG_DIR/state/
+write-lock.json` (`papaia.write-lock/1`) is present. It sits next to the halt file in the
+folder every service mounts read-only (see [docs/halt.md](docs/halt.md)); a service that
+finds it active accepts reads only and answers every write with "The installation is being
+updated. Your change was not saved. Please try again once the update has finished." A lock
+file that cannot be read counts as active. When a stage fails, the lock stays, so going
+back to R0 loses no data. The failure output names the way back:
+`git checkout` of the previous tag, `restore --restore-point=R0`, then
+`upgrade --release-lock -y`, which ends the lock only when both the checkout and the
+configuration are back at the release the upgrade started from. A retried
+`upgrade --version=X.Y.Z` to the same target keeps R0; `upgrade --resume` continues the
+module stages. The state of the run is in `$PAPAIA_CONFIG_DIR/state/upgrade.json`; every
+change of state (begin, each stage, a blocked module, finish, lock released) writes one
+`papaia.audit/1` row with the run's correlation id.
+
+**First upgrade into the staged release.** The first phase of an upgrade (stage 0, the
+restore point, the stop and the checkout) always runs from the installed release. Coming
+from a release without staged upgrades (1.9.0 and earlier, including 1.8.0), that is the
+old first phase: it takes a restore point unless `--no-backup` is given, but checks no
+backup key, takes no write lock and accepts no `--identity`, `--stage` or `--addon-path`.
+Start it as before, `upgrade --version=X.Y.Z -y`. The target's second phase then takes the
+run over: it records the restore point the old phase took as R0, switches the write lock on,
+plans the module stages against the target's add-on check and suite matrix (each module
+stays, or with `--force` is blocked) and runs stages 2 to 8 as usual; the upgrade exits 0
+when they pass. Upgrade the modules afterwards with `addon upgrade`. If the old phase ran
+with `--no-backup`, there is no R0: the second phase stops before any migration, with the
+stack stopped and the configuration unchanged, and names the way back (`git checkout` of
+the previous tag, `start --addons`); run the upgrade again without `--no-backup`. Every
+later upgrade runs all stages, the key check included, from its first phase.
 
 **Migrations.** A release may ship scripts in `tools/migrations/` that adapt an
 existing config bundle to a change the render pass cannot express on its own. Every

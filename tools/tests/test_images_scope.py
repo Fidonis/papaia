@@ -365,6 +365,8 @@ py_cli() {
     case "$1" in
         image-trust-anchor) echo "@TRUSTED@"; return ;;
         new-correlation-id) echo "@CORRELATION@"; return ;;
+        # No unfinished staged upgrade: no restore point to keep.
+        upgrade-stage) [ "$2" = restore-point ] && return 0; echo "py_cli $*"; return ;;
         active-addons) echo wiki; return ;;
         addon-override-files) return ;;
     esac
@@ -456,7 +458,8 @@ def test_the_second_phase_without_an_anchor_names_the_key_it_trusted(tmp_path):
     """The first upgrade from a core that pinned no key: the target's own key is all
     there is. The operator is shown its fingerprint to compare out of band."""
     done = _upgrade_addons(
-        tmp_path, "cmd_upgrade --resume-from=1.9.0 --resume-target=1.10.0",
+        tmp_path,
+        "cmd_upgrade --resume-from=1.9.0 --resume-target=1.10.0 --resume-restore-point=R0",
         trusted="sha256:" + "b" * 64,
     )
     assert done.returncode == 0, done.stderr

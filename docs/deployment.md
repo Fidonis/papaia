@@ -71,19 +71,31 @@ is stored in the config dir, and the tag is recomposed from the compose pin on e
 The supported upgrade path is:
 
 ```bash
-tools/papaia-ctl upgrade                 # to the newest release
-tools/papaia-ctl upgrade --version=1.9.0 # to a specific one
+tools/papaia-ctl upgrade --dry-run --version=1.9.0                 # 1. see every stage
+tools/papaia-ctl upgrade --version=1.9.0 --identity=/path/to/key   # 2. upgrade
 ```
 
-`upgrade` checks the active add-ons against the target release, takes a restore point, stops
-the stack, moves the checkout to the release tag, runs the migration scripts the release
-ships with, re-renders the configuration and starts the stack again. Customer overrides under
-`$PAPAIA_CONFIG_DIR/overlay/` survive untouched. Use `--dry-run` first to see the target
-version and the migrations that would run.
+`upgrade` checks the active add-ons against the target release and its suite matrix, checks
+the operator's backup key, takes restore point R0 and switches the write lock on, stops the
+stack, moves the checkout to the release tag, runs the migration scripts the release ships
+with, re-renders the configuration and starts the stack again. Then the module stages run
+(Me, Data, Studio, Flow, Assistant, each from the checkout given with `--addon-path`), and
+the write lock ends. Customer overrides under `$PAPAIA_CONFIG_DIR/overlay/` survive
+untouched. Use `--dry-run` first to see the target version, the migrations and every stage.
 
-If a migration fails, the upgrade stops and prints the commands to return to the previous
-release. Downgrades are not offered: restore a backup taken before the upgrade
-(`tools/papaia-ctl restore --list`).
+If a stage fails, the upgrade stops, keeps the write lock and prints the commands to return
+to the previous release: check out its tag, restore R0, `upgrade --release-lock -y`.
+Downgrades are not offered. See the [README](../README.md#upgrade) for stages, the write
+lock and the backup key.
+
+The first upgrade into the release with staged upgrades starts from the installed release
+(1.9.0 or earlier), so its first phase is the old one: `upgrade --version=X.Y.Z -y`, without
+`--identity`. That phase takes a restore point but checks no backup key and takes no write
+lock before the checkout moves. The target's second phase takes the restore point over as
+R0, switches the write lock on and runs the remaining stages; the modules stay at their
+versions and are upgraded afterwards with `addon upgrade`. Do not pass `--no-backup` on this
+run: without a restore point the second phase stops before any migration and names the way
+back.
 
 To pin a single service to a different tag ahead of a release, edit the `image:` line in that
 service's compose file and run `tools/papaia-ctl start`.

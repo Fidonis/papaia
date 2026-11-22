@@ -37,8 +37,12 @@
 #                            [--insecure-images] [--config-dir=PATH]
 #   papaia-ctl stop          [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--node=NAME]
 #                            [--config-dir=PATH]
-#   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--no-backup] [--force] [-y]
-#                            [--insecure-images] [--config-dir=PATH]
+#   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--force] [-y] [--insecure-images]
+#                            --identity=FILE|- [--stage=NAME[,NAME]] [--addon-path=NAME=DIR]
+#                            [--config-dir=PATH] — stages: core, me, data, studio, flow,
+#                            assist, finish; restore point R0 and write lock first
+#   papaia-ctl upgrade --resume --identity=FILE|- [--stage=NAME[,NAME]] [-y]
+#   papaia-ctl upgrade --release-lock [-y] — after going back to R0
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl backup        [--backup-dir=PATH] [--keep=N] [--retention-period-days=N]
 #                            [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
@@ -134,6 +138,7 @@
 # Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
 # release it just checked out:
 #   --resume-from=X.Y.Z --resume-target=X.Y.Z [--resume-restore-point=ID]
+#   [--resume-stages=LIST] [--resume-started=EPOCH]
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -143,7 +148,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,136p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,141p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
