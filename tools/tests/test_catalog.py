@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import stat
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,6 +79,29 @@ def test_the_vendored_kit_schemas_match_their_snapshot_digests():
     assert files == set(snapshot["files"])
     for name, digest in snapshot["files"].items():
         assert hashlib.sha256((KIT_SCHEMAS / name).read_bytes()).hexdigest() == digest, name
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="papaia-kit needs Python 3.12")
+def test_the_core_copies_of_kit_files_are_those_of_the_vendored_kit_release():
+    """The schema snapshot, the audit schema of papaia-audit and the audit vectors are the
+    files of the kit release in kit.lock, byte for byte."""
+    from importlib import metadata, resources
+
+    import tomllib
+
+    lock = tomllib.loads((REPO / "tools" / "kit.lock").read_text(encoding="utf-8"))
+    snapshot = json.loads((KIT_SCHEMAS / "snapshot.json").read_text())
+    assert metadata.version("papaia-kit") == lock["version"] == snapshot["source"]["version"]
+    assert snapshot["source"]["commit"] == lock["commit"]
+    data = resources.files("papaia_kit") / "_data"
+    copies = {
+        **{KIT_SCHEMAS / name: data / "schemas" / name for name in snapshot["files"]},
+        REPO / "src/infra/audit/papaia_audit/audit.v1.schema.json":
+            data / "schemas" / "audit.v1.schema.json",
+        Path(__file__).parent / "fixtures/audit/audit.v1.json": data / "vectors" / "audit.v1.json",
+    }
+    for copy, original in copies.items():
+        assert copy.read_bytes() == original.read_bytes(), copy.name
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -421,7 +445,7 @@ def test_the_brand_logo_write_and_removal_are_audited(tmp_path):
     config_dir = _install(tmp_path, "", [])
     overlay = config_dir / "overlay" / "platform"
     overlay.mkdir(parents=True)
-    (overlay / "brand-logo").write_bytes(b"\x89PNG fake logo")
+    (overlay / "brand-logo").write_bytes(b"\x89PNG\r\n\x1a\n fake logo")
     catalog.render(config_dir, REPO, now=NOW)
     (overlay / "brand-logo").unlink()
     catalog.render(config_dir, REPO, now=NOW)
@@ -497,16 +521,16 @@ def test_branding_comes_from_the_overlay(tmp_path):
     (overlay / "branding.yaml").write_text(
         "name: Beispiel GmbH\nsuffix: Arbeitsplattform\ncontact: {name: IT-Service}\n"
     )
-    (overlay / "brand-logo").write_bytes(b"\x89PNG fake logo")
+    (overlay / "brand-logo").write_bytes(b"\x89PNG\r\n\x1a\n fake logo")
     catalog.render(config_dir, REPO, now=NOW)
     branding = _services(config_dir)["branding"]
     assert branding == {
         "name": "Beispiel GmbH",
         "suffix": "Arbeitsplattform",
         "contact": {"name": "IT-Service"},
-        "logo_sha256": hashlib.sha256(b"\x89PNG fake logo").hexdigest(),
+        "logo_sha256": hashlib.sha256(b"\x89PNG\r\n\x1a\n fake logo").hexdigest(),
     }
-    assert (config_dir / "platform" / "brand-logo").read_bytes() == b"\x89PNG fake logo"
+    assert (config_dir / "platform" / "brand-logo").read_bytes() == b"\x89PNG\r\n\x1a\n fake logo"
 
 
 def test_an_unknown_branding_field_is_refused(tmp_path):

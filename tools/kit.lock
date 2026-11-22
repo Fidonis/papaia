@@ -3,16 +3,16 @@
 # pyproject.toml that binds the wheel as a path source; uv.lock carries the
 # same sha256. Rebuild and compare with: make release-verify TAG=v<version>
 
-version = "0.1.1"
-commit = "fb8225c710df4bf104d04116dcec4a9259e525e4"
-source_date_epoch = 1795256988
+version = "0.1.4"
+commit = "c00443f4e510692dc7a75263958de3442bef36f2"
+source_date_epoch = 1795301595
 
 [[files]]
-name = "papaia_kit-0.1.1-py3-none-any.whl"
-path = "vendor/papaia-kit/0.1.1/papaia_kit-0.1.1-py3-none-any.whl"
-sha256 = "ebdcf13924f6dde300cfc36d5116fc695c5343b724ee5d7d71fae106195605ab"
+name = "papaia_kit-0.1.4-py3-none-any.whl"
+path = "vendor/papaia-kit/0.1.4/papaia_kit-0.1.4-py3-none-any.whl"
+sha256 = "2d0d6f60ed311338f85be87e7b34d844dad4b32ec13ce303f6948c8ac800c955"
 
 [[files]]
-name = "papaia_kit-0.1.1.tar.gz"
-path = "vendor/papaia-kit/0.1.1/papaia_kit-0.1.1.tar.gz"
-sha256 = "d7ff3d842d227d90927ea08a7c520b48e9912988c8669a821af24e8886be9681"
+name = "papaia_kit-0.1.4.tar.gz"
+path = "vendor/papaia-kit/0.1.4/papaia_kit-0.1.4.tar.gz"
+sha256 = "e9c4fc33c81ea6475c94b92b6ce3296068d85f223cba3ed384b4e6cf920e7914"

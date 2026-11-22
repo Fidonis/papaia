@@ -69,6 +69,7 @@ from . import (
     resolve,
     secrets,
     service_accounts,
+    settings,
     stack_network,
     status,
     suite,
@@ -817,6 +818,64 @@ def cmd_catalog_render(args: argparse.Namespace) -> int:
         return 3
     print(f"Platform catalog {'written' if written else 'unchanged'}: {path}")
     return 0
+
+
+def cmd_settings_show(args: argparse.Namespace) -> int:
+    """`papaia-ctl settings show`: contact point, brand and four-eyes rule in effect."""
+    try:
+        shown = settings.show(Path(args.config_dir))
+    except settings.SettingsError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    print(json.dumps(shown, indent=2, ensure_ascii=False) if args.json
+          else settings.format_table(shown))
+    return 0
+
+
+def _settings_change(args: argparse.Namespace, change) -> int:
+    """Exit 0 done or unchanged, 1 refused (audited), 2 invalid, 3 stored but the catalog
+    could not be rendered."""
+    try:
+        outcome = change()
+    except settings.RefusedError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except settings.SettingsError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except catalog.CatalogError as exc:
+        print(f"ERROR: setting stored, but the platform catalog was not rendered: {exc}",
+              file=sys.stderr)
+        return 3
+    if not outcome.changed:
+        print(f"{args.key} unchanged.")
+    elif outcome.catalog_written is None:
+        print(f"{args.key} stored; no platform catalog yet "
+              f"({catalog.skip_reason(Path(args.config_dir), Path(args.repo_root))}).")
+    return 0
+
+
+def cmd_settings_set(args: argparse.Namespace) -> int:
+    def change():
+        outcome = settings.set_value(
+            Path(args.config_dir), Path(args.repo_root), args.key, args.value
+        )
+        if outcome.changed and outcome.catalog_written is not None:
+            shown = "the new logo" if args.key == settings.LOGO_KEY else args.value
+            print(f"{args.key} set to {shown}; platform catalog rendered.")
+        return outcome
+
+    return _settings_change(args, change)
+
+
+def cmd_settings_unset(args: argparse.Namespace) -> int:
+    def change():
+        outcome = settings.unset(Path(args.config_dir), Path(args.repo_root), args.key)
+        if outcome.changed and outcome.catalog_written is not None:
+            print(f"{args.key} removed; platform catalog rendered.")
+        return outcome
+
+    return _settings_change(args, change)
 
 
 def cmd_privacy_pack(args: argparse.Namespace) -> int:
@@ -2753,6 +2812,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_catalog_render = sub.add_parser("catalog-render")
     p_catalog_render.set_defaults(func=cmd_catalog_render)
+
+    p_settings_show = sub.add_parser("settings-show")
+    p_settings_show.add_argument("--json", action="store_true")
+    p_settings_show.set_defaults(func=cmd_settings_show)
+
+    p_settings_set = sub.add_parser("settings-set")
+    p_settings_set.add_argument("--key", required=True)
+    p_settings_set.add_argument("--value", required=True)
+    p_settings_set.set_defaults(func=cmd_settings_set)
+
+    p_settings_unset = sub.add_parser("settings-unset")
+    p_settings_unset.add_argument("--key", required=True)
+    p_settings_unset.set_defaults(func=cmd_settings_unset)
 
     p_privacy = sub.add_parser("privacy-pack")
     p_privacy.add_argument("--lang", choices=["de"], default="de")

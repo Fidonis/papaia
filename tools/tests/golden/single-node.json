@@ -8,7 +8,7 @@
     "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://chat.papaia.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.papaia.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://litellm.papaia.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.papaia.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.papaia.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.papaia.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,egress,audit,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
     "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - audit\n  - nginx\n  inference: local-first\n  addon_api: 13\naddons: []\n",
     "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - audit\n  - nginx\n  inference: local-first\n  addon_api: 13\naddons: []\n",
-    "doctor_json": "775e440b7ea6a554c76b7aa2543713bc43b7d47503110627291eeabc994f3f88",
+    "doctor_json": "e6847e4c4c1a2780a5c4e3b33452ad2a6d8e6eb36c5207f123465eb81d9149eb",
     "repeated_setup_changes": [
       "deployed.lock"
     ],
@@ -53,7 +53,7 @@
       "infra/smtp-relay/.env": "ea4386c632ad83d3361cb7a93f3caba966439bf5723d5aae842998fb590f808d",
       "manager/.env": "c20d28a2e375c0df4708b191f54b7ab4d939ee76b1b0e1f18c553520dd8d40a5",
       "platform/groups.json": "f07dc3a83627aade434350e2a7e6b36bcf01c4ac694780e6c2e32ba4d4e67874",
-      "platform/services.json": "53e21613269213154c47593661281e660924e9e2ec248b40858d312a93769ebd",
+      "platform/services.json": "237c8b8d22be66694f18204404ae79af6db01e5ee86c6bd4f203223a3d332b0c",
       "secrets/paperless-gate/proxy/nginx.conf": "92acd45934bc0d6df6ba2cee532508d56fe55893a87c46ae80c665178e764e4f",
       "secrets/paperless-gate/proxy/secret": "01e53c9fc4c9051968e542b8a60bfa8ebe5ad0e36dabf1fc80970e5ba2f21ccd",
       "security/egress-internal-targets.yaml": "0b326b0ab90596ddf291d4ecb2ae67d30e471ce0ccc6389ebf2fa28002631a5c",
@@ -72,7 +72,7 @@
     "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://papaia.example.org:8000\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://papaia.example.org:8080\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://papaia.example.org:8200\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://papaia.example.org:8120\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://papaia.example.org:6333\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=false\nMANAGER_STICKY=false\nRAG_STICKY=false\nVOICE_STICKY=false\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=\nSMTP_STICKY=false\nSMTP_HOST_STICKY=\nSMTP_PORT_STICKY=\nSMTP_SECURITY_STICKY=\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=\nSMTP_FROM_NAME_STICKY=\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=external_oidc\nREVERSE_PROXY_PROVIDER_STICKY=external_proxy\nNPM_ADMIN_HOST_STICKY=https://papaia.example.org:8100\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=true\nWEB_SEARCH_STICKY=false\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=oauth2-proxy,librechat,litellm,egress,audit\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
     "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - audit\n  inference: local-first\n  addon_api: 13\naddons: []\n",
     "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - audit\n  inference: local-first\n  addon_api: 13\naddons: []\n",
-    "doctor_json": "ad094103f7f1f37551a302b03de6d284427e8d59068fdf9b7875dbd00e9cb38e",
+    "doctor_json": "8bb4d48d144f48882e4176860145c4446edbd7b94b4484669f5a1ac259a42aa3",
     "repeated_setup_changes": [
       "deployed.lock"
     ],
@@ -118,7 +118,7 @@
       "manager/.env": "c20d28a2e375c0df4708b191f54b7ab4d939ee76b1b0e1f18c553520dd8d40a5",
       "overrides/docker-compose.ssl-cert.override.yml": "73e5965dad7ad51526d34281450eaba5de331dcc8265720ea9bc0df324f5cc7c",
       "platform/groups.json": "f07dc3a83627aade434350e2a7e6b36bcf01c4ac694780e6c2e32ba4d4e67874",
-      "platform/services.json": "4a6ed35cb79d74e7c95a86aaa85640db5ca1f5ce032d9bab725b7bb09460f228",
+      "platform/services.json": "ddd9411dca73b8e593b79a1b00da57342ccc68c7f6ac6920c427dd5f6d151e34",
       "secrets/paperless-gate/proxy/nginx.conf": "92acd45934bc0d6df6ba2cee532508d56fe55893a87c46ae80c665178e764e4f",
       "secrets/paperless-gate/proxy/secret": "01e53c9fc4c9051968e542b8a60bfa8ebe5ad0e36dabf1fc80970e5ba2f21ccd",
       "security/egress-internal-targets.yaml": "0b326b0ab90596ddf291d4ecb2ae67d30e471ce0ccc6389ebf2fa28002631a5c",
@@ -137,7 +137,7 @@
     "defaults": "APP_HOST_STICKY=https://papaia.example.org\nAUTH_HOST_STICKY=\nAUTH_HOST_DERIVED=https://auth.papaia.example.org\nKEYCLOAK_EXT_PORT=8110\nLIBRECHAT_HOST_STICKY=https://chat.example.org\nLIBRECHAT_EXT_PORT=8000\nLOCALAI_HOST_STICKY=https://localai.example.org\nLOCALAI_EXT_PORT=8080\nLOCALAI_VARIANT_STICKY=cpu\nLOCALAI_RUNTIME_STICKY=container\nLITELLM_HOST_STICKY=https://llm.example.org\nLITELLM_EXT_PORT=8200\nMANAGER_HOST_STICKY=https://manager.example.org\nMANAGER_EXT_PORT=8120\nQDRANT_HOST_STICKY=https://qdrant.example.org\nQDRANT_EXT_PORT=6333\nLOCAL_AI_STICKY=true\nMANAGER_STICKY=true\nRAG_STICKY=true\nVOICE_STICKY=true\nKNOWLEDGE_MAP_STICKY=false\nVOICE_VARIANT_STICKY=cpu\nSMTP_STICKY=true\nSMTP_HOST_STICKY=smtp.example.org\nSMTP_PORT_STICKY=587\nSMTP_SECURITY_STICKY=starttls\nSMTP_USER_STICKY=\nSMTP_FROM_STICKY=noreply@example.org\nSMTP_FROM_NAME_STICKY=papAIa\nSMTP_PASSWORD_STORED=false\nAUTH_PROVIDER_STICKY=internal_keycloak\nREVERSE_PROXY_PROVIDER_STICKY=internal_nginx\nNPM_ADMIN_HOST_STICKY=https://npm.example.org\nNPM_ADMIN_HOST_DERIVED=https://papaia.example.org:8100\nEXTERNAL_REVERSE_PROXY_STICKY=false\nWEB_SEARCH_STICKY=true\nRERANKER_MODEL_STICKY=YOUR_RERANKER_MODEL_NAME\nBACKUP_DIR_STICKY=<WORKSPACE>/backup\nCOMPOSE_PROFILES_STICKY=keycloak,oauth2-proxy,librechat,litellm,egress,audit,librechat-websearch,localai,manager,rag,voice,smtp,nginx\nPLATFORM_VERSION=1.9.0\nCONFIG_SEEDED=true\n",
     "deployment_yaml": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - audit\n  - nginx\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - voice\n  - smtp\n  inference: local-first\n  addon_api: 13\naddons: []\n",
     "deployment_yaml_after_upgrade": "customer: papaia\nplatform_version: 1.9.0\nhosting: self-hosted\ncore:\n  profiles:\n  - keycloak\n  - oauth2-proxy\n  - librechat\n  - litellm\n  - egress\n  - audit\n  - librechat-websearch\n  - localai\n  - manager\n  - rag\n  - voice\n  - smtp\n  - nginx\n  inference: local-first\n  addon_api: 13\naddons: []\n",
-    "doctor_json": "36107a90c6f6af5e8f28c8c97e1a4c4ca57e1f75e10db3366482f5520fece34d",
+    "doctor_json": "0b3f525ae8b9cda856686deb8c63886b593be77270ff5d0bffcb779d0065cc53",
     "repeated_setup_changes": [
       ".env",
       "deployed.lock",
@@ -185,7 +185,7 @@
       "infra/smtp-relay/upstream-password": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "manager/.env": "c20d28a2e375c0df4708b191f54b7ab4d939ee76b1b0e1f18c553520dd8d40a5",
       "platform/groups.json": "f07dc3a83627aade434350e2a7e6b36bcf01c4ac694780e6c2e32ba4d4e67874",
-      "platform/services.json": "55d93b9c6c9f364382f598aa92becc2a11c90e2848a91a5fe7b94f132c9e4688",
+      "platform/services.json": "0245ba1a5193e4636cbbabb133a8d6b0b7bb3d80816a56b60925229b36091e65",
       "secrets/paperless-gate/proxy/nginx.conf": "92acd45934bc0d6df6ba2cee532508d56fe55893a87c46ae80c665178e764e4f",
       "secrets/paperless-gate/proxy/secret": "01e53c9fc4c9051968e542b8a60bfa8ebe5ad0e36dabf1fc80970e5ba2f21ccd",
       "security/egress-internal-targets.yaml": "0b326b0ab90596ddf291d4ecb2ae67d30e471ce0ccc6389ebf2fa28002631a5c",

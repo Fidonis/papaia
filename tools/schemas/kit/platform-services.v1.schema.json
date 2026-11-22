@@ -26,9 +26,16 @@
     "branding": {"$ref": "#/$defs/Branding"},
     "platform_notices": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/Notice"}},
     "approvals": {
+      "description": "Approval rule of the installation, read by every module from here and kept by none of its own (E-18).",
       "type": "object",
       "additionalProperties": false,
-      "properties": {"single_admin_exception": {"type": "boolean", "default": false}}
+      "properties": {
+        "four_eyes": {
+          "description": "The only four-eyes setting of the platform, valid for every module. on: an approval needs a second person, approval by the submitter is refused (PK-REVIEW-SELF). off: the submitter may approve, the module flags the audit row with selbstfreigabe. Always on in security profile kritis, where the core states it explicitly.",
+          "enum": ["on", "off"],
+          "default": "off"
+        }
+      }
     },
     "delegations": {
       "description": "Lifetime of delegations (offline sessions) in effect for this installation, as set by the administration and written to the realm by the core. Holders and the personal area compute expiry dates from these values, never from numbers of their own. A missing value means the default of the security profile: 90 / 180 days in standard, 7 / 30 days in kritis; the schema carries no default keyword because the default depends on the profile. idle_days is not greater than max_days (checked by the catalog reader).",
@@ -54,6 +61,14 @@
     {
       "if": {"required": ["security_profile"], "properties": {"security_profile": {"const": "kritis"}}},
       "else": {"properties": {"services": {"items": {"not": {"required": ["ca"]}}}}}
+    },
+    {
+      "description": "In security profile kritis the four-eyes setting is stated and on; it cannot be switched off.",
+      "if": {"required": ["security_profile"], "properties": {"security_profile": {"const": "kritis"}}},
+      "then": {
+        "required": ["approvals"],
+        "properties": {"approvals": {"required": ["four_eyes"], "properties": {"four_eyes": {"const": "on"}}}}
+      }
     },
     {
       "description": "In security profile kritis 7 days without use and 30 days in all are the upper bound.",

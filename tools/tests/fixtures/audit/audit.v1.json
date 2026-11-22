@@ -442,6 +442,96 @@
         "error_code": "PK-INPUT-001",
         "event": "delegation_lifetime_changed"
       }
+    },
+    {
+      "name": "four_eyes_change",
+      "stage": "submission",
+      "row": {
+        "format": "papaia.audit/1",
+        "time": "2026-11-21T11:00:00.000Z",
+        "source_seq": 320,
+        "correlation_id": "0193a7c1-2b3d-7e4f-9a1b-2c3d4e5f6b01",
+        "writer": "papaia-core/settings",
+        "role": "server",
+        "sub": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+        "identity_kind": "person",
+        "result": "allowed",
+        "detail": {"four_eyes_old": "off", "four_eyes_new": "on"},
+        "event": "four_eyes_changed"
+      }
+    },
+    {
+      "name": "four_eyes_change_stored",
+      "stage": "stored",
+      "row": {
+        "format": "papaia.audit/1",
+        "time": "2026-11-21T11:01:00.000Z",
+        "source_seq": 321,
+        "correlation_id": "0193a7c1-2b3d-7e4f-9a1b-2c3d4e5f6b02",
+        "writer": "papaia-core/settings",
+        "role": "server",
+        "sub": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+        "identity_kind": "person",
+        "result": "allowed",
+        "detail": {"four_eyes_old": "on", "four_eyes_new": "off"},
+        "event": "four_eyes_changed",
+        "source": "papaia-core",
+        "seq": 98,
+        "prev_hash": "sha256:0e2d4c6b8a9f1e3d5c7b9a0f2e4d6c8b1a3f5e7d9c0b2a4f6e8d1c3b5a7f9e0d",
+        "hash": "sha256:7a1c3e5b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c"
+      }
+    },
+    {
+      "name": "four_eyes_change_refused_in_kritis",
+      "stage": "submission",
+      "row": {
+        "format": "papaia.audit/1",
+        "time": "2026-11-21T11:02:00.000Z",
+        "source_seq": 322,
+        "correlation_id": "0193a7c1-2b3d-7e4f-9a1b-2c3d4e5f6b03",
+        "writer": "papaia-core/settings",
+        "role": "server",
+        "sub": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+        "identity_kind": "person",
+        "result": "denied",
+        "error_code": "PK-INPUT-001",
+        "detail": {"four_eyes_old": "on", "four_eyes_new": "off"},
+        "event": "four_eyes_changed"
+      }
+    },
+    {
+      "name": "four_eyes_change_refused_without_values",
+      "stage": "submission",
+      "row": {
+        "format": "papaia.audit/1",
+        "time": "2026-11-21T11:03:00.000Z",
+        "source_seq": 323,
+        "correlation_id": "0193a7c1-2b3d-7e4f-9a1b-2c3d4e5f6b04",
+        "writer": "papaia-core/settings",
+        "role": "server",
+        "sub": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+        "identity_kind": "person",
+        "result": "denied",
+        "error_code": "PK-ACCESS-001",
+        "event": "four_eyes_changed"
+      }
+    },
+    {
+      "name": "self_approval_flagged",
+      "stage": "submission",
+      "row": {
+        "format": "papaia.audit/1",
+        "time": "2026-11-21T11:04:00.000Z",
+        "source_seq": 77,
+        "correlation_id": "0193a7c1-2b3d-7e4f-9a1b-2c3d4e5f6b05",
+        "writer": "papaia-studio/api",
+        "sub": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+        "identity_kind": "person",
+        "object_ref": {"type": "app_version", "id": "app-12:v3"},
+        "result": "allowed",
+        "detail": {"selbstfreigabe": true},
+        "event": "approval_changed"
+      }
     }
   ],
   "invalid": [
@@ -680,6 +770,33 @@
      "reason": "unknown field"},
     {"name": "lifetime_values_on_other_event", "stage": "submission", "base": "audit_export_counted",
      "set": {"detail": {"idle_days_old": 90, "idle_days_new": 365, "max_days_old": 180, "max_days_new": 365}},
-     "reason": "rule"}
+     "reason": "rule"},
+    {"name": "four_eyes_value_unknown", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": {"four_eyes_old": "off", "four_eyes_new": "yes"}}, "reason": "enum"},
+    {"name": "four_eyes_value_upper_case", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": {"four_eyes_old": "OFF", "four_eyes_new": "on"}}, "reason": "enum"},
+    {"name": "four_eyes_value_as_boolean", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": {"four_eyes_old": false, "four_eyes_new": true}}, "reason": "type"},
+    {"name": "four_eyes_values_partial", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": {"four_eyes_new": "on"}}, "reason": "rule"},
+    {"name": "four_eyes_change_without_values", "stage": "submission", "base": "four_eyes_change",
+     "unset": ["detail"], "reason": "rule"},
+    {"name": "four_eyes_change_with_empty_detail", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": null}, "reason": "rule"},
+    {"name": "four_eyes_change_without_a_change", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": {"four_eyes_old": "on", "four_eyes_new": "on"}}, "reason": "rule"},
+    {"name": "four_eyes_unknown_field_in_detail", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": {"four_eyes_old": "off", "four_eyes_new": "on", "security_profile": "standard"}},
+     "reason": "unknown field"},
+    {"name": "four_eyes_values_on_other_event", "stage": "submission", "base": "audit_export_counted",
+     "set": {"detail": {"four_eyes_old": "off", "four_eyes_new": "on"}}, "reason": "rule"},
+    {"name": "four_eyes_old_single_admin_field", "stage": "submission", "base": "four_eyes_change",
+     "set": {"detail": {"single_admin_exception": true}}, "reason": "unknown field"},
+    {"name": "self_approval_flag_false", "stage": "submission", "base": "self_approval_flagged",
+     "set": {"detail": {"selbstfreigabe": false}}, "reason": "const"},
+    {"name": "self_approval_flag_as_string", "stage": "submission", "base": "self_approval_flagged",
+     "set": {"detail": {"selbstfreigabe": "true"}}, "reason": "type"},
+    {"name": "self_approval_flag_on_denied_row", "stage": "submission", "base": "self_approval_flagged",
+     "set": {"result": "denied", "error_code": "PK-REVIEW-SELF"}, "reason": "rule"}
   ]
 }

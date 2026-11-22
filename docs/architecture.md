@@ -985,7 +985,10 @@ read-only; the core is their only writer.
   the public URL of each user interface (`<HOST_KEY>_HOST`, https only) and a
   `content_hash` (sha256 over the RFC 8785 form of the entry). Branding comes from
   the overlay file `platform/branding.yaml` (`name`, `suffix`, `contact`; logo
-  `platform/brand-logo`), and `platform_notices` carries the test-mode notice. A
+  `platform/brand-logo`, a PNG, JPEG or WebP image that each module serves under
+  `/_kit/brand/logo`), `approvals.four_eyes` from `platform/approvals.yaml` (default
+  `off`, always `on` in security profile `kritis`); `papaia-ctl settings` writes both
+  and renders the catalog. `platform_notices` carries the test-mode notice. A
   stopped add-on stays listed with `state: stopped`; its hash changes, and the
   hashes of the other entries do not. An id declared twice, an address without its
   compose service or a user interface without its public host stops the render.
@@ -1039,6 +1042,7 @@ No Core changes required.
 | `papaia-ctl npm-provision` | Provision the bundled Nginx Proxy Manager's proxy hosts from the rendered configuration |
 | `papaia-ctl keycloak-role-sync` | Reconcile the bundled Keycloak's realm roles, composites and protocol mappers against the rendered realm template, and grant `papaia-admin` to every holder of the legacy `admin` role, then run the realm sync. Runs on every `start`; no-op with an external OIDC provider |
 | `papaia-ctl catalog render` | Write `platform/services.json` from the `exposes` declarations of the installed add-ons and the active core profiles (see "Platform catalog"). Every render does it as well. Exit 3 when the catalog cannot be rendered; the previous file stays |
+| `papaia-ctl settings show\|set\|unset` | Contact point, brand and the four-eyes rule `approvals.four_eyes` in `overlay/platform/` (README, `settings`). Each change is audited (`four_eyes_changed` with old and new value for the rule) and renders the catalog. Exit 1 when profile `kritis` refuses switching four eyes off |
 | `papaia-ctl privacy-pack [--out=DIR] [--check]` | Write the records of processing `docs/de/datenschutz/vvt/<module>.md` from the `storage` declarations of the core profiles; only the part between the `privacy-pack` markers is generated, text around it is kept. `--check` writes nothing and exits 1 when a generated part differs from the declarations, a module file is missing or stale, a generated table has an empty cell, or a claim of a technical lock in the package names no acceptance criterion (a test runs it in CI). An entry without a `storage` declaration is listed as such and warned about |
 | `papaia-ctl privacy-pack --installation --out=FILE --backup-retention=DAYS [--format=html\|pdf\|md] [--offsite=PLACE --offsite-retention=DAYS]` | Write the data protection package of this installation as one document (default HTML): the processors it actually sends data to (the hosted model route, the mail server behind the relay, the host service provider), the places that keep copies with their deadlines (backup target, copy off site), and the records of every active core profile and installed add-on. One `papaia.audit/1` row (`privacy_pack.installation_write`) |
 | `papaia-ctl realm sync [--check]` | Reconcile the clients, roles, exchange scopes and service accounts the installed modules declare and `security/pairings.yaml` confirms, write the name list of the Paperless gate (see "Realm sync of declared clients") and the group list `platform/groups.json`. `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |

@@ -52,6 +52,7 @@ from urllib.parse import urlsplit
 
 from . import (
     backup,
+    catalog,
     cli_addon,
     common,
     compat,
@@ -2102,6 +2103,64 @@ def check_lifecycle(ctx: Context) -> CheckResult:
     )
 
 
+def check_approvals(ctx: Context) -> CheckResult:
+    """The four-eyes rule (`doctor approvals`, BE-26): reports `approvals.four_eyes` as the
+    catalog publishes it. `fail` for a malformed `approvals.yaml` and for a stored `off` in
+    security profile kritis, where the rule cannot be switched off (the catalog states `on`
+    all the same; the stored value contradicts the profile)."""
+    name = "approvals"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        profile = catalog.profile_name(common.parse_env_file(ctx.config_dir / ".env"))
+    except catalog.CatalogError as exc:
+        return CheckResult(
+            name, FAIL,
+            f"{exc}; the four-eyes rule cannot be read from an unknown security profile",
+            {"security_profile": None},
+        )
+    try:
+        stored = catalog.stored_four_eyes(ctx.config_dir)
+    except catalog.CatalogError as exc:
+        return CheckResult(name, FAIL, f"{exc} (papaia-ctl settings set approvals.four_eyes)",
+                           {"security_profile": profile})
+    value = catalog.four_eyes_in_effect(profile, stored)
+    details = {"four_eyes": value, "security_profile": profile, "stored": stored}
+    if profile == catalog.FOUR_EYES_FIXED_PROFILE:
+        if stored == "off":
+            return CheckResult(
+                name, FAIL,
+                f"approvals.yaml says four eyes off, which security profile {profile} does not "
+                "allow; the catalog states on ('papaia-ctl settings set approvals.four_eyes on')",
+                details,
+            )
+        return CheckResult(name, PASS, f"four eyes on (fixed by security profile {profile})",
+                           details)
+    origin = "default" if stored is None else "set"
+    return CheckResult(name, PASS, f"four eyes {value} ({origin}, security profile {profile})",
+                       details)
+
+
+def check_contact_point(ctx: Context) -> CheckResult:
+    """The contact point for users (`doctor contact_point`, PLT-82): `warn` while none is
+    set, since every module then shows "Ansprechstelle nicht hinterlegt"."""
+    name = "contact_point"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        contact = catalog.current_branding(ctx.config_dir).get("contact")
+    except catalog.CatalogError as exc:
+        return CheckResult(name, FAIL, str(exc))
+    if not contact:
+        return CheckResult(
+            name, WARN,
+            "no contact point for users is set; modules show 'Ansprechstelle nicht hinterlegt' "
+            "('papaia-ctl settings set contact.name <name>', then contact.mail or contact.phone)",
+            {"contact": None},
+        )
+    return CheckResult(name, PASS, f"contact point: {contact['name']}", {"contact": contact})
+
+
 def _uplink_members(ctx: Context, network: str) -> list[tuple[str, str, str]] | None:
     """(container, compose service, compose project) of every running container on
     `network`, or None when Docker does not answer."""
@@ -2398,6 +2457,8 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("container_health", check_container_health),
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
+    ("approvals", check_approvals),
+    ("contact_point", check_contact_point),
     ("network", check_network),
     ("identity", check_identity),
 ]

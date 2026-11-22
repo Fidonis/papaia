@@ -578,19 +578,41 @@ def test_the_schema_file_holds_plain_sql_without_a_password():
     assert "CREATE ROLE audit_ingest" in text and "CREATE ROLE audit_read" in text
 
 
-def test_the_vendored_schema_is_the_revision_with_the_delegation_lifetime():
+def test_the_vendored_schema_is_the_revision_with_four_eyes_rows():
     schema = json.loads(
         (SERVICE_DIR / "papaia_audit" / "audit.v1.schema.json").read_text(encoding="utf-8")
     )
     names = {v["name"] for v in VECTORS["valid"]}
 
-    assert schema["x-papaia-schema-version"] == "1.3.0"
+    assert schema["x-papaia-schema-version"] == "1.4.0"
+    assert "four_eyes_changed" in schema["$defs"]["event"]["enum"]
     assert "delegation_lifetime_changed" in schema["$defs"]["event"]["enum"]
     assert {
         "operation_at_server_with_token_times",
         "delegation_lifetime_change",
         "delegation_lifetime_change_refused",
+        "four_eyes_change",
+        "four_eyes_change_refused_in_kritis",
+        "self_approval_flagged",
     } <= names
+
+
+def test_the_four_eyes_rows_of_the_kit_are_stored_and_a_bad_one_is_refused():
+    valid = next(v for v in VECTORS["valid"] if v["name"] == "four_eyes_change_refused_in_kritis")
+    row = _vector_row(valid)
+    source = row["writer"].split("/", 1)[0]
+    row["source_seq"] = 1
+
+    stored = _ingest(FakeStore(), row, source=source)
+    unchanged = _ingest(
+        FakeStore(),
+        {**row, "result": "allowed", "error_code": None,
+         "detail": {"four_eyes_old": "on", "four_eyes_new": "on"}},
+        source=source,
+    )
+
+    assert stored.refused is None
+    assert unchanged.refused is not None and unchanged.refused.code == core.INVALID
 
 
 def test_token_times_are_stored_only_in_the_server_row_of_an_operation():

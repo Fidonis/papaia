@@ -13,8 +13,9 @@ tools/schemas/kit:
   the catalog while stopped; add-ons that are not installed are absent. Fields that
   serve the core alone (`service_accounts`, `storage`, `requires`, ...) stay out: the
   catalog is mounted into every consuming module. On top: `identity`, `branding`,
-  `platform_notices`, the model aliases and `delegations`, the delegation lifetime in
-  effect (delegation_lifetime; holders compute expiry dates from it).
+  `approvals` (the four-eyes rule), `platform_notices`, the model aliases and
+  `delegations`, the delegation lifetime in effect (delegation_lifetime; holders compute
+  expiry dates from it).
 - `groups.json` (`papaia.platform-groups/1`): the realm's groups with `id`, `path`,
   `display_name` and `technical` only, written by `realm sync` from the identity
   provider; no member lists, no personal data.
@@ -75,6 +76,16 @@ CORE_PROFILES: dict[str, str] = {
 BRANDING_OVERLAY = "overlay/platform/branding.yaml"
 LOGO_OVERLAY = "overlay/platform/brand-logo"
 DEFAULT_BRAND_NAME = "papAIa"
+# The four-eyes rule of the installation (E-18): `four_eyes: "on"|"off"`, written by
+# `papaia-ctl settings`. Without the file `off`; in profile kritis always `on`.
+APPROVALS_OVERLAY = "overlay/platform/approvals.yaml"
+FOUR_EYES_VALUES = ("on", "off")
+FOUR_EYES_DEFAULT = "off"
+FOUR_EYES_FIXED_PROFILE = "kritis"
+# Modules serve the logo from their own origin (/_kit/brand/logo), so only raster images:
+# an SVG could carry script that would run in that origin.
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+JPEG_SIGNATURE = b"\xff\xd8\xff"
 
 RUNNING = "running"
 STOPPED = "stopped"
@@ -411,22 +422,91 @@ def _stamp(now: datetime | None) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def logo_problem(data: bytes) -> str | None:
+    """Why `data` cannot be the brand logo, or None: a PNG, JPEG or WebP image of at most
+    MAX_BYTES."""
+    if not data:
+        return "the logo file is empty"
+    if len(data) > MAX_BYTES:
+        return f"the logo is larger than {MAX_BYTES} bytes"
+    webp = data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if webp or data.startswith((PNG_SIGNATURE, JPEG_SIGNATURE)):
+        return None
+    return "the logo must be a PNG, JPEG or WebP image"
+
+
+def profile_name(env: dict[str, str]) -> str:
+    """The security profile (security_profile.name_of). CatalogError for a value that is
+    no profile: the four-eyes rule depends on it, so a misspelt `kritis` is never read as
+    standard; the render stops and the previous catalog stays."""
+    try:
+        return security_profile.name_of(env)
+    except security_profile.ProfileError as exc:
+        raise CatalogError(str(exc)) from None
+
+
+def stored_four_eyes(config_dir: Path) -> str | None:
+    """The value of `approvals.yaml`, or None without the file. Raises CatalogError for a
+    file that is not exactly `four_eyes: "on"` or `"off"`; YAML reads an unquoted on/off
+    as a boolean, which is refused rather than guessed."""
+    path = config_dir / APPROVALS_OVERLAY
+    if not path.is_file():
+        return None
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise CatalogError(f"{APPROVALS_OVERLAY} cannot be read: {exc}") from None
+    if not isinstance(doc, dict) or set(doc) != {"four_eyes"}:
+        raise CatalogError(f"{APPROVALS_OVERLAY}: must hold exactly the key four_eyes")
+    value = doc["four_eyes"]
+    if type(value) is not str or value not in FOUR_EYES_VALUES:
+        raise CatalogError(
+            f'{APPROVALS_OVERLAY}: four_eyes must be the quoted text "on" or "off"'
+        )
+    return value
+
+
+def four_eyes_in_effect(profile: str, stored: str | None) -> str:
+    """The rule the catalog publishes: always `on` in profile kritis, else the stored
+    value or the default `off`."""
+    if profile == FOUR_EYES_FIXED_PROFILE:
+        return "on"
+    return stored or FOUR_EYES_DEFAULT
+
+
+def branding_overlay(config_dir: Path) -> dict:
+    """The operator overlay `overlay/platform/branding.yaml` as written (fields `name`,
+    `suffix`, `contact`), unchecked; an empty mapping without the file."""
+    path = config_dir / BRANDING_OVERLAY
+    if not path.is_file():
+        return {}
+    try:
+        overlay = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise CatalogError(f"{BRANDING_OVERLAY} is not valid YAML: {exc}") from None
+    if overlay is None:
+        return {}
+    if not isinstance(overlay, dict) or "logo_sha256" in overlay:
+        raise CatalogError(
+            f"{BRANDING_OVERLAY}: must be a mapping of name, suffix and contact "
+            "(the core sets logo_sha256 from the logo file)"
+        )
+    return overlay
+
+
+def current_branding(config_dir: Path) -> dict:
+    """The `branding` block of the catalog (see _branding)."""
+    return _branding(config_dir)[0]
+
+
 def _branding(config_dir: Path) -> tuple[dict, bytes | None]:
     """The brand from the operator overlay (`overlay/platform/branding.yaml`, fields
     `name`, `suffix`, `contact`) and the logo file next to it; the core sets
-    `logo_sha256`. Without an overlay the product name."""
-    path = config_dir / BRANDING_OVERLAY
+    `logo_sha256`. Without a name the product name."""
     branding: dict = {"name": DEFAULT_BRAND_NAME}
-    if path.is_file():
-        try:
-            branding = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as exc:
-            raise CatalogError(f"{BRANDING_OVERLAY} is not valid YAML: {exc}") from None
-        if not isinstance(branding, dict) or "logo_sha256" in branding:
-            raise CatalogError(
-                f"{BRANDING_OVERLAY}: must be a mapping of name, suffix and contact "
-                "(the core sets logo_sha256 from the logo file)"
-            )
+    overlay = branding_overlay(config_dir)
+    if overlay:
+        branding = {**branding, **overlay}
         try:
             schema_check.validate(
                 branding, exposes.load_schema(exposes.SERVICES_SCHEMA), "#/$defs/Branding"
@@ -439,6 +519,9 @@ def _branding(config_dir: Path) -> tuple[dict, bytes | None]:
         if logo_path.stat().st_size > MAX_BYTES:
             raise CatalogError(f"{LOGO_OVERLAY} is larger than {MAX_BYTES} bytes")
         logo = logo_path.read_bytes()
+        problem = logo_problem(logo)
+        if problem is not None:
+            raise CatalogError(f"{LOGO_OVERLAY}: {problem}")
         branding = {**branding, "logo_sha256": hashlib.sha256(logo).hexdigest()}
     return branding, logo
 
@@ -516,12 +599,10 @@ def build(
             entries[declared["id"]] = _entry(source, index, declared, services)
 
     assert core.addon_api is not None  # skip_reason
-    try:
-        profile = security_profile.name_of(env)
-    except security_profile.ProfileError:
-        # Setup and start refuse such a value; the catalog keeps the safe reading.
-        profile = security_profile.DEFAULT
+    # Fails closed: no catalog (and so no four-eyes value) from an unknown profile.
+    profile = profile_name(env)
     branding, _ = _branding(config_dir)
+    four_eyes = four_eyes_in_effect(profile, stored_four_eyes(config_dir))
     try:
         # Both values always (kit platform-services 2.6): a partial block is filled per
         # field by the reader and may then contradict itself.
@@ -541,6 +622,7 @@ def build(
         "services": [entries[key] for key in sorted(entries)],
         "models": [],
         "branding": branding,
+        "approvals": {"four_eyes": four_eyes},
         "platform_notices": [TEST_MODE_NOTICE] if hosted_model.enabled(env) else [],
         "delegations": delegations,
     }

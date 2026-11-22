@@ -2,12 +2,12 @@
   "format": "papaia.kit-schema-snapshot/1",
   "source": {
     "package": "papaia-kit",
-    "version": "0.1.2",
-    "commit": "c11d686ee79ea3f0f8d13ccb813c788c432162e0"
+    "version": "0.1.4",
+    "commit": "c00443f4e510692dc7a75263958de3442bef36f2"
   },
   "files": {
     "exposes.v1.schema.json": "e95b1fdcda697d5b4937b83c87e85aa75fce3ad344fe7b35d21af3a9c285fb48",
     "platform-groups.v1.schema.json": "6d32c907d9a0d3761372f1526a2f9da05e04f09d979260473e36487df4dc733e",
-    "platform-services.v1.schema.json": "28d73db0aa3037982c0bf2725475688a83edde9485b68ea0bced8b22eba57b84"
+    "platform-services.v1.schema.json": "3fe0b6ba405f55df399711eedcdfc67a512e97679dfaeef46604ec1f21758e6a"
   }
 }

@@ -692,6 +692,9 @@
   "branding": {
     "name": "papAIa"
   },
+  "approvals": {
+    "four_eyes": "off"
+  },
   "platform_notices": [],
   "delegations": {
     "idle_days": 90,

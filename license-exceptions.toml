@@ -39,3 +39,11 @@ package = "typing-extensions"
 version = "4.16.0"
 license = "PSF-2.0"
 source = "https://pypi.org/project/typing-extensions/4.16.0/"
+
+# Template engine of papaia-kit (development dependency). The 3.1.6 metadata carries only
+# the classifier "BSD License"; the shipped LICENSE.txt is the three-clause BSD text.
+[[verified]]
+package = "jinja2"
+version = "3.1.6"
+license = "BSD-3-Clause"
+source = "https://github.com/pallets/jinja/blob/3.1.6/LICENSE.txt"

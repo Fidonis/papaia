@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.papaia.dev/audit.v1.schema.json",
-  "x-papaia-schema-version": "1.3.0",
+  "x-papaia-schema-version": "1.4.0",
   "title": "papaia.audit/1 event (stored form)",
   "description": "One audit event as papaia-audit stores and exports it: the submitted body plus source, seq, prev_hash and hash, which only papaia-audit assigns. A source submits the form '#/$defs/submission'. Events never carry tokens, payloads, titles, search texts, form values or SQL literals; every string is limited to identifiers, and unknown fields are rejected at every level. Rules in contract/audit.md.",
   "type": "object",
@@ -220,6 +220,47 @@
             "required": ["detail"],
             "properties": {"detail": {"type": "object", "required": ["idle_days_old"]}}
           }
+        },
+        {
+          "description": "The old and new four-eyes values belong to four_eyes_changed only.",
+          "if": {
+            "properties": {
+              "detail": {
+                "type": "object",
+                "anyOf": [{"required": ["four_eyes_old"]}, {"required": ["four_eyes_new"]}]
+              }
+            },
+            "required": ["detail"]
+          },
+          "then": {"required": ["event"], "properties": {"event": {"const": "four_eyes_changed"}}}
+        },
+        {
+          "description": "An allowed change of the four-eyes setting records the old and the new value, and they differ.",
+          "if": {
+            "properties": {"event": {"const": "four_eyes_changed"}, "result": {"const": "allowed"}},
+            "required": ["event", "result"]
+          },
+          "then": {
+            "required": ["detail"],
+            "properties": {
+              "detail": {
+                "type": "object",
+                "required": ["four_eyes_old", "four_eyes_new"],
+                "anyOf": [
+                  {"properties": {"four_eyes_old": {"const": "off"}, "four_eyes_new": {"const": "on"}}},
+                  {"properties": {"four_eyes_old": {"const": "on"}, "four_eyes_new": {"const": "off"}}}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "description": "The self-approval flag marks an approval that went through.",
+          "if": {
+            "properties": {"detail": {"type": "object", "required": ["selbstfreigabe"]}},
+            "required": ["detail"]
+          },
+          "then": {"required": ["result"], "properties": {"result": {"const": "allowed"}}}
         }
       ]
     },
@@ -230,6 +271,7 @@
         "delegation_redeemed",
         "delegation_revoked",
         "delegation_lifetime_changed",
+        "four_eyes_changed",
         "approval_changed",
         "exchange_right_changed",
         "role_changed",
@@ -346,7 +388,7 @@
       "additionalProperties": false
     },
     "detail": {
-      "description": "Counters, hashes, the fixed codes of the erasure journal and the day values of a delegation lifetime change only; never statement text, rows or values.",
+      "description": "Counters, hashes, the fixed codes of the erasure journal, the day values of a delegation lifetime change, the on/off values of a four-eyes setting change and the self-approval flag only; never statement text, rows or values.",
       "type": "object",
       "properties": {
         "objects": {
@@ -425,13 +467,27 @@
         "max_days_new": {
           "description": "Delegation lifetime change: maximum age in days after the change.",
           "$ref": "#/$defs/lifetime_days"
+        },
+        "four_eyes_old": {
+          "description": "Four-eyes setting change: approvals.four_eyes in effect before the change.",
+          "enum": ["on", "off"]
+        },
+        "four_eyes_new": {
+          "description": "Four-eyes setting change: the value after the change; in a denied row the value asked for.",
+          "enum": ["on", "off"]
+        },
+        "selbstfreigabe": {
+          "description": "Approval by the submitter while approvals.four_eyes is off (E-18). Absent for every other approval.",
+          "const": true
         }
       },
       "dependentRequired": {
         "idle_days_old": ["idle_days_new", "max_days_old", "max_days_new"],
         "idle_days_new": ["idle_days_old", "max_days_old", "max_days_new"],
         "max_days_old": ["idle_days_old", "idle_days_new", "max_days_new"],
-        "max_days_new": ["idle_days_old", "idle_days_new", "max_days_old"]
+        "max_days_new": ["idle_days_old", "idle_days_new", "max_days_old"],
+        "four_eyes_old": ["four_eyes_new"],
+        "four_eyes_new": ["four_eyes_old"]
       },
       "additionalProperties": false
     },

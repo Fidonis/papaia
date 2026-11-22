@@ -1005,6 +1005,49 @@ active; modules check it before each effect. Lifting it needs a reason. Setting,
 refused lift are `papaia.audit/1` rows of the host account. `backup` leaves the halt out and
 `restore` keeps it as it is. Details: [docs/halt.md](docs/halt.md).
 
+### `settings`
+
+```bash
+tools/papaia-ctl settings show  [--json] [--config-dir=PATH]
+tools/papaia-ctl settings set   <key> <value> [--config-dir=PATH]
+tools/papaia-ctl settings unset <key> [--config-dir=PATH]
+```
+
+The settings of the installation that every module shows or obeys. They are kept in
+`$PAPAIA_CONFIG_DIR/overlay/platform/` and published in the platform catalog
+(`platform/services.json`, see [docs/architecture.md](docs/architecture.md), "Platform
+catalog"), which modules read within 60 s:
+
+| Key | Value | Default |
+|---|---|---|
+| `branding.name` | Name of the installation, 1 to 60 characters | `papAIa` |
+| `branding.suffix` | Second line under the name, 1 to 60 characters | none |
+| `branding.logo` | Path of a PNG, JPEG or WebP file of at most 1 MiB; copied to `platform/brand-logo`, and each module serves it under `/_kit/brand/logo` | none |
+| `contact.name` | Contact point for users, 1 to 120 characters; named in every "no access" and "not allowed" message | none: modules show "Ansprechstelle nicht hinterlegt" |
+| `contact.mail`, `contact.phone` | Mail address or phone number of the contact point (needs `contact.name`) | none |
+| `approvals.four_eyes` | `on`: an approval in Studio, Data, Flow or the core needs a second person (role "Bestätigung" is enough), and the submitter cannot approve. `off`: the submitter may approve; the module marks the audit row `selbstfreigabe`. | `off`; always `on` in security profile `kritis` |
+
+`approvals.four_eyes` is the only four-eyes setting of the platform; no module and no size
+profile has one of its own. In security profile `kritis` (`PAPAIA_SECURITY_PROFILE`) it is always
+`on`: `set approvals.four_eyes off` is refused (exit 1) and the refusal is audited, and
+`set approvals.four_eyes on` rewrites an `off` stored before the profile changed (the remedy
+`doctor approvals` names). Any profile other than `standard`, `kritis` or empty (for example
+`Kritis`) stops `settings`, the catalog render and `doctor approvals` instead of reading as
+`standard`. The setting never applies to the resolution of pseudonyms, the deletion lock or write pairings of data
+class `vertraulich`: they always need a second person.
+
+Every value is checked before anything is written (lengths, no control characters, mail and phone
+format, raster images only, since an SVG served from a module's origin could carry script).
+Setting the value already in effect changes nothing. Each change is one `papaia.audit/1` row of
+the host account: `config_changed` naming the key (never the value), and for
+`approvals.four_eyes` the event `four_eyes_changed` with the old and the new value. The catalog
+is rendered right after the change; without a catalog yet (no `OIDC_ISSUER`) the value is stored
+and published by the first render. Two changes at once wait for each other
+(`overlay/platform/.settings.lock`), so none is lost. `unset` returns a key to its default; `unset contact` removes
+the whole contact point. Exit codes: 0 done or unchanged, 1 refused, 2 invalid key or value, 3
+stored but the catalog could not be rendered. [`doctor`](#doctor) reports both settings
+(`approvals`, `contact_point`).
+
 ### `pairing`
 
 ```bash
@@ -1337,6 +1380,8 @@ raw values behind its summary in `details`.
 | `network` | Only with a SQL source: the direct route of `mcp-mssql` to it (see [docs/network.md](docs/network.md)). The network `<project>-sql-uplink` exists, is not internal, has the rendered range and no member other than `mcp-mssql`; `iptables -S` of the installation's chain equals the rendered host rules and its jump is the first rule of `DOCKER-USER`. | `fail` for a drifted, missing, misplaced or additional rule, another member or another range; `warn` when the network is not created yet or the rules cannot be read (not root, no `iptables`, inside a container); `skip` without a SQL source |
 | `lifecycle` | Only while the `lifecycle` profile is on: the health report of `papaia-lifecycle` (see [docs/lifecycle.md](docs/lifecycle.md)), read with `docker exec`: the age of its last reconciliation independent of events, deactivated accounts still holding a consent, the revocation list, gap revokes and accounts it could not revoke. | `fail` when the last reconciliation is older than 2 h or none has run, a deactivated account holds a consent, the list is old, missing or does not verify, or the service does not run; `warn` for a gap revoke in the last 7 days, a parked event or an account outside the group of persons; `skip` while the profile is off or where the service runs on another node |
 | `identity` | Only with a federation (`security/idp.yaml`, see [docs/federation.md](docs/federation.md)): the status sync of `papaia-lifecycle` with the upstream directory, from the same health report. | `fail` when the status sync has failed for longer than 300 s, has not succeeded in the last 300 s or never ran, when `idp.yaml` or the group map is not usable, when the `lifecycle` profile is off or the service does not run; `skip` without a federation or where the service runs on another node |
+| `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
+| `contact_point` | A contact point for users is set (`contact.name`, see [Installation settings](#installation-settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set, `fail` for a malformed `overlay/platform/branding.yaml` |
 
 Before `setup` has run, the checks that need the installation's configuration report `skip`
 instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as

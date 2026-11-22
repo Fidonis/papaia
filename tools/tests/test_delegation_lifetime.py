@@ -642,7 +642,8 @@ def test_the_vendored_catalog_schema_holds_the_bounds(tmp_path, profile, block, 
     config_dir = _install(tmp_path, "rag", [])
     doc = catalog.build(config_dir, REPO, NOW)
     assert doc is not None
-    doc = dict(doc, security_profile=profile, delegations=block)
+    # The kit binds four eyes to on in kritis; only the delegation bounds are under test.
+    doc = dict(doc, security_profile=profile, delegations=block, approvals={"four_eyes": "on"})
     schema = exposes.load_schema(exposes.SERVICES_SCHEMA)
     if valid:
         schema_check.validate(doc, schema)

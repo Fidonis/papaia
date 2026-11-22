@@ -79,6 +79,13 @@
 #                            a module wrote for the clients in its client_keys
 #   papaia-ctl catalog render [--config-dir=PATH] — write platform/services.json from
 #                            the exposes declarations (setup, start and addon do it too)
+#   papaia-ctl settings show [--json] [--config-dir=PATH] — contact point, brand, four eyes
+#   papaia-ctl settings set  <key> <value> [--config-dir=PATH] — keys: branding.name,
+#                            branding.suffix, branding.logo (a PNG, JPEG or WebP file),
+#                            contact.name, contact.mail, contact.phone, approvals.four_eyes
+#                            (on|off; always on in security profile kritis)
+#   papaia-ctl settings unset <key> [--config-dir=PATH] — branding.name, branding.suffix,
+#                            branding.logo, contact, contact.mail, contact.phone
 #   papaia-ctl privacy-pack  [--lang=de] [--out=DIR] [--check] — the data protection package
 #                            docs/de/datenschutz/ from the storage declarations
 #   papaia-ctl privacy-pack  --installation --out=FILE --backup-retention=DAYS
@@ -155,7 +162,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,148p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,155p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -194,6 +201,8 @@ source "$SH_LIB/librechat.sh"
 source "$SH_LIB/secrets.sh"
 # shellcheck source=lib/sh/halt.sh
 source "$SH_LIB/halt.sh"
+# shellcheck source=lib/sh/settings.sh
+source "$SH_LIB/settings.sh"
 # shellcheck source=lib/sh/audit.sh
 source "$SH_LIB/audit.sh"
 # shellcheck source=lib/sh/pairing.sh
@@ -304,6 +313,7 @@ case "$cmd" in
             *) error "Unknown 'catalog' subcommand: '${sub:-<none>}'. Valid: render."; exit 2 ;;
         esac
         ;;
+    settings)      cmd_settings "$@" ;;
     privacy-pack)  cmd_privacy_pack "$@" ;;
     service-account) cmd_service_account "$@" ;;
     certs)         cmd_certs "$@" ;;

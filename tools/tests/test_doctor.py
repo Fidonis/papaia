@@ -190,6 +190,9 @@ def gpu_in_a_container(stack, docker: FakeDocker, variant: str = "nvidia-cuda-13
 
 def test_healthy_installation_passes_and_validates(stack):
     add_certs(stack, "local-ca.crt")
+    overlay = stack["config"] / "overlay" / "platform"
+    overlay.mkdir(parents=True)
+    (overlay / "branding.yaml").write_text("contact: {name: IT-Service}\n", encoding="utf-8")
     report = run_doctor(stack)
 
     assert [c.status for c in report.checks] == [
@@ -211,6 +214,8 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # container_health
         PASS,  # image_signatures: nothing runs in the fake
         SKIP,  # lifecycle: the lifecycle profile is off
+        PASS,  # approvals: four eyes off by default
+        PASS,  # contact_point
         SKIP,  # network: no SQL source, no direct route
         SKIP,  # identity: no federation
     ]
@@ -239,6 +244,8 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "container_health",
         "image_signatures",
         "lifecycle",
+        "approvals",
+        "contact_point",
         "network",
         "identity",
     )
