@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.8.0 |
-| **Date** | 2026-11-07 |
-| **Status** | Active — describes the 1.8.0 release as built |
+| **Version** | 1.9.0 |
+| **Date** | 2026-11-20 |
+| **Status** | Active — describes the 1.9.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -1194,7 +1194,7 @@ reads from the same place.
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, backup, mail, settings (modules and overlay) and, while the `rag` profile is active, the RAG pages |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, models, backup, mail, settings (modules and overlay), nodes, the AI map and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 | `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page and `/api/v1/users`, `/api/v1/roles`: the accounts, their roles and sessions, and the realm's roles themselves. A tier above the admin role: `manager-admin` alone is not enough |
 
@@ -1246,6 +1246,21 @@ fails the add-on stays active. It is refused while the add-on's `docker-compose.
 a core before 1.7.0 aims its Compose call at the core project then (see the add-on lifecycle table
 above), so a manager on such a core could take its own stack down.
 
+### Add-on requirements and maintenance actions
+
+The manager reads `requires.addons` and `actions` from the manifest itself and leaves the decision
+to `papaia-ctl`. Each required add-on is shown with its state (active, inactive, missing, too old,
+or unchecked when a version or range cannot be read), and *Install* is disabled while one is unmet,
+unless the compatibility mode is `warn`, where `papaia-ctl` installs anyway. The other direction,
+the active add-ons that require an add-on, is shown as *Required by*; while there is one, *Remove*
+and *Uninstall* answer 409 in every compatibility mode, and the queued job checks again before it
+takes anything down, since an install queued ahead can add a dependent. A declared maintenance
+action is a button that queues exactly `papaia-ctl addon run <add-on> <action>`: the request
+carries the action's name only, never a command or an argument, `run` is not one of the generic
+verbs, and an undeclared action or an inactive add-on is a 404. Destructive actions ask for a
+confirmation; on a distributed installation actions are refused, as `addon run` is single-host.
+Both need a core with these manifest fields (1.9.0 or newer).
+
 ### Long-running operations
 
 Installs, upgrades and lifecycle verbs shell out to `papaia-ctl` and can take minutes
@@ -1290,20 +1305,24 @@ Settings has three tabs: *Manager* (the manager's own configuration), *Modules* 
 The last two keep no second source of truth; both drive the core.
 
 **Modules.** The tab is the one place in the manager that switches the optional modules
-(LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off.
+(LocalAI with its accelerator variant, web search, the RAG system, voice, the mail relay and the
+knowledge map) on and off.
 It stores the choice with the core's own `setup`, so validation, sticky values and generated
 secrets stay in one implementation, and starts the module's profile. Which volumes a module owns,
 what its settings consist of and which questions `setup` still needs answered when the module is
 switched on (the public URL of LocalAI and of Qdrant, the relay's mail server) come from the core's
 read-only `module-info`; deleting a module's data (its volumes) and/or its settings is the core's
 `module-purge`, offered only for a module that is switched off, with the module's name typed back
-as confirmation. Both are internal commands of the core's Python entry point, not `papaia-ctl`
+as confirmation. The files an operator wrote by hand for a module (the knowledge map's
+declarations, governance records and gold set) are neither data nor settings: they go only when
+`module-purge --operator-files` asks for them, a separate choice that is off by default. Both are internal commands of the core's Python entry point, not `papaia-ctl`
 verbs, and the manager passes them typed options only: one module, never `--force`, `--env` or any
 other part of the configuration. A core without them (before 1.6.0) still switches LocalAI and web
 search and switches modules off keeping everything.
 
-**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM
-and SearXNG ([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
+**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM,
+SearXNG and Chatterbox, the speech synthesis of the `voice` profile
+([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
 draft is the core's `render-preview`: the draft merged in memory, nothing written. *Apply* saves
 the file and recreates the services that read it as a queued job. Before every Apply, Discard and
 roll-back the previous file is copied to `$PAPAIA_CONFIG_DIR/manager/overlay-history/` (the latest
@@ -1320,7 +1339,8 @@ process in its environment only, never in an argument or the log. While the rela
 recreated and the Keycloak realm gets it as its mail server (`papaia-ctl keycloak-role-sync`), which
 is what lets the Users page offer a mailed link. *Notifications* belongs to the manager: recipients
 (an email address or a webhook URL) choose which events they receive — a failed job, an overdue
-backup, a service that stopped or turned unhealthy, an available update, an expiring certificate.
+backup, a service that stopped or turned unhealthy, an available update, an expiring certificate,
+a new or changed high finding of the AI map that no exception covers.
 The checks run on an interval and after every job, each event is reported once per occurrence
 (`notifications-state.json` keeps what was reported), email goes through the relay and a webhook
 gets a JSON `POST`. A notification carries no job log and no error text.
@@ -1409,6 +1429,23 @@ The core's `upgrade.lock` and each node's `state.json` drive a banner and the sa
 core would make. Switching a module off keeps its data, because the core does not delete volumes
 across nodes. Without a topology in `deployment.yaml` none of this runs, and a single host
 behaves as before.
+
+### AI map
+
+The *AI map* page (`/knowledge-map`, administrators only) is the management view of the
+[knowledge map](knowledge-map.md) ([ADR 0013](adr/0013-knowledge-map-as-optional-core-profile.md)).
+It computes no rule of its own: the rendered map and `lints.yaml` come from the configuration
+directory, as the core's render wrote them, and the server's own view, usage, gold-set runs and
+mined refinements from the map server's admin API at `KNOWLEDGE_MAP_URL`
+(`http://knowledge-map-mcp:8200` on the stack network) with the bearer `KM_ADMIN_TOKEN`, read
+from `$PAPAIA_CONFIG_DIR/ai/knowledge-map/.env` when a request needs it. The only check it adds
+is a live comparison of the model tiers against LiteLLM (findings with `origin: manager`). Every
+change, an entry, an override of a declared entry, an operator file or a governance record under
+`overlay/knowledge-map/`, is a queued job that checks the file, writes it, renders the map and
+puts the previous file back when the render refuses it. A routing test or an entry probe asks
+the map server without recording anything. High findings that no exception covers feed the
+notifications. The module itself is switched in the Modules tab; deleting its operator files is
+the separate `module-purge --operator-files` choice described above.
 
 ---
 
