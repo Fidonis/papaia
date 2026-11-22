@@ -25,6 +25,7 @@ import logging
 import re
 import shutil
 import sys
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -68,6 +69,14 @@ LITELLM_CONFIG = "ai/litellm/config.yaml"
 LOCALAI_PROFILE = "localai"
 LOCALAI_MODELS_FILE = "ai/localai/models.txt"
 LOCALAI_MODELS_DIR = "ai/localai/models"
+# The model YAMLs the last render wrote, next to their directory, which the init job mounts.
+# Only these are the render's to delete: until 1.8 the rendered directory was the only place
+# for a model YAML of one's own, so any other file there can be the only copy.
+LOCALAI_MODELS_RECORD = "ai/localai/.rendered-models"
+# LocalAI reads the model YAMLs when it starts and a reload forgets none. Each removal writes
+# a new label, so `start` recreates it. An addition writes none: LocalAI would be down while
+# the init job downloads the model.
+LOCALAI_MODELS_OVERRIDE = "overrides/docker-compose.localai-models.override.yml"
 # LiteLLM resolves `os.environ/...` itself, so the key is never written into the file.
 LOCALAI_API_KEY_REF = "os.environ/LOCALAI_API_KEY"
 
@@ -113,6 +122,13 @@ def _localai_model_files(directory: Path) -> list[Path]:
     )
 
 
+def _localai_model_names(repo_root: Path, config_dir: Path) -> set[str]:
+    """The names of the model YAMLs a render writes: shipped ones and overlay-only ones."""
+    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
+    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
+    return {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
+
+
 def _localai_model_configs(
     repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> list[dict]:
@@ -120,11 +136,8 @@ def _localai_model_configs(
     exist only in the overlay. Only the top-level `*.yaml`, which is all the init job copies
     (`cp /models-config/configs/*.yaml`), so a `.yml` is never registered without reaching
     LocalAI."""
-    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
-    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
-    names = {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
     configs = []
-    for name in sorted(names):
+    for name in sorted(_localai_model_names(repo_root, config_dir)):
         rel_path = f"{LOCALAI_MODELS_DIR}/{name}"
         text = _effective_text(rel_path, repo_root, config_dir, active_addons)
         if text is None:
@@ -534,6 +547,10 @@ def _render_dir(
     base_dir = repo_root / "src" / rel_path
     if not base_dir.is_dir():
         return
+    if rel_path == LOCALAI_MODELS_DIR:
+        # Before writing: where file names ignore case, a YAML renamed only in case is
+        # written into the file of the old name, which would then be deleted as stale.
+        _remove_stale_model_files(repo_root, config_dir)
     src_root = repo_root / "src"
     for file_path in sorted(base_dir.rglob("*")):
         if file_path.is_file():
@@ -550,6 +567,37 @@ def _render_dir(
         if not (src_root / sub_rel).is_file():
             text = _overlay_only_text(sub_rel, config_dir)
             common.atomic_write(config_dir / sub_rel, text)
+    names = sorted(_localai_model_names(repo_root, config_dir))
+    common.atomic_write(config_dir / LOCALAI_MODELS_RECORD, "".join(f"{n}\n" for n in names))
+
+
+def _remove_stale_model_files(repo_root: Path, config_dir: Path) -> None:
+    """Delete the model YAMLs an earlier render wrote that neither the repository nor the
+    overlay has any longer, and label LocalAI anew. The init job copies every YAML of the
+    rendered directory, so a leftover would keep the model in LocalAI."""
+    try:
+        record = (config_dir / LOCALAI_MODELS_RECORD).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    recorded = set(record.splitlines())
+    names = _localai_model_names(repo_root, config_dir)
+    stale = [
+        path
+        for path in _localai_model_files(config_dir / LOCALAI_MODELS_DIR)
+        if path.name in recorded and path.name not in names
+    ]
+    if not stale:
+        return
+    override = {
+        "services": {"localai": {"labels": {"org.papaia.models-removed": uuid.uuid4().hex[:16]}}}
+    }
+    common.atomic_write(
+        config_dir / LOCALAI_MODELS_OVERRIDE,
+        yaml.safe_dump(override, sort_keys=False, default_flow_style=False),
+    )
+    for path in stale:
+        path.unlink()
+        logger.info("removed %s/%s: no longer in the overlay", LOCALAI_MODELS_DIR, path.name)
 
 
 # Browser-facing URLs in the root .env. A stored URL counts even while its service is off:

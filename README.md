@@ -1830,6 +1830,14 @@ other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `c
 `threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
 An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
 
+A YAML you delete from the overlay leaves the rendered directory on the next render. The next
+`start` removes it from LocalAI's models directory and recreates LocalAI, which would list the
+model until then (restart a [native LocalAI](#native-localai-on-apple-silicon) yourself). Only
+YAMLs that papAIa wrote are removed: the render records its files in `ai/localai/.rendered-models`,
+the init job in `.papaia-model-configs.txt` in the models directory. Downloaded model files, models
+from LocalAI's gallery and YAMLs you put into the rendered directory by hand stay, as do YAMLs
+installed by a release without these records; delete those by hand.
+
 LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
 copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. A key
 you change in `ai/localai/.env` reaches LiteLLM only on the next `setup`. The
