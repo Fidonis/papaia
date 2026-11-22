@@ -34,7 +34,7 @@ Each form prefills the right labels and structure, so please use them rather tha
    - `chore/<short-name>` for maintenance
 3. Make your change in small, reviewable commits.
 4. Open a pull request against `main`. The repository's PR template is filled in automatically; please complete each section, especially **Linked issues**, **Type of change**, and **Test plan**.
-5. CI will run lint, tests, the license, word and secret checks and the PR-title check. Address any failures. Once green, request a review.
+5. CI will run lint, tests, the license, word and secret checks, the build and vulnerability scan of the own images and the PR-title check. Address any failures. Once green, request a review.
 6. PRs are merged via **Squash & Merge**. The PR title becomes the squash commit message - make sure it follows Conventional Commits (see below).
 
 ## Commit and PR title convention
@@ -93,7 +93,7 @@ The core's own images (`compat/own-images.yaml`) are pinned by the digest their 
 
 ### Repository checks
 
-Three more CI jobs guard every pull request. They use the platform's shared contract package `papaia-kit`, vendored as its release wheel under `tools/vendor/papaia-kit/<version>/` and pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; it is a development dependency only (Python 3.12) and never part of `papaia-ctl` or an image.
+More CI jobs guard every pull request. They use the platform's shared contract package `papaia-kit`, vendored as its release wheel under `tools/vendor/papaia-kit/<version>/` and pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; it is a development dependency only (Python 3.12) and never part of `papaia-ctl` or an image.
 
 - **License check** - every package of `tools/uv.lock` and the base image of the own images (`licenses/base-images.json`) against the kit's license policy. Packages with missing or ambiguous metadata carry a `[[verified]]` entry with its source in `license-exceptions.toml`; an exception for a weak-copyleft package needs an ADR and an approval. The job also checks that a seeded package under a forbidden license is rejected.
 
@@ -106,6 +106,12 @@ Three more CI jobs guard every pull request. They use the platform's shared cont
       uv run --locked --extra dev --project tools papaia-kit repo words --root . --baseline words-baseline.toml
 
 - **Secret scan** - gitleaks (version and sha256 pinned in the workflow) over the full history with `.gitleaks.toml`, whose narrow allow lists cover values that are no secret by construction (file digests of the golden snapshots, the unsigned test token without claims, canary labels in the tests). The reviewed findings of the history are listed in `.gitleaksignore`, one fingerprint each with its reason; the history is not rewritten. A value that was ever committed counts as public and is rotated, never listed as if it were still secret.
+
+- **Own images** (`.github/workflows/images.yml`) - builds every image of `compat/own-images.yaml` for linux/amd64 and linux/arm64 into a registry inside the job, scans each platform of the built digest with a pinned Trivy image and keeps the reports and the CycloneDX SBOMs as an artefact. A critical finding always fails. A high finding passes only with an entry in `security/exceptions.yaml` (id, package, reason, expiry at most 90 days ahead, approval of the security officer); an expired entry and an unknown field fail. The job also checks that a seeded critical finding is rejected, and warns when the built digests differ from the compose pins. It runs again every night.
+
+      tools/build-images build --registry=127.0.0.1:5000/unpublished/ --out=builds.json
+      tools/scan-images scan --builds=builds.json --out=scan/
+      tools/scan-images check
 
 ## Local development
 

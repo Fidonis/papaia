@@ -1,0 +1,20 @@
+# Accepted vulnerability findings of the core's own images (tools/scan-images,
+# lib/image_scan.py; CI workflow images.yml).
+#
+# A CRITICAL finding always fails the scan: no entry can except it. A HIGH finding
+# passes only with an unexpired entry here; an expired entry fails the scan on its
+# own. Unknown fields, duplicates and dates more than 90 days ahead are refused.
+#
+# Entry format:
+#
+#   - id: CVE-2026-12345           # CVE or GHSA id as Trivy reports it
+#     package: libexample          # package or source package as Trivy reports it
+#     severity: HIGH               # the only severity an entry may name
+#     reason: >-                   # 20 to 1000 characters: why the finding cannot
+#       ...                        # be reached here or why no fix exists yet
+#     expires: 2027-02-28          # review date (YYYY-MM-DD), at most 90 days ahead
+#     approved_by: security officer  # countersignature of the security officer
+#
+# Every entry is added in a pull request the security officer reviews.
+version: 1
+exceptions: []

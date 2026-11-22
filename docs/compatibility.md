@@ -272,6 +272,33 @@ tools/build-images bom-entries --sbom=ghcr.io/fidonis/papaia-egress=<sbom> ...
   registry login is used (release); without it cosign runs as a pinned
   container on the host network (local registry). For a loopback registry the
   signature is not written to the public transparency log.
+- CI (`.github/workflows/images.yml`) builds every own image on each pull
+  request, push and night into a registry inside the job and scans both
+  platforms of the built digest (`tools/scan-images scan`, Trivy pinned by
+  digest). The gate: a critical finding always fails; a high finding passes
+  only with an unexpired entry in
+  [`security/exceptions.yaml`](../security/exceptions.yaml) (at most 90 days,
+  approved by the security officer); an expired entry fails. Reports and the
+  CycloneDX SBOM of each platform are kept as the `images-report` artefact.
+- On a version tag the `publish` job, the only one that may request an OIDC
+  token, rebuilds into `ghcr.io/fidonis/`, refuses digests other than the
+  compose pins (`tools/build-images verify`; the scan job checked its build
+  against the same pins), signs each digest with the workflow identity and
+  attaches both SBOMs as cosign attestations of type `cyclonedx`, next to the
+  image (`tools/build-images sign-keyless`). The job runs only when the
+  repository variable `PAPAIA_PUBLISH_IMAGES` is `true`. The signature by the
+  release key in the signature repository (3 of the release gate) stays with
+  the release process. Check a released image and fetch its SBOM:
+
+  ```sh
+  id='^https://github\.com/Fidonis/papaia/\.github/workflows/images\.yml@refs/tags/v'
+  issuer=https://token.actions.githubusercontent.com
+  cosign verify --certificate-identity-regexp "$id" \
+      --certificate-oidc-issuer "$issuer" ghcr.io/fidonis/papaia-egress@sha256:<digest>
+  cosign verify-attestation --type cyclonedx --certificate-identity-regexp "$id" \
+      --certificate-oidc-issuer "$issuer" ghcr.io/fidonis/papaia-egress@sha256:<digest> \
+      | jq -r .payload | base64 -d | jq .predicate
+  ```
 - An own image gets no exception at start: it must be listed with its digest
   and signed, like every other image. For a local test environment that means
   the local registry, its test key, and a test bill of materials signed with

@@ -19,6 +19,11 @@ The path of an image, the same for a release and for a local test environment:
 4. `bom-entries` the image entries of the core in the suite bill of materials
              (papaia.suite-bom/1), from the pins in compose.
 
+In CI (.github/workflows/images.yml) a version tag adds `verify` (the rebuilt digests
+are the scanned and pinned ones) and `sign-keyless` (signature and CycloneDX SBOM
+attestations by the workflow identity, next to the image); lib/image_scan.py gates
+the build on its vulnerability findings.
+
 `prefix` is empty for the release registry and a registry prefix such as
 `127.0.0.1:5000/unpublished/` for a local one; the digest does not depend on it. The
 start check (lib/images.py) knows no own images: they must be listed with their digest
@@ -541,6 +546,51 @@ def sign(repo_root: Path, prefix: str, entries: list[dict], *, key: Path,
             raise OwnImageError(f"signing {ref} failed:\n{(done.stderr or '')[-2000:]}")
 
 
+_SBOM_LIMIT = 32 * 1024 * 1024
+
+
+def sign_keyless(prefix: str, entries: list[dict], *, sboms: Path, cosign: str,
+                 env: dict | None = None, run: Runner = _run) -> None:
+    """Sign each built digest with the identity of the CI workflow (cosign keyless,
+    OIDC) and attach the CycloneDX SBOM of each platform as an attestation.
+
+    Release registry only: the signature and the attestations stay next to the image
+    (no COSIGN_REPOSITORY), apart from the release key's signatures in the signature
+    repository that `sign` writes. Every SBOM (`<sboms>/<image>-<arch>.cdx.json`) is
+    checked before the first signature."""
+    if _prefix(prefix) != "":
+        raise OwnImageError("sign-keyless signs images of the release registry only; a "
+                            "local registry is signed with a key (sign)")
+    env = {key: value for key, value in dict(os.environ if env is None else env).items()
+           if key != "COSIGN_REPOSITORY"}
+    plan: list[tuple[str, list[Path]]] = []
+    for entry in entries:
+        short = entry["name"].rsplit("/", 1)[1]
+        files = []
+        for platform in PLATFORMS:
+            path = Path(sboms) / f"{short}-{platform.split('/', 1)[1]}.cdx.json"
+            if not path.is_file() or path.is_symlink():
+                raise OwnImageError(f"{entry['name']}: no SBOM for {platform} ({path.name})")
+            try:
+                doc = json.loads(suite._read_limited(path, _SBOM_LIMIT, "SBOM"))
+            except (suite.SuiteError, ValueError) as exc:
+                raise OwnImageError(f"{path.name}: not readable as JSON") from exc
+            if not isinstance(doc, dict) or doc.get("bomFormat") != "CycloneDX":
+                raise OwnImageError(f"{path.name}: not a CycloneDX document")
+            files.append(path)
+        plan.append((f"{entry['name']}@{entry['digest']}", files))
+    for ref, files in plan:
+        commands = [[cosign, "sign", "--yes", ref]] + [
+            [cosign, "attest", "--yes", "--type", "cyclonedx", "--predicate", str(path), ref]
+            for path in files
+        ]
+        for cmd in commands:
+            done = run(cmd, env=env)
+            if done.returncode != 0:
+                raise OwnImageError(f"cosign {cmd[1]} of {ref} failed:\n"
+                                    f"{(done.stderr or '')[-2000:]}")
+
+
 # ── pin ──────────────────────────────────────────────────────────────────────
 
 
@@ -593,6 +643,28 @@ def pin(repo_root: Path, entries: list[dict]) -> list[str]:
             else:
                 raise OwnImageError(f"service {service} of {image.name} is in no compose file")
     return changed
+
+
+def pin_mismatches(repo_root: Path, entries: list[dict]) -> list[str]:
+    """Every declared image that was not built, or whose build is not the digest its
+    compose services pin. A release signs only what an installation pulls."""
+    root = Path(repo_root)
+    services = images.compose_services(root)
+    built = {entry["name"]: entry for entry in entries}
+    problems: list[str] = []
+    for image in load(root):
+        entry = built.pop(image.name, None)
+        if entry is None:
+            problems.append(f"{image.name}: not built")
+            continue
+        wanted = f"{image.name}:{entry['tag']}@{entry['digest']}"
+        for service in image.services:
+            if services.get(service) != wanted:
+                problems.append(f"{image.name}: built {entry['digest']}, but service "
+                                f"{service} pins {services.get(service)}; rebuild and pin "
+                                "(build-images pin) before the tag")
+    problems += [f"{name}: built but not declared in {DECLARATION_PATH}" for name in built]
+    return problems
 
 
 # ── bill of materials ────────────────────────────────────────────────────────
@@ -676,6 +748,13 @@ def main(argv: list[str] | None = None) -> int:
     p_sign.add_argument("--signatures", default=None, help="signature repository override")
     p_pin = sub.add_parser("pin", help="pin the built digests in compose")
     p_pin.add_argument("--builds", required=True)
+    p_verify = sub.add_parser("verify", help="check that the builds are the pinned digests")
+    p_verify.add_argument("--builds", required=True)
+    p_keyless = sub.add_parser("sign-keyless",
+                               help="sign and attest the SBOMs with the CI identity")
+    p_keyless.add_argument("--builds", required=True)
+    p_keyless.add_argument("--sboms", required=True, help="folder of <image>-<arch>.cdx.json")
+    p_keyless.add_argument("--cosign", default="cosign", help="cosign binary")
     p_bom = sub.add_parser("bom-entries", help="print the bill of materials entries (YAML)")
     p_bom.add_argument("--sbom", action="append", default=[], help="NAME=FILE per image")
     args = parser.parse_args(argv)
@@ -702,6 +781,19 @@ def main(argv: list[str] | None = None) -> int:
             sign(root, prefix, entries, key=Path(args.key), cosign=args.cosign,
                  signatures=args.signatures)
             print(f"{len(entries)} image(s) signed.")
+            return 0
+        if args.action == "verify":
+            _, entries = read_builds(Path(args.builds))
+            problems = pin_mismatches(root, entries)
+            for problem in problems:
+                print(f"ERROR: {problem}", file=sys.stderr)
+            if not problems:
+                print(f"{len(entries)} build(s) match the compose pins.")
+            return 1 if problems else 0
+        if args.action == "sign-keyless":
+            prefix, entries = read_builds(Path(args.builds))
+            sign_keyless(prefix, entries, sboms=Path(args.sboms), cosign=args.cosign)
+            print(f"{len(entries)} image(s) signed and attested.")
             return 0
         if args.action == "pin":
             _, entries = read_builds(Path(args.builds))

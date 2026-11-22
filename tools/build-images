@@ -11,6 +11,8 @@
 #   build-images build --out=FILE [--registry=PREFIX] [--image=NAME]...
 #   build-images sign  --builds=FILE --key=FILE [--cosign=PATH] [--signatures=REPO]
 #   build-images pin   --builds=FILE
+#   build-images verify --builds=FILE
+#   build-images sign-keyless --builds=FILE --sboms=DIR [--cosign=PATH]
 #   build-images bom-entries --sbom=NAME=FILE...
 #
 # Needs Docker with buildx for linux/amd64 and linux/arm64 (build), cosign or Docker
