@@ -1,0 +1,197 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Mein Bereich · me-web, prefs, prefs-db
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Core profile `me` (ADR 0020):
+#   COMPOSE_PROFILES=...,me
+#
+# Three services, two of them from one pinned papaia-me image:
+#
+#   me-web     Mein Bereich: the page where every person sees and changes their own
+#              settings of the installation's modules. Signs the person in as the
+#              confidential client papaia-me and exchanges the person's token per
+#              module. Keeps no state and no volume.
+#   prefs      The preference store (notification channel, language, appearance,
+#              time zone), audience papaia-prefs. Modules reach it on papaia-net
+#              after attaching `prefs` (addon_api 8); every write gives one
+#              papaia.audit/1 row, delivered to papaia-audit over mutual TLS.
+#   prefs-db   PostgreSQL of prefs, on papaia-prefs-db-net only (internal); no
+#              add-on may attach it (compat.NEVER_ATTACHABLE).
+#
+# Safety:
+#   - No service publishes a host port. Browsers reach me-web through the edge
+#     proxy as `me.<domain>` (ME_PUBLIC_URL); direct port access never applies to it.
+#   - The environment of me-web and prefs holds exactly the variables the image
+#     reads: src/infra/me/service-env.json, generated from the image's source and
+#     compared by `python -m lib.me_profile check` (tools/tests/test_me_profile.py).
+#     No env_file: a second source of values is how names drift apart.
+#   - Read-only root file systems, no capabilities, no new privileges.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env merged
+# with src/infra/me/.env.
+services:
+
+  me-web:
+    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:7d8e5165cbda151723d31d322e8cd6524bc9449f4372345a57cd3302f88d2c99
+    restart: unless-stopped
+    environment:
+      OIDC_ISSUER: ${OIDC_ISSUER}
+      # Browser-side authorization URL; token and keys on the internal name.
+      OIDC_AUTH_URL: ${OIDC_AUTH_URL}
+      OIDC_TOKEN_URL: ${OIDC_TOKEN_URL}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL}
+      # Empty: derived from the issuer with Keycloak's paths.
+      ME_OIDC_LOGOUT_URL: ${ME_OIDC_LOGOUT_URL:-}
+      ME_OIDC_INTERNAL_ISSUER: ${ME_OIDC_INTERNAL_ISSUER:-}
+      # Fixed: the realm sync and the token-exchange pairings depend on it.
+      ME_OIDC_CLIENT_ID: papaia-me
+      ME_OIDC_CLIENT_SECRET: ${ME_OIDC_CLIENT_SECRET}
+      ME_OIDC_SCOPE: ${ME_OIDC_SCOPE:-openid profile}
+      ME_SESSION_SECRET: ${ME_SESSION_SECRET}
+      ME_PUBLIC_URL: ${ME_PUBLIC_URL}
+      ME_ACCOUNT_URL: ${ME_ACCOUNT_URL:-}
+      # Rendered files, mounted read-only below; the area never changes a declaration.
+      PAPAIA_CONFIG_DIR: /config
+      ME_REGISTRY_FILE: /config/personal-settings/registry.yaml
+      ME_CATALOG_FILE: /config/platform/services.json
+      ME_MODULE_CA_DIR: /config/personal-settings/module-ca
+      # The local CA of the bundled Keycloak and of the module calls. Cleared to ""
+      # via docker-compose.ssl-cert.override.yml when AUTH_PROVIDER=external_oidc.
+      SSL_CERT_FILE: /certs/local-ca.crt
+      # The area may only be stricter than the platform.
+      PAPAIA_SECURITY_PROFILE: ${PAPAIA_SECURITY_PROFILE:-standard}
+      ME_SECURITY_PROFILE: ${ME_SECURITY_PROFILE:-}
+      ME_MODULE_TIMEOUT: ${ME_MODULE_TIMEOUT:-2}
+      ME_EXPORT_TIMEOUT: ${ME_EXPORT_TIMEOUT:-10}
+      ME_EXPORT_MAX_BYTES: ${ME_EXPORT_MAX_BYTES:-16777216}
+      ME_MODULE_PORT: ${ME_MODULE_PORT:-8080}
+      ME_DEFAULT_LANG: ${ME_DEFAULT_LANG:-de}
+      ME_INSTALLATION_NAME: ${ME_INSTALLATION_NAME:-}
+    volumes:
+      - ${PAPAIA_CONFIG_DIR}/personal-settings:/config/personal-settings:ro
+      - ${PAPAIA_CONFIG_DIR}/platform:/config/platform:ro
+      - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - papaia-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-me
+      de.fidonis.role:   personal-area
+    profiles: [me]
+
+  prefs:
+    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:7d8e5165cbda151723d31d322e8cd6524bc9449f4372345a57cd3302f88d2c99
+    entrypoint: ["python", "-m", "prefs"]
+    restart: unless-stopped
+    depends_on:
+      prefs-db:
+        condition: service_healthy
+    environment:
+      OIDC_ISSUER: ${OIDC_ISSUER}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL}
+      SSL_CERT_FILE: /certs/local-ca.crt
+      PREFS_DB_DIALECT: postgres
+      PREFS_DB_HOST: prefs-db
+      PREFS_DB_PORT: "5432"
+      PREFS_DB_NAME: prefs
+      PREFS_DB_USER: prefs
+      # The password is read from this file at connect time, never from a variable.
+      PREFS_DB_PASSWORD_FILE: /run/secrets/prefs-db-password
+      # Only for the single-file store of a local check; empty in the core profile.
+      PREFS_SQLITE_FILE: ""
+      # azp per audience, written by the realm sync and re-read when replaced;
+      # missing or unreadable, prefs refuses every token.
+      PREFS_AZP_ALLOWLIST_FILE: /run/papaia/azp/azp-allowlist.json
+      PREFS_DEFAULT_TIME_ZONE: ${PREFS_DEFAULT_TIME_ZONE:-Europe/Berlin}
+      PREFS_DEFAULT_CHANNEL: ${PREFS_DEFAULT_CHANNEL:-mail}
+      PREFS_LANG: ${PREFS_LANG:-de}
+      # Client certificate of the audit source papaia-me (`papaia-ctl audit` issues it).
+      PREFS_AUDIT_URL: https://papaia-audit:8443/v1/ingest
+      PREFS_AUDIT_CERT_FILE: /run/papaia/audit/client.crt
+      PREFS_AUDIT_KEY_FILE: /run/papaia/audit/client.key
+      PREFS_AUDIT_CA_FILE: /run/papaia/audit/ca.crt
+    secrets:
+      - prefs-db-password
+    volumes:
+      - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
+      # The folders, not the files: both are replaced atomically.
+      - ${PAPAIA_CONFIG_DIR}/security/azp:/run/papaia/azp:ro
+      - ${PAPAIA_CONFIG_DIR}/infra/audit/clients/papaia-me:/run/papaia/audit:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777,noexec,nosuid,nodev
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+      interval: 15s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    networks:
+      - papaia-net
+      - papaia-audit-ingest-net
+      - papaia-prefs-db-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-me
+      de.fidonis.role:   preference-store
+    profiles: [me]
+
+  prefs-db:
+    image: postgres:18.3@sha256:7e32e9833a6fb1c92c32552794cb6ed569d51b445a54907d35fc112ef39684db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: prefs
+      POSTGRES_USER: prefs
+      POSTGRES_PASSWORD_FILE: /run/secrets/prefs-db-password
+    secrets:
+      - prefs-db-password
+    volumes:
+      - prefs-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "prefs", "-d", "prefs"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - papaia-prefs-db-net
+    security_opt: [no-new-privileges:true]
+    labels:
+      de.fidonis.module: papaia-me
+      de.fidonis.role:   database
+    profiles: [me]
+
+secrets:
+  # Generated by setup into src/infra/me/.env; handed to both containers as a file.
+  prefs-db-password:
+    environment: PREFS_DB_PASSWORD
+
+networks:
+  # Only prefs and its database; no route out.
+  papaia-prefs-db-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  prefs-pgdata:

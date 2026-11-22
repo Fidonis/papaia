@@ -65,6 +65,7 @@ CORE_PROXY_HOSTS: list[tuple[str, str, str, str, str, int, str, bool, bool]] = [
     ("litellm", "", "LITELLM_PUBLIC_URL", "litellm", "litellm", 4000, "http", True, False),
     ("localai", "", "LOCALAI_PUBLIC_URL", "localai", "localai", 8080, "http", True, False),
     ("manager", "", "MANAGER_PUBLIC_URL", "manager", "papaia-manager", 8000, "http", True, False),
+    ("me", "", "ME_PUBLIC_URL", "me", "me-web", 8000, "http", True, False),
     ("rag", "", "QDRANT_PUBLIC_URL", "qdrant", "qdrant", 6333, "http", True, False),
     # The forward-auth proxy (its callback has no port of its own) and the NPM admin UI
     # behind its login sidecar; the NPM API itself stays on 127.0.0.1 (BE-06).

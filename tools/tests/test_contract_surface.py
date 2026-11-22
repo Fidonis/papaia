@@ -170,6 +170,10 @@ ATTACHABLE_SERVICES = {
     "localai": ["localai"],
     "localai-model-init": ["localai"],
     "mcp-firecrawl": ["librechat-websearch"],
+    # Mein Bereich and the preference store (addon_api 8, ADR 0020). Add-ons attach
+    # `prefs` or `me-web`; the database is on papaia-prefs-db-net with prefs alone
+    # (compat.NEVER_ATTACHABLE).
+    "me-web": ["me"],
     "nginx-proxy-manager": ["nginx"],
     "nginx-proxy-manager-auth": ["nginx"],
     "oauth2-proxy": ["oauth2-proxy"],
@@ -194,6 +198,8 @@ ATTACHABLE_SERVICES = {
     # papaia-people); `networks.attach` is checked against the core's services, so an
     # older core refuses an add-on that attaches it.
     "papaia-people": ["people"],
+    "prefs": ["me"],
+    "prefs-db": ["me"],
     "qdrant": ["rag"],
     "qdrant-ingest": ["rag"],
     "qdrant-ingest-tika": ["rag"],

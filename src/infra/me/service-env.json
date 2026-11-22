@@ -1,0 +1,87 @@
+{
+  "format": "papaia.me-service-env/1",
+  "image": "ghcr.io/fidonis/papaia-me:0.1.0@sha256:7d8e5165cbda151723d31d322e8cd6524bc9449f4372345a57cd3302f88d2c99",
+  "source": {
+    "repository": "papaia-me",
+    "commit": "4d9b1a13750678eda10a47452ae7f4ae06f60cea"
+  },
+  "services": {
+    "me-web": {
+      "reads": [
+        "ME_ACCOUNT_URL",
+        "ME_CATALOG_FILE",
+        "ME_DEFAULT_LANG",
+        "ME_EXPORT_MAX_BYTES",
+        "ME_EXPORT_TIMEOUT",
+        "ME_INSTALLATION_NAME",
+        "ME_MODULE_CA_DIR",
+        "ME_MODULE_PORT",
+        "ME_MODULE_TIMEOUT",
+        "ME_OIDC_CLIENT_ID",
+        "ME_OIDC_CLIENT_SECRET",
+        "ME_OIDC_INTERNAL_ISSUER",
+        "ME_OIDC_SCOPE",
+        "ME_PUBLIC_URL",
+        "ME_REGISTRY_FILE",
+        "ME_SECURITY_PROFILE",
+        "ME_SESSION_SECRET",
+        "PAPAIA_CONFIG_DIR",
+        "PAPAIA_SECURITY_PROFILE"
+      ],
+      "one_of": [
+        [
+          "ME_MODULE_CA_FILE",
+          "SSL_CERT_FILE"
+        ],
+        [
+          "ME_OIDC_AUTH_URL",
+          "OIDC_AUTH_URL"
+        ],
+        [
+          "ME_OIDC_ISSUER",
+          "OIDC_ISSUER"
+        ],
+        [
+          "ME_OIDC_JWKS_URL",
+          "OIDC_JWKS_URL"
+        ],
+        [
+          "ME_OIDC_LOGOUT_URL",
+          "OIDC_LOGOUT_URL"
+        ],
+        [
+          "ME_OIDC_TOKEN_URL",
+          "OIDC_TOKEN_URL"
+        ]
+      ],
+      "runtime": [
+        "SSL_CERT_FILE"
+      ]
+    },
+    "prefs": {
+      "reads": [
+        "OIDC_ISSUER",
+        "OIDC_JWKS_URL",
+        "PREFS_AUDIT_CA_FILE",
+        "PREFS_AUDIT_CERT_FILE",
+        "PREFS_AUDIT_KEY_FILE",
+        "PREFS_AUDIT_URL",
+        "PREFS_AZP_ALLOWLIST_FILE",
+        "PREFS_DB_DIALECT",
+        "PREFS_DB_HOST",
+        "PREFS_DB_NAME",
+        "PREFS_DB_PASSWORD_FILE",
+        "PREFS_DB_PORT",
+        "PREFS_DB_USER",
+        "PREFS_DEFAULT_CHANNEL",
+        "PREFS_DEFAULT_TIME_ZONE",
+        "PREFS_LANG",
+        "PREFS_SQLITE_FILE"
+      ],
+      "one_of": [],
+      "runtime": [
+        "SSL_CERT_FILE"
+      ]
+    }
+  }
+}

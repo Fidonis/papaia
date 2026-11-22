@@ -390,6 +390,32 @@ def _resolve_external_oidc_issuer(args: SetupArgs) -> str:
     )
 
 
+def _me_public_url(
+    root: dict[str, str],
+    args: SetupArgs,
+    edge: ingress.HostScheme | None,
+    app_host: str,
+    sticky_app_host: str,
+) -> str:
+    """ME_PUBLIC_URL, the browser-facing address of me-web (src/infra/me/docker-compose.yml).
+
+    me-web publishes no port of its own, also not with direct port access (architecture
+    A-02), so the only derivation is a host name: `me.<domain>` on the edge and behind an
+    external proxy. A value the operator chose is kept; without a proxy nothing is derived
+    and the stored value (empty by default) stays."""
+    stored = "" if args.fresh_init else root.get("ME_PUBLIC_URL", "")
+    if common.is_placeholder(stored):
+        stored = ""
+    if edge is not None:
+        return _edge_default(edge, "me", stored) or stored
+    if args.allow_direct_port_access or _effective_proxy_provider(root, args) == "no_proxy":
+        return stored
+    external = _external_proxy_url(root, "me", app_host, sticky_app_host)
+    derived = not stored or is_edge_derivation(stored, "me") or stored.rstrip("/") in external
+    current = _external_proxy_url(root, "me", app_host)
+    return current[0] if derived and current else stored
+
+
 def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
     root = tree.setdefault("", {})
     keycloak = tree.setdefault("infra/keycloak", {})
@@ -634,6 +660,9 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
             sticky_manager or derived_manager,
         )
     root["MANAGER_PUBLIC_URL"] = manager_url
+
+    # --- Mein Bereich public URL (host name only, see _me_public_url) ---
+    root["ME_PUBLIC_URL"] = _me_public_url(root, args, edge, app_host, sticky_app_host)
 
     # --- NPM admin public URL ---
     # Always derived regardless of REVERSE_PROXY_PROVIDER: resolve_reverse_proxy

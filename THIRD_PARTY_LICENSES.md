@@ -24,13 +24,14 @@ their images there; the table below covers the Core only.
 | Image | Version | License | Compose file | Notes |
 |---|---|---|---|---|
 | `quay.io/keycloak/keycloak` | 26.7.0 | Apache-2.0 | `infra/keycloak` | |
-| `postgres` | 18.3 | PostgreSQL License | `infra/keycloak` | Keycloak database |
+| `postgres` | 18.3 | PostgreSQL License | `infra/keycloak`, `infra/me` | Keycloak database; preference store database `prefs-db` (profile `me`) |
 | `postgres` | 17.12-alpine3.24 (digest-pinned) | PostgreSQL License | `infra/audit` | audit store database `papaia-audit-db` (profile `audit`) |
 | `jc21/nginx-proxy-manager` | 2.15.1 | MIT | `infra/nginx` | |
 | `quay.io/oauth2-proxy/oauth2-proxy` | v7.15.6 | MIT | `infra/nginx`, `infra/oauth2-proxy` | admin-UI sidecar + standalone gateway |
 | `boky/postfix` | 5.1.0-alpine | MIT | `infra/smtp-relay` | optional mail relay (profile `smtp`); the image bundles Postfix (IPL-1.0 or EPL-2.0), OpenDKIM and rsyslog (GPL-3.0-or-later among others), used as network service |
 | `haproxy` | 3.2.26-alpine | GPL-2.0 | `infra/link-gateway` | mTLS link gateway between the nodes of a distributed installation (profile `link-gateway`, not in the include list); its include files are LGPL-2.1; used as network service |
 | `ghcr.io/fidonis/papaia-manager` | 1.7.0 | MIT | `manager` | Fidonis-maintained add-on management UI |
+| `ghcr.io/fidonis/papaia-me` | 0.1.0 | MIT | `infra/me` | Fidonis-maintained personal area `me-web` and preference store `prefs` (profile `me`, ADR 0020); the store's database is the `postgres` image listed above |
 | `ghcr.io/fidonis/papaia-egress` | 1.9.0 | MIT | `infra/egress` | own image of the core (`compat/own-images.yaml`): the egress proxy on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-egress/` |
 | `ghcr.io/fidonis/papaia-lifecycle` | 1.9.0 | MIT | `infra/lifecycle` | own image of the core (`compat/own-images.yaml`): the lifecycle service on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, OpenSSL Apache-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-lifecycle/` |
 | `ghcr.io/fidonis/papaia-audit` | 1.9.0 | MIT | `infra/audit` | own image of the core (`compat/own-images.yaml`): the audit store service and its schema step (profile `audit`) on `python:3.12.16-alpine3.24`; carries psycopg and psycopg-binary (LGPL-3.0-only, unmodified libraries; the wheel bundles libpq, OpenSSL and further libraries), cryptography (Apache-2.0 OR BSD-3-Clause), cffi (MIT-0), pycparser (BSD-3-Clause), jsonschema, jsonschema-specifications, referencing, attrs and rpds-py (MIT), typing-extensions (PSF-2.0); notice files under `/usr/share/licenses/papaia-audit/` |

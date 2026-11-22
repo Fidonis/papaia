@@ -348,6 +348,8 @@ _SSL_CERT_SERVICES = (
     "qdrant-mcp",
     "qdrant-ingest",
     "knowledge-map-mcp",
+    "me-web",
+    "prefs",
 )
 
 

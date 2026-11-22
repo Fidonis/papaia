@@ -237,6 +237,14 @@ CATALOGUE: dict[str, ServiceSpec] = {
             start_group=1,
         ),
         ServiceSpec(
+            "me",
+            "Mein Bereich (me-web, prefs)",
+            ("me",),
+            ("infra/me",),
+            start_group=2,
+            public_url=("", "ME_PUBLIC_URL"),
+        ),
+        ServiceSpec(
             "manager",
             "papaia-manager",
             ("manager",),
@@ -252,8 +260,9 @@ CATALOGUE: dict[str, ServiceSpec] = {
 # ingester keeps its catalogue and the operator's documents inside the config dir,
 # knowledge-map-mcp reads the rendered map from it, papaia-egress reads the allow
 # lists rendered there and joins the egress networks of the add-ons, which run there too,
-# and papaia-audit mounts its certificates and secrets from it.
-CONTROLLER_ONLY = ("manager", "rag", "knowledge-map", "egress", "audit")
+# papaia-audit mounts its certificates and secrets from it, and me-web reads the rendered
+# registry and catalog from it.
+CONTROLLER_ONLY = ("manager", "rag", "knowledge-map", "egress", "audit", "me")
 
 # The bundled reverse proxy. Its profile, not the `nginx` service, says whether it runs.
 PROXY_PROFILE = "nginx"
