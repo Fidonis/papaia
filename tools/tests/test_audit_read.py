@@ -141,6 +141,23 @@ class FakeStore:
         self.rows: list[read.Row] = []
         self.queries: dict[str, read.PersonQuery] = {}
         self.fail_own = False
+        self.identities: dict[str, read.PersonIdentity] = {}
+
+    # identity map (audit.person_identity)
+    def identity(self, sub: str):
+        return self.identities.get(sub)
+
+    def sub_by_upstream(self, tid: str, oid: str):
+        found = [i.sub for i in self.identities.values() if (i.tid, i.oid) == (tid, oid)]
+        return found[0] if found else None
+
+    def put_identities(self, identities, build) -> int:
+        # One transaction: the entries are stored only together with their own event.
+        event = self._own_event(build)
+        for identity in identities:
+            self.identities[identity.sub] = identity
+        self.add("papaia-audit", event)
+        return len(identities)
 
     def add(self, source: str, body: dict[str, Any]) -> None:
         chain = [r for r in self.rows if r.source == source]
@@ -216,7 +233,7 @@ class FakeStore:
             query = self.queries.get(ref.get("id", ""))
             if (
                 row.source == "papaia-audit"
-                and row.body["event"] in ("audit_read", "audit_exported")
+                and row.body["event"] in ("audit_read", "audit_exported", "pseudonym_resolved")
                 and row.body["result"] == "allowed"
                 and query
                 and query.person_sub == sub
@@ -955,3 +972,145 @@ def test_the_person_query_table_is_written_only_through_functions_with_two_perso
     assert "GRANT INSERT" not in text and "GRANT UPDATE" not in text
     assert "password" not in text.lower()
     assert "SECURITY DEFINER" in text and "REVOKE ALL ON FUNCTION" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# identity map (audit idmap): one person, both directions, only with a ticket
+# ─────────────────────────────────────────────────────────────────────────
+
+TENANT = "7a1d0c55-3e3b-4d5c-9a9e-0c5f1f0e2a11"
+OBJECT = "0f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a"
+
+
+def _mapped(api: Api) -> None:
+    api.store.identities[ANNA] = read.PersonIdentity(ANNA, "anna.berger", TENANT, OBJECT)
+    api.store.identities[BERT] = read.PersonIdentity(BERT, "bert.kurz", TENANT, "other-object")
+
+
+def test_idmap_round_trip_from_pseudonym_to_upstream_id_and_back(api):
+    _mapped(api)
+    query_id = _ticket(api)
+    pseud = read.pseudonym(PSEUDONYM_KEY, ANNA)
+
+    status, person = api.call("POST", "/v1/idmap", body={"ticket": query_id, "pseud": pseud})
+    assert status == 200, person
+    assert person == {"pseud": pseud, "sub": ANNA, "username": "anna.berger", "tid": TENANT,
+                      "oid": OBJECT}
+
+    status, back = api.call("POST", "/v1/idmap",
+                            body={"ticket": query_id, "tid": person["tid"], "oid": person["oid"]})
+    assert status == 200, back
+    assert back == {"pseud": pseud}
+
+    resolved = api.store.own("pseudonym_resolved")
+    assert [e["operation"] for e in resolved] == [
+        "idmap.pseudonym_to_identity",
+        "idmap.upstream_to_pseudonym",
+    ]
+    for event in resolved:
+        assert event["sub"] == DANA and event["effect"] == "read"
+        assert event["object_ref"] == {"type": "person_query", "id": query_id}
+        assert ANNA not in json.dumps(event) and OBJECT not in json.dumps(event)
+    # The affected person sees both resolutions under "Aktivität".
+    status, page = api.call("GET", "/v1/me/reads", ANNA, roles=(), caller="papaia-me")
+    assert status == 200 and len(page["reads"]) == 2
+
+
+def test_idmap_without_a_confirmed_ticket_is_refused_and_resolves_nothing(api):
+    _mapped(api)
+    pseud = read.pseudonym(PSEUDONYM_KEY, ANNA)
+    open_query = _request(api)
+
+    for body in ({"pseud": pseud}, {"ticket": open_query, "pseud": pseud},
+                 {"ticket": "00000000-0000-4000-8000-000000000000", "pseud": pseud}):
+        status, problem = api.call("POST", "/v1/idmap", body=body)
+        assert status in (400, 403), problem
+        assert ANNA not in json.dumps(problem)
+    assert api.store.own("pseudonym_resolved") == []
+
+
+def test_idmap_holds_only_for_the_requester_and_the_person_of_the_ticket(api):
+    _mapped(api)
+    query_id = _ticket(api)
+
+    other = read.pseudonym(PSEUDONYM_KEY, BERT)
+    assert api.call("POST", "/v1/idmap", body={"ticket": query_id, "pseud": other})[0] == 403
+    # The upstream id of another person: refused like an unknown one, nothing revealed.
+    for oid in ("other-object", "never-seen"):
+        status, problem = api.call("POST", "/v1/idmap",
+                                   body={"ticket": query_id, "tid": TENANT, "oid": oid})
+        assert status == 403 and problem["code"] == "AUDIT-PERSON-403"
+    pseud = read.pseudonym(PSEUDONYM_KEY, ANNA)
+    assert api.call("POST", "/v1/idmap", EMIL, body={"ticket": query_id, "pseud": pseud})[0] == 403
+    api.now += 3601
+    status, problem = api.call("POST", "/v1/idmap", body={"ticket": query_id, "pseud": pseud})
+    assert status == 403 and problem["code"] == "AUDIT-PERSON-EXPIRED"
+
+
+@pytest.mark.parametrize("body", [
+    {"ticket": "00000000-0000-4000-8000-000000000000"},
+    {"ticket": "00000000-0000-4000-8000-000000000000", "pseud": "P-AAAAAAAA", "tid": "t",
+     "oid": "o"},
+    {"ticket": "00000000-0000-4000-8000-000000000000", "tid": "t"},
+    {"ticket": "00000000-0000-4000-8000-000000000000", "pseud": "anna"},
+    {"ticket": "00000000-0000-4000-8000-000000000000", "pseud": "P-AAAAAAAA", "all": True},
+    {"ticket": "00000000-0000-4000-8000-000000000000", "tid": "t\n", "oid": "o"},
+])
+def test_idmap_takes_exactly_one_direction_and_no_unknown_field(api, body):
+    status, problem = api.call("POST", "/v1/idmap", body=body)
+    assert status == 400, problem
+
+
+def test_idmap_needs_the_auditor_role_and_a_reading_client(api):
+    body = {"ticket": "00000000-0000-4000-8000-000000000000", "pseud": "P-AAAAAAAA"}
+    assert api.call("POST", "/v1/idmap", DORA, roles=("papaia-admin",), body=body)[0] == 403
+    assert api.call("POST", "/v1/idmap", body=body, caller="papaia-me")[0] == 404
+    assert api.call("GET", "/v1/idmap")[0] == 404
+
+
+def test_idmap_of_a_person_without_a_mapping_answers_the_sub_only(api):
+    query_id = _ticket(api)
+    pseud = read.pseudonym(PSEUDONYM_KEY, ANNA)
+
+    status, person = api.call("POST", "/v1/idmap", body={"ticket": query_id, "pseud": pseud})
+
+    assert status == 200
+    assert person == {"pseud": pseud, "sub": ANNA, "username": None, "tid": None, "oid": None}
+
+
+def _identities(api: Api, document: Any, caller: str = "papaia-lifecycle") -> tuple[int, Any]:
+    return api.call("POST", "/v1/identities", None, body=document, caller=caller)
+
+
+def test_the_identity_map_is_fed_by_papaia_lifecycle_only(api):
+    entry = {"sub": ANNA, "username": "anna.berger", "tid": TENANT, "oid": OBJECT}
+
+    status, answer = _identities(api, {"identities": [entry]})
+    assert status == 200 and answer == {"stored": 1}
+    assert api.store.identities[ANNA] == read.PersonIdentity(ANNA, "anna.berger", TENANT, OBJECT)
+    (event,) = api.store.own("operation")
+    assert event["operation"] == "identity_map.put" and event["effect"] == "write"
+    assert event["sub"] == "papaia-lifecycle" and event["detail"] == {"count": 1}
+    assert ANNA not in json.dumps(event) and OBJECT not in json.dumps(event)
+    for caller in ("papaia-manager", "papaia-ctl", "papaia-flow"):
+        assert _identities(api, {"identities": [entry]}, caller)[0] == 404
+
+
+@pytest.mark.parametrize("entry", [
+    {"sub": ANNA, "username": "anna", "tid": TENANT},
+    {"sub": ANNA, "username": "anna", "tid": TENANT, "oid": None},
+    {"sub": ANNA, "username": "anna", "tid": TENANT, "oid": OBJECT, "email": "a@example.org"},
+    {"sub": "eyJhbGciOiJub25lIn0.e30.", "username": None, "tid": None, "oid": None},
+    {"sub": ANNA, "username": "anna\nberger", "tid": None, "oid": None},
+    {"sub": ANNA, "username": "a" * 256, "tid": None, "oid": None},
+])
+def test_identity_entries_are_checked_field_by_field(api, entry):
+    assert _identities(api, {"identities": [entry]})[0] == 400
+    assert api.store.identities == {} and api.store.own("operation") == []
+
+
+def test_an_identity_batch_holds_at_most_500_entries_and_nothing_else(api):
+    entry = {"sub": ANNA, "username": None, "tid": None, "oid": None}
+    assert _identities(api, {"identities": [entry] * 501})[0] == 400
+    assert _identities(api, {"identities": [entry], "more": 1})[0] == 400
+    assert _identities(api, [entry])[0] == 400

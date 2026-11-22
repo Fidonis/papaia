@@ -258,6 +258,7 @@ def run(
 # ─────────────────────────────────────────────────────────────────────────
 
 RUN_AT = (3, 30)  # daily retention run, UTC
+WATCH_SECONDS = 60  # the SIEM targets' backlog
 
 
 def next_hour(now: datetime) -> datetime:
@@ -285,10 +286,13 @@ class Duties:
     verify: Callable[[], None]  # every chain, one log line per source
     send_heads: Callable[[dict[str, Any]], None] | None  # the heads to the SIEM target
     retain: Callable[[], object]  # one retention run
+    # how far behind the SIEM targets are, with the warning mail; None without a target
+    watch: Callable[[datetime], None] | None = None
 
 
 class Schedule:
-    """Every few seconds `tick`: the SIEM export; every full hour the signed heads, kept at
+    """Every few seconds `tick`: the SIEM export; every minute how far behind the targets
+    are (with the warning mail); every full hour the signed heads, kept at
     the backup target before anything else, and the verification of every chain; daily
     the retention run. A failure of one duty (an unreachable SIEM target, the database)
     is logged and skips no other one: the heads at the backup target are needed most when
@@ -300,6 +304,7 @@ class Schedule:
         self.duties, self.log, self.target = duties, log, target
         self.recorded = False
         self.due_heads, self.due_retention = next_hour(now), next_run(now)
+        self.due_watch = now
 
     def _run(self, name: str, action: Callable[[], object]) -> bool:
         try:
@@ -336,6 +341,10 @@ class Schedule:
             self.recorded = self._run("settings", self.duties.record)
         if self.recorded and self.duties.export is not None:
             self._run("export", self._export)
+        watch = self.duties.watch
+        if self.recorded and watch is not None and now >= self.due_watch:
+            self.due_watch = now + timedelta(seconds=WATCH_SECONDS)
+            self._run("watch", lambda: watch(now))
         if now >= self.due_heads:
             self.due_heads = next_hour(now)
             self.hourly()

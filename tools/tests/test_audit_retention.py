@@ -74,6 +74,7 @@ class Store:
         self.targets: dict[str, bool] = {}
         self.cursors: dict[tuple[str, str], int] = {}
         self.refuse: set[str] = set()  # sources whose prune the store refuses (PA002)
+        self.deliveries: list[tuple[str, bool]] = []
         self.clock = clock
 
     # audit.append / next_seq / append_own
@@ -151,6 +152,12 @@ class Store:
 
     def advance(self, target: str, source: str, seq: int) -> None:
         self.cursors[(target, source)] = max(self.cursors.get((target, source), 0), seq)
+
+    def delivery(self, target: str, ok: bool) -> None:
+        self.deliveries.append((target, ok))
+
+    def upstream(self, subs: set[str]) -> dict[str, tuple[str, str]]:
+        return {}
 
     # verify as __main__.verify_all does it
     def verify(self) -> dict[str, core.ChainReport]:
@@ -309,7 +316,9 @@ def test_a_target_no_longer_configured_still_holds_back_what_it_has_not_taken():
     # The store judges every target too, not only the active one.
     sql = (SERVICE_DIR / "papaia_audit" / "schema_retention.sql").read_text(encoding="utf-8")
     main = (SERVICE_DIR / "papaia_audit" / "__main__.py").read_text(encoding="utf-8")
-    assert "t.active" not in sql and "t.active" not in main
+    facts = main[main.index("    def facts(self, source: str, before: datetime)"):]
+    facts = facts[: facts.index("    def prune(")]
+    assert "t.active" not in sql and "active" not in facts
 
 
 def test_a_refused_prune_of_one_source_does_not_stop_the_others():

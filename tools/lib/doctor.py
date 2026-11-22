@@ -157,6 +157,21 @@ LIFECYCLE_GAP_WARN_SECONDS = 7 * 24 * 3600
 # 300 s is `fail` (and papaia-lifecycle sends the warning mail).
 STATUS_SYNC_FAIL_SECONDS = 300
 VOICE_GPU_OVERRIDE = Path("overrides") / "docker-compose.voice-gpu.override.yml"
+AUDIT_PROFILE = "audit"
+AUDIT_SERVICE = "papaia-audit"
+AUDIT_DB_SERVICE = "papaia-audit-db"
+AUDIT_DB_DATA = "/var/lib/postgresql/data"
+# The service's own report (src/infra/audit/papaia_audit/watch.py): backlog, lag and
+# delivery state per SIEM target, the GV-05/GV-06 measurements and chain verification.
+OPERATIONS_MAIL_KEY = "PAPAIA_OPERATIONS_MAIL"
+SIEM_STATUS_COMMAND = ("python3", "-I", "-m", "papaia_audit", "siem-status")
+SIEM_TIMEOUT_SECONDS = 60.0
+# Fill level of the audit database's volume (governance GV-06): the export has no
+# buffer of its own, so the volume is where an outage of the SIEM piles up.
+SIEM_DISK_WARN_PERCENT = 80
+SIEM_DISK_FAIL_PERCENT = 95
+# The service verifies every chain every full hour; older than two runs is stale.
+SIEM_VERIFY_STALE_SECONDS = 2 * 3600
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
 
@@ -1973,16 +1988,20 @@ def check_image_signatures(ctx: Context) -> CheckResult:
     return CheckResult(name, _worst(i["status"] for i in items), summary, {"images": items})
 
 
-def _lifecycle_container(ctx: Context) -> tuple[str | None, str | None] | None:
-    """(name, state) of papaia-lifecycle's container; None when this host's stack does not
+def _core_container(ctx: Context, service: str) -> tuple[str | None, str | None] | None:
+    """(name, state) of a core service's container; None when this host's stack does not
     declare or run it (another node in a distributed installation)."""
     for module in ctx.status_report().modules:
         if module.kind != "core":
             continue
         for container in module.containers:
-            if container.service == LIFECYCLE_SERVICE:
+            if container.service == service:
                 return container.name or None, container.state or None
     return None
+
+
+def _lifecycle_container(ctx: Context) -> tuple[str | None, str | None] | None:
+    return _core_container(ctx, LIFECYCLE_SERVICE)
 
 
 def _count_field(report: dict[str, Any], key: str, *, optional: bool = False) -> int | None:
@@ -2100,6 +2119,126 @@ def check_lifecycle(ctx: Context) -> CheckResult:
         f"last reconciliation {reconcile // 60} min ago, revocation list "
         f"{values['revocations_age_seconds']} s old",
         details,
+    )
+
+
+def _siem_report(text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    report = json.loads(status.first_line(text))
+    targets, metrics = report["targets"], report["metrics"]
+    if not isinstance(targets, list) or not isinstance(metrics, dict):
+        raise ValueError("shape")
+    for target in targets:
+        if not (
+            isinstance(target, dict)
+            and isinstance(target.get("target"), str)
+            and isinstance(target.get("active"), bool)
+            and target.get("status") in ("ok", "warn", "fail")
+            and isinstance(target.get("text"), str)
+        ):
+            raise ValueError("target")
+        for key in ("backlog", "lag_seconds", "failing_seconds"):
+            _count_field(target, key)
+    verified = metrics.get("papaia_audit_verify_ok")
+    if not isinstance(verified, dict) or not all(v in (0, 1) for v in verified.values()):
+        raise ValueError("verify")
+    age = metrics["papaia_audit_verify_age_seconds"]
+    if age is not None and (isinstance(age, bool) or not isinstance(age, int) or age < 0):
+        raise ValueError("verify age")
+    return targets, metrics
+
+
+def _disk_percent(text: str) -> int | None:
+    """The `Capacity` column of `df -P` for the one file system it lists."""
+    lines = [line.split() for line in text.splitlines()[1:] if line.strip()]
+    if len(lines) != 1:
+        return None
+    found = [f for f in lines[0] if f.endswith("%") and f[:-1].isdigit()]
+    return int(found[0][:-1]) if len(found) == 1 else None
+
+
+def check_siem(ctx: Context) -> CheckResult:
+    """The SIEM export of papaia-audit (`doctor siem`, betrieb BE-28, governance GV-06).
+
+    `fail` when a target has not taken events for more than 10 minutes (lag or failing
+    deliveries), a chain does not verify, the volume of papaia-audit-db is 95 % full or
+    more, or the service does not run; `warn` for more than 60 s behind, from 80 %, a
+    target no longer configured that still holds events back from retention, when no
+    target is set at all, when the hourly chain verification is missing or older than
+    2 h, and when an operations address is set without an active mail relay.
+
+    Gaps in `seq` per source (BE-28) are part of the chain verification: `seq` is gapless
+    by construction (ingest refuses a `source_seq` gap, papaia-audit assigns `seq`), so a
+    gap means a stored event is missing and the chain does not verify. That is `fail`,
+    not `warn`: it is the tamper evidence of GV-07, not a delivery delay."""
+    name = "siem"
+    if not ctx.configured:
+        return _not_set_up(name)
+    if AUDIT_PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "not enabled (the audit profile is off)")
+    found = _core_container(ctx, AUDIT_SERVICE)
+    if found is None:
+        return CheckResult(name, SKIP, "papaia-audit does not run on this host")
+    container, state = found
+    if container is None or state != "running":
+        return CheckResult(
+            name, FAIL,
+            f"papaia-audit is {state or 'not created'}: no audit event is stored or sent to "
+            "the SIEM ('papaia-ctl start' starts it)",
+            {"state": state},
+        )
+    done = ctx.run(["docker", "exec", container, *SIEM_STATUS_COMMAND], SIEM_TIMEOUT_SECONDS)
+    try:
+        targets, metrics = _siem_report(done.stdout)
+    except (ValueError, TypeError, KeyError):
+        return CheckResult(name, FAIL, "the SIEM report of papaia-audit cannot be read",
+                           {"exit_code": done.returncode})
+    percent = None
+    database = _core_container(ctx, AUDIT_DB_SERVICE)
+    if database is not None and database[0] and database[1] == "running":
+        listing = ctx.run(["docker", "exec", database[0], "df", "-P", AUDIT_DB_DATA],
+                          SIEM_TIMEOUT_SECONDS)
+        percent = _disk_percent(listing.stdout) if listing.returncode == 0 else None
+    details: dict[str, Any] = {"targets": targets, "metrics": metrics, "disk_percent": percent}
+    failures: list[str] = []
+    warnings: list[str] = []
+    for target in targets:
+        line = f"{target['target']} {target['text']}"
+        if target["status"] == "fail":
+            failures.append(line + " ('papaia-ctl logs papaia-audit' names the cause)")
+        elif target["status"] == "warn":
+            warnings.append(line)
+    if not any(t["active"] for t in targets):
+        warnings.append("no SIEM target set (PAPAIA_AUDIT_SIEM_TARGET): audit events stay in "
+                        "the store only")
+    broken = sorted(s for s, ok in metrics["papaia_audit_verify_ok"].items() if not ok)
+    if broken:
+        failures.append(f"the chain of {', '.join(broken)} does not verify "
+                        "('papaia-ctl audit verify' names the position)")
+    age = metrics["papaia_audit_verify_age_seconds"]
+    if age is None or age > SIEM_VERIFY_STALE_SECONDS:
+        when = "has not run yet" if age is None else f"last ran {age // 3600} h ago"
+        warnings.append(f"the hourly chain verification {when} ('papaia-ctl audit verify' "
+                        "checks every chain now)")
+    if ctx.env.get(OPERATIONS_MAIL_KEY, "").strip() and not smtp.Settings.load(
+        ctx.config_dir
+    ).active:
+        warnings.append(f"{OPERATIONS_MAIL_KEY} is set, but the mail relay is not active "
+                        "(profile smtp with a mail server): no warning mail can be sent")
+    if percent is None:
+        warnings.append("the fill level of the papaia-audit-db volume could not be read")
+    elif percent >= SIEM_DISK_FAIL_PERCENT:
+        failures.append(f"the papaia-audit-db volume is {percent} % full: undelivered events "
+                        "pile up there")
+    elif percent >= SIEM_DISK_WARN_PERCENT:
+        warnings.append(f"the papaia-audit-db volume is {percent} % full")
+    if failures:
+        return CheckResult(name, FAIL, "; ".join(failures + warnings), details)
+    if warnings:
+        return CheckResult(name, WARN, "; ".join(warnings), details)
+    active = sum(1 for t in targets if t["active"])
+    return CheckResult(
+        name, PASS,
+        f"{active} SIEM target(s) up to date, papaia-audit-db volume {percent} % full", details,
     )
 
 
@@ -2457,6 +2596,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("container_health", check_container_health),
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
+    ("siem", check_siem),
     ("approvals", check_approvals),
     ("contact_point", check_contact_point),
     ("network", check_network),

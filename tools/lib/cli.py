@@ -2514,6 +2514,30 @@ def cmd_audit_run(args: argparse.Namespace) -> int:
         return 2
 
 
+def cmd_audit_siem_skip(args: argparse.Namespace) -> int:
+    """`audit siem skip`: release undelivered events of one source, with a reason."""
+    try:
+        argv, stdin = audit.siem_skip_command(args.source, args.until, args.reason, args.target)
+        return audit.run_in_service(Path(args.config_dir), argv, stdin)
+    except audit.AuditError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+def cmd_audit_idmap(args: argparse.Namespace) -> int:
+    """`audit idmap`: one person, one direction, with a confirmed person filter. The token
+    of the auditor comes from PAPAIA_AUDIT_TOKEN, never from the command line."""
+    try:
+        argv, stdin = audit.idmap_command(
+            args.ticket, os.environ.get("PAPAIA_AUDIT_TOKEN", "").strip(),
+            pseud=args.pseud, tid=args.tid, oid=args.oid,
+        )
+        return audit.run_in_service(Path(args.config_dir), argv, stdin)
+    except audit.AuditError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Preflight and diagnostics. Exit 2 if any check failed, else 0; `warn`
     and `skip` never fail the run. Works before `setup`."""
@@ -3340,6 +3364,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit_heads.set_defaults(func=cmd_audit_run, audit_command="heads")
     p_audit_retention = sub.add_parser("audit-retention")
     p_audit_retention.set_defaults(func=cmd_audit_run, audit_command="retention")
+    p_audit_siem_status = sub.add_parser("audit-siem-status")
+    p_audit_siem_status.set_defaults(func=cmd_audit_run, audit_command="siem-status")
+    p_audit_siem_skip = sub.add_parser("audit-siem-skip")
+    p_audit_siem_skip.add_argument("--source", required=True)
+    p_audit_siem_skip.add_argument("--until", required=True)
+    p_audit_siem_skip.add_argument("--reason", default="")
+    p_audit_siem_skip.add_argument("--target", default=None)
+    p_audit_siem_skip.set_defaults(func=cmd_audit_siem_skip)
+    p_audit_idmap = sub.add_parser("audit-idmap")
+    p_audit_idmap.add_argument("--ticket", required=True)
+    p_audit_idmap.add_argument("--pseud", default=None)
+    p_audit_idmap.add_argument("--tid", default=None)
+    p_audit_idmap.add_argument("--oid", default=None)
+    p_audit_idmap.set_defaults(func=cmd_audit_idmap)
 
     return parser
 

@@ -14,7 +14,11 @@ Everything lives under `$PAPAIA_CONFIG_DIR/infra/audit/`:
 The signed chain heads go to `$PAPAIA_BACKUP_DIR/audit-heads/` (`ensure_heads_folder`).
 With a SIEM target over the network (`PAPAIA_AUDIT_SIEM_TARGET`), papaia-audit leaves the
 stack through papaia-egress only: `egress_source` allows that one host and port, and
-`generate_siem_override` puts the service on its own internal egress network.
+`generate_siem_override` puts the service on its own internal egress network. With an
+operations address (`PAPAIA_OPERATIONS_MAIL`) and the mail relay, the relay joins that
+network too, for the warning mails when the target takes no events for 10 minutes or
+the volume of the store is 95 % full. `upstream_oid` is refused for a JSON lines target:
+its `tid` and `oid` travel in the syslog header only.
 
 `prepare` creates what is missing and never replaces what exists, so it runs before
 every start. `issue_source_certificate` gives a source (one of SOURCES) a new client
@@ -44,7 +48,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, status
+from . import common, smtp, status
 
 SERVICE = "papaia-audit"
 PROFILE = "audit"
@@ -90,6 +94,14 @@ HEADS_FOLDER = "audit-heads"
 # The backup target the heads folder was set up on; its folder must exist from then on.
 HEADS_TARGET_FILE = Path("infra") / "audit" / "heads-target"
 SIEM_KEY = "PAPAIA_AUDIT_SIEM_TARGET"
+IDENTITY_KEY = "PAPAIA_AUDIT_SIEM_IDENTITY"
+OPERATIONS_MAIL_KEY = "PAPAIA_OPERATIONS_MAIL"
+_MAIL_RE = re.compile(r"^[^@\s,;<>\"'\x00-\x1f\x7f]{1,64}@[A-Za-z0-9.-]{1,253}$")
+SKIP_REASON_MIN, SKIP_REASON_MAX = 20, 1000
+_TICKET_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_PSEUD_RE = re.compile(r"^P-[A-Z2-7]{8}$")
+_UPSTREAM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
 SIEM_SCHEMES = {"syslog-tls": 6514, "https": 443}
 
 
@@ -396,8 +408,16 @@ def generate_siem_override(config_dir: Path) -> Path | None:
     if siem_target(env) is None:
         out.unlink(missing_ok=True)
         return None
+    identity = env.get(IDENTITY_KEY, "").strip()
+    if identity == "upstream_oid" and urlsplit(env.get(SIEM_KEY, "").strip()).scheme != (
+        "syslog-tls"
+    ):
+        raise AuditError(f"{IDENTITY_KEY}=upstream_oid needs a syslog-tls:// target: tid and "
+                         "oid travel in the syslog header, never in the papaia.audit/1 document")
     net = siem_network(env)
-    override = {
+    mail = operations_mail(env)
+    relay = smtp.Settings.load(config_dir)
+    override: dict = {
         "services": {
             SERVICE: {
                 "environment": {
@@ -414,9 +434,25 @@ def generate_siem_override(config_dir: Path) -> Path | None:
         },
         "networks": {net: {"name": net, "internal": True}},
     }
+    if mail and relay.active:
+        # The relay joins the audit egress network, never papaia-audit-net.
+        override["services"][SERVICE]["environment"].update({
+            "PAPAIA_AUDIT_MAIL_RELAY": f"{smtp.RELAY_HOST}:{smtp.RELAY_PORT}",
+            "PAPAIA_AUDIT_ALERT_TO": mail,
+            "PAPAIA_AUDIT_ALERT_FROM": relay.from_address,
+        })
+        override["services"][smtp.SERVICE] = {"networks": {"papaia-net": {}, net: {}}}
     out.parent.mkdir(parents=True, exist_ok=True)
     common.atomic_write(out, yaml.safe_dump(override, sort_keys=False, default_flow_style=False))
     return out
+
+
+def operations_mail(env: dict[str, str]) -> str:
+    """`PAPAIA_OPERATIONS_MAIL`: one address for the warning mails, or empty."""
+    value = env.get(OPERATIONS_MAIL_KEY, "").strip()
+    if value and not _MAIL_RE.fullmatch(value):
+        raise AuditError(f"{OPERATIONS_MAIL_KEY} must be one mail address")
+    return value
 
 
 def issue_source_certificate(config_dir: Path, source: str) -> Path:
@@ -472,7 +508,7 @@ def service_command(
     command: str, *, source: str | None = None, against: Path | None = None, as_json: bool = False
 ) -> tuple[list[str], str]:
     """Arguments for `python -m papaia_audit` in the container, and its stdin."""
-    if command not in ("verify", "heads", "retention"):
+    if command not in ("verify", "heads", "retention", "siem-status"):
         raise AuditError(f"unknown audit command '{command}'")
     args = [command]
     stdin = ""
@@ -489,6 +525,52 @@ def service_command(
     if as_json:
         args.append("--json")
     return args, stdin
+
+
+def siem_skip_command(source: str, until: str, reason: str,
+                      target: str | None = None) -> tuple[list[str], str]:
+    """`siem-skip` and its request on stdin; the service checks everything again."""
+    text = (reason or "").strip()
+    if not SKIP_REASON_MIN <= len(text) <= SKIP_REASON_MAX or any(
+        (ord(c) < 32 and c not in "\n\t") or ord(c) == 127 for c in text
+    ):
+        raise AuditError(
+            "audit siem skip needs --reason, 20 to 1000 characters: why these events may be "
+            "missing in the SIEM."
+        )
+    if not _SOURCE_RE.fullmatch(source or ""):
+        raise AuditError(f"'{source}' is not a source name.")
+    if not until.isascii() or not until.isdigit() or len(until) > 18 or int(until) < 1:
+        raise AuditError("audit siem skip needs --until=<seq>, a seq of 1 or more.")
+    if target is not None and not target.strip():
+        raise AuditError("audit siem skip --target needs a target as 'doctor siem' shows it.")
+    request = {"source": source, "until": int(until), "reason": text, "target": target}
+    return ["siem-skip"], json.dumps(request)
+
+
+def idmap_command(ticket: str, token: str, *, pseud: str | None = None,
+                  tid: str | None = None, oid: str | None = None) -> tuple[list[str], str]:
+    """`idmap` and its token and request on stdin: the token never shows in a process
+    list. Exactly one direction: a pseudonym, or the provider's tid and oid."""
+    if not _TICKET_RE.fullmatch(ticket or ""):
+        raise AuditError("audit idmap needs --ticket=<id> of a confirmed person filter.")
+    if not _TOKEN_RE.fullmatch(token or ""):
+        raise AuditError(
+            "audit idmap needs the token of a person with the role papaia-auditor in "
+            "PAPAIA_AUDIT_TOKEN."
+        )
+    request: dict[str, str] = {"ticket": ticket}
+    if pseud is not None and tid is None and oid is None:
+        if not _PSEUD_RE.fullmatch(pseud):
+            raise AuditError(f"'{pseud}' is not a pseudonym (P- and 8 characters).")
+        request["pseud"] = pseud
+    elif pseud is None and tid is not None and oid is not None:
+        if not (_UPSTREAM_RE.fullmatch(tid) and _UPSTREAM_RE.fullmatch(oid)):
+            raise AuditError("--tid and --oid must be ids of the upstream provider.")
+        request.update(tid=tid, oid=oid)
+    else:
+        raise AuditError("audit idmap takes either --pseud or both --tid and --oid.")
+    return ["idmap"], json.dumps({"token": token, "request": request})
 
 
 def run_in_service(config_dir: Path, args: Sequence[str], stdin: str) -> int:

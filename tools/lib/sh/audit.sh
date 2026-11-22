@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# papaia-ctl — audit store: audit cert | verify | heads | token-keys | retention (docs/audit.md).
+# papaia-ctl — audit store: audit cert | verify | heads | token-keys | retention | siem |
+# idmap (docs/audit.md).
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
@@ -7,6 +8,8 @@ cmd_audit() {
     local sub="${1:-}"
     shift || true
     local config_dir="$DEFAULT_CONFIG_DIR" source="" against="" json=0
+    local until="" reason="" target="" ticket="" pseud="" tid="" oid=""
+    local target_set=0 pseud_set=0 tid_set=0 oid_set=0
     local -a positional=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -14,6 +17,13 @@ cmd_audit() {
             --source=*) source="${1#*=}" ;;
             --against=*) against="${1#*=}" ;;
             --json) json=1 ;;
+            --until=*) until="${1#*=}" ;;
+            --reason=*) reason="${1#*=}" ;;
+            --target=*) target="${1#*=}"; target_set=1 ;;
+            --ticket=*) ticket="${1#*=}" ;;
+            --pseud=*) pseud="${1#*=}"; pseud_set=1 ;;
+            --tid=*) tid="${1#*=}"; tid_set=1 ;;
+            --oid=*) oid="${1#*=}"; oid_set=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option for audit $sub: $1"; exit 2 ;;
             *) positional+=("$1") ;;
@@ -52,6 +62,38 @@ cmd_audit() {
             [ "${#positional[@]}" -eq 0 ] || { error "audit retention takes no arguments."; exit 2; }
             py_cli audit-retention
             ;;
-        *) error "Unknown 'audit' subcommand: '${sub:-<none>}'. Valid: cert, verify, heads, token-keys, retention."; exit 2 ;;
+        siem)
+            local action="${positional[0]:-}"
+            case "$action" in
+                status)
+                    [ "${#positional[@]}" -eq 1 ] || { error "audit siem status takes no arguments."; exit 2; }
+                    py_cli audit-siem-status
+                    ;;
+                skip)
+                    [ "${#positional[@]}" -eq 1 ] || { error "audit siem skip takes only options."; exit 2; }
+                    if [ -z "$source" ] || [ -z "$until" ]; then
+                        error "Usage: papaia-ctl audit siem skip --source=NAME --until=SEQ --reason=TEXT [--target=TARGET]"
+                        exit 2
+                    fi
+                    local -a skip_args=(--source="$source" --until="$until" --reason="$reason")
+                    [ "$target_set" -eq 1 ] && skip_args+=(--target="$target")
+                    py_cli audit-siem-skip ${skip_args[@]+"${skip_args[@]}"}
+                    ;;
+                *) error "Unknown 'audit siem' action: '${action:-<none>}'. Valid: status, skip."; exit 2 ;;
+            esac
+            ;;
+        idmap)
+            [ "${#positional[@]}" -eq 0 ] || { error "audit idmap takes only options."; exit 2; }
+            if [ -z "$ticket" ]; then
+                error "Usage: papaia-ctl audit idmap --ticket=ID (--pseud=P-XXXXXXXX | --tid=ID --oid=ID)"
+                exit 2
+            fi
+            local -a map_args=(--ticket="$ticket")
+            [ "$pseud_set" -eq 1 ] && map_args+=(--pseud="$pseud")
+            [ "$tid_set" -eq 1 ] && map_args+=(--tid="$tid")
+            [ "$oid_set" -eq 1 ] && map_args+=(--oid="$oid")
+            py_cli audit-idmap ${map_args[@]+"${map_args[@]}"}
+            ;;
+        *) error "Unknown 'audit' subcommand: '${sub:-<none>}'. Valid: cert, verify, heads, token-keys, retention, siem, idmap."; exit 2 ;;
     esac
 }

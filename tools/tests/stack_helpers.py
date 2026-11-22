@@ -145,7 +145,7 @@ class FakeDocker:
             return self.exec_failure
         if argv[:1] == ["timeout"]:
             argv = argv[2:]
-        if not argv or argv[0] not in (*HOST_TOOLS, "postqueue", "python3"):
+        if not argv or argv[0] not in (*HOST_TOOLS, "postqueue", "python3", "df"):
             raise AssertionError(f"unexpected exec: {argv}")
         return self.tools.get(argv[0]) or not_found(argv[0])
 

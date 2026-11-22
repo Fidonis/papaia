@@ -10,9 +10,15 @@
   restart or an outage the export resumes from there; an event may arrive twice, never
   not at all. Receivers recognise a repeat by `source` and `seq`.
 - Persons: by default (`PAPAIA_AUDIT_SIEM_IDENTITY=pseudonym`) `sub` and person ids in
-  `object_ref` leave as a pseudonym and `client_ip` is left out. `sub` in clear text only
-  with `PAPAIA_AUDIT_SIEM_IDENTITY=sub` and a basis (`PAPAIA_AUDIT_SIEM_BASIS`, the works
-  agreement it rests on). `hash` and `prev_hash` stay those of the stored event.
+  `object_ref` leave as a pseudonym. `sub` in clear text only with
+  `PAPAIA_AUDIT_SIEM_IDENTITY=sub`; the upstream provider's ids only with `upstream_oid`
+  (parameters `tid` and `oid` in the structured data of the syslog header, next to the
+  pseudonym in the message, from the identity map; only for `syslog-tls://` targets).
+  Both need a basis (`PAPAIA_AUDIT_SIEM_BASIS`, the works agreement it rests on).
+  `client_ip` leaves with sign-in events only (and with every event under `sub`). `hash`
+  and `prev_hash` stay those of the stored event.
+- The message is always the stored form of `papaia.audit/1` (audit.v1.schema.json, which
+  rejects unknown fields): nothing is added to it in any identity.
 - The connection goes through `PAPAIA_AUDIT_SIEM_PROXY` (papaia-egress, HTTP CONNECT) when
   set; TLS stays end to end.
 - A syslog connection is reused only while it is alive: before each batch it is opened
@@ -36,7 +42,7 @@ import select
 import socket
 import ssl
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -51,7 +57,9 @@ TIMEOUT_SECONDS = 15
 # A syslog connection idle for longer is opened again before the next batch; papaia-egress
 # closes an idle tunnel after 300 s (src/infra/egress/egress.py IDLE_TIMEOUT_SECONDS).
 IDLE_SECONDS = 240
-IDENTITIES = ("pseudonym", "sub")
+IDENTITIES = ("pseudonym", "sub", "upstream_oid")
+# Events whose client address the SOC correlates with the sign-in logs of the provider.
+SIGN_IN_EVENTS = frozenset({"login_failed", "breakglass_login"})
 MAX_BASIS = 200
 PERSON_REF_TYPES = frozenset({"user", "person", "member", "account", "subject", "principal"})
 # Facility 13 (log audit); severity 6 (informational), 5 (notice) for denied or error.
@@ -116,19 +124,30 @@ def parse_pen(text: str | None) -> int:
 
 
 def parse_identity(identity: str | None, basis: str | None) -> tuple[str, str]:
-    """(identity, basis); `sub` only with a basis, which is otherwise ignored."""
+    """(identity, basis); `sub` and `upstream_oid` only with a basis, which is otherwise
+    ignored."""
     value = (identity or "").strip() or "pseudonym"
     if value not in IDENTITIES:
-        raise ValueError("PAPAIA_AUDIT_SIEM_IDENTITY must be pseudonym or sub")
+        raise ValueError("PAPAIA_AUDIT_SIEM_IDENTITY must be pseudonym, sub or upstream_oid")
     reason = (basis or "").strip()
-    if value == "sub":
+    if value != "pseudonym":
         if not _BASIS_RE.match(reason):
             raise ValueError(
-                "PAPAIA_AUDIT_SIEM_IDENTITY=sub needs PAPAIA_AUDIT_SIEM_BASIS (1 to 200"
+                f"PAPAIA_AUDIT_SIEM_IDENTITY={value} needs PAPAIA_AUDIT_SIEM_BASIS (1 to 200"
                 " characters, the agreement it rests on)"
             )
         return value, reason
     return value, ""
+
+
+def check_identity_target(identity: str, target: Target | None) -> None:
+    """`upstream_oid` travels in the syslog header: a JSON lines target has no place for
+    `tid` and `oid` outside the `papaia.audit/1` document, which allows no further field."""
+    if identity == "upstream_oid" and target is not None and target.kind != "syslog":
+        raise ValueError(
+            "PAPAIA_AUDIT_SIEM_IDENTITY=upstream_oid needs a syslog-tls:// target (tid and oid"
+            " travel in the syslog header, never in the papaia.audit/1 document)"
+        )
 
 
 def pseudonym(key: bytes, sub: str) -> str:
@@ -149,15 +168,15 @@ class Row:
 def present(row: Row, identity: str, key: bytes) -> dict[str, Any]:
     """The event as it leaves: stored form of `papaia.audit/1`, persons per `identity`."""
     body = dict(row.body)
-    if identity == "pseudonym":
-        sub = body.get("sub")
+    sub = body.get("sub")
+    if identity != "sub":
         if isinstance(sub, str):
             body["sub"] = pseudonym(key, sub)
         ref = body.get("object_ref")
         if isinstance(ref, dict) and isinstance(ref.get("id"), str):
             if ref.get("type") in PERSON_REF_TYPES or ref["id"] == sub:
                 body["object_ref"] = {**ref, "id": pseudonym(key, ref["id"])}
-        if body.get("client_ip") is not None:
+        if body.get("client_ip") is not None and body.get("event") not in SIGN_IN_EVENTS:
             body["client_ip"] = None
     body.update(
         source=row.source,
@@ -176,12 +195,15 @@ def _sd_value(value: str) -> str:
 def syslog_message(
     document: dict[str, Any], *, msgid: str, pen: int, hostname: str, now: datetime,
     source: str | None = None, seq: int | None = None, severity: int = 6,
+    upstream: tuple[str, str] | None = None,
 ) -> bytes:
     """One RFC 5424 message with RFC 5425 octet-counting framing (`LEN SP MSG`)."""
     stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     params = ""
     if source is not None and seq is not None:
         params = f' source="{_sd_value(source)}" seq="{seq}"'
+    if upstream is not None:
+        params += f' tid="{_sd_value(upstream[0])}" oid="{_sd_value(upstream[1])}"'
     structured = f"[papaia@{pen}{params}]"
     message = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
     header = f"<{_FACILITY * 8 + severity}>1 {stamp} {hostname} papaia - {msgid}"
@@ -190,11 +212,13 @@ def syslog_message(
     return str(len(data)).encode("ascii") + b" " + data
 
 
-def event_message(document: dict[str, Any], pen: int, hostname: str, now: datetime) -> bytes:
+def event_message(document: dict[str, Any], pen: int, hostname: str, now: datetime,
+                  upstream: tuple[str, str] | None = None) -> bytes:
     severity = 6 if document.get("result") == "allowed" else 5
     return syslog_message(
         document, msgid=str(document["event"]), pen=pen, hostname=hostname, now=now,
         source=str(document["source"]), seq=int(document["seq"]), severity=severity,
+        upstream=upstream,
     )
 
 
@@ -358,6 +382,15 @@ class ExportStore(Protocol):
 
     def advance(self, target: str, source: str, seq: int) -> None: ...
 
+    def delivery(self, target: str, ok: bool) -> None:
+        """Record a cycle: the target took everything (`ok`) or a batch failed; the
+        first failure of a run of them is kept as the time the target began failing."""
+        ...
+
+    def upstream(self, subs: set[str]) -> dict[str, tuple[str, str]]:
+        """The provider's (`tid`, `oid`) of those persons the identity map knows."""
+        ...
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -367,18 +400,30 @@ class Settings:
     hostname: str = "papaia-audit"
 
 
+def _upstream_of(row: Row, upstream: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    sub = row.body.get("sub")
+    return upstream.get(sub) if isinstance(sub, str) else None
+
+
 class Exporter:
     def __init__(self, store: ExportStore, sender: Sender, settings: Settings, key: bytes,
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
         self.store, self.sender, self.settings, self.key = store, sender, settings, key
         self.clock = clock
 
-    def encode(self, rows: Iterable[Row]) -> list[bytes]:
+    def encode(self, rows: Sequence[Row]) -> list[bytes]:
+        upstream: dict[str, tuple[str, str]] = {}
+        if self.settings.identity == "upstream_oid":
+            subs = {r.body["sub"] for r in rows if isinstance(r.body.get("sub"), str)}
+            upstream = self.store.upstream(subs) if subs else {}
         documents = [present(row, self.settings.identity, self.key) for row in rows]
         if self.settings.target.kind == "syslog":
             now = self.clock()
-            return [event_message(d, self.settings.pen, self.settings.hostname, now)
-                    for d in documents]
+            return [
+                event_message(d, self.settings.pen, self.settings.hostname, now,
+                              _upstream_of(row, upstream))
+                for row, d in zip(rows, documents, strict=True)
+            ]
         return [json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                 + b"\n" for d in documents]
 
@@ -387,16 +432,21 @@ class Exporter:
         Returns the number of events taken; ExportError stops at the failing batch, whose
         position stays where it was."""
         name, sent = self.settings.target.name, 0
-        for source in self.store.sources():
-            position = self.store.position(name, source)
-            while True:
-                rows = self.store.rows_after(source, position, BATCH)
-                if not rows:
-                    break
-                self.sender.send(self.encode(rows))
-                position = rows[-1].seq
-                self.store.advance(name, source, position)
-                sent += len(rows)
+        try:
+            for source in self.store.sources():
+                position = self.store.position(name, source)
+                while True:
+                    rows = self.store.rows_after(source, position, BATCH)
+                    if not rows:
+                        break
+                    self.sender.send(self.encode(rows))
+                    position = rows[-1].seq
+                    self.store.advance(name, source, position)
+                    sent += len(rows)
+        except ExportError:
+            self.store.delivery(name, False)
+            raise
+        self.store.delivery(name, True)
         return sent
 
     def send_heads(self, document: dict[str, Any]) -> None:

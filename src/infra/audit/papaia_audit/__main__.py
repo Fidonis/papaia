@@ -7,6 +7,9 @@ chain heads.
     python -I -m papaia_audit heads
     python -I -m papaia_audit retention
     python -I -m papaia_audit access < request.json
+    python -I -m papaia_audit siem-status
+    python -I -m papaia_audit siem-skip      (request as JSON on stdin)
+    python -I -m papaia_audit idmap          (token and request as JSON on stdin)
 
 `serve` accepts `POST /v1/ingest` on port 8443. The source of a request is the client
 certificate: it must chain to the ingest CA and its fingerprint must be listed for that
@@ -24,7 +27,9 @@ service itself never holds the owner's password.
 `serve` also runs the store's upkeep in one background thread: every full hour it signs
 the chain heads into the heads folder at the backup target and verifies every chain;
 daily at 03:30 UTC it runs retention (retention.py, role `audit_retention`); every few
-seconds it sends new events to the SIEM target, if one is set (siem.py). Each duty fails
+seconds it sends new events to the SIEM target, if one is set (siem.py); every minute it
+checks how far behind each target is and mails the operations address once a target
+takes no events for more than 10 minutes (watch.py). Each duty fails
 on its own (retention.Schedule): an unreachable SIEM target stops no heads, verification
 or retention. Settings are
 read from the environment at start; a malformed one stops the service. A changed setting
@@ -51,7 +56,7 @@ import signal
 import ssl
 import sys
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -62,7 +67,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from psycopg import sql
 
-from papaia_audit import access, core, read, retention, siem
+from papaia_audit import access, core, read, retention, siem, watch
 
 CONFIG_DIR = Path(os.environ.get("PAPAIA_AUDIT_CONFIG_DIR", "/etc/papaia-audit"))
 SECRETS_DIR = Path(os.environ.get("PAPAIA_AUDIT_SECRETS_DIR", "/run/secrets"))
@@ -76,6 +81,7 @@ SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 SCHEMA_READ_SQL = Path(__file__).with_name("schema_read.sql")
 SCHEMA_RETENTION_SQL = Path(__file__).with_name("schema_retention.sql")
 SCHEMA_ACCESS_SQL = Path(__file__).with_name("schema_access.sql")
+SCHEMA_SIEM_SQL = Path(__file__).with_name("schema_siem.sql")
 SERVICE_ROLES = ("ingest", "read", "retention", "hold")
 HEADS_DIR = Path(os.environ.get("PAPAIA_AUDIT_HEADS_DIR", "/var/lib/papaia-audit/heads"))
 EXPORT_INTERVAL_SECONDS = 5
@@ -439,13 +445,42 @@ class PgReadStore:
         return True
 
     @_guarded
+    def identity(self, sub: str) -> read.PersonIdentity | None:
+        with connect("read") as conn:
+            row = conn.execute(
+                "SELECT sub, username, tid, oid FROM audit.person_identity WHERE sub = %s",
+                (sub,),
+            ).fetchone()
+        return read.PersonIdentity(*row) if row else None
+
+    @_guarded
+    def sub_by_upstream(self, tid: str, oid: str) -> str | None:
+        with connect("read") as conn:
+            row = conn.execute(
+                "SELECT sub FROM audit.person_identity WHERE tid = %s AND oid = %s", (tid, oid)
+            ).fetchone()
+        return row[0] if row else None
+
+    @_guarded
+    def put_identities(self, identities: list[read.PersonIdentity], build: Any) -> int:
+        with connect("ingest") as conn, conn.transaction():
+            for entry in identities:
+                conn.execute(
+                    "SELECT audit.identity_put(%s, %s, %s, %s)",
+                    (entry.sub, entry.username, entry.tid, entry.oid),
+                )
+            self._append_on(conn, build)
+        return len(identities)
+
+    @_guarded
     def reads_about(self, sub: str, limit: int) -> list[tuple[datetime, read.PersonQuery]]:
         columns = ", ".join(f"q.{name.strip()}" for name in _QUERY_COLUMNS.split(","))
         with connect("read") as conn:
             rows = conn.execute(
                 f"SELECT e.time, {columns} FROM audit.event e JOIN audit.person_query q"
                 " ON q.id::text = e.body -> 'object_ref' ->> 'id'"
-                " WHERE e.source = %s AND e.event IN ('audit_read', 'audit_exported')"
+                " WHERE e.source = %s"
+                " AND e.event IN ('audit_read', 'audit_exported', 'pseudonym_resolved')"
                 " AND e.result = 'allowed' AND q.person_sub = %s"
                 " ORDER BY e.time DESC LIMIT %s",
                 (read.OWN_SOURCE, sub, limit),
@@ -517,7 +552,8 @@ class IngestHandler(http.server.BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", ""))
             except ValueError:
                 length = -1
-            if content_type == "application/json" and 0 <= length <= read.MAX_JSON_BODY:
+            limit = read.MAX_IDENTITY_BODY if path == read.IDENTITIES_PATH else read.MAX_JSON_BODY
+            if content_type == "application/json" and 0 <= length <= limit:
                 body = self.rfile.read(length)
         response = self.server.api.handle(
             read.Request(
@@ -640,6 +676,12 @@ def schema() -> int:
         if not (holds and holds[0]):
             conn.execute(SCHEMA_ACCESS_SQL.read_text(encoding="utf-8"))
             log("permission report confirmations and two-person deletion lock added")
+        identities = conn.execute(
+            "SELECT to_regclass('audit.person_identity') IS NOT NULL"
+        ).fetchone()
+        if not (identities and identities[0]):
+            conn.execute(SCHEMA_SIEM_SQL.read_text(encoding="utf-8"))
+            log("identity map, delivery state and skips added")
         for role, password in passwords.items():
             # ALTER ROLE takes no parameters; the literal is quoted by the driver and the
             # statement is never logged.
@@ -885,6 +927,85 @@ class PgExportStore:
         with connect("ingest", autocommit=True) as conn:
             conn.execute("SELECT audit.export_advance(%s, %s, %s)", (target, source, seq))
 
+    def delivery(self, target: str, ok: bool) -> None:
+        with connect("ingest", autocommit=True) as conn:
+            conn.execute("SELECT audit.export_delivery(%s, %s)", (target, ok))
+
+    def upstream(self, subs: set[str]) -> dict[str, tuple[str, str]]:
+        with connect("read") as conn:
+            rows = conn.execute(
+                "SELECT sub, tid, oid FROM audit.person_identity"
+                " WHERE sub = ANY(%s) AND tid IS NOT NULL",
+                (sorted(subs),),
+            ).fetchall()
+        return {sub: (tid, oid) for sub, tid, oid in rows}
+
+
+# Every source of a stored event by a skip scan over the primary key (source, seq): one
+# index probe per source instead of reading every event.
+_SOURCES = """
+    WITH RECURSIVE s(source) AS (
+        (SELECT e.source FROM audit.event e ORDER BY e.source LIMIT 1)
+        UNION ALL
+        SELECT (SELECT e.source FROM audit.event e WHERE e.source > s.source
+                ORDER BY e.source LIMIT 1)
+        FROM s WHERE s.source IS NOT NULL
+    )
+"""
+
+
+def export_health() -> list[watch.TargetHealth]:
+    """Backlog and delivery state of every SIEM target, active or not (audit_read).
+
+    Per target and source one range scan of the primary key (source, seq) from the read
+    position on, so the cost follows the backlog, not the size of the store; the sources
+    by a skip scan over the same key."""
+    with connect("read") as conn:
+        rows = conn.execute(
+            _SOURCES + """
+            SELECT t.target, t.active, t.delivered_at, t.failing_since,
+                   coalesce(sum(b.backlog), 0), min(b.oldest)
+            FROM audit.export_target t
+            LEFT JOIN s ON s.source IS NOT NULL
+            LEFT JOIN audit.export_cursor c ON c.target = t.target AND c.source = s.source
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS backlog, min(e.time) AS oldest FROM audit.event e
+                WHERE e.source = s.source AND e.seq > coalesce(c.seq, 0)
+            ) b ON true
+            GROUP BY t.target, t.active, t.delivered_at, t.failing_since
+            ORDER BY t.target
+            """
+        ).fetchall()
+    return [
+        watch.TargetHealth(target, active, int(backlog), oldest, failing, delivered)
+        for target, active, delivered, failing, backlog, oldest in rows
+    ]
+
+
+class PgAlertState:
+    """The outages already mailed (`audit.alert_state`): read as audit_read, changed as
+    audit_retention through its two functions."""
+
+    def raised(self) -> set[str]:
+        with connect("read") as conn:
+            return {row[0] for row in conn.execute("SELECT key FROM audit.alert_state")}
+
+    def mark(self, key: str) -> None:
+        with connect("retention", autocommit=True) as conn:
+            conn.execute("SELECT audit.alert_mark(%s)", (key,))
+
+    def clear(self, keys: set[str]) -> None:
+        with connect("retention", autocommit=True) as conn:
+            conn.execute("SELECT audit.alert_clear(%s)", (sorted(keys),))
+
+
+def append_siem_event(build: Callable[[int], str]) -> None:
+    """One own event of the SIEM writer (the warning mail), role audit_retention."""
+    with connect("retention") as conn, conn.transaction():
+        seq_row = conn.execute("SELECT audit.next_seq(%s)", (watch.OWN_SOURCE,)).fetchone()
+        assert seq_row is not None
+        conn.execute("SELECT audit.append_own(%s)", (build(int(seq_row[0])),))
+
 
 class ServiceSettings:
     """The environment of the service, checked at start."""
@@ -897,7 +1018,13 @@ class ServiceSettings:
             self.identity, self.basis = siem.parse_identity(
                 env.get("PAPAIA_AUDIT_SIEM_IDENTITY"), env.get("PAPAIA_AUDIT_SIEM_BASIS")
             )
+            siem.check_identity_target(self.identity, self.target)
             self.proxy = siem.parse_proxy(env.get("PAPAIA_AUDIT_SIEM_PROXY"))
+            self.mail = watch.parse_mail(
+                env.get("PAPAIA_AUDIT_MAIL_RELAY"),
+                env.get("PAPAIA_AUDIT_ALERT_TO"),
+                env.get("PAPAIA_AUDIT_ALERT_FROM"),
+            )
         except ValueError as error:
             raise SystemExit(f"papaia-audit: {error}") from None
 
@@ -989,12 +1116,20 @@ def run_retention(settings: ServiceSettings, check: core.SubmissionCheck) -> ret
 
 
 def verify_chains() -> None:
-    """Every chain, one log line per source (the hourly check of the service)."""
+    """Every chain, one log line per source (the hourly check of the service); the result
+    is kept in audit.verify_state for `siem-status`."""
     with connect("read") as conn:
         conn.read_only = True
-        for report in verify_all(conn, None, []).values():
-            state = "valid" if report.valid else f"broken at seq {report.broken_at}"
-            log(f"verify source={report.source} {state}")
+        reports = list(verify_all(conn, None, []).values())
+    for report in reports:
+        state = "valid" if report.valid else f"broken at seq {report.broken_at}"
+        log(f"verify source={report.source} {state}")
+    with connect("retention") as conn, conn.transaction():
+        for report in reports:
+            conn.execute(
+                "SELECT audit.verify_record(%s, %s, %s)",
+                (report.source, report.valid, None if report.valid else report.broken_at or 1),
+            )
 
 
 class Upkeep(threading.Thread):
@@ -1005,6 +1140,9 @@ class Upkeep(threading.Thread):
         self.stop = threading.Event()
         check = core.SubmissionCheck()
         exporter = make_exporter(settings)
+        mailer = watch.SmtpMailer(settings.mail) if settings.mail else None
+        self.watch = watch.Watch(export_health, mailer, append_siem_event, check, log,
+                                 disk=watch.volume_percent, state=PgAlertState())
         duties = retention.Duties(
             # Before anything is removed: a new SIEM target must hold events back.
             record=lambda: record_settings(settings, check),
@@ -1014,6 +1152,8 @@ class Upkeep(threading.Thread):
             verify=verify_chains,
             send_heads=exporter.send_heads if exporter else None,
             retain=lambda: run_retention(settings, check),
+            # Also without a target: the volume can fill, and an inactive target holds back.
+            watch=self.watch.run,
         )
         target = settings.target.name if settings.target else ""
         self.schedule = retention.Schedule(duties, datetime.now(timezone.utc), log, target)
@@ -1053,6 +1193,98 @@ def access_call() -> int:
     return 0
 
 
+def siem_status() -> int:
+    """`siem-status`: backlog, lag and delivery state per target, the measurements and
+    the last hourly verification of every chain with its age, as one JSON line (`doctor
+    siem` reads it). It does not walk the chains itself: that takes longer than doctor
+    waits on a large store; `verify` does it on demand."""
+    now = datetime.now(timezone.utc)
+    healths = export_health()
+    with connect("read") as conn:
+        conn.read_only = True
+        # The oldest event of each source is its first by seq: one index probe per source.
+        row = conn.execute(
+            _SOURCES + """
+            SELECT min((SELECT e.time FROM audit.event e WHERE e.source = s.source
+                        ORDER BY e.seq LIMIT 1))
+            FROM s WHERE s.source IS NOT NULL
+            """
+        ).fetchone()
+        states = conn.execute(
+            "SELECT source, valid, verified_at FROM audit.verify_state"
+        ).fetchall()
+    verified = {source: bool(valid) for source, valid, _ in states}
+    verified_at = min((at for _, _, at in states), default=None)
+    print(json.dumps(watch.report(healths, row[0] if row else None, verified, now,
+                                  verified_at),
+                     separators=(",", ":")))
+    return 0
+
+
+def siem_skip(stdin: str) -> int:
+    """`siem-skip`: move read positions past undelivered events, with a reason; one
+    `config_changed` event per moved position in the same transaction."""
+    try:
+        request = watch.parse_skip(json.loads(stdin))
+    except (ValueError, json.JSONDecodeError) as error:
+        print(f"papaia-audit: {error}", file=sys.stderr)
+        return 2
+    check = core.SubmissionCheck()
+    correlation_id = "siem-skip-" + os.urandom(12).hex()
+    now = datetime.now(timezone.utc)
+    moved: list[dict[str, Any]] = []
+    try:
+        with connect("retention") as conn, conn.transaction():
+            rows = conn.execute(
+                "SELECT target, from_seq, released FROM audit.export_skip(%s, %s, %s, %s, %s)",
+                (request.source, request.until, request.target, request.reason, correlation_id),
+            ).fetchall()
+            for target, from_seq, released in rows:
+                seq_row = conn.execute(
+                    "SELECT audit.next_seq(%s)", (watch.OWN_SOURCE,)
+                ).fetchone()
+                assert seq_row is not None
+                conn.execute("SELECT audit.append_own(%s)", (watch.skip_event(
+                    check, source=request.source, target=target, released=int(released),
+                    moment=now, source_seq=int(seq_row[0]), correlation_id=correlation_id,
+                ),))
+                moved.append({"target": target, "from": int(from_seq), "until": request.until,
+                              "released": int(released)})
+    except psycopg.Error as error:
+        if error.sqlstate == "PA003":
+            print("papaia-audit: skip refused (no such source, seq or target)", file=sys.stderr)
+            return 2
+        raise
+    log(f"siem skip source={request.source} until={request.until} positions={len(moved)}"
+        f" correlation_id={correlation_id}")
+    print(json.dumps({"source": request.source, "moved": moved,
+                      "correlation_id": correlation_id}))
+    return 0
+
+
+def idmap(stdin: str) -> int:
+    """`idmap`: the read API's `POST /v1/idmap` for `papaia-ctl audit idmap`, with the same
+    checks (token of an auditor, ticket of that auditor for that person)."""
+    try:
+        document = json.loads(stdin)
+        token, body = document["token"], document["request"]
+        if set(document) != {"token", "request"} or not isinstance(token, str):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        print("papaia-audit: idmap takes a token and a request", file=sys.stderr)
+        return 2
+    api = read.ReadApi(
+        PgReadStore(), TokenKeysFile(CONFIG_DIR / "token-keys.json"), _pseudonym_key(),
+        core.SubmissionCheck(),
+    )
+    response = api.handle(read.Request(
+        "POST", read.IDMAP_PATH, "", "papaia-ctl", f"Bearer {token}", None,
+        json.dumps(body).encode("utf-8"),
+    ))
+    print(response.body.decode("utf-8"))
+    return 0 if response.status == 200 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="papaia-audit")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1065,6 +1297,9 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("heads")
     commands.add_parser("retention")
     commands.add_parser("access")
+    commands.add_parser("siem-status")
+    commands.add_parser("siem-skip")
+    commands.add_parser("idmap")
     args = parser.parse_args(argv)
     if args.command == "serve":
         return serve()
@@ -1077,6 +1312,12 @@ def main(argv: list[str] | None = None) -> int:
             return retention_now()
         if args.command == "access":
             return access_call()
+        if args.command == "siem-status":
+            return siem_status()
+        if args.command == "siem-skip":
+            return siem_skip(sys.stdin.read(64 * 1024))
+        if args.command == "idmap":
+            return idmap(sys.stdin.read(64 * 1024))
         return heads()
     except psycopg.Error as error:
         raise SystemExit(f"papaia-audit: database not reachable ({type(error).__name__})") from None

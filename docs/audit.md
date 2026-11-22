@@ -370,15 +370,26 @@ target in the root `.env`:
 |---|---|
 | `PAPAIA_AUDIT_SIEM_TARGET` | `syslog-tls://host[:6514]` (syslog RFC 5424 over TLS RFC 5425, octet counting) or `https://host[:port]/path` (`POST` of up to 500 JSON lines; 2xx means taken). Empty: no export |
 | `PAPAIA_AUDIT_SIEM_PEN` | private enterprise number in the structured data, default `32473` (the example number of RFC 5612) |
-| `PAPAIA_AUDIT_SIEM_IDENTITY` | `pseudonym` (default) or `sub` |
-| `PAPAIA_AUDIT_SIEM_BASIS` | with `sub`: the agreement the clear-text export rests on (required) |
+| `PAPAIA_AUDIT_SIEM_IDENTITY` | `pseudonym` (default), `sub` or `upstream_oid` (only with a `syslog-tls://` target) |
+| `PAPAIA_AUDIT_SIEM_BASIS` | with `sub` or `upstream_oid`: the agreement the export rests on (required) |
+| `PAPAIA_OPERATIONS_MAIL` | one address for the warning mails (needs an active mail relay, profile `smtp`); empty: no mail |
 
 A syslog message carries `APP-NAME` `papaia`, `MSGID` the event name and
 `[papaia@<PEN> source="…" seq="…"]`; the message is the event in its stored form (with
 `source`, `seq`, `prev_hash`, `hash`). With `pseudonym`, `sub` and person ids in
 `object_ref` leave as `P-` and 8 characters of base32(HMAC-SHA-256(key, sub)), with the key
-`secrets/pseudonym-key` that never leaves `papaia-audit`, and `client_ip` is left out;
-`hash` stays that of the stored event.
+`secrets/pseudonym-key` that never leaves `papaia-audit`. With `upstream_oid` the
+pseudonym stays and the structured data of the syslog header carries the upstream
+provider's tenant and object id from the identity map as two more parameters,
+`[papaia@<PEN> source="…" seq="…" tid="…" oid="…"]` (left out for a person the map does
+not know), so the SOC can match events with the provider's sign-in logs. The message
+itself stays the stored form of `papaia.audit/1`, which allows no further field; a JSON
+lines target has no such header, so `upstream_oid` needs a `syslog-tls://` target
+(`setup` and the service refuse it otherwise). With `sub`, `sub` leaves in clear
+text. `client_ip` leaves with the sign-in events `login_failed` and `breakglass_login`
+(and, with `sub`, with every event); otherwise it is left out. `hash` stays that of the
+stored event, so it covers the stored identifiers, not the ones sent. A change of
+identity or basis is a `config_changed` event.
 
 The queue is the store: each target keeps a read position per source
 (`audit.export_cursor`) that moves only after the target took a batch. After an outage or a
@@ -390,6 +401,92 @@ A target that is removed from or replaced in the configuration is no longer sent
 it keeps holding back every event it has not taken: removing it is not a decision to
 discard them. Only `papaia-ctl audit siem skip` releases them, with a reason recorded as an
 event. Until then, retention records such a source as `siem_undelivered`.
+
+### Backlog, thresholds and warning mail
+
+There is no buffer of its own and no size limit: undelivered events stay in
+`papaia-audit-db`, and retention holds them back. Every minute `papaia-audit` compares
+each target's read positions with the chains (one range of the primary key per target and
+source, so the cost follows the backlog, not the size of the store) and reads the fill
+level of the volume of `papaia-audit-db` (mounted read-only into the service, only for
+`statvfs`; the service cannot read a file in it):
+
+| Finding | Result |
+|---|---|
+| oldest undelivered event older than 60 s, or deliveries failing for more than 60 s | `warn` |
+| either for more than 10 minutes | `fail` and one warning mail |
+| a target no longer configured that holds events back | `warn`, until `audit siem skip` |
+| volume of `papaia-audit-db` 80 % full or more | `warn` |
+| volume 95 % full or more | `fail` and one warning mail |
+| a chain that does not verify (at the last hourly verification) | `fail` |
+| no hourly verification yet, or the last one older than 2 h | `warn` |
+| `PAPAIA_OPERATIONS_MAIL` set without an active mail relay | `warn` |
+
+Each mail goes once per outage to `PAPAIA_OPERATIONS_MAIL` through the mail relay
+(`smtp-relay`, which then joins the network `<project>-papaia-audit-egress`; it never
+joins `papaia-audit-net`), so it needs a SIEM target, whose network the relay joins. The
+mail about a target carries the Manager's hint: "Audit-Weiterleitung gestört: Das Ziel
+{ziel} nimmt seit {dauer} keine Ereignisse an. …"; the one about the volume: "Audit-Speicher
+fast voll: Das Volume papaia-audit-db ist zu {prozent} % belegt. …". Sending is an
+`operation` event of `papaia-audit/siem` (`siem.alert_mail` with `object_ref`
+`siem_target`, or `store.disk_alert_mail` with `object_ref` `volume` `papaia-audit-db`;
+effect `send`; result `error` with `mail_not_sent` when the relay refuses it, which is then
+tried again a minute later). A sent mail is marked in `audit.alert_state` before its event
+is stored, so neither a restart of the service nor a store that refuses the event brings
+a second mail for the same outage; the mark is cleared once the target or the volume is
+fine again. `doctor siem` reports the same findings:
+
+    papaia-ctl doctor                  # check `siem`
+    papaia-ctl audit siem status       # the service's report as JSON
+
+The report also carries the measurements `papaia_audit_export_lag_seconds{target}`,
+`papaia_audit_export_backlog{target}`, `papaia_audit_oldest_event_age_days`,
+`papaia_audit_verify_ok{source}` and `papaia_audit_verify_age_seconds`; none of them names
+a person. The verification in it is that of the last full hour (kept in
+`audit.verify_state`); `papaia-ctl audit verify` walks every chain on demand.
+
+Gaps in `seq` per source are part of that verification: papaia-audit assigns `seq`
+without a gap and refuses a delivery whose `source_seq` skips one (the source sends it
+again), so a gap in the store means an event is missing. The chain then does not verify,
+which `doctor siem` reports as `fail`, not as `warn`: it is tamper evidence, not a delay.
+
+### Releasing undelivered events: `audit siem skip`
+
+    papaia-ctl audit siem skip --source=papaia-flow --until=1200 \
+        --reason="Ziel neu aufgebaut, Ereignisse bis 1200 liegen im Archiv 2026-11"
+
+moves the read positions of the source up to that `seq` for every target that has not
+taken them, active or not (`--target=<name as doctor siem shows it>` limits it to one).
+The reason (20 to 1000 characters) is required; without it the command and the store
+refuse. Each moved position is kept in `audit.export_skip` with the reason and the number
+of released events, and gives one `config_changed` event (`operation` `siem.skip`,
+`object_ref` `siem_position` `<source>@<target>`, `detail.count`), in the same
+transaction. The event does not carry the reason. Released events stay in the store
+until retention removes them; they are only no longer sent.
+
+### Identity map: `audit idmap`
+
+The map holds, per person, the user name and the upstream provider's `tid` and `oid`. It
+is filled through `POST /v1/identities`, which accepts only the client certificate of
+`papaia-lifecycle` (at most 500 entries per call, each field checked, unknown fields
+refused); an upstream id that moves to another person is taken from the first. Each call
+is one `operation` event (`identity_map.put`, effect `write`, `detail.count`) in the same
+transaction, without the entries. Until a
+person is in the map, `audit idmap` answers only `sub` and the export sends no `tid` and
+`oid` for that person. The map is read in two places only: by the export with `upstream_oid`, and for
+one person at a time with a confirmed person filter:
+
+    PAPAIA_AUDIT_TOKEN=<token of an auditor> papaia-ctl audit idmap --ticket=<id> --pseud=P-7Q2KXXXX
+    PAPAIA_AUDIT_TOKEN=<token of an auditor> papaia-ctl audit idmap --ticket=<id> --tid=<tid> --oid=<oid>
+
+The first answers `sub`, user name, `tid` and `oid` of the person behind the pseudonym,
+the second the pseudonym of the person with that upstream id. Both answer only for the
+person of the ticket, only to its requester and only within its 60 minutes (the same
+route `POST /v1/idmap` serves the Manager). Each answer is a `pseudonym_resolved` event
+with the direction in `operation` (`idmap.pseudonym_to_identity`,
+`idmap.upstream_to_pseudonym`), and the affected person sees it under "Aktivität". All
+pseudonyms at once are not offered. The token is read from the environment, never from
+the command line.
 
 A syslog connection is reused only while it is alive. Before every batch `papaia-audit`
 checks whether the receiver or `papaia-egress` closed it and opens a new one if so; a

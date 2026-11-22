@@ -27,7 +27,8 @@
 #     $PAPAIA_BACKUP_DIR/audit-heads, the one folder of the backup target it sees.
 #   - papaia-audit and papaia-audit-schema run the core's own image
 #     ghcr.io/fidonis/papaia-audit; nothing of the checkout is mounted.
-#   - Runs as the user that owns the config dir, read-only, without capabilities.
+#   - Runs as the user that owns the config dir, read-only, without capabilities. It
+#     sees the database volume read-only and only for its fill level.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
 services:
@@ -61,7 +62,7 @@ services:
   # empty database and sets the service role passwords. The only holder of the owner's
   # password besides the database.
   papaia-audit-schema:
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:dacc9ab2eb64b0de758e19a5ffb2a852e7c9537ca5650338580921c72724de00
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:baba99470151efe7e115e0614f01b1820ca138feb9e45f191aca0dd11b560c29
     restart: "no"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["schema"]
@@ -87,7 +88,7 @@ services:
   papaia-audit:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml).
     # Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:dacc9ab2eb64b0de758e19a5ffb2a852e7c9537ca5650338580921c72724de00
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:baba99470151efe7e115e0614f01b1820ca138feb9e45f191aca0dd11b560c29
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
     command: ["serve"]
@@ -99,6 +100,8 @@ services:
       PAPAIA_AUDIT_SIEM_PEN: ${PAPAIA_AUDIT_SIEM_PEN:-32473}
       PAPAIA_AUDIT_SIEM_IDENTITY: ${PAPAIA_AUDIT_SIEM_IDENTITY:-pseudonym}
       PAPAIA_AUDIT_SIEM_BASIS: ${PAPAIA_AUDIT_SIEM_BASIS:-}
+      # The warning mail (relay, operations address and sender) comes from the generated
+      # SIEM override, only with a target, PAPAIA_OPERATIONS_MAIL and the smtp profile.
     secrets:
       - audit_db_ingest_password
       - audit_db_read_password
@@ -125,6 +128,15 @@ services:
         target: /var/lib/papaia-audit/heads
         bind:
           create_host_path: false
+      # The database volume, read-only and only for its fill level (statvfs): the 95 %
+      # warning mail. PostgreSQL keeps its root owned by the database user, mode 0700
+      # or 0750, so the service cannot list or read it; nocopy keeps Compose out of it.
+      - type: volume
+        source: papaia-audit-pgdata
+        target: /var/lib/papaia-audit/db-volume
+        read_only: true
+        volume:
+          nocopy: true
     read_only: true
     depends_on:
       papaia-audit-schema:

@@ -214,6 +214,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # container_health
         PASS,  # image_signatures: nothing runs in the fake
         SKIP,  # lifecycle: the lifecycle profile is off
+        SKIP,  # siem: the audit profile is off
         PASS,  # approvals: four eyes off by default
         PASS,  # contact_point
         SKIP,  # network: no SQL source, no direct route
@@ -244,6 +245,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "container_health",
         "image_signatures",
         "lifecycle",
+        "siem",
         "approvals",
         "contact_point",
         "network",
@@ -2794,3 +2796,142 @@ def test_cli_doctor_with_an_unknown_check_name_exits_2(stack, monkeypatch, capsy
     code = _run_cli(stack, monkeypatch, healthy_docker(), "nope")
     assert code == 2
     assert "nope" in capsys.readouterr().err
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# siem
+# ─────────────────────────────────────────────────────────────────────────
+
+SIEM_TARGET = "syslog-tls://siem.example.org:6514"
+
+
+def siem_report(*targets: dict, verify: dict | None = None,
+                verify_age: int | None = 600) -> dict:
+    return {
+        "targets": list(targets),
+        "metrics": {
+            "papaia_audit_export_lag_seconds": {t["target"]: t["lag_seconds"] for t in targets},
+            "papaia_audit_export_backlog": {t["target"]: t["backlog"] for t in targets},
+            "papaia_audit_oldest_event_age_days": 12,
+            "papaia_audit_verify_ok": verify if verify is not None else {"papaia-flow": 1},
+            "papaia_audit_verify_age_seconds": verify_age,
+        },
+    }
+
+
+def siem_target(status: str = "ok", *, active: bool = True, lag: int = 0, backlog: int = 0,
+                failing: int = 0, text: str = "") -> dict:
+    return {"target": SIEM_TARGET, "active": active, "status": status, "text": text,
+            "backlog": backlog, "lag_seconds": lag, "failing_seconds": failing}
+
+
+def df_text(percent: int) -> str:
+    return (
+        "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
+        f"/dev/vda1 10000000 {percent * 100000} {(100 - percent) * 100000} {percent}% "
+        "/var/lib/postgresql/data\n"
+    )
+
+
+def audit_containers() -> list[str]:
+    return [
+        ps_line("papaia-papaia-audit-1", "running", "Up 2 hours (healthy)", "papaia-audit",
+                "papaia-audit", "audit"),
+        ps_line("papaia-papaia-audit-db-1", "running", "Up 2 hours (healthy)", "papaia-audit-db",
+                "papaia-audit", "database"),
+    ]
+
+
+def siem_docker(report: dict | str, percent: int = 40, *, code: int = 0) -> FakeDocker:
+    text = report if isinstance(report, str) else json.dumps(report)
+    return FakeDocker(
+        healthy_core() + healthy_addon() + audit_containers(),
+        tools={"python3": CommandResult(code, text + "\n", ""),
+               "df": CommandResult(0, df_text(percent), "")},
+    )
+
+
+def siem_result(stack, docker: FakeDocker, **env: str) -> doctor.CheckResult:
+    set_env(stack, COMPOSE_PROFILES=f"{PROFILES},audit", **env)
+    return result(run_doctor(stack, docker=docker), "siem")
+
+
+def test_siem_is_skipped_while_the_audit_profile_is_off(stack):
+    assert result(run_doctor(stack, docker=siem_docker(siem_report())), "siem").status == SKIP
+
+
+def test_siem_warns_without_a_target(stack):
+    found = siem_result(stack, siem_docker(siem_report()))
+    assert found.status == WARN
+    assert "no SIEM target" in found.summary
+
+
+def test_siem_passes_while_the_target_takes_the_events(stack):
+    docker = siem_docker(siem_report(siem_target()))
+    found = siem_result(stack, docker, PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
+    assert found.status == PASS, found.summary
+    assert found.details["disk_percent"] == 40
+    assert found.details["metrics"]["papaia_audit_oldest_event_age_days"] == 12
+    execs = [c for c in docker.calls if c[:2] == ["docker", "exec"]]
+    assert ["docker", "exec", "papaia-papaia-audit-1", "python3", "-I", "-m", "papaia_audit",
+            "siem-status"] in execs
+    assert ["docker", "exec", "papaia-papaia-audit-db-1", "df", "-P",
+            "/var/lib/postgresql/data"] in execs
+
+
+def test_siem_fails_when_the_target_has_not_taken_events_for_more_than_10_minutes(stack):
+    target = siem_target("fail", lag=660, backlog=40, failing=660,
+                         text="takes no events for 11 min")
+    found = siem_result(stack, siem_docker(siem_report(target)),
+                        PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
+    assert found.status == FAIL
+    assert SIEM_TARGET in found.summary and "11 min" in found.summary
+
+
+def test_siem_names_an_inactive_target_that_holds_events_back(stack):
+    old = dict(siem_target("warn", active=False, backlog=9, lag=4000,
+                           text="no longer configured, holds back 9 event(s)"),
+               target="https://old.example.org:443/in")
+    found = siem_result(stack, siem_docker(siem_report(siem_target(), old)),
+                        PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
+    assert found.status == WARN
+    assert "https://old.example.org:443/in" in found.summary
+
+
+@pytest.mark.parametrize("percent, expected", [(79, PASS), (80, WARN), (95, FAIL)])
+def test_siem_judges_the_volume_of_the_audit_database(stack, percent, expected):
+    found = siem_result(stack, siem_docker(siem_report(siem_target()), percent),
+                        PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
+    assert found.status == expected
+    if expected != PASS:
+        assert f"{percent} %" in found.summary
+
+
+def test_siem_fails_when_a_chain_does_not_verify(stack):
+    report = siem_report(siem_target(), verify={"papaia-flow": 0, "papaia-studio": 1})
+    found = siem_result(stack, siem_docker(report),
+                        PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
+    assert found.status == FAIL
+    assert "papaia-flow" in found.summary
+
+
+@pytest.mark.parametrize("age", [None, 2 * 3600 + 1])
+def test_siem_warns_while_the_hourly_verification_is_missing_or_old(stack, age):
+    found = siem_result(stack, siem_docker(siem_report(siem_target(), verify_age=age)),
+                        PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
+    assert found.status == WARN
+    assert "verification" in found.summary and "papaia-ctl audit verify" in found.summary
+
+
+def test_siem_warns_when_the_operations_address_has_no_mail_relay(stack):
+    found = siem_result(stack, siem_docker(siem_report(siem_target())),
+                        PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org",
+                        PAPAIA_OPERATIONS_MAIL="ops@example.org")
+    assert found.status == WARN
+    assert "PAPAIA_OPERATIONS_MAIL" in found.summary and "smtp" in found.summary
+
+
+def test_siem_fails_when_its_report_cannot_be_read(stack):
+    found = siem_result(stack, siem_docker("not json", code=1),
+                        PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
+    assert found.status == FAIL

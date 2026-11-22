@@ -17,9 +17,13 @@ Rules:
   one auditor requested with a reason and another auditor confirmed after a fresh sign-in.
   Nobody confirms their own request, whatever the platform's four-eyes setting says; the
   ticket holds for the requester, for that person and period, for 60 minutes.
-- Requests, decisions, reads with a ticket and exports are events of the source
-  `papaia-audit`, written before the answer; the affected person reads the reads about
-  them at `/v1/me/reads` (through `papaia-me`).
+- The identity map (`POST /v1/idmap`, `papaia-ctl audit idmap`) resolves one person at a
+  time and only with such a ticket: from the pseudonym to `sub`, user name and the
+  upstream provider's `tid`/`oid`, or from `tid`/`oid` back to the pseudonym. papaia-lifecycle
+  feeds the map (`POST /v1/identities`, client certificate only); nobody reads it whole.
+- Requests, decisions, reads with a ticket, resolutions and exports are events of the
+  source `papaia-audit`, written before the answer; the affected person reads the reads
+  about them at `/v1/me/reads` (through `papaia-me`).
 
 Answers carry no reason text, token or row in any log; error bodies follow the platform's
 error envelope (class, code, message, hint, correlation id).
@@ -51,6 +55,12 @@ WRITER = "papaia-audit/read"
 # Clients that reach the read API, by the source of their client certificate.
 AUDITOR_CALLERS = frozenset({"papaia-manager", "papaia-ctl"})
 ME_CALLERS = frozenset({"papaia-me"})
+# The service that knows the provider's ids of the persons and feeds the identity map.
+IDENTITY_CALLERS = frozenset({"papaia-lifecycle"})
+IDMAP_PATH = "/v1/idmap"
+IDENTITIES_PATH = "/v1/identities"
+MAX_IDENTITY_BODY = 256 * 1024
+IDENTITIES_MAX = 500
 # `object_ref.type` values whose id names a person (a lifecycle change on an account, a
 # realm sync on a user). Without a ticket for that person the id is shown as pseudonym,
 # like `sub`; so is any id equal to the row's own `sub`, whatever its type.
@@ -86,12 +96,16 @@ PAGE_FIELDS = frozenset({"page_token", "limit"})
 # Asking for an evaluation by person is refused as such, not as an unknown parameter.
 GROUPING_FIELDS = frozenset({"group_by", "count", "count_by", "per", "aggregate", "distinct"})
 REQUEST_FIELDS = frozenset({"person", "from", "to", "reason"})
+IDMAP_FROM_PSEUDONYM = frozenset({"ticket", "pseud"})
+IDMAP_FROM_UPSTREAM = frozenset({"ticket", "tid", "oid"})
+IDENTITY_FIELDS = frozenset({"sub", "username", "tid", "oid"})
 
 _SUBJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@|+-]{0,254}$")
 _PSEUD_RE = re.compile(r"^P-[A-Z2-7]{8}$")
 _EVENT_RE = re.compile(r"^[a-z][a-z_]{0,63}$")
 _CATALOG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)*$")
 _CORRELATION_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_UPSTREAM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _PAGE_TOKEN_RE = re.compile(r"^([0-9]{1,15})\.([a-z][a-z0-9-]{0,62})\.([0-9]{1,18})$")
 _TIME_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{3})?Z)?$")
@@ -484,6 +498,16 @@ def _reason(value: Any) -> str:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class PersonIdentity:
+    """One entry of the identity map: a person's user name and upstream ids."""
+
+    sub: str
+    username: str | None
+    tid: str | None
+    oid: str | None
+
+
 @dataclass
 class Row:
     source: str
@@ -537,7 +561,19 @@ class ReadStore(Protocol):
         ...
 
     def reads_about(self, sub: str, limit: int) -> list[tuple[datetime, PersonQuery]]:
-        """Times of allowed reads and exports with a ticket for `sub`, newest first."""
+        """Times of allowed reads, resolutions and exports with a ticket for `sub`, newest
+        first."""
+        ...
+
+    def identity(self, sub: str) -> PersonIdentity | None: ...
+
+    def sub_by_upstream(self, tid: str, oid: str) -> str | None: ...
+
+    def put_identities(
+        self, identities: list[PersonIdentity], build: Callable[[int], str]
+    ) -> int:
+        """Store the entries and the own event `build(next source_seq)` in one
+        transaction; returns how many."""
         ...
 
 
@@ -611,12 +647,18 @@ class ReadApi:
             if request.caller not in ME_CALLERS:
                 raise _not_found()
             return self._me_reads(self._identity(request), request)
+        if (method, path) == ("POST", IDENTITIES_PATH):
+            # A service, proven by its client certificate; no person token.
+            if request.caller not in IDENTITY_CALLERS:
+                raise _not_found()
+            return self._identities(request, cid)
         decision = _QUERY_PATH_RE.match(path)
         routes = {
             ("GET", "/v1/events"): self._events,
             ("POST", "/v1/exports"): self._export,
             ("GET", "/v1/person-queries"): self._open_queries,
             ("POST", "/v1/person-queries"): self._request_query,
+            ("POST", IDMAP_PATH): self._idmap,
         }
         handler = routes.get((method, path))
         if handler is None and not (decision and method == "POST"):
@@ -692,6 +734,8 @@ class ReadApi:
                 "detail": {"rows": rows} if rows is not None else None,
                 "event": event,
             }
+            if operation is not None:
+                body["operation"] = operation
             _, canonical = self.check.check(json.dumps(body).encode("utf-8"), OWN_SOURCE)
             return canonical.decode("utf-8")
 
@@ -703,15 +747,20 @@ class ReadApi:
 
     # -- search and export ------------------------------------------------
 
-    def _ticket(self, search: Search, identity: Identity) -> PersonQuery | None:
-        if not search.by_person:
-            return None
-        query = self.store.get_query(search.ticket) if search.ticket else None
+    def _confirmed(self, ticket: str | None, identity: Identity) -> PersonQuery:
+        """The confirmed query `ticket` of this requester, within its 60 minutes."""
+        query = self.store.get_query(ticket) if ticket else None
         if query is None or query.state != "confirmed" or query.requested_by != identity.sub:
             raise PERSON_FILTER
         assert query.decided_at is not None
         if self._now() >= query.decided_at + TICKET_LIFETIME:
             raise EXPIRED
+        return query
+
+    def _ticket(self, search: Search, identity: Identity) -> PersonQuery | None:
+        if not search.by_person:
+            return None
+        query = self._confirmed(search.ticket, identity)
         if search.sub and search.sub != query.person_sub:
             raise PERSON_FILTER
         if search.pseud and search.pseud != pseudonym(self._key, query.person_sub):
@@ -898,6 +947,126 @@ class ReadApi:
             raise NOT_OPEN
         query.state, query.decided_by, query.decided_at = state, identity.sub, now
         return _json(200, self._query_view(query, identity))
+
+    # -- identity map -----------------------------------------------------
+
+    def _idmap(self, identity: Identity, request: Request, cid: str) -> Response:
+        document = _json_body(request.body)
+        fields = set(document)
+        what = "das Ticket und genau eine Kennung (Pseudonym oder tid und oid)"
+        if fields not in (IDMAP_FROM_PSEUDONYM, IDMAP_FROM_UPSTREAM) or not all(
+            isinstance(value, str) for value in document.values()
+        ):
+            raise _invalid(what)
+        if not _UUID_RE.fullmatch(document["ticket"]):
+            raise _invalid(what)
+        if fields == IDMAP_FROM_PSEUDONYM and not _PSEUD_RE.fullmatch(document["pseud"]):
+            raise _invalid(what)
+        if fields == IDMAP_FROM_UPSTREAM and not all(
+            _UPSTREAM_RE.fullmatch(document[name]) for name in ("tid", "oid")
+        ):
+            raise _invalid(what)
+        query = self._confirmed(document["ticket"], identity)
+        person = query.person_sub
+        pseud = pseudonym(self._key, person)
+        if fields == IDMAP_FROM_PSEUDONYM:
+            if document["pseud"] != pseud:
+                raise PERSON_FILTER
+            found = self.store.identity(person)
+            answer: dict[str, Any] = {
+                "pseud": pseud,
+                "sub": person,
+                "username": found.username if found else None,
+                "tid": found.tid if found else None,
+                "oid": found.oid if found else None,
+            }
+            operation = "idmap.pseudonym_to_identity"
+        else:
+            # Another person's upstream id is refused like an unknown one.
+            if self.store.sub_by_upstream(document["tid"], document["oid"]) != person:
+                raise PERSON_FILTER
+            answer = {"pseud": pseud}
+            operation = "idmap.upstream_to_pseudonym"
+        self._emit(
+            "pseudonym_resolved", identity, cid, query_id=query.id, effect="read",
+            operation=operation,
+        )
+        return _json(200, answer)
+
+    def _identity_entry(self, entry: Any) -> PersonIdentity:
+        if not isinstance(entry, dict) or set(entry) != IDENTITY_FIELDS:
+            raise _invalid("die Einträge der Zuordnung")
+        sub, username, tid, oid = (entry[name] for name in ("sub", "username", "tid", "oid"))
+        valid = (
+            isinstance(sub, str)
+            and bool(_SUBJECT_RE.fullmatch(sub))
+            and (
+                username is None
+                or (
+                    isinstance(username, str)
+                    and 1 <= len(username) <= 255
+                    and not any(ord(c) < 32 or ord(c) == 127 for c in username)
+                )
+            )
+            and (
+                (tid is None and oid is None)
+                or all(isinstance(v, str) and _UPSTREAM_RE.fullmatch(v) for v in (tid, oid))
+            )
+        )
+        texts = [v for v in (sub, username, tid, oid) if isinstance(v, str)]
+        if not valid or any(self._token_shape.search(text) for text in texts):
+            raise _invalid("die Einträge der Zuordnung")
+        return PersonIdentity(sub, username, tid, oid)
+
+    def _identities(self, request: Request, cid: str) -> Response:
+        if request.query or request.body is None or len(request.body) > MAX_IDENTITY_BODY:
+            raise _invalid("die Einträge der Zuordnung")
+        try:
+            document = json.loads(
+                request.body.decode("utf-8"),
+                object_pairs_hook=core._unique_keys,
+                parse_float=core._no_fraction,
+                parse_constant=core._no_constant,
+            )
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise _invalid("die Einträge der Zuordnung") from None
+        entries = document.get("identities") if isinstance(document, dict) else None
+        if set(document if isinstance(document, dict) else ()) != {"identities"} or not (
+            isinstance(entries, list) and 1 <= len(entries) <= IDENTITIES_MAX
+        ):
+            raise _invalid("die Einträge der Zuordnung")
+        identities = [self._identity_entry(entry) for entry in entries]
+        moment = time_text(self._now())
+        caller = request.caller
+
+        def build(source_seq: int) -> str:
+            # The write of a service: who delivered how many entries, never an entry.
+            body = {
+                "format": core.FORMAT,
+                "time": moment,
+                "source_seq": source_seq,
+                "correlation_id": cid,
+                "writer": WRITER,
+                "role": "server",
+                "sub": caller,
+                "identity_kind": "service",
+                "service_account": caller,
+                "azp": caller,
+                "catalog_id": "papaia-audit.identity_map",
+                "operation": "identity_map.put",
+                "effect": "write",
+                "result": "allowed",
+                "detail": {"count": len(identities)},
+                "event": "operation",
+            }
+            _, canonical = self.check.check(json.dumps(body).encode("utf-8"), OWN_SOURCE)
+            return canonical.decode("utf-8")
+
+        try:
+            stored = self.store.put_identities(identities, build)
+        except core.Refused:
+            raise UNAVAILABLE from None
+        return _json(200, {"stored": stored})
 
     # -- the affected person ----------------------------------------------
 
