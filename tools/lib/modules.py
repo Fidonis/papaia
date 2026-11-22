@@ -1,4 +1,5 @@
-"""The optional modules (LocalAI, web search, RAG, the mail relay, voice): what each owns.
+"""The optional modules (LocalAI, web search, RAG, the mail relay, voice, the knowledge map):
+what each owns.
 
 Switching a module off removes its containers and keeps everything else (`stop --clean-up`,
 then `setup --no-<module>`). Two things can follow, and they are separate on purpose:
@@ -10,7 +11,13 @@ then `setup --no-<module>`). Two things can follow, and they are separate on pur
   found as well.
 * **Delete the module's settings**: `reset_config` puts the module's `.env` files back to what
   the release ships, removes the files it keeps outside them (the mail password, the RAG
-  catalog) and regenerates its secrets where that is safe.
+  catalog, the rendered knowledge map) and regenerates its secrets where that is safe.
+
+A module can also have **operator files**: what the operator wrote by hand for it, such as the
+knowledge map's declarations, overrides, governance records and gold set. They are neither
+settings nor data, and neither of the two deletes them: `purge_operator_files` does, on its own
+explicit request only. The rendered knowledge map goes with them, since it carries their
+content.
 
 A module's settings and its data can be bound to each other. The RAG system encrypts the
 ingester's stored credentials with `QI_CONNECTIONS_SECRET` and keeps the grants of its
@@ -43,7 +50,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, common, envtree, localai_native, resolve, secrets
+from . import backup, common, envtree, knowledge_map, localai_native, resolve, secrets
 
 
 class ModuleError(Exception):
@@ -71,7 +78,8 @@ class ModuleSpec:
     # Keys of the root `.env` the module's settings own.
     root_keys: tuple[str, ...] = ()
     # Files under the configuration directory removed with the settings (a trailing `/*`
-    # means the files directly inside that directory, which stays).
+    # means the files directly inside that directory, `/**` every file below it; the
+    # directory itself stays).
     files: tuple[str, ...] = ()
     # Whether regenerating the module's secrets is safe for the rest of the stack.
     regenerate_secrets: bool = False
@@ -79,6 +87,12 @@ class ModuleSpec:
     settings_need_data: bool = False
     # What `setup` asks when the module is switched on.
     questions: tuple[Question, ...] = ()
+    # Files under the configuration directory the operator wrote by hand for the module.
+    # Removed only on their own request (`purge_operator_files`), never with the settings.
+    operator_files: tuple[str, ...] = ()
+    # Files derived from the operator files, removed together with them (same patterns as
+    # `files`).
+    operator_derived: tuple[str, ...] = ()
 
 
 MODULES: dict[str, ModuleSpec] = {
@@ -135,6 +149,23 @@ MODULES: dict[str, ModuleSpec] = {
         # The accelerator choice lives in the root .env (like LOCALAI_IMAGE_VARIANT),
         # so a module reset must restore it to the template's cpu default too.
         root_keys=("VOICE_TTS_IMAGE_VARIANT",),
+    ),
+    "knowledge-map": ModuleSpec(
+        name="knowledge-map",
+        profile="knowledge-map",
+        env_dirs=("ai/knowledge-map",),
+        # The rendered map: a fresh render rebuilds it once the module is on again.
+        files=(f"{knowledge_map.MAP_DIR}/**",),
+        # Only the admin token and the embedding key, which `setup` copies from LiteLLM's
+        # master key again; nothing outside the module holds the admin token.
+        regenerate_secrets=True,
+        operator_files=(
+            knowledge_map.SOURCES_REL_PATH,
+            knowledge_map.OVERRIDES_REL_PATH,
+            knowledge_map.GOVERNANCE_REL_PATH,
+            knowledge_map.GOLDSET_REL_PATH,
+        ),
+        operator_derived=(f"{knowledge_map.MAP_DIR}/**",),
     ),
 }
 
@@ -265,6 +296,10 @@ def info(config_dir: Path, repo_root: Path, name: str, *, runner: Runner | None 
         },
         "settings_need_data": module.settings_need_data,
         "questions": questions(config_dir, name),
+        # Listed with `exists`, so a dialog can name the files that would really go.
+        "operator_files": [
+            {"path": rel, "exists": (config_dir / rel).is_file()} for rel in module.operator_files
+        ],
     }
 
 
@@ -368,17 +403,56 @@ def reset_config(config_dir: Path, repo_root: Path, name: str) -> list[str]:
                 target, tree[rel_dir], template_path=template if template.is_file() else None
             )
 
-    for entry in module.files:
-        if entry.endswith("/*"):
-            directory = config_dir / entry[:-2]
-            if directory.is_dir():
-                for item in sorted(directory.iterdir()):
-                    if item.is_file():
-                        item.unlink()
-                        touched.append(item.relative_to(config_dir).as_posix())
+    touched.extend(_remove_files(config_dir, module.files))
+    return touched
+
+
+def _remove_files(config_dir: Path, entries: tuple[str, ...]) -> list[str]:
+    """Remove the files the entries name (see `ModuleSpec.files`). Returns what was removed,
+    relative to the configuration directory. A directory named with `/*` or `/**` stays; one
+    `/**` emptied of its files loses its empty subdirectories too."""
+    removed: list[str] = []
+    for entry in entries:
+        if entry.endswith(("/*", "/**")):
+            recursive = entry.endswith("/**")
+            directory = config_dir / entry.rsplit("/", 1)[0]
+            if not directory.is_dir():
+                continue
+            found = directory.rglob("*") if recursive else directory.iterdir()
+            for item in sorted(found):
+                if item.is_file() or item.is_symlink():
+                    item.unlink()
+                    removed.append(item.relative_to(config_dir).as_posix())
+            if recursive:
+                # Deepest first, so a parent is empty once its children are gone.
+                subdirs = sorted(
+                    (p for p in directory.rglob("*") if p.is_dir()),
+                    key=lambda p: len(p.parts),
+                    reverse=True,
+                )
+                for sub in subdirs:
+                    if not any(sub.iterdir()):
+                        sub.rmdir()
         else:
             target = config_dir / entry
             if target.is_file():
                 target.unlink()
-                touched.append(entry)
-    return touched
+                removed.append(entry)
+    return removed
+
+
+def purge_operator_files(config_dir: Path, name: str) -> list[str]:
+    """Remove the files the operator wrote for the module, and what was derived from them.
+    Returns what was removed, relative to the configuration directory.
+
+    Asked for on its own, never implied by a settings reset: these are the operator's work
+    (the knowledge map's declarations, governance records and gold set). Refused while the
+    module is on, and for a module that has none."""
+    module = spec(name)
+    if not module.operator_files:
+        raise ModuleError(f"{module.name} keeps no operator files")
+    if module.profile in _active_profiles(config_dir):
+        raise ModuleError(
+            f"{module.name} is still switched on; switch it off before deleting its operator files"
+        )
+    return _remove_files(config_dir, module.operator_files + module.operator_derived)

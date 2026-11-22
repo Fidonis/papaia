@@ -236,6 +236,7 @@ CORE_OVERRIDES = (
     "docker-compose.ssl-cert.override.yml",
     "docker-compose.localai-gpu.override.yml",
     "docker-compose.localai-runtime.override.yml",
+    "docker-compose.localai-models.override.yml",
     "docker-compose.voice-gpu.override.yml",
     "docker-compose.litellm-config.override.yml",
 )

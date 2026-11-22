@@ -107,6 +107,7 @@ variable reference is in [`docs/configuration.md`](../../docs/configuration.md).
 
 - Profile: `librechat-websearch`
 - Image: `ghcr.io/firecrawl/firecrawl-mcp-server` (digest-pinned)
+- Listens on port 3000 (`/mcp` for LibreChat, `/health` for the healthcheck).
 - No published port: reachable only from `papaia-net`, which is the security
   boundary — the server itself does no authentication.
 - Talks to the Firecrawl service in

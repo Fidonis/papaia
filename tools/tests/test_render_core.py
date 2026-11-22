@@ -120,7 +120,7 @@ def test_render_merges_addon_allowed_domains(repo_root, config_dir):
         (config_dir / "ai/librechat/librechat.yaml").read_text(encoding="utf-8")
     )
     domains = rendered["mcpSettings"]["allowedDomains"]
-    assert "http://mcp-firecrawl:8080" in domains, "base domain must be preserved"
+    assert "http://mcp-firecrawl:3000" in domains, "base domain must be preserved"
     assert "http://paperless-mcp:8000" in domains, "addon domain must be appended"
 
 
@@ -204,7 +204,7 @@ def test_render_merges_the_rag_fragment_only_while_the_profile_is_active(repo_ro
     assert rendered["mcpServers"]["QdrantIngest"]["url"] == "http://qdrant-ingest:8300/mcp"
     assert "FirecrawlMCP" in rendered["mcpServers"], "base servers must be preserved"
     domains = rendered["mcpSettings"]["allowedDomains"]
-    assert "http://mcp-firecrawl:8080" in domains
+    assert "http://mcp-firecrawl:3000" in domains
     assert "http://qdrant-mcp:8000" in domains
     assert "http://qdrant-ingest:8300" in domains
 
@@ -221,7 +221,7 @@ def test_render_drops_the_rag_servers_again_when_the_profile_is_removed(repo_roo
 
     rendered = _rendered_librechat(config_dir)
     assert set(rendered["mcpServers"]) == {"FirecrawlMCP"}
-    assert rendered["mcpSettings"]["allowedDomains"] == ["http://mcp-firecrawl:8080"]
+    assert rendered["mcpSettings"]["allowedDomains"] == ["http://mcp-firecrawl:3000"]
 
 
 def test_render_rag_fragment_is_idempotent_and_loses_to_the_overlay(repo_root, config_dir):
@@ -566,6 +566,114 @@ def test_an_overlay_only_model_yaml_is_rendered_and_registered(repo_root, config
     assert (config_dir / "ai/localai/models/my-model.yaml").read_text(encoding="utf-8") == own
     assert (config_dir / "ai/localai/models/stub.yaml").is_file()
     assert _model_names(config_dir) == ["my-model"]
+
+
+def test_a_model_yaml_removed_from_the_overlay_leaves_the_render(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _set_profiles(config_dir, "litellm,localai")
+    own = "name: my-model\nbackend: llama-cpp\nparameters:\n  model: my-model.gguf\n"
+    _localai_overlay(config_dir, "models/my-model.yaml", own)
+    _localai_overlay(config_dir, "models.txt", "https://example.org/files/my-model.gguf\n")
+    render_core.render(config_dir, repo_root)
+    rendered = config_dir / "ai" / "localai" / "models"
+    assert (rendered / "my-model.yaml").is_file()
+
+    (config_dir / "overlay" / "ai" / "localai" / "models" / "my-model.yaml").unlink()
+    render_core.render(config_dir, repo_root)
+
+    assert not (rendered / "my-model.yaml").exists()
+    shipped = {p.name for p in (repo_root / "src" / "ai" / "localai" / "models").glob("*.yaml")}
+    assert {p.name for p in rendered.glob("*.yaml")} == shipped
+    assert _model_names(config_dir) == []
+
+
+def test_an_overlay_copy_of_a_shipped_model_yaml_falls_back_to_the_shipped_one(
+    repo_root, config_dir
+):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    shipped = repo_root / "src" / "ai" / "localai" / "models" / "qwen2.5-1.5b-instruct.yaml"
+    _localai_overlay(config_dir, "models/qwen2.5-1.5b-instruct.yaml", "context_size: 4096\n")
+    render_core.render(config_dir, repo_root)
+    rendered = config_dir / "ai" / "localai" / "models" / "qwen2.5-1.5b-instruct.yaml"
+    assert yaml.safe_load(rendered.read_text())["context_size"] == 4096
+
+    (config_dir / "overlay" / "ai" / "localai" / "models" / "qwen2.5-1.5b-instruct.yaml").unlink()
+    render_core.render(config_dir, repo_root)
+
+    assert yaml.safe_load(rendered.read_text()) == yaml.safe_load(shipped.read_text())
+
+
+def test_only_model_yamls_are_removed_from_the_rendered_models(repo_root, config_dir):
+    """Files the init job never copies are not the render's to delete."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    rendered = config_dir / "ai" / "localai" / "models"
+    rendered.mkdir(parents=True)
+    for name in ("notes.txt", "model.gguf", "old.yml", ".hidden.yaml"):
+        (rendered / name).write_text("x", encoding="utf-8")
+    (rendered / "gone.yaml").write_text("name: gone\n", encoding="utf-8")
+    (config_dir / render_core.LOCALAI_MODELS_RECORD).write_text(
+        "gone.yaml\nnotes.txt\nmodel.gguf\nold.yml\n.hidden.yaml\n", encoding="utf-8"
+    )
+    render_core.render(config_dir, repo_root)
+
+    assert not (rendered / "gone.yaml").exists()
+    for name in ("notes.txt", "model.gguf", "old.yml", ".hidden.yaml"):
+        assert (rendered / name).is_file(), name
+    assert (rendered / "stub.yaml").is_file()
+
+
+def test_a_model_yaml_the_render_did_not_write_is_kept(repo_root, config_dir):
+    """Until 1.8 the rendered directory was the only place for a model YAML of one's own, so
+    such a file can be the only copy there is."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    rendered = config_dir / "ai" / "localai" / "models"
+    rendered.mkdir(parents=True)
+    (rendered / "handmade.yaml").write_text("name: handmade\n", encoding="utf-8")
+
+    render_core.render(config_dir, repo_root)
+    render_core.render(config_dir, repo_root)
+
+    assert (rendered / "handmade.yaml").read_text() == "name: handmade\n"
+    assert not (config_dir / render_core.LOCALAI_MODELS_OVERRIDE).exists()
+
+
+def test_a_model_yaml_that_is_no_longer_shipped_leaves_the_render(repo_root, config_dir):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+
+    (repo_root / "src" / "ai" / "localai" / "models" / "stub.yaml").unlink()
+    render_core.render(config_dir, repo_root)
+
+    assert not (config_dir / "ai" / "localai" / "models" / "stub.yaml").exists()
+
+
+def test_each_removal_changes_the_localai_label(repo_root, config_dir):
+    """LocalAI forgets a model only when it starts, so `start` has to recreate it. An added
+    model must not: LocalAI would be down for as long as its download takes."""
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    override = config_dir / render_core.LOCALAI_MODELS_OVERRIDE
+    written = [None]
+    for _ in range(2):
+        _localai_overlay(config_dir, "models/own.yaml", "name: own\n")
+        render_core.render(config_dir, repo_root)
+        assert (override.read_text() if override.exists() else None) == written[-1]
+
+        (config_dir / "overlay" / "ai" / "localai" / "models" / "own.yaml").unlink()
+        render_core.render(config_dir, repo_root)
+        written.append(override.read_text())
+        render_core.render(config_dir, repo_root)
+        assert override.read_text() == written[-1]
+
+    assert written[1] != written[2]
+    services = yaml.safe_load(written[1])["services"]
+    assert list(services) == ["localai"]
+    assert list(services["localai"]) == ["labels"]
 
 
 _NOT_UTF8 = b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00\xff\xfe\x89PNG\r\n\x1a\n"
