@@ -90,7 +90,7 @@
 #   papaia-ctl certs renew   [--force] [--ca] [--config-dir=PATH]
 #   papaia-ctl certs status  [--json] [--config-dir=PATH]
 #   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
-#   papaia-ctl doctor        [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+#   papaia-ctl doctor        [CHECK...] [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
 #   papaia-ctl topology show [--json] [--config-dir=PATH]
 #   papaia-ctl topology validate [--config-dir=PATH]
 #   papaia-ctl topology firewall [--format=table|json|csv] [--config-dir=PATH]

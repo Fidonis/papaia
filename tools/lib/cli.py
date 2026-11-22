@@ -441,6 +441,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "Setup complete. Run 'papaia-ctl start' to bring up the stack."
         f" PAPAIA_CONFIG_DIR={config_dir}"
     )
+    reporting.print_model_location(config_dir, repo_root)
     # Only for the switch-on: confirming an already enabled RAG system needs no reminder.
     if setup_args.enable_rag and not rag_was_enabled:
         reporting.print_rag_next_steps(config_dir, tree)

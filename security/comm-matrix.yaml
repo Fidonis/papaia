@@ -1,0 +1,272 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — communication matrix
+# ═══════════════════════════════════════════════════════════════════════════
+# Every connection the installation makes or accepts: inbound to the edge,
+# between the Docker networks, from the host, and outbound. This file is the
+# one source: `papaia-ctl topology firewall` prints it with the concrete
+# targets of this installation, `papaia-ctl doctor network` checks the direct
+# route against it, and docs/network.md explains it. There is no second,
+# hand-kept list.
+#
+# Fields of a row:
+#   id            K-nn
+#   direction     inbound | internal | outbound | host
+#                 (host: made by the Docker host itself, not by a container)
+#   from          the source (service or party)
+#   from_network  the network the connection leaves the source on; names
+#                 without the Compose project prefix
+#   to            the target
+#   ports         list of ports; empty for file system targets and for rows
+#                 whose ports depend on the add-on (see `purpose`)
+#   protocol      tcp | udp | file
+#   purpose       what it is for
+#   when          when the row applies
+#   required      true: needed whenever `when` applies; false: optional
+#   via           outbound rows only: egress (through papaia-egress) or
+#                 direct. direct exists for K-12, K-14 and K-15 only.
+#   pending       optional: what is still missing before the row's way holds
+#                 in this release. A row without it is in place.
+
+version: 1
+rows:
+  - id: K-01
+    direction: inbound
+    from: browser (operator network)
+    from_network: operator network
+    to: edge proxy (nginx-proxy-manager)
+    ports: [443, 80]
+    protocol: tcp
+    purpose: all user interfaces and the login; port 80 only redirects to 443
+    when: always
+    required: true
+
+  - id: K-02
+    direction: internal
+    from: edge proxy
+    from_network: papaia-net
+    to: keycloak
+    ports: [8443]
+    protocol: tcp
+    purpose: login (TLS)
+    when: always
+    required: true
+
+  - id: K-03
+    direction: internal
+    from: edge proxy
+    from_network: papaia-net
+    to: librechat, papaia-manager and the interfaces of the add-ons
+    ports: [3080, 8000]
+    protocol: tcp
+    purpose: user interfaces and APIs; the ports of an add-on come from its manifest
+    when: per module
+    required: true
+
+  - id: K-04
+    direction: internal
+    from: add-ons, librechat, papaia-manager
+    from_network: papaia-net or the add-on's network
+    to: keycloak
+    ports: [8443]
+    protocol: tcp
+    purpose: discovery, JWKS, token exchange (RFC 8693)
+    when: always
+    required: true
+
+  - id: K-05
+    direction: internal
+    from: add-ons, librechat
+    from_network: papaia-net or the add-on's network
+    to: litellm
+    ports: [4000]
+    protocol: tcp
+    purpose: model calls through the model gateway
+    when: always
+    required: true
+
+  - id: K-06
+    direction: internal
+    from: litellm
+    from_network: papaia-net
+    to: localai (container, or the native LocalAI on host.docker.internal)
+    ports: [8080]
+    protocol: tcp
+    purpose: the local model
+    when: profile localai
+    required: false
+
+  - id: K-07
+    direction: internal
+    from: add-ons
+    from_network: the add-on's network
+    to: add-ons
+    ports: []
+    protocol: tcp
+    purpose: traffic between modules as their manifests pair them (HTTP, TLS, MCP)
+    when: per pairing
+    required: false
+
+  - id: K-08
+    direction: internal
+    from: mcp-paperless
+    from_network: the paperless add-on's internal network
+    to: paperless
+    ports: []
+    protocol: tcp
+    purpose: the trust header of Paperless, never at the edge
+    when: add-on paperless
+    required: false
+
+  - id: K-09
+    direction: internal
+    from: papaia-manager
+    from_network: papaia-docker-gate-net
+    to: papaia-docker-gate (Docker socket, read-only)
+    ports: []
+    protocol: tcp
+    purpose: status, backup plan, start and stop of named projects
+    when: profile manager
+    required: false
+    pending: >-
+      papaia-docker-gate is not part of this release; the manager mounts the
+      Docker socket itself.
+
+  - id: K-10
+    direction: outbound
+    from: smtp-relay
+    from_network: papaia-net
+    to: the operator's mail server
+    ports: [587, 465]
+    protocol: tcp
+    purpose: the one way out for mail (STARTTLS or TLS)
+    when: profile smtp
+    required: false
+    via: egress
+    pending: >-
+      SMTP cannot be tunnelled through papaia-egress (CONNECT only); the relay
+      still sends directly.
+
+  - id: K-11
+    direction: outbound
+    from: papaia-audit
+    from_network: papaia-egress-net
+    to: SIEM
+    ports: [6514, 443]
+    protocol: tcp
+    purpose: audit export (syslog over TLS, RFC 5425, or JSON lines over HTTPS)
+    when: as soon as a SIEM target is set
+    required: true
+    via: egress
+    pending: the SIEM export is not part of this release.
+
+  - id: K-12
+    direction: outbound
+    from: backup (papaia-ctl on the host)
+    from_network: host
+    to: backup target
+    ports: []
+    protocol: file
+    purpose: archives and the erasure journal (file system, NFS or SMB)
+    when: always
+    required: true
+    via: direct
+
+  - id: K-13
+    direction: host
+    from: Docker host
+    from_network: host
+    to: NTP server
+    ports: [123]
+    protocol: udp
+    purpose: time
+    when: always
+    required: true
+
+  - id: K-14
+    direction: outbound
+    from: mcp-mssql
+    from_network: papaia-sql-uplink
+    to: the operator's SQL Server (protected hosts with a mssql catalog entry)
+    ports: [1433]
+    protocol: tcp
+    purpose: >-
+      read access of the SQL source; the only direct way to a production
+      system, limited by host rules to the protected hosts and their ports
+    when: a protected host with a catalog entry mssql.<name>
+    required: false
+    via: direct
+
+  - id: K-15
+    direction: outbound
+    from: papaia-audit
+    from_network: host
+    to: backup target
+    ports: []
+    protocol: file
+    purpose: chain heads (audit-heads) outside the host
+    when: always
+    required: true
+    via: direct
+
+  - id: K-16
+    direction: outbound
+    from: keycloak
+    from_network: papaia-egress-net
+    to: upstream identity provider
+    ports: [443]
+    protocol: tcp
+    purpose: token, JWKS and discovery endpoints
+    when: federation
+    required: false
+    via: egress
+    pending: federation does not go through papaia-egress in this release.
+
+  - id: K-17
+    direction: outbound
+    from: papaia-lifecycle
+    from_network: papaia-egress-net
+    to: directory API of the upstream identity provider
+    ports: [443]
+    protocol: tcp
+    purpose: status reconciliation every 60 seconds
+    when: federation
+    required: false
+    via: egress
+    pending: the directory reconciliation is not part of this release.
+
+  - id: K-18
+    direction: outbound
+    from: papaia-egress
+    from_network: papaia-egress-net
+    to: corporate proxy
+    ports: []
+    protocol: tcp
+    purpose: the one way out of the services; the port comes from PAPAIA_EGRESS_UPSTREAM_PROXY
+    when: PAPAIA_EGRESS_UPSTREAM_PROXY is set
+    required: false
+    via: egress
+
+  - id: K-19
+    direction: host
+    from: Docker daemon of the host
+    from_network: host
+    to: image registry or the operator's mirror
+    ports: [443]
+    protocol: tcp
+    purpose: image download at installation and upgrade
+    when: installation and upgrade
+    required: true
+
+  - id: K-20
+    direction: outbound
+    from: litellm
+    from_network: litellm-egress
+    to: model server outside the installation
+    ports: [443]
+    protocol: tcp
+    purpose: >-
+      model calls to a model server papaia does not run; the content of the
+      requests leaves the network. The port comes from the model's api_base.
+    when: a model route outside the stack (the hosted test model, docs/hosted-test-model.md)
+    required: false
+    via: egress

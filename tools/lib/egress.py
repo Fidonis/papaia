@@ -156,8 +156,10 @@ def _list(value: object, what: str) -> list:
     return value
 
 
-def load_protected_hosts(config_dir: Path) -> list[dict]:
-    """The validated protected hosts; seeds an empty list on first use."""
+def load_protected_entries(config_dir: Path) -> list[dict]:
+    """The validated protected hosts with every field: `name`, `hosts` (normalised),
+    `ports` (sorted, or None) and `catalog_entry` (or None). Seeds an empty list on
+    first use."""
     path = config_dir / PROTECTED_HOSTS_FILE
     if not path.is_file():
         common.atomic_write(path, _PROTECTED_SEED)
@@ -172,19 +174,31 @@ def load_protected_hosts(config_dir: Path) -> list[dict]:
             hosts = _list(item["hosts"], "hosts")
             if not hosts:
                 raise ValueError(f"{name}: hosts must not be empty")
-            if "ports" in item:
-                _ports(item["ports"])  # used by the host rules of a direct route
+            # The ports are for the host rules of the direct route (lib/sql_uplink.py).
+            ports = _ports(item["ports"]) if "ports" in item else None
             catalog = item.get("catalog_entry")
             if catalog is not None and not (
                 isinstance(catalog, str) and _CATALOG_RE.match(catalog)
             ):
                 raise ValueError(f"{name}: bad catalog_entry")
             entries.append(
-                {"name": name, "hosts": [normalise_host(h, networks=True) for h in hosts]}
+                {
+                    "name": name,
+                    "hosts": [normalise_host(h, networks=True) for h in hosts],
+                    "ports": ports,
+                    "catalog_entry": catalog,
+                }
             )
     except (OSError, yaml.YAMLError, ValueError) as exc:
         raise EgressError(f"{path}: {exc}") from exc
     return entries
+
+
+def load_protected_hosts(config_dir: Path) -> list[dict]:
+    """The validated protected hosts as the proxy reads them (name and hosts)."""
+    return [
+        {"name": e["name"], "hosts": e["hosts"]} for e in load_protected_entries(config_dir)
+    ]
 
 
 def load_internal_targets(config_dir: Path) -> dict[str, list[str]]:

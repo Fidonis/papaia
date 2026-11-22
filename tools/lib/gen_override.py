@@ -28,6 +28,7 @@ from . import (
     hosted_model,
     images,
     paperless_gate,
+    sql_uplink,
 )
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
@@ -324,6 +325,9 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
         common.atomic_write(
             out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
         )
+    # The direct route of `mcp-mssql` to the SQL source (lib/sql_uplink.py), also an
+    # override of the add-on's own project.
+    sql_uplink.generate_override(config_dir, repo_root)
 
 
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For

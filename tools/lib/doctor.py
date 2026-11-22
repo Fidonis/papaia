@@ -11,6 +11,7 @@ Nothing here changes anything. The probes are reads: `docker version/info` and
 `rocm-smi` / `timedatectl`, a TCP connect to localhost, a name lookup,
 `openssl x509` on a file, a handshake with the configured mail server (greeting, EHLO,
 STARTTLS and a login -- no mail is sent) and `postqueue -p` in the mail relay's container,
+`iptables -S` of the SQL uplink's chain and of `DOCKER-USER`, `docker network inspect`,
 plus everything `status` reads. Inside a container,
 where the host's driver tools and `timedatectl` are out of reach, the NVIDIA GPU
 is read with a `docker exec` of `nvidia-smi` into the LocalAI container and the
@@ -55,6 +56,7 @@ from . import (
     common,
     compat,
     deployment,
+    egress,
     envtree,
     gpu_detect,
     images,
@@ -62,6 +64,7 @@ from . import (
     pki,
     semver,
     smtp,
+    sql_uplink,
     status,
 )
 from .status import Runner
@@ -116,6 +119,7 @@ GPU_EXEC_TIMEOUT_SECONDS = 8
 TIME_PROBE_TIMEOUT_SECONDS = 5.0
 # `postqueue -p` reads the queue directory; a large queue takes a moment.
 SMTP_QUEUE_TIMEOUT_SECONDS = 10.0
+IPTABLES_TIMEOUT_SECONDS = 10.0
 
 # What systemd's `NTPSynchronized` means: the kernel's estimated maximum error is
 # under sixteen seconds. The kernel starts at exactly that figure and only lowers
@@ -2056,6 +2060,215 @@ def check_lifecycle(ctx: Context) -> CheckResult:
     )
 
 
+def _uplink_members(ctx: Context, network: str) -> list[tuple[str, str, str]] | None:
+    """(container, compose service, compose project) of every running container on
+    `network`, or None when Docker does not answer."""
+    listed = ctx.run(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"network={network}",
+            "--format",
+            '{{.Names}}\t{{.Label "com.docker.compose.service"}}'
+            '\t{{.Label "com.docker.compose.project"}}',
+        ],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    if listed.returncode != 0:
+        return None
+    found = []
+    for line in listed.stdout.splitlines():
+        parts = (line.split("\t") + ["", ""])[:3]
+        if parts[0].strip():
+            found.append((parts[0].strip(), parts[1].strip(), parts[2].strip()))
+    return found
+
+
+def _check_uplink_network(
+    ctx: Context, network: str, subnet: str, details: dict[str, Any]
+) -> tuple[list[str], list[str]]:
+    """(failures, warnings) about the uplink network itself and who is on it."""
+    fails: list[str] = []
+    warns: list[str] = []
+    try:
+        addon = sql_uplink.sql_addon(ctx.config_dir, ctx.repo_root)
+    except sql_uplink.SqlUplinkError as exc:
+        return [str(exc)], []
+    inspected = ctx.run(
+        ["docker", "network", "inspect", "--format", "{{json .}}", network],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    if inspected.returncode != 0:
+        warns.append(
+            f"{network} is not created yet (the start of the add-on with {sql_uplink.SERVICE}"
+            " creates it)"
+        )
+        return fails, warns
+    try:
+        data = json.loads(inspected.stdout or "{}")
+    except ValueError:
+        return [f"docker network inspect {network}: unreadable answer"], warns
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict):
+        return [f"docker network inspect {network}: unreadable answer"], warns
+    if data.get("Internal") is True:
+        fails.append(f"{network} is internal: {sql_uplink.SERVICE} has no route to the SQL source")
+    configs = (data.get("IPAM") or {}).get("Config") or []
+    subnets = [c.get("Subnet") for c in configs if isinstance(c, dict)]
+    details["live_subnets"] = subnets
+    ipv6 = [str(s) for s in subnets if ":" in str(s or "")]
+    if data.get("EnableIPv6") is True or ipv6:
+        fails.append(
+            f"{network} has IPv6 ({', '.join(ipv6) or 'EnableIPv6'}): the host rules are IPv4"
+            " only, so it is a way out no rule covers (remove the network and start the add-on"
+            " again)"
+        )
+    expected_bridge = sql_uplink.bridge(sql_uplink.root_env(ctx.config_dir))
+    live_bridge = (data.get("Options") or {}).get(sql_uplink.BRIDGE_OPTION)
+    details["bridge"] = live_bridge
+    if live_bridge != expected_bridge:
+        fails.append(
+            f"{network} is on the bridge {live_bridge or 'chosen by Docker'}, the host rules are"
+            f" for {expected_bridge} (remove the network and start the add-on again)"
+        )
+    if subnets != [subnet]:
+        fails.append(
+            f"{network} has the range {', '.join(map(str, subnets)) or 'none'}, the host rules"
+            f" are for {subnet} (remove the network and start the add-on again)"
+        )
+    members = _uplink_members(ctx, network)
+    if members is None:
+        warns.append(f"the members of {network} could not be listed")
+        return fails, warns
+    details["members"] = [m[0] for m in members]
+    project = addon[1].name if addon else None
+    foreign = [
+        name
+        for name, service, owner in members
+        if service != sql_uplink.SERVICE or owner != project
+    ]
+    if foreign:
+        fails.append(
+            f"{network} has members other than {sql_uplink.SERVICE}: {', '.join(foreign)}"
+        )
+    for container, service, owner in members:
+        if service == sql_uplink.SERVICE and owner == project:
+            routed, unknown = _second_routes(ctx, container, network)
+            if routed:
+                fails.append(
+                    f"{container} is also on {', '.join(routed)}, which is not internal: Docker"
+                    " may put its default route there and the host rules drop that traffic"
+                    " (the other networks of the SQL add-on must be internal)"
+                )
+            if unknown:
+                warns.append(f"the networks of {container} could not be read: {unknown}")
+    return fails, warns
+
+
+def _second_routes(ctx: Context, container: str, uplink: str) -> tuple[list[str], str]:
+    """(networks of `container` besides the uplink that are not internal, reason when they
+    cannot be read). Only an internal network carries no default route."""
+    listed = ctx.run(
+        ["docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    if listed.returncode != 0:
+        return [], status.first_line(listed.stderr) or f"exit {listed.returncode}"
+    try:
+        attached = json.loads(listed.stdout or "{}")
+    except ValueError:
+        return [], "unreadable answer"
+    if not isinstance(attached, dict):
+        return [], "unreadable answer"
+    routed: list[str] = []
+    for name in sorted(n for n in attached if isinstance(n, str) and n != uplink):
+        inspected = ctx.run(
+            ["docker", "network", "inspect", "--format", "{{json .}}", name],
+            DOCKER_PROBE_TIMEOUT_SECONDS,
+        )
+        try:
+            data = json.loads(inspected.stdout or "{}") if inspected.returncode == 0 else None
+        except ValueError:
+            data = None
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict):
+            return routed, f"docker network inspect {name} failed"
+        if data.get("Internal") is not True:
+            routed.append(name)
+    return routed, ""
+
+
+def _check_host_rules(
+    ctx: Context, expected: list[str], chain: str, rules_file: Path
+) -> tuple[list[str], list[str]]:
+    """(failures, warnings) from comparing the host's chain with the rendered one."""
+    load = f"load them as root with 'sudo sh {rules_file}'"
+    live = ctx.run(["iptables", "-S", chain], IPTABLES_TIMEOUT_SECONDS)
+    user = ctx.run(["iptables", "-S", sql_uplink.DOCKER_USER], IPTABLES_TIMEOUT_SECONDS)
+    if live.returncode == 0 and user.returncode == 0:
+        problems = sql_uplink.compare(expected, chain, live.stdout, user.stdout)
+        if problems:
+            return [f"host rules differ from {rules_file}: {'; '.join(problems)}; {load}"], []
+        return [], []
+    answers = [r for r in (live, user) if r.returncode != 0]
+    if all(r.returncode not in (124, 126, 127) and "No chain" in r.stderr for r in answers):
+        return [f"host rules not loaded (no chain {chain}); {load}"], []
+    reason = status.first_line(answers[0].stderr) or f"exit {answers[0].returncode}"
+    return [], [
+        f"host rules not verified: {reason} (run 'sudo papaia-ctl doctor' on the Docker host;"
+        " on Docker Desktop the rules live in its VM)"
+    ]
+
+
+def check_network(ctx: Context) -> CheckResult:
+    """The one direct route out of the stack, to the SQL source (row K-14,
+    docs/network.md). Without a SQL source there is nothing to check. With one: the
+    network `<project>-sql-uplink` is not internal, has the rendered range and only
+    `mcp-mssql` of the SQL add-on on it, and the host's chain equals the rendered rules
+    (`iptables -S`, which needs root) with the jump as the first rule of DOCKER-USER.
+    A drifted, missing or misplaced rule is `fail`; rules that cannot be read here
+    (not root, no iptables, inside a container) are `warn`, never `pass`."""
+    name = "network"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        expected = sql_uplink.expected_rules(ctx.config_dir)
+    except (sql_uplink.SqlUplinkError, egress.EgressError) as exc:
+        return CheckResult(name, FAIL, str(exc))
+    if not expected:
+        return CheckResult(name, SKIP, "no SQL source: nothing leaves the stack directly")
+    env = sql_uplink.root_env(ctx.config_dir)
+    network = sql_uplink.network_name(env)
+    subnet = str(sql_uplink.subnet(env))
+    chain = sql_uplink.chain(env)
+    rules_file = ctx.config_dir / sql_uplink.RULES_FILE
+    details: dict[str, Any] = {
+        "network": network,
+        "subnet": subnet,
+        "chain": chain,
+        "rules_file": str(rules_file),
+        "members": [],
+    }
+    fails, warns = _check_uplink_network(ctx, network, subnet, details)
+    rule_fails, rule_warns = _check_host_rules(ctx, expected, chain, rules_file)
+    fails += rule_fails
+    warns += rule_warns
+    if fails:
+        return CheckResult(name, FAIL, "; ".join(fails + warns), details)
+    if warns:
+        return CheckResult(name, WARN, "; ".join(warns), details)
+    hosts = len(sql_uplink.targets(ctx.config_dir))
+    return CheckResult(
+        name,
+        PASS,
+        f"direct route to {hosts} SQL source(s) only through {network}; host rules match",
+        details,
+    )
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -2073,6 +2286,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("container_health", check_container_health),
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
+    ("network", check_network),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import common, envtree, executor, link, nodes, topology
+from . import comm_matrix, common, egress, envtree, executor, link, nodes, sql_uplink, topology
 from .topology import Node
 
 
@@ -317,7 +317,21 @@ def cmd_node_exec(args: argparse.Namespace) -> int:
 def cmd_topology_firewall(args: argparse.Namespace) -> int:
     config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
     try:
-        _manifest, topo = nodes.require_distributed(config_dir)
+        _manifest, topo = nodes.load(config_dir)
+    except nodes.NodeError as exc:
+        return _fail(exc, 2)
+    if not topo.distributed:
+        # One host: the routes of the communication matrix that leave it, with this
+        # installation's targets, and the host rules of the direct route to the SQL source.
+        try:
+            routes = comm_matrix.routes(config_dir, repo_root)
+            rules = sql_uplink.expected_rules(config_dir)
+        except (comm_matrix.MatrixError, sql_uplink.SqlUplinkError, egress.EgressError) as exc:
+            return _fail(exc, 2)
+        rules_file = config_dir / sql_uplink.RULES_FILE
+        print(comm_matrix.format_routes(routes, rules, rules_file, args.format))
+        return 0
+    try:
         env = topology.validation_env(config_dir, repo_root)
         profiles = [p for p in env.get("COMPOSE_PROFILES", "").split(",") if p]
         plan = link.plan(topo, profiles, env)

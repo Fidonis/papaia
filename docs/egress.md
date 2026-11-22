@@ -131,7 +131,7 @@ entry names a source system that no service may reach through the exit:
 | `name` | Short name, lower case (`a-z`, `0-9`, `-`, `_`, `.`) |
 | `hosts` | Host names, IP addresses or address ranges (CIDR). Required, not empty |
 | `ports` | Optional. The proxy refuses the hosts on every port; the ports are for routes that bypass the exit |
-| `catalog_entry` | Optional. The catalog entry the system belongs to |
+| `catalog_entry` | Optional. The catalog entry the system belongs to. `mssql.<name>` makes the entry a SQL source: `mcp-mssql` then reaches it directly over `papaia-sql-uplink`, limited by host rules to these addresses and ports ([network.md](network.md)); such an entry needs `ports` and an IPv4 address |
 
 Unknown fields, wildcards and malformed entries stop the render, so a typo never turns into a
 missing protection.

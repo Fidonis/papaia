@@ -12,7 +12,34 @@ from pathlib import Path
 
 import yaml
 
-from . import chat_servers, common, envtree, keycloak_role_sync, secrets, smtp
+from . import chat_servers, common, envtree, hosted_model, keycloak_role_sync, secrets, smtp
+
+# The operator notice when the model server is outside the installation (betrieb BE-05),
+# in the operator's language as specified.
+MODEL_OUTSIDE_NOTICE = (
+    "Inhalte der Anfragen verlassen Ihr Netz. Prüfen Sie Auftragsverarbeitung und Übermittlung."
+)
+
+
+def print_model_location(config_dir: Path, repo_root: Path) -> None:
+    """Print where the models of the installation run. Inside: every route of LiteLLM
+    goes to a service of the stack or the native LocalAI of this host. Outside: a route
+    leaves the stack (row K-20 of the communication matrix, through papaia-egress); any
+    model server papaia does not run counts as outside, so the notice is never missed."""
+    names = hosted_model.rendered_stack_names(config_dir, repo_root)
+    try:
+        found = hosted_model.route(config_dir, names)
+    except hosted_model.HostedModelError as exc:
+        print(f"Model source: cannot be determined ({exc})")
+        return
+    if found is None:
+        print(
+            "Model source: inside the installation (the models run in the stack or on this host)."
+        )
+        return
+    host, port = found
+    print(f"Model source: outside the installation ({host}:{port}).")
+    print(f"  {MODEL_OUTSIDE_NOTICE}")
 
 
 def print_external_oidc_checklist(config_dir: Path, tree: envtree.EnvTree) -> None:

@@ -51,6 +51,7 @@ from . import (
     realm_hardening,
     service_account_keys,
     smtp,
+    sql_uplink,
 )
 
 logger = logging.getLogger(__name__)
@@ -267,6 +268,13 @@ def render(config_dir: Path, repo_root: Path) -> None:
     try:
         egress.render(config_dir, repo_root)
     except egress.EgressError as exc:
+        raise RenderError(str(exc)) from exc
+    # The one direct route, to the SQL source: its host rules, and one add-on with
+    # `mcp-mssql` at most (docs/network.md).
+    try:
+        sql_uplink.render_rules(config_dir)
+        sql_uplink.sql_addon(config_dir, repo_root)
+    except (sql_uplink.SqlUplinkError, egress.EgressError) as exc:
         raise RenderError(str(exc)) from exc
 
     ensure_lifecycle_key(config_dir)

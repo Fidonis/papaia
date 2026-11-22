@@ -1333,6 +1333,7 @@ raw values behind its summary in `details`.
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
 | `image_signatures` | Every running container of the core project runs an image pinned by digest, listed with that digest in the signed bill of materials of the checkout and signed with its key (see [Image pinning and signatures](#image-pinning-and-signatures)). | `fail` for an unpinned, unlisted or unsigned image, for a running image whose digest is not the pinned one, and while containers run without the pinned release key or bill of materials; `warn` if the registry cannot be asked (no connection, rate limit, server error) or Docker does not say what runs |
+| `network` | Only with a SQL source: the direct route of `mcp-mssql` to it (see [docs/network.md](docs/network.md)). The network `<project>-sql-uplink` exists, is not internal, has the rendered range and no member other than `mcp-mssql`; `iptables -S` of the installation's chain equals the rendered host rules and its jump is the first rule of `DOCKER-USER`. | `fail` for a drifted, missing, misplaced or additional rule, another member or another range; `warn` when the network is not created yet or the rules cannot be read (not root, no `iptables`, inside a container); `skip` without a SQL source |
 | `lifecycle` | Only while the `lifecycle` profile is on: the health report of `papaia-lifecycle` (see [docs/lifecycle.md](docs/lifecycle.md)), read with `docker exec`: the age of its last reconciliation independent of events, deactivated accounts still holding a consent, the revocation list, gap revokes and accounts it could not revoke. | `fail` when the last reconciliation is older than 2 h or none has run, a deactivated account holds a consent, the list is old, missing or does not verify, or the service does not run; `warn` for a gap revoke in the last 7 days, a parked event or an account outside the group of persons; `skip` while the profile is off or where the service runs on another node |
 
 Before `setup` has run, the checks that need the installation's configuration report `skip`
@@ -1561,10 +1562,13 @@ URL with a port (in distributed mode the bundled proxy serves every URL by host 
 tools/papaia-ctl topology firewall [--format=table|json|csv]
 ```
 
-`firewall` lists the connections the installation opens between its nodes: SSH from the
-controller to every other node, and the link port wherever a service on one node calls a
-service on another. For the `dmz-split` example that is SSH and 7443 from internal to edge,
-and 7443 from edge to internal. papaia never changes a firewall itself.
+`firewall` lists, in a distributed installation, the connections the installation opens
+between its nodes: SSH from the controller to every other node, and the link port wherever a
+service on one node calls a service on another. For the `dmz-split` example that is SSH and
+7443 from internal to edge, and 7443 from edge to internal. On one host it lists the routes
+of the [communication matrix](docs/network.md) that leave the host, with the configured
+targets, and the host rules of the direct route to a SQL source. papaia never changes a
+firewall itself.
 
 ### `node`
 

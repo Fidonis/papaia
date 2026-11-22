@@ -35,6 +35,8 @@ cmd_doctor() {
             --skip=*) extra+=(--skip="${1#*=}") ;;
             --json) extra+=(--json) ;;
             -h|--help) usage; exit 0 ;;
+            # A check name (`doctor network`) runs that check only; Python validates it.
+            [a-z]*) extra+=("$1") ;;
             *) error "Unknown option for doctor: $1"; exit 2 ;;
         esac
         shift

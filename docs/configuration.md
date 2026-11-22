@@ -209,6 +209,14 @@ checks. The allow lists come from the add-on manifests (`networks.egress`), the 
 hosts from `$PAPAIA_CONFIG_DIR/security/protected-hosts.yaml` and the internal ranges an
 add-on may reach from `$PAPAIA_CONFIG_DIR/security/egress-internal-targets.yaml`.
 
+## SQL uplink variable
+
+Root `.env`, read by `papaia-ctl` when a SQL source is configured ([network.md](network.md)).
+
+| Variable | Purpose |
+|---|---|
+| `PAPAIA_SQL_UPLINK_SUBNET` | Fixed range of the network `<project>-sql-uplink`, the direct route of `mcp-mssql` to the SQL source. A private IPv4 range from /24 to /29 that overlaps no SQL source; empty means `10.255.254.0/29`. The host rules are written for this range |
+
 ## Hosted test model variable
 
 Root `.env`, read by `papaia-ctl` when it renders LiteLLM's configuration
