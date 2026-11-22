@@ -14,6 +14,9 @@ nothing else:
     file is written unquoted and Compose reads `$` and ` #` in it, and an env value
     shows up in `docker inspect`,
   - the Keycloak `smtpServer` block,
+  - the one sender every mail leaves with: the relay replaces any From with the name of
+    the installation and the configured address (PLT-78, ASS-42-A6), so a module cannot
+    send under a name of its own,
   - the probe `doctor` uses and the parser of the queue listing it reads.
 
 Nothing here prompts; setup resolves values in bash and passes them in. Pure functions
@@ -22,6 +25,7 @@ wherever feasible, the same split the other lib modules keep.
 
 from __future__ import annotations
 
+import base64
 import re
 import smtplib
 import socket
@@ -52,6 +56,7 @@ KEY_SECURITY = "SMTP_RELAY_UPSTREAM_SECURITY"
 KEY_USER = "SMTP_RELAY_UPSTREAM_USER"
 KEY_FROM = "SMTP_RELAY_FROM_ADDRESS"
 KEY_FROM_NAME = "SMTP_RELAY_FROM_NAME"
+KEY_FROM_HEADER = "SMTP_RELAY_FROM_HEADER"
 KEY_SENDER_DOMAINS = "SMTP_RELAY_SENDER_DOMAINS"
 KEY_TLS_LEVEL = "SMTP_RELAY_TLS_LEVEL"
 KEY_TLS_WRAPPER = "SMTP_RELAY_TLS_WRAPPER"
@@ -76,6 +81,14 @@ _ENV_UNSAFE = set("#$\"'\\`")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 MAX_PASSWORD_LENGTH = 512
+
+# A name of these characters is a valid RFC 5322 phrase as it is. Anything else is sent
+# as RFC 2047 encoded words, which also keeps the header free of what the relay's rule
+# table (`{`, `}`, `$`) and the env file (`#`, quotes) would read.
+_PLAIN_NAME_RE = re.compile(r"^[A-Za-z0-9_+-]+(?: [A-Za-z0-9_+-]+)*$")
+# UTF-8 bytes per encoded word: 45 bytes are 60 base64 characters, 72 with the frame,
+# under the 75 RFC 2047 allows.
+_ENCODED_WORD_BYTES = 45
 
 
 class SmtpConfigError(ValueError):
@@ -170,9 +183,39 @@ def validate_password(value: str) -> str:
     return value
 
 
-def derived_keys(security: str, from_address: str) -> dict[str, str]:
-    """The module env keys that follow from the chosen security and sender."""
+def _encoded_words(text: str) -> str:
+    words: list[str] = []
+    chunk = ""
+    for char in text:
+        if chunk and len((chunk + char).encode("utf-8")) > _ENCODED_WORD_BYTES:
+            words.append(chunk)
+            chunk = ""
+        chunk += char
+    words.append(chunk)
+    return " ".join(
+        "=?utf-8?b?" + base64.b64encode(word.encode("utf-8")).decode("ascii") + "?="
+        for word in words
+    )
+
+
+def sender_header(name: str, address: str) -> str:
+    """The From header value the relay writes into every mail: `<name> <address>`.
+
+    The name is the installation's for every module (Ä-32: never `<name> – <module>`).
+    The result is ASCII and holds no `{`, `}`, `,`, `$`, `#` or quote, so it fits into
+    the relay's inline rule table and into the env file unchanged."""
+    display = validate_display_name(name)
+    mailbox = validate_address(address)
+    phrase = display if _PLAIN_NAME_RE.match(display) else _encoded_words(display)
+    return f"{phrase} <{mailbox}>"
+
+
+def derived_keys(
+    security: str, from_address: str, from_name: str = DEFAULT_FROM_NAME
+) -> dict[str, str]:
+    """The module env keys that follow from the chosen security, sender and name."""
     return {
+        KEY_FROM_HEADER: sender_header(from_name, from_address),
         KEY_SENDER_DOMAINS: from_address.rsplit("@", 1)[1].lower(),
         KEY_TLS_LEVEL: "none" if security == "none" else "verify",
         KEY_TLS_WRAPPER: "yes" if security == "tls" else "no",

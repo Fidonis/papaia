@@ -191,6 +191,7 @@ def test_the_example_env_matches_the_keys_and_defaults_of_the_helper():
         smtp.KEY_USER,
         smtp.KEY_FROM,
         smtp.KEY_FROM_NAME,
+        smtp.KEY_FROM_HEADER,
         smtp.KEY_SENDER_DOMAINS,
         smtp.KEY_TLS_LEVEL,
         smtp.KEY_TLS_WRAPPER,
@@ -201,6 +202,7 @@ def test_the_example_env_matches_the_keys_and_defaults_of_the_helper():
     assert example[smtp.KEY_SECURITY] == "starttls"
     assert example[smtp.KEY_PORT] == str(smtp.DEFAULT_PORTS["starttls"])
     derived = smtp.derived_keys("starttls", "noreply@example.org")
+    assert example[smtp.KEY_FROM_HEADER] == "", "derived by setup from the installation name"
     assert example[smtp.KEY_TLS_LEVEL] == derived[smtp.KEY_TLS_LEVEL]
     assert example[smtp.KEY_TLS_WRAPPER] == derived[smtp.KEY_TLS_WRAPPER]
 
@@ -216,3 +218,38 @@ def test_the_consumer_contract_is_what_the_realm_block_and_the_docs_name():
     assert (smtp.RELAY_HOST, smtp.RELAY_PORT) == ("smtp-relay", 587)
     block = smtp.realm_smtp_server(smtp.Settings(profile_on=True, host="h", from_address="a@b.c"))
     assert (block["host"], block["port"]) == ("smtp-relay", "587")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# one sender and text and link only (PLT-78, ASS-42-A6, KE-25)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_the_relay_writes_the_one_sender_into_every_mail_and_drops_a_second_identity():
+    rules = _service()["environment"]["POSTFIX_header_checks"]
+
+    assert rules.startswith("regexp:{") and rules.endswith("}")
+    assert "{ /^From:/ REPLACE From: ${SMTP_RELAY_FROM_HEADER:-" in rules
+    assert "{ /^Sender:/ IGNORE }" in rules
+    # Postfix substitutes `$n` in a REPLACE text: the header may not carry one.
+    default = rules.split("${SMTP_RELAY_FROM_HEADER:-", 1)[1].split("}", 1)[0]
+    assert default.endswith(".invalid>"), "unconfigured: a sender that can go nowhere"
+
+
+def test_attachments_and_non_text_parts_are_refused():
+    rules = _service()["environment"]["POSTFIX_mime_header_checks"]
+
+    assert rules.startswith("regexp:{") and rules.endswith("}")
+    assert "/^Content-Disposition:[[:space:]]*attachment/ REJECT 5.7.1 " in rules
+    assert "/^Content-Type:[[:space:]]*(application|audio|video|message)/ REJECT 5.7.1 " in rules
+    # A kit notification is text, HTML and an inline logo; nothing of it may be refused.
+    assert "text/" not in rules and "image/" not in rules and "multipart/" not in rules
+
+
+def test_the_rule_tables_are_inline_and_need_no_file_or_volume():
+    environment = _service()["environment"]
+    mounts = [v for v in _service()["volumes"] if isinstance(v, dict)]
+
+    for key in ("POSTFIX_header_checks", "POSTFIX_mime_header_checks"):
+        assert "/" not in environment[key].split(":", 1)[0]
+    assert [m["target"] for m in mounts] == ["/run/secrets/upstream-password"]

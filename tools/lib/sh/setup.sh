@@ -1340,9 +1340,6 @@ _prompt_smtp() {
             "Mails are sent from this address, e.g. noreply@example.org. Your provider may only accept addresses it knows." \
             "SMTP_RELAY_FROM_ADDRESS" "${SMTP_FROM_STICKY:-}")"
     fi
-    if [ -z "$smtp_from_name" ]; then
-        smtp_from_name="$(prompt_field "Sender name" \
-            "Shown next to the address in the recipient's mailbox." \
-            "SMTP_RELAY_FROM_NAME" "${SMTP_FROM_NAME_STICKY:-papAIa}")"
-    fi
+    # No question for the sender name: every mail goes out under the name of the
+    # installation (overlay/platform/branding.yaml), whichever module sends it.
 }

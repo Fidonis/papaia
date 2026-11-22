@@ -67,7 +67,11 @@ class SetupArgs:
     smtp_user: str | None = None
     smtp_no_auth: bool = False  # drop the stored login and password
     smtp_from: str | None = None  # sender address
+    # Only accepted when it equals installation_name: one sender name for every mail.
     smtp_from_name: str | None = None
+    # Name of the installation (catalog brand, overlay/platform/branding.yaml); the
+    # relay's sender name. The caller reads it; the default is the product name.
+    installation_name: str = smtp.DEFAULT_FROM_NAME
     smtp_password: str | None = field(default=None, repr=False)  # never printed or stored in env
     reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
@@ -1168,11 +1172,7 @@ def _resolve_smtp_settings(module: dict[str, str], args: SetupArgs) -> tuple[dic
     if not from_value.strip():
         raise SetupError("--smtp-from is required: the sender address of the mails.")
     from_address = smtp.validate_address(from_value)
-    from_name = smtp.validate_display_name(
-        args.smtp_from_name
-        if args.smtp_from_name is not None
-        else module.get(smtp.KEY_FROM_NAME, "") or smtp.DEFAULT_FROM_NAME
-    )
+    from_name = _sender_name(args)
 
     if args.smtp_no_auth:
         user, password = "", ""
@@ -1209,17 +1209,57 @@ def _resolve_smtp_settings(module: dict[str, str], args: SetupArgs) -> tuple[dic
         smtp.KEY_USER: user,
         smtp.KEY_FROM: from_address,
         smtp.KEY_FROM_NAME: from_name,
-        **smtp.derived_keys(security, from_address),
+        **smtp.derived_keys(security, from_address, from_name),
     }
     return values, password
+
+
+def _sender_name(args: SetupArgs) -> str:
+    """The relay's sender name: the name of the installation, for every mail (PLT-78
+    with Ä-32, ASS-42-A6). `--smtp-from-name` may only repeat it."""
+    try:
+        name = smtp.validate_display_name(args.installation_name)
+    except smtp.SmtpConfigError as exc:
+        raise SetupError(
+            f"The name of the installation ('{args.installation_name}') is the sender name"
+            f" of every mail and cannot be used as it is: {exc} Change `name` in"
+            " overlay/platform/branding.yaml."
+        ) from None
+    if args.smtp_from_name is not None and smtp.validate_display_name(args.smtp_from_name) != name:
+        raise SetupError(
+            f"Every mail is sent with the name of the installation ('{name}'), not"
+            f" '{args.smtp_from_name.strip()}'. Drop --smtp-from-name, or change `name` in"
+            " overlay/platform/branding.yaml."
+        )
+    return name
+
+
+def _follow_installation_name(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """A stored relay takes over a renamed installation, and one stored before the From
+    header existed gets it, on any setup run; nothing else of it changes."""
+    module = tree.get(smtp.MODULE_DIR, {})
+    from_address = module.get(smtp.KEY_FROM, "").strip()
+    if not from_address:
+        return tree
+    try:
+        from_address = smtp.validate_address(from_address)
+    except smtp.SmtpConfigError as exc:
+        raise SetupError(str(exc)) from exc
+    name = _sender_name(args)
+    header = smtp.sender_header(name, from_address)
+    if (module.get(smtp.KEY_FROM_NAME), module.get(smtp.KEY_FROM_HEADER)) != (name, header):
+        module[smtp.KEY_FROM_NAME] = name
+        module[smtp.KEY_FROM_HEADER] = header
+    return tree
 
 
 def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Add or remove the `smtp` Compose profile and store the relay's configuration.
 
-    Without a flag and without a value the call is a no-op -- whatever a prior run
-    stored is kept (sticky). Values are stored whether the relay is on or off, so the
-    settings can be prepared first and switched on later; they change the profile only
+    Without a flag and without a value whatever a prior run stored is kept (sticky);
+    only the sender name and the From header follow the name of the installation.
+    Values are stored whether the relay is on or off, so the settings can be prepared
+    first and switched on later; they change the profile only
     together with a flag: `enable_smtp=True` adds it, `enable_smtp=False` removes it.
     `enable_smtp=False` on its own only removes the profile: the settings and the
     password stay, so a later opt-in finds them.
@@ -1229,14 +1269,14 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
     (the file is read once, at start, and a changed file does not alter the config
     hash). Everything is validated before the first write."""
     if args.enable_smtp is None and not _smtp_fields_given(args):
-        return tree
+        return _follow_installation_name(tree, args)
     root = tree.setdefault("", {})
     profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p]
     others = [p for p in profiles if p != smtp.PROFILE]
 
     if args.enable_smtp is False and not _smtp_fields_given(args):
         root["COMPOSE_PROFILES"] = ",".join(others)
-        return tree
+        return _follow_installation_name(tree, args)
 
     module = tree.setdefault(smtp.MODULE_DIR, {})
     try:

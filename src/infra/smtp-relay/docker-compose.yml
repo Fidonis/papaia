@@ -53,6 +53,19 @@ services:
       POSTFIX_mynetworks: ${SMTP_RELAY_ALLOWED_CLIENTS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       # Mail the upstream keeps refusing is returned to the sender after a day.
       POSTFIX_maximal_queue_lifetime: 1d
+      # One sender for every mail (PLT-78, ASS-42-A6): whatever a module or Keycloak
+      # puts into From, the mail leaves with the name of the installation and the
+      # configured address, and a Sender header (a second identity) is dropped. Setup
+      # derives SMTP_RELAY_FROM_HEADER from the brand name (overlay/platform/branding.yaml)
+      # and the sender address; it is ASCII and carries no `$`, which Postfix would
+      # substitute. The tables are inline (Postfix 3.7 and later), so no file is mounted.
+      # Mail Postfix generates itself (bounces) is not filtered: internal_mail_filter_classes
+      # stays empty.
+      POSTFIX_header_checks: "regexp:{ { /^From:/ REPLACE From: ${SMTP_RELAY_FROM_HEADER:-papAIa <noreply@unconfigured.invalid>} }, { /^Sender:/ IGNORE } }"
+      # Notifications carry text and a link only (KE-25): text, HTML and an inline
+      # logo pass; an attachment or any other kind of part is refused with 5.7.1 at the
+      # end of DATA, so the module sees the refusal and nothing is queued.
+      POSTFIX_mime_header_checks: "regexp:{ { /^Content-Disposition:[[:space:]]*attachment/ REJECT 5.7.1 Notifications carry text and a link only }, { /^Content-Type:[[:space:]]*(application|audio|video|message)/ REJECT 5.7.1 Notifications carry text and a link only } }"
       # Not read by the image. Setup raises it whenever the password changes: the
       # password file is read once at start, and a changed file alone would not
       # make Compose recreate the container.

@@ -499,6 +499,12 @@ def current_branding(config_dir: Path) -> dict:
     return _branding(config_dir)[0]
 
 
+def installation_name(config_dir: Path) -> str:
+    """The name of the installation: `name` of the brand overlay, else the product
+    name. The mail relay sends every mail under it (PLT-78)."""
+    return current_branding(config_dir)["name"]
+
+
 def _branding(config_dir: Path) -> tuple[dict, bytes | None]:
     """The brand from the operator overlay (`overlay/platform/branding.yaml`, fields
     `name`, `suffix`, `contact`) and the logo file next to it; the core sets

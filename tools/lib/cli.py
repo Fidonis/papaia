@@ -280,6 +280,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         except localai_native.InstallError as exc:
             print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
             return 3
+    # The mail relay sends every mail under this name (PLT-78); read before anything
+    # is written, so a broken brand overlay leaves the configuration as it was.
+    try:
+        installation_name = catalog.installation_name(config_dir)
+    except catalog.CatalogError as exc:
+        print(f"ERROR: platform catalog: {exc}. Nothing was changed.", file=sys.stderr)
+        return 3
     envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
@@ -290,6 +297,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # value means "keep the stored password" (--smtp-no-auth drops it).
     smtp_password = os.environ.pop("PAPAIA_SMTP_PASSWORD", "") or None
     setup_args = resolve.SetupArgs(
+        installation_name=installation_name,
         config_dir=config_dir,
         env_name=args.env,
         host_ip=args.host_ip,

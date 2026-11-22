@@ -461,3 +461,58 @@ def test_a_timeout_is_a_connect_failure(fake_smtp):
 
     assert not result.ok and result.stage == "connect"
     assert "timed out" in result.reason
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# the one sender of every mail (PLT-78, ASS-42-A6)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["papAIa", "Muster GmbH", "Team-7 Mail_Desk"])
+def test_a_plain_name_is_written_as_it_is(name):
+    assert smtp.sender_header(name, "noreply@example.org") == f"{name} <noreply@example.org>"
+
+
+@pytest.mark.parametrize(
+    "name", ["Café Müller", "Muster & Co.", "Rathaus (Bürgerbüro)", "Ämter, Zentrale", "日本語 名"]
+)
+def test_any_other_name_is_encoded_so_the_header_stays_ascii(name):
+    from email.header import decode_header, make_header
+
+    header = smtp.sender_header(name, "noreply@example.org")
+    phrase, _, address = header.rpartition(" ")
+
+    assert header.isascii()
+    assert address == "<noreply@example.org>"
+    assert str(make_header(decode_header(phrase))) == name
+    # Nothing the relay's rule table or Compose would read: braces, commas, `$`, `#`.
+    assert not set(header) & set("{},$#\"'\\")
+
+
+def test_a_long_name_is_split_into_encoded_words_of_at_most_75_characters():
+    from email.header import decode_header, make_header
+
+    name = "Ä" * 80
+    phrase = smtp.sender_header(name, "noreply@example.org").rpartition(" ")[0]
+
+    assert len(phrase.split(" ")) > 1
+    assert all(len(word) <= 75 for word in phrase.split(" "))
+    assert str(make_header(decode_header(phrase))) == name
+
+
+@pytest.mark.parametrize(
+    "name,address",
+    [("", "noreply@example.org"), ("Mail $1", "noreply@example.org"), ("Mail", "no-address")],
+)
+def test_an_unusable_sender_is_refused(name, address):
+    with pytest.raises(smtp.SmtpConfigError):
+        smtp.sender_header(name, address)
+
+
+def test_the_derived_keys_carry_the_header_the_relay_writes():
+    keys = smtp.derived_keys("starttls", "noreply@example.org", "Café Müller")
+
+    assert keys[smtp.KEY_FROM_HEADER] == smtp.sender_header("Café Müller", "noreply@example.org")
+    assert smtp.derived_keys("starttls", "noreply@example.org")[smtp.KEY_FROM_HEADER] == (
+        "papAIa <noreply@example.org>"
+    )

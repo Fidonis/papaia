@@ -376,7 +376,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--smtp-port=PORT` | by mode: 587, 465, 25 | Port of the mail server |
 | `--smtp-user=NAME` / `--smtp-no-auth` | _(prompted)_ | Login of the mail server, or none. The password is read from the environment variable `PAPAIA_SMTP_PASSWORD`, never from an argument |
 | `--smtp-from=ADDRESS` | _(prompted)_ | Address the mails are sent from |
-| `--smtp-from-name=NAME` | `papAIa` | Sender name shown next to the address |
+| `--smtp-from-name=NAME` | the installation name | Accepted only when it repeats the name of the installation (`name` in `overlay/platform/branding.yaml`, `papAIa` without it): every mail is sent under that name |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags. Never confirms pairings |
 | `--approve-pairings=SHA256` | _(prompted)_ | Confirm the pairings of the signed bill of materials whose list has this sha256 (as `setup` and `papaia-ctl pairing list` show it); the one way to confirm them without the question |
@@ -2296,8 +2296,8 @@ What you get once it is on: Keycloak's login page offers **Forgot password?**, a
 not change who can sign in or how.
 
 **Enable it** with `papaia-ctl setup`: the wizard asks whether to send mail and, on yes, for the
-mail server, how to connect (STARTTLS, TLS or none), its port, the login and password, the sender
-address and the sender name. Non-interactively:
+mail server, how to connect (STARTTLS, TLS or none), its port, the login and password and the sender
+address. Non-interactively:
 
 ```bash
 PAPAIA_SMTP_PASSWORD='the-password' \
@@ -2328,6 +2328,20 @@ only from the private ranges Docker hands out. Your provider decides which sende
 accepts: a verified identity, a mailbox, an alias. A mail the provider refuses is returned to the
 sender address. The relay also refuses recipients whose domain does not resolve, so accounts with a
 made-up address (the seeded `*.lan` ones, say) cannot receive mail.
+
+**One sender for every mail.** Whatever a module or Keycloak writes into `From`, the relay sends
+the mail as `<name of the installation> <sender address>` and drops a `Sender` header, so a task
+from Flow and a reminder from the assistant arrive from the same sender. The name is `name` in
+`$PAPAIA_CONFIG_DIR/overlay/platform/branding.yaml` (the name the interfaces show; `papAIa`
+without it; `papaia-ctl settings set branding.name …` writes it); after renaming the
+installation, run `papaia-ctl setup` once so the relay takes the new name over. A name with characters beyond letters, digits, spaces, `-`, `_` and `+` is sent
+encoded (RFC 2047); `$`, `#`, quotes and backslashes cannot be part of it.
+
+**Text and a link only.** Notifications of the modules are rendered with the mail template of
+papaia-kit (`dist/mail/notification.{html,txt}.j2`: subject `<kind>: <title>`, first line
+`From <module>`, one link to the object, the module named again in the footer) and carry no content
+from integrations. The relay enforces the part it can see: a mail with an attachment, or with a
+part that is not text, HTML or an image, is refused with `550 5.7.1` and never queued.
 
 **Delivery is asynchronous.** The relay accepts a message and delivers it from a queue. Keycloak or
 papaia-manager reporting that a mail was sent therefore means it reached the relay. If the mail

@@ -12,6 +12,14 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Changed
+
+- Mail relay: every mail leaves `smtp-relay` with one sender, the name of the
+  installation (`name` in `overlay/platform/branding.yaml`) and the configured address;
+  a `Sender` header is dropped. `--smtp-from-name` is accepted only when it repeats that
+  name, and setup no longer asks for a sender name. A mail with an attachment or a part
+  that is not text, HTML or an image is refused with `550 5.7.1`.
+
 ### Removed
 
 Descriptions replaced by `exposes:` in this release (no parallel operation):

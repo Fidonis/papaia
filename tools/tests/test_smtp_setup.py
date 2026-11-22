@@ -55,6 +55,13 @@ def _on(config_dir, **kwargs) -> resolve.SetupArgs:
     return _args(config_dir, **values)
 
 
+def _brand(config_dir, name: str) -> None:
+    """The installation's name in the operator's brand overlay."""
+    branding = config_dir / "overlay" / "platform" / "branding.yaml"
+    branding.parent.mkdir(parents=True, exist_ok=True)
+    branding.write_text(f"name: {name}\n", encoding="utf-8")
+
+
 def _profiles(tree) -> list[str]:
     return [p for p in tree[""]["COMPOSE_PROFILES"].split(",") if p]
 
@@ -268,11 +275,11 @@ def test_values_with_a_switch_off_are_stored_and_the_profile_stays_off(repo_root
     tree = resolve.resolve_smtp(_tree(repo_root, "keycloak,librechat,smtp"), _on(config_dir))
 
     tree = resolve.resolve_smtp(
-        tree, _args(config_dir, enable_smtp=False, smtp_from_name="Example Mail")
+        tree, _args(config_dir, enable_smtp=False, smtp_from="info@example.org")
     )
 
     assert "smtp" not in _profiles(tree)
-    assert tree[smtp.MODULE_DIR][smtp.KEY_FROM_NAME] == "Example Mail"
+    assert tree[smtp.MODULE_DIR][smtp.KEY_FROM] == "info@example.org"
     assert smtp.read_password(config_dir) == PASSWORD
 
 
@@ -290,9 +297,71 @@ def test_an_unusable_value_is_refused_while_the_relay_is_off_too(repo_root, conf
 def test_an_option_is_accepted_once_the_relay_is_on(repo_root, config_dir):
     tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_from_name="Example Mail"))
+    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_from="info@example.org"))
 
-    assert tree[smtp.MODULE_DIR][smtp.KEY_FROM_NAME] == "Example Mail"
+    assert tree[smtp.MODULE_DIR][smtp.KEY_FROM] == "info@example.org"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# the sender name is the installation name (PLT-78 with Ä-32, ASS-42-A6)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_the_sender_name_and_header_follow_the_installation_name(repo_root, config_dir):
+    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir, installation_name="Café Müller"))
+
+    module = tree[smtp.MODULE_DIR]
+    assert module[smtp.KEY_FROM_NAME] == "Café Müller"
+    assert module[smtp.KEY_FROM_HEADER] == smtp.sender_header("Café Müller", "noreply@example.org")
+
+
+def test_a_renamed_installation_reaches_the_relay_on_the_next_run_without_a_flag(
+    repo_root, config_dir
+):
+    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+
+    tree = resolve.resolve_smtp(tree, _args(config_dir, installation_name="Rathaus Musterstadt"))
+
+    module = tree[smtp.MODULE_DIR]
+    assert module[smtp.KEY_FROM_NAME] == "Rathaus Musterstadt"
+    assert module[smtp.KEY_FROM_HEADER] == "Rathaus Musterstadt <noreply@example.org>"
+    assert _profiles(tree) == ["keycloak", "librechat", "smtp"]
+    assert tree[smtp.MODULE_DIR][smtp.KEY_PASSWORD_REV] == "1", "nothing else changes"
+
+
+def test_a_relay_stored_before_the_header_existed_gets_it_on_the_next_run(repo_root, config_dir):
+    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    del tree[smtp.MODULE_DIR][smtp.KEY_FROM_HEADER]
+
+    tree = resolve.resolve_smtp(tree, _args(config_dir))
+
+    assert tree[smtp.MODULE_DIR][smtp.KEY_FROM_HEADER] == "papAIa <noreply@example.org>"
+
+
+def test_a_different_sender_name_is_refused(repo_root, config_dir):
+    tree = _tree(repo_root)
+    before = {k: dict(v) for k, v in tree.items()}
+
+    with pytest.raises(resolve.SetupError, match="name of the installation"):
+        resolve.resolve_smtp(tree, _on(config_dir, smtp_from_name="papAIa – Flow"))
+
+    assert tree == before
+
+
+def test_the_installation_name_given_as_sender_name_is_accepted(repo_root, config_dir):
+    tree = resolve.resolve_smtp(
+        _tree(repo_root),
+        _on(config_dir, installation_name="Muster GmbH", smtp_from_name="Muster GmbH"),
+    )
+
+    assert tree[smtp.MODULE_DIR][smtp.KEY_FROM_NAME] == "Muster GmbH"
+
+
+def test_an_installation_name_the_env_file_cannot_hold_is_refused_with_its_source(
+    repo_root, config_dir
+):
+    with pytest.raises(resolve.SetupError, match="branding.yaml"):
+        resolve.resolve_smtp(_tree(repo_root), _on(config_dir, installation_name="O'Neil $Mail"))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -377,6 +446,8 @@ def test_setup_flags_and_the_environment_reach_the_stored_configuration(
 ):
     monkeypatch.setenv("PAPAIA_SMTP_PASSWORD", PASSWORD)
 
+    _brand(config_dir, "Example Mail")
+
     assert _setup(repo_root, config_dir, *FLAGS, "--smtp-from-name=Example Mail") == 0
 
     stored = common.parse_env_file(config_dir / ".env")
@@ -384,6 +455,7 @@ def test_setup_flags_and_the_environment_reach_the_stored_configuration(
     module = _module_env(config_dir)
     assert module[smtp.KEY_HOST] == "smtp.example.org"
     assert module[smtp.KEY_FROM_NAME] == "Example Mail"
+    assert module[smtp.KEY_FROM_HEADER] == "Example Mail <noreply@example.org>"
     assert smtp.read_password(config_dir) == PASSWORD
     assert "PAPAIA_SMTP_PASSWORD" not in os.environ, "taken out so nothing inherits it"
     out = capsys.readouterr()
@@ -514,7 +586,8 @@ def test_a_setup_without_the_relay_renders_a_realm_without_a_mail_server(repo_ro
 
 def test_setup_renders_the_relay_block_into_the_realm(repo_root, config_dir, monkeypatch):
     monkeypatch.setenv("PAPAIA_SMTP_PASSWORD", PASSWORD)
-    assert _setup(repo_root, config_dir, *FLAGS, "--smtp-from-name=Café Mail") == 0
+    _brand(config_dir, "Café Mail")
+    assert _setup(repo_root, config_dir, *FLAGS) == 0
 
     realm = _realm(config_dir)
     assert realm["smtpServer"] == {
@@ -539,3 +612,20 @@ def test_turning_the_relay_off_removes_the_block_from_the_next_render(
     assert _setup(repo_root, config_dir, "--enable-smtp=false") == 0
 
     assert "smtpServer" not in _realm(config_dir)
+
+
+def test_setup_takes_the_sender_name_from_the_brand_and_refuses_another(
+    repo_root, config_dir, monkeypatch, capsys
+):
+    monkeypatch.setenv("PAPAIA_SMTP_PASSWORD", PASSWORD)
+    _brand(config_dir, "Rathaus Musterstadt")
+
+    assert _setup(repo_root, config_dir, *FLAGS, "--smtp-from-name=Rathaus – Flow") == 3
+    assert "name of the installation" in capsys.readouterr().err
+
+    monkeypatch.setenv("PAPAIA_SMTP_PASSWORD", PASSWORD)  # setup takes it out each run
+    assert _setup(repo_root, config_dir, *FLAGS) == 0
+    assert _module_env(config_dir)[smtp.KEY_FROM_HEADER] == (
+        "Rathaus Musterstadt <noreply@example.org>"
+    )
+    assert _realm(config_dir)["smtpServer"]["fromDisplayName"] == "Rathaus Musterstadt"

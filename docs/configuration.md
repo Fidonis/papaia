@@ -180,7 +180,8 @@ configured".
 | `SMTP_RELAY_UPSTREAM_HOST`, `SMTP_RELAY_UPSTREAM_PORT` | The mail server the relay forwards to: host name or IPv4 address, and its port (587 for `starttls`, 465 for `tls`, 25 for `none`) |
 | `SMTP_RELAY_UPSTREAM_SECURITY` | `starttls`, `tls` (implicit TLS) or `none`. The first two verify the server's certificate against the system CAs; `none` allows no login |
 | `SMTP_RELAY_UPSTREAM_USER` | Login at the mail server. Empty: the server needs none |
-| `SMTP_RELAY_FROM_ADDRESS`, `SMTP_RELAY_FROM_NAME` | The address the mails are sent from and the name shown next to it. Keycloak's `from` and `fromDisplayName` |
+| `SMTP_RELAY_FROM_ADDRESS` | The address the mails are sent from. Keycloak's `from` |
+| `SMTP_RELAY_FROM_NAME`, `SMTP_RELAY_FROM_HEADER` | Derived by setup from the name of the installation (`name` in `overlay/platform/branding.yaml`) and the sender address — do not edit. The name is Keycloak's `fromDisplayName`; the header is the `From` the relay writes into every mail |
 | `SMTP_RELAY_SENDER_DOMAINS`, `SMTP_RELAY_TLS_LEVEL`, `SMTP_RELAY_TLS_WRAPPER` | Derived by setup from the sender address and the security mode — do not edit |
 | `SMTP_RELAY_PASSWORD_REV` | Raised by setup whenever the password changes, so that Compose recreates the relay (it reads the password file once, at start) |
 | `SMTP_RELAY_ALLOWED_CLIENTS` | Optional, commented out. The networks allowed to send, comma separated; the default is the private IPv4 ranges Docker hands out |
