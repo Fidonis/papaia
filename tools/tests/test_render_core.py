@@ -753,6 +753,35 @@ def test_litellm_is_labelled_with_the_hash_of_its_rendered_configuration(repo_ro
     render_core.render(config_dir, repo_root)
     content = (config_dir / "ai/litellm/config.yaml").read_bytes()
     assert _litellm_label(config_dir) == hashlib.sha256(content).hexdigest()[:16]
+    # The pattern `start` collects the overrides with.
+    found = (config_dir / "overrides").glob("docker-compose.*.override.yml")
+    assert config_dir / render_core.LITELLM_CONFIG_OVERRIDE in found
+
+
+def test_the_litellm_label_goes_with_its_configuration(config_dir):
+    config = config_dir / "ai/litellm/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("model_list: []\n", encoding="utf-8")
+    render_core.render_litellm_config_label(config_dir)
+    assert (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).is_file()
+
+    config.unlink()
+    render_core.render_litellm_config_label(config_dir)
+    assert not (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).exists()
+
+
+# The hash of this configuration starts `0e` and has only digits after it, which Compose
+# reads as the number 0 unless it is quoted.
+_NUMBER_LIKE_HASH_CONFIG = b"litellm_settings:\n  request_timeout: 7668\n"
+
+
+def test_a_litellm_hash_that_looks_like_a_number_is_quoted(config_dir):
+    config = config_dir / "ai/litellm/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_bytes(_NUMBER_LIKE_HASH_CONFIG)
+    render_core.render_litellm_config_label(config_dir)
+    override = (config_dir / render_core.LITELLM_CONFIG_OVERRIDE).read_text(encoding="utf-8")
+    assert '"0e17342021637129"' in override
 
 
 def test_an_unchanged_litellm_configuration_keeps_the_label(repo_root, config_dir):
@@ -796,31 +825,37 @@ def test_an_edit_of_the_litellm_overlay_changes_the_label(repo_root, config_dir)
 def test_the_litellm_label_changes_the_compose_hash(tmp_path):
     """What makes `start` recreate LiteLLM: Compose compares the service hash, which covers
     the labels but not the content of a bind-mounted file."""
-    (tmp_path / "docker-compose.yml").write_text(
-        "services:\n  litellm:\n    image: example.org/litellm:1\n", encoding="utf-8"
-    )
+    probe = subprocess.run(["docker", "compose", "version"], capture_output=True, check=False)
+    if probe.returncode != 0:
+        pytest.skip("docker compose is not installed")
+    base = tmp_path / "docker-compose.yml"
+    base.write_text("services:\n  litellm:\n    image: example.org/litellm:1\n", encoding="utf-8")
+    config = tmp_path / "ai/litellm/config.yaml"
+    config.parent.mkdir(parents=True)
+    files = ["-f", str(base), "-f", str(tmp_path / render_core.LITELLM_CONFIG_OVERRIDE)]
 
-    def compose_hash(label: str) -> str:
-        override = tmp_path / "override.yml"
-        labels = {"org.papaia.config-hash": label}
-        override.write_text(
-            yaml.safe_dump({"services": {"litellm": {"labels": labels}}}), encoding="utf-8"
-        )
-        files = ["-f", "docker-compose.yml", "-f", str(override)]
+    def compose(*args: str) -> str:
         done = subprocess.run(
-            ["docker", "compose", "-p", "hash-check", *files, "config", "--hash", "litellm"],
-            cwd=tmp_path,
+            ["docker", "compose", "-p", "hash-check", *files, "config", *args],
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
         )
-        if done.returncode != 0:
-            pytest.skip(f"docker compose is not usable: {done.stderr.strip()}")
-        return done.stdout.split()[-1]
+        assert done.returncode == 0, done.stderr
+        return done.stdout
 
-    assert compose_hash("aaaa") == compose_hash("aaaa")
-    assert compose_hash("aaaa") != compose_hash("bbbb")
+    def service_hash(content: bytes) -> str:
+        config.write_bytes(content)
+        render_core.render_litellm_config_label(tmp_path)
+        service = json.loads(compose("--format", "json"))["services"]["litellm"]
+        label = service["labels"]["org.papaia.config-hash"]
+        assert label == hashlib.sha256(content).hexdigest()[:16]
+        return compose("--hash", "litellm").split()[-1]
+
+    empty = service_hash(b"model_list: []\n")
+    assert service_hash(b"model_list: []\n") == empty
+    assert service_hash(_NUMBER_LIKE_HASH_CONFIG) != empty
 
 
 def test_the_localai_key_is_named_but_never_written(repo_root, config_dir):

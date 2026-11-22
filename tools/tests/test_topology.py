@@ -3,6 +3,7 @@ the per-node bundles a render projects out of the config tree."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -557,6 +558,15 @@ def test_a_remote_node_gets_the_rendered_configuration_of_its_services(full: Ins
     assert "infra/nginx/nginx-data" in manifest["state_dirs"]
     assert "keycloak" in manifest["compose_services"]
     assert "librechat" not in manifest["compose_services"]
+
+
+def test_a_remote_node_gets_the_label_of_its_litellm_configuration(full: Installation):
+    project(full, dmz_split())
+    edge = topology.bundle_dir(full.config, "edge")
+    path = edge / "overrides/docker-compose.litellm-config.override.yml"
+    labels = yaml.safe_load(path.read_text(encoding="utf-8"))["services"]["litellm"]["labels"]
+    content = (edge / "ai/litellm/config.yaml").read_bytes()
+    assert labels["org.papaia.config-hash"] == hashlib.sha256(content).hexdigest()[:16]
 
 
 def test_no_bundle_contains_the_ca_key(full: Installation):

@@ -700,7 +700,7 @@ git-pristine; the source of truth lives in the config directory.
     ├── manager/                         # papaia-manager state: catalogs · installed · tiles · jobs
     ├── certs/                           # GENERATED local CA + Keycloak server certificate
     ├── migrations/applied.json          # Which release migrations have run
-    ├── overrides/                       # GENERATED docker-compose.<addon>.override.yml
+    ├── overrides/                       # GENERATED docker-compose.<name>.override.yml
     └── overlay/                         # Customer overlay (hand-authored, survives re-render)
         └── ai/librechat/librechat.yaml
 ```
@@ -1024,7 +1024,10 @@ render stops before `docker compose up`, so a running stack is not touched.
 **Applying an overlay means recreating the services that read it.** A render replaces each
 target with a new file, and most targets are bind-mounted single files, so a running
 container keeps the one it was created with. `papaia-ctl stop --clean-up --profiles=<profile>`
-followed by `start` recreates the group; a restart is not enough.
+followed by `start` recreates the group; a restart is not enough. LiteLLM needs no `stop`: every
+render labels it with a hash of its configuration
+(`overrides/docker-compose.litellm-config.override.yml`), so a `start` that includes the
+`litellm` profile recreates it when that configuration changed.
 
 **Previewing a draft.** `python3 -m lib.cli --repo-root R --config-dir C render-preview
 --target=<path> --overlay-file=<file>` merges a draft overlay onto the same layers `render`

@@ -273,8 +273,11 @@ def render_litellm_config_label(config_dir: Path) -> None:
             }
         }
     }
+    # Quoted throughout: safe_dump leaves some number-like hashes plain, and Compose reads
+    # those as floats (`0e12...` becomes "0").
     common.atomic_write(
-        override_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+        override_path,
+        yaml.safe_dump(override, sort_keys=False, default_flow_style=False, default_style='"'),
     )
 
 

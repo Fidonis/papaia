@@ -431,7 +431,9 @@ Because rendering happens on **every** `start`, new templates, new add-on fragme
 edits under `overlay/` are rendered into the configuration directory automatically. A
 container that is already running keeps the file it was created with (most targets are
 bind-mounted single files, and a render replaces the file), so an edit takes effect once the
-service is recreated: `papaia-ctl stop --clean-up --profiles=<profile>` followed by `start`.
+service is recreated. `start` does that itself for LiteLLM (see
+[LocalAI models in LiteLLM](#localai-models-in-litellm)); for another service run
+`papaia-ctl stop --clean-up --profiles=<profile>` followed by `start`.
 To move the installation to a newer
 release, use [`upgrade`](#upgrade) rather than `git pull` — it also runs the migrations
 the release ships with.
@@ -1131,7 +1133,7 @@ ${PAPAIA_CONFIG_DIR}/
 │                           #   tiles.yaml · jobs/ · audit.log
 ├── addons/<name>/.env      # per-add-on secrets
 ├── overlay/                # customer config overrides (highest merge layer)
-└── overrides/              # auto-generated add-on network overrides
+└── overrides/              # auto-generated Compose overrides
 ```
 
 To customise a rendered config, drop your changes into `overlay/` — mirroring the target's
@@ -1821,7 +1823,9 @@ tools/papaia-ctl start
 the rendered file's hash is a label of the `litellm` service
 (`overrides/docker-compose.litellm-config.override.yml`): `start` recreates LiteLLM whenever the
 configuration changed, after any other edit of the LiteLLM overlay too, and leaves it running
-when nothing changed.
+when nothing changed (except on Docker Desktop, where `start` recreates every container). A
+`start --profiles=LIST` without `litellm` does not touch LiteLLM; the next `start` that includes
+it does.
 
 The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
 `<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
@@ -2180,7 +2184,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 └── papaia-config/             ← PAPAIA_CONFIG_DIR (generated, never committed)
     ├── deployment.yaml         # installation manifest
     ├── overlay/                # customer config overrides (highest merge layer)
-    └── overrides/              # auto-generated add-on network overrides
+    └── overrides/              # auto-generated Compose overrides
 ```
 
 ---
