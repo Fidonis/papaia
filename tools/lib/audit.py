@@ -6,18 +6,23 @@ Everything lives under `$PAPAIA_CONFIG_DIR/infra/audit/`:
     service/server.crt, .key      the certificate papaia-audit serves on :8443
     service/ca.crt                the CA it checks client certificates against
     service/sources.json          source -> fingerprints of its client certificates
-    secrets/                      database passwords and the key that signs chain heads
+    service/token-keys.json       the realm's issuer and signing keys, for the read API
+    secrets/                      database passwords, the key that signs chain heads and
+                                  the key of the pseudonyms
     clients/<source>/             client.crt, client.key and ca.crt of one source
 
 `prepare` creates what is missing and never replaces what exists, so it runs before
 every start. `issue_source_certificate` gives a source (one of SOURCES) a new client
 certificate and lists only that one for the source: the previous one stops working.
+`write_token_keys` stores the realm's signing keys that `papaia-ctl audit token-keys`
+fetched; the read API accepts no token without them.
 
 Keys and certificates are made with the `openssl` command, like the local CA of Keycloak.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -27,6 +32,7 @@ import shutil
 import ssl
 import subprocess
 import tempfile
+import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -65,6 +71,11 @@ SECRET_FILES = {
     "db-read-password": 0o600,
 }
 HEADS_KEY = "heads-signing-key"
+# Never replaced: a new key gives every person a new pseudonym.
+PSEUDONYM_KEY = "pseudonym-key"
+TOKEN_KEYS_FORMAT = "papaia.audit-token-keys/1"
+_TOKEN_KEY_FIELDS = ("kid", "kty", "alg", "use", "n", "e")
+_B64URL_RE = re.compile(r"^[A-Za-z0-9_-]{1,1024}$")
 
 
 class AuditError(Exception):
@@ -222,6 +233,62 @@ def prepare(config_dir: Path) -> None:
     if not (secrets_dir / HEADS_KEY).is_file():
         _openssl("genpkey", "-algorithm", "ed25519", "-out", str(secrets_dir / HEADS_KEY))
     os.chmod(secrets_dir / HEADS_KEY, 0o600)
+    if not (secrets_dir / PSEUDONYM_KEY).is_file():
+        common.atomic_write_private(secrets_dir / PSEUDONYM_KEY, secrets.token_urlsafe(48))
+    os.chmod(secrets_dir / PSEUDONYM_KEY, 0o600)
+
+
+def write_token_keys(config_dir: Path, discovery: object, jwks: object) -> Path:
+    """Write service/token-keys.json from the realm's discovery document and key set:
+    the issuer and its RSA signing keys (RS256, at least 2048 bits), nothing else.
+    papaia-audit re-reads the file when it changes."""
+    issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
+    if not isinstance(issuer, str) or not issuer.startswith(("https://", "http://")):
+        raise AuditError("the realm's discovery document names no issuer.")
+    entries = jwks.get("keys") if isinstance(jwks, dict) else None
+    if not isinstance(entries, list):
+        raise AuditError("the realm's key set holds no keys.")
+    keys = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("kty") != "RSA":
+            continue
+        if entry.get("use", "sig") != "sig" or entry.get("alg", "RS256") != "RS256":
+            continue
+        key = {name: entry[name] for name in _TOKEN_KEY_FIELDS if name in entry}
+        if not all(
+            isinstance(key.get(name), str) and _B64URL_RE.match(key[name])
+            for name in ("kid", "n", "e")
+        ):
+            raise AuditError("the realm's key set holds a malformed key.")
+        padded = key["n"] + "=" * (-len(key["n"]) % 4)
+        if int.from_bytes(base64.urlsafe_b64decode(padded), "big").bit_length() < 2048:
+            raise AuditError("the realm's signing key is shorter than 2048 bits.")
+        keys.append(key)
+    if not keys:
+        raise AuditError("the realm has no RS256 signing key.")
+    path = audit_dir(config_dir) / "service" / "token-keys.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = {"format": TOKEN_KEYS_FORMAT, "issuer": issuer, "keys": keys}
+    common.atomic_write(path, json.dumps(document, indent=2) + "\n")
+    os.chmod(path, 0o644)
+    return path
+
+
+def fetch_token_keys(base_url: str, ctx: ssl.SSLContext) -> tuple[object, object]:
+    """The realm's discovery document and key set, from where `papaia-ctl` reaches Keycloak
+    (the key set by its fixed path there, not by the `jwks_uri` the document names)."""
+    realm = f"{base_url}/realms/papaia"
+    documents = []
+    for url in (
+        f"{realm}/.well-known/openid-configuration",
+        f"{realm}/protocol/openid-connect/certs",
+    ):
+        try:
+            with urllib.request.urlopen(url, timeout=10, context=ctx) as response:  # noqa: S310
+                documents.append(json.loads(response.read(256 * 1024)))
+        except (OSError, ValueError) as exc:
+            raise AuditError(f"Keycloak did not answer at {base_url}: {exc}") from None
+    return documents[0], documents[1]
 
 
 def issue_source_certificate(config_dir: Path, source: str) -> Path:

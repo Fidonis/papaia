@@ -136,6 +136,7 @@
 #   papaia-ctl audit cert    <source> [--config-dir=PATH]
 #   papaia-ctl audit verify  [--source=NAME] [--against=FILE] [--json] [--config-dir=PATH]
 #   papaia-ctl audit heads   [--config-dir=PATH]
+#   papaia-ctl audit token-keys [--config-dir=PATH]
 #   papaia-ctl help
 #
 # Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
@@ -151,7 +152,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,144p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,145p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

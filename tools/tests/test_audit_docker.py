@@ -317,11 +317,15 @@ def test_the_schema_step_runs_again_without_touching_the_store(stack: Stack):
     assert again.returncode == 0, again.stderr
     assert "store created" not in again.stderr
     assert stack.psql("read", "SELECT count(*) FROM audit.event").stdout.split()[2] == before
-    # The service holds the role passwords and the signing key, never the owner's.
+    # The service holds the role passwords, the signing key and the pseudonym key, never
+    # the owner's password.
     secrets = stack.compose("exec", "-T", "papaia-audit", "ls", "/run/secrets").stdout.split()
     assert sorted(secrets) == [
-        "audit_db_ingest_password", "audit_db_read_password", "audit_heads_key"
+        "audit_db_ingest_password", "audit_db_read_password", "audit_heads_key",
+        "audit_pseudonym_key",
     ]
+    tables = stack.psql("read", "SELECT count(*) FROM audit.person_query")
+    assert tables.returncode == 0, tables.stderr
 
 
 def test_service_credentials_cannot_change_or_remove_rows(stack: Stack):

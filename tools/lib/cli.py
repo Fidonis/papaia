@@ -2192,6 +2192,25 @@ def cmd_audit_cert(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit_token_keys(args: argparse.Namespace) -> int:
+    """Fetch the realm's signing keys for the read API of papaia-audit."""
+    config_dir = Path(args.config_dir)
+    root = envtree.load_config_dir_tree(config_dir, Path(args.repo_root)).get("", {})
+    if root.get("AUTH_PROVIDER", "internal_keycloak") != "internal_keycloak":
+        print("ERROR: audit token-keys needs the bundled Keycloak (AUTH_PROVIDER).",
+              file=sys.stderr)
+        return 2
+    base_url, ctx = keycloak_role_sync._admin_connection(root, config_dir)
+    try:
+        discovery, jwks = audit.fetch_token_keys(base_url, ctx)
+        path = audit.write_token_keys(config_dir, discovery, jwks)
+    except (audit.AuditError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(f"Signing keys of the realm written to {path}; papaia-audit reads them at once.")
+    return 0
+
+
 def cmd_audit_run(args: argparse.Namespace) -> int:
     """`verify` or `heads` inside the running papaia-audit; its exit status passes through."""
     against = Path(args.against) if getattr(args, "against", None) else None
@@ -2945,6 +2964,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit_verify.add_argument("--against", default=None)
     p_audit_verify.add_argument("--json", action="store_true")
     p_audit_verify.set_defaults(func=cmd_audit_run, audit_command="verify")
+
+    p_audit_token_keys = sub.add_parser("audit-token-keys")
+    p_audit_token_keys.set_defaults(func=cmd_audit_token_keys)
 
     p_audit_heads = sub.add_parser("audit-heads")
     p_audit_heads.set_defaults(func=cmd_audit_run, audit_command="heads")

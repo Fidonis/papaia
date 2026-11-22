@@ -34,8 +34,10 @@ images:
       - src/infra/audit/papaia_audit/__init__.py
       - src/infra/audit/papaia_audit/__main__.py
       - src/infra/audit/papaia_audit/core.py
+      - src/infra/audit/papaia_audit/read.py
       - src/infra/audit/papaia_audit/audit.v1.schema.json
       - src/infra/audit/papaia_audit/schema.sql
+      - src/infra/audit/papaia_audit/schema_read.sql
       - src/infra/audit/THIRD_PARTY_LICENSES.md
     services: [papaia-audit, papaia-audit-schema]
     license: MIT

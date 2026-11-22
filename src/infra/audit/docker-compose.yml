@@ -56,7 +56,7 @@ services:
   # empty database and sets the service role passwords. The only holder of the owner's
   # password besides the database.
   papaia-audit-schema:
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:e7829d9135656c3540bdb4f6aac5cf64de8f5c9f8b2985fc646fbc4e9d9f1d2f
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:272cbf23ac07fea9250475f4083946931760bd882ffec4f290bbc4615b8de6a7
     restart: "no"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["schema"]
@@ -80,7 +80,7 @@ services:
   papaia-audit:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml).
     # Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:e7829d9135656c3540bdb4f6aac5cf64de8f5c9f8b2985fc646fbc4e9d9f1d2f
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:272cbf23ac07fea9250475f4083946931760bd882ffec4f290bbc4615b8de6a7
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
     command: ["serve"]
@@ -88,8 +88,10 @@ services:
       - audit_db_ingest_password
       - audit_db_read_password
       - audit_heads_key
+      - audit_pseudonym_key
     volumes:
-      # Server certificate and key, the ingest CA certificate and sources.json. The
+      # Server certificate and key, the ingest CA certificate, sources.json and
+      # token-keys.json (the realm's signing keys for the read API). The
       # directory, not the files: sources.json is replaced atomically when a source
       # certificate is issued, and a bind-mounted file would keep showing the old one.
       - type: bind
@@ -128,6 +130,9 @@ secrets:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-read-password
   audit_heads_key:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/heads-signing-key
+  # Key of the pseudonyms the read API shows instead of persons; only papaia-audit holds it.
+  audit_pseudonym_key:
+    file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/pseudonym-key
 
 networks:
   # Only papaia-audit and its database.

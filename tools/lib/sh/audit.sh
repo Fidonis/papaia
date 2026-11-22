@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# papaia-ctl — audit store: audit cert | verify | heads (docs/audit.md).
+# papaia-ctl — audit store: audit cert | verify | heads | token-keys (docs/audit.md).
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 
@@ -44,6 +44,10 @@ cmd_audit() {
             [ "${#positional[@]}" -eq 0 ] || { error "audit heads takes no arguments."; exit 2; }
             py_cli audit-heads
             ;;
-        *) error "Unknown 'audit' subcommand: '${sub:-<none>}'. Valid: cert, verify, heads."; exit 2 ;;
+        token-keys)
+            [ "${#positional[@]}" -eq 0 ] || { error "audit token-keys takes no arguments."; exit 2; }
+            py_cli audit-token-keys
+            ;;
+        *) error "Unknown 'audit' subcommand: '${sub:-<none>}'. Valid: cert, verify, heads, token-keys."; exit 2 ;;
     esac
 }
