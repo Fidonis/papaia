@@ -195,13 +195,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if isinstance(requested_topology, int):
         return requested_topology
 
-    fresh_init = not (config_dir / ".env").is_file()
-    # The native LocalAI lives below the workspace. Checked before the config directory is
-    # seeded or anything is written, so a refused run leaves neither LOCALAI_RUNTIME=native
-    # in the root .env nor, on a fresh config directory, template files a later setup would
-    # take for an existing installation. It needs only the requested or stored runtime, the
-    # stored PAPAIA_WORKSPACE_DIR and the checkout name.
-    stored_root = {} if fresh_init else common.parse_env_file(config_dir / ".env")
+    # The native LocalAI lives below the workspace. Checked first: it needs only the
+    # requested or stored runtime, the stored PAPAIA_WORKSPACE_DIR and the checkout name.
+    stored_root = common.parse_env_file(config_dir / ".env")
     wanted_runtime = args.localai_runtime or localai_native.runtime(stored_root)
     if wanted_runtime == localai_native.NATIVE:
         workspace = envtree.stamp_workspace_dir({"": dict(stored_root)}, repo_root)
@@ -211,76 +207,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
             return 3
 
-    # A first setup is resolved and checked before the config directory is seeded: a
-    # refused run that left the template .env files behind would make the next setup take
-    # them for an existing installation and keep their template URLs. The tree
-    # falls back to the shipped templates for every file that is not there yet, so the
-    # values are the same as after seeding. What the checks themselves write on the way
-    # (the relay's password file) is removed again when a first setup is refused.
-    first_run = _FirstRun(config_dir) if fresh_init else None
-    try:
-        code = _setup_tree(args, repo_root, config_dir, requested_topology, first_run)
-    except BaseException:
-        if first_run is not None:
-            first_run.undo()
-        raise
-    if code != 0 and first_run is not None:
-        first_run.undo()
-    return code
-
-
-class _FirstRun:
-    """What a config directory held before a first setup, so that a refused one can be
-    taken back: only paths this run created are removed, never a file that was there."""
-
-    def __init__(self, config_dir: Path) -> None:
-        self.config_dir = config_dir
-        self.existed = config_dir.is_dir()
-        self.before = _listing(config_dir) if self.existed else set()
-        # Set once the configuration is written: a later failure keeps it, as on any run.
-        self.persisted = False
-
-    def undo(self) -> None:
-        if self.persisted or not self.config_dir.is_dir():
-            return
-        created = _listing(self.config_dir) - self.before
-        # Deepest first, so a directory this run created is empty when its turn comes.
-        for path in sorted(created, key=lambda p: len(p.parts), reverse=True):
-            try:
-                if path.is_dir() and not path.is_symlink():
-                    path.rmdir()
-                else:
-                    path.unlink()
-            except OSError:
-                pass
-        if not self.existed:
-            try:
-                self.config_dir.rmdir()
-            except OSError:
-                pass
-
-
-def _listing(root: Path) -> set[Path]:
-    """Every path below root, without following symlinked directories."""
-    found: set[Path] = set()
-    for current, dirs, files in os.walk(root, followlinks=False):
-        base = Path(current)
-        found.update(base / name for name in dirs)
-        found.update(base / name for name in files)
-    return found
-
-
-def _setup_tree(
-    args: argparse.Namespace,
-    repo_root: Path,
-    config_dir: Path,
-    requested_topology: topology.Topology | None,
-    first_run: _FirstRun | None,
-) -> int:
-    """Resolve, check and write the configuration; the exit code of `setup`. A refusal
-    before persist_tree has written nothing but what the checks store themselves."""
-    fresh_init = first_run is not None
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    # Nothing is written before the whole configuration is resolved and checked, so a
+    # refused setup has nothing to take back.
+    tree, set_up = envtree.load_setup_tree(
+        config_dir, repo_root, auth_provider=args.auth_provider
+    )
+    fresh_init = not set_up
     runtime_before = localai_native.runtime(tree.get("", {})) if not fresh_init else ""
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
@@ -397,12 +329,17 @@ def _setup_tree(
     tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
     tree = envtree.stamp_host_uid_gid(tree)
-    # Seeds what is not there yet: the directories, the .env files of modules the tree
-    # has no values for, deployment.yaml.
-    envtree.init(config_dir, repo_root, env_name=args.env, force=False)
-    envtree.persist_tree(tree, config_dir, repo_root)
-    if first_run is not None:
-        first_run.persisted = True
+    # The first writes. The root .env goes last: until it is there, the next setup is still
+    # a first one and derives every URL again. The relay's password follows the revision
+    # that announces it, so a run cut short in between raises the revision once more
+    # instead of hiding the change from Compose.
+    envtree.init(config_dir, repo_root, env_name=args.env, env_files=False)
+    envtree.persist_tree(
+        tree,
+        config_dir,
+        repo_root,
+        before_root=lambda: resolve.store_smtp_password(setup_args),
+    )
     deployment.sync_manifest(config_dir, tree, repo_root)
     if requested_topology is not None:
         manifest = deployment.load(config_dir)
