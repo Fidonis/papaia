@@ -14,7 +14,8 @@ sources and reconciles the live `papaia` realm with them, idempotently:
 
 The core serves audiences of its own under its profiles: `papaia-people` (the people
 lookup, profile `people`, lib/people_account.py) is a bearer-only resource server for
-persons only, and only `assist-gate` may exchange for it, with effect x (security 1.4).
+persons only, and only `assist-gate` (people lookup) and `papaia-studio-gateway` (group
+members for share notices) may exchange for it, with effect x (security 1.4, RE-98).
 
 What it manages:
 
@@ -246,8 +247,9 @@ PERSON_SCOPE_CLIENTS = frozenset({"flow-console"})
 SIGN_IN_AUDIENCES = {"flow-console": ("flow",)}
 EXCHANGE_LIMITS = {"flow-console": ("papaia-data", "papaia-studio")}
 # Audiences only named clients may exchange for, with fixed effects (security 1.4): the
-# people lookup of the core is reached by the assistant's gate alone, effect x.
-AUDIENCE_LIMITS = {"papaia-people": (("assist-gate",), ("x",))}
+# people lookup of the core is reached by the assistant's gate and, for the group members
+# of a share notice, by Studio's gateway, effect x; the service binds each to its route.
+AUDIENCE_LIMITS = {"papaia-people": (("assist-gate", "papaia-studio-gateway"), ("x",))}
 
 # Delegation (offline sessions) is held at exactly one client per purpose family.
 HOLDERS = {"flow": ("papaia-flow", "flow-engine"), "assist": ("papaia-assist", "assist-gate")}

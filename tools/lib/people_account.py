@@ -8,15 +8,18 @@ While the Compose profile `people` is active, `papaia-ctl realm sync` makes sure
   only, the public key of `$PAPAIA_CONFIG_DIR/security/service-accounts/
   svc-papaia-people/private-key.pem`, no sign-in flow, no password grant, no token
   exchange, `fullScopeAllowed: false`;
-- its service-account user holds `realm-management` `query-users` and `view-users` and
-  nothing else: no write right, no other client or realm role, no group. `query-users`
-  alone finds nobody and cannot read role mappings, so `view-users` is needed; Keycloak
-  makes `view-users` a composite that also holds `query-groups` (measured against
-  Keycloak 26.7.0 in stage 0, MN-16), which is within the bound of security 1.9;
-- the same two roles, and only these, in the client's token scope.
+- its service-account user holds `realm-management` `query-users`, `view-users` and
+  `query-groups` and nothing else: no write right, no other client or realm role, no
+  group. `query-users` alone finds nobody and cannot read role mappings, so
+  `view-users` is needed; `query-groups` serves the group member lookup for Studio and
+  is the one further right security 1.9 allows (RE-98, ISB-G3.3). Keycloak makes
+  `view-users` a composite that also holds `query-groups` (measured against Keycloak
+  26.7.0 in stage 0, MN-16); it is mapped explicitly so the bound is named;
+- the same three roles, and only these, in the client's token scope.
 
 The audience `papaia-people` itself (a bearer-only client and the exchange scope
-`aud-papaia-people`, persons only, paired with `assist-gate` alone) is part of the plan
+`aud-papaia-people`, persons only, paired with `assist-gate` and `papaia-studio-gateway`
+alone, effect x) is part of the plan
 of `realm_sync` while the profile is active (`core_audiences`).
 
 Without the profile the client and its key folder are removed.
@@ -34,7 +37,7 @@ from . import service_account_keys as sak
 CLIENT_ID = "svc-papaia-people"
 AUDIENCE = "papaia-people"
 PROFILE = "people"
-DIRECTORY_ROLES = ("query-users", "view-users")
+DIRECTORY_ROLES = ("query-users", "view-users", "query-groups")
 
 _FLAGS = {
     "protocol": "openid-connect",
@@ -122,7 +125,7 @@ class _Align:
         return current
 
     def account_user(self, client: dict) -> None:
-        """Exactly the two directory roles of realm-management, in the user's mappings
+        """Exactly the three directory roles of realm-management, in the user's mappings
         and in the client's token scope; no group, no other role."""
         found = self.call("GET", "/clients?clientId=realm-management") or []
         management = next((c for c in found if c.get("clientId") == "realm-management"), None)

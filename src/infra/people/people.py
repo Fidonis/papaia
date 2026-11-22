@@ -1,4 +1,5 @@
-"""papaia-people: the exact-match people lookup of the core (`GET /v1/people/lookup`).
+"""papaia-people: the exact-match people lookup of the core (`GET /v1/people/lookup`) and
+the bounded group member lookup for Studio's share notices (`GET /v1/people/group-members`).
 
 The assistant must find every person who holds an assistant role, also one who never
 opened it, without any module getting a right on the directory (sicherheit §1.4, RE-51).
@@ -23,14 +24,35 @@ checked here on every request:
   `q` (case-insensitive) and that holds the role (directly, through a group or a
   composite); at most 5 hits.
 
+Studio's gateway asks, for a notice of an app shared with a group (sicherheit §1.4
+"Gruppenmitglieder für Studio", RE-98),
+
+    GET /v1/people/group-members?group=<group id>[&role=<studio role>]
+
+and gets `{"members": [<sub>, ...]}` (at most 50, no names) or `{"too_many": true}`
+without a list, under these limits:
+
+- the token is a person token for `papaia-people` issued to `papaia-studio-gateway` (the
+  only client of this route; `assist-gate` reaches only the lookup above, and the
+  Studio gateway only this route);
+- exactly the parameter `group`, optionally `role` (default `studio-member`, one of the
+  Studio roles), each once; `group` is a whole group id (no wildcard, path, space or
+  empty value: 400) of a group that `platform/groups.json` offers for sharing (listed and
+  not technical; anything else: 403 `group_not_offered`);
+- a member is an enabled account, not a service account, that is a member of the group
+  or of one of its subgroups (as the `groups` claim resolves it) and holds the role; more
+  than 50 such members, or more than `MAX_SCANNED` accounts to look at, is `too_many`;
+- the same rate limits per person and per calling client as above.
+
 Every request with a verified token is one `papaia.audit/1` row on stdout (operation
-`people_lookup`, effect `read`, the role and the hit count, never the search text, a
-name or a token). Operational messages go to stderr.
+`people_lookup`, effect `read`, the role or the group and the hit count, `too_many` as
+its code, never the search text, a name, a member list or a token). Operational messages
+go to stderr. A member list lives only in memory for the one answer.
 
 The directory is read as `svc-papaia-people`, which holds `realm-management`
-`query-users` and `view-users` and nothing else (the realm sync keeps it so), signing in
-with a client assertion (private_key_jwt, ES256); the key is mounted read-only from the
-configuration directory. Only exact searches are sent (`exact=true`).
+`query-users`, `view-users` and `query-groups` and nothing else (the realm sync keeps it
+so), signing in with a client assertion (private_key_jwt, ES256); the key is mounted
+read-only from the configuration directory. Only exact searches are sent (`exact=true`).
 
 Standard library and the `openssl` command line only; runs as an unprivileged user on a
 read-only file system.
@@ -69,8 +91,19 @@ CLIENT_ID = "svc-papaia-people"
 AUDIENCE = "papaia-people"
 WRITER = "papaia-people"
 ROUTE = "/v1/people/lookup"
+GROUP_ROUTE = "/v1/people/group-members"
 PAIRED_CLIENTS = frozenset({"assist-gate"})
+GROUP_CLIENTS = frozenset({"papaia-studio-gateway"})
 LOOKUP_ROLES = frozenset({"assist-member", "assist-admin"})
+GROUP_ROLES = frozenset({"studio-member", "studio-author", "studio-reviewer", "studio-admin"})
+DEFAULT_GROUP_ROLE = "studio-member"
+MAX_MEMBERS = 50
+# Accounts looked at for one group answer at most; a larger group is `too_many`.
+MAX_SCANNED = 1000
+MEMBER_PAGE = 100
+GROUPS_FORMAT = "papaia.platform-groups/1"
+MAX_GROUPS_BYTES = 4 << 20
+MAX_GROUPS = 5000
 PER_PERSON = 30
 PER_CLIENT = 300
 WINDOW_SECONDS = 600.0
@@ -98,6 +131,9 @@ _EMAIL_RE = re.compile(
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,63}"
 )
 _ROLE_RE = re.compile(r"[a-z][a-z0-9-]{0,63}")
+# The group id of platform/groups.json (papaia.platform-groups/1).
+_GROUP_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}")
+_PATH_RE = re.compile(r"(?:/[^/\x00-\x1f\x7f]+)+")
 _SUB_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
 _CLIENT_RE = re.compile(r"[a-z][a-z0-9-]{0,63}")
 _KID_RE = re.compile(r"[A-Za-z0-9_.:=-]{1,128}")
@@ -317,8 +353,9 @@ def classify(q: object) -> str | None:
     return "name" if all(_WORD_RE.fullmatch(w) for w in words) else None
 
 
-def parse_query(query: str) -> tuple[str, str]:
-    """(q, role) of the query string, or Refused(400)."""
+def _params(query: str, allowed: tuple[str, ...], required: tuple[str, ...]) -> dict:
+    """The parameters of the query string: only `allowed`, each once, all of `required`;
+    anything else is Refused(400)."""
     if not isinstance(query, str) or len(query) > MAX_QUERY_STRING:
         raise Refused(400, "malformed_query")
     try:
@@ -328,14 +365,88 @@ def parse_query(query: str) -> tuple[str, str]:
     except ValueError:
         raise Refused(400, "malformed_query") from None
     keys = [k for k, _ in pairs]
-    if any(k not in ("q", "role") for k in keys):
+    if any(k not in allowed for k in keys):
         raise Refused(400, "unknown_parameter")
     if len(set(keys)) != len(keys):
         raise Refused(400, "duplicate_parameter")
     params = dict(pairs)
-    if "q" not in params or "role" not in params:
+    if any(k not in params for k in required):
         raise Refused(400, "missing_parameter")
+    return params
+
+
+def parse_query(query: str) -> tuple[str, str]:
+    """(q, role) of the query string, or Refused(400)."""
+    params = _params(query, ("q", "role"), ("q", "role"))
     return params["q"], params["role"]
+
+
+def parse_group_query(query: str) -> tuple[str, str]:
+    """(group, role) of the query string of the group route, or Refused(400)."""
+    params = _params(query, ("group", "role"), ("group",))
+    return params["group"], params.get("role", DEFAULT_GROUP_ROLE)
+
+
+class GroupList:
+    """The groups Studio offers for sharing: `platform/groups.json` as the realm sync
+    writes it, read again whenever the file is replaced. A file that is missing or not
+    of the format offers no group at all."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._stamp: tuple | None = None
+        self._groups: dict[str, tuple[str, bool]] | None = None
+        self._lock = threading.Lock()
+
+    def _read(self) -> dict[str, tuple[str, bool]]:
+        with open(self.path, "rb") as handle:
+            raw = handle.read(MAX_GROUPS_BYTES + 1)
+        if len(raw) > MAX_GROUPS_BYTES:
+            raise ValueError("too large")
+        doc = json.loads(raw)
+        listed = doc.get("groups") if isinstance(doc, dict) else None
+        if doc.get("format") != GROUPS_FORMAT or not isinstance(listed, list):
+            raise ValueError("not a group list")
+        if len(listed) > MAX_GROUPS:
+            raise ValueError("too many groups")
+        groups: dict[str, tuple[str, bool]] = {}
+        for row in listed:
+            if not isinstance(row, dict):
+                raise ValueError("malformed group")
+            gid, path, technical = row.get("id"), row.get("path"), row.get("technical")
+            if not (isinstance(gid, str) and _GROUP_RE.fullmatch(gid)):
+                raise ValueError("malformed group id")
+            if not (isinstance(path, str) and len(path) <= 1024 and _PATH_RE.fullmatch(path)):
+                raise ValueError("malformed group path")
+            if not isinstance(technical, bool) or gid in groups:
+                raise ValueError("malformed group")
+            groups[gid] = (path, technical)
+        return groups
+
+    def _current(self) -> dict[str, tuple[str, bool]]:
+        with self._lock:
+            try:
+                st = os.stat(self.path)
+                stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
+                if stamp != self._stamp:
+                    self._groups, self._stamp = None, stamp
+                    self._groups = self._read()
+            except (OSError, ValueError) as exc:
+                self._groups, self._stamp = None, None
+                _log(f"the group list cannot be read: {type(exc).__name__}")
+            if self._groups is None:
+                raise Refused(503, "group_list_unavailable")
+            return self._groups
+
+    def resolve(self, gid: str) -> list[str]:
+        """The ids of a group offered for sharing and of all its subgroups (the group
+        first), or Refused(403) for a group that is not offered."""
+        groups = self._current()
+        entry = groups.get(gid)
+        if entry is None or entry[1]:
+            raise Refused(403, "group_not_offered")
+        below = entry[0] + "/"
+        return [gid] + sorted(g for g, (path, _) in groups.items() if path.startswith(below))
 
 
 def display_name(user: dict) -> str:
@@ -375,6 +486,43 @@ class Directory:
         if not isinstance(found, list):
             raise DirectoryError("malformed answer")
         return {r.get("name") for r in found if isinstance(r, dict)}
+
+    def members(self, group_ids: list[str], role: str) -> list[str] | None:
+        """The ids of the enabled persons in these groups who hold `role`, or None when
+        there are more than MAX_MEMBERS of them or more than MAX_SCANNED accounts to look
+        at. Each account is looked at once, also when it is in several of the groups."""
+        found: list[str] = []
+        seen: set[str] = set()
+        for gid in group_ids:
+            first = 0
+            while True:
+                page = self.api.get(
+                    f"/groups/{gid}/members",
+                    {"first": str(first), "max": str(MEMBER_PAGE), "briefRepresentation": "true"},
+                )
+                if not isinstance(page, list):
+                    raise DirectoryError("malformed answer")
+                for user in page:
+                    uid = user.get("id") if isinstance(user, dict) else None
+                    if not isinstance(uid, str) or not _SUB_RE.fullmatch(uid):
+                        raise DirectoryError("malformed answer")
+                    if uid in seen:
+                        continue
+                    seen.add(uid)
+                    if len(seen) > MAX_SCANNED:
+                        return None
+                    if user.get("enabled") is not True:
+                        continue
+                    if str(user.get("username", "")).startswith("service-account-"):
+                        continue
+                    if role in self.roles(uid):
+                        found.append(uid)
+                        if len(found) > MAX_MEMBERS:
+                            return None
+                if len(page) < MEMBER_PAGE:
+                    break
+                first += MEMBER_PAGE
+        return sorted(found)
 
     def find(self, kind: str, q: str, role: str) -> list[dict]:
         want = q.casefold()
@@ -436,6 +584,7 @@ class Lookup:
         verifier: TokenVerifier,
         directory: Directory,
         *,
+        groups: GroupList | None = None,
         per_client: int = PER_CLIENT,
         per_person: int = PER_PERSON,
         clock=time.monotonic,
@@ -445,42 +594,56 @@ class Lookup:
         for value in (per_client, per_person):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError("the limits must be positive integers")
-        self.verifier, self.directory = verifier, directory
+        self.verifier, self.directory, self.groups = verifier, directory, groups
         self.wall, self.out = wall, out or sys.stdout
         self._person = Window(per_person, WINDOW_SECONDS, clock)
         self._client = Window(per_client, WINDOW_SECONDS, clock)
         self._lock = threading.Lock()
         self._out_lock = threading.Lock()
 
-    def handle(
-        self, authorization: str | None, query: str, correlation: str | None
-    ) -> tuple[int, dict, dict]:
-        """(status, body, headers) of one request to the route."""
+    def _admit(self, authorization, correlation):
+        """(principal, correlation) of a request with a verified token, or the answer
+        (status, body, headers) of one without."""
         try:
             principal = self.verifier.verify(authorization)
         except Refused as exc:
             # No verified identity, so no audit row (it would name nobody).
-            return exc.status, {"error": exc.code}, {"WWW-Authenticate": 'Bearer realm="papaia"'}
+            headers = {"WWW-Authenticate": 'Bearer realm="papaia"'}
+            return None, (exc.status, {"error": exc.code}, headers)
         if not (
             isinstance(correlation, str)
             and _CORRELATION_RE.fullmatch(correlation)
             and not _KEY_SHAPED_RE.search(correlation)
         ):
             correlation = _uuid7()
+        return (principal, correlation), None
+
+    def _gate(self, principal: Principal, clients: frozenset, headers: dict) -> None:
+        """Client, person token and the rate limits; every admitted request counts."""
+        if principal.azp not in clients:
+            raise Refused(403, "client_not_paired")
+        if not principal.person:
+            raise Refused(403, "person_token_required")
+        with self._lock:
+            person = (principal.azp, principal.sub)
+            wait = self._person.retry_after(person) or self._client.retry_after(principal.azp)
+            if wait:
+                headers["Retry-After"] = str(wait)
+                raise Refused(429, "rate_limited")
+            self._person.add(person)
+            self._client.add(principal.azp)
+
+    def handle(
+        self, authorization: str | None, query: str, correlation: str | None
+    ) -> tuple[int, dict, dict]:
+        """(status, body, headers) of one request to the lookup route."""
+        admitted, answer = self._admit(authorization, correlation)
+        if answer:
+            return answer
+        principal, correlation = admitted
         role, hits, headers = None, None, {}
         try:
-            if principal.azp not in PAIRED_CLIENTS:
-                raise Refused(403, "client_not_paired")
-            if not principal.person:
-                raise Refused(403, "person_token_required")
-            with self._lock:
-                person = (principal.azp, principal.sub)
-                wait = self._person.retry_after(person) or self._client.retry_after(principal.azp)
-                if wait:
-                    headers["Retry-After"] = str(wait)
-                    raise Refused(429, "rate_limited")
-                self._person.add(person)
-                self._client.add(principal.azp)
+            self._gate(principal, PAIRED_CLIENTS, headers)
             q, wanted = parse_query(query)
             if not _ROLE_RE.fullmatch(wanted):
                 raise Refused(400, "invalid_role")
@@ -498,12 +661,58 @@ class Lookup:
             hits = len(people)
         except Refused as exc:
             result = "error" if exc.status >= 500 else "denied"
-            self._audit(principal, correlation, role, result, exc.code, None)
+            ref = {"type": "role", "id": role} if role else None
+            self._audit(principal, correlation, "people.lookup", ref, result, exc.code, None)
             return exc.status, {"error": exc.code}, headers
-        self._audit(principal, correlation, role, "allowed", None, hits)
+        ref = {"type": "role", "id": role}
+        self._audit(principal, correlation, "people.lookup", ref, "allowed", None, hits)
         return 200, {"people": people}, headers
 
-    def _audit(self, principal, correlation, role, result, error_code, hits) -> None:
+    def handle_group(
+        self, authorization: str | None, query: str, correlation: str | None
+    ) -> tuple[int, dict, dict]:
+        """(status, body, headers) of one request to the group route. The member list
+        is handed to the caller only; the audit row carries its length."""
+        admitted, answer = self._admit(authorization, correlation)
+        if answer:
+            return answer
+        principal, correlation = admitted
+        group, headers = None, {}
+        try:
+            self._gate(principal, GROUP_CLIENTS, headers)
+            gid, role = parse_group_query(query)
+            if not _GROUP_RE.fullmatch(gid):
+                raise Refused(400, "invalid_group")
+            if not _ROLE_RE.fullmatch(role):
+                raise Refused(400, "invalid_role")
+            group = gid
+            if role not in GROUP_ROLES:
+                raise Refused(403, "role_not_allowed")
+            if self.groups is None:
+                raise Refused(503, "group_list_unavailable")
+            group_ids = self.groups.resolve(gid)
+            try:
+                members = self.directory.members(group_ids, role)
+            except (DirectoryError, OSError, ValueError) as exc:
+                _log(f"the directory did not answer: {exc}")
+                raise Refused(502, "directory_unavailable") from None
+        except Refused as exc:
+            result = "error" if exc.status >= 500 else "denied"
+            ref = {"type": "group", "id": group} if group else None
+            self._audit(principal, correlation, "people.group_members", ref, result, exc.code, None)
+            return exc.status, {"error": exc.code}, headers
+        ref = {"type": "group", "id": group}
+        if members is None:
+            self._audit(
+                principal, correlation, "people.group_members", ref, "allowed", "too_many", None
+            )
+            return 200, {"too_many": True}, headers
+        self._audit(
+            principal, correlation, "people.group_members", ref, "allowed", None, len(members)
+        )
+        return 200, {"members": members}, headers
+
+    def _audit(self, principal, correlation, catalog_id, ref, result, error_code, hits) -> None:
         now = self.wall()
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now))
         row = {
@@ -517,10 +726,10 @@ class Lookup:
             "service_account": None if principal.person else principal.azp,
             "azp": principal.azp,
             "aud": AUDIENCE,
-            "catalog_id": "people.lookup",
+            "catalog_id": catalog_id,
             "operation": "people_lookup",
             "effect": "read",
-            "object_ref": {"type": "role", "id": role} if role else None,
+            "object_ref": ref,
             "data_class": None,
             "result": result,
             "error_code": error_code,
@@ -717,8 +926,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if path == "/healthz" and not query:
             self._send(200, {"status": "ok"})
-        elif path == ROUTE:
-            status, body, headers = self.server.lookup.handle(
+        elif path in (ROUTE, GROUP_ROUTE):
+            serve = self.server.lookup.handle if path == ROUTE else self.server.lookup.handle_group
+            status, body, headers = serve(
                 self.headers.get("Authorization"),
                 query,
                 self.headers.get("X-Papaia-Correlation-Id"),
@@ -763,6 +973,9 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--account-dir", type=Path, required=True)
     run.add_argument("--listen", default="0.0.0.0:8080")
     run.add_argument("--per-client", type=int, default=PER_CLIENT)
+    run.add_argument(
+        "--groups-file", type=Path, required=True, help="platform/groups.json (read-only)"
+    )
     health = sub.add_parser("health", help="ask the running service")
     health.add_argument("--port", type=int, default=8080)
     return parser
@@ -785,13 +998,16 @@ def main(argv: list[str] | None = None) -> int:
         api = AdminApi(args.keycloak_url, ctx, args.account_dir)
         AccountKey(args.account_dir)
         lookup = Lookup(
-            TokenVerifier(Keys(api.jwks), issuer), Directory(api), per_client=args.per_client
+            TokenVerifier(Keys(api.jwks), issuer),
+            Directory(api),
+            groups=GroupList(args.groups_file),
+            per_client=args.per_client,
         )
         server = make_server(lookup, *_listen(args.listen))
     except (PeopleError, ValueError, OSError) as exc:
         _log(f"cannot start: {exc}")
         return 2
-    _log(f"serving {ROUTE} on {args.listen}")
+    _log(f"serving {ROUTE} and {GROUP_ROUTE} on {args.listen}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -56,7 +56,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
 | Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
-| People lookup | `people` | — | Exact-match lookup of persons with an assistant role for the assistant's gate: whole name or mail only, role filter, rate limit, audit. No published port — see [docs/people.md](docs/people.md). |
+| People lookup | `people` | — | Exact-match lookup of persons with an assistant role for the assistant's gate, and the members (`sub` only, at most 50) of a share group for Studio's notices: whole name, mail or group id only, role filter, rate limit, audit. No published port — see [docs/people.md](docs/people.md). |
 | Knowledge map | `knowledge-map` | — | An OIDC-secured MCP directory of the installation's knowledge sources: tells the chat where knowledge lives, trimmed to the caller's roles. Internal-only — see [docs/knowledge-map.md](docs/knowledge-map.md). |
 
 `localai`, `manager`, `librechat-websearch`, `rag`, `smtp`, `voice` and `knowledge-map` are toggled by `papaia-ctl setup`

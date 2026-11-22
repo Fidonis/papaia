@@ -880,9 +880,10 @@ The core's own account `svc-papaia-lifecycle` (profile `lifecycle`) is not decla
 the undeclared accounts. See [lifecycle.md](lifecycle.md).
 
 Likewise `svc-papaia-people` (profile `people`) is kept by `lib/people_account.py` with
-`realm-management` `query-users` and `view-users` only; under the same profile the realm
-sync serves the core audience `papaia-people` (persons only) and accepts a pairing for it
-from `assist-gate` alone, effect `x`. See [people.md](people.md).
+`realm-management` `query-users`, `view-users` and `query-groups` only; under the same
+profile the realm sync serves the core audience `papaia-people` (persons only) and accepts
+a pairing for it from `assist-gate` (people lookup) and `papaia-studio-gateway` (group
+members for share notices) alone, effect `x`. See [people.md](people.md).
 
 ### Seam 3 — LibreChat-MCP
 

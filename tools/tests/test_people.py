@@ -1,4 +1,5 @@
-"""papaia-people: the exact-match people lookup for the assistant (`GET /v1/people/lookup`).
+"""papaia-people: the exact-match people lookup for the assistant (`GET /v1/people/lookup`)
+and the bounded group member lookup for Studio (`GET /v1/people/group-members`).
 
 The service (`src/infra/people/people.py`) is one standard-library file in the core's own
 image `ghcr.io/fidonis/papaia-people`, so it is imported here straight from the checkout,
@@ -135,12 +136,14 @@ def _person(uid, first, last, email, roles, enabled=True, username=None):
 
 
 class FakeUsers:
-    """`GET /users` with `exact=true` and `GET /users/{id}/role-mappings/realm/composite`
-    as Keycloak answers them; every request is recorded."""
+    """`GET /users` with `exact=true`, `GET /groups/{id}/members` and
+    `GET /users/{id}/role-mappings/realm/composite` as Keycloak answers them; every
+    request is recorded. `members` maps a group id to the ids of its direct members."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.fail = False
+        self.members: dict[str, list[str]] = {}
         self.users = [
             _person(ANNA, "Anna", "Albers", "anna.albers@example.test", {"assist-member"}),
             _person(BEN, "Ben", "Berger", "ben.berger@example.test", {"assist-admin"}),
@@ -165,6 +168,13 @@ class FakeUsers:
                 ):
                     found.append({k: v for k, v in user.items() if not k.startswith("_")})
             return found[: int(params["max"])]
+        if path.startswith("/groups/") and path.endswith("/members"):
+            assert params["briefRepresentation"] == "true"
+            gid = path.split("/")[2]
+            first, size = int(params["first"]), int(params["max"])
+            ids = self.members.get(gid, [])[first : first + size]
+            by_id = {u["id"]: u for u in self.users}
+            return [{k: v for k, v in by_id[i].items() if not k.startswith("_")} for i in ids]
         if path.startswith("/users/") and path.endswith("/role-mappings/realm/composite"):
             uid = path.split("/")[2]
             user = next(u for u in self.users if u["id"] == uid)
@@ -180,18 +190,51 @@ class Clock:
         return self.now
 
 
+SALES, SOUTH, BUNDLE, OUTSIDE = "g-sales", "g-south", "g-bundle", "g-outside"
+
+
+def _group(gid: str, path: str, technical: bool = False) -> dict:
+    name = path.rsplit("/", 1)[1]
+    return {"id": gid, "path": path, "display_name": {"de": name, "en": name},
+            "technical": technical}
+
+
+def _write_groups(path: Path, groups: list[dict]) -> None:
+    doc = {"format": "papaia.platform-groups/1", "generated_at": "2026-11-22T10:00:00Z",
+           "groups": groups}
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
 @pytest.fixture
-def stack(signer):
+def stack(signer, tmp_path):
     users = FakeUsers()
     clock = Clock()
     out = io.StringIO()
+    groups_file = tmp_path / "platform" / "groups.json"
+    groups_file.parent.mkdir()
+    _write_groups(
+        groups_file,
+        [
+            _group(SALES, "/sales"),
+            _group(SOUTH, "/sales/south"),
+            _group(BUNDLE, "/studio-authors", technical=True),
+        ],
+    )
     verifier = pp.TokenVerifier(
         pp.Keys(lambda: {"keys": [signer.jwk()]}, clock=clock), ISSUER, wall=lambda: NOW
     )
     lookup = pp.Lookup(
-        verifier, pp.Directory(users), per_client=300, clock=clock, wall=lambda: NOW, out=out
+        verifier,
+        pp.Directory(users),
+        groups=pp.GroupList(groups_file),
+        per_client=300,
+        clock=clock,
+        wall=lambda: NOW,
+        out=out,
     )
-    return types.SimpleNamespace(users=users, clock=clock, out=out, lookup=lookup, signer=signer)
+    return types.SimpleNamespace(
+        users=users, clock=clock, out=out, lookup=lookup, signer=signer, groups_file=groups_file
+    )
 
 
 def _ask(stack, query, token=None, correlation=None, **claims):
@@ -525,6 +568,295 @@ def test_a_role_not_offered_never_reaches_the_audit_row(stack):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# group members for Studio (GET /v1/people/group-members)
+# ─────────────────────────────────────────────────────────────────────────
+
+STUDIO = "papaia-studio-gateway"
+
+
+def _members(stack, gid: str, count: int, roles=("studio-member",), enabled=True, start=0):
+    """`count` accounts as direct members of `gid`; returns their ids."""
+    ids = []
+    for i in range(start, start + count):
+        uid = f"00000000-0000-4000-8000-{i:012d}"
+        stack.users.users.append(
+            _person(uid, "Member", f"No{i}", f"member{i}@example.test", roles, enabled=enabled)
+        )
+        stack.users.members.setdefault(gid, []).append(uid)
+        ids.append(uid)
+    return ids
+
+
+def _group_ask(stack, query, token=None, correlation=None, **claims):
+    if isinstance(query, dict):
+        query = urllib.parse.urlencode(query)
+    claims.setdefault("azp", STUDIO)
+    token = token if token is not None else stack.signer.token(**claims)
+    return stack.lookup.handle_group(f"Bearer {token}", query, correlation)
+
+
+def test_a_group_of_fifty_active_members_with_the_role_answers_their_subs(stack):
+    ids = _members(stack, SALES, 50)
+    status, body, _ = _group_ask(stack, {"group": SALES})
+    assert status == 200
+    assert body == {"members": sorted(ids)}
+
+
+def test_a_group_of_fifty_one_answers_too_many_without_a_list(stack):
+    _members(stack, SALES, 51)
+    status, body, _ = _group_ask(stack, {"group": SALES})
+    assert (status, body) == (200, {"too_many": True})
+    (row,) = _rows(stack)
+    assert (row["result"], row["error_code"], row["detail"]) == ("allowed", "too_many", None)
+
+
+def test_inactive_accounts_and_members_without_the_role_are_not_returned(stack):
+    active = _members(stack, SALES, 2)
+    _members(stack, SALES, 1, enabled=False, start=10)
+    _members(stack, SALES, 1, roles=("flow-member",), start=20)
+    stack.users.members[SALES].append(ANNA)  # assistant role only
+    status, body, _ = _group_ask(stack, {"group": SALES})
+    assert (status, body) == (200, {"members": sorted(active)})
+
+
+def test_inactive_members_and_members_without_the_role_do_not_count_towards_the_limit(stack):
+    active = _members(stack, SALES, 50)
+    _members(stack, SALES, 5, enabled=False, start=100)
+    _members(stack, SALES, 5, roles=("assist-member",), start=200)
+    assert _group_ask(stack, {"group": SALES})[1] == {"members": sorted(active)}
+
+
+def test_a_service_account_in_the_group_is_never_a_member(stack):
+    stack.users.users.append(
+        _person("11111111-2222-4333-8444-555555555555", "", "", "svc@example.test",
+                {"studio-member"}, username="service-account-robot")
+    )
+    stack.users.members[SALES] = ["11111111-2222-4333-8444-555555555555"]
+    assert _group_ask(stack, {"group": SALES})[1] == {"members": []}
+
+
+def test_members_of_subgroups_count_like_the_groups_claim_and_once_only(stack):
+    direct = _members(stack, SALES, 2)
+    below = _members(stack, SOUTH, 2, start=10)
+    stack.users.members[SOUTH].append(direct[0])
+    status, body, _ = _group_ask(stack, {"group": SALES})
+    assert body == {"members": sorted(direct + below)}
+    # The subgroup alone holds only its own members.
+    assert _group_ask(stack, {"group": SOUTH})[1] == {"members": sorted([direct[0], *below])}
+
+
+def test_the_role_parameter_selects_a_studio_role(stack):
+    authors = _members(stack, SALES, 2, roles=("studio-author",))
+    _members(stack, SALES, 2, start=10)
+    status, body, _ = _group_ask(stack, {"group": SALES, "role": "studio-author"})
+    assert body == {"members": sorted(authors)}
+
+
+def test_a_role_outside_the_studio_roles_is_refused(stack):
+    for role in ("assist-member", "realm-admin"):
+        status, body, _ = _group_ask(stack, {"group": SALES, "role": role})
+        assert (status, body) == (403, {"error": "role_not_allowed"})
+    assert stack.users.calls == []
+
+
+@pytest.mark.parametrize("gid", [BUNDLE, OUTSIDE, "g-sale"])
+def test_a_group_that_is_not_a_share_target_is_refused(stack, gid):
+    stack.users.members[gid] = [ANNA]
+    status, body, _ = _group_ask(stack, {"group": gid})
+    assert (status, body) == (403, {"error": "group_not_offered"})
+    assert stack.users.calls == []
+
+
+@pytest.mark.parametrize(
+    "query, code",
+    [
+        ({"group": "*"}, "invalid_group"),
+        ({"group": "%"}, "invalid_group"),
+        ({"group": "g-*"}, "invalid_group"),
+        ({"group": ""}, "invalid_group"),
+        ({"group": " "}, "invalid_group"),
+        ({"group": "/sales"}, "invalid_group"),
+        ({"group": "sales south"}, "invalid_group"),
+        ({"group": "-sales"}, "invalid_group"),
+        ({"group": "g" * 65}, "invalid_group"),
+        ({"group": SALES, "role": ""}, "invalid_role"),
+        ({"group": SALES, "role": "Studio*"}, "invalid_role"),
+        ({}, "missing_parameter"),
+        ({"role": "studio-member"}, "missing_parameter"),
+        ({"group": SALES, "max": "100"}, "unknown_parameter"),
+        ({"group": SALES, "q": "Anna Albers"}, "unknown_parameter"),
+        (f"group={SALES}&group={SOUTH}", "duplicate_parameter"),
+        ("group", "malformed_query"),
+        ("group=" + "a" * 700, "malformed_query"),
+    ],
+)
+def test_a_wild_empty_partial_or_malformed_group_query_is_refused(stack, query, code):
+    status, body, _ = _group_ask(stack, query)
+    assert (status, body) == (400, {"error": code})
+    assert stack.users.calls == []
+
+
+def test_only_the_studio_gateway_reaches_the_group_route(stack):
+    _members(stack, SALES, 1)
+    for azp in ("assist-gate", "flow-engine", "papaia-studio-me"):
+        status, body, _ = _group_ask(stack, {"group": SALES}, azp=azp)
+        assert (status, body) == (403, {"error": "client_not_paired"})
+    assert stack.users.calls == []
+    assert [r["azp"] for r in _rows(stack)] == ["assist-gate", "flow-engine", "papaia-studio-me"]
+
+
+def test_the_group_route_needs_a_person_token(stack):
+    status, body, _ = _group_ask(stack, {"group": SALES}, sid=None)
+    assert (status, body) == (403, {"error": "person_token_required"})
+
+
+def test_the_group_route_refuses_a_token_for_another_audience(stack):
+    status, body, _ = _group_ask(stack, {"group": SALES}, aud="papaia-studio")
+    assert (status, body) == (401, {"error": "invalid_token"})
+    assert _rows(stack) == []
+
+
+def test_the_group_route_is_rate_limited_per_person(stack):
+    _members(stack, SALES, 1)
+    for _ in range(30):
+        assert _group_ask(stack, {"group": SALES})[0] == 200
+    status, body, headers = _group_ask(stack, {"group": SALES})
+    assert (status, body) == (429, {"error": "rate_limited"})
+    assert int(headers["Retry-After"]) > 0
+    row = _rows(stack)[-1]
+    assert (row["result"], row["error_code"], row["azp"]) == ("denied", "rate_limited", STUDIO)
+    assert _group_ask(stack, {"group": SALES}, sub=BEN)[0] == 200
+
+
+def test_the_group_route_is_rate_limited_per_client(signer, tmp_path):
+    groups_file = tmp_path / "groups.json"
+    _write_groups(groups_file, [_group(SALES, "/sales")])
+    clock, out = Clock(), io.StringIO()
+    verifier = pp.TokenVerifier(
+        pp.Keys(lambda: {"keys": [signer.jwk()]}, clock=clock), ISSUER, wall=lambda: NOW
+    )
+    lookup = pp.Lookup(
+        verifier, pp.Directory(FakeUsers()), groups=pp.GroupList(groups_file), per_client=3,
+        clock=clock, wall=lambda: NOW, out=out,
+    )
+    query = f"group={SALES}"
+    for sub in (ANNA, BEN, CEM):
+        assert lookup.handle_group(f"Bearer {signer.token(sub=sub, azp=STUDIO)}", query, None)[
+            0
+        ] == 200
+    status, body, _ = lookup.handle_group(
+        f"Bearer {signer.token(sub=DORA, azp=STUDIO)}", query, None
+    )
+    assert (status, body) == (429, {"error": "rate_limited"})
+    # The assistant's gate keeps its own client budget.
+    assert lookup.handle(
+        f"Bearer {signer.token(sub=DORA)}", "q=Anna+Albers&role=assist-member", None
+    )[0] == 200
+    rows = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert (rows[3]["result"], rows[3]["error_code"]) == ("denied", "rate_limited")
+
+
+def test_the_group_audit_row_names_the_group_and_the_count_never_the_members(stack):
+    ids = _members(stack, SALES, 3)
+    _group_ask(stack, {"group": SALES}, correlation="share-0001")
+    (row,) = _rows(stack)
+    assert row["correlation_id"] == "share-0001"
+    assert (row["operation"], row["catalog_id"], row["effect"]) == (
+        "people_lookup",
+        "people.group_members",
+        "read",
+    )
+    assert row["object_ref"] == {"type": "group", "id": SALES}
+    assert (row["sub"], row["azp"], row["aud"]) == (ANNA, STUDIO, "papaia-people")
+    assert (row["result"], row["error_code"], row["detail"]) == ("allowed", None, {"count": 3})
+    text = stack.out.getvalue()
+    for uid in ids:
+        assert uid not in text
+    assert "member0@" not in text and "No0" not in text
+
+
+def test_every_group_audit_row_is_a_valid_submission_of_the_audit_schema(stack):
+    jsonschema = pytest.importorskip("jsonschema")
+    schema_path = REPO / "src" / "infra" / "audit" / "papaia_audit" / "audit.v1.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(
+        {**schema, "$ref": "#/$defs/submission", "required": [], "properties": {}},
+        format_checker=jsonschema.FormatChecker(),
+    )
+    _members(stack, SALES, 51)
+    _group_ask(stack, {"group": SALES})
+    _group_ask(stack, {"group": SOUTH})
+    _group_ask(stack, {"group": "*"})
+    _group_ask(stack, {"group": OUTSIDE})
+    _group_ask(stack, {"group": SALES}, azp="assist-gate")
+    stack.users.fail = True
+    _group_ask(stack, {"group": SALES})
+    rows = _rows(stack)
+    assert len(rows) == 6
+    for seq, row in enumerate(rows, start=1):
+        errors = [e.message for e in validator.iter_errors({**row, "source_seq": seq})]
+        assert errors == [], (row["result"], row["error_code"], errors)
+
+
+def test_a_directory_failure_on_the_group_route_is_502(stack):
+    stack.users.fail = True
+    status, body, _ = _group_ask(stack, {"group": SALES})
+    assert (status, body) == (502, {"error": "directory_unavailable"})
+    (row,) = _rows(stack)
+    assert (row["result"], row["error_code"]) == ("error", "directory_unavailable")
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "not json",
+        json.dumps({"format": "papaia.platform-groups/2", "groups": []}),
+        json.dumps({"format": "papaia.platform-groups/1", "groups": [{"id": "*", "path": "/x",
+                    "technical": False}]}),
+        json.dumps({"format": "papaia.platform-groups/1", "groups": [{"id": "g-sales",
+                    "path": "/sales", "technical": "no"}]}),
+    ],
+)
+def test_without_a_readable_group_list_no_group_is_offered(stack, content):
+    if content is None:
+        stack.groups_file.unlink()
+    else:
+        stack.groups_file.write_text(content, encoding="utf-8")
+    status, body, _ = _group_ask(stack, {"group": SALES})
+    assert (status, body) == (503, {"error": "group_list_unavailable"})
+    assert stack.users.calls == []
+    (row,) = _rows(stack)
+    assert row["result"] == "error"
+
+
+def test_a_new_group_list_is_read_once_it_is_replaced(stack):
+    assert _group_ask(stack, {"group": OUTSIDE})[0] == 403
+    replacement = stack.groups_file.with_name("groups.json.new")
+    _write_groups(replacement, [_group(OUTSIDE, "/outside")])
+    replacement.replace(stack.groups_file)
+    assert _group_ask(stack, {"group": OUTSIDE})[1] == {"members": []}
+    assert _group_ask(stack, {"group": SALES})[0] == 403
+
+
+def test_a_group_larger_than_the_scan_bound_answers_too_many(stack, monkeypatch):
+    monkeypatch.setattr(pp, "MAX_SCANNED", 20)
+    _members(stack, SALES, 30, roles=("flow-member",))
+    _members(stack, SALES, 2, start=100)
+    status, body, _ = _group_ask(stack, {"group": SALES})
+    assert (status, body) == (200, {"too_many": True})
+    role_reads = [c for c in stack.users.calls if c[0].endswith("/composite")]
+    assert len(role_reads) <= 20
+
+
+def test_the_member_scan_stops_once_the_limit_is_passed(stack):
+    _members(stack, SALES, 120)
+    assert _group_ask(stack, {"group": SALES})[1] == {"too_many": True}
+    role_reads = [c for c in stack.users.calls if c[0].endswith("/composite")]
+    assert len(role_reads) == 51
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # HTTP
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -561,6 +893,22 @@ def test_the_route_answers_over_http(server, stack):
     assert headers["Content-Type"] == "application/json"
     assert headers["Cache-Control"] == "no-store"
     assert _rows(stack)[0]["correlation_id"] == "abc-1"
+
+
+def test_the_group_route_answers_over_http(server, stack):
+    ids = _members(stack, SALES, 2)
+    token = stack.signer.token(azp=STUDIO)
+    status, body, headers = _http(
+        server,
+        "GET",
+        f"/v1/people/group-members?group={SALES}&role=studio-member",
+        {"Authorization": f"Bearer {token}"},
+    )
+    assert (status, body) == (200, {"members": sorted(ids)})
+    assert headers["Cache-Control"] == "no-store"
+    assert _http(server, "POST", f"/v1/people/group-members?group={SALES}",
+                 {"Authorization": f"Bearer {token}"})[0] == 405
+    assert _http(server, "GET", "/v1/people/group-members/", {})[0] == 404
 
 
 def test_other_routes_and_methods_are_refused(server, stack):
@@ -658,6 +1006,9 @@ def test_the_service_runs_unprivileged_on_the_stack_network_without_a_port():
     account = mounts["/run/papaia-people/account"]
     assert account["read_only"] is True
     assert account["source"].endswith("/security/service-accounts/svc-papaia-people")
+    platform = mounts["/run/papaia-people/platform"]
+    assert platform["source"] == "${PAPAIA_CONFIG_DIR}/platform"
+    assert "--groups-file=/run/papaia-people/platform/groups.json" in service["command"]
     assert all(m["read_only"] for m in mounts.values())
 
 

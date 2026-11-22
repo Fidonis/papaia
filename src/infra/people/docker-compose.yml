@@ -12,16 +12,22 @@
 # whose whole display name or mail is q and who hold the assistant role. No
 # partial search, no list of the directory; 30 requests per person and 10 min;
 # one papaia.audit/1 row per request on stdout, never the search text.
+# For Studio's share notices it answers GET /v1/people/group-members?group=<id>
+# for papaia-studio-gateway with the sub of at most 50 active members holding
+# a Studio role, else {too_many: true}; only groups that platform/groups.json
+# offers for sharing.
 #
 # Safety:
 #   - No port is published. It is reached on the stack network as
 #     http://papaia-people:8080 by a client that holds a token for papaia-people.
 #   - Every request carries a person token of the realm for the audience
-#     papaia-people, issued to assist-gate; the service checks signature, issuer,
-#     audience, client and lifetime itself.
+#     papaia-people, issued to assist-gate (lookup) or papaia-studio-gateway
+#     (group members); the service checks signature, issuer, audience, client,
+#     route and lifetime itself.
 #   - Signs in with private_key_jwt; the key is mounted read-only from
 #     $PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-people. The account
-#     holds realm-management query-users and view-users, no write right.
+#     holds realm-management query-users, view-users and query-groups, no write
+#     right. The group list is mounted read-only from $PAPAIA_CONFIG_DIR/platform.
 #   - Keeps no state and no volume. Runs as the user that owns the config dir,
 #     read-only, without capabilities.
 #
@@ -43,6 +49,7 @@ services:
       - --issuer=${OIDC_ISSUER}
       - --ca-file=/etc/papaia-people/local-ca.crt
       - --account-dir=/run/papaia-people/account
+      - --groups-file=/run/papaia-people/platform/groups.json
       - --listen=0.0.0.0:8080
     user: "${UID:-1000}:${GID:-1000}"
     environment:
@@ -58,6 +65,13 @@ services:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/security/service-accounts/svc-papaia-people
         target: /run/papaia-people/account
+        read_only: true
+        bind:
+          create_host_path: false
+      # The folder, not the file: the realm sync replaces groups.json atomically.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/platform
+        target: /run/papaia-people/platform
         read_only: true
         bind:
           create_host_path: false

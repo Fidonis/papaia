@@ -43,6 +43,7 @@ REALM_MANAGEMENT_ROLES = [
     "manage-users",
     "view-users",
     "query-users",
+    "query-groups",
     "view-realm",
     "view-clients",
 ]

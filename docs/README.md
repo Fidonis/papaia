@@ -31,7 +31,8 @@ Welcome to the papAIa documentation.
   verification and signed chain heads, the read API with pseudonyms and the person filter
   that needs a reason and a second person
 - [People lookup](./people.md) — papaia-people: exact-match lookup of persons with an
-  assistant role for `assist-gate`, its service account and audience
+  assistant role for `assist-gate`, the bounded group member lookup for Studio's share
+  notices, its service account and audience
 - [Platform PKI and trust bundle](./pki.md) — certificates for TLS between services, their
   renewal, company CA certificates, the security profile `kritis`
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack

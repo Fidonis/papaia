@@ -1,9 +1,10 @@
 """The realm side of the people lookup: `svc-papaia-people` and the audience `papaia-people`.
 
 While the Compose profile `people` is active, the realm sync keeps the service account
-with exactly `realm-management` `query-users` and `view-users` (sicherheit §1.9, RE-51),
-serves the audience `papaia-people` as a bearer-only resource server for persons only, and
-lets only `assist-gate` exchange for it (sicherheit §1.4). Runs against the in-memory Admin
+with exactly `realm-management` `query-users`, `view-users` and `query-groups` (sicherheit
+§1.9, RE-51, RE-98), serves the audience `papaia-people` as a bearer-only resource server
+for persons only, and lets only `assist-gate` and `papaia-studio-gateway` exchange for it,
+with effect x (sicherheit §1.4). Runs against the in-memory Admin
 API of tests/realm_fake.py.
 """
 
@@ -43,7 +44,7 @@ def _account_roles(fake) -> tuple[set, dict]:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_the_account_holds_exactly_query_users_and_view_users(tmp_path):
+def test_the_account_holds_exactly_query_users_view_users_and_query_groups(tmp_path):
     fake, keys = FakeRealm(), _keys(tmp_path)
     changes = _align(fake, keys)
     assert changes
@@ -58,12 +59,13 @@ def test_the_account_holds_exactly_query_users_and_view_users(tmp_path):
     assert jwk == keys.public_jwk(pa.CLIENT_ID)
     realm_roles, client_roles = _account_roles(fake)
     assert realm_roles == {"default-roles-papaia"}
-    assert client_roles == {"realm-management": {"query-users", "view-users"}}
+    assert client_roles == {"realm-management": {"query-users", "view-users", "query-groups"}}
     rm = fake.by_client_id("realm-management")["id"]
     scope = client["_client_scope"].get(rm, set())
     assert {fake._client_role(fake.clients[rm], n)["name"] for n in scope} == {
         "query-users",
         "view-users",
+        "query-groups",
     }
     assert _align(fake, keys, apply=False) == []
 
@@ -73,15 +75,16 @@ def test_a_wider_right_is_reported_then_removed(tmp_path):
     _align(fake, keys)
     user = fake.service_account_user(pa.CLIENT_ID)
     rm = fake.by_client_id("realm-management")["id"]
-    user["_clients"][rm] |= {"manage-users"}
+    user["_clients"][rm] |= {"manage-users", "view-realm"}
     user["_realm"] |= {"offline_access"}
     found = _align(fake, keys, apply=False)
     assert any("manage-users" in c.action for c in found)
+    assert any("view-realm" in c.action for c in found)
     assert any("offline_access" in c.action for c in found)
     _align(fake, keys)
     assert _account_roles(fake) == (
         {"default-roles-papaia"},
-        {"realm-management": {"query-users", "view-users"}},
+        {"realm-management": {"query-users", "view-users", "query-groups"}},
     )
     assert _align(fake, keys, apply=False) == []
 
@@ -183,15 +186,26 @@ def test_without_the_profile_the_pairing_waits():
 @pytest.mark.parametrize(
     "client, effects, message",
     [
-        ("papaia-studio-gateway", ["x"], "only assist-gate"),
-        ("flow-engine", ["x"], "only assist-gate"),
+        ("flow-engine", ["x"], "only assist-gate, papaia-studio-gateway"),
+        ("papaia-me", ["x"], "only assist-gate, papaia-studio-gateway"),
         ("assist-gate", ["r"], "effect x only"),
         ("assist-gate", ["x", "r"], "effect x only"),
+        ("papaia-studio-gateway", ["r"], "effect x only"),
+        ("papaia-studio-gateway", ["x", "w"], "effect x only"),
     ],
 )
-def test_only_the_gate_exchanges_for_the_lookup_with_effect_x(client, effects, message):
+def test_only_the_two_gateways_exchange_for_the_lookup_with_effect_x(client, effects, message):
     with pytest.raises(rs.RealmSyncError, match=message):
         _pairings((client, "papaia-people", effects))
+
+
+def test_the_studio_gateway_may_be_paired_for_the_group_members_with_effect_x():
+    (pairing,) = _pairings(("papaia-studio-gateway", "papaia-people", ["x"]))
+    assert (pairing.client, pairing.audience, pairing.effects) == (
+        "papaia-studio-gateway",
+        "papaia-people",
+        ("x",),
+    )
 
 
 def test_the_reconcile_creates_the_bearer_client_and_the_scope(tmp_path):
