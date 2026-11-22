@@ -12,6 +12,9 @@ Then:
 * a marker sent in that request is found nowhere in the gateway's database (dump and
   data files) or its log, while the usage of the module key is counted, without a
   person;
+* the gateway mounts the folder of the platform halt as the shipped Compose file does;
+  with the halt set, the module key is refused with `platform_halt`, and served again
+  once it is lifted;
 * revoking the key writes `key_revoke` into the erasure journal `model-gateway`, and
   the key stops working.
 
@@ -35,7 +38,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import common, envtree, model_gateway, render_core, resolve
+from lib import common, envtree, halt, model_gateway, render_core, resolve
 from lib import secrets as core_secrets
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,6 +48,8 @@ SUBNET = ipaddress.ip_network(
     os.environ.get("PAPAIA_MODEL_GATEWAY_TEST_SUBNET", "10.250.79.0/24")
 )
 MODULE = "probe"
+# Where papaia_hooks looks for the halt file.
+HALT_MOUNT = "/run/papaia-halt"
 MARKER = "MARK-" + secrets.token_hex(8)
 
 
@@ -145,6 +150,18 @@ def _set_up_with_local_ai(repo_root: Path, config_dir: Path, backup: Path) -> No
     render_core.render(config_dir, repo_root)
 
 
+def _halt_mount(real: dict, config_dir: Path) -> dict:
+    """The shipped bind of the halt folder, pointed at the test's configuration. Without
+    it the hook fails closed and refuses every request (docs/halt.md)."""
+    (mount,) = [
+        m for m in real["litellm"]["volumes"]
+        if isinstance(m, dict) and m.get("target") == HALT_MOUNT
+    ]  # fmt: skip
+    prefix = "${PAPAIA_CONFIG_DIR}/"
+    assert mount["source"].startswith(prefix), mount
+    return {**mount, "source": str(config_dir / mount["source"][len(prefix):])}
+
+
 def _compose_file(tmp_path: Path, config_dir: Path, master_key: str, local_key: str) -> Path:
     real = yaml.safe_load(LITELLM_COMPOSE.read_text(encoding="utf-8"))["services"]
     environment = {
@@ -167,6 +184,7 @@ def _compose_file(tmp_path: Path, config_dir: Path, master_key: str, local_key: 
                 "volumes": [
                     f"{config_dir / 'ai/litellm/config.yaml'}:/app/config.yaml:ro",
                     f"{REPO / 'src/ai/litellm/papaia_hooks.py'}:/app/papaia_hooks.py:ro",
+                    _halt_mount(real, config_dir),
                 ],
                 "depends_on": {"litellm-db": {"condition": "service_healthy"}},
             },
@@ -240,6 +258,15 @@ def _as_module(key: str, method: str, path: str, body: object = None) -> tuple[i
     return doc["status"], doc["body"]
 
 
+def _chat_until(key: str, chat: dict, wanted: int, within: float = 60) -> tuple[int, str]:
+    deadline = time.monotonic() + within
+    while True:
+        status, body = _as_module(key, "POST", "/v1/chat/completions", chat)
+        if status == wanted or time.monotonic() > deadline:
+            return status, body
+        time.sleep(2)
+
+
 def _psql(sql: str) -> str:
     return _run("docker", "exec", _container("litellm-db"), "psql", "-U", "llmproxy",
                 "-d", "litellm", "-Atc", sql).stdout.strip()
@@ -300,6 +327,17 @@ def test_local_ai_serves_the_alias_to_a_module_key_and_keeps_no_contents(gateway
     assert files.returncode == 1 and files.stdout == "", files.stdout
     logs = _run("docker", "logs", _container("litellm"))
     assert MARKER not in logs.stdout + logs.stderr
+
+    # The halt reaches the gateway through the mounted folder, and lifting it serves again,
+    # each within the 60 s docs/halt.md allows for model calls (a bind mount of the host
+    # folder may show the renamed file a little late).
+    chat = {"model": "papaia-chat", "messages": [{"role": "user", "content": "say pong"}]}
+    halt.set_halt(config_dir, "probe")
+    status, body = _chat_until(key, chat, 503)
+    assert status == 503 and "platform_halt" in body, body
+    halt.clear_halt(config_dir, "probe over")
+    status, body = _chat_until(key, chat, 200)
+    assert status == 200, body
 
     assert model_gateway.revoke_module_key(
         config_dir, repo_root, MODULE, admin, reason="addon_uninstall"
