@@ -38,8 +38,9 @@ What it manages:
   mapper that adds a role or an audience (Keycloak's audience resolve mapper of `roles`
   stays: no client role reaches a managed client's token scope);
 - the declared module roles and the platform roles `papaia-admin`, `papaia-auditor`,
-  `papaia-confirm`; each declared `<module>-admin` role joins `papaia-admin`, which never
-  includes `papaia-auditor` or `papaia-operator` (separation of duties);
+  `papaia-confirm`, `papaia-legal-hold`; each declared `<module>-admin` role joins
+  `papaia-admin`, which never includes `papaia-auditor`, `papaia-operator` or
+  `papaia-legal-hold` (separation of duties);
 - the token scope of each sign-in client: its module's roles, the roles of every
   `visible_for_roles` that exist and `papaia-confirm`. `papaia-admin` never enters it, nor
   any role whose composite reaches beyond that set or into client roles: an admin's token
@@ -180,10 +181,12 @@ MANAGED = "papaia.managed"
 OWNER = "papaia.owner"
 TOKEN_EXCHANGE = "standard.token.exchange.enabled"
 MAX_EXCHANGE_SCOPES = 12
-PLATFORM_ROLES = ("papaia-admin", "papaia-auditor", "papaia-confirm")
+# papaia-legal-hold: the two-person deletion lock of papaia-audit (docs/audit.md); a
+# person's token carries it once a sign-in client lists it in `visible_for_roles`.
+PLATFORM_ROLES = ("papaia-admin", "papaia-auditor", "papaia-confirm", "papaia-legal-hold")
 ADMIN_ROLE = "papaia-admin"
 # Separation of duties (security 1.3): never part of the papaia-admin composite.
-NOT_IN_ADMIN = ("papaia-auditor", "papaia-operator")
+NOT_IN_ADMIN = ("papaia-auditor", "papaia-operator", "papaia-legal-hold")
 # The one platform role a module reads from its own token (second person for approvals).
 # papaia-admin is never in a module client's scope: it is a composite of every module's
 # admin role and of the manager's realm-management roles; an admin gets the module's own

@@ -11,6 +11,11 @@ that is now deactivated it
      logout alone leaves offline sessions, and with them delegations, alive, and a
      reactivated account would get them back.
 
+A sign-in (user event `LOGIN`) of the emergency account (its id in `breakglass-ids`
+next to the account key, written by `papaia-ctl breakglass`) is one audit row
+`breakglass_login` and an alert line in the log (security 1.15); any other sign-in is
+only read past.
+
 A deleted account goes on the list; Keycloak removed its sessions with it. An account
 the service may not read (outside the group `papaia-persons`, 403) cannot be revoked: it
 is recorded as skipped, with one audit row, and counted in health. An event whose
@@ -101,6 +106,8 @@ ACCOUNT_KEY_FILE = "private-key.pem"
 # (lib/lifecycle_account.py): the group permission lets the account list the group's
 # members, but neither search accounts nor look the group up.
 GROUP_FILE = "persons-group"
+# The ids of the emergency account, one per line, next to the account key.
+BREAKGLASS_FILE = "breakglass-ids"
 STATE_FORMAT = "papaia.lifecycle-state/1"
 
 POLL_SECONDS = 10
@@ -167,6 +174,7 @@ _GROUP_PATH_RE = re.compile(rf"users/({_ID})/groups/({_ID})")
 _OWN_PASSWORD_RE = re.compile(rf"users/({_ID})/password")
 _OWN_CREDENTIAL_RE = re.compile(rf"users/({_ID})/credentials(?:/({_ID}))?")
 _OWN_SESSIONS_RE = re.compile(rf"users/({_ID})/sessions")
+_OWN_LOGIN_RE = re.compile(rf"users/({_ID})/login")
 _SUB_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _GROUP_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
 _EVENT_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -235,7 +243,8 @@ EVENT_OPERATION_TYPES = ("UPDATE", "DELETE", "ACTION")
 # removed second factor REMOVE_CREDENTIAL (and REMOVE_TOTP, not read), and "sign out all
 # devices" one LOGOUT per session of the account API's client `account`. The realm sync
 # makes the realm store these types (lib/lifecycle_account.py).
-USER_EVENT_TYPES = ("UPDATE_PASSWORD", "REMOVE_CREDENTIAL", "LOGOUT")
+# A sign-in (`LOGIN`) is read for the emergency account only (security 1.15).
+USER_EVENT_TYPES = ("UPDATE_PASSWORD", "REMOVE_CREDENTIAL", "LOGOUT", "LOGIN")
 # A sign-in through the upstream provider that the post sign-in flow refused (federation,
 # docs/federation.md): read to write `idp_group_overflow`, never journaled.
 IDP_ERROR_TYPES = ("IDENTITY_PROVIDER_POST_LOGIN_ERROR",)
@@ -956,6 +965,8 @@ def user_event(row: object) -> dict | None:
         cid = details.get("selected_credential_id") if isinstance(details, dict) else None
         valid = isinstance(cid, str) and re.fullmatch(_ID, cid)
         path = f"users/{uid}/credentials/{cid}" if valid else f"users/{uid}/credentials"
+    elif etype == "LOGIN":
+        path = f"users/{uid}/login"
     elif row.get("clientId") == ACCOUNT_API_CLIENT:
         path = f"users/{uid}/sessions"  # sessions ended in the account console
     else:
@@ -1011,6 +1022,8 @@ def classify(event: object) -> tuple[str, str, str] | None:
             return "credential_reset", m[1], f"credential:{m[2]}" if m[2] else "credential"
         if op == "LOGOUT" and (m := _OWN_SESSIONS_RE.fullmatch(path)):
             return "session_revoke", m[1], "sessions"
+        if op == "LOGIN" and (m := _OWN_LOGIN_RE.fullmatch(path)):
+            return "breakglass_login", m[1], "login"
         return None
     if rtype == "USER":
         if (m := _USER_PATH_RE.fullmatch(path)) and op in ("UPDATE", "DELETE"):
@@ -1183,6 +1196,20 @@ class AccountClient:
         if not _GROUP_ID_RE.fullmatch(text):
             raise LifecycleError("the id of the persons group is malformed")
         return text
+
+    def breakglass_ids(self) -> frozenset[str]:
+        """The ids of the emergency account, read on every sign-in event; none without
+        the file (no emergency account yet)."""
+        path = self.account_dir / BREAKGLASS_FILE
+        if not os.path.lexists(path):
+            return frozenset()
+        try:
+            lines = _read_private(path, 1024).decode("ascii").splitlines()
+        except UnicodeDecodeError:
+            raise LifecycleError("the ids of the emergency account are malformed") from None
+        if not all(_SUB_RE.match(line) for line in lines):
+            raise LifecycleError("the ids of the emergency account are malformed")
+        return frozenset(lines)
 
     def token(self) -> str:
         if self._token and time.monotonic() < self._until:
@@ -1620,6 +1647,21 @@ class Lifecycle:
         kind, sub, object_ref = action
         since = math.ceil(when_ms / 1000)
         correlation = _uuid7()
+        if kind == "breakglass_login":
+            ids = getattr(self.api, "breakglass_ids", None)
+            if ids is not None and sub in ids():
+                self._audit(
+                    "breakglass_login",
+                    "check",
+                    "breakglass_login",
+                    correlation,
+                    {"type": "user", "id": sub},
+                )
+                _log(
+                    "ALERT: the emergency account signed in; rotate its password afterwards "
+                    "(papaia-ctl breakglass rotate)"
+                )
+            return
         if kind == "account_update":
             try:
                 user = self.api.call("GET", f"/users/{sub}")

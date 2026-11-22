@@ -659,26 +659,34 @@ class ReadApi:
         effect: str = "write",
         rows: int | None = None,
         error_code: str | None = None,
+        writer: str = WRITER,
+        operation: str | None = None,
+        object_ref: dict[str, str] | None = None,
+        moment: datetime | None = None,
     ) -> Any:
         """Run `write` with the builder of the own event; the store appends the event in
-        the transaction of its own change, so there is no change without its event."""
-        moment = time_text(self._now())
+        the transaction of its own change, so there is no change without its event.
+        `object_ref` names another object than a person query (access.py)."""
+        stamp = time_text(moment or self._now())
+        if query_id:
+            object_ref = {"type": "person_query", "id": query_id}
 
         def build(source_seq: int) -> str:
             body = {
                 "format": core.FORMAT,
-                "time": moment,
+                "time": stamp,
                 "source_seq": source_seq,
                 "correlation_id": cid,
-                "writer": WRITER,
+                "writer": writer,
                 "role": "server",
                 "sub": identity.sub,
                 "identity_kind": "person",
                 "service_account": None,
                 "azp": identity.azp,
                 "aud": AUDIENCE,
+                "operation": operation,
                 "effect": effect,
-                "object_ref": {"type": "person_query", "id": query_id} if query_id else None,
+                "object_ref": object_ref,
                 "result": result,
                 "error_code": error_code,
                 "detail": {"rows": rows} if rows is not None else None,

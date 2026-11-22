@@ -6,6 +6,7 @@ chain heads.
     python -I -m papaia_audit verify [--source NAME] [--against FILE|-] [--json]
     python -I -m papaia_audit heads
     python -I -m papaia_audit retention
+    python -I -m papaia_audit access < request.json
 
 `serve` accepts `POST /v1/ingest` on port 8443. The source of a request is the client
 certificate: it must chain to the ingest CA and its fingerprint must be listed for that
@@ -16,8 +17,9 @@ bearer token checked against token-keys.json (re-read when it changes).
 
 `schema` runs once before the service, as the database owner: it creates the store
 (schema.sql next to this file) in one transaction when it does not exist yet, and sets
-the passwords of `audit_ingest` and `audit_read` from their secrets on every run, so a
-replaced password takes effect. The service itself never holds the owner's password.
+the passwords of the service roles (`audit_ingest`, `audit_read`, `audit_retention`,
+`audit_hold`) from their secrets on every run, so a replaced password takes effect. The
+service itself never holds the owner's password.
 
 `serve` also runs the store's upkeep in one background thread: every full hour it signs
 the chain heads into the heads folder at the backup target and verifies every chain;
@@ -60,7 +62,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from psycopg import sql
 
-from papaia_audit import core, read, retention, siem
+from papaia_audit import access, core, read, retention, siem
 
 CONFIG_DIR = Path(os.environ.get("PAPAIA_AUDIT_CONFIG_DIR", "/etc/papaia-audit"))
 SECRETS_DIR = Path(os.environ.get("PAPAIA_AUDIT_SECRETS_DIR", "/run/secrets"))
@@ -73,7 +75,8 @@ CONTENT_TYPE = "application/x-ndjson"
 SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 SCHEMA_READ_SQL = Path(__file__).with_name("schema_read.sql")
 SCHEMA_RETENTION_SQL = Path(__file__).with_name("schema_retention.sql")
-SERVICE_ROLES = ("ingest", "read", "retention")
+SCHEMA_ACCESS_SQL = Path(__file__).with_name("schema_access.sql")
+SERVICE_ROLES = ("ingest", "read", "retention", "hold")
 HEADS_DIR = Path(os.environ.get("PAPAIA_AUDIT_HEADS_DIR", "/var/lib/papaia-audit/heads"))
 EXPORT_INTERVAL_SECONDS = 5
 CONFIG_WRITER = "papaia-audit/config"
@@ -181,6 +184,16 @@ _QUERY_COLUMNS = (
     "id, requested_by, person_sub, period_from, period_to, reason, requested_at, state,"
     " decided_by, decided_at"
 )
+_HOLD_COLUMNS = (
+    "id, action, sub, reason, requested_by, requested_at, state, decided_by, decided_at"
+)
+
+
+def _hold_row(row: tuple[Any, ...]) -> access.HoldRequest:
+    request_id, *rest = row
+    return access.HoldRequest(str(request_id), *rest)
+
+
 _SEARCH_COLUMNS = {
     "source": "source",
     "event": "event",
@@ -206,8 +219,9 @@ def _guarded(method: Any) -> Any:
 
 
 class PgReadStore:
-    """The read API's store: reads as audit_read, writes as audit_ingest (functions only).
-    A connection per call: requests are few, and no session outlives its request."""
+    """The read API's store: reads as audit_read, writes as audit_ingest (functions only);
+    the deletion lock as audit_hold. A connection per call: requests are few, and no
+    session outlives its request."""
 
     @_guarded
     def subjects(self) -> list[str]:
@@ -310,6 +324,119 @@ class PgReadStore:
         except psycopg.Error as error:
             log(f"own event not stored ({type(error).__name__})")
             raise core.Refused(core.STORAGE, 503) from None
+
+    # -- permission report and deletion lock (access.py) -----------------
+
+    @_guarded
+    def confirmations_latest(self) -> list[access.Confirmation]:
+        with connect("read") as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT ON (key) key, digest, confirmed_by, confirmed_at"
+                " FROM audit.access_confirmation ORDER BY key, confirmed_at DESC"
+            ).fetchall()
+        return [access.Confirmation(*row) for row in rows]
+
+    @_guarded
+    def add_confirmation(self, confirmation: access.Confirmation, build: Any) -> None:
+        with connect("ingest") as conn, conn.transaction():
+            conn.execute(
+                "SELECT audit.access_confirmation_add(%s, %s, %s, %s)",
+                (
+                    confirmation.key,
+                    confirmation.digest,
+                    confirmation.confirmed_by,
+                    confirmation.confirmed_at,
+                ),
+            )
+            self._append_on(conn, build)
+
+    @_guarded
+    def hold_active(self, sub: str) -> bool:
+        with connect("read") as conn:
+            row = conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM audit.legal_hold"
+                " WHERE sub = %s AND lifted_at IS NULL)",
+                (sub,),
+            ).fetchone()
+        return bool(row and row[0])
+
+    @_guarded
+    def active_holds(self) -> list[tuple[str, datetime]]:
+        with connect("read") as conn:
+            rows = conn.execute(
+                "SELECT sub, set_at FROM audit.legal_hold WHERE lifted_at IS NULL"
+                " ORDER BY sub LIMIT 1000"
+            ).fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+    @staticmethod
+    def _append_hold_on(conn: psycopg.Connection, build: Any) -> int:
+        """Append an event of the deletion lock on `conn`, in its open transaction; the
+        role audit_hold may append these events only (audit.append_hold)."""
+        row = conn.execute("SELECT audit.next_source_seq(%s)", (read.OWN_SOURCE,)).fetchone()
+        assert row is not None
+        stored = conn.execute("SELECT audit.append_hold(%s)", (build(int(row[0])),)).fetchone()
+        assert stored is not None
+        return int(stored[0])
+
+    @_guarded
+    def add_hold_request(self, request: access.HoldRequest, build: Any) -> None:
+        with connect("hold") as conn, conn.transaction():
+            conn.execute(
+                "SELECT audit.legal_hold_request_add(%s, %s, %s, %s, %s, %s)",
+                (
+                    request.id,
+                    request.action,
+                    request.sub,
+                    request.reason,
+                    request.requested_by,
+                    request.requested_at,
+                ),
+            )
+            self._append_hold_on(conn, build)
+
+    @_guarded
+    def get_hold_request(self, request_id: str) -> access.HoldRequest | None:
+        with connect("read") as conn:
+            row = conn.execute(
+                f"SELECT {_HOLD_COLUMNS} FROM audit.legal_hold_request WHERE id = %s",
+                (request_id,),
+            ).fetchone()
+        return _hold_row(row) if row else None
+
+    @_guarded
+    def open_hold_requests(self, since: datetime) -> list[access.HoldRequest]:
+        with connect("read") as conn:
+            rows = conn.execute(
+                f"SELECT {_HOLD_COLUMNS} FROM audit.legal_hold_request"
+                " WHERE state = 'open' AND requested_at > %s ORDER BY requested_at LIMIT 500",
+                (since,),
+            ).fetchall()
+        return [_hold_row(row) for row in rows]
+
+    @_guarded
+    def decide_hold_request(
+        self, request_id: str, state: str, by: str, at: datetime, build: Any
+    ) -> bool:
+        with connect("hold") as conn, conn.transaction():
+            if state == "confirmed":
+                # The database sets or lifts the lock and appends its event in one step.
+                seq = conn.execute(
+                    "SELECT audit.next_source_seq(%s)", (read.OWN_SOURCE,)
+                ).fetchone()
+                assert seq is not None
+                row = conn.execute(
+                    "SELECT audit.legal_hold_confirm(%s, %s, %s, %s)",
+                    (request_id, by, at, build(int(seq[0]))),
+                ).fetchone()
+                return bool(row and row[0])
+            row = conn.execute(
+                "SELECT audit.legal_hold_request_reject(%s, %s, %s)", (request_id, by, at)
+            ).fetchone()
+            if not (row and row[0]):
+                return False
+            self._append_hold_on(conn, build)
+        return True
 
     @_guarded
     def reads_about(self, sub: str, limit: int) -> list[tuple[datetime, read.PersonQuery]]:
@@ -470,7 +597,7 @@ def serve() -> int:
     context.load_verify_locations(cafile=str(CONFIG_DIR / "ca.crt"))
     settings = ServiceSettings(os.environ)
     check = core.SubmissionCheck()
-    api = read.ReadApi(
+    api = access.AccessApi(
         PgReadStore(), TokenKeysFile(CONFIG_DIR / "token-keys.json"), _pseudonym_key(), check
     )
     server = IngestServer(context, Sources(CONFIG_DIR / "sources.json"), api)
@@ -507,6 +634,12 @@ def schema() -> int:
             # A new store, or one of a release without retention: added in place.
             conn.execute(SCHEMA_RETENTION_SQL.read_text(encoding="utf-8"))
             log("retention, deletion lock and export positions added")
+        holds = conn.execute(
+            "SELECT to_regclass('audit.legal_hold_request') IS NOT NULL"
+        ).fetchone()
+        if not (holds and holds[0]):
+            conn.execute(SCHEMA_ACCESS_SQL.read_text(encoding="utf-8"))
+            log("permission report confirmations and two-person deletion lock added")
         for role, password in passwords.items():
             # ALTER ROLE takes no parameters; the literal is quoted by the driver and the
             # statement is never logged.
@@ -901,6 +1034,25 @@ def retention_now() -> int:
     return 0
 
 
+def access_call() -> int:
+    """`access`: one request of papaia-ctl to the read API through `docker exec`
+    (access.host_request). Prints {"status", "body"}; the API checks token and role."""
+    request = access.host_request(sys.stdin.read(access.HOST_REQUEST_MAX + 1))
+    if request is None:
+        print(json.dumps({"status": 400, "body": {"code": "AUDIT-HOST-400"}}))
+        return 0
+    api = access.AccessApi(
+        PgReadStore(),
+        TokenKeysFile(CONFIG_DIR / "token-keys.json"),
+        _pseudonym_key(),
+        core.SubmissionCheck(),
+    )
+    response = api.handle(request)
+    log(f"host request route={request.path} status={response.status}")
+    print(json.dumps({"status": response.status, "body": json.loads(response.body)}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="papaia-audit")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -912,6 +1064,7 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.add_argument("--json", action="store_true")
     commands.add_parser("heads")
     commands.add_parser("retention")
+    commands.add_parser("access")
     args = parser.parse_args(argv)
     if args.command == "serve":
         return serve()
@@ -922,6 +1075,8 @@ def main(argv: list[str] | None = None) -> int:
             return verify(args.source, args.against, args.json)
         if args.command == "retention":
             return retention_now()
+        if args.command == "access":
+            return access_call()
         return heads()
     except psycopg.Error as error:
         raise SystemExit(f"papaia-audit: database not reachable ({type(error).__name__})") from None

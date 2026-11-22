@@ -538,11 +538,13 @@ def test_module_and_platform_roles_are_created_and_admins_join_papaia_admin():
     _run(realm, _full_plan())
     for role in ("flow-member", "flow-admin", "studio-member", "studio-admin"):
         assert realm.roles[role]["attributes"]["papaia.managed"] == ["true"]
-    for role in ("papaia-admin", "papaia-auditor", "papaia-confirm"):
+    for role in ("papaia-admin", "papaia-auditor", "papaia-confirm", "papaia-legal-hold"):
         assert role in realm.roles
     assert realm.roles["papaia-admin"]["_composites"] == {"flow-admin", "studio-admin"}
     assert "studio-member" not in realm.roles["papaia-admin"]["_composites"]
     assert "papaia-auditor" not in realm.roles["papaia-admin"]["_composites"]
+    # The deletion lock is a duty of its own (docs/audit.md), never part of papaia-admin.
+    assert "papaia-legal-hold" not in realm.roles["papaia-admin"]["_composites"]
 
 
 def test_sign_in_clients_see_their_roles_the_visible_roles_and_papaia_confirm_only():
@@ -991,13 +993,16 @@ def test_papaia_admin_never_includes_auditor_operator_or_admin_roles_of_removed_
         },
     )
     extra = [
-        {"name": n} for n in ("papaia-auditor", "papaia-operator", "data-admin", "manager-admin")
+        {"name": n}
+        for n in (
+            "papaia-auditor", "papaia-operator", "papaia-legal-hold", "data-admin", "manager-admin"
+        )
     ]
     realm.call("POST", "/roles/papaia-admin/composites", extra)
 
     drift = _run(realm, plan, apply=False)
     actions = " ".join(c.action for c in drift if c.name == "papaia-admin")
-    for name in ("papaia-auditor", "papaia-operator", "data-admin"):
+    for name in ("papaia-auditor", "papaia-operator", "papaia-legal-hold", "data-admin"):
         assert name in actions
     assert "manager-admin" not in actions
 

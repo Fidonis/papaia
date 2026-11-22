@@ -29,9 +29,11 @@ from pathlib import Path
 import yaml
 
 from . import (
+    access_report,
     audit,
     backup,
     backup_crypt,
+    breakglass,
     catalog,
     cli_addon,
     cli_node,
@@ -1607,6 +1609,74 @@ def cmd_service_account_list(args: argparse.Namespace) -> int:
     return service_accounts.list_accounts(tree, config_dir, as_json=args.json)
 
 
+def _report_inputs(args: argparse.Namespace):
+    """The realm's Admin API call, the root env and the config dir of the report."""
+    config_dir = Path(args.config_dir)
+    tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
+    base_url, ctx, admin_password, _ = service_accounts._connection(tree, config_dir)
+    keycloak_role_sync._wait_for_keycloak(base_url, ctx)
+    return realm_sync.MasterAdmin(base_url, ctx, admin_password).call, tree.get("", {}), config_dir
+
+
+def cmd_report_permissions(args: argparse.Namespace) -> int:
+    """`papaia-ctl report permissions`: 0 printed, 3 refused by papaia-audit, 1 Keycloak
+    or papaia-audit unavailable, 2 invalid input."""
+    try:
+        token = access_report.read_token(args.token_file)
+        call, root, config_dir = _report_inputs(args)
+        period = access_report.period_days(root)
+        snapshot = access_report.collect(
+            call,
+            service_accounts=service_accounts.describe(call),
+            pairings=realm_sync.load_pairings(
+                realm_sync.pairings_path(config_dir), realm_sync.load_register()
+            ),
+            delegations=delegation_lifetime.report(config_dir),
+            breakglass_ids=breakglass.recorded_ids(breakglass.record_store(config_dir)),
+        )
+        return access_report.run(
+            snapshot,
+            args.by,
+            args.format,
+            token,
+            access_report.service_gate(config_dir),
+            sys.stdout,
+            period=period,
+        )
+    except access_report.AuditUnavailable as exc:
+        print(f"papaia-audit unavailable: {exc}", file=sys.stderr, flush=True)
+        return 1
+    except (access_report.ReportError, service_accounts.RotationError,
+            realm_sync.RealmSyncError, delegation_lifetime.SettingError,
+            breakglass.BreakglassError) as exc:
+        print(f"Report refused: {exc}", file=sys.stderr, flush=True)
+        return 2
+    except (TimeoutError, OSError) as exc:
+        print(f"Keycloak not reachable: {type(exc).__name__}", file=sys.stderr, flush=True)
+        return 1
+
+
+def cmd_report_confirm(args: argparse.Namespace) -> int:
+    """`papaia-ctl report confirm`: one recertification through papaia-audit. 0 confirmed,
+    3 refused by papaia-audit, 1 papaia-audit unavailable, 2 invalid input."""
+    try:
+        token = access_report.read_token(args.token_file)
+        gate = access_report.service_gate(Path(args.config_dir))
+        return access_report.confirm(args.key, args.digest, token, gate, sys.stdout)
+    except access_report.AuditUnavailable as exc:
+        print(f"papaia-audit unavailable: {exc}", file=sys.stderr, flush=True)
+        return 1
+    except access_report.ReportError as exc:
+        print(f"Confirmation refused: {exc}", file=sys.stderr, flush=True)
+        return 2
+
+
+def cmd_breakglass(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config_dir)
+    tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
+    return breakglass.main(args.action, tree, config_dir, address=args.address)
+
+
 def cmd_service_account_rotate(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
@@ -3048,6 +3118,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_sa_list = sub.add_parser("service-account-list")
     p_sa_list.add_argument("--json", action="store_true")
     p_sa_list.set_defaults(func=cmd_service_account_list)
+
+    p_report = sub.add_parser("report-permissions")
+    p_report.add_argument("--by", choices=access_report.KINDS, required=True)
+    p_report.add_argument("--format", choices=access_report.FORMATS, default="json")
+    p_report.add_argument("--token-file", required=True)
+    p_report.set_defaults(func=cmd_report_permissions)
+
+    p_report_confirm = sub.add_parser("report-confirm")
+    p_report_confirm.add_argument("--key", required=True)
+    p_report_confirm.add_argument("--digest", required=True)
+    p_report_confirm.add_argument("--token-file", required=True)
+    p_report_confirm.set_defaults(func=cmd_report_confirm)
+
+    p_breakglass = sub.add_parser("breakglass")
+    p_breakglass.add_argument("--action", choices=("create", "rotate", "status"), required=True)
+    p_breakglass.add_argument("--address", default=None)
+    p_breakglass.set_defaults(func=cmd_breakglass)
 
     p_sa_rotate = sub.add_parser("service-account-rotate")
     p_sa_rotate.add_argument("--id", required=True)

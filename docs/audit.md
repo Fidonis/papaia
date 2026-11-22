@@ -110,6 +110,7 @@ Roles in `papaia-audit-db`:
 | `audit_ingest` | execute `audit.append(source, event)` (security definer) — nothing else, no `SELECT`, no `INSERT` |
 | `audit_read` | `SELECT` on `audit.event` and on the tables of retention and export |
 | `audit_retention` | execute `audit.prune`, and write the retention run's own events (`audit.next_seq`, `audit.append_own`, `audit.setting_put`) — nothing else |
+| `audit_hold` | the two-person deletion lock of the read API: `audit.legal_hold_request_add`, `audit.legal_hold_request_reject`, `audit.legal_hold_confirm` (which appends the lock event itself), and the request events only (`audit.append_hold`: `approval_changed`, writer `papaia-audit/hold`) — nothing else |
 | `audit_owner` | owns the database; its password is a secret of the database container and of `papaia-audit-schema` only |
 
 Triggers refuse every `UPDATE` and `TRUNCATE` on `audit.event`, also for the owner, and
@@ -117,8 +118,10 @@ every `DELETE` outside `audit.prune` (see [Retention](#retention)). The owner ca
 triggers off; such an intervention is not prevented but found by verification.
 
 `audit_ingest` additionally executes the functions that move the SIEM read positions
-(`audit.export_targets_set`, `audit.export_advance`). No service role executes
-`audit.legal_hold_set` or `audit.legal_hold_lift` (see [Deletion lock](#deletion-lock)).
+(`audit.export_targets_set`, `audit.export_advance`) and records report confirmations
+(`audit.access_confirmation_add`). `audit.legal_hold_set` and `audit.legal_hold_lift` keep
+no grant: only `audit.legal_hold_confirm` (role `audit_hold`) calls them, after it checked
+the second person (see [Deletion lock](#deletion-lock)).
 
 ## Verification and signed heads
 
@@ -171,14 +174,15 @@ answers only these clients, recognised by their client certificate:
 
 | Client | Routes |
 |---|---|
-| `papaia-manager` (page "Audit-Log"), `papaia-ctl` | `/v1/events`, `/v1/exports`, `/v1/person-queries…` |
+| `papaia-manager` (page "Audit-Log"), `papaia-ctl` | `/v1/events`, `/v1/exports`, `/v1/person-queries…`, `/v1/access-reports…`, `/v1/legal-holds…` |
 | `papaia-me` (page "Aktivität") | `/v1/me/reads` |
 
 Every request carries the bearer token of a person (`Authorization: Bearer …`), obtained by
 token exchange for the audience `papaia-audit`: signed RS256 by the realm, issuer and
 audience exact (one audience), not expired, with a session (`sid`; a service account's
 token has none). The routes of the audit log further need the realm role
-`papaia-auditor`; without it every route answers `403` (`forbidden_or_not_found`). Any
+`papaia-auditor`; without it every route answers `403` (`forbidden_or_not_found`). The
+routes of the permission report and the deletion lock check their own roles (below). Any
 other client or path answers `404`. Errors use the platform's error envelope
 (`application/problem+json`: `class`, `code`, `message`, `hint`, `correlation_id`).
 
@@ -255,6 +259,33 @@ same database: the reason is free text, which an event never carries. Rows are a
 decided only through database functions; a check of the table refuses a confirmation by
 the requester as well.
 
+### Permission report
+
+`papaia-ctl report permissions` (and later the manager) builds the permission report and
+has papaia-audit release it before showing anything ([permission-report.md](permission-report.md)):
+
+    POST /v1/access-reports   {"by": "person"|"system", "rows": N, "checksum": "sha256:…"}
+
+needs the role `papaia-auditor`; `papaia-admin` alone is not enough. Every call with a valid
+token is the event `inventory_exported` (writer `papaia-audit/access`, `operation`
+`access_report.person` or `access_report.system`, `object_ref` `access_report` with the
+checksum, `detail.rows`), also a refused one (`result` `denied`, `AUDIT-REPORT-403`). The
+answer lists the latest confirmation of every row (`key`, `digest`, `confirmed_at`,
+`confirmed_by` as pseudonym).
+
+    POST /v1/access-reports/confirmations   {"key": "person:<sub>"|"system:<audience>", "digest": "sha256:…"}
+
+is the recertification of one row by the administration (role `papaia-admin`, else
+`AUDIT-REPORT-ADMIN`), with the digest of the row it saw. Nobody confirms their own row
+(`AUDIT-REPORT-SELF`, a `denied` event). Each confirmation is stored in
+`audit.access_confirmation` (rows are only added) together with its event
+`approval_changed` (`operation` `access_report.confirmed`, `object_ref` `person` or
+`catalog_entry`); both or neither.
+
+From the host, `papaia-ctl` reaches these two routes through `docker exec` into the
+container (`python -m papaia_audit access`, the request with the token on stdin), as the
+client `papaia-ctl`; no other route is reachable that way.
+
 ### What the affected person sees
 
 `GET /v1/me/reads` (through `papaia-me`, the person's own token, no role) lists each read
@@ -295,13 +326,40 @@ A changed retention or SIEM setting is recorded with one `config_changed` event 
 ### Deletion lock
 
 A deletion lock (`audit.legal_hold`) keeps every event of one person (`sub`). It is set and
-lifted by two different persons with a reason of 20 to 1000 characters; the database
-refuses a lock or a lift confirmed by the person who asked for it. Lock rows are never
-deleted, a lift is recorded in the row. Retention already honours locks. Setting and
-lifting comes with the person-authenticated API of the store, which takes both persons
-from their verified tokens and writes the `legal_hold_set` and `legal_hold_lifted` events
-in the same transaction; until then no service role may call `audit.legal_hold_set` or
-`audit.legal_hold_lift`, and no host command sets a lock.
+lifted by two different persons with the role `papaia-legal-hold` and a reason of 20 to
+1000 characters, whatever the platform's four-eyes setting says. Lock rows are never
+deleted, a lift is recorded in the row. Retention honours locks. No host command sets a
+lock.
+
+1. Person A: `POST /v1/legal-holds` with exactly `action` (`set` or `lift`), `person` (a
+   pseudonym from the log or a `sub`) and `reason`, after a sign-in of at most 5 minutes
+   ago (`AUDIT-AUTH-FRESH`). The body names no acting person: both come from the verified
+   tokens. A second lock for the same person, or a lift without a lock, is `409`
+   (`AUDIT-HOLD-409`). The request is stored in `audit.legal_hold_request` with the event
+   `approval_changed` (writer `papaia-audit/hold`, `operation` `legal_hold.set.requested`
+   or `legal_hold.lift.requested`, `object_ref` `legal_hold_request`).
+2. Person B (another person with `papaia-legal-hold`) sees the open requests with reason in
+   `GET /v1/legal-holds` (persons as pseudonyms, with the active locks) and decides with
+   `POST /v1/legal-holds/<id>/confirm` (fresh sign-in) or `…/reject`. A confirmation by A is
+   refused (`403`, `AUDIT-HOLD-SELF`, a `denied` event); the database refuses it as well.
+   Open requests expire after 24 hours; the database refuses an older one as well, by its
+   own clock.
+3. The confirmation runs `audit.legal_hold_confirm` with the role `audit_hold`: it sets or
+   lifts the lock (`set_by`/`lifted_by` = A, `set_confirmed_by`/`lift_confirmed_by` = B)
+   and appends the event `legal_hold_set` or `legal_hold_lifted` itself (`sub` B,
+   `object_ref` `person` with the locked `sub`), after checking that the event names B
+   and that person. Without the event nothing changes (`503`); the role `audit_hold` cannot
+   append a lock event without a change (`audit.append_hold` takes `approval_changed`
+   only). This holds for `audit_hold` only: `audit_ingest` keeps `EXECUTE` on
+   `audit.append` for the sources it serves, and `audit.append` does not yet refuse a
+   `legal_hold_set` or `legal_hold_lifted` body with source `papaia-audit` (follow-up
+   CORE-041-F5).
+
+Without the role every route answers `403` (`AUDIT-HOLD-403`). `papaia-ctl realm sync`
+creates the realm role `papaia-legal-hold`, never part of `papaia-admin`. An administrator
+assigns it in Keycloak. A person's token carries it only through a sign-in client that
+lists it in `visible_for_roles`. That is the administration's part (papaia-manager,
+MGR-007).
 
 ## SIEM
 
@@ -382,6 +440,7 @@ Under `$PAPAIA_CONFIG_DIR/infra/audit/`:
 | `secrets/db-owner-password` | Docker secret of `papaia-audit-db` and `papaia-audit-schema` | dir 0700, 0600 |
 | `secrets/db-ingest-password`, `db-read-password` | Docker secrets of `papaia-audit-schema` (sets them) and `papaia-audit` (logs in with them) | 0600 |
 | `secrets/db-retention-password` | Docker secret of `papaia-audit-schema` (sets it) and `papaia-audit` (retention) | 0600 |
+| `secrets/db-hold-password` | Docker secret of `papaia-audit-schema` (sets it) and `papaia-audit` (deletion lock) | 0600 |
 | `secrets/heads-signing-key` | Ed25519 key that signs chain heads | 0600 |
 | `secrets/pseudonym-key` | key of the pseudonyms of the read API and the SIEM export; never replaced | 0600 |
 | `service/siem-ca.crt` | optional CA of the SIEM target | 0644 |
@@ -393,6 +452,8 @@ from `schema.sql` in the image (`src/infra/audit/papaia_audit/schema.sql`), in o
 transaction, when the schema `audit` does not exist yet; `schema_read.sql` adds the person
 queries of the read API in the same way when `audit.person_query` does not exist yet, and
 `schema_retention.sql` adds retention, deletion lock and export positions when
-`audit.anchor` does not exist yet (both also on a store of an earlier release). On every
-start it sets the passwords of `audit_ingest`, `audit_read` and `audit_retention` from
-their secrets, so a replaced password takes effect with the next start.
+`audit.anchor` does not exist yet, and `schema_access.sql` adds the role `audit_hold`, the
+lock requests and the report confirmations when `audit.legal_hold_request` does not exist
+yet (each also on a store of an earlier release). On every start it sets the passwords of
+`audit_ingest`, `audit_read`, `audit_retention` and `audit_hold` from their secrets, so a
+replaced password takes effect with the next start.

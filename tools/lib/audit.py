@@ -78,6 +78,7 @@ SECRET_FILES = {
     "db-ingest-password": 0o600,
     "db-read-password": 0o600,
     "db-retention-password": 0o600,
+    "db-hold-password": 0o600,
 }
 HEADS_KEY = "heads-signing-key"
 # Never replaced: a new key gives every person a new pseudonym.

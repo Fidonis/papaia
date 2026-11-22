@@ -54,6 +54,14 @@
     "effect": "write",
     "event": "config_changed",
     "kind": "role",
+    "name": "papaia-legal-hold",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
     "name": "prefs-read",
     "operation": "create_role"
    },
@@ -1708,6 +1716,14 @@
     "event": "config_changed",
     "kind": "role",
     "name": "papaia-confirm",
+    "operation": "create_role"
+   },
+   {
+    "action": "created",
+    "effect": "write",
+    "event": "config_changed",
+    "kind": "role",
+    "name": "papaia-legal-hold",
     "operation": "create_role"
    },
    {

@@ -70,6 +70,7 @@ services:
       - audit_db_ingest_password
       - audit_db_read_password
       - audit_db_retention_password
+      - audit_db_hold_password
     read_only: true
     depends_on:
       papaia-audit-db:
@@ -102,6 +103,7 @@ services:
       - audit_db_ingest_password
       - audit_db_read_password
       - audit_db_retention_password
+      - audit_db_hold_password
       - audit_heads_key
       - audit_pseudonym_key
     volumes:
@@ -153,6 +155,9 @@ secrets:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-read-password
   audit_db_retention_password:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-retention-password
+  # Role audit_hold: the two-person deletion lock of the read API, nothing else.
+  audit_db_hold_password:
+    file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/db-hold-password
   audit_heads_key:
     file: ${PAPAIA_CONFIG_DIR}/infra/audit/secrets/heads-signing-key
   # Key of the pseudonyms the read API shows instead of persons and the SIEM export

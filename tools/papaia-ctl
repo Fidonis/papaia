@@ -91,6 +91,13 @@
 #   papaia-ctl privacy-pack  --installation --out=FILE --backup-retention=DAYS
 #                            [--format=html|pdf|md] [--offsite=PLACE --offsite-retention=DAYS]
 #                            [--config-dir=PATH]
+#   papaia-ctl report permissions --by=person|system [--format=json|csv]
+#                            --token-file=PATH|- [--config-dir=PATH] — the permission
+#                            report, released by papaia-audit (role papaia-auditor)
+#   papaia-ctl report confirm --key=KEY --digest=SHA256 --token-file=PATH|-
+#                            [--config-dir=PATH] — recertify one row (role papaia-admin)
+#   papaia-ctl breakglass create|rotate|status [--address=EMAIL] [--config-dir=PATH]
+#                            — the emergency account; its password is shown once
 #   papaia-ctl service-account list   [--json] [--config-dir=PATH]
 #   papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
 #   papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
@@ -162,7 +169,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,155p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,162p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -209,6 +216,8 @@ source "$SH_LIB/audit.sh"
 source "$SH_LIB/pairing.sh"
 # shellcheck source=lib/sh/delegations.sh
 source "$SH_LIB/delegations.sh"
+# shellcheck source=lib/sh/report.sh
+source "$SH_LIB/report.sh"
 
 # --- preflight ---------------------------------------------------------------
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -269,6 +278,8 @@ case "$cmd" in
     post-restore)  cmd_post_restore "$@" ;;
     halt)          cmd_halt "$@" ;;
     delegations)   cmd_delegations "$@" ;;
+    report)        cmd_report "$@" ;;
+    breakglass)    cmd_breakglass "$@" ;;
     npm-provision) cmd_npm_provision "$@" ;;
     proxy)         cmd_proxy "$@" ;;
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;

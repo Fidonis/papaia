@@ -307,6 +307,10 @@ papaia-ctl realm keys apply <module> [--config-dir=PATH]
 papaia-ctl pairing   <list [--json]|confirm --approve-pairings=SHA256> [--config-dir=PATH]
 papaia-ctl pairing   <approve|revoke> --client=NAME --audience=NAME [--effects=rwdx]
                      [--config-dir=PATH]
+papaia-ctl report    permissions --by=person|system [--format=json|csv] --token-file=PATH|-
+                     [--config-dir=PATH]   (docs/permission-report.md)
+papaia-ctl report    confirm --key=KEY --digest=SHA256 --token-file=PATH|- [--config-dir=PATH]
+papaia-ctl breakglass <create --address=EMAIL|rotate|status> [--config-dir=PATH]
 papaia-ctl service-account list [--json] [--config-dir=PATH]
 papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
 papaia-ctl status    [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]

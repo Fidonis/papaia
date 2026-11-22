@@ -982,7 +982,7 @@ def test_the_service_asks_for_the_user_events_it_journals(stack):
     stack.service.step()
     query = next(p for _, p in stack.keycloak.calls if p.startswith("/events?"))
     params = urllib.parse.parse_qs(query.partition("?")[2])
-    assert set(params["type"]) == {"UPDATE_PASSWORD", "REMOVE_CREDENTIAL", "LOGOUT"}
+    assert set(params["type"]) == {"UPDATE_PASSWORD", "REMOVE_CREDENTIAL", "LOGOUT", "LOGIN"}
     assert params["direction"] == ["asc"]
     assert int(params["dateFrom"][0]) == int(stack.clock.now * 1000) - lc.FIRST_LOOKBACK_MS
 

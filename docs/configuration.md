@@ -62,6 +62,7 @@ next to it, even when it has an inline `:-` default.
 | `PAPAIA_BACKUP_DIR` | Directory `papaia-ctl backup` writes to; derived by setup as `$PAPAIA_WORKSPACE_DIR/backup` unless `--backup-dir` was passed. A backup only runs once the directory was confirmed with `papaia-ctl backup target init`. It must exist before `start`: the audit store keeps its signed chain heads in `audit-heads/` there |
 | `PAPAIA_AUDIT_RETENTION_MONTHS` | Months the audit store keeps events, 6 to 36, default 12 ([audit.md](audit.md#retention)) |
 | `PAPAIA_AUDIT_SIEM_TARGET`, `_PEN`, `_IDENTITY`, `_BASIS` | SIEM export of the audit store; empty target: none ([audit.md](audit.md#siem)) |
+| `PAPAIA_RECERTIFICATION_DAYS` | Optional. Days after which a confirmed row of the permission report is due again, 30 to 730, default 180 ([permission-report.md](permission-report.md#recertification)) |
 | `PAPAIA_BACKUP_RECIPIENTS` | Public age keys every backup archive is encrypted to (`NAME:age1...`, comma-separated); empty means `backup` refuses to run. Set with `papaia-ctl backup keys generate` or `backup recipients add` |
 | `UID` / `GID` | Host ownership for bind-mounted files (Linux only) |
 | `HOST_IP` | Bind address of the edge ports and, with direct port access, of the core ports — the network layer |
@@ -318,6 +319,19 @@ the password never changed since the account was created, no password change pen
 `admin` gets `KC_REALM_ADMIN_PASSWORD` as a temporary password (disabled instead while that
 variable is not set); `testuser` is disabled. `--check` reports such an account. An
 account whose password was changed is left alone.
+
+### User events of the realm
+
+With the `lifecycle` profile, `papaia-ctl realm sync` sets the realm to store the user events
+`UPDATE_PASSWORD`, `REMOVE_CREDENTIAL`, `LOGOUT` and `LOGIN`, next to the service-account
+sign-ins `CLIENT_LOGIN` it stores in any case. `LOGIN` is stored for every person's sign-in, with account,
+client, IP address and session. papaia-lifecycle needs it to alert on a sign-in of the
+emergency account ([permission-report.md](permission-report.md),
+[lifecycle.md](lifecycle.md#what-it-does)). Keycloak keeps all user events of a realm for
+one period, `eventsExpiration`: 180 days (`EVENTS_EXPIRATION`, two rotation intervals of
+a service account) unless the operator set a retention, which is kept. A shorter
+retention also shortens the record of service-account sign-ins. Name the stored sign-ins
+and their retention in the records of processing.
 
 ## Delegation lifetime
 

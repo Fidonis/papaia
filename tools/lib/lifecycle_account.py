@@ -24,7 +24,8 @@ While the Compose profile `lifecycle` is active, `papaia-ctl realm sync` makes s
   A retention the operator set is kept;
 - user events stored for the types papaia-lifecycle journals from them (a person's own
   password change, removed second factor and "sign out all devices": `UPDATE_PASSWORD`,
-  `REMOVE_CREDENTIAL`, `LOGOUT`; sicherheit §1.12 Nr. 1, RE-103). Types the operator or
+  `REMOVE_CREDENTIAL`, `LOGOUT`; sicherheit §1.12 Nr. 1, RE-103) and sign-ins (`LOGIN`,
+  for the alert on the emergency account, sicherheit §1.15). Types the operator or
   the realm sync chose stay; with none set, user events are kept as long as the sign-ins
   of service accounts (`EVENTS_EXPIRATION`).
 
@@ -52,7 +53,7 @@ PROFILE = "lifecycle"
 ADMIN_EVENTS_EXPIRATION = 7 * 24 * 3600
 EXPIRATION_ATTRIBUTE = "adminEventsExpiration"
 # The user event types papaia-lifecycle reads (src/infra/lifecycle/lifecycle.py).
-USER_EVENT_TYPES = ("LOGOUT", "REMOVE_CREDENTIAL", "UPDATE_PASSWORD")
+USER_EVENT_TYPES = ("LOGIN", "LOGOUT", "REMOVE_CREDENTIAL", "UPDATE_PASSWORD")
 _PAGE = 100
 # Next to the account key: the id of PERSONS_GROUP for papaia-lifecycle, which may list
 # the group's members but not look the group up (same name in its lifecycle.py).

@@ -44,7 +44,7 @@ COPY --from=python:3.12.16-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f1058
 
 # The packages keep their license files in their *.dist-info folders.
 COPY --from=wheels /opt/wheels/ /usr/local/lib/python3.12/site-packages/
-COPY src/infra/audit/papaia_audit/__init__.py src/infra/audit/papaia_audit/__main__.py src/infra/audit/papaia_audit/core.py src/infra/audit/papaia_audit/read.py src/infra/audit/papaia_audit/retention.py src/infra/audit/papaia_audit/siem.py src/infra/audit/papaia_audit/audit.v1.schema.json src/infra/audit/papaia_audit/schema.sql src/infra/audit/papaia_audit/schema_read.sql src/infra/audit/papaia_audit/schema_retention.sql /usr/local/lib/python3.12/site-packages/papaia_audit/
+COPY src/infra/audit/papaia_audit/__init__.py src/infra/audit/papaia_audit/__main__.py src/infra/audit/papaia_audit/access.py src/infra/audit/papaia_audit/core.py src/infra/audit/papaia_audit/read.py src/infra/audit/papaia_audit/retention.py src/infra/audit/papaia_audit/siem.py src/infra/audit/papaia_audit/audit.v1.schema.json src/infra/audit/papaia_audit/schema.sql src/infra/audit/papaia_audit/schema_read.sql src/infra/audit/papaia_audit/schema_retention.sql src/infra/audit/papaia_audit/schema_access.sql /usr/local/lib/python3.12/site-packages/papaia_audit/
 
 ENV PYTHONDONTWRITEBYTECODE=1
 # Not root; compose runs it as the user that owns the configuration directory.

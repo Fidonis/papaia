@@ -17,8 +17,13 @@ run `papaia-ctl start`. The realm sync then sets up its service account.
 
 Every 10 s the service reads the admin events of the realm (`UPDATE`, `DELETE` and
 `ACTION` of an account, removed realm and client role mappings and group memberships)
-and its user events of the types `UPDATE_PASSWORD`, `REMOVE_CREDENTIAL` and `LOGOUT`
-(what a person does on their own account). For an account that is now deactivated:
+and its user events of the types `UPDATE_PASSWORD`, `REMOVE_CREDENTIAL`, `LOGOUT` and `LOGIN`
+(what a person does on their own account). A `LOGIN` counts only for the emergency
+account (its id in `breakglass-ids` next to the account key, written by `papaia-ctl
+breakglass`): each is one audit row `breakglass_login` (`operation`
+`lifecycle.breakglass_login`) and an `ALERT` line in the service log
+([permission-report.md](permission-report.md)); other sign-ins are read past. For an
+account that is now deactivated:
 
 1. the person goes on the revocation list, `since` = time of the event;
 2. `POST /users/{id}/logout` ends every session;
@@ -29,6 +34,21 @@ Step 3 is needed: logout alone leaves offline sessions alive, and a reactivated 
 would get its old delegations back. After the three steps a refresh with an old offline
 token fails, also after the account is activated again; the person grants delegations
 anew. A deleted account goes on the list only (Keycloak removed its sessions with it).
+
+Storing `LOGIN` widens what Keycloak keeps: since this release the realm stores a user
+event for every sign-in of every person, with account, client, IP address and session.
+It is kept as long as the other user events (`eventsExpiration`, 180 days unless the
+operator set a retention, see [configuration.md](configuration.md#user-events-of-the-realm)).
+The reason is the alert on the emergency account. Keycloak cannot store sign-ins of one
+account only. papaia-lifecycle reads type, account and time of a sign-in and keeps nothing
+of other accounts. Record the sign-ins in the records of processing.
+
+Sign-ins and revocation events share one read position. A poll reads at most 2000 user
+events (20 pages of 100). When more sign-ins wait, the admin events after the last
+sign-in read wait for the next poll (10 s later). A burst of more than 2000 sign-ins
+within one poll interval therefore delays revocations by one poll per 2000 sign-ins.
+Reading `LOGIN` for the emergency account only (`user=<id>`, a separate stream with its
+own position) removes both costs inside papaia-lifecycle; it is follow-up CORE-041-F6.
 
 If a call to Keycloak fails, the entry stays on the list and the event is handled again
 on the next cycle. An event that fails on 3 cycles in a row is *parked*: later events
@@ -293,7 +313,7 @@ While the profile is active, `papaia-ctl realm sync` (also run by every `start`)
 | Group `papaia-persons` | a default group; every account except service accounts is a member |
 | Admin permissions | switched on for the realm (`adminPermissionsEnabled`); one permission on resource type Groups, scopes `view-members` and `manage-members`, for `papaia-persons`, granted to the client alone |
 | Admin events | stored (`adminEventsEnabled`), without representations, kept 7 days (realm attribute `adminEventsExpiration` = 604800; a retention the operator set is kept, none or 0 is replaced). They name actor, address and resource path; the lasting record is papaia-audit |
-| User events | stored (`eventsEnabled`) at least for `UPDATE_PASSWORD`, `REMOVE_CREDENTIAL` and `LOGOUT`; types already stored stay. Without a retention set, kept 180 days (`eventsExpiration`). Keycloak has one retention for all user events of a realm, and the sign-ins of service accounts (`CLIENT_LOGIN`, the last use of a service account) are kept that long, two rotation intervals, so the person events share it. They name account, client, address and session; the service reads type, account, time and the id of a removed credential only and needs them only until its next poll plus an outage buffer. If the evaluation of service sign-ins allows it, set a shorter `eventsExpiration`; a retention the operator set is kept. Record the retention in the records of processing |
+| User events | stored (`eventsEnabled`) at least for `UPDATE_PASSWORD`, `REMOVE_CREDENTIAL`, `LOGOUT` and `LOGIN` (the alert on the emergency account); types already stored stay. Without a retention set, kept 180 days (`eventsExpiration`). Keycloak has one retention for all user events of a realm, and the sign-ins of service accounts (`CLIENT_LOGIN`, the last use of a service account) are kept that long, two rotation intervals, so the person events share it. They name account, client, address and session; the service reads type, account, time and the id of a removed credential only and needs them only until its next poll plus an outage buffer. If the evaluation of service sign-ins allows it, set a shorter `eventsExpiration`; a retention the operator set is kept. Record the retention in the records of processing |
 
 That permission is the smallest set with which logout and consent removal work in
 Keycloak 26.7.0. **Residual risk:** it is finer than `manage-users` by reach (members of
