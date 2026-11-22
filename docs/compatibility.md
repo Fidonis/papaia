@@ -214,7 +214,7 @@ Without 1 to 3 every operator would need `--insecure-images`.
 ## Own images of the core
 
 A core service that runs code of this repository runs it from an image built
-here: `papaia-egress`, `papaia-lifecycle` and `papaia-audit` today. A stock image with the code
+here: `papaia-egress`, `papaia-lifecycle`, `papaia-audit` and `papaia-people` today. A stock image with the code
 mounted in, or an image built by Compose (`build:`), is not used: the start
 check would have nothing to compare it with. The images are listed in
 [`compat/own-images.yaml`](../compat/own-images.yaml) (schema

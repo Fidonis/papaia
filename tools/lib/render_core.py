@@ -277,6 +277,7 @@ def render(config_dir: Path, repo_root: Path) -> None:
         halt.ensure_dir(config_dir)
     except (halt.HaltError, OSError) as exc:
         raise RenderError(f"the folder of the platform halt: {exc}") from exc
+    ensure_people_key(config_dir)
 
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
@@ -316,6 +317,23 @@ def ensure_lifecycle_key(config_dir: Path) -> None:
     try:
         if keys.public_jwk(LIFECYCLE_ACCOUNT) is None:
             keys.generate(LIFECYCLE_ACCOUNT)
+    except service_account_keys.KeyFileError as exc:
+        raise RenderError(str(exc)) from exc
+
+
+PEOPLE_ACCOUNT = "svc-papaia-people"
+
+
+def ensure_people_key(config_dir: Path) -> None:
+    """With the `people` profile, the key pair of svc-papaia-people exists before `up`:
+    the container mounts its folder and Compose must not create it. The realm sync
+    registers the public key after the start."""
+    if "people" not in _active_profiles(config_dir):
+        return
+    keys = service_account_keys.KeyStore(config_dir / "security" / "service-accounts")
+    try:
+        if keys.public_jwk(PEOPLE_ACCOUNT) is None:
+            keys.generate(PEOPLE_ACCOUNT)
     except service_account_keys.KeyFileError as exc:
         raise RenderError(str(exc)) from exc
 

@@ -24,6 +24,8 @@ Welcome to the papAIa documentation.
 - [The audit store](./audit.md) — papaia-audit: ingest over mutual TLS, hash chain per source,
   verification and signed chain heads, the read API with pseudonyms and the person filter
   that needs a reason and a second person
+- [People lookup](./people.md) — papaia-people: exact-match lookup of persons with an
+  assistant role for `assist-gate`, its service account and audience
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
   only
 - [Architecture Decision Records (ADRs)](./adr/) — recorded architecture decisions

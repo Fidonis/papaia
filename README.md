@@ -56,6 +56,7 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | RAG system | `rag` | 6333 / 8300 | Qdrant vector database, an OIDC + RBAC MCP server for LibreChat, and a scheduled document ingester, managed in papaia-manager. Not LibreChat's built-in file search — see [RAG system](#rag-system). |
 | Mail relay | `smtp` | — | One internal SMTP relay that forwards to your mail server, so Keycloak can send password-reset mails and add-ons can attach it. No published port — see [Outbound mail](#outbound-mail). |
 | Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
+| People lookup | `people` | — | Exact-match lookup of persons with an assistant role for the assistant's gate: whole name or mail only, role filter, rate limit, audit. No published port — see [docs/people.md](docs/people.md). |
 | Knowledge map | `knowledge-map` | — | An OIDC-secured MCP directory of the installation's knowledge sources: tells the chat where knowledge lives, trimmed to the caller's roles. Internal-only — see [docs/knowledge-map.md](docs/knowledge-map.md). |
 
 `localai`, `manager`, `librechat-websearch`, `rag`, `smtp`, `voice` and `knowledge-map` are toggled by `papaia-ctl setup`
@@ -2532,7 +2533,7 @@ whose upstream keeps no tag for the pinned build may stay digest-only through an
 at most 90 days. The sidecar image of `backup` is pinned the same way.
 
 **Own images of the core.** Services that run code of this repository (`papaia-egress`,
-`papaia-lifecycle`, `papaia-audit`) run it from images built here, `ghcr.io/fidonis/papaia-<service>`, listed
+`papaia-lifecycle`, `papaia-audit`, `papaia-people`) run it from images built here, `ghcr.io/fidonis/papaia-<service>`, listed
 in [`compat/own-images.yaml`](compat/own-images.yaml) and pinned with the core `VERSION` as
 tag. `tools/build-images` builds them for linux/amd64 and linux/arm64 (reproducibly: the same
 inputs give the same digest), signs them, pins the digests and prints their entries for the

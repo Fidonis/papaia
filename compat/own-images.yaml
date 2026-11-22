@@ -42,3 +42,12 @@ images:
     services: [papaia-audit, papaia-audit-schema]
     license: MIT
     license_class: P
+  - name: ghcr.io/fidonis/papaia-people
+    dockerfile: src/infra/people/Dockerfile
+    inputs:
+      - src/infra/people/Dockerfile
+      - src/infra/people/people.py
+      - src/infra/people/THIRD_PARTY_LICENSES.md
+    services: [papaia-people]
+    license: MIT
+    license_class: P

@@ -14,7 +14,7 @@
     ],
     "status_json": "8f7c85912047eff81f3dbd6913f97e82583f53010f539337fd0fb73aa8a158ea",
     "tree": {
-      ".env": "8a66e1376f64d280a2e5d3b93ca020b90e202e50bbb6d0e1a2763e808b4bdc2f",
+      ".env": "fc79a8ee796b07d55b3b1b6be33bcabb7f8867141ba44d44393518ea3bc1f805",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "49a538a2e47ac7b287a460e540f1287a5d951c2f9d6da5ecf0371e201306ce90",
@@ -78,7 +78,7 @@
     ],
     "status_json": "3850cd29fa04452f5e856c59e96405b30500c481023bd21bee03341f9a5b8d06",
     "tree": {
-      ".env": "0c436fa727e9d4498246f8849513e4c137917545a2e85158cfd380015138c0b9",
+      ".env": "3bc9c8f10b5705e5c7525cf4035b0fcaa9e103f6d6eecfdcf6b3ec1e95255e3e",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "4ea092dcf6bb0493af434ab28acff431ba10fcf8aee89cb0b68a69b3f45d9adc",
@@ -145,7 +145,7 @@
     ],
     "status_json": "1e7742fc866e1aa2e76d9726dd27f448cc1992886f2692d8cca3ef73c2361294",
     "tree": {
-      ".env": "1320047a637de389beb4bd2bf00b4b4fdeb8bfd4ee5dadf0573e05ba4c1971fc",
+      ".env": "a61c0df58f67e1e5a400035ffc010beeb53f1b16d9c202cc3d6d7166c4484072",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "f73aeb7ac7d4c388ad92e5b6d00c5442a79d14b43bd6b4f202314d03136b3650",

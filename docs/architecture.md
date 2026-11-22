@@ -879,6 +879,11 @@ The core's own account `svc-papaia-lifecycle` (profile `lifecycle`) is not decla
 `manage-users`; the realm sync leaves it and Keycloak's `admin-permissions` client out of
 the undeclared accounts. See [lifecycle.md](lifecycle.md).
 
+Likewise `svc-papaia-people` (profile `people`) is kept by `lib/people_account.py` with
+`realm-management` `query-users` and `view-users` only; under the same profile the realm
+sync serves the core audience `papaia-people` (persons only) and accepts a pairing for it
+from `assist-gate` alone, effect `x`. See [people.md](people.md).
+
 ### Seam 3 — LibreChat-MCP
 
 The `mcpServers` and `allowedDomains` fragment from `integration/librechat/`

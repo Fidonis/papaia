@@ -12,6 +12,10 @@ sources and reconciles the live `papaia` realm with them, idempotently:
   and a confirmed write pairing (effect `w` or `d`) names two different host accounts
   (`requested_by`, `confirmed_by`; `pairing_approval` writes the file).
 
+The core serves audiences of its own under its profiles: `papaia-people` (the people
+lookup, profile `people`, lib/people_account.py) is a bearer-only resource server for
+persons only, and only `assist-gate` may exchange for it, with effect x (security 1.4).
+
 What it manages:
 
 - every register client of an installed module, and the resource-server client of every
@@ -151,11 +155,14 @@ REGISTER_FORMAT = "papaia.names-register-snapshot/1"
 PAIRINGS_FORMAT = "papaia.pairings/1"
 
 SYNC_CLIENT = "svc-papaia-realm-sync"
-# Core accounts the realm sync keeps outside the module declarations: its own and the
-# one of papaia-lifecycle (lib/lifecycle_account.py). Keycloak's `admin-permissions`
-# client (admin permissions switched on for papaia-lifecycle) carries a service account
-# Keycloak needs for its authorization settings.
-CORE_ACCOUNTS = frozenset({SYNC_CLIENT, "svc-papaia-lifecycle", "admin-permissions"})
+# Core accounts the realm sync keeps outside the module declarations: its own, the one
+# of papaia-lifecycle (lib/lifecycle_account.py) and the one of papaia-people
+# (lib/people_account.py). Keycloak's `admin-permissions` client (admin permissions
+# switched on for papaia-lifecycle) carries a service account Keycloak needs for its
+# authorization settings.
+CORE_ACCOUNTS = frozenset(
+    {SYNC_CLIENT, "svc-papaia-lifecycle", "svc-papaia-people", "admin-permissions"}
+)
 SYNC_SECRET_KEY = "KC_REALM_SYNC_CLIENT_SECRET"
 # Measured against Keycloak 26.7.0: manage-clients creates clients and client scopes and
 # changes the realm's default scopes; creating realm roles, adding composites and mapping
@@ -238,6 +245,9 @@ PERSON_SCOPE = "papaia-person"
 PERSON_SCOPE_CLIENTS = frozenset({"flow-console"})
 SIGN_IN_AUDIENCES = {"flow-console": ("flow",)}
 EXCHANGE_LIMITS = {"flow-console": ("papaia-data", "papaia-studio")}
+# Audiences only named clients may exchange for, with fixed effects (security 1.4): the
+# people lookup of the core is reached by the assistant's gate alone, effect x.
+AUDIENCE_LIMITS = {"papaia-people": (("assist-gate",), ("x",))}
 
 # Delegation (offline sessions) is held at exactly one client per purpose family.
 HOLDERS = {"flow": ("papaia-flow", "flow-engine"), "assist": ("papaia-assist", "assist-gate")}
@@ -487,6 +497,16 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
         if limits is not None and audience not in limits:
             raise RealmSyncError(f"{label}: {client} exchanges only for {', '.join(limits)}")
         effects = row["effects"]
+        if audience in AUDIENCE_LIMITS:
+            allowed, fixed = AUDIENCE_LIMITS[audience]
+            if client not in allowed:
+                raise RealmSyncError(
+                    f"{label}: only {', '.join(allowed)} exchanges for {audience}"
+                )
+            if effects != list(fixed):
+                raise RealmSyncError(
+                    f"{label}: {audience} is paired with effect {''.join(fixed)} only"
+                )
         if (
             not isinstance(effects, list)
             or not effects
@@ -1109,9 +1129,16 @@ def _list(mapping: dict, key: str, label: str) -> list:
     return value
 
 
-def build_plan(register: Register, modules: list[Module], pairings: list[Pairing]) -> Plan:
+def build_plan(
+    register: Register,
+    modules: list[Module],
+    pairings: list[Pairing],
+    *,
+    core_audiences: frozenset[str] = frozenset(),
+) -> Plan:
     """The target state of the managed objects; RealmSyncError for anything not
-    acceptable. Nothing is read from or written to Keycloak here."""
+    acceptable. Nothing is read from or written to Keycloak here. `core_audiences` are
+    the audiences the core serves itself under its active profiles (persons only)."""
     clients: dict[str, ClientSpec] = {}
     own_roles: dict[str, set[str]] = {}
     visible: set[str] = set()
@@ -1225,6 +1252,15 @@ def build_plan(register: Register, modules: list[Module], pairings: list[Pairing
             for client_id, entry in product_clients.items():
                 if entry.owner == module.name:
                     manage(client_id, module.name)
+
+    for audience in sorted(core_audiences):
+        register.check(audience, "audience", "core audience")
+        if register.clients.get(audience) is None or register.clients[audience].owner != "papaia":
+            raise RealmSyncError(f"core audience {audience}: not a client of the core")
+        audiences.add(audience)
+        identities.setdefault(audience, set()).add("person")
+        person_audiences.add(audience)
+        manage(audience, "papaia")
 
     exchange_scopes: dict[str, str] = {}
     for pairing in pairings:
@@ -3566,10 +3602,13 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
     keycloak = tree.get(kcs._KEYCLOAK_NODE, {})
     try:
         register = load_register()
+        from . import people_account  # it imports this module
+
         plan = build_plan(
             register,
             load_modules(config_dir, repo_root),
             load_pairings(pairings_path(config_dir), register),
+            core_audiences=people_account.core_audiences(tree),
         )
         plan.hardening = rh.load(
             {**root, **keycloak},
@@ -3645,6 +3684,13 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
                 MasterAdmin(base_url, ctx, admin_password).call,
                 keystore(config_dir),
                 enabled=lifecycle_account.enabled(tree),
+                apply=not check,
+                audit=audit,
+            )
+            changes += people_account.align(
+                MasterAdmin(base_url, ctx, admin_password).call,
+                keystore(config_dir),
+                enabled=people_account.enabled(tree),
                 apply=not check,
                 audit=audit,
             )

@@ -16,6 +16,7 @@ include:
   - path: ./infra/egress/docker-compose.yml
   - path: ./infra/lifecycle/docker-compose.yml
   - path: ./infra/audit/docker-compose.yml
+  - path: ./infra/people/docker-compose.yml
 
   # Application Services
   - path: ./manager/docker-compose.yml

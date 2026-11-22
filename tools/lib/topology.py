@@ -230,6 +230,13 @@ CATALOGUE: dict[str, ServiceSpec] = {
             start_group=0,
         ),
         ServiceSpec(
+            "people",
+            "papaia-people (people lookup)",
+            ("people",),
+            (),
+            start_group=1,
+        ),
+        ServiceSpec(
             "manager",
             "papaia-manager",
             ("manager",),
@@ -252,8 +259,9 @@ CONTROLLER_ONLY = ("manager", "rag", "knowledge-map", "egress", "audit")
 PROXY_PROFILE = "nginx"
 
 # Placed together: web search is a LibreChat feature and talks to nothing else;
-# papaia-lifecycle reaches Keycloak only over an internal network of that node.
-COLOCATED = (("websearch", "librechat"), ("lifecycle", "keycloak"))
+# papaia-lifecycle reaches Keycloak only over an internal network of that node, and
+# papaia-people reads the directory over the stack network of that node.
+COLOCATED = (("websearch", "librechat"), ("lifecycle", "keycloak"), ("people", "keycloak"))
 
 # The core overrides `setup` writes into $PAPAIA_CONFIG_DIR/overrides. Everything else in
 # that directory belongs to an add-on.

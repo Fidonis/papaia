@@ -47,6 +47,7 @@ REGISTRY_IMAGE = (
 EGRESS = "ghcr.io/fidonis/papaia-egress"
 LIFECYCLE = "ghcr.io/fidonis/papaia-lifecycle"
 AUDIT = "ghcr.io/fidonis/papaia-audit"
+PEOPLE = "ghcr.io/fidonis/papaia-people"
 INDEX_TYPES = (
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -188,7 +189,7 @@ def test_own_images_round_trip_through_a_registry(
     root = _checkout(tmp_path)
     builds = tmp_path / "builds.json"
 
-    # Build both images for both platforms, twice: the same digest each time, and the
+    # Build every image for both platforms, twice: the same digest each time, and the
     # digest the shipped compose file pins.
     assert own_images.main(["--repo-root", str(root), "build", f"--registry={prefix}",
                             f"--out={builds}"]) == 0
@@ -233,7 +234,7 @@ def test_own_images_round_trip_through_a_registry(
     assert {(e["name"], e["digest"]) for e in listed} == {
         (name, build["digest"]) for name, build in built.items()
     }
-    assert {EGRESS, LIFECYCLE, AUDIT} <= set(built)
+    assert {EGRESS, LIFECYCLE, AUDIT, PEOPLE} <= set(built)
     version = images.core_version(root)
     doc = _bom(pem, listed, version=version)
     (root / suite.RELEASE_KEY_PATH).write_text(pem, encoding="ascii")

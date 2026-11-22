@@ -187,6 +187,10 @@ ATTACHABLE_SERVICES = {
     # papaia-security-state; they do not attach to the service itself.
     "papaia-lifecycle": ["lifecycle"],
     "papaia-lifecycle-init": ["lifecycle"],
+    # People lookup (optional, additive). Only `assist-gate` may call it (token audience
+    # papaia-people); `networks.attach` is checked against the core's services, so an
+    # older core refuses an add-on that attaches it.
+    "papaia-people": ["people"],
     "qdrant": ["rag"],
     "qdrant-ingest": ["rag"],
     "qdrant-ingest-tika": ["rag"],
