@@ -636,6 +636,111 @@ def check(config_dir: Path, repo_root: Path, deployed: dict) -> None:
         _serialize(doc)
 
 
+def _core_compose_names(repo_root: Path, profiles: set[str]) -> set[str]:
+    """Service and container names of the core services of the active profiles (a
+    service without profiles always runs)."""
+    names: set[str] = set()
+    root = repo_root / "src" / "docker-compose.yml"
+    if not root.is_file():
+        return names
+    for path in compat.compose_files(root):
+        if not path.is_file():
+            continue
+        for service, body in _compose_services(path, "core").items():
+            body = body or {}
+            wanted = set(body.get("profiles") or ())
+            if wanted and not wanted & profiles:
+                continue
+            names.add(str(service))
+            container = body.get("container_name")
+            if isinstance(container, str) and "$" not in container:
+                names.add(container)
+    return names
+
+
+def _addon_compose_names(path: Path, where: str) -> set[str]:
+    names: set[str] = set()
+    if not path.is_file():
+        return names  # an add-on without compose file runs no server
+    for service, body in _compose_services(path, where).items():
+        names.add(str(service))
+        container = (body or {}).get("container_name")
+        if isinstance(container, str) and "$" not in container:
+            names.add(container)
+    return names
+
+
+def conflicts(config_dir: Path, repo_root: Path, deployed: dict, name: str) -> list[str]:
+    """What add-on `name` would duplicate in the installation `deployed` describes: a
+    catalog `id` another provider declares, an audience another service serves, a
+    service or container name another provider (core profile or add-on) already uses.
+    Two servers under one address are never valid (PLT-54), so `addon install|start`
+    refuse them whatever the catalog's other preconditions (identity provider, contract
+    generation). Only conflicts that involve `name` are reported. Empty when there is
+    none."""
+    env = common.parse_env_file(config_dir / ".env")
+    profiles = _profiles(env) | {
+        str(p) for p in ((deployed.get("core") or {}).get("profiles") or [])
+    }
+    ids: dict[str, str] = {}
+    audiences: dict[str, tuple[str, str]] = {}
+    owners: dict[str, str] = {
+        service: "core" for service in _core_compose_names(repo_root, profiles)
+    }
+    found: list[str] = []
+
+    def claim_exposes(provider: str, section: object) -> None:
+        if not isinstance(section, list):
+            return
+        for declared in section:
+            if not isinstance(declared, dict):
+                continue
+            catalog_id = declared.get("id")
+            if isinstance(catalog_id, str):
+                other = ids.setdefault(catalog_id, provider)
+                if other != provider and name in (other, provider):
+                    found.append(f"catalog id '{catalog_id}' is declared by {other} and {provider}")
+            audience = declared.get("audience")
+            address = declared.get("address")
+            service = address.get("service") if isinstance(address, dict) else None
+            if isinstance(audience, str):
+                server = (provider, str(service or ""))
+                other_server = audiences.setdefault(audience, server)
+                if other_server != server and name in (other_server[0], provider):
+                    found.append(
+                        f"audience '{audience}' is served by {_server(other_server)} and "
+                        f"{_server(server)}"
+                    )
+
+    for profile, directory in CORE_PROFILES.items():
+        path = repo_root / directory / "exposes.yaml"
+        if profile in profiles and path.is_file():
+            try:
+                doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except yaml.YAMLError:
+                continue  # the render names it; the add-on is not the cause
+            if isinstance(doc, dict):
+                claim_exposes(f"core:{profile}", doc.get("exposes"))
+    for entry in deployment.active_addons(deployed):
+        provider = str(entry.get("name") or "")
+        addon_path = deployment.resolve_addon_path(entry, repo_root)
+        manifest, _ = deployment.load_addon_manifest(addon_path)
+        if not provider or manifest is None:
+            continue
+        claim_exposes(provider, manifest.get("exposes"))
+        for service in sorted(_addon_compose_names(addon_path / "docker-compose.yml", provider)):
+            other = owners.setdefault(service, provider)
+            if other != provider and name in (other, provider):
+                label = "the core" if other == "core" else other
+                found.append(f"service name '{service}' is used by {label} and {provider}")
+    return found
+
+
+def _server(server: tuple[str, str]) -> str:
+    provider, service = server
+    return f"{provider}/{service}" if service else provider
+
+
 def render(config_dir: Path, repo_root: Path, now: datetime | None = None) -> bool:
     """Render `platform/services.json` (and an empty `groups.json` until `realm sync`
     writes the groups). Returns True when services.json was written. Raises

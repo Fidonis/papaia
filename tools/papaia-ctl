@@ -120,7 +120,7 @@
 #   papaia-ctl addon list      [--json] [--config-dir=PATH]
 #   papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 #   papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
-#   papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
+#   papaia-ctl addon uninstall <name> [--purge-data] [--force] [--config-dir=PATH]
 #   papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
 #   papaia-ctl suite verify  --bom=FILE [--signature=FILE] [--json]
 #                            [--key=FILE | --fingerprint=sha256:HEX]

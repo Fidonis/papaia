@@ -1,0 +1,7 @@
+# A Qdrant add-on next to the core profile `rag`, which already runs Qdrant: the same
+# service names under the same addresses (PLT-54-A1).
+name: qdrant
+version: 2.0.0
+requires:
+  addon_api: 2
+description: "Qdrant vector database"

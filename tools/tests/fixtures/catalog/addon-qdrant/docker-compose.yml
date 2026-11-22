@@ -1,0 +1,5 @@
+services:
+  qdrant:
+    image: example.invalid/qdrant:1.0.0
+  qdrant-mcp:
+    image: example.invalid/qdrant-mcp:1.0.0

@@ -548,35 +548,68 @@ def addon_actions(manifest: dict) -> dict[str, dict]:
     return result
 
 
-def required_addons(manifest: dict) -> list[tuple[str, str | None]]:
-    """The `requires.addons` entries of a manifest as (name, version range or None).
+@dataclass(frozen=True)
+class Requirement:
+    """One `requires.addons` entry. An `optional` one is a soft dependency: the add-on
+    runs without it and only loses what the other one adds (Studio -> Data)."""
 
-    An entry is a name or a mapping with `name` and an optional SemVer `version`
-    range. Raises ValueError for a malformed list, entry or range."""
+    name: str
+    version: str | None = None
+    optional: bool = False
+
+
+_REQUIREMENT_KEYS = frozenset({"name", "id", "version", "optional"})
+_REQUIREMENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def addon_requirements(manifest: dict) -> list[Requirement]:
+    """The `requires.addons` entries of a manifest.
+
+    An entry is a name or a mapping with `name` (or `id`, the platform kit's word for
+    it), an optional SemVer `version` range and `optional: true|false`. Unknown keys
+    are refused. Raises ValueError for a malformed list, entry or range."""
     requires = manifest.get("requires") or {}
     if not isinstance(requires, dict):
         raise ValueError("requires: must be a mapping")
     entries = requires.get("addons")
     if entries is None:
         return []
-    if not isinstance(entries, list):
-        raise ValueError("requires.addons must be a list")
-    result: list[tuple[str, str | None]] = []
+    if not isinstance(entries, list) or len(entries) > 64:
+        raise ValueError("requires.addons must be a list of at most 64 entries")
+    malformed = "requires.addons entries must be a name or a mapping with 'name'"
+    result: list[Requirement] = []
     for entry in entries:
-        if isinstance(entry, str) and entry:
-            result.append((entry, None))
+        if isinstance(entry, str):
+            if not _REQUIREMENT_NAME_RE.match(entry):
+                raise ValueError(malformed)
+            result.append(Requirement(entry))
             continue
-        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
-            raise ValueError("requires.addons entries must be a name or a mapping with 'name'")
-        if not entry["name"]:
-            raise ValueError("requires.addons entries must be a name or a mapping with 'name'")
+        if not isinstance(entry, dict):
+            raise ValueError(malformed)
+        unknown = sorted(str(key) for key in entry if key not in _REQUIREMENT_KEYS)
+        if unknown:
+            raise ValueError(f"requires.addons: unknown field {', '.join(unknown)}")
+        if "name" in entry and "id" in entry:
+            raise ValueError("requires.addons entries name an add-on by 'name' or 'id', not both")
+        name = entry.get("name", entry.get("id"))
+        if not isinstance(name, str) or not _REQUIREMENT_NAME_RE.match(name):
+            raise ValueError(malformed)
         version = entry.get("version")
         if version is not None:
             if not isinstance(version, str):
-                raise ValueError(f"requires.addons '{entry['name']}': version must be a string")
+                raise ValueError(f"requires.addons '{name}': version must be a string")
             semver.parse_constraint(version)
-        result.append((entry["name"], version))
+        optional = entry.get("optional", False)
+        if not isinstance(optional, bool):
+            raise ValueError(f"requires.addons '{name}': optional must be true or false")
+        result.append(Requirement(name, version, optional))
     return result
+
+
+def required_addons(manifest: dict) -> list[tuple[str, str | None]]:
+    """The `requires.addons` entries of a manifest as (name, version range or None),
+    optional ones included. Raises ValueError for a malformed list, entry or range."""
+    return [(r.name, r.version) for r in addon_requirements(manifest)]
 
 
 def joined_addons(manifest: dict) -> list[tuple[str, list[str]]]:
@@ -626,7 +659,7 @@ def evaluate_required_addons(
     what is missing. A requirement on a version the active addon does not state
     passes with a warning."""
     try:
-        requirements = required_addons(manifest)
+        requirements = addon_requirements(manifest)
         joined_addons(manifest)
     except ValueError as exc:
         return CompatResult(name, STATUS_ERROR, axis=REQUIRES_AXIS, reason=str(exc))
@@ -634,9 +667,17 @@ def evaluate_required_addons(
         return None
     problems: list[str] = []
     warnings: list[str] = []
-    for required, version_range in requirements:
+    for requirement in requirements:
+        required, version_range = requirement.name, requirement.version
         if required not in active:
-            problems.append(f"add-on '{required}' is not installed and active")
+            if requirement.optional:
+                # A soft dependency: the add-on runs, what the other one adds is off.
+                warnings.append(
+                    f"optional add-on '{required}' is not installed and active;"
+                    f" '{name}' runs without what it adds"
+                )
+            else:
+                problems.append(f"add-on '{required}' is not installed and active")
             continue
         if version_range is None:
             continue
@@ -663,10 +704,41 @@ def evaluate_required_addons(
         name,
         STATUS_INCOMPATIBLE if problems else STATUS_OK,
         axis=REQUIRES_AXIS,
-        requirement=[n if r is None else f"{n} {r}" for n, r in requirements],
+        requirement=[
+            (r.name if r.version is None else f"{r.name} {r.version}")
+            + (" (optional)" if r.optional else "")
+            for r in requirements
+        ],
         reason="; ".join(problems) if problems else None,
         warnings=tuple(warnings),
     )
+
+
+def dependency_order(names: list[str], manifests: dict[str, dict]) -> list[str]:
+    """`names` with every add-on after the add-ons it requires, optional ones included
+    (Data before Studio), otherwise in the given order. A malformed `requires.addons`
+    counts as requiring nothing, and a cycle keeps the given order for the add-ons in
+    it: the order is a preference of `start` and `upgrade`, the gate refuses the rest."""
+    present = set(names)
+    needs: dict[str, set[str]] = {}
+    for name in names:
+        try:
+            requirements = addon_requirements(manifests.get(name) or {})
+        except ValueError:
+            requirements = []
+        needs[name] = {r.name for r in requirements if r.name in present and r.name != name}
+    ordered: list[str] = []
+    placed: set[str] = set()
+    remaining = list(names)
+    while remaining:
+        ready = [n for n in remaining if needs[n] <= placed]
+        if not ready:
+            ready = remaining[:1]  # a cycle: take the next one as given
+        for name in ready:
+            ordered.append(name)
+            placed.add(name)
+        remaining = [n for n in remaining if n not in placed]
+    return ordered
 
 
 def gate(results: list[CompatResult], *, mode: str, force: bool = False) -> int:

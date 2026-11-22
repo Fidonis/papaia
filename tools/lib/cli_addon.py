@@ -14,6 +14,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import yaml
+
 from . import (
     addon_upgrade,
     addons,
@@ -28,11 +30,15 @@ from . import (
     gen_override,
     keycloak_role_sync,
     model_gateway,
+    npm_provision,
+    paperless_gate,
+    realm_sync,
     render_core,
     reporting,
     semver,
     suite,
     topology,
+    uninstall_journal,
 )
 
 
@@ -64,6 +70,12 @@ def _report_compat_result(result: compat.CompatResult, *, fatal: bool, force: bo
 
 
 PLACEMENT_AXIS = "placement"
+
+# The service of the Paperless add-on that checks the gate header in front of Paperless.
+PAPERLESS_GATE_SERVICE = "paperless-gate"
+
+# The writer of the audit row `addon uninstall` leaves.
+WRITER = "papaia-ctl/addon"
 
 
 def placement_result(
@@ -297,12 +309,63 @@ def _compat_gate_addon(
     return exit_code
 
 
+def _conflicts_refuse(config_dir: Path, repo_root: Path, deployed: dict, name: str) -> bool:
+    """Refuse two servers under one address, also where the installation has no catalog
+    yet: the same catalog id, an audience another service serves, a service or container
+    name the core or another add-on already uses (PLT-54). Not forcible."""
+    try:
+        found = catalog.conflicts(config_dir, repo_root, deployed, name)
+    except catalog.CatalogError as exc:
+        found = [str(exc)]
+    if not found:
+        return False
+    print(f"ERROR: addon '{name}' conflicts with the installation:", file=sys.stderr)
+    for conflict in found:
+        print(f"  - {conflict}", file=sys.stderr)
+    print("Nothing was installed or started; deployment.yaml is unchanged.", file=sys.stderr)
+    return True
+
+
+def _paperless_gate_missing(name: str, addon_path: Path) -> bool:
+    """Paperless takes the person from a request header, so it is offered only with its
+    gate in front of it: the add-on's compose file has the service `paperless-gate` in
+    Paperless' network namespace. An add-on directory without a compose file starts no
+    server (`addon start` refuses it) and passes. Not forcible."""
+    if name != paperless_gate.ADDON:
+        return False
+    compose = addon_path / "docker-compose.yml"
+    if not compose.is_file():
+        return False
+    try:
+        doc = yaml.safe_load(compose.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        print(f"ERROR: addon '{name}': {compose} cannot be read: {exc}", file=sys.stderr)
+        return True
+    services = doc.get("services") if isinstance(doc, dict) else None
+    gate = (services or {}).get(PAPERLESS_GATE_SERVICE) if isinstance(services, dict) else None
+    if isinstance(gate, dict) and gate.get("network_mode") == (
+        f"service:{paperless_gate.GATE_SERVICE}"
+    ):
+        return False
+    print(
+        f"ERROR: addon '{name}' brings no gate: its docker-compose.yml needs the service"
+        f" '{PAPERLESS_GATE_SERVICE}' with network_mode 'service:{paperless_gate.GATE_SERVICE}'."
+        " Install a version of the add-on that ships the gate.",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _catalog_refuses(config_dir: Path, repo_root: Path, deployed: dict, name: str) -> bool:
     """Check the catalog of the installation `deployed` describes before it is saved.
     A declaration can be valid on its own and still clash with the installation (an id
     another module declares, a UI surface whose public host is not set, an address
     service missing from compose); saved, it would make every later render fail until
-    the add-on is removed. Not forcible for that reason."""
+    the add-on is removed. Not forcible for that reason.
+
+    Two servers under one address are refused first (_conflicts_refuse)."""
+    if _conflicts_refuse(config_dir, repo_root, deployed, name):
+        return True
     try:
         catalog.check(config_dir, repo_root, deployed)
     except catalog.CatalogError as exc:
@@ -354,6 +417,9 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
     manifest, manifest_error = deployment.load_addon_manifest(addon_path)
     if manifest is None:
         print(f"ERROR: {manifest_error}", file=sys.stderr)
+        return 2
+
+    if _paperless_gate_missing(name, addon_path):
         return 2
 
     node = getattr(args, "node", None)
@@ -415,6 +481,15 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
             entry["node"] = node
         addon_entries.append(entry)
 
+    # Before anything is seeded: a refused install leaves no bundle behind.
+    if _conflicts_refuse(config_dir, repo_root, deployed, name):
+        return 2
+    try:
+        # Installed again: its realm clients and proxy hosts are kept from now on.
+        uninstall_journal.forget(config_dir, name)
+    except (uninstall_journal.JournalError, OSError) as exc:
+        print(f"ERROR: addon '{name}': {exc}", file=sys.stderr)
+        return 2
     addons.seed_addon_env(addon_path, config_dir)
 
     bundle_env_path = config_dir / "addons" / name / ".env"
@@ -1022,9 +1097,12 @@ def cmd_addon_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def dependent_addons(name: str, deployed: dict, repo_root: Path) -> list[str]:
-    """The other active addons whose `requires.addons` names `name`. A manifest
-    that cannot be read or parsed counts as requiring nothing."""
+def dependent_addons(
+    name: str, deployed: dict, repo_root: Path, *, optional: bool = False
+) -> list[str]:
+    """The other active addons whose `requires.addons` names `name`: those that need it,
+    or with `optional` those that use it optionally and run without it. A manifest that
+    cannot be read or parsed counts as requiring nothing."""
     dependents: list[str] = []
     for addon in deployment.active_addons(deployed):
         other = addon.get("name")
@@ -1034,10 +1112,10 @@ def dependent_addons(name: str, deployed: dict, repo_root: Path) -> list[str]:
             deployment.resolve_addon_path(addon, repo_root)
         )
         try:
-            required = compat.required_addons(manifest or {})
+            required = compat.addon_requirements(manifest or {})
         except ValueError:
             continue
-        if any(required_name == name for required_name, _ in required):
+        if any(r.name == name and r.optional == optional for r in required):
             dependents.append(other)
     return dependents
 
@@ -1133,6 +1211,12 @@ def cmd_addon_dependents(args: argparse.Namespace) -> int:
     deployed = deployment.load(config_dir)
     if not deployed:
         return 0
+    for other in dependent_addons(args.name, deployed, repo_root, optional=True):
+        print(
+            f"NOTICE: addon '{other}' uses '{args.name}' optionally; it keeps running"
+            " without what it adds.",
+            file=sys.stderr,
+        )
     dependents = dependent_addons(args.name, deployed, repo_root)
     if not dependents:
         return 0
@@ -1201,6 +1285,41 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     # take the entry stops the uninstall while everything else is still in place.
     if _revoke_model_key(config_dir, repo_root, name, entry):
         return 2
+    # What lives in the identity provider and the proxy goes at their next sync
+    # (lib/uninstall_journal.py): recorded before the bundle with its public URL goes.
+    manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(entry, repo_root))
+    hostnames = npm_provision.uninstalled_hostnames(
+        manifest or {},
+        name,
+        common.parse_env_file(config_dir / ".env"),
+        common.parse_env_file(config_dir / "addons" / name / ".env"),
+    )
+    try:
+        audit = realm_sync.AuditLog(
+            realm_sync.audit_path(config_dir), realm_sync.new_correlation_id(), writer=WRITER
+        )
+    except (realm_sync.RealmSyncError, OSError) as exc:
+        print(f"ERROR: addon '{name}': the audit outbox cannot be written: {exc}",
+              file=sys.stderr)
+        return 2
+    with audit:
+        try:
+            uninstall_journal.record(config_dir, name, hostnames)
+        except (uninstall_journal.JournalError, OSError) as exc:
+            print(f"ERROR: addon '{name}': {exc}. Nothing was uninstalled.", file=sys.stderr)
+            return 2
+        purge = bool(getattr(args, "purge_data", False))
+        audit.write(
+            realm_sync.Change(
+                "addon",
+                name,
+                "uninstalled, data purged" if purge else "uninstalled, data kept",
+                "uninstall",
+                effect="delete",
+            ),
+            "allowed",
+            host=True,
+        )
 
     override_file = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
     override_file.unlink(missing_ok=True)
@@ -1262,11 +1381,15 @@ def cmd_active_addons(args: argparse.Namespace) -> int:
 
     Exists so the bash dispatcher can enumerate addons without parsing
     deployment.yaml itself -- the script header's stated contract."""
-    deployed = deployment.load(Path(args.config_dir))
-    for addon in deployment.active_addons(deployed):
-        name = addon.get("name")
-        if name:
-            print(name)
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir)
+    names = [str(a["name"]) for a in deployment.active_addons(deployed or {}) if a.get("name")]
+    # Required add-ons first, optional ones included (Data before Studio), so `start`
+    # and `upgrade` bring an add-on up after what it builds on.
+    manifests = _active_manifests(deployed or {}, repo_root)
+    for name in compat.dependency_order(names, manifests):
+        print(name)
     return 0
 
 

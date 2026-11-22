@@ -1098,7 +1098,7 @@ tools/papaia-ctl addon rollback  <name> [--restore-data] [--no-restart] [--force
 tools/papaia-ctl addon list      [--json] [--config-dir=PATH]
 tools/papaia-ctl addon stop      <name> [--clean-up] [--config-dir=PATH]
 tools/papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
-tools/papaia-ctl addon uninstall <name> [--clean-up] [--force] [--config-dir=PATH]
+tools/papaia-ctl addon uninstall <name> [--purge-data] [--force] [--config-dir=PATH]
 tools/papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
 tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
   [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
@@ -1107,8 +1107,8 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 
 | Command | Effect |
 |---|---|
-| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Before anything is registered, the add-on's images are checked against the signed bill of materials; an add-on outside it needs `--accept-unlisted-images` (see [Image pinning and signatures](#image-pinning-and-signatures)). Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. A `--path` that re-points an installed add-on is refused, like `upgrade`, when the version there no longer meets a range another active add-on requires of it. |
-| `start` | Copies the add-on's `.env` into place, re-renders, checks the add-on's images (digest and signature) and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. `--insecure-images` skips the image check for this one command. |
+| `install` | Registers the add-on in `deployment.yaml` as `active`, seeds `addons/<name>/.env` in the config directory, generates the network override, re-renders, and prints an identity-provider checklist. `--path` is required the first time. Before anything is registered, the add-on's images are checked against the signed bill of materials; an add-on outside it needs `--accept-unlisted-images` (see [Image pinning and signatures](#image-pinning-and-signatures)). Aborts if the add-on is incompatible with the current core; `--force` demotes INCOMPATIBLE to a warning and proceeds. Refused, whatever `--force` says, when the add-on would put a second server under an address the installation already has (see [Module selection](#module-selection)), and `paperless` only with its gate. A `--path` that re-points an installed add-on is refused, like `upgrade`, when the version there no longer meets a range another active add-on requires of it. |
+| `start` | Copies the add-on's `.env` into place, re-renders, checks the add-on's images (digest and signature) and runs `docker compose up -d` for the add-on. Re-checks compatibility before starting; `--force` to override. A second server under an existing address is refused here too, not forcible. `--insecure-images` skips the image check for this one command. |
 | `install --node=NAME` | Distributed installations only: the node the add-on runs on. Without it, the add-on goes to the node of the core services it attaches to. An add-on whose `networks.attach` names services on two nodes is **not placeable** and is refused whatever `--force` says: its network exists on one node only. On a remote node the add-on travels in the node's bundle, and `start`, `stop` and `start --addons` run it there. |
 | `upgrade` | Moves an installed add-on to another version of itself, kept in a directory of its own (`--path`). Nothing in the registered directory is touched: the registration is repointed and the old one is kept as `previous` ([ADR 0008](docs/adr/0008-upgrade-add-ons-by-repointing-to-immutable-snapshots.md)). Refused when the new version no longer meets a range another active add-on requires of it (`requires.addons`); `--force` proceeds with a warning. The images of the new version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. See [Upgrading an add-on](#upgrading-an-add-on). |
 | `rollback` | One step back: repoints the add-on at the version it had before the last upgrade and forgets `previous`. The add-on's data is left alone unless `--restore-data` restores the restore point the upgrade took. Refused, like `upgrade`, when the older version does not meet a range another active add-on requires of it. The images of the older version are checked before its containers are recreated; `--insecure-images` skips that check for this one command. |
@@ -1116,9 +1116,35 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
 | `run` | Runs a maintenance action the add-on declares under `actions:` — `docker compose run --rm <service> <args>` in the add-on's project, with the files and env of `addon start` — and exits with the action's code. Only declared actions with their fixed arguments run; without an action, lists the declared ones (`--json` for tools). Single host only. |
-| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. |
+| `uninstall` | Removes the add-on's containers and networks, its override files, config bundle and entry in `deployment.yaml`. Its proxy hosts and its clients in the realm go right after, through `npm-provision` and `keycloak-role-sync` (or at the next `start` when the stack is down); its service accounts and `aud-*` scopes go with them, since no installed module declares them any more. `--purge-data` (formerly `--clean-up`) also removes its volumes; without it the volumes stay and a later `install` uses them again. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. An add-on that uses it optionally does not refuse it and is named. Leaves one audit row. |
 | `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. When the core ships the suite matrix `compat/suite.yaml`, every add-on it names must have a version of the core's suite or the suite before it (axis `matrix`, see [`docs/compatibility.md`](docs/compatibility.md)). `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). An add-on built against a newer contract generation than the target serves is reported with every missing generation and its meaning, for example `missing generations 4, 5, 6, 7, 8, 9, 10, 11, 12; 12: add-on ingress integration.nginx (ADR 0023)`; see the generation table in [`ADDON_API`](ADDON_API). |
+
+#### Module selection
+
+Modules are chosen freely; the core only refuses what cannot work next to the rest.
+
+- **No two servers under one address.** `addon install` and `addon start` check the
+  installation as it would be afterwards: a catalog `id` another module or core profile
+  declares, an `audience` another service serves, or a Compose service or container name the
+  core (its active profiles) or another active add-on already uses ends the command with exit
+  2 and the conflict named, for example `service name 'qdrant' is used by the core and
+  qdrant` for a Qdrant add-on next to the profile `rag`. Nothing is written; `--force` does
+  not lift it. The check runs also before the installation has a catalog.
+- **Soft dependencies.** An entry of `requires.addons` names an add-on by `name` (or `id`)
+  and may carry `optional: true`: the add-on runs without it and only loses what the other
+  one adds (Studio declares `{id: papaia-data, optional: true}` for the handover to Data).
+  A missing optional add-on is a notice, not a refusal; installed, its version range is
+  checked like any other. Unknown fields in an entry are refused.
+- **Order.** `start --addons` and `upgrade` bring add-ons up after the add-ons they require,
+  optional ones included: Data before Studio.
+- **Paperless only with its gate.** Paperless takes the person from a request header, so
+  `addon install paperless` is refused unless the add-on's compose file has the service
+  `paperless-gate` in Paperless' network namespace (`network_mode: service:paperless`).
+- **Uninstall.** What lives outside the configuration directory (the add-on's proxy hosts
+  and realm clients) is recorded in `security/uninstalled-modules.json` (names and host
+  names only, mode 0600) and removed by the step that owns it; each removal leaves one audit
+  row. Installing the add-on again drops the record.
 
 **`addon check` flags**
 

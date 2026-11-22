@@ -790,11 +790,12 @@ cmd_addon_list() {
 }
 
 cmd_addon_uninstall() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0 force=0
+    local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" purge_data=0 force=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
-            --clean-up) clean_up=1 ;;
+            # --clean-up is the older name of --purge-data.
+            --purge-data|--clean-up) purge_data=1 ;;
             --force) force=1 ;;
             -h|--help) usage; exit 0 ;;
             -*) error "Unknown option: $1"; exit 2 ;;
@@ -803,7 +804,7 @@ cmd_addon_uninstall() {
         shift
     done
     if [ -z "$addon_name" ]; then
-        error "Usage: papaia-ctl addon uninstall <name> [--clean-up] [--force]"
+        error "Usage: papaia-ctl addon uninstall <name> [--purge-data] [--force]"
         exit 2
     fi
     CONFIG_DIR="$config_dir"
@@ -811,13 +812,15 @@ cmd_addon_uninstall() {
     _addon_refuse_while_required "$addon_name" "$force"
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
-    info "Removing containers for addon $addon_name..."
-    if [ "$clean_up" -eq 1 ]; then
+    info "Removing containers and networks of addon $addon_name..."
+    if [ "$purge_data" -eq 1 ]; then
         _addon_compose down "$addon_name" "$addon_path" -v
     else
         _addon_compose down "$addon_name" "$addon_path"
     fi
-    py_cli addon-uninstall --name="$addon_name"
+    local -a uninstall_flags=(--name="$addon_name")
+    [ "$purge_data" -eq 1 ] && uninstall_flags+=(--purge-data)
+    py_cli addon-uninstall ${uninstall_flags[@]+"${uninstall_flags[@]}"}
     # What was accepted for it outside the bill of materials goes with it (audited). The
     # add-on is gone by now, so a file that cannot be updated is reported, not a failure.
     if ! py_cli image-accept --addon="$addon_name" --forget; then
@@ -825,5 +828,20 @@ cmd_addon_uninstall() {
         warn "$CONFIG_DIR/trust/accepted-images.json. Repair or remove the file; an acceptance"
         warn "left in it applies only if an add-on named $addon_name is installed again."
     fi
+    _addon_uninstall_sync "$addon_name"
+    [ "$purge_data" -eq 0 ] && info "The volumes of $addon_name are kept; a later 'addon install' uses them again."
     success "addon uninstall complete: $addon_name"
+}
+
+# The proxy hosts and the realm clients of an uninstalled add-on go in the steps that own
+# them (lib/uninstall_journal.py). Run here so they are gone at once while the stack runs;
+# otherwise the next 'papaia-ctl start' removes them. $1 = addon name
+_addon_uninstall_sync() {
+    local addon_name="$1" step
+    for step in npm-provision keycloak-role-sync; do
+        if ! ( cmd_"${step//-/_}" --config-dir="$CONFIG_DIR" ); then
+            warn "$step did not finish; the proxy hosts and realm clients of $addon_name are"
+            warn "removed at the next 'papaia-ctl start' (or run 'papaia-ctl $step')."
+        fi
+    done
 }

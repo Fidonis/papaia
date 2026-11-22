@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import common, deployment, ingress, paperless_gate
+from . import common, deployment, ingress, paperless_gate, uninstall_journal
 from .envtree import EnvTree
 
 # Env-tree node holding the bundled proxy's own configuration. The NPM admin
@@ -28,6 +28,9 @@ _NGINX_NODE = "infra/nginx"
 # NPM groups all reverse-proxy resources under /api/nginx/ — /api/proxy-hosts
 # (without the segment) answers 404.
 _PROXY_HOSTS_PATH = "/api/nginx/proxy-hosts"
+
+# The writer of the audit rows for proxy hosts this module deletes.
+WRITER = "papaia-ctl/npm-provision"
 
 
 def _is_subdomain_url(url: str, edge: tuple[int, ...] = ()) -> bool:
@@ -157,6 +160,75 @@ def _ingress_hosts(base_url: str, token: str, found: list[ingress.Route]) -> int
             continue
         changed += 1
     return changed
+
+
+def _delete_proxy_host(base_url: str, token: str, host_id: int) -> None:
+    if isinstance(host_id, bool) or not isinstance(host_id, int):
+        raise ValueError("proxy host id must be an integer")
+    _send(base_url, token, f"{_PROXY_HOSTS_PATH}/{host_id}", "DELETE")
+
+
+def uninstalled_hostnames(
+    manifest: dict, name: str, root: dict[str, str], bundle: dict[str, str]
+) -> list[str]:
+    """The proxy host names an add-on's interfaces had, for the uninstall journal: its
+    `integration.nginx` routes (`root` = the root .env) and, for Paperless, the host of
+    its public URL (in its bundle .env) when the proxy serves it under a host name."""
+    try:
+        hostnames = [h for r in ingress.addon_routes(manifest, root) for h in r.hostnames]
+    except ingress.IngressError:
+        hostnames = []
+    if name == paperless_gate.ADDON:
+        url = bundle.get(paperless_gate.PUBLIC_URL_KEY, "")
+        if url and _is_subdomain_url(url, ingress.edge_ports(root)):
+            hostnames.append(urlsplit(url).hostname or "")
+    return sorted({h.lower() for h in hostnames if h})
+
+
+def _uninstalled_hosts(
+    base_url: str, token: str, config_dir: Path, served: set[str]
+) -> bool:
+    """Delete the proxy hosts `addon uninstall` recorded (lib/uninstall_journal.py) that
+    no installed interface serves; each deletion is one `papaia.audit/1` row. Clears the
+    journal's part once every recorded host is gone. False when that failed."""
+    from . import realm_sync as rs  # it imports the render path
+
+    try:
+        recorded = uninstall_journal.pending(config_dir, uninstall_journal.PROXY)
+    except uninstall_journal.JournalError as exc:
+        print(f"Proxy hosts of uninstalled add-ons kept: {exc}", file=sys.stderr, flush=True)
+        return False
+    if not recorded:
+        return True
+    names = {h for entry in recorded.values() for h in entry["proxy_hosts"]} - served
+    try:
+        with rs.AuditLog(
+            rs.audit_path(config_dir), rs.new_correlation_id(), writer=WRITER
+        ) as audit:
+            for host in _list_proxy_hosts(base_url, token):
+                domains = set(host.get("domain_names") or [])
+                if not domains & names or domains & served:
+                    continue
+                change = rs.Change(
+                    "proxy-host",
+                    sorted(domains & names)[0],
+                    "removed, its add-on was uninstalled",
+                    "delete_proxy_host",
+                    effect="delete",
+                )
+                try:
+                    _delete_proxy_host(base_url, token, host.get("id"))
+                except (urllib.error.URLError, OSError, ValueError):
+                    audit.write(change, "error", "transport", host=True)
+                    raise
+                audit.write(change, "allowed", host=True)
+                print(f"  removed proxy host: {', '.join(sorted(domains))}", flush=True)
+        uninstall_journal.done(config_dir, uninstall_journal.PROXY, set(recorded))
+    except (rs.RealmSyncError, uninstall_journal.JournalError, urllib.error.URLError,
+            OSError, ValueError) as exc:
+        print(f"Proxy hosts of uninstalled add-ons kept: {exc}", file=sys.stderr, flush=True)
+        return False
+    return True
 
 
 def _send(base_url: str, token: str, path: str, method: str, body: dict | None = None):
@@ -329,11 +401,13 @@ def provision_npm_hosts(
     skipped_port_based = 0
 
     edge = ingress.edge_ports(root)
+    served: set[str] = set()  # host names an installed interface serves
     for spec in ingress.CORE_PROXY_HOSTS:
         profile, node, key, _label, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws = spec
         if profile not in active_profiles:
             continue
         url = _public_url(tree, node, key)
+        served.add(urlsplit(url).hostname or "")
         if not _is_subdomain_url(url, edge):
             skipped_port_based += 1
             continue
@@ -366,6 +440,8 @@ def provision_npm_hosts(
             # The Paperless route goes to its gate with the proxy's secret (below).
             addon = [r for r in found if r.module not in ("core", paperless_gate.ADDON)]
             created += _ingress_hosts(base_url, token, addon)
+            served |= {h for r in found for h in r.hostnames}
+            ok = _uninstalled_hosts(base_url, token, Path(config_dir), served) and ok
     if config_dir is not None:
         ok = _gate_steps(base_url, token, Path(config_dir), root) and ok
 

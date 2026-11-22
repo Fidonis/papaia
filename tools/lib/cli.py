@@ -2729,6 +2729,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_addon_uninstall = sub.add_parser("addon-uninstall")
     p_addon_uninstall.add_argument("--name", required=True)
+    p_addon_uninstall.add_argument("--purge-data", action="store_true")
     p_addon_uninstall.set_defaults(func=cli_addon.cmd_addon_uninstall)
 
     p_addon_networks = sub.add_parser("addon-networks")

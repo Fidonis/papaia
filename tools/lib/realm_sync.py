@@ -141,7 +141,7 @@ from pathlib import Path
 import yaml
 
 from . import client_keys as ck
-from . import common, delegation_lifetime, deployment
+from . import common, delegation_lifetime, deployment, uninstall_journal
 from . import keycloak_role_sync as kcs
 from . import realm_hardening as rh
 from . import service_account_keys as sak
@@ -710,6 +710,9 @@ class Plan:
     hardening: rh.Hardening = field(default_factory=rh.Hardening)
     # the shared person scope is the default scope of a planned client
     person_scope: bool = False
+    # `papaia.owner` values of modules `addon uninstall` removed and nobody installed again
+    # (lib/uninstall_journal.py): their managed clients are deleted, not left in place.
+    uninstalled: frozenset[str] = frozenset()
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -2193,6 +2196,19 @@ class _Reconciler(_Actions):
                 and client_id != SYNC_CLIENT
                 and attributes.get(KIND) != SERVICE_ACCOUNT
             ):
+                if attributes.get(OWNER) in self.plan.uninstalled:
+                    self.do(
+                        Change(
+                            "client",
+                            client_id,
+                            "removed, its module was uninstalled",
+                            "delete_client",
+                            effect="delete",
+                        ),
+                        "DELETE",
+                        f"/clients/{client['id']}",
+                    )
+                    continue
                 print(
                     f"WARNING: managed client {client_id} has no declaration any more; it is "
                     "left in place. Remove it in the admin console once its module is gone.",
@@ -3560,6 +3576,7 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             tree.get("ai/librechat", {}),
             lifetime=delegation_lifetime.stored(config_dir),
         )
+        removed = _uninstalled(config_dir, plan)
     except (RealmSyncError, rh.HardeningError, delegation_lifetime.LifetimeError) as exc:
         print(f"Realm sync refused: {exc}. Nothing was changed.", file=sys.stderr, flush=True)
         return 2
@@ -3656,6 +3673,11 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             flush=True,
         )
         return 1
+    if removed:
+        try:
+            uninstall_journal.done(config_dir, uninstall_journal.REALM, removed)
+        except (uninstall_journal.JournalError, OSError) as exc:
+            print(f"WARNING: {exc}", file=sys.stderr, flush=True)
     print(f"Realm sync complete: {len(changes)} change(s).", flush=True)
     return 0
 
@@ -3743,3 +3765,16 @@ def apply_keys(tree: dict, config_dir: Path, repo_root: Path, module: str) -> in
         f"Client keys of {module} applied: {len(reconciler.changes)} change(s).", flush=True
     )
     return 0
+
+
+def _uninstalled(config_dir: Path, plan: Plan) -> set[str]:
+    """Set `plan.uninstalled` from the uninstall journal and return the recorded module
+    names it covers. A module installed again keeps its clients."""
+    try:
+        recorded = uninstall_journal.pending(config_dir, uninstall_journal.REALM)
+    except uninstall_journal.JournalError as exc:
+        raise RealmSyncError(str(exc)) from None
+    owners = {spec.owner for spec in plan.clients.values()}
+    names = {name for name in recorded if name not in owners}
+    plan.uninstalled = frozenset(_owner_value(name) for name in names)
+    return names
