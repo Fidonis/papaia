@@ -31,7 +31,15 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, deployment, keycloak_role_sync, knowledge_map, localai_native, smtp
+from . import (
+    common,
+    deployment,
+    keycloak_role_sync,
+    knowledge_map,
+    localai_native,
+    platform_services,
+    smtp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,10 +239,20 @@ def render(config_dir: Path, repo_root: Path) -> None:
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
 
+    profiles = _active_profiles(config_dir)
+    # The platform services catalogue: what the core modules and add-ons offer to other
+    # modules (issue #435). Generated like the baked realm, never merged or overlaid;
+    # LibreChat's configuration above is independent of it.
+    try:
+        platform_services.render(
+            config_dir, repo_root, profiles, deployment.active_addons(deployment.load(config_dir))
+        )
+    except platform_services.ServicesError as exc:
+        raise RenderError(f"platform services catalogue: {exc}") from exc
+
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
     # installation's output stays byte-identical.
-    profiles = _active_profiles(config_dir)
     if "knowledge-map" in profiles:
         try:
             warnings = knowledge_map.render(

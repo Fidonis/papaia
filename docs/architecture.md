@@ -299,6 +299,16 @@ knowledge:                         # optional (addon_api 6): the knowledge sourc
         classification: internal   # the operator decides in governance.yaml (ADR 0016)
         personal_data: ordinary
         data_subjects: [employees]
+
+exposes:                           # optional (addon_api 7): what this add-on offers
+  - id: <name>.mcp                 # other modules, for the platform services catalogue
+    kind: mcp                      # (ADR 0017): mcp | rest | llm_api | task_feed |
+    title: {de: "...", en: "..."}  # flow_provider. Older cores ignore the key.
+    url: http://<name>-mcp:8000/mcp
+    auth: oidc_bearer              # oidc_bearer (needs audience) | own_oauth | none
+    audience: mcp-<name>
+    max_class: internal            # highest data class the service may receive
+    consumable: true               # false needs `reason`; own_oauth is never consumable
 ```
 
 #### `.env.example` value markers
@@ -540,6 +550,31 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
 - **Known limitation:** A distributed installation does not ship the override or
   the two directories to a node bundle, so add-on agents and prompts are not
   provisioned there (Fidonis/papaia#368).
+
+### Platform services catalogue (addon_api 7)
+
+What the core modules and add-ons offer other modules is rendered into
+`$PAPAIA_CONFIG_DIR/platform/services.json`, format `papaia.platform-services/1`
+(ADR 0017, schema `tools/schemas/platform-services.schema.json`). Consumers such as
+papaia Studio and papaia-work mount it read-only and read their MCP servers and APIs
+from it instead of from another product's configuration.
+
+- **Declarations:** core modules in an `exposes.yaml` next to their compose file
+  (`src/ai/mcp-firecrawl`, `src/ai/rag`, `src/ai/knowledge-map`; the latter two only
+  while their profile is active), add-ons under the manifest key `exposes:`.
+- **Rendered on every render** (`setup`, `start`, add-on install, upgrade, removal),
+  atomically, sorted by id, with `addon` (`core` or the add-on's name), `version`
+  and, for core modules, `profile`. A `digest` covers the services; `generated_at`
+  stays while the digest does not change, so a render without changes leaves the file
+  byte-identical.
+- **Checks:** ids are unique across the core and all add-ons; `oidc_bearer` needs an
+  `audience`; `own_oauth` is never `consumable`; `consumable: false` needs a `reason`.
+  `addon install` refuses an add-on whose entries fail these checks, and a render with
+  invalid entries stops with a named error.
+- **Nothing granted:** the file holds no secrets. An entry is an offer; each consumer
+  decides whether and how to connect it, with its own approval.
+- **Independent of LibreChat:** LibreChat keeps its own configuration (Seam 3); the
+  catalogue neither reads nor changes it.
 
 ### Seam 4 — Ingress (optional)
 

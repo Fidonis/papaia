@@ -108,6 +108,11 @@ def _tree_digests(inst: Installation) -> dict[str, str]:
             summary = json.loads(text)
             summary["deployed_at"] = "<TIME>"
             text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+        elif rel == "platform/services.json":
+            # The time of the first render; everything else in the catalogue is stable.
+            catalogue = json.loads(text)
+            catalogue["generated_at"] = "<TIME>"
+            text = json.dumps(catalogue, indent=2, sort_keys=True) + "\n"
         digests[rel] = _digest(inst.normalise(text))
     return digests
 

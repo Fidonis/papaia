@@ -69,7 +69,12 @@ _SURFACE_CHANGED = (
 # semantics: an add-on listing [2, 6] still installs on a gen-2..5 core (the 2
 # matches), which is wanted here because the key is additive — a core below
 # gen 6 simply renders no map entry for it.
-ADDON_API_WINDOW = (1, 6)
+#
+# Gen 7 (additive): the `exposes` manifest key (ADR 0017) lets an add-on declare what it
+# offers other modules -- an MCP server, a REST API -- for the platform services catalogue
+# (`platform/services.json`). Older cores ignore the key, so `min` stays 1; a core below
+# gen 7 simply lists nothing for the add-on.
+ADDON_API_WINDOW = (1, 7)
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -160,6 +165,9 @@ MANIFEST_KEYS = [
     # Since addon_api 6: declares the knowledge sources an add-on contributes to the
     # knowledge-map profile (ADR 0014). Read by knowledge_map.collect_sources.
     "knowledge",
+    # Since addon_api 7: declares what the add-on offers other modules, for the platform
+    # services catalogue (ADR 0017). Read by platform_services.collect.
+    "exposes",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -219,4 +227,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 20, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 21, _SURFACE_CHANGED
