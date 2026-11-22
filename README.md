@@ -1520,8 +1520,10 @@ tools/papaia-ctl setup \
 
 `--oidc-issuer` is mandatory the first time you switch, if you are running non-interactively.
 `setup` derives all OIDC endpoints from the issuer URL (RFC 8414 layout), drops the `keycloak`
-profile, and clears `SSL_CERT_FILE` for LiteLLM, oauth2-proxy, and LocalAI so they validate
-the issuer against the system CA bundle instead of the bundled self-signed CA.
+profile, and clears `SSL_CERT_FILE` for oauth2-proxy, LocalAI, papaia-manager, the RAG
+services and the knowledge map so they validate the issuer against the system CA bundle
+instead of the bundled self-signed CA. LiteLLM builds its own bundle from the public roots
+and adds `certs/local-ca.crt` only when that file exists.
 
 Client secrets cannot be generated for an issuer papAIa does not control, so each one is
 written as the literal placeholder `REPLACE_WITH_VALID_SECRET`. `setup` prints the full list.
