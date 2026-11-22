@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -71,6 +72,7 @@ from . import (
     render_core,
     reporting,
     resolve,
+    rollback_key,
     secrets,
     service_accounts,
     settings,
@@ -1733,11 +1735,23 @@ def cmd_backup_plan(args: argparse.Namespace) -> int:
         # Before anything is written: no recipient, no confirmed target or no room means
         # no snapshot directory at all (BE-14, RE-33).
         plan.recipients = backup_crypt.require_recipients(config_dir)
+        if args.rollback_key:
+            # R0 of an upgrade: also encrypted to the run's rollback key (BE-11, RE-11).
+            if args.only:
+                raise backup.BackupError("--rollback-key is for a whole restore point only")
+            extra = rollback_key.recipient(config_dir, args.rollback_key)
+            if any(r.name == extra.name or r.key == extra.key for r in plan.recipients):
+                raise backup.BackupError(
+                    f"The rollback key collides with recipient {extra.name!r}"
+                )
+            plan.recipients = [*plan.recipients, extra]
         backup_crypt.check_target(config_dir, backup_dir)
         backup_crypt.check_free_space(backup_dir)
         common.ensure_dir(plan.snapshot / "volumes")
         common.ensure_dir(plan.snapshot / "binds")
         backup.write_plan(plan)
+    except rollback_key.RollbackKeyError as exc:
+        return _fail(exc)
     except backup.SelectionError as exc:
         # Before anything is written: a selection that cannot be met leaves no
         # snapshot directory behind, let alone an archive.
@@ -1747,6 +1761,7 @@ def cmd_backup_plan(args: argparse.Namespace) -> int:
         return _fail(exc)
     for name in plan.skipped:
         print(f"WARNING: declared volume does not exist, skipping: {name}", file=sys.stderr)
+    _sweep_rollback_keys(config_dir, keep=args.rollback_key)
     if len(plan.recipients) == 1:
         print(
             "WARNING: only one backup recipient; a lost key makes every point unreadable."
@@ -1758,6 +1773,51 @@ def cmd_backup_plan(args: argparse.Namespace) -> int:
         print(f"SCOPE\t{','.join(plan.scope)}")
     for artifact in plan.artifacts:
         print(f"{artifact.kind}\t{artifact.archive}\t{artifact.source}\t{artifact.owner}")
+    return 0
+
+
+def _sweep_rollback_keys(config_dir: Path, keep: str | None = None) -> None:
+    """Remove rollback keys whose time is over (lib/rollback_key.py). A problem here is
+    reported and never stops the command that asked for it; `doctor rollback_window`
+    fails for a key that stays past its window."""
+    try:
+        state = upgrade_stages.load_state(config_dir)
+        for upgrade_id in rollback_key.sweep(config_dir, state, keep=keep):
+            print(f"Rollback key of upgrade {upgrade_id} deleted: its time is over.",
+                  file=sys.stderr)
+    except (rollback_key.RollbackKeyError, upgrade_stages.StageError, OSError) as exc:
+        print(f"WARNING: rollback keys not checked: {exc}", file=sys.stderr)
+
+
+def cmd_rollback_key(args: argparse.Namespace) -> int:
+    """The rollback key of an upgrade run (lib/rollback_key.py).
+
+    create    a new key pair; prints the upgrade id it belongs to
+    identity  the private key of a run, to standard output only when that is no terminal
+    discard   remove a key made for a run that never began
+    sweep     remove keys whose time is over"""
+    config_dir = Path(args.config_dir)
+    try:
+        if args.action == "create":
+            rollback_key.window_hours(config_dir)
+            upgrade_id, _public = rollback_key.create(config_dir)
+            print(upgrade_id)
+        elif args.action == "identity":
+            if sys.stdout.isatty():
+                raise rollback_key.RollbackKeyError(
+                    "The rollback key is never written to a terminal"
+                )
+            print(rollback_key.identity(config_dir, args.upgrade_id or ""))
+        elif args.action == "discard":
+            rollback_key.discard_unbegun(
+                config_dir, rollback_key.check_id(args.upgrade_id),
+                upgrade_stages.load_state(config_dir),
+            )
+        elif args.action == "sweep":
+            _sweep_rollback_keys(config_dir)
+    except (rollback_key.RollbackKeyError, upgrade_stages.StageError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -2317,10 +2377,14 @@ def cmd_upgrade_stage(args: argparse.Namespace) -> int:
             point = us.restore_point_for(config_dir, upgrade.normalize_version(args.target))
             if point:
                 print(point)
+        elif args.action == "kept-key":
+            kept = us.kept_run_has_key(config_dir, upgrade.normalize_version(args.target))
+            print(f"ROLLBACK_KEY\t{int(kept)}")
         elif args.action == "begin":
             steps = json.loads(Path(args.steps_file).read_text(encoding="utf-8"))
             us.begin(config_dir, source=args.from_version, target=args.to_version,
-                     restore_point=args.restore_point, steps=steps)
+                     restore_point=args.restore_point, steps=steps,
+                     upgrade_id=args.upgrade_id)
         elif args.action == "block":
             for name in us.block_addons(config_dir):
                 print(name)
@@ -2344,6 +2408,7 @@ def cmd_upgrade_stage(args: argparse.Namespace) -> int:
             print(f"FROM\t{state['from']}")
             print(f"TO\t{state['to']}")
             print(f"RESTORE_POINT\t{state['restore_point']}")
+            print(f"ROLLBACK_KEY\t{int(rollback_key.exists(config_dir, state['id']))}")
         elif args.action == "steps":
             deployed = deployment.load(config_dir)
             state, stages = us.steps_to_run(
@@ -2360,8 +2425,49 @@ def cmd_upgrade_stage(args: argparse.Namespace) -> int:
                 print(f"STAGE\t{stage}\t{step['addon']}\t{step['action']}\t"
                       f"{step['path'] or '-'}")
         elif args.action == "finish":
-            for line in us.report(us.finish(config_dir)):
+            state = us.finish(config_dir)
+            for line in us.report(state):
                 print(line)
+            if rollback_key.exists(config_dir, state["id"]):
+                # The upgrade has finished; a window broken during the run only changes
+                # what is said about the key, never the result of the stage.
+                try:
+                    end = rollback_key.deadline(state, rollback_key.window_hours(config_dir))
+                except rollback_key.RollbackKeyError as exc:
+                    print(f"WARNING: {exc}. The rollback key of this upgrade stays until "
+                          "the window is fixed or 'papaia-ctl upgrade --finalize -y' deletes "
+                          "it; 'papaia-ctl doctor rollback_window' reports it.",
+                          file=sys.stderr)
+                else:
+                    print(
+                        "The rollback key of this upgrade stays until "
+                        f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(end))}: until "
+                        "then 'papaia-ctl rollback' goes back to the restore point without "
+                        "the operator key. 'papaia-ctl upgrade --finalize -y' deletes it "
+                        "earlier."
+                    )
+        elif args.action == "finalize":
+            removed = us.finalize(config_dir)
+            if removed:
+                print(f"Rollback key(s) deleted: {', '.join(removed)}. Going back now needs "
+                      "the operator key (--identity).")
+            else:
+                print("There is no rollback key left on this host.")
+        elif args.action == "rollback-plan":
+            plan = us.rollback_plan(config_dir, args.restore_point)
+            print(f"ID\t{plan['id']}")
+            print(f"FROM\t{plan['from']}")
+            print(f"TO\t{plan['to']}")
+            print(f"RESTORE_POINT\t{plan['restore_point']}")
+            print(f"FINISHED\t{plan['finished'] if plan['finished'] is not None else '-'}")
+            print(f"ROLLBACK_KEY\t{int(plan['key'])}")
+        elif args.action == "rollback-done":
+            bundle = upgrade.resolve_current_version(config_dir, repo_root)
+            checkout = envtree.resolve_platform_version(repo_root)
+            state = us.rollback_done(config_dir, upgrade_id=args.upgrade_id or "",
+                                     bundle_version=bundle, checkout_version=checkout)
+            print(f"Upgrade to {state['to']} rolled back; the installation is at "
+                  f"{state['from']} again (restore point {state['restore_point']}).")
         elif args.action == "release-lock":
             bundle = upgrade.resolve_current_version(config_dir, repo_root)
             checkout = envtree.resolve_platform_version(repo_root)
@@ -2370,7 +2476,7 @@ def cmd_upgrade_stage(args: argparse.Namespace) -> int:
         else:
             raise us.StageError(f"unknown action {args.action!r}")
     except (us.StageError, backup_crypt.BackupError, suite.SuiteError, upgrade.UpgradeError,
-            ValueError, OSError) as exc:
+            rollback_key.RollbackKeyError, ValueError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     return 0
@@ -3185,7 +3291,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_backup_plan.add_argument("--backup-dir", default=None)
     p_backup_plan.add_argument("--existing-volumes", default=None)
     p_backup_plan.add_argument("--only", default=None)
+    p_backup_plan.add_argument("--rollback-key", default=None)
     p_backup_plan.set_defaults(func=cmd_backup_plan)
+
+    p_rollback_key = sub.add_parser("rollback-key")
+    p_rollback_key.add_argument("action", choices=["create", "identity", "discard", "sweep"])
+    p_rollback_key.add_argument("--upgrade-id", default=None)
+    p_rollback_key.set_defaults(func=cmd_rollback_key)
 
     p_backup_finish = sub.add_parser("backup-finish")
     p_backup_finish.add_argument("--backup-dir", default=None)
@@ -3254,8 +3366,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_upgrade_stage = sub.add_parser("upgrade-stage")
     p_upgrade_stage.add_argument(
         "action",
-        choices=["plan", "identity-check", "restore-point", "begin", "block", "record",
-                 "resume-check", "steps", "finish", "release-lock"],
+        choices=["plan", "identity-check", "restore-point", "kept-key", "begin", "block", "record",
+                 "resume-check", "steps", "finish", "release-lock", "finalize",
+                 "rollback-plan", "rollback-done"],
     )
     p_upgrade_stage.add_argument("--check-file", default=None)
     p_upgrade_stage.add_argument("--target", default=None)
@@ -3271,6 +3384,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_upgrade_stage.add_argument("--steps-file", default=None)
     p_upgrade_stage.add_argument("--result", default=None)
     p_upgrade_stage.add_argument("--seconds", type=int, default=None)
+    p_upgrade_stage.add_argument("--upgrade-id", default=None)
     p_upgrade_stage.set_defaults(func=cmd_upgrade_stage)
 
     p_restore_resolve = sub.add_parser("restore-resolve")

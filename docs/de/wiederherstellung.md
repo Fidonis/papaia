@@ -35,6 +35,33 @@ Empfänger des Punkts ist, oder ein verändertes Archiv führt ebenso zum Abbruc
   (`duration=`) und in das Audit (`restore_applied`, `duration_s`). Das ist die gemessene
   Wiederherstellungszeit; Ziel sind höchstens 60 Minuten.
 
+## Rückweg nach einem Upgrade
+
+Jedes Upgrade erzeugt in Stufe 0 einen einmaligen Rückwegschlüssel. Der Wiederherstellungspunkt
+R0 ist an die Sicherungsempfänger und an diesen Schlüssel verschlüsselt. Der private Teil liegt
+nur auf dem Host (`state/rollback/<upgrade-id>.key`, Ordner `0700`, Datei `0600`) und nie am
+Sicherungsziel.
+
+- **Ein Befehl.** Scheitert das Upgrade, nennt die Ausgabe `tools/papaia-ctl rollback -y`. Der
+  Befehl wechselt den Checkout auf die Ausgangsversion, spielt R0 mit `--restart-clean` zurück
+  (Löschjournale und `post-restore` laufen vor dem Start der Module), hebt die Schreibsperre
+  auf, löscht den Rückwegschlüssel und endet mit `doctor`. Ein Betreiberschlüssel ist dafür
+  nicht nötig.
+- **Frist.** Nach einem erfolgreichen Upgrade bleibt der Schlüssel 72 Stunden
+  (`PAPAIA_ROLLBACK_WINDOW_HOURS`, 24 bis 168). `tools/papaia-ctl upgrade --finalize -y` löscht
+  ihn früher. `tools/papaia-ctl doctor rollback_window` zeigt die Restzeit und meldet `fail`,
+  wenn ein Schlüssel nach Fristende noch vorhanden ist. Die geplante Sicherung entfernt
+  abgelaufene Schlüssel.
+- **Nach der Frist** verlangt `rollback` den Sicherungsschlüssel eines Empfängers
+  (`--identity=<Datei>` oder `--identity=-` mit `-y`). Er wird vor jeder Änderung gegen alle
+  Archive von R0 geprüft.
+- **Datenverlust.** War das Upgrade schon abgeschlossen, hat die Installation seither
+  Änderungen angenommen; sie gehen verloren. `rollback` sagt das und verlangt
+  `--accept-data-loss` oder die Eingabe „ja“; `-y` ersetzt diese Bestätigung nicht.
+- **Ohne Rückwegschlüssel** (`upgrade --no-rollback-key`) prüft Stufe 0 des Upgrades den
+  Sicherungsschlüssel (`--identity`) und bricht ohne passenden Schlüssel ab: „Without a
+  matching backup key there is no way back; the upgrade was not started.“
+
 ## Probewiederherstellung neben dem laufenden Stapel
 
 Eine Probe läuft in einer zweiten Installation mit eigener Docker-Engine (zweiter Host oder

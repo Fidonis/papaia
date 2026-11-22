@@ -72,21 +72,29 @@ The supported upgrade path is:
 
 ```bash
 tools/papaia-ctl upgrade --dry-run --version=1.9.0                 # 1. see every stage
-tools/papaia-ctl upgrade --version=1.9.0 --identity=/path/to/key   # 2. upgrade
+tools/papaia-ctl upgrade --version=1.9.0                           # 2. upgrade
+tools/papaia-ctl upgrade --finalize -y                             # 3. keep it (optional)
 ```
 
-`upgrade` checks the active add-ons against the target release and its suite matrix, checks
-the operator's backup key, takes restore point R0 and switches the write lock on, stops the
+`upgrade` checks the active add-ons against the target release and its suite matrix, makes a
+one-off rollback key for the run, takes restore point R0 (encrypted to the backup recipients
+and to the rollback key) and switches the write lock on, stops the
 stack, moves the checkout to the release tag, runs the migration scripts the release ships
 with, re-renders the configuration and starts the stack again. Then the module stages run
 (Me, Data, Studio, Flow, Assistant, each from the checkout given with `--addon-path`), and
 the write lock ends. Customer overrides under `$PAPAIA_CONFIG_DIR/overlay/` survive
 untouched. Use `--dry-run` first to see the target version, the migrations and every stage.
 
-If a stage fails, the upgrade stops, keeps the write lock and prints the commands to return
-to the previous release: check out its tag, restore R0, `upgrade --release-lock -y`.
-Downgrades are not offered. See the [README](../README.md#upgrade) for stages, the write
-lock and the backup key.
+If a stage fails, the upgrade stops, keeps the write lock and names the way back in one
+command, `papaia-ctl rollback -y`: it checks out the previous tag, restores R0 with the
+rollback key (no operator key needed), ends the write lock and runs `doctor`. The steps one by
+one are printed as well: check out its tag, restore R0, `upgrade --release-lock -y`. The
+rollback key is deleted with `upgrade --finalize -y`, otherwise 72 hours after the upgrade
+finished (`PAPAIA_ROLLBACK_WINDOW_HOURS`, 24 to 168); after that `rollback` needs
+`--identity`. With `--no-rollback-key` the upgrade checks the operator's backup key
+(`--identity`) in stage 0 instead. Downgrades are not offered. See the
+[README](../README.md#upgrade) for stages, the write lock, the rollback key and the backup
+key.
 
 The first upgrade into the release with staged upgrades starts from the installed release
 (1.9.0 or earlier), so its first phase is the old one: `upgrade --version=X.Y.Z -y`, without

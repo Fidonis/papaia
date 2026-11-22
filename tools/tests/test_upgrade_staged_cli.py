@@ -263,8 +263,12 @@ def test_the_lock_is_released_after_the_way_back(clone: dict):
 
 @pytest.mark.parametrize("key", ["missing", "wrong"])
 def test_without_a_matching_key_nothing_is_changed(clone: dict, key: str):
+    """Without a rollback key (RE-85) the operator key is required; a key given is checked
+    in any case."""
     before = _head(clone)
     args = ["--version=1.9.0", "-y", "--insecure-images"]
+    if key == "missing":
+        args.append("--no-rollback-key")
     if key == "wrong":
         wrong = clone["identity"].parent / "wrong.key"
         wrong.write_text(age.generate_identity()[0] + "\n", encoding="utf-8")

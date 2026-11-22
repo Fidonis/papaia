@@ -147,10 +147,13 @@ cmd_backup() {
         recipients|keys|target|key-check) _backup_admin "$@"; return ;;
     esac
     local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention="" keep="" only="" only_given=0
+    local rollback_key=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
+            # Set by `upgrade` for its restore point R0 (lib/rollback_key.py).
+            --rollback-key=*) rollback_key="${1#*=}" ;;
             --retention-period-days=*) retention="${1#*=}" ;;
             --keep=*) keep="${1#*=}" ;;
             --only=*) only="${1#*=}"; only_given=1 ;;
@@ -184,6 +187,10 @@ cmd_backup() {
     local mode
     mode="$(_topology_mode)" || exit 3
     if [ "$mode" = "distributed" ]; then
+        if [ -n "$rollback_key" ]; then
+            error "A rollback key is not available for a distributed installation."
+            exit 2
+        fi
         _backup_distributed "$backup_dir" "$retention" "$only" "$only_given" "$keep"
         return
     fi
@@ -208,6 +215,7 @@ cmd_backup() {
     plan_file="$(_new_tmpfile)"
     local -a plan_extra=()
     [ "$only_given" -eq 1 ] && plan_extra+=(--only="$only")
+    [ -n "$rollback_key" ] && plan_extra+=(--rollback-key="$rollback_key")
     # `tr -d '\r'`: on Windows the Python interpreter emits CRLF, and IFS=$'\t'
     # leaves the CR attached to the last field -- a snapshot path ending in CR
     # makes docker bind-mount (and auto-create) a second, wrong directory.

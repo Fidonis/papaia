@@ -219,6 +219,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # contact_point
         SKIP,  # network: no SQL source, no direct route
         SKIP,  # identity: no federation
+        SKIP,  # rollback_window: no rollback key on this host
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -250,6 +251,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "contact_point",
         "network",
         "identity",
+        "rollback_window",
     )
 
 

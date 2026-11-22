@@ -284,9 +284,12 @@ values unchanged.
 papaia-ctl setup     [OPTIONS]
 papaia-ctl start     [--addons] [--profiles=LIST] [--config-dir=PATH]
 papaia-ctl stop      [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--config-dir=PATH]
-papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--force] [-y] --identity=FILE|-
-                     [--stage=NAME[,NAME]] [--addon-path=NAME=DIR] [--config-dir=PATH]
-papaia-ctl upgrade   --resume --identity=FILE|- [--stage=NAME[,NAME]] | --release-lock [-y]
+papaia-ctl upgrade   [--version=X.Y.Z] [--dry-run] [--force] [-y] [--identity=FILE|-]
+                     [--no-rollback-key] [--stage=NAME[,NAME]] [--addon-path=NAME=DIR]
+                     [--config-dir=PATH]
+papaia-ctl upgrade   --resume [--identity=FILE|-] [--stage=NAME[,NAME]] | --release-lock [-y]
+                     | --finalize [-y]
+papaia-ctl rollback  [--restore-point=R0] [--identity=FILE|-] [--accept-data-loss] [-y]
 papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N]
                      [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
@@ -560,10 +563,12 @@ holds a copy; for the others the module's generated values stay as they are.
 
 ```bash
 tools/papaia-ctl upgrade [--version=X.Y.Z] [--dry-run] [--force] [-y] \
-  [--insecure-images] --identity=FILE|- [--stage=NAME[,NAME]] \
+  [--insecure-images] [--identity=FILE|-] [--no-rollback-key] [--stage=NAME[,NAME]] \
   [--addon-path=NAME=DIR ...] [--config-dir=PATH]
-tools/papaia-ctl upgrade --resume --identity=FILE|- [--stage=NAME[,NAME]] [-y]
+tools/papaia-ctl upgrade --resume [--identity=FILE|-] [--stage=NAME[,NAME]] [-y]
 tools/papaia-ctl upgrade --release-lock [-y]
+tools/papaia-ctl upgrade --finalize [-y]
+tools/papaia-ctl rollback [--restore-point=R0] [--identity=FILE|-] [--accept-data-loss] [-y]
 ```
 
 Moves the installation to a release. Without `--version` the newest release is used;
@@ -587,9 +592,11 @@ The run, in order:
    (digest and signature, see [Image pinning and
    signatures](#image-pinning-and-signatures)); a mismatch aborts before anything is
    changed. `--force` does not lift this; only `--insecure-images` does.
-   Then the backup key of the operator is checked (see *Stages* below); without a
+   Then stage 0 makes the rollback key of this upgrade (see *Rollback key* below); with
+   `--no-rollback-key` the backup key of the operator is checked instead, and without a
    matching key nothing is started.
-4. Creates restore point R0 (`backup`, encrypted to the backup recipients), switches
+4. Creates restore point R0 (`backup`, encrypted to the backup recipients and to the
+   rollback key), switches
    the write lock on and stops the stack. A restore point is mandatory; `--no-backup`
    is refused.
 5. Checks out the release tag and re-executes itself from the new tree, so the
@@ -628,12 +635,31 @@ With `--force` the upgrade goes ahead, and that module is stopped, set inactive 
 the target accepts with `addon install` and start it to bring it back. A module that is not
 installed is not installed by the upgrade.
 
-**Backup key (stage 0).** Until the upgrade has a rollback key of its own, the way back
-needs the backup key of a recipient in `PAPAIA_BACKUP_RECIPIENTS`. Stage 0 therefore asks
-for it with `--identity=FILE` (or `--identity=-` to read it from standard input) and opens a
-check block encrypted to those recipients with it. If that fails, the upgrade stops with
-"Without a matching backup key there is no way back; the upgrade was not started." and
-nothing has changed. The key is only held in memory; it is never written to disk.
+**Rollback key (stage 0).** Stage 0 makes a one-off age key pair for the upgrade. Restore
+point R0 is encrypted to the backup recipients **and** to this key, so `papaia-ctl rollback`
+can open R0 without the operator's private key, also at night with the key safe out of
+reach. The private key lives on this host only, in
+`$PAPAIA_CONFIG_DIR/state/rollback/<upgrade-id>.key` (folder `0700`, file `0600`); `backup`
+never archives `state/`, so it never reaches the backup target. It opens R0 only, that is
+data that lies on this host in clear anyway; the delegation and revocation list keys are
+not in R0. Somebody with access to the backup target alone still cannot read R0.
+
+The key is deleted by `upgrade --finalize -y` once you keep the upgrade, by `rollback` and
+`upgrade --release-lock` (the run ends without the upgrade), and otherwise when its window
+ends: `PAPAIA_ROLLBACK_WINDOW_HOURS` (root `.env`, default `72`, from `24` to `168`) after the
+upgrade finished. `backup` (for example the scheduled one), `upgrade` and `rollback` remove a
+key whose window has ended; `doctor rollback_window` shows the time left and fails for a key
+still there after its window. Every key made or deleted writes one `papaia.audit/1` row
+(`rollback-key`, ids and the public key only).
+
+**Backup key (stage 0, RE-85).** Without a rollback key (`--no-rollback-key`, a distributed
+installation, or when none could be made) the way back needs the backup key of a recipient
+in `PAPAIA_BACKUP_RECIPIENTS`. Stage 0 then asks for it with `--identity=FILE` (or
+`--identity=-` to read it from standard input) and opens a check block encrypted to those
+recipients with it. If that fails, the upgrade stops with "Without a matching backup key
+there is no way back; the upgrade was not started." and nothing has changed. A key given
+with a rollback key in place is checked the same way. The key is only held in memory; it is
+never written to disk. `upgrade --resume` needs it only for a run without a rollback key.
 
 **Write lock.** From restore point R0 until the finish stage, `$PAPAIA_CONFIG_DIR/state/
 write-lock.json` (`papaia.write-lock/1`) is present. It sits next to the halt file in the
@@ -644,7 +670,8 @@ file that cannot be read counts as active. When a stage fails, the lock stays, s
 back to R0 loses no data. The failure output names the way back:
 `git checkout` of the previous tag, `restore --restore-point=R0`, then
 `upgrade --release-lock -y`, which ends the lock only when both the checkout and the
-configuration are back at the release the upgrade started from. A retried
+configuration are back at the release the upgrade started from. The same in one command is
+`papaia-ctl rollback -y` (see [`rollback`](#rollback)). A retried
 `upgrade --version=X.Y.Z` to the same target keeps R0; `upgrade --resume` continues the
 module stages. The state of the run is in `$PAPAIA_CONFIG_DIR/state/upgrade.json`; every
 change of state (begin, each stage, a blocked module, finish, lock released) writes one
@@ -682,6 +709,40 @@ another release than the controller — `start`, `backup`, `setup` and the add-o
 with the reason. `upgrade` and the way back (`restore`) still work, and `start --unlock` releases
 the lock after an upgrade abandoned without a restore point. A failure names the way back for
 the controller and for every node. See [docs/distributed.md](docs/distributed.md#upgrades).
+
+### `rollback`
+
+```bash
+tools/papaia-ctl rollback [--restore-point=R0] [--identity=FILE|-] [--accept-data-loss] [-y] \
+  [--insecure-images] [--config-dir=PATH]
+```
+
+Goes back to restore point R0 of the last upgrade in one command, the command a failed
+upgrade names. It reads the run from `state/upgrade.json`, checks out the release tag the
+upgrade started from, and hands over to that release's `papaia-ctl`, which runs
+`restore --restore-point=R0 --restart-clean` (the add-ons' erasure journals and the
+post-restore step run before any add-on starts again, with the trigger `rollback`), ends the
+run, removes the write lock and the rollback key, and finishes with `doctor`.
+
+- **Key.** While the upgrade's rollback key exists (see *Rollback key* under
+  [`upgrade`](#upgrade)), no operator key is needed. After its window, after
+  `upgrade --finalize`, or for an upgrade without one, pass the backup key of a recipient
+  with `--identity=FILE` or `--identity=-` (standard input, together with `-y`). Before
+  anything changes, the key must open every archive of R0 and each archive must still match
+  its checksum; otherwise the command stops with exit 2 and nothing changed.
+- **Data written after the upgrade.** For an upgrade that already finished, the
+  installation accepted writes after it; they are lost. `rollback` says so and needs
+  `--accept-data-loss` (or typing `ja` at a terminal); `-y` does not replace it. While an
+  upgrade is not finished the write lock kept every write out, so no such confirmation is
+  asked.
+- `--restore-point` may only name R0 of the run; any other point is restored with
+  [`restore`](#restore).
+- Not available for a distributed installation, and only back to a release that has the
+  `rollback` command; otherwise it prints the steps (checkout, `restore`) and changes
+  nothing.
+
+Exit codes: `0` rolled back and `doctor` passed, `2` refused before any change, `3` the
+rollback stopped or `doctor` reports a failure afterwards.
 
 ### `uninstall`
 
@@ -1454,6 +1515,7 @@ raw values behind its summary in `details`.
 | `lifecycle` | Only while the `lifecycle` profile is on: the health report of `papaia-lifecycle` (see [docs/lifecycle.md](docs/lifecycle.md)), read with `docker exec`: the age of its last reconciliation independent of events, deactivated accounts still holding a consent, the revocation list, gap revokes and accounts it could not revoke. | `fail` when the last reconciliation is older than 2 h or none has run, a deactivated account holds a consent, the list is old, missing or does not verify, or the service does not run; `warn` for a gap revoke in the last 7 days, a parked event or an account outside the group of persons; `skip` while the profile is off or where the service runs on another node |
 | `siem` | Only while the `audit` profile is on: the SIEM report of `papaia-audit` (see [docs/audit.md](docs/audit.md#siem)), read with `docker exec`: backlog, lag and failing deliveries per target, targets no longer configured that hold events back, the last hourly chain verification, and the fill level of the `papaia-audit-db` volume (`df` in its container). | `fail` when a target has taken no events for more than 10 minutes, a chain does not verify, the volume is 95 % full or more, or the service does not run; `warn` for more than 60 s behind, from 80 %, for a removed target that still holds events back, when no target is set, when the hourly verification is missing or older than 2 h, and when `PAPAIA_OPERATIONS_MAIL` is set without an active mail relay; `skip` while the profile is off or where the service runs on another node |
 | `identity` | Only with a federation (`security/idp.yaml`, see [docs/federation.md](docs/federation.md)): the status sync of `papaia-lifecycle` with the upstream directory, from the same health report. | `fail` when the status sync has failed for longer than 300 s, has not succeeded in the last 300 s or never ran, when `idp.yaml` or the group map is not usable, when the `lifecycle` profile is off or the service does not run; `skip` without a federation or where the service runs on another node |
+| `rollback_window` | The rollback key of the last upgrade (see *Rollback key* under [`upgrade`](#upgrade)): how long `rollback` still works without the operator key, and the window (`PAPAIA_ROLLBACK_WINDOW_HOURS`). | `fail` for a key still there after its window or after its run ended, for a key file or folder others can read, a key without a recorded upgrade older than 168 h and a window outside 24–168 h; `warn` for a younger key without a recorded upgrade; `skip` without a rollback key |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
 | `contact_point` | A contact point for users is set (`contact.name`, see [Installation settings](#installation-settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set, `fail` for a malformed `overlay/platform/branding.yaml` |
 

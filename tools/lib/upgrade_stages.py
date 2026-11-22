@@ -20,9 +20,12 @@ and answers every write with LOCK_MESSAGE. A lock file that cannot be read count
 active. The lock stays after a failed stage, so the way back loses no data; it ends with
 the finish stage or with `upgrade --release-lock` after the restore of R0.
 
-Until a rollback key exists for the run, stage 0 needs the operator's backup key
-(`--identity=FILE|-`): it must open a check block encrypted to PAPAIA_BACKUP_RECIPIENTS,
-otherwise nothing is started. The key is only held in memory.
+Stage 0 makes a one-off rollback key for the run (lib/rollback_key.py); R0 is encrypted
+to the backup recipients and to it, so `papaia-ctl rollback` goes back to R0 without the
+operator's key. Without a rollback key (`--no-rollback-key`, a distributed installation,
+or none could be made) stage 0 needs the operator's backup key (`--identity=FILE|-`): it
+must open a check block encrypted to PAPAIA_BACKUP_RECIPIENTS, otherwise nothing is
+started. That key is only held in memory.
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import age, backup_crypt, common, deployment, halt, semver
+from . import age, backup_crypt, common, deployment, halt, rollback_key, semver
 
 STATE_FILE = "upgrade.json"
 LOCK_FILE = "write-lock.json"
@@ -507,14 +510,31 @@ def restore_point_for(config_dir: Path, target: str) -> str | None:
     return state["restore_point"]
 
 
+def kept_run_has_key(config_dir: Path, target: str) -> bool:
+    """Whether the unfinished run to `target` a retry continues still has its rollback key.
+    A retry of a run without one needs the operator key again (RE-85)."""
+    if restore_point_for(config_dir, target) is None:
+        raise StageError(f"No unfinished upgrade to {target} to continue.")
+    state = load_state(config_dir)
+    return rollback_key.exists(config_dir, state["id"])
+
+
 def begin(config_dir: Path, *, source: str, target: str, restore_point: str,
-          steps: list[dict]) -> dict:
-    """Stages 0 and 1 done: record R0 and the plan, switch the write lock on."""
+          steps: list[dict], upgrade_id: str | None = None) -> dict:
+    """Stages 0 and 1 done: record R0 and the plan, switch the write lock on.
+
+    `upgrade_id` is the id of the rollback key stage 0 made for this run; a retry keeps
+    the id (and the key) of the run it continues."""
     existing = restore_point_for(config_dir, target)
     previous = load_state(config_dir) if existing else None
+    if upgrade_id is not None:
+        try:
+            rollback_key.check_id(upgrade_id)
+        except rollback_key.RollbackKeyError as exc:
+            raise StageError(str(exc)) from None
     state = {
         "schema": STATE_SCHEMA,
-        "id": previous["id"] if previous else str(uuid.uuid4()),
+        "id": previous["id"] if previous else (upgrade_id or str(uuid.uuid4())),
         "from": _check_version(source, "from"),
         "to": _check_version(target, "to"),
         "started": previous["started"] if previous else int(time.time()),
@@ -526,8 +546,13 @@ def begin(config_dir: Path, *, source: str, target: str, restore_point: str,
     }
     state["stages"]["preflight"]["status"] = "ok"
     state["stages"]["restore-point"]["status"] = "ok"
+    before = previous or load_state(config_dir)
     _save(config_dir, state)
     _set_lock(config_dir, state)
+    if before is not None and before["id"] != state["id"]:
+        # A new run supersedes the one before it: its R0 is no way back any more, so its
+        # rollback key goes now instead of staying as an orphan past its window.
+        rollback_key.delete(config_dir, before["id"], "superseded")
     _audit(config_dir, "upgrade.begin", "write lock on", {
         "upgrade_id": state["id"], "from": source, "to": target,
         "restore_point": state["restore_point"], "retry": bool(previous),
@@ -626,6 +651,83 @@ def release_lock(config_dir: Path, *, bundle_version: str, checkout_version: str
         "upgrade_id": state["id"], "from": state["from"], "to": state["to"],
         "restore_point": state["restore_point"],
     })
+    # The run is over without the upgrade: R0 needs no second way in any more.
+    rollback_key.delete(config_dir, state["id"], "released")
+    return state
+
+
+def finalize(config_dir: Path) -> list[str]:
+    """`upgrade --finalize`: the upgrade stays, so its rollback key goes now instead of at
+    the end of the window. Keys of earlier runs go as well; the key of a run that is not
+    over is refused, because it is the way back of that run."""
+    state = load_state(config_dir)
+    if _unfinished(state):
+        raise StageError(
+            f"The upgrade from {state['from']} to {state['to']} is not finished; its rollback "
+            "key is the way back. Finish it with 'papaia-ctl upgrade --resume' or go back "
+            "with 'papaia-ctl rollback -y'."
+        )
+    removed = []
+    for entry in rollback_key.list_keys(config_dir):
+        if entry.upgrade_id is not None and rollback_key.delete(
+                config_dir, entry.upgrade_id, "finalized"):
+            removed.append(entry.upgrade_id)
+    _audit(config_dir, "upgrade.finalize", "rollback keys deleted", {
+        "upgrade_id": state["id"] if state else None, "deleted": removed,
+    })
+    return removed
+
+
+def rollback_plan(config_dir: Path, restore_point: str | None, *, now: float | None = None
+                  ) -> dict:
+    """What `rollback` goes back to: the last upgrade run, its R0 and whether its rollback
+    key is still there. Refuses without a run, for a run that ended already, and for
+    another restore point than the run's R0."""
+    state = load_state(config_dir)
+    if state is None:
+        raise StageError("No upgrade was recorded on this installation; nothing to roll back.")
+    if state["abandoned"] is not None:
+        raise StageError(
+            f"The upgrade from {state['from']} to {state['to']} was already rolled back or "
+            "abandoned; nothing to roll back."
+        )
+    if restore_point is not None and restore_point != state["restore_point"]:
+        raise StageError(
+            f"The way back of the upgrade to {state['to']} is its restore point "
+            f"{state['restore_point']}, not {restore_point}. For another point use "
+            "'papaia-ctl restore'."
+        )
+    moment = time.time() if now is None else now
+    key = rollback_key.exists(config_dir, state["id"])
+    end = rollback_key.deadline(state, rollback_key.window_hours(config_dir))
+    if key and end is not None and moment >= end:
+        # Past its window the key is no way back any more, also when it was not yet swept.
+        key = False
+    return {"id": state["id"], "from": state["from"], "to": state["to"],
+            "restore_point": state["restore_point"], "finished": state["finished"],
+            "key": key}
+
+
+def rollback_done(config_dir: Path, *, upgrade_id: str, bundle_version: str,
+                  checkout_version: str) -> dict:
+    """After the restore of R0: the checkout and the configuration are back at the release
+    the run started from. The run ends, the write lock goes and so does the rollback key."""
+    state = load_state(config_dir)
+    if state is None or state["id"] != upgrade_id or state["abandoned"] is not None:
+        raise StageError(f"Upgrade {upgrade_id} is not the run to roll back.")
+    if bundle_version != state["from"] or checkout_version != state["from"]:
+        raise StageError(
+            f"The installation is not back at {state['from']} (checkout {checkout_version}, "
+            f"configuration {bundle_version}); the write lock and the rollback key stay."
+        )
+    state["abandoned"] = int(time.time())
+    _save(config_dir, state)
+    _clear_lock(config_dir)
+    _audit(config_dir, "upgrade.rollback", "rolled back to the restore point", {
+        "upgrade_id": state["id"], "from": state["from"], "to": state["to"],
+        "restore_point": state["restore_point"],
+    })
+    rollback_key.delete(config_dir, state["id"], "rolled back")
     return state
 
 

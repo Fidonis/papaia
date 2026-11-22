@@ -26,6 +26,8 @@
 
 _UPGRADE_TMPDIR=""
 _UPGRADE_WORKTREE=""
+# The rollback key stage 0 made, until stage 1 began the run with it (lib/rollback_key.py).
+_UPGRADE_NEW_KEY=""
 # The stage a failure is recorded against.
 _UPGRADE_STAGE="core"
 
@@ -37,6 +39,11 @@ _upgrade_cleanup() {
     if [ -n "$_UPGRADE_TMPDIR" ]; then
         rm -rf "$_UPGRADE_TMPDIR"
         _UPGRADE_TMPDIR=""
+    fi
+    # A run that stopped before stage 1 began needs no way back.
+    if [ -n "$_UPGRADE_NEW_KEY" ]; then
+        py_cli rollback-key discard --upgrade-id="$_UPGRADE_NEW_KEY" >/dev/null 2>&1 || true
+        _UPGRADE_NEW_KEY=""
     fi
     return 0
 }
@@ -112,7 +119,7 @@ _upgrade_addon_check() {
 cmd_upgrade() {
     local config_dir="$DEFAULT_CONFIG_DIR" version="" force=0
     local assume_yes=0 dry_run=0 insecure_images=0
-    local identity="" stage_sel="" resume=0 release_lock=0
+    local identity="" stage_sel="" resume=0 release_lock=0 finalize=0 no_rollback_key=0
     local -a addon_paths=()
     local resume_from="" resume_target="" resume_restore_point=""
     local resume_anchor="" resume_correlation="" resume_stages="" resume_started=""
@@ -130,6 +137,8 @@ cmd_upgrade() {
             --addon-path=*) addon_paths+=(--addon-path="${1#*=}") ;;
             --resume) resume=1 ;;
             --release-lock) release_lock=1 ;;
+            --finalize) finalize=1 ;;
+            --no-rollback-key) no_rollback_key=1 ;;
             --force) force=1 ;;
             --dry-run) dry_run=1 ;;
             --insecure-images) insecure_images=1 ;;
@@ -154,6 +163,9 @@ cmd_upgrade() {
     # The upgrade's own backup, stop and start are not held up by the lock it takes (and
     # a retry by the lock an earlier attempt left).
     [ "$distributed" -eq 1 ] && UPGRADE_IN_PROGRESS=1
+    # The rollback key goes with a restore point of this host's backup; a distributed
+    # installation checks the operator key in stage 0 instead.
+    [ "$distributed" -eq 1 ] && no_rollback_key=1
 
     if [ "$release_lock" -eq 1 ]; then
         if [ "$assume_yes" -eq 0 ]; then
@@ -171,18 +183,38 @@ cmd_upgrade() {
         return 0
     fi
 
+    if [ "$finalize" -eq 1 ]; then
+        if [ "$assume_yes" -eq 0 ]; then
+            if ! is_tty; then
+                error "Refusing to delete the rollback key without confirmation. Re-run with -y."
+                exit 2
+            fi
+            if ! confirm "Delete the rollback key? Going back then needs the operator key." "N"; then
+                error "Aborted."
+                exit 3
+            fi
+        fi
+        _upgrade_correlation
+        py_cli upgrade-stage finalize || exit 2
+        return 0
+    fi
+
     if [ "$resume" -eq 1 ]; then
         _upgrade_correlation
-        local resumed key value r_from="" r_to="" r_point=""
+        local resumed key value r_from="" r_to="" r_point="" r_key=0
         resumed="$(py_cli upgrade-stage resume-check | tr -d '\r')" || exit 2
         while IFS=$'\t' read -r key value; do
             case "$key" in
                 FROM) r_from="$value" ;;
                 TO) r_to="$value" ;;
                 RESTORE_POINT) r_point="$value" ;;
+                ROLLBACK_KEY) r_key="$value" ;;
             esac
         done <<< "$resumed"
-        _upgrade_check_key "$identity" || exit 2
+        # The run's rollback key is the way back; without it the operator key is checked.
+        if [ "$r_key" != "1" ] || [ -n "$identity" ]; then
+            _upgrade_check_key "$identity" || exit 2
+        fi
         _upgrade_module_stages "$r_from" "$r_to" "$r_point" "$stage_sel" "$force" \
             "$insecure_images"
         return 0
@@ -295,6 +327,20 @@ cmd_upgrade() {
     IMAGES_CORRELATION_ID="$(py_cli new-correlation-id)"
     PAPAIA_CORRELATION_ID="$IMAGES_CORRELATION_ID"
     export PAPAIA_CORRELATION_ID
+    # Rollback keys of earlier runs whose window is over go now.
+    py_cli rollback-key sweep || true
+    # A retry continues the run it keeps, with that run's rollback key or without one: a run
+    # begun with --no-rollback-key needs the operator key on every retry as well.
+    local kept_key=0
+    if [ -n "$kept_point" ]; then
+        local kept_out
+        kept_out="$(py_cli upgrade-stage kept-key --target="$target" | tr -d '\r')" || exit 2
+        [ "$kept_out" = "ROLLBACK_KEY"$'\t'"1" ] && kept_key=1
+    fi
+    local needs_identity=0
+    if [ "$no_rollback_key" -eq 1 ] || { [ -n "$kept_point" ] && [ "$kept_key" -eq 0 ]; }; then
+        needs_identity=1
+    fi
 
     # The commit the tag names now: what is checked below is what is checked out later.
     local commit
@@ -382,7 +428,15 @@ cmd_upgrade() {
     if [ "$dry_run" -eq 1 ]; then
         if [ -n "$identity" ]; then
             _upgrade_check_key "$identity" || exit 2
-        else
+        fi
+        if [ "$needs_identity" -eq 0 ] && [ -n "$kept_point" ]; then
+            info "The unfinished run keeps its rollback key: 'papaia-ctl rollback' needs no"
+            info "operator key (--identity) until the window after the upgrade ends."
+        elif [ "$needs_identity" -eq 0 ]; then
+            info "Stage 0 makes a one-off rollback key for this upgrade and R0 is encrypted to"
+            info "it as well: 'papaia-ctl rollback' then needs no operator key (--identity)"
+            info "until the window after the upgrade ends."
+        elif [ -z "$identity" ]; then
             info "Stage 0 needs the backup key of a recipient: there is no rollback key for"
             info "this upgrade, so pass --identity=FILE (or --identity=- for standard input)."
         fi
@@ -391,8 +445,27 @@ cmd_upgrade() {
         return 0
     fi
 
-    # Stage 0, last check: without the key nothing is started.
-    _upgrade_check_key "$identity" || exit 2
+    # Stage 0, last check: without a way back nothing is started. Without a rollback key
+    # (none asked for, or the kept run has none) the operator key must open a check block;
+    # a key given anyway is checked as well.
+    if [ "$needs_identity" -eq 1 ] || [ -n "$identity" ]; then
+        _upgrade_check_key "$identity" || exit 2
+    fi
+    local upgrade_id=""
+    if [ "$no_rollback_key" -eq 0 ] && [ -z "$kept_point" ]; then
+        if _UPGRADE_NEW_KEY="$(py_cli rollback-key create | tr -d '\r')" &&
+                [ -n "$_UPGRADE_NEW_KEY" ]; then
+            upgrade_id="$_UPGRADE_NEW_KEY"
+            info "Stage 0: a rollback key for this upgrade is kept on this host only."
+        elif [ -n "$identity" ]; then
+            _UPGRADE_NEW_KEY=""
+            warn "No rollback key could be made; the way back needs the backup key checked above."
+        else
+            _UPGRADE_NEW_KEY=""
+            error "No rollback key could be made for this upgrade."
+            _upgrade_check_key "" || exit 2
+        fi
+    fi
 
     # --- confirm ----------------------------------------------------------
     warn "The upgrade will remove and recreate the containers (volumes are kept),"
@@ -417,7 +490,9 @@ cmd_upgrade() {
         info "Restore point $restore_point of the unfinished upgrade to $target is kept as R0."
     else
         info "Stage 1: creating restore point R0..."
-        cmd_backup --config-dir="$CONFIG_DIR"
+        local -a backup_flags=(--config-dir="$CONFIG_DIR")
+        [ -n "$upgrade_id" ] && backup_flags+=(--rollback-key="$upgrade_id")
+        cmd_backup ${backup_flags[@]+"${backup_flags[@]}"}
         restore_point="$LAST_BACKUP_ID"
         if [ -z "$restore_point" ]; then
             error "No restore point was created. Nothing has been changed."
@@ -425,7 +500,9 @@ cmd_upgrade() {
         fi
     fi
     py_cli upgrade-stage begin --from="$current" --to="$target" \
-        --restore-point="$restore_point" --steps-file="$steps_file" || exit 3
+        --restore-point="$restore_point" --steps-file="$steps_file" \
+        ${upgrade_id:+--upgrade-id="$upgrade_id"} || exit 3
+    _UPGRADE_NEW_KEY=""
     info "Write lock on: every module accepts reads only until the upgrade ends."
     local stage_started
     stage_started="$(date +%s)"
@@ -731,7 +808,8 @@ _upgrade_module_stages() {
     done 3<<< "$steps"
     if [ "$finish" -eq 0 ]; then
         warn "The write lock stays on until the remaining stages ran:"
-        warn "    papaia-ctl upgrade --resume --identity=FILE [--stage=NAME[,NAME]]"
+        warn "    papaia-ctl upgrade --resume [--stage=NAME[,NAME]]"
+        warn "  (with --identity=FILE when the upgrade has no rollback key)"
         return 0
     fi
     _UPGRADE_STAGE="finish"
@@ -792,6 +870,11 @@ _upgrade_failed() {
     error "The checkout is on v$target and $situation."
     error "The write lock stays on: every module accepts reads only, so going back loses no data."
     error ""
+    if [ -n "$restore_point" ] && [ "${UPGRADE_IN_PROGRESS:-0}" != "1" ]; then
+        error "To go back to $from in one command:"
+        error "    papaia-ctl rollback -y --config-dir=$CONFIG_DIR"
+        error "or step by step."
+    fi
     error "To go back to $from:"
     error "    git -C $REPO_ROOT checkout $previous_tag"
     if [ -n "$restore_point" ]; then
@@ -826,9 +909,229 @@ _upgrade_failed() {
         error "restore point $restore_point is kept."
     else
         error "To continue after fixing the cause:"
-        error "    papaia-ctl upgrade --resume --identity=FILE --config-dir=$CONFIG_DIR"
+        error "    papaia-ctl upgrade --resume --config-dir=$CONFIG_DIR"
+        error "  (with --identity=FILE when the upgrade has no rollback key)"
     fi
     exit 3
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# papaia-ctl rollback: back to restore point R0 of the last upgrade in one command
+# (lib/upgrade_stages.py, lib/rollback_key.py). Like `upgrade` it runs in two phases,
+# split by the checkout:
+#
+#   phase 1 (this release)   the run and R0 from the upgrade state, the key (the run's
+#                            rollback key, or --identity), the check that the key opens
+#                            every archive of R0, the confirmation, `git checkout v<from>`
+#   phase 2 (from release)   `restore --restart-clean` of R0 (erasure journals and the
+#                            post-restore step run before the add-ons start), the run
+#                            ends, the write lock and the rollback key go, `doctor`
+#
+# The key reaches phase 2 on standard input only, never as a file, argument or variable
+# of the environment.
+# ─────────────────────────────────────────────────────────────────────────
+cmd_rollback() {
+    local config_dir="$DEFAULT_CONFIG_DIR" restore_point="" identity="" assume_yes=0
+    local accept_loss=0 insecure_images=0 resume_id="" resume_point=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --restore-point=*) restore_point="${1#*=}" ;;
+            --identity=*)
+                identity="${1#*=}"
+                if [ -z "$identity" ]; then
+                    error "--identity needs a key file or - (the key on standard input)."
+                    exit 2
+                fi
+                ;;
+            --accept-data-loss) accept_loss=1 ;;
+            --insecure-images) insecure_images=1 ;;
+            -y|--yes) assume_yes=1 ;;
+            --resume-upgrade-id=*) resume_id="${1#*=}" ;;
+            --resume-restore-point=*) resume_point="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for rollback: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "'rollback' is not available for a distributed installation; go back with the"
+        error "steps 'upgrade' printed (checkout, restore, upgrade --release-lock)."
+        exit 2
+    fi
+    if [ -n "$resume_id" ]; then
+        _rollback_apply "$resume_id" "$resume_point" "$insecure_images" "$assume_yes" \
+            "$accept_loss"
+        return 0
+    fi
+    if [ "$identity" = "-" ] && [ "$assume_yes" -eq 0 ]; then
+        error "--identity=- reads the key from standard input, which then cannot answer"
+        error "the confirmation. Add -y to confirm the rollback, or pass --identity=FILE."
+        exit 2
+    fi
+    _upgrade_correlation
+    py_cli rollback-key sweep || true
+
+    local plan key value id="" from="" to="" point="" finished="" has_key=0
+    local -a plan_flags=()
+    [ -n "$restore_point" ] && plan_flags+=(--restore-point="$restore_point")
+    plan="$(py_cli upgrade-stage rollback-plan ${plan_flags[@]+"${plan_flags[@]}"} \
+        | tr -d '\r')" || exit 2
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            ID) id="$value" ;;
+            FROM) from="$value" ;;
+            TO) to="$value" ;;
+            RESTORE_POINT) point="$value" ;;
+            FINISHED) finished="$value" ;;
+            ROLLBACK_KEY) has_key="$value" ;;
+        esac
+    done <<< "$plan"
+
+    local commit
+    if ! commit="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "v$from^{commit}")" ||
+            [ -z "$commit" ]; then
+        error "The release tag v$from is not in $REPO_ROOT; nothing was changed."
+        exit 2
+    fi
+    # Phase 2 runs the papaia-ctl of $from; a release without the command cannot finish it.
+    if ! git -C "$REPO_ROOT" show "$commit:tools/lib/sh/upgrade.sh" 2>/dev/null \
+            | grep -q '^cmd_rollback()'; then
+        error "Release $from has no 'rollback' command. Go back step by step (nothing was changed):"
+        error "    git -C $REPO_ROOT checkout v$from"
+        error "    papaia-ctl restore --restore-point=$point --restart-clean --config-dir=$CONFIG_DIR"
+        exit 2
+    fi
+    if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]; then
+        error "The checkout has uncommitted changes to tracked files; the rollback has to move"
+        error "it to v$from. Commit, stash or discard them first. Nothing was changed."
+        exit 2
+    fi
+
+    # The key, checked against every archive of R0 before anything changes.
+    local key_text=""
+    if [ -n "$identity" ]; then
+        key_text="$(py_cli backup-identities --identity="$identity")" || exit 2
+    elif [ "$has_key" = "1" ]; then
+        key_text="$(py_cli rollback-key identity --upgrade-id="$id")" || exit 2
+        info "Using the rollback key of the upgrade to $to; no operator key is needed."
+    else
+        error "There is no rollback key for the upgrade to $to any more (its window ended or"
+        error "it was deleted). Pass the backup key of a recipient: --identity=FILE, or"
+        error "--identity=- together with -y. Nothing was changed."
+        exit 2
+    fi
+    if ! printf '%s\n' "$key_text" | py_cli restore-resolve --restore-point="$point" --identity=- \
+            >/dev/null; then
+        error "The key does not open restore point $point; nothing was changed."
+        exit 2
+    fi
+
+    warn "Rollback of the upgrade $from → $to: the checkout goes back to v$from, restore point"
+    warn "$point is restored with --restart-clean (named volumes are deleted first) and the"
+    warn "stack starts again."
+    if [ "$finished" != "-" ] && [ "$accept_loss" -eq 0 ]; then
+        warn "The upgrade finished at $finished and the installation accepted writes since"
+        warn "then. They are lost: the installation goes back to the state before the upgrade."
+        if [ "$assume_yes" -eq 0 ] && is_tty; then
+            local answer=""
+            read -r -p "Type 'ja' to accept the loss of these writes: " answer
+            if [ "$answer" != "ja" ] && [ "$answer" != "yes" ]; then
+                error "Aborted; nothing was changed."
+                exit 3
+            fi
+        else
+            error "Confirm the loss with --accept-data-loss (-y does not). Nothing was changed."
+            exit 2
+        fi
+    fi
+    if [ "$assume_yes" -eq 0 ]; then
+        if ! is_tty; then
+            error "Refusing to roll back without confirmation. Re-run with -y in non-interactive contexts."
+            exit 2
+        fi
+        if ! confirm "Roll back to $from?" "N"; then
+            error "Aborted."
+            exit 3
+        fi
+    fi
+
+    info "Moving the checkout back to v$from..."
+    if ! git -C "$REPO_ROOT" checkout --detach --quiet "$commit"; then
+        error "Could not check out v$from; nothing was changed."
+        exit 3
+    fi
+    _upgrade_log "$to" "$from" rollback "restore_point=$point"
+    # Confirmed above; the second phase checks the run, R0 and the data-loss answer again.
+    local -a flags=(--config-dir="$CONFIG_DIR" --resume-upgrade-id="$id"
+        --resume-restore-point="$point" -y)
+    [ "$finished" != "-" ] && flags+=(--accept-data-loss)
+    [ "$insecure_images" -eq 1 ] && flags+=(--insecure-images)
+    # The papaia-ctl of $from, through the interpreter (see the handoff in cmd_upgrade);
+    # the key travels on standard input.
+    exec "${BASH:-bash}" "$REPO_ROOT/tools/papaia-ctl" rollback ${flags[@]+"${flags[@]}"} \
+        < <(printf '%s\n' "$key_text")
+}
+
+# Phase 2 of `rollback`, from the release the upgrade started from. The key is on
+# standard input. $1 upgrade id, $2 restore point R0, $3 1 for --insecure-images,
+# $4 1 for -y, $5 1 for --accept-data-loss
+#
+# Reachable from the command line as well, so it never trusts phase 1: the point must be
+# R0 of the recorded run with this id, and a finished upgrade needs the loss of its
+# writes confirmed, before anything is restored.
+_rollback_apply() {
+    local id="$1" point="$2" insecure_images="${3:-0}" assume_yes="${4:-0}" accept_loss="${5:-0}"
+    if [ -z "$point" ]; then
+        error "--resume-upgrade-id needs --resume-restore-point; both are set by 'rollback'."
+        exit 2
+    fi
+    _upgrade_correlation
+    local plan key value plan_id="" finished=""
+    plan="$(py_cli upgrade-stage rollback-plan --restore-point="$point" | tr -d '\r')" || exit 2
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            ID) plan_id="$value" ;;
+            FINISHED) finished="$value" ;;
+        esac
+    done <<< "$plan"
+    if [ "$plan_id" != "$id" ]; then
+        error "Upgrade $id is not the run to roll back; nothing was changed."
+        exit 2
+    fi
+    if [ "$finished" != "-" ] && [ "$accept_loss" -eq 0 ]; then
+        error "The upgrade finished at $finished; confirm the loss of the writes since then"
+        error "with --accept-data-loss. Nothing was changed."
+        exit 2
+    fi
+    if [ "$assume_yes" -eq 0 ]; then
+        error "Refusing to restore $point without confirmation; run 'papaia-ctl rollback'."
+        exit 2
+    fi
+    info "Continuing the rollback with the papaia-ctl of the checkout."
+    # The add-ons' erasure journals run with the trigger `rollback` (lib/module_actions.py).
+    # shellcheck disable=SC2034  # read by cmd_restore in lib/sh/backup.sh
+    RESTORE_TRIGGER="rollback"
+    local -a flags=(--config-dir="$CONFIG_DIR" --restore-point="$point" --restart-clean
+        --identity=- -y)
+    [ "$insecure_images" = "1" ] && flags+=(--insecure-images)
+    cmd_restore ${flags[@]+"${flags[@]}"}
+    if ! py_cli upgrade-stage rollback-done --upgrade-id="$id"; then
+        error "Restore point $point was restored, but the run could not be closed; the write"
+        error "lock stays. Check the installation, then run 'papaia-ctl upgrade --release-lock -y'."
+        exit 3
+    fi
+    local rc=0
+    cmd_doctor --config-dir="$CONFIG_DIR" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        error "The rollback is complete, but doctor reports a failure (above)."
+        exit 3
+    fi
+    success "rollback complete: back at restore point $point."
 }
 
 # Run one migration script in a subshell. $1 id, $2 version, $3 path, $4 kind,

@@ -2577,6 +2577,89 @@ def check_identity(ctx: Context) -> CheckResult:
     return CheckResult(name, PASS, f"last status sync {age} s ago", details)
 
 
+def _hours_left(seconds: float) -> str:
+    hours, rest = divmod(max(int(seconds), 0) // 60, 60)
+    return f"{hours} h {rest:02d} min"
+
+
+def check_rollback_window(ctx: Context) -> CheckResult:
+    """The rollback key of the last upgrade (`doctor rollback_window`, BE-11, RE-11): how
+    long `rollback` still works without the operator key. `fail` for a key that is still
+    there after its window or after its run ended, for a key file others can read, and
+    for a malformed window setting; `skip` without any key."""
+    from . import rollback_key, upgrade_stages
+
+    name = "rollback_window"
+    if not ctx.configured:
+        return _not_set_up(name)
+    now = ctx.now.timestamp()
+    try:
+        hours = rollback_key.window_hours(ctx.config_dir)
+        state = upgrade_stages.load_state(ctx.config_dir)
+        keys = rollback_key.classify(ctx.config_dir, state, hours, now)
+    except (rollback_key.RollbackKeyError, upgrade_stages.StageError, OSError) as exc:
+        return CheckResult(name, FAIL, str(exc))
+    details: dict[str, Any] = {
+        "window_hours": hours,
+        "keys": [
+            {"upgrade_id": k.upgrade_id, "state": k.kind,
+             "deadline": None if k.deadline is None else
+             datetime.fromtimestamp(k.deadline, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            for k in keys
+        ],
+    }
+    if not keys:
+        return CheckResult(name, SKIP, "no rollback key on this host; 'rollback' needs the "
+                                       "operator key (--identity)", details)
+    problems: list[str] = []
+    warnings: list[str] = []
+    passes: list[str] = []
+    folder = rollback_key.key_dir(ctx.config_dir)
+    try:
+        if os.lstat(folder).st_mode & 0o077:
+            problems.append(f"{folder} is open to others than its owner (0700 expected)")
+    except OSError as exc:
+        problems.append(f"{folder} cannot be read ({exc.strerror})")
+    for entry in rollback_key.list_keys(ctx.config_dir):
+        if entry.mode & 0o077:
+            problems.append(f"{entry.path.name} is readable by others than its owner")
+    for key in keys:
+        when = None if key.deadline is None else datetime.fromtimestamp(
+            key.deadline, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        if key.kind == "bad":
+            problems.append(f"{key.path.name} is not a rollback key file")
+        elif key.kind == "expired":
+            problems.append(
+                f"the rollback key of upgrade {key.upgrade_id} is still there although its "
+                f"window ended {when}; delete it with 'papaia-ctl upgrade --finalize -y'"
+            )
+        elif key.kind == "ended":
+            problems.append(
+                f"the rollback key of upgrade {key.upgrade_id} is still there although the "
+                "run ended; delete it with 'papaia-ctl upgrade --finalize -y'"
+            )
+        elif key.kind == "orphan":
+            text = f"rollback key {key.upgrade_id} belongs to no recorded upgrade"
+            if key.deadline is not None and now >= key.deadline:
+                problems.append(f"{text}; delete it with 'papaia-ctl upgrade --finalize -y'")
+            else:
+                warnings.append(text)
+        elif key.kind == "running":
+            passes.append(
+                f"upgrade to {state['to']} in progress; its rollback key stays until it ends"
+            )
+        else:
+            passes.append(
+                f"'rollback' works without the operator key for {_hours_left(key.deadline - now)}"
+                f" more (until {when})"
+            )
+    if problems:
+        return CheckResult(name, FAIL, "; ".join(problems), details)
+    if warnings:
+        return CheckResult(name, WARN, "; ".join(warnings + passes), details)
+    return CheckResult(name, PASS, "; ".join(passes), details)
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -2601,6 +2684,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("contact_point", check_contact_point),
     ("network", check_network),
     ("identity", check_identity),
+    ("rollback_window", check_rollback_window),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

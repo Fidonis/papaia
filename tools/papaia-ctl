@@ -38,11 +38,15 @@
 #   papaia-ctl stop          [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--node=NAME]
 #                            [--config-dir=PATH]
 #   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--force] [-y] [--insecure-images]
-#                            --identity=FILE|- [--stage=NAME[,NAME]] [--addon-path=NAME=DIR]
-#                            [--config-dir=PATH] — stages: core, me, data, studio, flow,
-#                            assist, finish; restore point R0 and write lock first
-#   papaia-ctl upgrade --resume --identity=FILE|- [--stage=NAME[,NAME]] [-y]
+#                            [--identity=FILE|-] [--no-rollback-key] [--stage=NAME[,NAME]]
+#                            [--addon-path=NAME=DIR] [--config-dir=PATH] — stages: core, me,
+#                            data, studio, flow, assist, finish; rollback key, restore point
+#                            R0 and write lock first (--identity needed with --no-rollback-key)
+#   papaia-ctl upgrade --resume [--identity=FILE|-] [--stage=NAME[,NAME]] [-y]
 #   papaia-ctl upgrade --release-lock [-y] — after going back to R0
+#   papaia-ctl upgrade --finalize [-y] — delete the rollback key before its window ends
+#   papaia-ctl rollback      [--restore-point=R0] [--identity=FILE|-] [--accept-data-loss] [-y]
+#                            [--config-dir=PATH] — back to R0 of the last upgrade
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl backup        [--backup-dir=PATH] [--keep=N] [--retention-period-days=N]
 #                            [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
@@ -164,6 +168,8 @@
 # release it just checked out:
 #   --resume-from=X.Y.Z --resume-target=X.Y.Z [--resume-restore-point=ID]
 #   [--resume-stages=LIST] [--resume-started=EPOCH]
+# and by 'rollback' from the release it went back to: --resume-upgrade-id=ID
+#   --resume-restore-point=ID (only for the run's R0, with its data-loss confirmation)
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -173,7 +179,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,166p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,172p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -270,6 +276,7 @@ case "$cmd" in
     start)         cmd_start "$@" ;;
     stop)          cmd_stop "$@" ;;
     upgrade)       cmd_upgrade "$@" ;;
+    rollback)      cmd_rollback "$@" ;;
     # One name for the operation, not two: 'update' means "refresh the package
     # index" in the most widespread precedent (apt), which is the opposite of
     # what this does.
