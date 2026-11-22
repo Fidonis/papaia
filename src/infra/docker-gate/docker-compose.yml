@@ -1,0 +1,71 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Docker socket broker · papaia-docker-gate
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Runs with the manager — profile `manager`.
+#
+# Access to the Docker socket is equivalent to root on the host. The gate is the one
+# holder of the socket the manager is meant to reach (docs/docker-gate.md):
+#
+#   papaia-manager -> papaia-docker-gate-net (internal) -> papaia-docker-gate -> socket
+#
+# Allowed: status of the containers of the named projects (DOCKER_GATE_PROJECTS, the
+# installation's own compose project) and `start`/`stop` of those containers. Refused
+# with 403 and one `papaia.audit/1` row: `exec`, `create` (with or without host mounts),
+# containers of other projects and every other Docker API call.
+#
+# Safety:
+#   - No port is published. papaia-docker-gate-net is internal and holds only the gate
+#     and papaia-manager; no add-on may attach the gate (lib/compat.py).
+#   - The socket is mounted read-only. A read-only mount does not stop requests over a
+#     Unix socket: the allow list in the gate is the control.
+#   - Runs as an unprivileged user with the group that owns the socket (DOCKER_GID),
+#     read-only, without capabilities.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+services:
+
+  papaia-docker-gate:
+    # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
+    # standard-library Python file on a pinned Python base. Built, signed and pinned by
+    # tools/build-images.
+    image: ghcr.io/fidonis/papaia-docker-gate:1.9.0@sha256:78dfdc1e118406d89803573f4146a07d552617b30ba550b1a09f94ee8d473b1e
+    restart: unless-stopped
+    command: ["python3", "-I", "/opt/papaia-docker-gate/docker_gate.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DOCKER_GATE_PROJECTS: "${COMPOSE_PROJECT_NAME}"
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+        bind:
+          # Without a Docker socket the gate has nothing to do; never create one.
+          create_host_path: false
+    read_only: true
+    healthcheck:
+      # Asks the kernel whether port 2375 (0x0947) has a listener (state 0A).
+      # No request is made, so no audit line is written for the check.
+      test: ["CMD-SHELL", "grep -qiE ':0947 [0-9A-F:]+ 0A ' /proc/net/tcp /proc/net/tcp6"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - papaia-docker-gate-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-docker-gate
+      de.fidonis.role:   docker-gate
+    profiles: [manager]
+
+networks:
+  # Only papaia-manager and the gate; no route out.
+  papaia-docker-gate-net:
+    driver: bridge
+    internal: true

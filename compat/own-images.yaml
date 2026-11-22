@@ -51,3 +51,12 @@ images:
     services: [papaia-people]
     license: MIT
     license_class: P
+  - name: ghcr.io/fidonis/papaia-docker-gate
+    dockerfile: src/infra/docker-gate/Dockerfile
+    inputs:
+      - src/infra/docker-gate/Dockerfile
+      - src/infra/docker-gate/docker_gate.py
+      - src/infra/docker-gate/THIRD_PARTY_LICENSES.md
+    services: [papaia-docker-gate]
+    license: MIT
+    license_class: P

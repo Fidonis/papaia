@@ -191,8 +191,9 @@ def compose_files(root_compose: Path) -> list[Path]:
 
 # Core services no add-on network may reach: the audit database is on
 # papaia-audit-net only (docs/audit.md), like its one-shot schema step; add-ons deliver
-# events to papaia-audit.
-NEVER_ATTACHABLE = frozenset({"papaia-audit-db", "papaia-audit-schema"})
+# events to papaia-audit. The Docker socket broker shares its network with papaia-manager
+# alone (docs/docker-gate.md).
+NEVER_ATTACHABLE = frozenset({"papaia-audit-db", "papaia-audit-schema", "papaia-docker-gate"})
 
 
 def resolve_core_services(repo_root: Path) -> dict[str, list[str]] | None:

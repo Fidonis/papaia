@@ -1625,6 +1625,11 @@ the mounts above cannot be satisfied there. Every other profile is unaffected â€
 Mounting the Docker socket grants the container root-equivalent access to the host.
 That is inherent to an orchestration UI; the mitigations are role gating on every
 route, an audit log, and keeping `MANAGER_ADMIN_ROLE` a host-administrator role.
+The core ships the broker `papaia-docker-gate` (docs/docker-gate.md) on the internal
+network `papaia-docker-gate-net`, shared with the manager alone: it allows the status
+and `start`/`stop` of the installation's own containers and refuses `exec`, `create`
+and every other call with an audit row. Once the manager reaches Docker only through
+it, the socket mount above goes away.
 
 ### Catalogues and snapshot pinning
 

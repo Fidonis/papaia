@@ -21,6 +21,8 @@ Welcome to the papAIa documentation.
   one key per module, no stored contents
 - [Platform halt](./halt.md) — `papaia-ctl halt`: stop every write, send and delete of the
   installation with one host command
+- [The Docker socket broker](./docker-gate.md) — papaia-docker-gate: the manager's only way to
+  Docker, status and start/stop of the installation's containers
 - [The audit store](./audit.md) — papaia-audit: ingest over mutual TLS, hash chain per source,
   verification and signed chain heads, the read API with pseudonyms and the person filter
   that needs a reason and a second person

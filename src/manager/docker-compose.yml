@@ -85,6 +85,9 @@ services:
       start_period: 15s
     networks:
       - papaia-net
+      # Shared with papaia-docker-gate alone; internal. The gate allows status and
+      # start/stop of the installation's own containers (docs/docker-gate.md).
+      - papaia-docker-gate-net
     security_opt: [no-new-privileges:true]
     labels:
       de.fidonis.module: papaia-manager

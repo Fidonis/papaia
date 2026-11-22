@@ -1712,7 +1712,9 @@ the same thing inside the container as on the host — **path parity**:
 Granting a container access to the Docker socket is granting it root on the host. That is
 inherent to what the manager does, and the reason its access is role-gated and its
 operations are recorded in `$PAPAIA_CONFIG_DIR/manager/audit.log`. Expose it behind TLS and
-treat `MANAGER_ADMIN_ROLE` as a host-administrator role.
+treat `MANAGER_ADMIN_ROLE` as a host-administrator role. With the manager profile the core also
+starts `papaia-docker-gate`, a broker that allows only the status and `start`/`stop` of the
+installation's containers ([docs/docker-gate.md](docs/docker-gate.md)).
 
 ### State
 
@@ -2533,7 +2535,7 @@ whose upstream keeps no tag for the pinned build may stay digest-only through an
 at most 90 days. The sidecar image of `backup` is pinned the same way.
 
 **Own images of the core.** Services that run code of this repository (`papaia-egress`,
-`papaia-lifecycle`, `papaia-audit`, `papaia-people`) run it from images built here, `ghcr.io/fidonis/papaia-<service>`, listed
+`papaia-lifecycle`, `papaia-audit`, `papaia-people`, `papaia-docker-gate`) run it from images built here, `ghcr.io/fidonis/papaia-<service>`, listed
 in [`compat/own-images.yaml`](compat/own-images.yaml) and pinned with the core `VERSION` as
 tag. `tools/build-images` builds them for linux/amd64 and linux/arm64 (reproducibly: the same
 inputs give the same digest), signs them, pins the digests and prints their entries for the

@@ -179,6 +179,9 @@ ATTACHABLE_SERVICES = {
     "papaia-audit": ["audit"],
     "papaia-audit-db": ["audit"],
     "papaia-audit-schema": ["audit"],
+    # The manager's Docker socket broker (docs/docker-gate.md); never attachable
+    # (compat.NEVER_ATTACHABLE): its network holds the manager and the gate only.
+    "papaia-docker-gate": ["manager"],
     "papaia-manager": ["manager"],
     # The single exit (always on). An add-on reaches it through `networks.egress`,
     # which joins it to the add-on's egress network; see lib/egress.py.

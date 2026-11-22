@@ -49,6 +49,7 @@ def test_the_core_builds_its_own_images_for_the_services_that_run_its_code():
         "ghcr.io/fidonis/papaia-lifecycle",
         "ghcr.io/fidonis/papaia-audit",
         "ghcr.io/fidonis/papaia-people",
+        "ghcr.io/fidonis/papaia-docker-gate",
     }
     assert declared["ghcr.io/fidonis/papaia-egress"].services == ("papaia-egress",)
     assert declared["ghcr.io/fidonis/papaia-lifecycle"].services == ("papaia-lifecycle",)
@@ -57,6 +58,7 @@ def test_the_core_builds_its_own_images_for_the_services_that_run_its_code():
         "papaia-audit-schema",
     )
     assert declared["ghcr.io/fidonis/papaia-people"].services == ("papaia-people",)
+    assert declared["ghcr.io/fidonis/papaia-docker-gate"].services == ("papaia-docker-gate",)
     for image in declared.values():
         assert image.license == "MIT"
         assert image.license_class == "P"
