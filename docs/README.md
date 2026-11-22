@@ -41,9 +41,20 @@ Welcome to the papAIa documentation.
 - [Parallel Search MCP in LibreChat](./parallel-search-mcp.md) — opt-in hosted web search
   through the customer overlay
 
+### Delivery documents in German
+
+- [Datenschutzunterlagen](./de/datenschutz/index.md) — records of processing, logging, why no
+  performance or behaviour control is offered, input for a data protection impact assessment,
+  technical and organisational measures, points for a works agreement
+- [Lizenz und Bezug](./de/betrieb/lizenz-und-bezug.md) — license, cost and contract per
+  component, image sourcing and availability, exit, support and security fixes
+- [Nachweis mit dem ausgelieferten Modell](./de/betrieb/modellnachweis.md) — how the modules are
+  checked with the smallest shipped model and what the report holds
+
 ## Conventions
 
-- All documentation is written in **English**.
+- All documentation is written in **English**, except the delivery documents for operators,
+  data protection officers and works councils under [`de/`](./de/), which are German.
 - Markdown is the primary format.
 - Code samples use fenced blocks with a language tag for syntax highlighting.
 

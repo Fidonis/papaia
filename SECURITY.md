@@ -4,13 +4,21 @@ We take the security of papAIa seriously. Thanks for helping us keep it safe.
 
 ## Supported versions
 
-Security fixes are issued for the latest published release.
-Older releases receive only critical-severity fixes on a best-effort basis.
+Security fixes are issued for the current and the previous minor release
+line. The end of a line is announced at least six months ahead. A fix
+release for a critical finding follows within 14 days, for a high finding
+within 30 days of it becoming known; operators are notified within 72 hours
+through the manager banner and the release notes.
 
 | Version | Status |
 |---|---|
-| Latest release | supported |
-| Older releases | critical fixes only |
+| Current minor line | supported |
+| Previous minor line | supported |
+| Older lines | not supported |
+
+The German delivery document
+[`docs/de/betrieb/lizenz-und-bezug.md`](docs/de/betrieb/lizenz-und-bezug.md)
+states the same policy for operators.
 
 ## Reporting a vulnerability
 
