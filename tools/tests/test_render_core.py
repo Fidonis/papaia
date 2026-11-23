@@ -676,7 +676,32 @@ def test_each_removal_changes_the_localai_label(repo_root, config_dir):
     assert list(services["localai"]) == ["labels"]
 
 
-_NOT_UTF8 = b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00\xff\xfe\x89PNG\r\n\x1a\n"
+class _NumberLikeHex:
+    """A random value or digest whose first 16 hex digits read as a number when not quoted."""
+
+    hex = "0e17342021637129" + "0" * 16
+
+    def update(self, data: bytes) -> None:
+        pass
+
+    def hexdigest(self) -> str:
+        return self.hex
+
+
+def test_a_localai_label_that_looks_like_a_number_is_quoted(repo_root, config_dir, monkeypatch):
+    _install_localai(repo_root, "")
+    _setup_minimal(repo_root, config_dir)
+    _localai_overlay(config_dir, "models/own.yaml", "name: own\n")
+    render_core.render(config_dir, repo_root)
+    (config_dir / "overlay" / "ai" / "localai" / "models" / "own.yaml").unlink()
+    monkeypatch.setattr(render_core.uuid, "uuid4", _NumberLikeHex)
+    render_core.render(config_dir, repo_root)
+
+    override = (config_dir / render_core.LOCALAI_MODELS_OVERRIDE).read_text(encoding="utf-8")
+    assert '"0e17342021637129"' in override
+
+
+_NOT_UTF8 =b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00\xff\xfe\x89PNG\r\n\x1a\n"
 
 
 def test_a_binary_file_in_the_localai_models_overlay_is_ignored(repo_root, config_dir):
@@ -1025,6 +1050,61 @@ def test_render_mounts_addon_agents_and_prompts(repo_root, config_dir):
     }
     assert all(v["read_only"] for v in librechat["volumes"])
     assert len(librechat["labels"]["org.papaia.addon-content"]) == 16
+
+
+def test_an_addon_content_label_that_looks_like_a_number_is_quoted(
+    repo_root, config_dir, monkeypatch
+):
+    _setup_minimal(repo_root, config_dir)
+    _librechat_addon(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    monkeypatch.setattr(render_core.hashlib, "sha256", _NumberLikeHex)
+    render_core.render_librechat_addon_content(config_dir, repo_root)
+
+    text = (config_dir / render_core.LIBRECHAT_ADDON_OVERRIDE).read_text(encoding="utf-8")
+    assert '"0e17342021637129"' in text
+    # Only strings are quoted: Compose wants a boolean here, not the string "true".
+    volumes = _override(config_dir)["services"]["librechat"]["volumes"]
+    assert all(v["read_only"] is True for v in volumes)
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
+def test_compose_reads_the_addon_override_as_written(tmp_path, monkeypatch):
+    """The label keeps its digits and the mounts stay read-only, also for a long source path
+    with blanks."""
+    probe = subprocess.run(["docker", "compose", "version"], capture_output=True, check=False)
+    if probe.returncode != 0:
+        pytest.skip("docker compose is not installed")
+    repo_root = tmp_path / "repo"
+    shutil.copytree(FIXTURES_DIR / "repo", repo_root)
+    config_dir = tmp_path / ("a long directory name with blanks " * 3).strip() / "papaia-config"
+    _setup_minimal(repo_root, config_dir)
+    _librechat_addon(repo_root, config_dir)
+    render_core.render(config_dir, repo_root)
+    monkeypatch.setattr(render_core.hashlib, "sha256", _NumberLikeHex)
+    render_core.render_librechat_addon_content(config_dir, repo_root)
+
+    base = tmp_path / "docker-compose.yml"
+    base.write_text(
+        "services:\n  librechat:\n    image: example.org/librechat:1\n", encoding="utf-8"
+    )
+    override = config_dir / render_core.LIBRECHAT_ADDON_OVERRIDE
+    done = subprocess.run(
+        ["docker", "compose", "-p", "label-check", "-f", str(base), "-f", str(override)]
+        + ["config", "--format", "json"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    librechat = json.loads(done.stdout)["services"]["librechat"]
+    assert librechat["labels"]["org.papaia.addon-content"] == "0e17342021637129"
+    assert {v["source"] for v in librechat["volumes"]} == {
+        str(config_dir / "ai/librechat/addon-agents"),
+        str(config_dir / "ai/librechat/addon-prompts"),
+    }
+    assert all(v["read_only"] is True for v in librechat["volumes"])
 
 
 def test_changed_content_changes_the_label(repo_root, config_dir):
