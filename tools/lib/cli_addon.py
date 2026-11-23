@@ -1013,6 +1013,7 @@ def cmd_addon_actions(args: argparse.Namespace) -> int:
                         "service": a["service"],
                         "description": a["description"],
                         "destructive": a["destructive"],
+                        "on_uninstall": a["on_uninstall"],
                     }
                     for n, a in sorted(actions.items())
                 ]
@@ -1023,6 +1024,58 @@ def cmd_addon_actions(args: argparse.Namespace) -> int:
     else:
         for name, action in sorted(actions.items()):
             print(f"{name:<20} {action['description']}".rstrip())
+    return 0
+
+
+def cmd_addon_uninstall_action(args: argparse.Namespace) -> int:
+    """Resolve the clean-up action `addon uninstall --clean-up` runs: materialize the
+    addon's .env and print the action's name, service and fixed arguments,
+    NUL-separated, or nothing when the addon declares none (`on_uninstall: true`).
+
+    Unlike `addon-action` an inactive addon qualifies: `addon remove` keeps its
+    registration and data, and the uninstall is the last chance to run the action.
+    `addon remove` also dropped the addon's generated overrides, though, and the
+    action needs them to reach the addons it wrote into (`networks.join_addons`)
+    and, under external OIDC, to clear the CA variables. They are written again
+    for this run, as for an active addon; `addon-uninstall` removes them with the
+    addon. An addon whose manifest is gone has nothing left to run; that is a
+    warning. Exit 2 for an unregistered addon or a malformed `actions` block."""
+    config_dir = Path(args.config_dir)
+    repo_root = Path(args.repo_root)
+    deployed = deployment.load(config_dir) or {}
+    entry = next(
+        (a for a in deployed.get("addons") or [] if a.get("name") == args.name), None
+    )
+    if entry is None:
+        print(f"ERROR: addon '{args.name}' is not registered.", file=sys.stderr)
+        return 2
+    addon_path = deployment.resolve_addon_path(entry, repo_root)
+    manifest, manifest_error = deployment.load_addon_manifest(addon_path)
+    if manifest is None:
+        print(
+            f"WARNING: {manifest_error} -- no clean-up action of addon '{args.name}' can run.",
+            file=sys.stderr,
+        )
+        return 0
+    try:
+        found = compat.uninstall_action(manifest)
+    except ValueError as exc:
+        print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
+        return 2
+    if found is None:
+        return 0
+    name, action = found
+    addons.materialize_addon_env(config_dir, addon_path, args.name)
+    if not entry.get("active"):
+        tree = envtree.load_config_dir_tree(config_dir, repo_root)
+        auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+        gen_override.generate_addon_ssl_cert_overrides(
+            config_dir, auth_provider, repo_root, also_active={args.name}
+        )
+        gen_override.generate_addon_join_overrides(config_dir, repo_root, also_active={args.name})
+    sys.stdout.write(
+        "".join(f"{part}\0" for part in [name, action["service"], *action["args"]])
+    )
     return 0
 
 

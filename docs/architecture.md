@@ -278,6 +278,21 @@ actions:                           # optional (addon_api 4): maintenance actions
     description: "Restore the initial data"  # service a compose profile (e.g.
                                    # `profiles: [actions]`) so `addon start` skips it.
     destructive: true              # optional: callers (papaia-manager) confirm first
+  purge:
+    service: maintenance
+    args: ["purge"]
+    description: "Remove the records this add-on wrote into other add-ons"
+    on_uninstall: true             # optional (addon_api 8), at most one action: run
+                                   # by `addon uninstall --clean-up` before the add-on's
+                                   # containers and volumes are removed. For data the
+                                   # add-on wrote outside its own volumes. A non-zero
+                                   # exit stops the uninstall before anything is removed;
+                                   # `--force` goes on with a warning. Plain `uninstall`
+                                   # (data kept) does not run it. After `addon remove` it
+                                   # still runs with the add-on's join_addons and ssl-cert
+                                   # overrides. Single host only: a distributed
+                                   # installation refuses (exit 2) unless `--force`.
+                                   # Older cores ignore it.
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -528,7 +543,14 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
 
 - **Tombstones:** An agent or prompt whose add-on no longer provides it is deleted,
   together with its access entries and project links. Agents and prompts created in
-  the UI or from the operator directories are never touched.
+  the UI or from the operator directories are never touched. `addon remove` and
+  `addon uninstall` of an add-on with agents or prompts run both init scripts once in a
+  one-off `librechat` container (`compose run --no-deps`, the compose files of `start`),
+  so its agents and prompts disappear without restarting LibreChat. Not the running
+  container: the render replaced the content directories, and the running container
+  still mounts the old, now empty one, which would read as "no add-on content" and
+  delete the agents of every other add-on. While LibreChat is down, and in a distributed
+  installation, its next start does it.
 - **Validation at render:** An agent that names an MCP server the rendered
   `librechat.yaml` does not define is skipped with a warning, because it would
   appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
@@ -620,7 +642,7 @@ No Core changes required.
 | `papaia-ctl addon stop <name> --clean-up` | `docker compose down` (remove containers, keep volumes) |
 | `papaia-ctl addon remove <name>` | Remove override → re-render Core → `active: false` in manifest. **Containers untouched, config bundle kept.** |
 | `papaia-ctl addon uninstall <name>` | Remove override + deployment entry → delete config bundle → `docker compose down` |
-| `papaia-ctl addon uninstall <name> --clean-up` | Like `uninstall` + `docker compose down -v` (also delete volumes) |
+| `papaia-ctl addon uninstall <name> --clean-up` | Run the action marked `on_uninstall: true` (if any, also after `remove`, with the add-on's overrides; a failure, or a distributed installation, stops here unless `--force`) → like `uninstall` + `docker compose down -v` (also delete volumes) |
 
 The Compose calls above run with `-p <addon directory name>`, the add-on's `docker-compose.yml` and the
 core `.env`. When that file is missing (a deleted or half-written add-on directory), Compose cannot build
