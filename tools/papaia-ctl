@@ -54,11 +54,11 @@
 #   papaia-ctl backup recipients list|add|remove [--name=NAME] [--key=age1...]
 #   papaia-ctl backup keys generate [--names=A,B]
 #   papaia-ctl backup target init|check [--backup-dir=PATH]
-#   papaia-ctl backup key-check --identity=FILE|- [--restore-point=ID]
+#   papaia-ctl backup key-check --identity=FILE|- [--restore-point=ID] [--from=PATH]
 #   papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...]
 #                            [--backup-dir=PATH] [-y] [--config-dir=PATH]
 #                            --restore-point is repeatable or comma-separated
-#   papaia-ctl restore       [--backup-dir=PATH] [--restore-point=ID] [--list]
+#   papaia-ctl restore       [--from=PATH] [--restore-point=ID|latest] [--list]
 #                            [--identity=FILE|-] [--only=SELECTOR[,SELECTOR]] [--restart-clean]
 #                            [--no-restart] [--insecure-images] [-y] [--config-dir=PATH]
 #                            SELECTOR is module:NAME, addon:NAME or volume:NAME

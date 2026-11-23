@@ -52,6 +52,7 @@ from . import (
     gen_override,
     gpu_detect,
     halt,
+    host_restore,
     images,
     ingress,
     keycloak_admin_path,
@@ -1973,7 +1974,12 @@ def cmd_backup_finish(args: argparse.Namespace) -> int:
             backup.read_results(snapshot),
             papaia_version=envtree.resolve_platform_version(Path(args.repo_root)),
         )
+        # Unencrypted, next to the archives: the release to check out on a new host (RE-88).
+        host_restore.write_release(
+            snapshot, plan.backup_id, Path(args.repo_root), Path(args.config_dir)
+        )
         entry = backup.record_backup(backup_dir, plan, manifest, args.result)
+        _update_latest(backup_dir)
         backup_crypt.audit(
             Path(args.config_dir), "backup", "backup_written",
             {"id": entry["id"], "result": args.result, "artifacts": entry["artifacts"],
@@ -1992,6 +1998,17 @@ def cmd_backup_finish(args: argparse.Namespace) -> int:
     return 0
 
 
+def _update_latest(backup_dir: Path) -> None:
+    """Move `<target>/latest` after the catalogue changed. A failure is reported: the
+    restore points themselves are fine, and `restore --restore-point=latest` reads the
+    catalogue, not the directory."""
+    try:
+        host_restore.update_latest(backup_dir)
+    except (backup.BackupError, OSError) as exc:
+        print(f"WARNING: {backup_dir}/{host_restore.LATEST_DIR} not updated: {exc}",
+              file=sys.stderr)
+
+
 def cmd_backup_prune(args: argparse.Namespace) -> int:
     if (args.retention_period_days is None) == (args.keep is None):
         print("ERROR: backup-prune needs --retention-period-days or --keep", file=sys.stderr)
@@ -2007,6 +2024,8 @@ def cmd_backup_prune(args: argparse.Namespace) -> int:
                 Path(args.config_dir), "backup-prune", "backup_deleted",
                 {"id": backup_id, "reason": "retention"}, effect="delete",
             )
+        if removed:
+            _update_latest(backup_dir)
     except backup.BackupError as exc:
         return _fail(exc)
     for backup_id in removed:
@@ -2180,11 +2199,30 @@ def cmd_backup_delete(args: argparse.Namespace) -> int:
     try:
         backup_dir = _resolve_backup_dir(Path(args.config_dir), args.backup_dir)
         removed = backup.delete_backups(backup_dir, ids)
+        _update_latest(backup_dir)
     except backup.BackupError as exc:
         return _fail(exc)
     for backup_id in removed:
         print(backup_id)
     return 0
+
+
+def _check_release(entry: dict, release: dict | None, args: argparse.Namespace) -> list[str]:
+    """Compare the point's release with the checkout. A whole restore replaces the
+    configuration the checkout renders from and stops on another release
+    (CheckoutMismatchError); a scoped one only warns. Returns the warnings."""
+    point = entry.get("id")
+    if release is None:
+        return [f"Restore point {point} has no {host_restore.RELEASE_NAME} file (taken before"
+                " it existed); the checkout is not compared with its release."]
+    if not args.only:
+        host_restore.check_checkout(release, Path(args.repo_root))
+        return []
+    current = host_restore.core_tag(Path(args.repo_root))
+    if release["tag"] != current:
+        return [f"Restore point {point} was taken with papaia {release['tag']}; this"
+                f" checkout is {current}."]
+    return []
 
 
 def cmd_restore_resolve(args: argparse.Namespace) -> int:
@@ -2203,6 +2241,14 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
         manifest = backup.read_manifest(snapshot)
         if not args.only:
             backup.require_whole_stack(manifest)
+        # The release and the installation of the point, before the key is asked for and
+        # before anything is touched (BE-18a, RE-88).
+        # `restore` asks for the comparison; the key check of `rollback` runs before the
+        # rollback moves the checkout back and does not.
+        release = host_restore.point_release(snapshot)
+        host_restore.check_point_target(backup_dir, release, required=args.host_loss)
+        if args.check_release or args.host_loss:
+            warnings.extend(_check_release(entry, release, args))
         selection = backup.resolve_selection(manifest, args.only) if args.only else None
         identities = backup_crypt.read_identities(args.identity) if args.identity else None
         encrypted = backup_crypt.require_key(manifest, identities)
@@ -2214,7 +2260,8 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
             backup_crypt.verify_archives(
                 snapshot, manifest, [a.archive for a in chosen], identities or []
             )
-    except (backup.ScopedRestorePointError, backup.EncryptedRestorePointError) as exc:
+    except (backup.ScopedRestorePointError, backup.EncryptedRestorePointError,
+            host_restore.CheckoutMismatchError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except backup.BackupError as exc:
@@ -2248,6 +2295,32 @@ def cmd_restore_resolve(args: argparse.Namespace) -> int:
             target = str(config_dir)
         print(f"{artifact.kind}\t{artifact.archive}\t{target}\t{artifact.owner}")
     return 0
+
+
+def cmd_erasure_probe(args: argparse.Namespace) -> int:
+    """After a restore has started the modules again: every object journaled for deletion
+    since the point must be gone (lib/host_restore.py). One `PROBE` line per module, then
+    `RESULT`; exit 0 when it passes, 1 when it fails, 3 when it cannot run."""
+    config_dir = Path(args.config_dir)
+    try:
+        backup_dir = _resolve_backup_dir(config_dir, args.backup_dir)
+        entry, _warnings = backup.resolve_restore_point(backup_dir, args.restore_point)
+        manifest = backup.read_manifest(backup.snapshot_path(backup_dir, entry))
+        correlation_id = module_actions.env_correlation()
+        result = host_restore.erasure_probe(
+            config_dir, Path(args.repo_root), backup_dir,
+            restore_point=str(entry.get("id")),
+            created_at=str(manifest.get("created_at") or entry.get("created_at") or ""),
+            correlation_id=correlation_id,
+            addons=_addon_list(args.addons),
+        )
+        host_restore.record_probe(config_dir, str(entry.get("id")), result, correlation_id)
+    except (backup.BackupError, images.ImageError, OSError) as exc:
+        return _fail(exc)
+    for m in result.modules:
+        print(f"PROBE\t{m.module}\t{m.result}\t{m.journaled}\t{m.reason}")
+    print(f"RESULT\t{'pass' if result.passed else 'fail'}")
+    return 0 if result.passed else 1
 
 
 def _refuse_terminal(what: str) -> bool:
@@ -3572,7 +3645,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_restore_resolve.add_argument("--restore-point", default=None)
     p_restore_resolve.add_argument("--only", default=None)
     p_restore_resolve.add_argument("--identity", default=None)
+    p_restore_resolve.add_argument("--host-loss", action="store_true")
+    p_restore_resolve.add_argument("--check-release", action="store_true")
     p_restore_resolve.set_defaults(func=cmd_restore_resolve)
+
+    p_erasure_probe = sub.add_parser("erasure-probe")
+    p_erasure_probe.add_argument("--backup-dir", default=None)
+    p_erasure_probe.add_argument("--restore-point", required=True)
+    p_erasure_probe.add_argument("--addons", default=None)
+    p_erasure_probe.set_defaults(func=cmd_erasure_probe)
 
     p_backup_identities = sub.add_parser("backup-identities")
     p_backup_identities.add_argument("--identity", required=True)

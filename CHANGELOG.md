@@ -12,6 +12,20 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Restore after the loss of the host
+
+- Every restore point carries an unencrypted `RELEASE` file (core tag, suite, installation
+  id); `<target>/latest/` names the newest good point of the whole installation, and
+  `restore --restore-point=latest` restores it.
+- `restore --from=<target>` names the source; on a host without a setup it restores the whole
+  point, checks `.papaia-target` and brings the configuration back. A whole restore stops
+  before any change when the checkout is another release and names `git checkout <tag>`.
+  `backup key-check` takes `--from` as well; `restore --backup-dir` still works.
+- Erasure probe after every restore that starts the modules: each module with deletions
+  journaled since the point must have applied its journal in this restore, otherwise the
+  restore exits with code 3. One audit row `erasure_probe` and `erasure_probe=` in
+  `backup.log`.
+
 ### Kit 0.1.0 in the core tools
 
 - The core tools vendor papaia-kit 0.1.0, the kit's first public release (MIT): wheel and

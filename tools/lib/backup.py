@@ -1345,6 +1345,21 @@ def require_plain(manifest: dict) -> None:
     )
 
 
+LATEST = "latest"
+
+
+def latest_entry(index: dict) -> dict | None:
+    """The newest `ok` restore point of the whole stack: what `<target>/latest` names and
+    `--restore-point=latest` restores (BE-18a, RE-88)."""
+    good = [
+        b for b in index.get("backups") or []
+        if b.get("result") == "ok" and not entry_scope(b)
+    ]
+    if not good:
+        return None
+    return sorted(good, key=lambda b: str(b.get("created_at", "")))[-1]
+
+
 def resolve_restore_point(
     backup_dir: Path, restore_point: str | None = None, *, whole_stack: bool = False
 ) -> tuple[dict, list[str]]:
@@ -1354,13 +1369,22 @@ def resolve_restore_point(
     entry is never selected implicitly, since restoring from one would replace
     live data with a knowingly incomplete snapshot. `whole_stack` skips scoped
     backups in that choice, because the newest backup being one add-on's
-    restore point must not turn a plain `restore` into a refusal."""
+    restore point must not turn a plain `restore` into a refusal. `latest` is
+    the newest `ok` point of the whole stack."""
     index = load_index(backup_dir)
     backups = index.get("backups") or []
     if not backups:
         raise BackupError(
             f"No restore points found in {backup_dir}. Run 'papaia-ctl backup' first."
         )
+    if restore_point == LATEST:
+        entry = latest_entry(index)
+        if entry is None:
+            raise BackupError(
+                f"No restore point of the whole stack with result 'ok' in {backup_dir}, so"
+                " there is no 'latest'. Pass --restore-point=ID; 'restore --list' shows them."
+            )
+        return entry, []
     if restore_point:
         for entry in backups:
             if str(entry.get("id")) == restore_point:

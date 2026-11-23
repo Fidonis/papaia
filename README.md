@@ -300,7 +300,7 @@ papaia-ctl backup    [--backup-dir=PATH] [--retention-period-days=N]
                      [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
 papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...] [--backup-dir=PATH]
                      [-y] [--config-dir=PATH]
-papaia-ctl restore   [--backup-dir=PATH] [--restore-point=ID] [--list]
+papaia-ctl restore   [--from=PATH] [--restore-point=ID|latest] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                      [--insecure-images] [-y] [--config-dir=PATH]
 papaia-ctl post-restore [--since=EPOCH] [--config-dir=PATH]
@@ -776,7 +776,7 @@ tools/papaia-ctl backup [--backup-dir=PATH] [--keep=N] [--retention-period-days=
 tools/papaia-ctl backup recipients list|add|remove [--name=NAME] [--key=age1...]
 tools/papaia-ctl backup keys generate [--names=betrieb,notfall]
 tools/papaia-ctl backup target init|check [--backup-dir=PATH]
-tools/papaia-ctl backup key-check --identity=FILE|- [--restore-point=ID]
+tools/papaia-ctl backup key-check --identity=FILE|- [--restore-point=ID] [--from=PATH]
 ```
 
 Every archive is encrypted with [age](https://age-encryption.org/v1) to the public keys in
@@ -849,7 +849,11 @@ $PAPAIA_BACKUP_DIR/
 ├── .papaia-target              # this installation's id: confirms the directory as its target
 ├── backup.yaml                 # catalogue: id, path, size in MB, result, recipients
 ├── backup.log                  # one line per backup / restore, with its result
+├── latest/
+│   ├── RELEASE                 # copy of the RELEASE of the newest good point
+│   └── POINT                   # its id
 └── 2026-07-30_14-05-33/
+    ├── RELEASE                 # unencrypted: core tag, suite, installation id (no person, no key)
     ├── manifest.yaml           # archive per volume or path, its SHA-256, recipients, exclusions
     ├── checksums.tsv           # SHA-256 of each encrypted archive as it was written
     ├── papaia-config.tar.gz.age
@@ -861,6 +865,20 @@ Each `.tar.gz.age` file opens with the `age` command and one of the private keys
 (`age -d -i key.txt FILE | tar tzf -`). `restore` in this version reads unencrypted restore
 points only; for an encrypted one it stops with exit code 2, names the point and its
 recipients, and changes nothing.
+
+`RELEASE` is plain text, readable with any editor or file browser, so after the loss of the
+host the release to check out is known before there is a checkout:
+
+```
+id: 2026-07-30_14-05-33
+tag: v1.10.0
+suite: 1.10.0
+installation_id: 6f1c…
+```
+
+`latest/` names the newest restore point of the whole installation with result `ok`; `backup`,
+`backup-delete` and the retention run move it. `restore --restore-point=latest` restores that
+point.
 
 Restore-point ids use local time, so they line up with what an incident timeline says;
 `created_at` in the catalogue is UTC so sorting and retention stay unambiguous.
@@ -962,15 +980,15 @@ disk. The running stack is not touched. Each deletion adds a `delete` line to `b
 ### `restore`
 
 ```bash
-tools/papaia-ctl restore [--backup-dir=PATH] [--restore-point=ID] [--list] [--identity=FILE|-]
+tools/papaia-ctl restore [--from=PATH] [--restore-point=ID|latest] [--list] [--identity=FILE|-]
                          [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                          [--insecure-images] [-y] [--config-dir=PATH]
 ```
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--backup-dir=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | Where to read restore points from |
-| `--restore-point=ID` | _(most recent usable)_ | Which restore point to restore, as listed by `--list` |
+| `--from=PATH` | `PAPAIA_BACKUP_DIR` from the root `.env` | The backup target to read restore points from; required on a host without a setup (see below) |
+| `--restore-point=ID\|latest` | _(most recent usable)_ | Which restore point to restore, as listed by `--list`; `latest` is the newest point of the whole installation with result `ok` |
 | `--list` | — | Print the available restore points and exit |
 | `--identity=FILE\|-` | — | The private backup key (`AGE-SECRET-KEY-1...`) of one recipient of the restore point, from a key file or, with `-`, from standard input; a passphrase-protected key file asks for its passphrase once. Required for an encrypted restore point |
 | `--only=SELECTOR[,SELECTOR]` | _(whole snapshot)_ | Restore only the selected units and scope the teardown and restart to them. Each `SELECTOR` is `module:NAME`, `addon:NAME` or `volume:NAME` (in a distributed installation also `node:NAME`); the prefix is mandatory. Cannot be combined with `--restart-clean`, and is refused for a selection that touches the config directory or resolves to the `manager` profile |
@@ -1057,6 +1075,40 @@ and stops with exit code 3 without starting the stack. Only a whole restore repl
 audit journal `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`. The journals of the core itself
 (accounts, chat, model gateway) are applied by the core start gate, not here.
 
+**The release of the point.** A whole restore replaces the configuration the checkout renders
+from, so it stops with exit code 2, before the key is asked for and before anything is touched,
+when the checkout is another release than the point's `RELEASE` names; the message names the
+command, for example `git checkout v1.10.0`. A scoped restore only warns. A point taken before
+`RELEASE` files existed is restored with a warning.
+
+**After the loss of the host.** When only the backup target and a backup key are left:
+
+1. Mount the target on the new host and read the tag from `<target>/latest/RELEASE`.
+2. `git clone --branch <tag> https://github.com/Fidonis/papaia.git` (and the add-on checkouts
+   at the paths the installation used, see `addons` in the point's `manifest.yaml`).
+3. `tools/papaia-ctl restore --from=<target> --restore-point=latest --identity=- -y`, paste the
+   key, then Ctrl-D.
+4. `tools/papaia-ctl doctor`.
+
+Without a setup, `restore` needs `--from` and restores the whole point only (no `--only`); the
+target must hold `.papaia-target`, and a point whose `RELEASE` names another installation than
+the target is refused. Nothing is stopped first, the configuration directory comes from the
+point, and the erasure journals at the target and `post-restore` run before the modules start,
+as in every restore. Base domain, app domain and issuer URL must stay the same; TLS material
+comes from the point.
+
+**Erasure probe.** After the modules started again, `restore` checks that what was deleted
+since the point did not come back: for each journal at the target, the entries written at or
+after the point's `created_at` name objects the point brought back. A module passes when its
+`erasure-replay` of this restore is in the audit journal (same correlation id and restore point,
+exit code 0) and nothing is left due; it fails when no installed add-on replays the journal, the
+add-on declares no `erasure-replay`, the replay did not run or failed, or the journal cannot be
+read. A scoped restore checks the selected add-ons only. The journals of the core itself
+(`identity`, `core-chat`, `model-gateway`) are listed and left to the core start gate. One line
+per module (`erasure probe: <module> pass|fail|core (<n> journaled since the point): <reason>`),
+one audit row `erasure_probe` and `erasure_probe=pass|fail` in `backup.log`; when it fails,
+`restore` exits with code 3. With `--no-restart` the probe does not run.
+
 **How long it took.** `restore` prints `Restore took N s` (from the confirmation to the stack
 being up again: the measured recovery time), logs `duration=Ns` and
 `module_actions=ok|pending|none` in `backup.log`, and writes one audit row `restore_applied`
@@ -1067,7 +1119,7 @@ module actions.
 without touching the installation it was taken of, restore it into a second installation in its
 own Docker engine (a second host or a virtual machine), with its own checkout and configuration
 directory: `setup` there without `start`, then
-`restore --backup-dir=<copy of the target> --restore-point=<ID> --identity=- -y`, then `doctor`.
+`restore --from=<copy of the target> --restore-point=<ID> --identity=- -y`, then `doctor`.
 The time from the restore command to `doctor` passing is the recovery time. The restore writes
 the volumes under the names recorded in the point and takes over the configuration of the
 point, including `COMPOSE_PROJECT_NAME`, host names and ports, so it must not share a Docker

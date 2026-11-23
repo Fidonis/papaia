@@ -279,6 +279,12 @@ def _read_target(backup_dir: Path) -> str | None:
     return value
 
 
+def target_installation(backup_dir: Path) -> str | None:
+    """The installation id in the target's `.papaia-target`, None without one."""
+    _require_dir(backup_dir)
+    return _read_target(backup_dir)
+
+
 def _require_dir(backup_dir: Path) -> None:
     if not backup_dir.is_dir():
         raise BackupError(

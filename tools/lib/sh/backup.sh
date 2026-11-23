@@ -493,6 +493,14 @@ _backup_admin() {
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
+            # The one name of the source in the restore part of the handbook (RE-88).
+            --from=*)
+                if [ "$area" != key-check ]; then
+                    error "--from is an option of 'backup key-check'; use --backup-dir here."
+                    exit 2
+                fi
+                backup_dir="${1#*=}"
+                ;;
             --name=*) name="${1#*=}" ;;
             --key=*) key="${1#*=}" ;;
             --names=*) names="${1#*=}" ;;
@@ -626,13 +634,28 @@ cmd_backup_delete() {
 # an add-on rollback restores its data through restore-scoped.
 RESTORE_TRIGGER="restore"
 
+# Is there a setup in $CONFIG_DIR? Asks _require_setup_done itself, in a subshell so its
+# exit only ends that.
+_restore_setup_present() {
+    ( _require_setup_done ) >/dev/null 2>&1
+}
+
 cmd_restore() {
     local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" restore_point="" only=""
     local no_restart=0 restart_clean=0 list_only=0 assume_yes=0 insecure_images=0
-    local identity=""
+    local identity="" host_loss=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
+            # The backup target to restore from (BE-18a, RE-88). --backup-dir below is the
+            # older spelling, kept for callers that still pass it.
+            --from=*)
+                backup_dir="${1#*=}"
+                if [ -z "$backup_dir" ]; then
+                    error "--from needs the backup target, for example --from=/mnt/papaia-backup."
+                    exit 2
+                fi
+                ;;
             --identity=*)
                 identity="${1#*=}"
                 if [ -z "$identity" ]; then
@@ -661,7 +684,23 @@ cmd_restore() {
         exit 2
     fi
     CONFIG_DIR="$config_dir"
-    _require_setup_done
+    # After the loss of the host there is no setup, only the target and the key: the
+    # restore point brings the configuration back (BE-18a).
+    if ! _restore_setup_present; then
+        if [ -z "$backup_dir" ]; then
+            error "No setup found at $CONFIG_DIR. Run 'papaia-ctl setup' first, or restore"
+            error "after the loss of the host with 'papaia-ctl restore --from=<target>"
+            error "--identity=-' (see docs/de/wiederherstellung.md)."
+            exit 2
+        fi
+        if [ -n "$only" ]; then
+            error "Without a setup only the whole restore point can be restored (no --only)."
+            exit 2
+        fi
+        host_loss=1
+    else
+        _require_setup_done
+    fi
     local mode
     mode="$(_topology_mode)" || exit 3
     if [ "$mode" = "distributed" ] && [ -n "$identity" ]; then
@@ -717,6 +756,9 @@ cmd_restore() {
     [ -n "$restore_point" ] && extra+=(--restore-point="$restore_point")
     [ -n "$only" ] && extra+=(--only="$only")
     [ -n "$_RESTORE_IDENTITIES" ] && extra+=(--identity=-)
+    [ "$host_loss" -eq 1 ] && extra+=(--host-loss)
+    # The release of the point against this checkout (RE-88).
+    extra+=(--check-release)
     local plan_file
     plan_file="$(mktemp)"
     _BACKUP_TMPFILES+=("$plan_file")
@@ -790,6 +832,9 @@ cmd_restore() {
         warn "  the config directory $CONFIG_DIR"
         warn "  ${#kinds[@]} archived volumes / directories"
     fi
+    if [ "$host_loss" -eq 1 ]; then
+        warn "  no setup at $CONFIG_DIR: the restore point brings the configuration back"
+    fi
     if [ "$no_restart" -eq 1 ]; then
         warn "  --no-restart: containers are neither stopped nor recreated. Volumes"
         warn "  will be overwritten underneath live processes, which usually corrupts"
@@ -822,7 +867,11 @@ cmd_restore() {
     local since
     since="$(date +%s)"
 
-    if [ "$no_restart" -eq 0 ]; then
+    if [ "$host_loss" -eq 1 ]; then
+        # Nothing of this installation runs here yet, and there is no configuration for
+        # compose to stop it with.
+        info "No setup on this host: nothing to stop."
+    elif [ "$no_restart" -eq 0 ]; then
         if [ -n "$only" ]; then
             _restore_teardown_scoped "$sel_profiles" "$sel_addons"
         else
@@ -962,6 +1011,14 @@ cmd_restore() {
         exit 3
     fi
 
+    # The modules are up and their journals applied: check that what was deleted since
+    # the point is gone (RE-88).
+    if [ "$post_restore" = "ok" ] && [ "$no_restart" -eq 0 ]; then
+        _restore_probe "$backup_dir" "$restore_id" "$only" "$sel_addons" || exit 3
+    elif [ "$result" != "failed" ]; then
+        warn "The erasure probe did not run: the modules were not started again."
+    fi
+
     case "$result" in
         ok)      success "restore complete: $restore_id (${#kinds[@]} artifacts)" ;;
         partial) warn "restore completed with errors: $restore_id ($failed of ${#kinds[@]} artifacts failed)" ;;
@@ -1011,6 +1068,41 @@ cmd_post_restore() {
         fi
     fi
     return "$rc"
+}
+
+# The erasure probe after a restore (lib/host_restore.py). $1 backup dir, $2 restore point,
+# $3 the selection of a scoped restore, $4 its add-ons. Returns 1 when it fails.
+_restore_probe() {
+    local backup_dir="$1" restore_id="$2" only="$3" addons="$4"
+    local -a flags=(--backup-dir="$backup_dir" --restore-point="$restore_id")
+    [ -n "$only" ] && flags+=(--addons="$addons")
+    local out rc=0
+    out="$(py_cli erasure-probe ${flags[@]+"${flags[@]}"} | tr -d '\r')" || rc=$?
+    local kind module state count reason total=0
+    while IFS=$'\t' read -r kind module state count reason; do
+        [ "$kind" = PROBE ] || continue
+        total=$((total + 1))
+        info "erasure probe: $module $state ($count journaled since the point): $reason"
+    done <<< "$out"
+    case "$rc" in
+        0)
+            _backup_log "$backup_dir" probe "$restore_id" ok "modules=$total erasure_probe=pass"
+            success "erasure probe passed: nothing deleted since $restore_id came back"
+            return 0
+            ;;
+        1)
+            _backup_log "$backup_dir" probe "$restore_id" failed "modules=$total erasure_probe=fail"
+            error "erasure probe failed: data deleted since restore point $restore_id may be"
+            error "back. The modules marked 'fail' above did not apply their erasure journal;"
+            error "fix the reason, then run 'papaia-ctl restore' again."
+            return 1
+            ;;
+        *)
+            _backup_log "$backup_dir" probe "$restore_id" failed "erasure_probe=error"
+            error "erasure probe could not run (see above); treat the restore as not verified."
+            return 1
+            ;;
+    esac
 }
 
 # The open restore entry of backup.log: written by _restore_close, or by the EXIT trap

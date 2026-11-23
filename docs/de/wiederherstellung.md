@@ -5,12 +5,14 @@ Abschnitt `restore`.
 
 ## Ablauf
 
-1. Sicherungsziel einhängen und den Punkt wählen: `tools/papaia-ctl restore --list`.
+1. Sicherungsziel einhängen und den Punkt wählen: `tools/papaia-ctl restore --from=<Ziel> --list`.
 2. Wiederherstellen, den Sicherungsschlüssel auf der Standardeingabe:
 
    ```bash
-   tools/papaia-ctl restore --restore-point=<ID> --identity=- -y
+   tools/papaia-ctl restore --from=<Ziel> --restore-point=<ID> --identity=- -y
    ```
+
+   Ohne `--from` gilt das in der Einrichtung angegebene Sicherungsziel.
 
    Schlüssel einfügen, dann Strg-D. Alternativ `--identity=<Schlüsseldatei>`; eine durch
    Kennsatz geschützte Datei fragt den Kennsatz einmal ab. Der Schlüssel wird nicht auf die
@@ -20,6 +22,47 @@ Abschnitt `restore`.
 Ohne Schlüssel bricht `restore` mit Ausgang 2 und der Meldung „The key for restore point
 <ID> is missing (recipients: …)“ ab, bevor etwas geändert wird. Ein Schlüssel, der kein
 Empfänger des Punkts ist, oder ein verändertes Archiv führt ebenso zum Abbruch ohne Änderung.
+
+Jeder Punkt trägt neben den verschlüsselten Archiven die unverschlüsselte Datei
+`<Ziel>/<Punkt>/RELEASE` mit Kern-Tag, Suite-Version und Installations-ID, ohne Personendaten
+und ohne Schlüssel. `<Ziel>/latest/RELEASE` ist die Datei des jüngsten vollständigen Punkts mit
+Ergebnis `ok`, `<Ziel>/latest/POINT` nennt dessen ID. Passt der Checkout nicht zum Tag des
+Punkts, bricht `restore` vor jeder Änderung mit Ausgang 2 ab und nennt den Befehl, etwa
+`git checkout v1.10.0`.
+
+## Wiederherstellung nach Verlust des Hosts
+
+Übrig sind nur das Sicherungsziel und ein Sicherungsschlüssel.
+
+Vorarbeiten: neuer Host mit Docker, Sicherungsziel einhängen, DNS auf die neue Adresse (entfällt
+bei gleicher Adresse).
+
+1. Tag lesen: `<Ziel>/latest/RELEASE` mit einem Texteditor oder Dateibrowser öffnen, Zeile `tag:`.
+   Dafür ist kein `papaia-ctl` nötig.
+2. Kern holen: `git clone --branch <Tag> https://github.com/Fidonis/papaia.git`. Die Add-ons an
+   den Pfaden bereitstellen, die die Installation benutzt hat (`addons` in
+   `<Ziel>/<Punkt>/manifest.yaml`).
+3. Im Checkout:
+
+   ```bash
+   tools/papaia-ctl restore --from=<Ziel> --restore-point=latest --identity=- -y
+   ```
+
+   Schlüssel einfügen, dann Strg-D. Ein vorheriges `setup` ist nicht nötig: die Konfiguration
+   kommt aus dem Punkt.
+4. `tools/papaia-ctl doctor`.
+
+Ohne Einrichtung verlangt `restore` den Schalter `--from` und stellt nur den ganzen Punkt
+wieder her (kein `--only`). Das Ziel muss die Kennungsdatei `.papaia-target` tragen; ein Punkt,
+dessen `RELEASE` eine andere Installation nennt als das Ziel, wird abgewiesen.
+
+Gleich bleiben müssen Basis-Domain, App-Domain und Aussteller-URL der Anmeldung, also die
+Hostnamen der Installation. Das TLS-Material kommt aus dem Punkt. Abweichende Namen unterstützt
+dieser Ablauf nicht, denn die Konfiguration aus dem Punkt trägt die alten Namen: DNS-Einträge
+auf den neuen Host zeigen lassen.
+
+Die Wiederherstellungszeit wird vom ersten Befehl bis `doctor` ohne Fehler gemessen; Ziel sind
+höchstens 60 Minuten.
 
 ## Was nach dem Zurückspielen geschieht
 
@@ -31,6 +74,16 @@ Empfänger des Punkts ist, oder ein verändertes Archiv führt ebenso zum Abbruc
 - **Vollmachten sind ungültig.** Die Vollmachtsschlüssel liegen nicht in der Sicherung;
   Anmeldedienst und Module beenden die alten Sitzungen und Vollmachten. Die Personen erteilen
   ihre Vollmachten neu.
+- **Löschprobe.** Nach dem Start der Module prüft `restore`, dass seit dem Punkt Gelöschtes
+  nicht zurückgekehrt ist. Für jedes Löschjournal am Ziel zählen die Einträge ab dem Zeitpunkt
+  des Punkts. Ein Modul besteht, wenn sein `erasure-replay` in diesem Restore mit Ausgang 0 im
+  Audit steht und nichts mehr fällig ist. Es fällt durch, wenn kein installiertes Add-on das
+  Journal einspielt, das Add-on kein `erasure-replay` kennt, das Einspielen fehlte oder
+  scheiterte oder das Journal unlesbar ist. Die Ausgabe nennt je Modul `pass`, `fail` oder
+  `core` (Journale des Kerns: Konten, Chat, Modell-Gateway; die spielt der Kern selbst ein).
+  Fällt die Probe durch, endet `restore` mit Ausgang 3; `backup.log` zeigt
+  `erasure_probe=fail`, das Audit den Eintrag `erasure_probe`. Mit `--no-restart` läuft die
+  Probe nicht.
 - **Dauer.** `restore` gibt „Restore took N s“ aus und schreibt die Dauer in `backup.log`
   (`duration=`) und in das Audit (`restore_applied`, `duration_s`). Das ist die gemessene
   Wiederherstellungszeit; Ziel sind höchstens 60 Minuten.
@@ -67,6 +120,6 @@ Sicherungsziel.
 Eine Probe läuft in einer zweiten Installation mit eigener Docker-Engine (zweiter Host oder
 virtuelle Maschine), nie in derselben Engine wie das Original: `restore` schreibt die Volumes
 unter den Namen aus dem Punkt und übernimmt dessen Konfiguration. In der zweiten Installation
-`setup` ohne `start`, dann `restore` wie oben mit einer Kopie des Sicherungsziels und
+`setup` ohne `start`, dann `restore --from=<Kopie des Sicherungsziels>` wie oben und
 `doctor`. Die Zeit vom Befehl `restore` bis `doctor` ohne Fehler ist die gemessene
 Wiederherstellungszeit.
