@@ -170,6 +170,12 @@ GENERATION_FEATURES = {
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
     "chatterbox": ["voice"],
+    # The connection registry (addon_api 9, ADR 0021). Add-ons attach `connections`; the
+    # database and the one-shot migration are on papaia-connections-db-net with the
+    # registry alone (compat.NEVER_ATTACHABLE).
+    "connections": ["connections"],
+    "connections-db": ["connections"],
+    "connections-migrate": ["connections"],
     "firecrawl": ["librechat-websearch"],
     "firecrawl-nuq-postgres": ["librechat-websearch"],
     "firecrawl-playwright-service": ["librechat-websearch"],

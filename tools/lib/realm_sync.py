@@ -421,8 +421,27 @@ class Register:
         return name
 
 
+# Names a core profile declares that the kit's register does not list yet (papaia-kit
+# 0.1.4). The kit's naming rule admits them (`<module>-<role>`, module `connections`);
+# they are merged into the snapshot when it is loaded. An entry goes once the kit
+# lists the name (tests/test_connections_profile.py checks that).
+PROFILE_ENTRIES: tuple[dict, ...] = (
+    {"name": "connections-admin", "kind": "role", "owner": "papaia-connections"},
+)
+
+# Core profiles whose declaration the realm sync reads like an add-on's: profile ->
+# (the module it stands for in the naming register, the directory of its exposes.yaml).
+# The module owns the roles and clients the register gives it, as an add-on would.
+CORE_PROFILE_MODULES: dict[str, tuple[str, str]] = {
+    "connections": ("papaia-connections", "src/infra/connections"),
+}
+
+
 def load_register(path: Path = REGISTER_PATH) -> Register:
-    return Register(json.loads(path.read_text(encoding="utf-8")))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    known = {(e["name"], e["kind"]) for e in data["entries"]}
+    extra = [dict(e) for e in PROFILE_ENTRIES if (e["name"], e["kind"]) not in known]
+    return Register({**data, "entries": [*data["entries"], *extra]})
 
 
 # Exchange scopes are built only by the platform kit (PLT-12): the kit-built scope of a
@@ -626,7 +645,8 @@ class Module:
 
 def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
     """The active add-ons that declare `exposes:`, with their install input (the
-    add-on's `.env` in the configuration directory).
+    add-on's `.env` in the configuration directory), and the core profiles of
+    CORE_PROFILE_MODULES that are on.
 
     The module identity decides which clients a module owns, whether it may hold a
     delegation and which roles join papaia-admin. It is the deployment entry's name, and
@@ -669,7 +689,26 @@ def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
                 folder=config_dir / "addons" / str(name),
             )
         )
-    return modules
+    return modules + core_profile_modules(config_dir, repo_root)
+
+
+def core_profile_modules(config_dir: Path, repo_root: Path) -> list[Module]:
+    """The core profiles of CORE_PROFILE_MODULES that are on, each as the module of its
+    `exposes.yaml`. Without the profile nothing of it is planned."""
+    active = common.cluster_profiles(common.parse_env_file(config_dir / ".env"))
+    found = []
+    for profile, (name, directory) in CORE_PROFILE_MODULES.items():
+        if profile not in active:
+            continue
+        path = repo_root / directory / "exposes.yaml"
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise RealmSyncError(f"core profile {profile}: {path} cannot be read: {exc}") from None
+        if not isinstance(doc, dict) or set(doc) != {"exposes"}:
+            raise RealmSyncError(f"core profile {profile}: {path} must hold exactly exposes")
+        found.append(Module(name, doc["exposes"], {}))
+    return found
 
 
 @dataclass

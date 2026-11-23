@@ -1,0 +1,375 @@
+# Catalog declaration of the core profile `connections` (contract generation 9, schema
+# exposes.v1, ADR 0021). Taken from papaia-connections deploy/catalog/exposes.yaml at
+# 82e6177, the commit of the pinned image, with two changes: `scheme: https`, since the
+# profile serves the registry over TLS, and an `id_field` on the resource of the two
+# operations that create an object (`propose_target`: host, `add_account`: label): the
+# platform catalog (platform-services.v1) needs one with every resource. `papaia-ctl catalog render` reads this file while the profile is on, and the
+# realm sync takes the role and the audience from it.
+#
+# Catalog entry of the connection registry (core profile `connections`,
+# contract generation 9). The core keeps this list as the `exposes.yaml` of
+# the profile and renders the platform catalog from it. The sealed hand-over
+# of credentials (`hand-over/v3`, module `sealing`) stays a contract of its
+# own: `use_account` returns the sealed form only, the client of this package
+# opens it.
+exposes:
+  - id: connections
+    kind: rest
+    title: {de: "Verbindungen", en: "Connections"}
+    description:
+      de: "Verbindungsregister: einzige Ablage für gespeicherte Zugangsdaten zu freigegebenen Zielen."
+      en: "Connection registry: the one store for saved credentials of approved targets."
+    address: {service: connections, port: 8080, scheme: https}
+    audience: papaia-connections
+    identity: [person, service]
+    requires:
+      addon_api: [9]
+    roles:
+      - name: connections-admin
+        title: {de: "Verbindungen verwalten", en: "Manage connections"}
+        description:
+          de: "Richtet Ziele ein, gibt sie frei und gibt angehaltene Dienste wieder frei."
+          en: "Sets up and approves targets and releases held services."
+    operations:
+      - name: list_services
+        version: 1
+        title: {de: "Dienste auflisten", en: "List services"}
+        via: rest
+        method: GET
+        path: /api/v1/services
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object, properties: {services: {type: array, items: {type: string}}}}
+        data_class_max: internal
+        rights_check: server
+      - name: list_uses
+        version: 1
+        title: {de: "Meine Nutzungen", en: "My uses"}
+        via: rest
+        method: GET
+        path: /api/v1/me/uses
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object, properties: {uses: {type: array, items: {type: object}}}}
+        data_class_max: personal
+        rights_check: server
+      - name: list_mandates
+        version: 1
+        title: {de: "Meine Vollmachten", en: "My mandates"}
+        via: rest
+        method: GET
+        path: /api/v1/me/mandates
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object, properties: {mandates: {type: array, items: {type: object}}}}
+        data_class_max: personal
+        rights_check: server
+      - name: end_mandate
+        version: 1
+        title: {de: "Vollmacht beenden", en: "End a mandate"}
+        via: rest
+        method: DELETE
+        path: /api/v1/me/mandates/{account}/{service}
+        effect: delete
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [account, service]
+          properties:
+            account: {type: string, maxLength: 64}
+            service: {type: string, maxLength: 64}
+        output_schema: {type: object}
+        data_class_max: personal
+        resource: {type: mandate, id_field: account}
+        rights_check: server
+      - name: list_held_services
+        version: 1
+        title: {de: "Angehaltene Dienste", en: "Held services"}
+        via: rest
+        method: GET
+        path: /api/v1/services/held
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object, properties: {held: {type: array, items: {type: string}}}}
+        data_class_max: internal
+        rights_check: server
+      - name: release_service
+        version: 1
+        title: {de: "Dienst wieder freigeben", en: "Release a held service"}
+        via: rest
+        method: POST
+        path: /api/v1/services/{service}/release
+        effect: write
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [service]
+          properties:
+            service: {type: string, maxLength: 64}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: service, id_field: service}
+        rights_check: server
+      - name: list_targets
+        version: 1
+        title: {de: "Ziele auflisten", en: "List targets"}
+        via: rest
+        method: GET
+        path: /api/v1/targets
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object, properties: {targets: {type: array, items: {type: object}}}}
+        data_class_max: internal
+        rights_check: server
+      - name: propose_target
+        version: 1
+        title: {de: "Ziel einrichten", en: "Set up a target"}
+        via: rest
+        method: POST
+        path: /api/v1/targets
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [protocol, host, port, max_class, groups]
+          properties:
+            protocol: {enum: [imap, caldav, carddav, smtp, sql, rest, mcp]}
+            host: {type: string, maxLength: 253}
+            port: {type: integer, minimum: 1, maximum: 65535}
+            max_class:
+              enum: [public, internal, partner_contact, personal, employee, confidential, special, professional_secret]
+            groups: {type: array, minItems: 1, items: {type: string, maxLength: 64}}
+            tls: {type: boolean}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: target, id_field: host}
+        rights_check: server
+      - name: approve_target
+        version: 1
+        title: {de: "Ziel freigeben", en: "Approve a target"}
+        via: rest
+        method: POST
+        path: /api/v1/targets/{target_id}/approve
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [target_id]
+          properties:
+            target_id: {type: string, maxLength: 64}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: target, id_field: target_id}
+        rights_check: server
+      - name: withdraw_target
+        version: 1
+        title: {de: "Ziel zurückziehen", en: "Withdraw a target"}
+        via: rest
+        method: POST
+        path: /api/v1/targets/{target_id}/withdraw
+        effect: write
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [target_id]
+          properties:
+            target_id: {type: string, maxLength: 64}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: target, id_field: target_id}
+        rights_check: server
+      - name: list_accounts
+        version: 1
+        title: {de: "Meine Konten", en: "My accounts"}
+        via: rest
+        method: GET
+        path: /api/v1/me/accounts
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object, properties: {accounts: {type: array, items: {type: object}}}}
+        data_class_max: personal
+        rights_check: server
+      - name: add_account
+        version: 1
+        title: {de: "Konto anlegen", en: "Add an account"}
+        description:
+          de: >-
+            Legt ein Konto auf einem freigegebenen Ziel an. Die Zugangsdaten werden nur angenommen und nie
+            zurückgegeben.
+          en: "Adds an account on an approved target. Credentials are taken in and never returned."
+        via: rest
+        method: POST
+        path: /api/v1/me/accounts
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [target, label, username, secret]
+          properties:
+            target: {type: string, maxLength: 64}
+            label: {type: string, maxLength: 80}
+            username: {type: string, maxLength: 254}
+            team: {type: string, maxLength: 64}
+            path: {type: string, maxLength: 512}
+            services: {type: array, items: {type: string, maxLength: 64}}
+            secret:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                password: {type: string, maxLength: 4096}
+                token: {type: string, maxLength: 4096}
+                client_secret: {type: string, maxLength: 4096}
+                api_key: {type: string, maxLength: 4096}
+        output_schema: {type: object}
+        data_class_max: confidential
+        resource: {type: account, id_field: label}
+        rights_check: server
+      - name: set_account_services
+        version: 1
+        title: {de: "Dienste eines Kontos festlegen", en: "Set the services of an account"}
+        via: rest
+        method: PATCH
+        path: /api/v1/me/accounts/{account_id}
+        effect: write
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [account_id, services]
+          properties:
+            account_id: {type: string, maxLength: 64}
+            services: {type: array, items: {type: string, maxLength: 64}}
+        output_schema: {type: object}
+        data_class_max: personal
+        resource: {type: account, id_field: account_id}
+        rights_check: server
+      - name: delete_account
+        version: 1
+        title: {de: "Konto löschen", en: "Delete an account"}
+        via: rest
+        method: DELETE
+        path: /api/v1/me/accounts/{account_id}
+        effect: delete
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [account_id]
+          properties:
+            account_id: {type: string, maxLength: 64}
+        output_schema: {type: object}
+        data_class_max: personal
+        resource: {type: account, id_field: account_id}
+        rights_check: server
+      - name: list_usable_accounts
+        version: 1
+        title: {de: "Nutzbare Konten einer Person", en: "Accounts a person lets the service use"}
+        via: rest
+        method: POST
+        path: /api/v1/use/accounts
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          properties:
+            person: {type: string, maxLength: 255}
+            protocol: {enum: [imap, caldav, carddav, smtp, sql, rest, mcp]}
+        output_schema: {type: object, properties: {accounts: {type: array, items: {type: object}}}}
+        data_class_max: personal
+        rights_check: server
+      - name: use_account
+        version: 1
+        title: {de: "Konto für einen Aufruf nutzen", en: "Use an account for one call"}
+        description:
+          de: >-
+            Übergibt die Zugangsdaten versiegelt an den Schlüssel des aufrufenden Dienstes, gültig für einen
+            Aufruf. Jede Übergabe steht im Journal und im Audit. Fehlt nur die Zustimmung der Person, lehnt
+            das Register mit CONNECTIONS-CONSENT-MISSING ab.
+          en: >-
+            Hands the credentials over sealed to the key of the calling service, valid for one call. Every
+            hand-over is journalled and audited. Where only the consent of the person is missing, the registry
+            refuses with CONNECTIONS-CONSENT-MISSING.
+        via: rest
+        method: POST
+        path: /api/v1/use
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [account, public_key, client_nonce]
+          properties:
+            person: {type: string, maxLength: 255}
+            account: {type: string, maxLength: 64}
+            public_key: {type: string, maxLength: 8192}
+            client_nonce: {type: string, minLength: 1, maxLength: 128}
+        output_schema:
+          type: object
+          required: [reference, sealed]
+          properties:
+            reference: {type: string}
+            sealed: {type: object, additionalProperties: {type: string}}
+        data_class_max: confidential
+        rights_check: server
+    volumes:
+      - name: connections-db
+        backup: include
+      - name: connections-keys
+        backup: include
+    export:
+      exit: {format: papaia.connections-export/1, schema: schemas/connections-export-1.json}
+    storage:
+      personal_data: true
+      retention: {until: deleted_by_person}
+      categories:
+        - id: accounts
+          title: {de: "Konten", en: "Accounts"}
+          purpose:
+            de: >-
+              Konten einer Person oder Gruppe auf freigegebenen Zielen mit Benutzername und verschlüsselten
+              Zugangsdaten.
+            en: "Accounts of a person or a group on approved targets, with user name and encrypted credentials."
+          legal_basis: {de: "Art. 6 Abs. 1 lit. f DSGVO", en: "Art. 6(1)(f) GDPR"}
+          retention: {until: deleted_by_person}
+          data_class: confidential
+          erasure: me_api
+        - id: journal
+          title: {de: "Journal der Nutzungen", en: "Journal of uses"}
+          purpose:
+            de: >-
+              Unveränderlicher Nachweis, wer wann ein Ziel eingerichtet, ein Konto angelegt oder genutzt hat.
+              Ohne Zugangsdaten.
+            en: >-
+              Unchangeable record of who set up a target, added an account or used one, and when. Without
+              credentials.
+          legal_basis: {de: "Art. 6 Abs. 1 lit. f DSGVO", en: "Art. 6(1)(f) GDPR"}
+          retention:
+            until: legal_obligation
+            note:
+              de: "Einträge sind verkettet und werden nicht einzeln entfernt."
+              en: "Entries are chained and are not removed one by one."
+          data_class: personal
+          erasure: on_request
+          on_request:
+            action: journal-review
+            way:
+              de: "Anfrage an den Betreiber der Installation, der die Aufbewahrungspflicht prüft."
+              en: "Request to the operator of the installation, who checks the duty to keep the record."
+            responsible: {de: "Betreiber der Installation", en: "Operator of the installation"}
+      secrets:
+        - {kind: database, location: connections-db}
+        - {kind: file, location: connections-keys}

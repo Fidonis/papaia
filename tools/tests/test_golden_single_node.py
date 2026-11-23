@@ -76,6 +76,12 @@ FIXTURES: dict[str, list[str]] = {
         "--smtp-from=noreply@example.org",
         "--smtp-from-name=papAIa",
     ],
+    # The default install with the connection registry on; `default` is the same install
+    # with it off (ADR 0021).
+    "connections": [
+        "--app-host=https://papaia.example.org",
+        "--enable-connections=true",
+    ],
     "external-oidc": [
         "--app-host=https://papaia.example.org",
         "--auth-provider=external_oidc",

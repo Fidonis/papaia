@@ -58,9 +58,10 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
 | People lookup | `people` | — | Exact-match lookup of persons with an assistant role for the assistant's gate, and the members (`sub` only, at most 50) of a share group for Studio's notices: whole name, mail or group id only, role filter, rate limit, audit. No published port — see [docs/people.md](docs/people.md). |
 | Knowledge map | `knowledge-map` | — | An OIDC-secured MCP directory of the installation's knowledge sources: tells the chat where knowledge lives, trimmed to the caller's roles. Internal-only — see [docs/knowledge-map.md](docs/knowledge-map.md). |
+| Connection registry | `connections` | — | One store for the saved credentials of mail, calendar and database accounts: a person adds an account once, a module receives it sealed for one call, every use is audited. Mutual TLS, two database logins, keys in their own volume. Reachable by Me and the add-ons that attach it only — see [ADR 0021](docs/adr/0021-connection-registry-as-a-core-profile.md) and [its variables](docs/configuration.md#connection-registry-variables). |
 
-`localai`, `manager`, `librechat-websearch`, `rag`, `smtp`, `voice` and `knowledge-map` are toggled by `papaia-ctl setup`
-(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`, `--knowledge-map`). When LocalAI is enabled, setup also asks
+`localai`, `manager`, `librechat-websearch`, `rag`, `smtp`, `voice`, `knowledge-map` and `connections` are toggled by `papaia-ctl setup`
+(`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`, `--knowledge-map`, `--connections`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
 The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 
@@ -377,6 +378,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--voice` / `--no-voice` | _(prompted, default off)_ | Toggle the `voice` profile (the local [speech engines](#voice-local-speech)) |
 | `--voice-variant=cpu\|nvidia\|hipblas\|auto` | _(prompted while voice is on)_ | Which image the TTS engine runs on; `auto` probes the host like the LocalAI image choice |
 | `--knowledge-map` / `--no-knowledge-map` | _(prompted, default off)_ | Toggle the `knowledge-map` profile (the [knowledge map](docs/knowledge-map.md)); switching it on also generates its secrets on an installation set up before the module existed |
+| `--connections` / `--no-connections` | _(prompted, default off)_ | Toggle the `connections` profile (the connection registry, [ADR 0021](docs/adr/0021-connection-registry-as-a-core-profile.md)); its two database passwords are generated once |
 | `--smtp` / `--no-smtp` | _(prompted, default off)_ | Toggle the `smtp` profile (the [mail relay](#outbound-mail)). `--no-smtp` keeps the stored settings |
 | `--smtp-host=HOST` | _(prompted)_ | Mail server the relay forwards to: host name or IPv4 address, no scheme and no port |
 | `--smtp-security=MODE` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (no encryption and no login) |
@@ -525,7 +527,7 @@ link gateways last). `--node=NAME` stops one node; `--volumes` is not available 
 `--volumes` (only together with `--clean-up` and `--profiles`) also deletes the data of those
 profiles: `docker compose down --volumes` removes the named volumes of their services and the
 anonymous volumes of their containers (a Redis or Postgres image declares one). It is limited to
-the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`, `voice`, `knowledge-map`); the always-on services and
+the optional modules (`localai`, `librechat-websearch`, `rag`, `smtp`, `voice`, `knowledge-map`, `connections`); the always-on services and
 the manager keep their data, and any other profile is refused before anything runs. A volume that
 a service of another profile still mounts is left in place by Compose.
 
@@ -1249,15 +1251,23 @@ arguments (also an address or a date that is not one), 3 when the confirmation i
 
 ```bash
 tools/papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
+tools/papaia-ctl secrets rotate connections/credentials [--config-dir=PATH]
 ```
 
-Replaces the proxy's own secret for the Paperless gate and reloads the running proxy, which
+`paperless-gate/proxy` replaces the proxy's own secret for the Paperless gate and reloads the running proxy, which
 then sends the new value. The Paperless gate reads it when the add-on starts again
 (`papaia-ctl addon start paperless`); until then requests through the proxy to Paperless are
 refused. The secret is never printed. Each rotation writes one `papaia.audit/1` row (target
-and event, not the value) to `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`. `paperless-gate/proxy`
-is the only target; any other name is refused with exit status 2. See
+and event, not the value) to `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`. See
 [Paperless behind the proxy](#paperless-behind-the-proxy).
+
+`connections/credentials` replaces the master key of the connection registry (profile
+`connections`): it runs `rotate-keys` in the running registry, which makes a new key active,
+seals every stored credential again and removes the keys nothing needs any more. Only the
+registry's summary (a count) is printed; no key, key id or credential leaves the container.
+It needs the profile on and the registry running (exit status 2 otherwise) and writes one
+`papaia.audit/1` row with the outcome, also when the registry refuses. Any other target is
+refused with exit status 2.
 
 ### `addon`
 

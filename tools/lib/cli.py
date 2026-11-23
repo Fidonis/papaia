@@ -329,6 +329,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         enable_rag=_tristate(args.enable_rag),
         enable_voice=_tristate(args.enable_voice),
         enable_knowledge_map=_tristate(args.enable_knowledge_map),
+        enable_connections=_tristate(args.enable_connections),
         voice_variant=args.voice_variant or None,
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
@@ -374,6 +375,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_voice(tree, setup_args)
         tree = resolve.resolve_voice_variant(tree, setup_args)
         tree = resolve.resolve_knowledge_map(tree, setup_args)
+        tree = resolve.resolve_connections(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
         tree = resolve.resolve_core_profiles(tree)
@@ -1632,8 +1634,28 @@ def cmd_proxy_list(args: argparse.Namespace) -> int:
 
 
 def cmd_secrets_rotate(args: argparse.Namespace) -> int:
-    """Replace one stored secret and make the proxy use it (lib/paperless_gate.py)."""
+    """Replace one stored secret: the proxy's gate secret (lib/paperless_gate.py) or the
+    key sealing the connection registry's credentials (lib/connections_profile.py)."""
+    from . import connections_profile
+
     config_dir = Path(args.config_dir)
+    targets = (*paperless_gate.ROTATE_TARGETS, *connections_profile.ROTATE_TARGETS)
+    if args.target not in targets:
+        print(
+            f"ERROR: unknown secret '{args.target}'; this command rotates: {', '.join(targets)}",
+            file=sys.stderr,
+        )
+        return 2
+    if args.target in connections_profile.ROTATE_TARGETS:
+        try:
+            summary = connections_profile.rotate_credentials(
+                config_dir, correlation=args.correlation_id
+            )
+        except (connections_profile.ConnectionsError, images.ImageError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"Rotated the secret {args.target}: {summary}")
+        return 0
     try:
         paperless_gate.rotate(config_dir, args.target, correlation=args.correlation_id)
     except paperless_gate.GateError as exc:
@@ -3033,6 +3055,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
     p_setup.add_argument("--voice-variant", choices=["cpu", "nvidia", "hipblas"], default=None)
     p_setup.add_argument("--enable-knowledge-map", choices=["true", "false"], default=None)
+    p_setup.add_argument("--enable-connections", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)

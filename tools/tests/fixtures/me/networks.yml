@@ -1,8 +1,11 @@
 # The networks the profile shares with the rest of the core, declared for a render of
 # src/infra/me/docker-compose.yml on its own (tools/tests/test_me_profile.py). In the
-# installation the root compose file and src/infra/audit declare them.
+# installation the root compose file, src/infra/audit and src/infra/connections declare
+# them.
 networks:
   papaia-net:
     name: ${DOCKER_NETWORK}
   papaia-audit-ingest-net:
     internal: true
+  papaia-connections-net:
+    driver: bridge

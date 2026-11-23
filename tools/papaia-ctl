@@ -24,6 +24,7 @@
 #                       [--rag|--no-rag] [--qdrant-host=URL]
 #                       [--voice|--no-voice] [--voice-variant=cpu|nvidia|hipblas|auto]
 #                       [--knowledge-map|--no-knowledge-map] [--ca-bundle=FILE]
+#                       [--connections|--no-connections]
 #                       [--smtp|--no-smtp] [--smtp-host=HOST] [--smtp-port=PORT]
 #                       [--smtp-security=starttls|tls|none] [--smtp-user=NAME|--smtp-no-auth]
 #                       [--smtp-from=ADDRESS] [--smtp-from-name=NAME]
@@ -118,7 +119,7 @@
 #                            — the emergency account; its password is shown once
 #   papaia-ctl service-account list   [--json] [--config-dir=PATH]
 #   papaia-ctl service-account rotate <id> [--grace=SECONDS] [--config-dir=PATH]
-#   papaia-ctl secrets rotate paperless-gate/proxy [--config-dir=PATH]
+#   papaia-ctl secrets rotate paperless-gate/proxy|connections/credentials [--config-dir=PATH]
 #   papaia-ctl certs renew   [--force] [--ca] [--config-dir=PATH]
 #   papaia-ctl certs status  [--json] [--config-dir=PATH]
 #   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
@@ -193,7 +194,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,186p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,187p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

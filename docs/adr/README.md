@@ -41,6 +41,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0016](./0016-knowledge-map-governance-metadata.md) | Keep governance metadata in a separate operator file and report model policy findings | Proposed | 2026-11-14 |
 | [0019](./0019-issue-internal-tls-from-one-platform-ca.md) | Issue the certificates for internal TLS from one platform CA | Proposed | 2026-11-21 |
 | [0020](./0020-mein-bereich-and-the-preference-store-as-core-profile.md) | Ship Mein Bereich and the preference store as the core profile me from one pinned image | Proposed | 2026-11-22 |
+| [0021](./0021-connection-registry-as-a-core-profile.md) | Ship the connection registry as the optional core profile connections | Proposed | 2026-11-23 |
 | [0022](./0022-one-security-profile-for-the-whole-installation.md) | Define one security profile for the whole installation in one place | Proposed | 2026-11-21 |
 | [0025](./0025-build-the-permission-report-in-papaia-audit.md) | Build the permission report in papaia-audit with an account that holds view-users only | Proposed | 2026-11-23 |
 
@@ -56,7 +57,6 @@ Records in other repositories cite these decisions with the repository name, for
 |---|---|---|
 | 0017 | Add-on contract generations 7 to 12 | 7, 10 (addendum) |
 | 0018 | Identity: roles, exchange scopes and service accounts | 7 |
-| 0021 | Connection registry | 9 |
 | 0023 | Add-on ingress and delivery | 12 |
 | 0024 | Design source | – |
 

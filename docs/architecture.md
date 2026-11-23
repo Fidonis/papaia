@@ -436,7 +436,7 @@ README, generation 14 (the reserved actions `erasure-replay` and
 | 6 | `knowledge:` | 0014 |
 | 7 | `exposes:` (also `exposes.yaml` of core profiles), rendering of `services.json` and `groups.json`, declared roles, exchange scopes `aud-<addon>`, service accounts, `models.needs`; `keycloak`, `litellm`, `papaia-audit`, `papaia-egress` attachable | 0017, 0018 |
 | 8 | `personal_settings:`; `me-web` and `prefs` attachable | 0020 |
-| 9 | `connections` attachable, registry client | 0021 |
+| 9 | `connections` (core profile `connections`) attachable, registry client | 0021 |
 | 10 | Install-time approval hook: approval at install up to the highest declared class | 0017 (addendum) |
 | 11 | `pki:`, internal TLS under the `kritis` security profile | 0019, 0022 |
 | 12 | Add-on ingress `integration.nginx` | 0023 |

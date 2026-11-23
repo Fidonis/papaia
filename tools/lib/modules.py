@@ -1,5 +1,5 @@
-"""The optional modules (LocalAI, web search, RAG, the mail relay, voice, the knowledge map):
-what each owns.
+"""The optional modules (LocalAI, web search, RAG, the mail relay, voice, the knowledge map,
+the connection registry): what each owns.
 
 Switching a module off removes its containers and keeps everything else (`stop --clean-up`,
 then `setup --no-<module>`). Two things can follow, and they are separate on purpose:
@@ -22,7 +22,9 @@ content.
 A module's settings and its data can be bound to each other. The RAG system encrypts the
 ingester's stored credentials with `QI_CONNECTIONS_SECRET` and keeps the grants of its
 collections in the Qdrant volume; settings reset with the data kept would leave data nobody can
-read. `ModuleSpec.settings_need_data` marks such a module, and `purge` refuses its settings
+read. The connection registry is bound the same way: its two database logins carry the
+generated passwords, and its credentials open only with the keys in its own volume.
+`ModuleSpec.settings_need_data` marks such a module, and `purge` refuses its settings
 without its data.
 
 A module can also have **questions**: the ones `setup` asks when the module is switched on
@@ -178,6 +180,15 @@ MODULES: dict[str, ModuleSpec] = {
             knowledge_map.GOLDSET_REL_PATH,
         ),
         operator_derived=(f"{knowledge_map.MAP_DIR}/**",),
+    ),
+    "connections": ModuleSpec(
+        name="connections",
+        profile="connections",
+        env_dirs=("infra/connections",),
+        # Both database logins were created with the generated passwords, and the
+        # credentials in the database open only with the keys in its key volume: new
+        # settings with the data kept would lock the registry out of its own data.
+        settings_need_data=True,
     ),
 }
 

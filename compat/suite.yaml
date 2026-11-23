@@ -15,6 +15,9 @@ components:
   - papaia-flow
   - papaia-assist
   - paperless
+  # The image of the core profile `connections` (ADR 0021), pinned in
+  # src/infra/connections/docker-compose.yml.
+  - papaia-connections
 suites:
   - suite: 1.9.0
     status: released
@@ -39,3 +42,4 @@ suites:
       papaia-flow: ">=0.1.0,<0.2.0"
       papaia-assist: ">=0.1.0,<0.2.0"
       paperless: ">=2.0.0,<3.0.0"
+      papaia-connections: ">=0.1.0,<0.2.0"

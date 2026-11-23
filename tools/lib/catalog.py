@@ -71,6 +71,7 @@ MAX_BYTES = 1024 * 1024
 # exposes.yaml and the docker-compose.yml its `address.service` names.
 CORE_PROFILES: dict[str, str] = {
     "rag": "src/ai/rag",
+    "connections": "src/infra/connections",
 }
 
 BRANDING_OVERLAY = "overlay/platform/branding.yaml"

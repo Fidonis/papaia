@@ -19,6 +19,7 @@ include:
   - path: ./infra/people/docker-compose.yml
   - path: ./infra/docker-gate/docker-compose.yml
   - path: ./infra/me/docker-compose.yml
+  - path: ./infra/connections/docker-compose.yml
 
   # Application Services
   - path: ./manager/docker-compose.yml

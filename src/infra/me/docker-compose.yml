@@ -89,6 +89,9 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - papaia-net
+      # The connection registry (profile `connections`, ADR 0021): me-web is one of
+      # its declared consumers. The network exists whether the profile is on or not.
+      - papaia-connections-net
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     labels:

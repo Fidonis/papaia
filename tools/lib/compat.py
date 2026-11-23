@@ -209,9 +209,18 @@ def compose_files(root_compose: Path) -> list[Path]:
 # papaia-audit-net only (docs/audit.md), like its one-shot schema step; add-ons deliver
 # events to papaia-audit. The Docker socket broker shares its network with papaia-manager
 # alone (docs/docker-gate.md). The preference database is on papaia-prefs-db-net with
-# prefs alone; add-ons attach `prefs` (addon_api 8, ADR 0020).
+# prefs alone; add-ons attach `prefs` (addon_api 8, ADR 0020). Add-ons attach the
+# registry `connections` (addon_api 9), never its database or its init container.
 NEVER_ATTACHABLE = frozenset(
-    {"papaia-audit-db", "papaia-audit-schema", "papaia-docker-gate", "prefs-db"}
+    {
+        "papaia-audit-db",
+        "papaia-audit-schema",
+        "papaia-docker-gate",
+        "prefs-db",
+        # The registry's database and the container holding its owner login (ADR 0021).
+        "connections-db",
+        "connections-migrate",
+    }
 )
 
 

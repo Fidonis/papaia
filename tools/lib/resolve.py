@@ -57,6 +57,7 @@ class SetupArgs:
     enable_rag: bool | None = None  # None = sticky / no change
     enable_voice: bool | None = None  # None = sticky / no change
     enable_knowledge_map: bool | None = None  # None = sticky / no change
+    enable_connections: bool | None = None  # None = sticky / no change
     # Voice TTS accelerator image variant ("cpu", "nvidia", "hipblas"); None = sticky
     voice_variant: str | None = None
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
@@ -1139,6 +1140,15 @@ def resolve_knowledge_map(tree: EnvTree, args: SetupArgs) -> EnvTree:
     if args.enable_knowledge_map is None:
         return tree
     return _toggle_profile(tree, "knowledge-map", args.enable_knowledge_map)
+
+
+def resolve_connections(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `connections` Compose profile (the connection registry, ADR 0021)
+    based on the operator's choice; None keeps what a prior run wrote (sticky). Its two
+    database passwords are generated with every module's secrets before this runs."""
+    if args.enable_connections is None:
+        return tree
+    return _toggle_profile(tree, "connections", args.enable_connections)
 
 
 def resolve_voice_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:

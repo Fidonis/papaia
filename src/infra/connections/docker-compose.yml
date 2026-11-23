@@ -1,0 +1,204 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Connection registry · connections, connections-migrate, connections-db
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Core profile `connections` (ADR 0021):
+#   COMPOSE_PROFILES=...,connections   OR   papaia-ctl setup --connections
+#
+# The one store for saved credentials of approved targets (mail servers, calendars,
+# databases). A person enters an account once; a module that may use it asks the
+# registry for it, sealed to a key valid for one call, and never keeps a copy.
+#
+#   connections           the registry, https://connections:8080 (TLS 1.3, mutual TLS
+#                         with certificates of the platform PKI by default)
+#   connections-migrate   one-shot: applies the migrations as the owner of the schema
+#                         and grants the service login data rights, then ends
+#   connections-db        PostgreSQL, owner `connections_owner`
+#
+# Safety:
+#   - Two logins. Only connections-migrate holds the owner login; the registry
+#     connects as `connections_service`, which can read and append the journal but
+#     cannot create, alter or drop a table. It refuses to start with the owner's
+#     login or with CONNECTIONS_MIGRATE_DB_URL in its environment.
+#   - Reachable only by its declared consumers: me-web on papaia-connections-net, and
+#     add-ons that list `connections` under `networks.attach` (flow-control,
+#     assist-gate), which puts the registry on their own network. It is not on
+#     papaia-net. The database is on papaia-connections-db-net (internal) with the
+#     registry and the init container only; no add-on may attach either of them.
+#   - Credentials are sealed with one data key per account, wrapped by the master
+#     key in the volume `connections-keys` (or by OpenBao or a token, see
+#     .env.example). Only the registry mounts that volume. `papaia-ctl backup`
+#     archives it encrypted with the database (module `connections`), and
+#     `restore --only=module:connections` brings both back together; a database
+#     without its keys cannot be read.
+#   - No host port, read-only root file systems, no capabilities, no new privileges.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env merged
+# with src/infra/connections/.env. Values come through environment:, never env_file:.
+services:
+
+  connections:
+    # Candidate digest: reproducible build of papaia-connections 82e6177 (make image
+    # VERSION=v0.1.0). Re-pinned to the published digest when the module is released.
+    image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:ad0b8201f34c081baca32e7c841f3859b9ac9b98c0a70154bd55b3091bd75aa5
+    restart: unless-stopped
+    user: "10001:10001"
+    depends_on:
+      connections-migrate:
+        condition: service_completed_successfully
+    environment:
+      # The service login; the owner login stays in connections-migrate.
+      CONNECTIONS_DB_URL: postgresql://connections_service:${CONNECTIONS_SERVICE_DB_PASSWORD}@connections-db:5432/connections
+      # Tokens are checked against the public issuer; its keys come from there too.
+      CONNECTIONS_OIDC_ISSUER: ${OIDC_ISSUER}
+      CONNECTIONS_AUDIENCE: papaia-connections
+      # Which clients may call, as person, as service, or as a gate with the person's
+      # own token. Empty in the core: the modules that use the registry name theirs.
+      CONNECTIONS_PERSON_CLIENTS: ${CONNECTIONS_PERSON_CLIENTS:-}
+      CONNECTIONS_SERVICE_CLIENTS: ${CONNECTIONS_SERVICE_CLIENTS:-}
+      CONNECTIONS_DELEGATE_CLIENTS: ${CONNECTIONS_DELEGATE_CLIENTS:-}
+      CONNECTIONS_MANDATE_DAYS: ${CONNECTIONS_MANDATE_DAYS:-}
+      CONNECTIONS_PERSON_TOKEN_SERVICES: ${CONNECTIONS_PERSON_TOKEN_SERVICES:-}
+      CONNECTIONS_USE_PERSONS_PER_HOUR: ${CONNECTIONS_USE_PERSONS_PER_HOUR:-500}
+      # The four-eyes rule of the platform catalog (approvals.four_eyes).
+      CONNECTIONS_PLATFORM_CATALOG: /etc/papaia/platform/services.json
+      # The platform-wide profile; CONNECTIONS_PROFILE may only be stricter.
+      PAPAIA_SECURITY_PROFILE: ${PAPAIA_SECURITY_PROFILE:-standard}
+      CONNECTIONS_PROFILE: ${CONNECTIONS_PROFILE:-}
+      CONNECTIONS_KEY_PROVIDER: ${CONNECTIONS_KEY_PROVIDER:-file}
+      CONNECTIONS_KEY_DIR: /var/lib/connections/keys
+      CONNECTIONS_OPENBAO_URL: ${CONNECTIONS_OPENBAO_URL:-}
+      CONNECTIONS_OPENBAO_TOKEN_FILE: ${CONNECTIONS_OPENBAO_TOKEN_FILE:-}
+      CONNECTIONS_PKCS11_MODULE: ${CONNECTIONS_PKCS11_MODULE:-}
+      CONNECTIONS_PKCS11_TOKEN_LABEL: ${CONNECTIONS_PKCS11_TOKEN_LABEL:-}
+      CONNECTIONS_PKCS11_PIN_FILE: ${CONNECTIONS_PKCS11_PIN_FILE:-}
+      CONNECTIONS_PKCS11_KEY_LABEL: ${CONNECTIONS_PKCS11_KEY_LABEL:-}
+      CONNECTIONS_PKCS11_JOURNAL_KEY_LABEL: ${CONNECTIONS_PKCS11_JOURNAL_KEY_LABEL:-}
+      # Server certificate of the platform PKI (src/infra/connections/pki.yaml). With
+      # the platform CA as client CA every caller needs a client certificate of it;
+      # an empty CONNECTIONS_TLS_CLIENT_CA allows one-sided TLS (refused under kritis).
+      CONNECTIONS_TLS_CERT: /run/papaia/tls/tls.crt
+      CONNECTIONS_TLS_KEY: /run/papaia/tls/tls.key
+      CONNECTIONS_TLS_CLIENT_CA: ${CONNECTIONS_TLS_CLIENT_CA-/run/papaia/tls/ca.crt}
+      # papaia.audit/1 rows over mutual TLS; `papaia-ctl audit issue papaia-connections`
+      # writes the client certificate. Without it the rows wait in the outbox.
+      CONNECTIONS_AUDIT_URL: https://papaia-audit:8443/v1/ingest
+      CONNECTIONS_AUDIT_CERT: /run/papaia/audit/client.crt
+      CONNECTIONS_AUDIT_KEY: /run/papaia/audit/client.key
+      CONNECTIONS_AUDIT_CA: /run/papaia/audit/ca.crt
+      # The local CA of the bundled Keycloak, for the issuer's keys. Cleared to ""
+      # via docker-compose.ssl-cert.override.yml when AUTH_PROVIDER=external_oidc.
+      SSL_CERT_FILE: /certs/local-ca.crt
+    volumes:
+      # Master keys. Mounted here only; backed up and restored with connections-db.
+      - connections-keys:/var/lib/connections/keys
+      - ${PAPAIA_CONFIG_DIR}/pki/core/connections:/run/papaia/tls:ro
+      - ${PAPAIA_CONFIG_DIR}/infra/audit/clients/papaia-connections:/run/papaia/audit:ro
+      - ${PAPAIA_CONFIG_DIR}/platform:/etc/papaia/platform:ro
+      - ${PAPAIA_CONFIG_DIR}/certs:/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    healthcheck:
+      # The port asks every caller for a client certificate, so the check only opens
+      # it. The registry listens only after its login, the migrations and the keys
+      # were checked; any of them wrong and it ends instead.
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 8080), timeout=3).close()"
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - papaia-connections-net
+      - papaia-connections-db-net
+      - papaia-audit-ingest-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-connections
+      de.fidonis.role:   credential-registry
+    profiles: [connections]
+
+  connections-migrate:
+    image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:ad0b8201f34c081baca32e7c841f3859b9ac9b98c0a70154bd55b3091bd75aa5
+    command: ["migrate"]
+    restart: "no"
+    user: "10001:10001"
+    depends_on:
+      connections-db:
+        condition: service_healthy
+    environment:
+      CONNECTIONS_MIGRATE_DB_URL: postgresql://connections_owner:${CONNECTIONS_OWNER_DB_PASSWORD}@connections-db:5432/connections
+      # Only the login name is read: the service login gets connections_app.
+      CONNECTIONS_DB_URL: postgresql://connections_service@connections-db:5432/connections
+      PAPAIA_SECURITY_PROFILE: ${PAPAIA_SECURITY_PROFILE:-standard}
+      CONNECTIONS_PROFILE: ${CONNECTIONS_PROFILE:-}
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777,noexec,nosuid,nodev
+    networks:
+      - papaia-connections-db-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-connections
+      de.fidonis.role:   migration
+    profiles: [connections]
+
+  connections-db:
+    image: postgres:18.3@sha256:7e32e9833a6fb1c92c32552794cb6ed569d51b445a54907d35fc112ef39684db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: connections
+      POSTGRES_USER: connections_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/connections-owner-db-password
+    secrets:
+      - connections-owner-db-password
+      - connections-service-db-password
+    volumes:
+      - connections-db:/var/lib/postgresql
+      # Creates the service login once, on an empty database.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "connections_owner", "-d", "connections"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - papaia-connections-db-net
+    security_opt: [no-new-privileges:true]
+    # The entrypoint switches to the postgres user and owns its data directory.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    labels:
+      de.fidonis.module: papaia-connections
+      de.fidonis.role:   database
+    profiles: [connections]
+
+secrets:
+  # Generated by setup into src/infra/connections/.env; handed over as files.
+  connections-owner-db-password:
+    environment: CONNECTIONS_OWNER_DB_PASSWORD
+  connections-service-db-password:
+    environment: CONNECTIONS_SERVICE_DB_PASSWORD
+
+networks:
+  # The registry and its consumers. Not internal: the registry reads the signing keys
+  # of the public issuer (OIDC_ISSUER) through the host.
+  papaia-connections-net:
+    driver: bridge
+  # The registry, the init container and the database; no route out.
+  papaia-connections-db-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  connections-db:
+  connections-keys:

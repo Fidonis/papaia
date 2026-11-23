@@ -64,6 +64,7 @@ SOURCES = (
     "papaia-flow",
     "papaia-assist",
     "papaia-me",
+    "papaia-connections",
     "papaia-manager",
     "papaia-lifecycle",
     "papaia-egress",

@@ -597,6 +597,7 @@ def evaluate_matrix(
 _TITLES = {
     "manager": "Manager", "papaia-me": "Me", "papaia-studio": "Studio", "papaia-data": "Data",
     "papaia-flow": "Flow", "papaia-assist": "Assistant", "paperless": "Paperless",
+    "papaia-connections": "Connections",
 }
 
 

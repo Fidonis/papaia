@@ -350,6 +350,7 @@ _SSL_CERT_SERVICES = (
     "knowledge-map-mcp",
     "me-web",
     "prefs",
+    "connections",
 )
 
 

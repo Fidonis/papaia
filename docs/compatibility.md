@@ -17,15 +17,17 @@ tested with the suite; `–` means the component is not part of the suite.
 [ADR 0002](adr/0002-addon-core-compatibility-gating.md)) the suite's core serves.
 A `candidate` row describes a suite whose release is still being prepared.
 
-| Suite | Status | Core | Add-on API | Manager | Me | Studio | Data | Flow | Assistant | Paperless |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1.9.0 | released | `>=1.9.0,<1.10.0` | 1..6 | `>=1.7.0,<1.8.0` | – | – | – | – | – | `>=2.0.0,<3.0.0` |
-| 1.10.0 | candidate | `>=1.10.0,<1.11.0` | 1..15 | `>=1.8.0,<1.9.0` | `>=0.1.0,<0.2.0` | `>=0.2.0,<0.3.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=2.0.0,<3.0.0` |
+| Suite | Status | Core | Add-on API | Manager | Me | Studio | Data | Flow | Assistant | Paperless | Connections |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1.9.0 | released | `>=1.9.0,<1.10.0` | 1..6 | `>=1.7.0,<1.8.0` | – | – | – | – | – | `>=2.0.0,<3.0.0` | – |
+| 1.10.0 | candidate | `>=1.10.0,<1.11.0` | 1..15 | `>=1.8.0,<1.9.0` | `>=0.1.0,<0.2.0` | `>=0.2.0,<0.3.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=2.0.0,<3.0.0` | `>=0.1.0,<0.2.0` |
 
 Columns map to add-on names: Me `papaia-me`, Studio `papaia-studio`, Data
 `papaia-data`, Flow `papaia-flow`, Assistant `papaia-assist`, Paperless
 `paperless`. The manager is part of the core and pinned in
-`src/manager/docker-compose.yml`.
+`src/manager/docker-compose.yml`; so is the connection registry `papaia-connections`
+(profile `connections`, [ADR 0021](adr/0021-connection-registry-as-a-core-profile.md)),
+pinned in `src/infra/connections/docker-compose.yml`.
 
 ### How `papaia-ctl addon check` uses it
 

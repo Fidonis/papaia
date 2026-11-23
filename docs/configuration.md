@@ -196,6 +196,30 @@ keeps it byte for byte. A non-interactive `setup` takes it from the environment 
 `PAPAIA_SMTP_PASSWORD`, which is not a stack variable and is removed from the process environment
 as soon as it has been read.
 
+## Connection registry variables
+
+`src/infra/connections/.env` (profile `connections`, [ADR 0021](adr/0021-connection-registry-as-a-core-profile.md)),
+written by `papaia-ctl setup --connections`. The profile is off on a fresh install. The compose
+file reads every key through `${VAR}` interpolation (path 1).
+
+| Variable | Purpose |
+|---|---|
+| `CONNECTIONS_OWNER_DB_PASSWORD` | Generated. The owner of the schema; only the one-shot container `connections-migrate` uses it |
+| `CONNECTIONS_SERVICE_DB_PASSWORD` | Generated. The registry's own login, with data rights only. Both passwords reach the database as secret files; a new value locks the registry out of its database |
+| `CONNECTIONS_PERSON_CLIENTS`, `CONNECTIONS_SERVICE_CLIENTS`, `CONNECTIONS_DELEGATE_CLIENTS` | The OIDC clients whose tokens the registry accepts: as a person, as a service account (`client=service`), or as a gate with the person's own token. Empty in the core; a module that uses the registry names its entries |
+| `CONNECTIONS_MANDATE_DAYS` | Days after which a mandate ends unless the person is active. Empty: the registry's default |
+| `CONNECTIONS_PERSON_TOKEN_SERVICES` | Services that never use an account without the person's own token |
+| `CONNECTIONS_USE_PERSONS_PER_HOUR` | Brake: a service asking for credentials of more persons within an hour is held until an administrator releases it (default 500, 0 = off) |
+| `CONNECTIONS_PROFILE` | `standard` or `kritis`. Empty: `PAPAIA_SECURITY_PROFILE`. It may be stricter than the platform, never weaker |
+| `CONNECTIONS_TLS_CLIENT_CA` | The CA whose client certificates every caller needs (default: the platform CA). Empty allows one-sided TLS; `kritis` refuses that |
+| `CONNECTIONS_KEY_PROVIDER` | `file` (key files in the volume `connections-keys`, default; refused under `kritis`), `openbao` or `pkcs11`, with the `CONNECTIONS_OPENBAO_*` and `CONNECTIONS_PKCS11_*` settings |
+
+The volumes `connections-db` and `connections-keys` belong to the module `connections` in a
+backup and are restored together (`papaia-ctl restore --only=module:connections`); a database
+without its keys cannot be read. `papaia-ctl secrets rotate connections/credentials` makes a new
+master key active in the running registry and seals every stored credential again; it writes one
+`papaia.audit/1` row.
+
 ## Egress variables
 
 Root `.env`, read by `papaia-ctl` when it renders `$PAPAIA_CONFIG_DIR/infra/egress/egress.json`

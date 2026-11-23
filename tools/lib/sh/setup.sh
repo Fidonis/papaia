@@ -10,6 +10,8 @@ SETUP_TOPOLOGY_ARGS=()
 SETUP_LOCALAI_ARGS=()
 # The knowledge map switch of the setup run in progress, same lifetime.
 SETUP_KNOWLEDGE_MAP_ARGS=()
+# The connection registry switch of the setup run in progress, same lifetime.
+SETUP_CONNECTIONS_ARGS=()
 
 # Reads a py_cli subcommand's KEY=VALUE output into the current shell's
 # variables.
@@ -55,7 +57,7 @@ cmd_setup() {
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" localai_variant="" localai_runtime="" manager="" rag="" voice="" voice_variant="" reranker_model="" backup_dir=""
-    local knowledge_map="" ca_bundle=""
+    local knowledge_map="" connections="" ca_bundle=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0 approve_pairings=""
@@ -67,6 +69,7 @@ cmd_setup() {
     SETUP_TOPOLOGY_ARGS=()
     SETUP_LOCALAI_ARGS=()
     SETUP_KNOWLEDGE_MAP_ARGS=()
+    SETUP_CONNECTIONS_ARGS=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -147,6 +150,8 @@ cmd_setup() {
             --knowledge-map) knowledge_map="true" ;;
             --ca-bundle=*) ca_bundle="${1#*=}" ;;
             --no-knowledge-map) knowledge_map="false" ;;
+            --connections) connections="true" ;;
+            --no-connections) connections="false" ;;
             --smtp) smtp="true" ;;
             --no-smtp) smtp="false" ;;
             --smtp-host=*) smtp_host="${1#*=}" ;;
@@ -338,6 +343,11 @@ cmd_setup() {
             local _km_label="disabled"
             [ "$KNOWLEDGE_MAP_STICKY" = "true" ] && _km_label="enabled"
             info "  Knowledge map     = $_km_label"
+        fi
+        if [ -n "${CONNECTIONS_STICKY:-}" ]; then
+            local _connections_label="disabled"
+            [ "$CONNECTIONS_STICKY" = "true" ] && _connections_label="enabled"
+            info "  Connections       = $_connections_label"
         fi
         if [ -n "${SMTP_STICKY:-}" ]; then
             local _smtp_label="disabled"
@@ -603,6 +613,25 @@ cmd_setup() {
                     ;;
             esac
         fi
+        if [ -z "$connections" ]; then
+            # Off for a fresh install (ADR 0021): the registry serves modules that use
+            # saved credentials. A previous opt-in stays the default on a re-run.
+            local connections_default="2"
+            [ "${CONNECTIONS_STICKY:-}" = "true" ] && connections_default="1"
+            printf '\n%sInstall the connection registry%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — one store for the saved credentials of mail, calendar and database accounts\n' >&2
+            printf '  2) No   — skip the connection registry (default)\n' >&2
+            local connections_choice
+            connections_choice="$(prompt_with_default "  Choose" "$connections_default")"
+            case "$connections_choice" in
+                1|[Yy]|[Yy]es|YES) connections="true" ;;
+                2|[Nn]|[Nn]o|NO)   connections="false" ;;
+                *)
+                    warn "Unrecognized choice '$connections_choice'; defaulting to disabled."
+                    connections="false"
+                    ;;
+            esac
+        fi
         if [ -z "$smtp" ]; then
             # Off for a fresh install: the relay needs a mail server only the operator
             # knows. A previous opt-in stays the default so a re-run does not flip it.
@@ -687,6 +716,7 @@ cmd_setup() {
     SETUP_SMTP_PASSWORD="$smtp_password"
     [ -n "$localai_runtime" ] && SETUP_LOCALAI_ARGS+=(--localai-runtime="$localai_runtime")
     [ -n "$knowledge_map" ] && SETUP_KNOWLEDGE_MAP_ARGS+=(--enable-knowledge-map="$knowledge_map")
+    [ -n "$connections" ] && SETUP_CONNECTIONS_ARGS+=(--enable-connections="$connections")
     # A variant is a property of the enabled profile: when voice ends up off
     # (an explicit --no-voice, a No at the prompt, or an untouched sticky
     # opt-out), no probed or flagged variant may be stored as a choice.
@@ -1277,6 +1307,9 @@ _run_setup_py() {
     fi
     if [ "${#SETUP_KNOWLEDGE_MAP_ARGS[@]}" -gt 0 ]; then
         extra+=(${SETUP_KNOWLEDGE_MAP_ARGS[@]+"${SETUP_KNOWLEDGE_MAP_ARGS[@]}"})
+    fi
+    if [ "${#SETUP_CONNECTIONS_ARGS[@]}" -gt 0 ]; then
+        extra+=(${SETUP_CONNECTIONS_ARGS[@]+"${SETUP_CONNECTIONS_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.
