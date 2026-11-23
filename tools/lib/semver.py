@@ -134,6 +134,12 @@ def parse_constraint(text: str) -> tuple[Clause, ...]:
     return tuple(clauses)
 
 
+def release_of(version: Version | str) -> Version:
+    """The release a version is or is a pre-release of: 1.10.0-rc.1 -> 1.10.0."""
+    v = parse_version(version) if isinstance(version, str) else version
+    return Version(v.major, v.minor, v.patch)
+
+
 def satisfies(version: Version | str, constraint: str | tuple[Clause, ...]) -> bool:
     """Whether `version` satisfies every clause of `constraint`."""
     v = parse_version(version) if isinstance(version, str) else version

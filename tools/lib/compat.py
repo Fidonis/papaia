@@ -433,7 +433,9 @@ def evaluate_addon(
         requirement = compat_range
         core_value = core.platform_version
         try:
-            if semver.satisfies(core.platform_version, compat_range):
+            # A pre-release core (1.10.0-rc.1) is the candidate of its release and serves
+            # the add-ons of that release, as the suite matrix judges it (suite.matrix_rows).
+            if semver.satisfies(semver.release_of(core.platform_version), compat_range):
                 status = STATUS_OK
             else:
                 status = STATUS_INCOMPATIBLE

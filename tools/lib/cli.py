@@ -1445,8 +1445,9 @@ def cmd_image_verify(args: argparse.Namespace) -> int:
         print(f"Nothing was started. To start anyway for this one command, re-run "
               f"'{_retry_hint(args.command)}' with --insecure-images.", file=sys.stderr)
         return 2
+    candidate = " (candidate)" if images.is_candidate(images.core_version(repo_root)) else ""
     print(f"{total} image(s) verified against the bill of materials of suite "
-          f"{bom['suite']} (digest and signature).")
+          f"{bom['suite']}{candidate} (digest and signature).")
     return 0
 
 

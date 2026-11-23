@@ -184,8 +184,9 @@ gemeldet.
 - **Prüfung.** Die eigenen Images des Kerns werden beim Build bei jeder Änderung (Pull-Request und
   Push) auf Schwachstellen geprüft und zusätzlich täglich: Der tägliche Lauf baut den Stand des
   Standardzweigs und prüft ihn erneut gegen die aktuellen Schwachstellendatenbanken
-  (`.github/workflows/images.yml`). Die Fremd-Images, die der Kern unverändert bezieht, werden
-  wöchentlich und bei jeder Änderung unter `src/` geprüft (`.github/workflows/image-scan.yml`).
+  (`.github/workflows/images.yml`). Die Fremd-Images, die der Kern unverändert bezieht, und die
+  Images der Module, die der Kern pinnt (etwa Mein Bereich), werden wöchentlich und bei jeder
+  Änderung unter `src/` geprüft (`.github/workflows/image-scan.yml`).
 - **Meldeweg.** Schwachstellen bitte nie als öffentliches Issue melden, sondern über
   <https://github.com/Fidonis/papaia/security/advisories/new> oder an `security@fidonis.de`. Die
   Eingangsbestätigung folgt innerhalb von 3 Arbeitstagen ([Sicherheitsrichtlinie](../../../SECURITY.md)).

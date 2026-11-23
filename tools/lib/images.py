@@ -117,6 +117,13 @@ _MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
 ))
+# A pinned image is usually a multi-platform index; its digest is the index's.
+_RESOLVE_ACCEPT = ", ".join((
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+))
 
 
 class ImageError(ValueError):
@@ -483,14 +490,23 @@ class Registry:
         return token if isinstance(token, str) and token else None
 
     def _fetch(self, url: str, headers: dict[str, str], limit: int) -> bytes:
-        request = urllib.request.Request(url, headers=headers)
+        return self._open(url, headers, limit)[0]
+
+    def _open(self, url: str, headers: dict[str, str], limit: int,
+              method: str = "GET") -> tuple[bytes, dict[str, str]]:
+        request = urllib.request.Request(url, headers=headers, method=method)
         with self._opener.open(request, timeout=self.timeout) as answer:
-            data = answer.read(limit + 1)
+            data = answer.read(limit + 1) if method == "GET" else b""
+            found = {key.lower(): value for key, value in answer.headers.items()}
         if len(data) > limit:
             raise ImageError(f"registry answer larger than {limit} bytes")
-        return data
+        return data, found
 
     def _get(self, host: str, repository: str, path: str, accept: str, limit: int) -> bytes:
+        return self._request(host, repository, path, accept, limit)[0]
+
+    def _request(self, host: str, repository: str, path: str, accept: str, limit: int,
+                 method: str = "GET") -> tuple[bytes, dict[str, str]]:
         url = f"{self._base(host)}/v2/{repository}/{path}"
         headers = {"Accept": accept}
         token = self._tokens.get((host, repository))
@@ -498,7 +514,9 @@ class Registry:
             headers["Authorization"] = f"Bearer {token}"
         for attempt in (0, 1):
             try:
-                return self._fetch(url, headers, limit)
+                if method == "GET":
+                    return self._fetch(url, headers, limit), {}
+                return self._open(url, headers, limit, method)
             except urllib.error.HTTPError as exc:
                 if exc.code == 404:
                     raise NotFound(f"{host}/{repository}: {path} not found") from None
@@ -533,6 +551,20 @@ class Registry:
 
     def blob(self, host: str, repository: str, digest: str, limit: int) -> bytes:
         return self._get(host, repository, f"blobs/{digest}", "*/*", limit)
+
+    def resolve(self, host: str, repository: str, reference: str) -> str:
+        """The digest the registry serves for a tag or digest, without the body where
+        it can: a HEAD request (Docker Hub does not count it against the pull limit)
+        whose `Docker-Content-Digest` names it; otherwise the sha256 of the manifest
+        or index fetched with GET. Raises NotFound for an unknown tag or digest."""
+        _, headers = self._request(host, repository, f"manifests/{reference}",
+                                   _RESOLVE_ACCEPT, MAX_MANIFEST_BYTES, method="HEAD")
+        digest = headers.get("docker-content-digest", "")
+        if _DIGEST_RE.match(digest):
+            return digest
+        body, _ = self._request(host, repository, f"manifests/{reference}",
+                                _RESOLVE_ACCEPT, MAX_MANIFEST_BYTES)
+        return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
 class SignatureCache:
@@ -762,8 +794,23 @@ def core_version(repo_root: Path) -> str:
         raise ImageError(f"{path} not readable") from exc
 
 
+def suite_version(version: str) -> str:
+    """The suite a core version belongs to: the version itself, or for a pre-release
+    (1.10.0-rc.1) the release it is a candidate of (1.10.0). A candidate core is checked
+    against the bill of materials of the suite it will ship in, never an older one."""
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?", version)
+    if not match:
+        raise ImageError(f"VERSION {version[:40]!r} is not a version X.Y.Z[-pre-release]")
+    return match.group(1)
+
+
+def is_candidate(version: str) -> bool:
+    """Whether the core version is a pre-release (a candidate of its suite)."""
+    return suite_version(version) != version
+
+
 def bom_path(repo_root: Path, version: str) -> Path:
-    return Path(repo_root) / "compat" / f"suite-{version}.yaml"
+    return Path(repo_root) / "compat" / f"suite-{suite_version(version)}.yaml"
 
 
 def _read_key(path: Path) -> str:
@@ -861,7 +908,7 @@ def load_trusted_bom(repo_root: Path, anchor: str | None = None) -> dict:
     try:
         return suite.verify_bom(
             path, Path(f"{path}.sig"), key_path=key_path, require_scope="delivery",
-            expected_suite=version,
+            expected_suite=suite_version(version),
         )
     except suite.SuiteError as exc:
         raise ImageError(f"bill of materials {path.relative_to(root)}: {exc}") from exc

@@ -354,6 +354,16 @@ reason = "git -C <source> rev-parse HEAD without a shell, for the maintainer com
 expires = 2027-05-20
 approved_by = "core maintainers (security officer countersignature pending)"
 
+[[exception]]
+rule = "code-exec"
+path = "tools/lib/image_pins.py"
+within = "on_release_tag"
+subject = "subprocess.run"
+input = "fixed"
+reason = "git -C <checkout> tag --points-at HEAD without a shell, so the candidate pin check refuses a release tag; program and arguments are literals, the only value is the core checkout path."
+expires = 2027-05-20
+approved_by = "core maintainers (security officer countersignature pending)"
+
 # --- code-exec: the forced command of a node ---------------------------------------
 
 [[exception]]

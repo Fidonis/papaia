@@ -76,10 +76,10 @@ def load(repo_root: Path) -> dict | None:
     """The verified bill of materials of this checkout; None when the checkout has none.
     A file that is there but does not verify raises OfferError."""
     try:
-        version = images.core_version(repo_root)
+        path = images.bom_path(repo_root, images.core_version(repo_root))
     except images.ImageError:
         return None
-    if not images.bom_path(repo_root, version).is_file():
+    if not path.is_file():
         return None
     try:
         return images.load_trusted_bom(repo_root)

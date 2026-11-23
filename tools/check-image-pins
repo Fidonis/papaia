@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — check-image-pins · every pinned image resolves in its registry
+# by Fidonis GmbH · https://fidonis.de
+#
+# Resolves every pinned image of the compose files, the service-env.json files and
+# the suite bill of materials of the checkout against the registry: the digest must
+# exist and the tag must point to it. Moves the pins of one image after a release
+# (lib/image_pins.py; docs/compatibility.md, "Pinned images resolve").
+#
+# Usage:
+#   check-image-pins check --mode=release [--own-builds=FILE]
+#   check-image-pins check --mode=candidate --registry=<host:port>/<path>/
+#   check-image-pins list
+#   check-image-pins repin --ref=<name>:<tag>@sha256:<digest> [--ref=...]
+#
+# Exit codes: 0 every pin resolves, 1 a pin does not resolve, 2 invalid input or a
+# refused mode. Reads registries only; needs Python 3.10+ with PyYAML.
+# ═══════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# shellcheck source=lib/sh/python.sh
+source "$REPO_ROOT/tools/lib/sh/python.sh"
+find_python || exit 2
+
+PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
+    exec "$PYTHON_BIN" -m lib.image_pins --repo-root "$REPO_ROOT" "$@"

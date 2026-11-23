@@ -383,13 +383,13 @@ def _scan_clauses() -> dict[str, list[str]]:
 
 
 def test_the_core_scans_its_own_images_on_every_change_and_upstream_images_apart():
-    """images.yml scans the own images on pull requests and pushes; image-scan.yml scans the
-    upstream images only, on changes under src/."""
+    """images.yml scans the own images on pull requests and pushes; image-scan.yml scans every
+    other pinned image (upstream and module images), on changes under src/."""
     own = _text(REPO / ".github" / "workflows" / "images.yml")
     assert re.search(r"^  pull_request:", own, re.M) and re.search(r"^  push:", own, re.M)
     upstream = _text(REPO / ".github" / "workflows" / "image-scan.yml")
     assert 'paths: ["src/**"' in upstream
-    assert "grep -v '^ghcr\\.io/fidonis/'" in upstream
+    assert "compat/own-images.yaml" in upstream and 'grep -vF "${own}"' in upstream
 
 
 def test_the_stated_scan_intervals_are_the_ones_the_core_runs():

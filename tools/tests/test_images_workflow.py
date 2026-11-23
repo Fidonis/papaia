@@ -93,10 +93,13 @@ def test_checkouts_keep_no_credentials():
                 assert step["with"]["persist-credentials"] is False
 
 
-def test_the_compose_image_scan_leaves_the_own_images_to_this_workflow():
+def test_the_compose_image_scan_leaves_only_the_own_images_to_this_workflow():
+    """The own images are scanned here on the built digest; the module images the core
+    pins (papaia-me among them) are not built here and are scanned by image-scan.yml."""
     text = (REPO / ".github" / "workflows" / "image-scan.yml").read_text(encoding="utf-8")
 
-    assert "ghcr.io/fidonis/" in text and "grep -v" in text
+    assert "compat/own-images.yaml" in text and 'grep -vF "${own}"' in text
+    assert "grep -v '^ghcr\\.io/fidonis/'" not in text
 
 
 # ── verify: the built digests are the pinned ones ────────────────────────────

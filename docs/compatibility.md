@@ -246,8 +246,79 @@ release (and a hotfix) is not cut until all of the following hold:
    pushed to `ghcr.io/fidonis/`, signed like 3, and pinned in compose with
    the release `VERSION` as tag; their entries in the bill of materials come
    from `tools/build-images bom-entries`.
+6. Every pin resolves: `tools/check-image-pins check --mode=release` passes
+   (next section), before the tag with `--own-builds` and on the tag without.
 
 Without 1 to 3 every operator would need `--insecure-images`.
+
+### Pinned images resolve
+
+The start check compares the images with the signed bill of materials; it cannot
+notice a pin that no registry serves (a digest built on one machine and never
+pushed) or a tag that was moved to another build after the pin was taken.
+`tools/check-image-pins` reads every pin of the checkout:
+
+- `services.*.image` and each `x-papaia-*-images` value of the compose files under
+  `src/`,
+- the `image` of each `service-env.json` under `src/` (the variable list of a module
+  image, such as `src/infra/me/service-env.json`),
+- every image of the bill of materials of the checkout's suite
+  (`compat/suite-<suite>.yaml`, when it is there),
+
+and resolves each one: the digest must exist and the tag must point to exactly that
+digest. Every problem names file, line and field; exit code 0 when every pin
+resolves, 1 when one does not, 2 on invalid input. The check only reads (pull access,
+with the host's Docker credentials when there are any; a HEAD request where the
+registry answers it) and needs no push credential.
+
+```sh
+tools/check-image-pins list                                      # every pin, file and line
+tools/check-image-pins check --mode=release                      # the release registry
+tools/check-image-pins check --mode=release --own-builds=builds.json   # before the tag
+tools/check-image-pins check --mode=candidate --registry=127.0.0.1:5000/unpublished/
+```
+
+- **Release mode** resolves every pin at the registry it names. A pin that names a
+  loopback registry fails, so no test registry name can stay in a release. Before
+  the tag the own images of the core are not published yet: `--own-builds` takes
+  them from the reproducible build of `tools/build-images build` (its builds file),
+  whose digests must be the pinned ones.
+- **Candidate mode** resolves each pin first behind `--registry`, the prefix of a
+  local test registry on the loopback interface (as `PAPAIA_IMAGE_MIRROR` names it),
+  then at its own registry. It refuses to run on a release tag (a `v*` tag in CI or
+  on the checked-out commit).
+
+CI (`.github/workflows/images.yml`) runs candidate mode on every push to a
+`releases/*` branch against the own images built in the job, release mode on demand
+(`workflow_dispatch`, `pin-check: release`) before a tag, and release mode in the
+job `release-pins` once a tag has published the own images. While a module image is
+not published, the candidate run on the milestone branch fails and names it.
+
+**Re-pin after a module release.** A module (papaia-me, papaia-connections, the
+manager, ...) publishes its image on its version tag; the release record of that
+tag (the release notes and the output of its release workflow) names
+`<name>:<version>@sha256:<digest>`. Then:
+
+```sh
+# 1. Move every pin of the image in compose and service-env.json at once.
+tools/check-image-pins repin --ref=ghcr.io/fidonis/papaia-me:0.1.0@sha256:<digest>
+# 2. papaia-me only: its variable list names the source commit; regenerate it from
+#    a checkout of papaia-me at the released tag.
+cd tools && python -m lib.me_profile generate --source <papaia-me at the tag> \
+    --image ghcr.io/fidonis/papaia-me:0.1.0@sha256:<digest>
+# 3. Check again.
+tools/check-image-pins check --mode=release
+```
+
+`repin` refuses an unpinned or floating reference, a loopback registry and an image
+pinned nowhere, and leaves the own images of the core to `tools/build-images pin`.
+It never edits the signed bill of materials: the release regenerates and signs it
+with the new digest.
+
+A pre-release `VERSION` (`1.10.0-rc.1`) is a candidate of its release: the start
+check reads the bill of materials of suite `1.10.0` (`compat/suite-1.10.0.yaml`,
+bound to suite `1.10.0`) and says "(candidate)"; add-on ranges and the
+compatibility matrix judge it as `1.10.0`.
 
 ## Own images of the core
 

@@ -19,13 +19,15 @@ jobs:
       images: ${{ steps.list.outputs.images }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The own images (ghcr.io/fidonis/) are built, scanned and gated on the built
-      # digest by images.yml; this workflow lists the upstream images.
-      - name: Read the upstream images from the compose files
+      # The own images of compat/own-images.yaml are built, scanned and gated on the
+      # built digest by images.yml; this workflow lists every other pinned image, the
+      # module images the core pins (papaia-me, papaia-connections, ...) included.
+      - name: Read the pinned images from the compose files
         id: list
         run: |
+          own=$(grep -oP '^\s*- name:\s*\K\S+' compat/own-images.yaml | sed 's/$/:/')
           images=$(grep -rhoP '^\s*image:\s*\K\S+' src --include='docker-compose*.yml' \
-            | grep -v '^ghcr\.io/fidonis/' \
+            | grep -vF "${own}" \
             | sort -u | jq -Rcs 'split("\n") | map(select(length > 0))')
           echo "images=$images" >> "$GITHUB_OUTPUT"
 
