@@ -33,3 +33,13 @@ condition = "AND"
 paths = ['''^tools/tests/[^/]+\.py$''']
 regexTarget = "secret"
 regexes = ['''^canary-[a-z]+(-[a-z]+)*-[0-9]{1,6}$''']
+
+[[allowlists]]
+description = "fixed test values: a rollback key id (a UUID) and a fake JWT whose signature part is the word signature"
+condition = "AND"
+paths = ['''^tools/tests/test_rollback_key\.py$''', '''^tools/tests/test_access_report\.py$''']
+regexTarget = "line"
+regexes = [
+  '''"--rollback-key=0b0c64c1-6f39-4f33-9d0f-0c3c8a7d1c11"''',
+  '''TOKEN = "eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJ4In0\.c2lnbmF0dXJl"''',
+]
