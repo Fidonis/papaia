@@ -1,0 +1,31 @@
+# What this module offers to other modules: entries of the platform services catalogue
+# (papaia.platform-services/1), rendered into $PAPAIA_CONFIG_DIR/platform/services.json
+# while the `rag` profile is active. See docs/architecture.md, "Platform services catalogue".
+exposes:
+  # Same id as the knowledge-map source in knowledge.yaml.
+  - id: rag.qdrant
+    kind: mcp
+    title:
+      de: "Vektorsuche (Qdrant)"
+      en: "Vector search (Qdrant)"
+    description:
+      de: "Suche in den Qdrant-Sammlungen, gefiltert nach den Rollen der Person"
+      en: "Search in the Qdrant collections, filtered by the person's roles"
+    url: http://qdrant-mcp:8000/mcp
+    auth: oidc_bearer
+    audience: mcp-qdrant
+    max_class: confidential
+    consumable: true
+  - id: rag.ingest
+    kind: mcp
+    title:
+      de: "Qdrant-Ingest"
+      en: "Qdrant ingest"
+    description:
+      de: "Aufnahme von Dokumenten in die Sammlungen prüfen und anstoßen"
+      en: "Inspect and trigger the ingestion of documents into the collections"
+    url: http://qdrant-ingest:8300/mcp
+    auth: oidc_bearer
+    audience: mcp-qdrant-ingest
+    max_class: internal
+    consumable: true
