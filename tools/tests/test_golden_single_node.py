@@ -33,8 +33,9 @@ import yaml
 from install_helpers import Installation, run_cli
 from stack_helpers import FakeDocker, ps_line
 
-from lib import backup, common, defaults, deployment, doctor, envtree, smtp, status
+from lib import backup, common, defaults, deployment, doctor, envtree, module_health, smtp, status
 from lib.doctor import MemInfo, Probes
+from lib.status import CommandResult
 
 REPO = Path(__file__).resolve().parents[2]
 GOLDEN = Path(__file__).parent / "golden" / "single-node.json"
@@ -178,11 +179,32 @@ def _status_json(inst: Installation) -> str:
     return inst.normalise(status.to_json(report))
 
 
+class _HealthyDocker(FakeDocker):
+    """FakeDocker plus the `doctor modules` probe container, answered as a healthy
+    installation answers it: every module in the kit /healthz form `ok` and a revocation
+    list 5 s old."""
+
+    def __call__(self, cmd, timeout):
+        cmd = list(cmd)
+        if cmd[:2] == ["docker", "run"] and (
+            f"de.fidonis.role={module_health.PROBE_LABEL_ROLE}" in cmd
+        ):
+            self.calls.append(cmd)
+            answer = [
+                {"origin": origin,
+                 "healthz": {"code": 200, "error": None, "body": '{"status": "ok"}'},
+                 "metrics": {"code": 200, "error": None, "values": ["5"]}}
+                for origin in json.loads(cmd[-1])
+            ]
+            return CommandResult(0, json.dumps(answer) + "\n", "")
+        return super().__call__(cmd, timeout)
+
+
 def _doctor_json(inst: Installation) -> str:
     report = doctor.run_checks(
         inst.config,
         inst.repo,
-        run=FakeDocker(_ps_lines(inst)),
+        run=_HealthyDocker(_ps_lines(inst)),
         probes=_probes(),
         now=NOW,
     )

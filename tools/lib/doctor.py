@@ -12,7 +12,9 @@ Nothing here changes anything. The probes are reads: `docker version/info` and
 `openssl x509` on a file, a handshake with the configured mail server (greeting, EHLO,
 STARTTLS and a login -- no mail is sent) and `postqueue -p` in the mail relay's container,
 `iptables -S` of the SQL uplink's chain and of `DOCKER-USER`, `docker network inspect`,
-plus everything `status` reads. Inside a container,
+`GET /healthz` and `GET /metrics` of the catalog's modules from a short-lived probe
+container on each module's network (lib/module_health.py), the `selftest` of a SQL Server
+source, plus everything `status` reads. Inside a container,
 where the host's driver tools and `timedatectl` are out of reach, the NVIDIA GPU
 is read with a `docker exec` of `nvidia-smi` into the LocalAI container and the
 clock with `adjtimex(2)`, which only reads.
@@ -64,6 +66,7 @@ from . import (
     gpu_detect,
     images,
     localai_native,
+    module_health,
     pki,
     semver,
     smtp,
@@ -428,6 +431,8 @@ class Context:
         self._status: status.StatusReport | None = None
         self._env: dict[str, dict[str, str]] | None = None
         self._totals: tuple[int | None, int | None] | None = None
+        self._modules: _ModuleScan | None = None
+        self._members: dict[str, set[str] | None] = {}
 
     def docker_totals(self) -> tuple[int | None, int | None]:
         """(CPU count, memory in bytes) as the Docker daemon sees them.
@@ -2660,6 +2665,430 @@ def check_rollback_window(ctx: Context) -> CheckResult:
     return CheckResult(name, PASS, "; ".join(passes), details)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# modules of the platform catalog (PLT-42, BE-26, RE-56)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class _ModuleScan:
+    """The catalog, the active add-ons and what the probes saw, shared by `modules` and
+    `revocations_age` so that every network is probed once per run."""
+
+    entries: list[module_health.Entry] | None
+    addons: dict[str, module_health.Addon]
+    networks: dict[str, str | None]  # provider -> network it is probed from
+    probes: dict[str, module_health.Probe]  # origin -> answer
+    failures: dict[str, tuple[str, str]]  # network -> (status, text) of a probe that failed
+    refused: dict[str, str]  # origin -> why it is not probed (a host outside the stack)
+
+
+def _unprobed(scan: _ModuleScan, origin: str, network: str | None) -> tuple[str, str] | None:
+    """(status, text) when a running *origin* has no probe answer, else None."""
+    if origin in scan.refused:
+        return WARN, scan.refused[origin]
+    if network is None:
+        return WARN, f"{origin}: no network known to probe it from"
+    if network in scan.failures:
+        return scan.failures[network]
+    if origin not in scan.probes:
+        return WARN, f"{origin} was not probed"
+    return None
+
+
+def _provider_network(ctx: Context, provider: str, addons: dict[str, module_health.Addon]):
+    if provider.startswith(module_health.CORE_PROVIDER_PREFIX):
+        return module_health.core_network(ctx.config_dir)
+    addon = addons.get(provider)
+    return addon.network if addon is not None else None
+
+
+def _module_scan(ctx: Context) -> _ModuleScan:
+    """Raises module_health.ModuleHealthError for a catalog that cannot be used."""
+    if ctx._modules is not None:
+        return ctx._modules
+    entries = module_health.load_entries(ctx.config_dir)
+    addons = {a.name: a for a in module_health.active_addons(ctx.config_dir, ctx.repo_root)}
+    scan = _ModuleScan(entries, addons, {}, {}, {}, {})
+    by_network: dict[str, list[str]] = {}
+    for entry in entries or []:
+        network = _provider_network(ctx, entry.provider, addons)
+        scan.networks[entry.provider] = network
+        if entry.state != catalog.RUNNING or entry.origin is None:
+            continue
+        refused = module_health.outside_the_stack(entry.origin)
+        if refused is not None:
+            scan.refused[entry.origin] = refused
+            continue
+        if network is None:
+            continue
+        origins = by_network.setdefault(network, [])
+        if entry.origin not in origins:
+            origins.append(entry.origin)
+    for network, origins in by_network.items():
+        for start in range(0, len(origins), module_health.MAX_ORIGINS_PER_PROBE):
+            batch = origins[start:start + module_health.MAX_ORIGINS_PER_PROBE]
+            try:
+                argv = module_health.probe_argv(ctx.repo_root, network, batch)
+            except module_health.ModuleHealthError as exc:
+                scan.failures[network] = (WARN, f"cannot probe from network {network}: {exc}")
+                break
+            done = ctx.run(argv, module_health.PROBE_TIMEOUT_SECONDS)
+            if done.returncode != 0:
+                reason = status.first_line(done.stderr) or f"exit {done.returncode}"
+                scan.failures[network] = (
+                    WARN, f"the probe container on network {network} did not run ({reason})"
+                )
+                break
+            try:
+                scan.probes.update(module_health.parse_probe(done.stdout, batch))
+            except (ValueError, TypeError, AttributeError):
+                scan.failures[network] = (
+                    WARN, f"the probe on network {network} gave an answer that cannot be read"
+                )
+                break
+    ctx._modules = scan
+    return scan
+
+
+def _network_members(ctx: Context, network: str) -> set[str] | None:
+    """Container names on *network*; None when Docker does not say (no such network,
+    no daemon)."""
+    if network not in ctx._members:
+        done = ctx.run(
+            ["docker", "network", "inspect", network, "--format", "{{json .Containers}}"],
+            DOCKER_PROBE_TIMEOUT_SECONDS,
+        )
+        members: set[str] | None = None
+        if done.returncode == 0:
+            try:
+                members = module_health.parse_network_members(done.stdout)
+            except ValueError:
+                members = None
+        ctx._members[network] = members
+    return ctx._members[network]
+
+
+def _neighbours(ctx: Context, addon: module_health.Addon) -> list[dict[str, Any]]:
+    """One item per attached core service: is it on the add-on's app network (PLT-42-A2)?"""
+    items: list[dict[str, Any]] = []
+    reachable = ctx.status_report().docker.reachable
+    for service in addon.attach:
+        item: dict[str, Any] = {"neighbour": service, "network": addon.network}
+        found = _core_container(ctx, service) if reachable else None
+        if not reachable:
+            item.update(status=WARN, text=f"neighbour {service} unknown, Docker not reachable")
+        elif addon.network is None:
+            item.update(status=FAIL, text=f"attaches {service} but declares no app network")
+        elif found is None:
+            item.update(status=WARN, text=f"neighbour {service} does not run on this host")
+        elif found[0] is None or found[1] != "running":
+            item.update(status=FAIL, text=f"neighbour {service} is {found[1] or 'not created'}")
+        else:
+            members = _network_members(ctx, addon.network)
+            if members is None:
+                item.update(
+                    status=FAIL,
+                    text=f"network {addon.network} does not exist; no network path to {service}",
+                )
+            elif found[0] not in members:
+                item.update(
+                    status=FAIL,
+                    text=f"no network path to neighbour {service}: {found[0]} is not on "
+                         f"network {addon.network}",
+                )
+            else:
+                item.update(status=PASS, text=f"{service} reachable on {addon.network}")
+        items.append(item)
+    return items
+
+
+def _addon_health(ctx: Context, addon: module_health.Addon) -> str | None:
+    """The container state `status` reports for the add-on's project."""
+    report = ctx.status_report()
+    if not report.docker.reachable:
+        return None
+    states = [m.status for m in report.addons if m.compose_project == addon.project]
+    return status.worst(states).value if states else None
+
+
+def check_modules(ctx: Context) -> CheckResult:
+    """One row per module of the platform catalog and per active add-on (`doctor modules`,
+    PLT-42, BE-26): version and state from the catalog, the answer of `/healthz` of every
+    running entry asked from the module's own network, and the network path to every
+    core service the add-on attaches."""
+    name = "modules"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        scan = _module_scan(ctx)
+    except module_health.ModuleHealthError as exc:
+        return CheckResult(name, FAIL, f"the platform catalog cannot be used: {exc}")
+    providers: list[str] = []
+    for entry in scan.entries or []:
+        if entry.provider not in providers:
+            providers.append(entry.provider)
+    providers.extend(n for n in scan.addons if n not in providers)
+    if not providers:
+        return CheckResult(name, SKIP, "no module in the platform catalog and no active add-on")
+
+    rows: list[dict[str, Any]] = []
+    for provider in providers:
+        entries = [e for e in scan.entries or [] if e.provider == provider]
+        addon = scan.addons.get(provider)
+        running = any(e.state == catalog.RUNNING for e in entries)
+        row: dict[str, Any] = {
+            "module": provider,
+            "version": entries[0].version if entries else
+            (str(addon.manifest.get("version")) if addon and addon.manifest.get("version")
+             else None),
+            "state": (catalog.RUNNING if running else catalog.STOPPED) if entries else None,
+            "containers": _addon_health(ctx, addon) if addon else None,
+            "entries": [e.id for e in entries],
+            "health": [],
+            "neighbours": _neighbours(ctx, addon) if addon else [],
+        }
+        network = scan.networks.get(provider)
+        origins: list[str] = []
+        for entry in entries:
+            if entry.state == catalog.RUNNING and entry.origin and entry.origin not in origins:
+                origins.append(entry.origin)
+        for origin in origins:
+            item: dict[str, Any] = {"origin": origin, "network": network}
+            missing = _unprobed(scan, origin, network)
+            if missing is not None:
+                item.update(status=missing[0], text=missing[1])
+            else:
+                probe = scan.probes[origin]
+                verdict, text = module_health.health_verdict(probe, network)
+                item.update(status=verdict, text=text, health=probe.health,
+                            http_status=probe.healthz_code)
+            row["health"].append(item)
+        row["status"] = _worst(
+            [i["status"] for i in row["health"] + row["neighbours"]] or [PASS]
+        )
+        rows.append(row)
+
+    overall = _worst(r["status"] for r in rows)
+    problems = [
+        f"{r['module']}: {i['text']}"
+        for r in rows
+        for i in r["health"] + r["neighbours"]
+        if i["status"] != PASS
+    ]
+    if problems:
+        summary = "; ".join(problems)
+    else:
+        summary = f"{len(rows)} module(s): " + ", ".join(
+            f"{r['module']} {r['version'] or '?'} ({r['state'] or 'not in the catalog'})"
+            for r in rows
+        )
+    return CheckResult(name, overall, summary, {"modules": rows})
+
+
+def check_revocations_age(ctx: Context) -> CheckResult:
+    """`revocations_age_seconds` of every running module (`doctor revocations_age`, BE-26,
+    EXI-P15): older than 60 s is `warn`, older than 300 s `fail`. Read from `/metrics` by
+    the same probe as `modules`; a module whose `/metrics` needs the operations token is
+    reported as `skip`."""
+    name = "revocations_age"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        scan = _module_scan(ctx)
+    except module_health.ModuleHealthError as exc:
+        return CheckResult(name, FAIL, f"the platform catalog cannot be used: {exc}")
+    if scan.entries is None:
+        return CheckResult(name, SKIP, "no platform catalog yet ('papaia-ctl catalog render')")
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in scan.entries:
+        if entry.state != catalog.RUNNING or entry.origin is None or entry.origin in seen:
+            continue
+        seen.add(entry.origin)
+        # A running module without a probe answer has an unknown revocation age: warn
+        # with the reason (probe did not start, answer unreadable, host outside the stack).
+        missing = _unprobed(scan, entry.origin, scan.networks.get(entry.provider))
+        if missing is not None:
+            verdict, text, age = missing[0], missing[1], None
+        else:
+            verdict, text, age = module_health.revocations_verdict(scan.probes[entry.origin])
+        items.append({"module": entry.provider, "origin": entry.origin,
+                      "revocations_age_seconds": age, "status": verdict, "text": text})
+    counted = [i for i in items if i["status"] != SKIP]
+    if not counted:
+        return CheckResult(name, SKIP, "no running module reported revocations_age_seconds",
+                           {"modules": items})
+    overall = _worst(i["status"] for i in counted)
+    problems = [f"{i['module']}: {i['text']}" for i in counted if i["status"] != PASS]
+    if problems:
+        return CheckResult(name, overall, "; ".join(problems), {"modules": items})
+    oldest = max(i["revocations_age_seconds"] for i in counted)
+    return CheckResult(
+        name, PASS, f"{len(counted)} module(s), oldest revocation list {oldest:.0f} s",
+        {"modules": items},
+    )
+
+
+def check_egress(ctx: Context) -> CheckResult:
+    """The single exit (`doctor egress`, RE-55, docs/egress.md): the profile is on,
+    papaia-egress runs, its configuration is there and holds a source for every active
+    add-on that declares an egress network, each with its attachment override."""
+    name = "egress"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        declared = egress.declarations(ctx.config_dir, ctx.repo_root)
+    except egress.EgressError as exc:
+        return CheckResult(name, FAIL, f"an egress declaration is not usable: {exc}")
+    names = [d["name"] for d in declared]
+    details: dict[str, Any] = {"declared": names}
+    if egress.PROFILE not in ctx.active_profiles:
+        if names:
+            return CheckResult(
+                name, FAIL,
+                f"the egress profile is off although {', '.join(names)} need(s) the exit",
+                details,
+            )
+        return CheckResult(
+            name, WARN, "the egress profile is off; 'papaia-ctl setup' turns it back on", details
+        )
+    found = _core_container(ctx, egress.SERVICE)
+    if found is None:
+        return CheckResult(name, SKIP, f"{egress.SERVICE} does not run on this host", details)
+    if found[0] is None or found[1] != "running":
+        return CheckResult(
+            name, FAIL, f"{egress.SERVICE} is {found[1] or 'not created'}: nothing leaves the "
+            "stack", details,
+        )
+    path = ctx.config_dir / egress.CONFIG_FILE
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(config, dict) or config.get("format") != egress.CONFIG_FORMAT:
+            raise ValueError("format")
+        sources = config["sources"]
+        if not isinstance(sources, list) or not all(
+            isinstance(s, dict) and isinstance(s.get("name"), str) for s in sources
+        ):
+            raise ValueError("sources")
+    except (OSError, ValueError, KeyError, UnicodeDecodeError):
+        return CheckResult(
+            name, FAIL, f"{path} is missing or not a {egress.CONFIG_FORMAT} configuration; "
+            "'papaia-ctl start' renders it", details,
+        )
+    present = {s["name"] for s in sources}
+    details["sources"] = sorted(present)
+    problems = [
+        f"{n} has no source in {egress.CONFIG_FILE}" for n in names if n not in present
+    ] + [
+        f"{n} has no attachment override" for n in names
+        if not egress.override_path(ctx.config_dir, n).is_file()
+    ]
+    if problems:
+        return CheckResult(
+            name, FAIL, "; ".join(problems) + "; 'papaia-ctl start' renders them", details
+        )
+    return CheckResult(
+        name, PASS, f"{egress.SERVICE} runs with {len(present)} source(s)", details
+    )
+
+
+# mssql-mcp-rbac reports the SQL Server version and the encryption in effect in its
+# commissioning check (`selftest`, one line `version + encryption [<alias>]` per database).
+MSSQL_COMPONENT = "mssql-mcp-rbac"
+MSSQL_SERVICE = "mssql-mcp-rbac"
+MSSQL_SELFTEST = ("/usr/local/bin/entrypoint.sh", "python", "main.py", "selftest")
+MSSQL_SELFTEST_TIMEOUT_SECONDS = 90.0
+# The step prefix is matched without a length limit on the detail: the version line joins
+# every problem of one database, and a long [FAIL] line is still the verdict. The detail is
+# shortened only for display.
+_SELFTEST_LINE = re.compile(
+    r"\A\[(ok|FAIL)\] (version \+ encryption|TLS \+ login) \[([a-z][a-z0-9_-]{0,31})\]"
+    r"(?:: (.*))?\Z"
+)
+_SELFTEST_VERSION_STEP = re.compile(r"\A\[(?:ok|FAIL)\] version \+ encryption\b")
+MSSQL_DETAIL_SHOWN = 300
+
+
+def _shown(text: str) -> str:
+    return text if len(text) <= MSSQL_DETAIL_SHOWN else text[:MSSQL_DETAIL_SHOWN - 3] + "..."
+
+
+def _mssql_container(ctx: Context, addon: module_health.Addon) -> tuple[str | None, str | None]:
+    for module in ctx.status_report().addons:
+        if module.compose_project != addon.project:
+            continue
+        for container in module.containers:
+            if container.service == MSSQL_SERVICE:
+                return container.name or None, container.state or None
+    return None, None
+
+
+def check_source_protection(ctx: Context) -> CheckResult:
+    """The SQL Server behind every `mssql-mcp-rbac` add-on (`doctor source_protection`,
+    RE-61): version and the encryption in effect, as the server's own `selftest` reports
+    them per database. `fail` for an unsupported version or weaker encryption than
+    required, `warn` for what the server reports as a warning (no TDS 8.0)."""
+    name = "source_protection"
+    if not ctx.configured:
+        return _not_set_up(name)
+    addons = [
+        a for a in module_health.active_addons(ctx.config_dir, ctx.repo_root)
+        if any(isinstance(c, dict) and c.get("id") == MSSQL_COMPONENT
+               for c in a.manifest.get("components") or [])
+    ]
+    if not addons:
+        return CheckResult(name, SKIP, "no SQL Server source")
+    if not ctx.status_report().docker.reachable:
+        return CheckResult(name, WARN, "Docker not reachable; version and encryption unknown")
+    items: list[dict[str, Any]] = []
+    for addon in addons:
+        container, state = _mssql_container(ctx, addon)
+        if container is None or state != "running":
+            items.append({"addon": addon.name, "status": FAIL,
+                          "text": f"{MSSQL_SERVICE} is {state or 'not created'}; version and "
+                                  "encryption unknown"})
+            continue
+        done = ctx.run(["docker", "exec", container, *MSSQL_SELFTEST],
+                       MSSQL_SELFTEST_TIMEOUT_SECONDS)
+        lines: dict[str, tuple[str, str, str]] = {}
+        unreadable = False
+        for line in done.stdout.splitlines():
+            found = _SELFTEST_LINE.match(line.strip())
+            if found is None:
+                unreadable = unreadable or bool(_SELFTEST_VERSION_STEP.match(line.strip()))
+                continue
+            mark, step, alias, text = found.groups()
+            if step == "version + encryption" or alias not in lines:
+                lines[alias] = (mark, step, text or "")
+        if unreadable:
+            items.append({"addon": addon.name, "status": FAIL,
+                          "text": f"a version + encryption line of the {MSSQL_SERVICE} "
+                                  "selftest cannot be read"})
+        if not lines:
+            if unreadable:
+                continue
+            reason = status.first_line(done.stderr) or "it reports no SQL Server version"
+            items.append({"addon": addon.name, "status": FAIL,
+                          "text": f"selftest of {MSSQL_SERVICE} failed ({reason})"})
+            continue
+        for alias, (mark, step, text) in sorted(lines.items()):
+            if mark == "FAIL":
+                verdict = FAIL
+            elif step == "version + encryption" and "Encrypt=" in text:
+                verdict = PASS
+            else:
+                verdict = WARN
+            items.append({"addon": addon.name, "database": alias, "status": verdict,
+                          "text": f"[{alias}] {_shown(text)}" if text else f"[{alias}] {step}"})
+    overall = _worst(i["status"] for i in items)
+    shown = [i for i in items if i["status"] != PASS] or items
+    return CheckResult(
+        name, overall, "; ".join(f"{i['addon']}: {i['text']}" for i in shown),
+        {"sources": items},
+    )
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -2677,12 +3106,16 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("smtp", check_smtp),
     ("addon_compat", check_addon_compat),
     ("container_health", check_container_health),
+    ("modules", check_modules),
+    ("revocations_age", check_revocations_age),
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
     ("siem", check_siem),
     ("approvals", check_approvals),
     ("contact_point", check_contact_point),
     ("network", check_network),
+    ("egress", check_egress),
+    ("source_protection", check_source_protection),
     ("identity", check_identity),
     ("rollback_window", check_rollback_window),
 ]

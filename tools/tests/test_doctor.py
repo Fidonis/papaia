@@ -212,12 +212,16 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # smtp: the mail relay is not enabled
         PASS,  # addon_compat
         PASS,  # container_health
+        PASS,  # modules: the add-on attaches nothing, no catalog to probe
+        SKIP,  # revocations_age: no platform catalog
         PASS,  # image_signatures: nothing runs in the fake
         SKIP,  # lifecycle: the lifecycle profile is off
         SKIP,  # siem: the audit profile is off
         PASS,  # approvals: four eyes off by default
         PASS,  # contact_point
         SKIP,  # network: no SQL source, no direct route
+        WARN,  # egress: the fixture's profiles predate the always-on egress profile
+        SKIP,  # source_protection: no SQL Server source
         SKIP,  # identity: no federation
         SKIP,  # rollback_window: no rollback key on this host
     ]
@@ -244,12 +248,16 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "smtp",
         "addon_compat",
         "container_health",
+        "modules",
+        "revocations_age",
         "image_signatures",
         "lifecycle",
         "siem",
         "approvals",
         "contact_point",
         "network",
+        "egress",
+        "source_protection",
         "identity",
         "rollback_window",
     )
