@@ -3089,6 +3089,45 @@ def check_source_protection(ctx: Context) -> CheckResult:
     )
 
 
+def check_person_export(ctx: Context) -> CheckResult:
+    """Archives of information requests (`doctor person_export`, security 1.14 no. 2b):
+    `warn` while one waits for its hand-over in state/person-export/, `fail` for one
+    older than 14 days (the sweep did not run) or a folder others can open; `pass`
+    without any."""
+    from . import person_request
+
+    name = "person_export"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        found = person_request.archives(ctx.config_dir)
+    except (person_request.RequestError, OSError) as exc:
+        return CheckResult(name, FAIL, str(exc))
+    if not found:
+        return CheckResult(name, PASS, "no archive of an information request on this host")
+    ages = {rid: max(0, int((ctx.now - created).total_seconds() // 86400))
+            for rid, created in found if created is not None}
+    details: dict[str, Any] = {
+        "archives": [{"request": rid, "age_days": ages.get(rid)} for rid, _ in found],
+    }
+    overdue = sorted(rid for rid, days in ages.items()
+                     if days >= person_request.ARCHIVE_DAYS)
+    if overdue:
+        return CheckResult(
+            name, FAIL,
+            f"{len(overdue)} archive(s) older than {person_request.ARCHIVE_DAYS} days still "
+            "on this host; run 'papaia-ctl person sweep'",
+            details,
+        )
+    return CheckResult(
+        name, WARN,
+        f"{len(found)} archive(s) of an information request wait for their hand-over "
+        f"(deleted after it or after {person_request.ARCHIVE_DAYS} days; 'papaia-ctl person "
+        "handover <request>')",
+        details,
+    )
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -3118,6 +3157,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("source_protection", check_source_protection),
     ("identity", check_identity),
     ("rollback_window", check_rollback_window),
+    ("person_export", check_person_export),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

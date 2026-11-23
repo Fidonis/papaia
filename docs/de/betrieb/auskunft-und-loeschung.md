@@ -7,54 +7,79 @@ technischen Einzelheiten stehen in [Information and erasure without an account](
 ## Voraussetzungen
 
 - Die Identität der anfragenden Person ist geprüft (Sache des Betriebs).
-- Ihre Kennung (`sub`) ist bekannt, zum Beispiel aus dem Berechtigungsbericht oder aus der
-  Kontoverwaltung, solange das Konto besteht.
-- Eine zweite Person hat den Antrag bestätigt (Vier-Augen-Prinzip). In dieser Version ist die
-  Bestätigung ein organisatorischer Schritt; die Bestätigung im Manager mit frischer Anmeldung
-  folgt.
-- Für die Löschung: Profil `lifecycle` aktiv (Installationsschlüssel `erasure-hmac`) und das
-  Sicherungsziel eingehängt (Ordner `erasure-journal`).
+- Zwei Personen sind beteiligt: eine stellt den Antrag (`--requested-by`), eine zweite
+  bestätigt ihn im Manager (`--confirmed-by`, Rolle `papaia-confirm` oder `papaia-admin`).
+  Dieselbe Person kann ihren eigenen Antrag nicht bestätigen.
+- Profile `audit` (Antragsablage) und `lifecycle` (Suche, Installationsschlüssel
+  `erasure-hmac`) aktiv; für die Löschung zusätzlich das Sicherungsziel eingehängt (Ordner
+  `erasure-journal`).
 - Die Installation läuft auf einem Host.
 
-## Auskunft
+## Ablauf in sechs Schritten
 
-1. Die anfragende Person (oder der Betrieb für sie) erzeugt ein age-Schlüsselpaar und gibt
-   nur den öffentlichen Schlüssel (`age1…`) weiter.
-2. Auf dem Host:
-
-   ```sh
-   papaia-ctl person export --sub=<sub> --out=/pfad/auskunft.zip.age --recipient=<age1…>
-   ```
-
-3. Die Ausgabe nennt je Zeile des Verzeichnisses der Verarbeitungstätigkeiten „included“ oder
-   „not included“ mit Grund. Exit 1 heißt: Das Archiv ist geschrieben, aber ein Modul fehlt; der
-   Grund steht in `index.json` und in der Ausgabe.
-4. Archiv und privaten Schlüssel auf zwei getrennten Wegen an die Person übergeben. Wer beides in
-   der Hand hat, kann das Archiv lesen. Das Archiv nach bestätigter Übergabe löschen.
-
-Das Archiv hat dasselbe Format wie der Export aus Mein Bereich (`index.json`, je Modul
-`<modul>.json` und `<modul>.schema.json`, `LIESMICH.txt`).
-
-## Löschung
-
-1. Auf dem Host, mit Übergabe der Objekte der Person an eine benannte Person:
+1. **Person finden.** Ist die Kennung (`sub`) nicht bekannt, sucht der Betrieb nach
+   Benutzername oder Mail-Adresse, auch für gelöschte Konten:
 
    ```sh
-   papaia-ctl person erase --sub=<sub> --now --transfer-to=<sub der neuen Eigentümerin>
+   papaia-ctl person find --email=anna.berger@example.org
    ```
 
-   Ohne `--transfer-to` bleiben eigene Objekte mit dem Kennzeichen „Eigentümer nicht mehr aktiv“
-   stehen und laufen nicht unter der Identität der Person weiter.
-2. Scheitert eine Übergabe, wird nichts gelöscht (Exit 1). Scheitert die Löschung in einem
-   Modul, löschen die anderen trotzdem; der Vorgang steht auf „partial“ (Exit 1) und wird nach
-   Behebung wiederholt.
-3. Die Ausgabe ist der Löschnachweis: je Modul und Kategorie die Anzahl gelöschter Einträge und
-   ob der Eintrag im Löschjournal am Sicherungsziel liegt („pending“: noch nicht am Ziel, das
-   Modul liefert ihn nach), oder bei Daten mit Aufbewahrungspflicht bzw. Löschsperre das Datum,
-   bis zu dem sie bleiben. Den Nachweis in der Betriebsablage aufbewahren.
+   Die Eingabe wird auf dem Host gehasht (HMAC), `papaia-lifecycle` kennt nur Hashes. Die
+   Ausgabe nennt Kennung, Status (`active`, `disabled`, `deleted`) und Tage, nie einen Namen.
 
-Jeder Aufruf eines Moduls steht im Audit-Log (ohne Inhalte), mit der Kennung der Person und dem
-Host-Konto, das den Befehl ausgeführt hat.
+2. **Antrag stellen.** Auskunft oder Löschung:
+
+   ```sh
+   papaia-ctl person export --sub=<sub> --requested-by=<sub Antragsteller> --confirmed-by=<sub Bestätiger>
+   papaia-ctl person erase  --sub=<sub> --now --requested-by=<sub> --confirmed-by=<sub> \
+       [--transfer-to=<sub der neuen Eigentümerin>]
+   ```
+
+   Die Ausgabe nennt die Antragskennung. Es läuft noch nichts.
+
+3. **Bestätigen.** Die zweite Person meldet sich im Manager neu an (höchstens 5 Minuten
+   vorher) und bestätigt oder lehnt ab. Bei einer Auskunft zeigt der Manager ihr **einmal**
+   eine Passphrase; sie wird nirgends gespeichert. Ein offener Antrag verfällt nach 7 Tagen.
+
+4. **Ausführen.** Innerhalb von 24 Stunden nach der Bestätigung:
+
+   ```sh
+   papaia-ctl person status <antrag>
+   papaia-ctl person run <antrag>
+   ```
+
+   Die Ausgabe nennt je Zeile des Verzeichnisses der Verarbeitungstätigkeiten „included“ oder
+   „not included“ mit Grund. Exit 1 heißt „teilweise“: ein Modul fehlt (Auskunft) oder eine
+   Übergabe bzw. Löschung scheiterte (Löschung). Nach Behebung einen neuen Antrag stellen.
+
+5. **Übergeben (Auskunft).** Das Archiv liegt in
+   `<config-dir>/state/person-export/<antrag>.zip.age`. Archiv und Passphrase gehen auf
+   **zwei getrennten Wegen** an die Person (`age -d` öffnet es mit der Passphrase). Danach:
+
+   ```sh
+   papaia-ctl person handover <antrag>
+   ```
+
+   Spätestens nach 14 Tagen wird das Archiv gelöscht (`papaia-ctl person sweep`, läuft auch
+   vor jedem anderen `person`-Befehl); `doctor person_export` warnt, solange eines wartet.
+
+6. **Nachweis ablegen (Löschung).** Die Ausgabe von `person run` ist der Löschnachweis: je
+   Modul und Kategorie die Anzahl gelöschter Einträge und ob der Eintrag im Löschjournal am
+   Sicherungsziel liegt („pending“: noch nicht am Ziel, das Modul liefert ihn nach), oder bei
+   Daten mit Aufbewahrungspflicht bzw. Löschsperre das Datum, bis zu dem sie bleiben. Ohne
+   `--transfer-to` bleiben eigene Objekte mit dem Kennzeichen „Eigentümer nicht mehr aktiv“
+   stehen; scheitert eine Übergabe, wird nichts gelöscht. Den Nachweis in der Betriebsablage
+   aufbewahren.
+
+Antrag, Bestätigung, jeder Schritt des Laufs und jeder Aufruf eines Moduls stehen im
+Audit-Log (ohne Inhalte), mit der Antragskennung als Korrelationskennung.
+
+## Namenssperre
+
+Legt jemand ein Konto mit dem Benutzernamen oder der Mail-Adresse eines gelöschten Kontos an,
+deaktiviert `papaia-lifecycle` das neue Konto einmal und meldet es (`ALERT`). So übernimmt
+niemand über den Namen die Daten der früheren Person. Nach Prüfung aktiviert die Verwaltung
+das Konto wieder; es wird nicht erneut gesperrt.
 
 ## Sicherungen
 
@@ -67,5 +92,5 @@ ein (siehe [Wiederherstellung](../wiederherstellung.md)).
 ## Noch nicht enthalten
 
 Chat, Modell-Gateway, Anmeldedienst (einschließlich der Löschung des Kontos), `papaia-lifecycle`
-und der pseudonyme Auszug aus dem Audit-Log werden als „not included“ gelistet. Antrag mit
-Antragskennung, Bestätigung im Manager, Passphrase für das Archiv und `person find` folgen.
+und der pseudonyme Auszug aus dem Audit-Log werden als „not included“ gelistet. Die Seite im
+Manager zum Bestätigen folgt.

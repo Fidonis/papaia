@@ -388,7 +388,7 @@ class FakeKeycloak:
         if self.users_error is not None:
             raise self.users_error
         rows: list = [
-            {"id": u["id"], "username": u["username"], "enabled": u["enabled"]}
+            {k: u[k] for k in ("id", "username", "email", "enabled") if k in u}
             for uid, u in sorted(self.users.items())
             if uid not in self.forbidden
         ]
@@ -472,6 +472,9 @@ class FakeKeycloak:
             raise lc.HttpError(404)
         if len(parts) == 2 and method == "GET":
             return dict(self.users[uid])
+        if len(parts) == 2 and method == "PUT":
+            self.users[uid].update(body)
+            return None
         if parts[2:] == ["logout"]:
             if self.fail_logout or uid in self.fail_logout_for:
                 raise lc.HttpError(500)

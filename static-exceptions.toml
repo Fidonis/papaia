@@ -143,6 +143,16 @@ approved_by = "core maintainers (security officer countersignature pending)"
 
 [[exception]]
 rule = "code-exec"
+path = "tools/lib/person_request.py"
+within = "service_gate.call"
+subject = "subprocess.run"
+input = "operator-config"
+reason = "Literal docker exec of the papaia_audit person route in the audit container that audit.find_container found for this installation, without a shell; the request path and body pass on stdin, never in the argument list."
+expires = 2027-05-20
+approved_by = "core maintainers (security officer countersignature pending)"
+
+[[exception]]
+rule = "code-exec"
 path = "tools/lib/cluster_data.py"
 within = "_archive_config_dir.produce"
 subject = "subprocess.run"

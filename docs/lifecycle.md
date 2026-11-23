@@ -232,6 +232,29 @@ The writer also accepts the core sources `core-chat` (`erase`, `erase_subject`) 
 `model-gateway` (`erase`, `erase_subject`, `key_revoke`) in their own files; the deletion
 of a person in chat and model gateway and the revocation of gateway keys write them.
 
+## Name index and tombstones
+
+For `papaia-ctl person find` (see [person-requests.md](person-requests.md#find-a-person))
+the service keeps, in its state file, an index of the persons it sees: for every member of
+`papaia-persons` the HMAC-SHA256 of `erasure-hmac` over the user name and over the mail
+address (NFKC, outer blanks removed, case folded), whether the account is enabled, and the
+day of the last sign-in. It is filled by every hourly reconciliation and by account update
+and sign-in events. When an account is deleted (event, or a member of the last round that
+answers `404`), its two HMACs move to the tombstones with the day of the deletion; a member
+that left the group (`403`) leaves the index. Neither list holds a clear name or address.
+
+```sh
+docker exec <papaia-lifecycle> python /opt/papaia-lifecycle/lifecycle.py find \
+    --key-dir=/var/lib/papaia-lifecycle --name-ref=<hmac> | --mail-ref=<hmac>
+```
+
+answers `{"persons": [...]}` with `sub`, `status` and days for at most 20 matches;
+`papaia-ctl person find` computes the HMAC on the host and calls it.
+
+**Name lock.** An account in the index whose name or mail HMAC is the one of a tombstone is
+disabled once (`PUT enabled: false`, audit row `lifecycle.account_name_locked`, an `ALERT`
+line). An administrator who enables it again is not overruled.
+
 ## The revocation list
 
 Written to the volume `papaia-security-state`, which modules mount read-only:

@@ -67,6 +67,7 @@ from . import (
     pairing_approval,
     paperless_gate,
     person,
+    person_request,
     post_restore,
     privacy_pack,
     realm_sync,
@@ -893,17 +894,111 @@ def cmd_settings_unset(args: argparse.Namespace) -> int:
     return _settings_change(args, change)
 
 
-def cmd_person_begin(args: argparse.Namespace) -> int:
-    """`papaia-ctl person export|erase`, first call: check the request and plan the module
-    steps in the run folder --work. 2 when refused; nothing has run then."""
+def _person_sweep(config_dir: Path) -> None:
+    """Archives older than 14 days go at the start of every `person` command."""
+    for request_id in person_request.sweep(config_dir):
+        print(f"archive of request {request_id} deleted (older than "
+              f"{person_request.ARCHIVE_DAYS} days)", file=sys.stderr)
+
+
+def cmd_person_request(args: argparse.Namespace) -> int:
+    """`papaia-ctl person export|erase --requested-by --confirmed-by`: file the request in
+    papaia-audit and print its id; nothing runs. 2 when refused."""
+    config_dir = Path(args.config_dir)
     try:
-        person.begin(
-            Path(args.config_dir), Path(args.repo_root), args.work,
-            operation=args.operation, sub=args.sub, out=args.out,
-            recipients=args.recipient or [], transfer_to=args.transfer_to,
+        _person_sweep(config_dir)
+        sub = person.check_sub(args.sub)
+        requested_by = person.check_sub(args.requested_by, "--requested-by")
+        confirmed_by = person.check_sub(args.confirmed_by, "--confirmed-by")
+        transfer_to = None
+        if args.transfer_to is not None:
+            transfer_to = person.check_sub(args.transfer_to, "--transfer-to")
+        view = person_request.create(
+            person_request.service_gate(config_dir), operation=args.operation, sub=sub,
+            requested_by=requested_by, confirmed_by=confirmed_by, transfer_to=transfer_to,
         )
-    except person.PersonError as exc:
+    except (person.PersonError, person_request.RequestError) as exc:
         print(f"ERROR: person {args.operation}: {exc}", file=sys.stderr)
+        return 2
+    print(person_request.render_request(view), end="")
+    print(
+        f"Nothing ran. {confirmed_by} confirms the request in the manager after signing "
+        f"in again; then run: papaia-ctl person run {view['id']}"
+    )
+    return 0
+
+
+def cmd_person_status(args: argparse.Namespace) -> int:
+    """`papaia-ctl person status <request>`: the state of a request. 2 when refused."""
+    config_dir = Path(args.config_dir)
+    try:
+        _person_sweep(config_dir)
+        view = person_request.get(person_request.service_gate(config_dir), args.request)
+        archive = None
+        if view["operation"] == "export":
+            path = person_request.archive_path(config_dir, view["id"])
+            archive = path if path.exists() else None
+    except person_request.RequestError as exc:
+        print(f"ERROR: person status: {exc}", file=sys.stderr)
+        return 2
+    print(person_request.render_request(view), end="")
+    if archive is not None:
+        print(f"  archive       {archive} (hand it over, then: papaia-ctl person handover "
+              f"{view['id']})")
+    return 0
+
+
+def cmd_person_find(args: argparse.Namespace) -> int:
+    """`papaia-ctl person find --name=…|--email=…`: also deactivated and deleted accounts;
+    sub, state and last sign-in, never content. 2 when refused."""
+    config_dir = Path(args.config_dir)
+    try:
+        _person_sweep(config_dir)
+        persons = person_request.find(config_dir, Path(args.repo_root), name=args.name,
+                                      email=args.email)
+    except person_request.RequestError as exc:
+        print(f"ERROR: person find: {exc}", file=sys.stderr)
+        return 2
+    print(person_request.render_find(persons), end="")
+    return 0
+
+
+def cmd_person_handover(args: argparse.Namespace) -> int:
+    """`papaia-ctl person handover <request>`: the archive was handed over and goes now."""
+    try:
+        gone = person_request.handover(Path(args.config_dir), args.request)
+    except person_request.RequestError as exc:
+        print(f"ERROR: person handover: {exc}", file=sys.stderr)
+        return 2
+    print(f"archive of request {args.request} deleted" if gone
+          else f"no archive of request {args.request} (already deleted)")
+    return 0
+
+
+def cmd_person_sweep(args: argparse.Namespace) -> int:
+    """`papaia-ctl person sweep`: delete every archive older than 14 days."""
+    try:
+        gone = person_request.sweep(Path(args.config_dir))
+    except person_request.RequestError as exc:
+        print(f"ERROR: person sweep: {exc}", file=sys.stderr)
+        return 2
+    print(f"{len(gone)} archive(s) older than {person_request.ARCHIVE_DAYS} days deleted")
+    return 0
+
+
+def cmd_person_begin(args: argparse.Namespace) -> int:
+    """`papaia-ctl person run <request>`, first call: check the confirmed request, plan
+    the module steps in the run folder --work and mark the request running. 2 when
+    refused; nothing has run then."""
+    config_dir = Path(args.config_dir)
+    try:
+        _person_sweep(config_dir)
+        person.begin(
+            config_dir, Path(args.repo_root), args.work, request=args.request,
+            gate=person_request.service_gate(config_dir),
+        )
+    except (person.PersonError, person_request.RequestError) as exc:
+        print(f"ERROR: person run: {exc}", file=sys.stderr)
         return 2
     return 0
 
@@ -925,12 +1020,18 @@ def cmd_person_next(args: argparse.Namespace) -> int:
 def cmd_person_finish(args: argparse.Namespace) -> int:
     """The result of the run: the archive written (export) or the proof (erase). 0 every
     module done, 1 a module missing or failed (named in the output), 2 refused."""
+    config_dir = Path(args.config_dir)
     try:
-        report = person.finish(Path(args.config_dir), Path(args.repo_root), args.work)
+        report = person.finish(config_dir, Path(args.repo_root), args.work,
+                               gate=person_request.service_gate(config_dir))
     except person.PersonError as exc:
         print(f"ERROR: person: {exc}", file=sys.stderr)
         return 2
     print(person.render(report), end="")
+    if report.archive is not None:
+        print(f"Archive written to {report.archive} (age, to the passphrase the confirming "
+              "person saw). Hand it over, then: papaia-ctl person handover "
+              f"{report.archive.name.removesuffix(person_request.ARCHIVE_SUFFIX)}")
     return 0 if report.ok else 1
 
 
@@ -3191,13 +3292,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_privacy.add_argument("--offsite-retention", type=int, default=None)
     p_privacy.set_defaults(func=cmd_privacy_pack)
 
+    p_person_request = sub.add_parser("person-request")
+    p_person_request.add_argument("--operation", required=True, choices=("export", "erase"))
+    p_person_request.add_argument("--sub", required=True)
+    p_person_request.add_argument("--requested-by", required=True)
+    p_person_request.add_argument("--confirmed-by", required=True)
+    p_person_request.add_argument("--transfer-to", default=None)
+    p_person_request.set_defaults(func=cmd_person_request)
+
+    p_person_status = sub.add_parser("person-status")
+    p_person_status.add_argument("--request", required=True)
+    p_person_status.set_defaults(func=cmd_person_status)
+
+    p_person_find = sub.add_parser("person-find")
+    p_person_find.add_argument("--name", default=None)
+    p_person_find.add_argument("--email", default=None)
+    p_person_find.set_defaults(func=cmd_person_find)
+
+    p_person_handover = sub.add_parser("person-handover")
+    p_person_handover.add_argument("--request", required=True)
+    p_person_handover.set_defaults(func=cmd_person_handover)
+
+    p_person_sweep = sub.add_parser("person-sweep")
+    p_person_sweep.set_defaults(func=cmd_person_sweep)
+
     p_person_begin = sub.add_parser("person-begin")
     p_person_begin.add_argument("--work", required=True)
-    p_person_begin.add_argument("--operation", required=True, choices=("export", "erase"))
-    p_person_begin.add_argument("--sub", required=True)
-    p_person_begin.add_argument("--out", default=None)
-    p_person_begin.add_argument("--recipient", action="append")
-    p_person_begin.add_argument("--transfer-to", default=None)
+    p_person_begin.add_argument("--request", required=True)
     p_person_begin.set_defaults(func=cmd_person_begin)
 
     p_person_next = sub.add_parser("person-next")

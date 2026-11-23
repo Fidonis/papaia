@@ -10,10 +10,12 @@ steps and checks every answer:
 
 * `person-export` prints the person's data as one JSON object, the same answer the
   module gives its personal-area export (`data.export` of the personal-area contract
-  v2). `person export` packs every answer into the archive format of the personal area
+  v2). The run packs every answer into the archive format of the personal area
   (`index.json`, `<module>.json`, `<module>.schema.json`, `LIESMICH.txt`) and writes it
-  encrypted with age to the recipients the operator names. The plain archive is built
-  in memory; the module answers wait in the run folder (mode 0700) until it is written.
+  to `state/person-export/<request>.zip.age`, encrypted with age to the one-time
+  passphrase that only the confirming person saw (lib/person_request.py). The plain
+  archive is built in memory; the module answers wait in the run folder (mode 0700)
+  until it is written.
 * `transfer-ownership` (with `--transfer-to`) hands the objects the person owns to
   another person before anything is erased; it prints `{"transferred", "halted"}`.
 * `person-erase` deletes the person's data, writes the module's erasure journal through
@@ -22,6 +24,11 @@ steps and checks every answer:
   a deletion lock (`legal_hold`) keeps it. The receipt names the journal entries; the
   core reads them at the backup target and checks that they name this person
   (`subject_ref` = HMAC of the installation key `erasure-hmac` over the `sub`).
+
+Nothing runs without a request that a second person confirmed in the manager
+(lib/person_request.py): `begin` takes the request id, moves the request to `running`
+and uses it as the correlation id of every audit row; `finish` reports `done` or
+`partial` back.
 
 The module learns the person from `PAPAIA_PERSON_SUB`, the step from
 `PAPAIA_PERSON_OPERATION`, the new owner from `PAPAIA_NEW_OWNER_SUB` and the run from
@@ -53,6 +60,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import age, catalog, common, compat, deployment, exposes, topology
+from . import person_request as pr
 from . import realm_sync as rs
 
 EXPORT = "person-export"
@@ -184,6 +192,7 @@ class Report:
     modules: dict[str, str] = field(default_factory=dict)
     proof: list[dict] = field(default_factory=list)
     transfers: list[dict] = field(default_factory=list)
+    archive: Path | None = None
 
     @property
     def state(self) -> str:
@@ -202,17 +211,6 @@ def check_sub(value: object, flag: str = "--sub") -> str:
             "letter or digit"
         )
     return value
-
-
-def _recipients(values: list[str]) -> list[str]:
-    if not values:
-        raise PersonError("export needs at least one --recipient (an age public key age1...)")
-    for value in values:
-        try:
-            age.parse_recipient(value)
-        except age.AgeError:
-            raise PersonError("--recipient must be an age public key (age1...)") from None
-    return list(values)
 
 
 # ── scope ────────────────────────────────────────────────────────────────────
@@ -447,14 +445,15 @@ def _archive(config_dir: Path, parts: list, rows: list[Row], now: datetime) -> b
     return buffer.getvalue()
 
 
-def _write_encrypted(out: Path, data: bytes, recipients: list[str]) -> int:
-    """Write the age file next to `out`, then link it into place: an existing file is
-    never replaced, and a half-written file never carries the name."""
+def _write_encrypted(out: Path, data: bytes, key: pr.ArchiveKey) -> int:
+    """Write the age file (to the passphrase behind `key`) next to `out`, then link it
+    into place: an existing file is never replaced, and a half-written file never carries
+    the name."""
     tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as fh:
-            encryptor = age.Encryptor(fh, recipients)
+            encryptor = age.Encryptor(fh, scrypt=(key.salt, key.log_n, key.key))
             encryptor.write(data)
             encryptor.close()
             fh.flush()
@@ -462,7 +461,7 @@ def _write_encrypted(out: Path, data: bytes, recipients: list[str]) -> int:
         os.link(tmp, out)
         return out.stat().st_size
     except FileExistsError:
-        raise PersonError(f"{out} exists; choose another --out") from None
+        raise PersonError(f"{out} exists; the archive of this request was written") from None
     except OSError as exc:
         raise PersonError(f"{out} cannot be written: {exc.strerror}") from None
     finally:
@@ -697,7 +696,7 @@ STEP_OUT = "step.out"
 STATE_FORMAT = "papaia.person-run/1"
 _OPERATIONS = {EXPORT: "export", ERASE: "erase", TRANSFER: "transfer"}
 _STATE_FIELDS = {
-    "format", "operation", "sub", "transfer_to", "out", "recipients", "correlation_id",
+    "format", "operation", "sub", "transfer_to", "request", "correlation_id",
     "queue", "pending", "ok", "modules", "proof", "transfers",
 }
 
@@ -764,25 +763,38 @@ def _single_host(config_dir: Path) -> None:
         )
 
 
-def begin(config_dir: Path, repo_root: Path, work: Path | str, *, operation: str, sub: str,
-          out: Path | str | None = None, recipients: list[str] | None = None,
-          transfer_to: str | None = None) -> None:
-    """Check the request and plan the steps; nothing runs yet. Raises PersonError."""
+def _gate_call(call: Callable, *args):
+    try:
+        return call(*args)
+    except pr.RequestError as exc:
+        raise PersonError(str(exc)) from None
+
+
+def begin(config_dir: Path, repo_root: Path, work: Path | str, *, request: str,
+          gate: pr.Gate) -> None:
+    """Check the confirmed request and plan the steps, then mark the request `running`;
+    no module step has run yet. Raises PersonError (the request is left as it was when
+    a check before the start fails)."""
     work = _work(work)
     if (work / STATE).exists():
         raise PersonError(f"{work} already holds a run")
     config_dir, repo_root = Path(config_dir), Path(repo_root)
+    request = _gate_call(pr.check_request_id, request)
+    view = _gate_call(pr.get, gate, request)
+    if view["state"] != "confirmed":
+        label = pr.STATE_LABELS.get(view["state"], view["state"])
+        raise PersonError(
+            f"request {request} is {view['state']} ({label}); it runs once the person it "
+            "names as confirming has confirmed it in the manager, within a day"
+        )
+    operation, sub = view["operation"], check_sub(view["person"])
+    transfer_to = view.get("transfer_to")
     _single_host(config_dir)
-    sub = check_sub(sub)
     if operation == "export":
-        recipients = _recipients(recipients or [])
-        if out is None:
-            raise PersonError("export needs --out")
-        out = Path(out).absolute()
+        pr.archive_dir(config_dir, create=True)
+        out = pr.archive_path(config_dir, request)
         if out.exists() or out.is_symlink():
-            raise PersonError(f"{out} exists; choose another --out")
-        if not out.parent.is_dir():
-            raise PersonError(f"{out.parent} is not a directory")
+            raise PersonError(f"{out} exists; the archive of this request was written")
     elif operation == "erase":
         if transfer_to is not None:
             transfer_to = check_sub(transfer_to, "--transfer-to")
@@ -798,14 +810,15 @@ def begin(config_dir: Path, repo_root: Path, work: Path | str, *, operation: str
         queue = [[m.name, TRANSFER] for m in modules
                  if transfer_to is not None and TRANSFER in m.actions]
         queue += [[m.name, ERASE] for m in modules if ERASE in m.actions]
+    _gate_call(pr.start, gate, request)
     _save(work, {
         "format": STATE_FORMAT,
         "operation": operation,
         "sub": sub,
         "transfer_to": transfer_to,
-        "out": str(out) if out is not None else None,
-        "recipients": recipients or [],
-        "correlation_id": rs.new_correlation_id(),
+        "request": request,
+        # The audit rows of every module call carry the request id.
+        "correlation_id": request,
         "queue": queue,
         "pending": None,
         "ok": True,
@@ -892,15 +905,28 @@ def advance(config_dir: Path, repo_root: Path, work: Path | str,
     return step
 
 
-def finish(config_dir: Path, repo_root: Path, work: Path | str,
+def finish(config_dir: Path, repo_root: Path, work: Path | str, *, gate: pr.Gate,
            now: datetime | None = None) -> Report:
     """The result of a run whose steps all ran: the archive written (export) or the proof
-    (erase)."""
+    (erase); the request is `done`, or `partial` when a module failed or the archive could
+    not be written."""
     work = _work(work)
     config_dir, repo_root = Path(config_dir), Path(repo_root)
     state = _load(work)
     if state["pending"] is not None or state["queue"]:
         raise PersonError("the run still has steps to take")
+    try:
+        report = _result(config_dir, repo_root, work, state, gate,
+                         now or datetime.now(timezone.utc))
+    except PersonError:
+        _gate_call(pr.finish, gate, state["request"], "partial")
+        raise
+    _gate_call(pr.finish, gate, state["request"], report.state)
+    return report
+
+
+def _result(config_dir: Path, repo_root: Path, work: Path, state: dict, gate: pr.Gate,
+            now: datetime) -> Report:
     modules, core = collect(config_dir, repo_root)
     operation = state["operation"]
     report = Report(
@@ -914,10 +940,14 @@ def finish(config_dir: Path, repo_root: Path, work: Path | str,
                                                         MAX_EXPORT_BYTES))
             for m in modules if m.name in state["modules"]
         ]
-        archive = _archive(config_dir, parts, report.rows, now or datetime.now(timezone.utc))
+        archive = _archive(config_dir, parts, report.rows, now)
         for m in modules:
             (work / f"part-{m.name}.json").unlink(missing_ok=True)
-        size = _write_encrypted(Path(state["out"]), archive, state["recipients"])
+        key = _gate_call(pr.take_key, gate, state["request"])
+        out = pr.archive_path(config_dir, state["request"])
+        size = _write_encrypted(out, archive, key)
+        pr.record_archive(config_dir, state["request"], now)
+        report.archive = out
         with _log(config_dir, state) as log:
             _record(log, catalog_id=CORE_CATALOG_ID, operation="person.export_archive",
                     effect="write", sub=state["sub"], error=None, detail={"bytes": size})
@@ -942,22 +972,12 @@ def _drive(config_dir: Path, repo_root: Path, work: Path, runner: Runner) -> Non
         code = outcome.exit_code
 
 
-def export(config_dir: Path, repo_root: Path, *, sub: str, out: Path, recipients: list[str],
-           runner: Runner, now: datetime | None = None) -> Report:
-    """A whole export in one process, each step run by `runner`."""
-    with tempfile.TemporaryDirectory(prefix="papaia-person-") as work:
-        begin(config_dir, repo_root, work, operation="export", sub=sub, out=out,
-              recipients=recipients)
-        _drive(config_dir, repo_root, Path(work), runner)
-        return finish(config_dir, repo_root, work, now=now)
-
-
-def erase(config_dir: Path, repo_root: Path, *, sub: str, runner: Runner,
-          transfer_to: str | None = None) -> Report:
-    """A whole erasure in one process: the transfers first (with `transfer_to`), then the
-    erasure in every module. A failed transfer stops before anything is erased; a failed
+def run(config_dir: Path, repo_root: Path, *, request: str, gate: pr.Gate, runner: Runner,
+        now: datetime | None = None) -> Report:
+    """A whole confirmed request in one process, each step run by `runner`. An erasure
+    runs the transfers first; a failed transfer stops before anything is erased, a failed
     erasure leaves the run `partial` and the other modules go ahead."""
     with tempfile.TemporaryDirectory(prefix="papaia-person-") as work:
-        begin(config_dir, repo_root, work, operation="erase", sub=sub, transfer_to=transfer_to)
+        begin(config_dir, repo_root, work, request=request, gate=gate)
         _drive(config_dir, repo_root, Path(work), runner)
-        return finish(config_dir, repo_root, work)
+        return finish(config_dir, repo_root, work, gate=gate, now=now)

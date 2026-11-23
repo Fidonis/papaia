@@ -757,63 +757,88 @@ cmd_privacy_pack() {
     py_cli privacy-pack ${flags[@]+"${flags[@]}"}
 }
 
-# papaia-ctl person export|erase: information and erasure for a person whose account is
-# gone (lib/person.py). Runs the reserved person actions of every module in its own
-# project; every module call is one audit row.
+# papaia-ctl person find|export|erase|status|run|handover|sweep: information and erasure
+# for a person whose account is gone (lib/person_request.py, lib/person.py). export and
+# erase only file a request; it runs (`person run`) once a second person confirmed it in
+# the manager. Every module call is one audit row.
 cmd_person() {
     local sub="${1:-}" config_dir="$DEFAULT_CONFIG_DIR"
     shift || true
     case "$sub" in
-        export|erase) ;;
-        *) error "Unknown 'person' subcommand: '${sub:-<none>}'. Valid: export, erase."; exit 2 ;;
+        find|export|erase|status|run|handover|sweep) ;;
+        *)
+            error "Unknown 'person' subcommand: '${sub:-<none>}'. Valid: find, export, erase, status, run, handover, sweep."
+            exit 2 ;;
     esac
-    local -a flags=()
+    local -a flags=() ids=()
+    local now=0 requested=0 confirmed=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
-            --sub=*) flags+=("$1") ;;
-            --out=*|--recipient=*)
-                if [ "$sub" != "export" ]; then
-                    error "Unknown option for person $sub: $1"; exit 2
-                fi
+            --name=*|--email=*)
+                [ "$sub" = "find" ] || { error "Unknown option for person $sub: $1"; exit 2; }
                 flags+=("$1") ;;
-            --transfer-to=*|--now)
-                if [ "$sub" != "erase" ]; then
-                    error "Unknown option for person $sub: $1"; exit 2
-                fi
+            --sub=*)
+                case "$sub" in export|erase) ;; *) error "Unknown option for person $sub: $1"; exit 2 ;; esac
                 flags+=("$1") ;;
-            *) error "Unknown option for person $sub: $1"; exit 2 ;;
+            --requested-by=*|--confirmed-by=*)
+                case "$sub" in export|erase) ;; *) error "Unknown option for person $sub: $1"; exit 2 ;; esac
+                case "$1" in --requested-by=*) requested=1 ;; *) confirmed=1 ;; esac
+                flags+=("$1") ;;
+            --transfer-to=*)
+                [ "$sub" = "erase" ] || { error "Unknown option for person $sub: $1"; exit 2; }
+                flags+=("$1") ;;
+            --now)
+                [ "$sub" = "erase" ] || { error "Unknown option for person $sub: $1"; exit 2; }
+                now=1 ;;
+            -*) error "Unknown option for person $sub: $1"; exit 2 ;;
+            *)
+                case "$sub" in status|run|handover) ids+=("$1") ;;
+                    *) error "Unknown argument for person $sub: $1"; exit 2 ;; esac ;;
         esac
         shift
     done
     CONFIG_DIR="$config_dir"
     _require_setup_done
-    _person_run "$sub" ${flags[@]+"${flags[@]}"}
+    case "$sub" in
+        find) py_cli person-find ${flags[@]+"${flags[@]}"} ;;
+        sweep) py_cli person-sweep ;;
+        export|erase)
+            if [ "$requested" -eq 0 ] || [ "$confirmed" -eq 0 ]; then
+                error "person $sub needs --requested-by=SUB and --confirmed-by=SUB: a second person confirms the request in the manager."
+                exit 2
+            fi
+            if [ "$sub" = "erase" ] && [ "$now" -eq 0 ]; then
+                error "person erase deletes the person's data in every module; pass --now."
+                exit 2
+            fi
+            py_cli person-request --operation="$sub" ${flags[@]+"${flags[@]}"} ;;
+        status|run|handover)
+            if [ "${#ids[@]}" -ne 1 ]; then
+                error "person $sub needs the request id that person export|erase printed."
+                exit 2
+            fi
+            case "$sub" in
+                status) py_cli person-status --request="${ids[0]}" ;;
+                handover) py_cli person-handover --request="${ids[0]}" ;;
+                run) _person_run "${ids[0]}" ;;
+            esac ;;
+    esac
 }
 
-# The run of `person export|erase` (lib/person.py): py_cli plans the module steps and
+# The run of a confirmed request (lib/person.py): py_cli plans the module steps and
 # checks every answer, this loop runs each step as `docker compose run --rm -T` of the
 # declared service in the add-on's own project, standard input closed, its answer into the
 # run folder. The run folder is private to this account (mktemp -d, mode 0700) and is
 # removed when the command ends.
 _person_run() {
-    local operation="$1"
-    shift
-    if [ "$operation" = "erase" ]; then
-        local -a kept=() flag
-        for flag in "$@"; do [ "$flag" = "--now" ] || kept+=("$flag"); done
-        if [ "${#kept[@]}" -eq "$#" ]; then
-            error "person erase deletes the person's data in every module; pass --now."
-            exit 2
-        fi
-        set -- ${kept[@]+"${kept[@]}"}
-    fi
+    local request="$1"
     local work
     work="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/papaia-person.XXXXXX")"
     # shellcheck disable=SC2064  # the folder is fixed now, on purpose
     trap "rm -rf '$work'" EXIT
-    py_cli person-begin --work="$work" --operation="$operation" "$@" || exit 2
+    py_cli person-begin --work="$work" --request="$request" || exit 2
     local line rc=0 status addon_name addon_path
     local -a code=() parts=()
     while :; do
@@ -829,11 +854,6 @@ _person_run() {
         code=(--exit-code="$status")
     done
     py_cli person-finish --work="$work" || rc=$?
-    if [ "$operation" = "export" ] && [ "$rc" -lt 2 ]; then
-        local out=""
-        for flag in "$@"; do case "$flag" in --out=*) out="${flag#*=}" ;; esac; done
-        success "Archive written to $out (encrypted with age)."
-    fi
     exit "$rc"
 }
 

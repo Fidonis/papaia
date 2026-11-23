@@ -380,8 +380,22 @@ def _stanza(file_key: bytes, recipient: bytes) -> bytes:
     return f"-> X25519 {_b64(share)}\n{_b64(body)}\n".encode("ascii")
 
 
-def _header(file_key: bytes, recipients: list[bytes]) -> bytes:
-    head = VERSION_LINE + b"\n" + b"".join(_stanza(file_key, r) for r in recipients) + b"---"
+def _scrypt_stanza(file_key: bytes, salt: bytes, log_n: int, wrap_key: bytes) -> bytes:
+    """The one stanza of a passphrase file, from the key scrypt derived from the
+    passphrase (`wrap_key`): the passphrase itself is not needed to write the file."""
+    if len(salt) != 16 or not 1 <= log_n <= _SCRYPT_MAX_LOG_N or len(wrap_key) != 32:
+        raise AgeError("scrypt stanza needs a 16-byte salt, a work factor and a 32-byte key")
+    aead = _Aead(wrap_key)
+    try:
+        body = aead.seal(bytes(12), file_key)
+    finally:
+        aead.close()
+    return f"-> scrypt {_b64(salt)} {log_n}\n{_b64(body)}\n".encode("ascii")
+
+
+def _header(file_key: bytes, recipients: list[bytes], scrypt: bytes = b"") -> bytes:
+    stanzas = scrypt or b"".join(_stanza(file_key, r) for r in recipients)
+    head = VERSION_LINE + b"\n" + stanzas + b"---"
     mac = hmac.new(hkdf_sha256(file_key, b"", b"header", 32), head, hashlib.sha256).digest()
     return head + b" " + _b64(mac).encode("ascii") + b"\n"
 
@@ -505,14 +519,23 @@ class Encryptor:
 
     `close()` writes the last chunk; without it the file is incomplete and does not open."""
 
-    def __init__(self, out: BinaryIO, recipients: list[str]) -> None:
-        if not recipients:
-            raise AgeError("at least one recipient is needed")
-        keys = [parse_recipient(r) for r in recipients]
+    def __init__(
+        self,
+        out: BinaryIO,
+        recipients: list[str] | None = None,
+        *,
+        scrypt: tuple[bytes, int, bytes] | None = None,
+    ) -> None:
+        """To X25519 `recipients`, or to a passphrase given as `scrypt` = (salt, log_n,
+        the key scrypt derived from it); a passphrase file has no other recipient."""
+        if bool(recipients) == (scrypt is not None):
+            raise AgeError("either recipients or one passphrase key is needed")
+        keys = [parse_recipient(r) for r in recipients or []]
         file_key = os.urandom(16)
         nonce = os.urandom(16)
+        stanza = _scrypt_stanza(file_key, *scrypt) if scrypt is not None else b""
         self._out = out
-        self._out.write(_header(file_key, keys) + nonce)
+        self._out.write(_header(file_key, keys, stanza) + nonce)
         self._aead = _Aead(hkdf_sha256(file_key, nonce, b"payload", 32))
         self._buffer = bytearray()
         self._counter = 0

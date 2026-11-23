@@ -1,7 +1,9 @@
-"""`papaia-ctl person export|erase`: information and erasure for a person whose account is
-gone (security 1.14, OPS-08, OPS-03). The core runs the reserved person actions of every
-module (contract generation 15) as the operator and audits each call; the modules here
-are simulated by a runner that answers as a module would."""
+"""`papaia-ctl person export|erase|run`: information and erasure for a person whose account
+is gone (security 1.14, OPS-08, OPS-03). A request is filed, confirmed by a second person
+in the manager and then run: the core runs the reserved person actions of every module
+(contract generation 15) as the operator and audits each call. The modules here are
+simulated by a runner that answers as a module would; papaia-audit by its real request
+routes over a store in a file (person_fake_docker.py)."""
 
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -23,7 +26,12 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from lib import age, compat, module_actions, person
+from lib import person_request as pr
 from lib import realm_sync as rs
+from tests.person_fake_docker import FileRequestStore
+from tests.test_audit_person_requests import CONFIRM, Caller
+from tests.test_audit_read import DANA, EMIL
+from tests.test_audit_read import signer as signer  # noqa: F401 - the shared fixture
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -151,11 +159,56 @@ def _rows(config: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def _open_archive(path: Path, identity: str) -> zipfile.ZipFile:
+def _open_archive(path: Path, passphrase: str) -> zipfile.ZipFile:
     plain = io.BytesIO()
     with open(path, "rb") as fh:
-        age.decrypt(fh, plain, [identity])
+        age.decrypt_with_passphrase(fh, plain, passphrase)
     return zipfile.ZipFile(io.BytesIO(plain.getvalue()))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# requests: filed by the host (Dana), confirmed by Emil in the manager
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def desk(install, signer) -> Caller:  # noqa: F811
+    """papaia-audit with its request routes; the store is shared with the subprocess
+    tests through a file."""
+    caller = Caller(signer, FileRequestStore(install["tmp"] / "audit-requests.json"))
+    caller.passphrases = {}
+    install["now"] = caller.now
+    return caller
+
+
+def _gate(desk: Caller) -> pr.Gate:
+    return lambda path, body: desk.host(path, body)
+
+
+def _confirmed(install: dict, desk: Caller, operation: str, *, sub: str = ANNA,
+               transfer_to: str | None = None) -> str:
+    view = pr.create(_gate(desk), operation=operation, sub=sub, requested_by=DANA,
+                     confirmed_by=EMIL, transfer_to=transfer_to)
+    status, answer = desk.call("POST", f"/v1/person-requests/{view['id']}/confirm", EMIL,
+                               roles=CONFIRM)
+    assert status == 200, answer
+    if operation == "export":
+        desk.passphrases[view["id"]] = answer["passphrase"]
+    return view["id"]
+
+
+def _export(install: dict, desk: Caller, runner, **kw) -> tuple[person.Report, str]:
+    request = _confirmed(install, desk, "export")
+    report = person.run(install["config"], REPO, request=request, gate=_gate(desk),
+                        runner=runner, **kw)
+    return report, desk.passphrases[request]
+
+
+def _erase(install: dict, desk: Caller, runner, *, sub: str = ANNA,
+           transfer_to: str | None = None) -> person.Report:
+    request = _confirmed(install, desk, "erase", sub=sub, transfer_to=transfer_to)
+    return person.run(install["config"], REPO, request=request, gate=_gate(desk),
+                      runner=runner)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -163,14 +216,11 @@ def _open_archive(path: Path, identity: str) -> zipfile.ZipFile:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_export_of_a_deleted_account_contains_every_module_part(install):
-    identity, recipient = age.generate_identity()
+def test_export_of_a_deleted_account_contains_every_module_part(install, desk):
     modules = Modules(install)
-    out = install["tmp"] / "anna.zip.age"
 
-    report = person.export(
-        install["config"], REPO, sub=ANNA, out=out, recipients=[recipient], runner=modules
-    )
+    report, passphrase = _export(install, desk, modules)
+    out = report.archive
 
     # Only the sub is needed: no account is looked up, so a deleted one works the same.
     assert [(s.addon, s.action) for s in modules.steps] == [
@@ -178,12 +228,15 @@ def test_export_of_a_deleted_account_contains_every_module_part(install):
     ]
     assert all(s.env[person.ENV_SUB] == ANNA for s in modules.steps)
     assert all(s.env[person.ENV_OPERATION] == "export" for s in modules.steps)
-    assert len({s.env[person.ENV_CORRELATION] for s in modules.steps}) == 1
+    # The request id ties the module calls to the request's events in papaia-audit.
+    assert {s.env[person.ENV_CORRELATION] for s in modules.steps} == {
+        out.name.removesuffix(pr.ARCHIVE_SUFFIX)
+    }
     assert modules.steps[0].service == "tasks-admin"
     assert modules.steps[0].args == ("person-export",)
     assert report.ok
 
-    archive = _open_archive(out, identity)
+    archive = _open_archive(out, passphrase)
     names = set(archive.namelist())
     assert {"index.json", "LIESMICH.txt", "tasks.json", "planner.json"} <= names
     assert {"tasks.schema.json", "planner.schema.json"} <= names
@@ -210,26 +263,67 @@ def test_export_of_a_deleted_account_contains_every_module_part(install):
     assert all(r.reason for r in report.rows if not r.included)
 
 
-def test_export_archive_is_private_and_never_overwritten(install):
-    _, recipient = age.generate_identity()
-    out = install["tmp"] / "anna.zip.age"
-    person.export(install["config"], REPO, sub=ANNA, out=out, recipients=[recipient],
-                  runner=Modules(install))
+def test_export_archive_is_private_and_never_overwritten(install, desk):
+    report, _ = _export(install, desk, Modules(install))
+    out = report.archive
+    assert out.parent == install["config"] / "state" / "person-export"
+    assert stat.S_IMODE(out.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
     assert SECRET_TEXT.encode() not in out.read_bytes()
     before = out.read_bytes()
-    with pytest.raises(person.PersonError, match="exists"):
-        person.export(install["config"], REPO, sub=ANNA, out=out, recipients=[recipient],
-                      runner=Modules(install))
+    request = out.name.removesuffix(pr.ARCHIVE_SUFFIX)
+    # A request runs once.
+    with pytest.raises(person.PersonError, match="done"):
+        person.run(install["config"], REPO, request=request, gate=_gate(desk),
+                   runner=Modules(install))
     assert out.read_bytes() == before
-    assert not [p for p in out.parent.iterdir() if p.name.startswith(".anna")]
+    assert not [p for p in out.parent.iterdir() if p.name.startswith(".")]
 
 
-def test_export_audits_every_module_call_without_content(install):
-    _, recipient = age.generate_identity()
-    out = install["tmp"] / "anna.zip.age"
-    person.export(install["config"], REPO, sub=ANNA, out=out, recipients=[recipient],
-                  runner=Modules(install))
+def test_the_archive_opens_only_with_the_passphrase_of_the_confirmation(install, desk):
+    report, passphrase = _export(install, desk, Modules(install))
+    with pytest.raises(age.NoIdentityError):
+        _open_archive(report.archive, "not-the-passphrase")
+    assert "tasks.json" in _open_archive(report.archive, passphrase).namelist()
+    # The passphrase reached neither the host nor the audit outbox.
+    assert passphrase not in rs.audit_path(install["config"]).read_text(encoding="utf-8")
+    assert passphrase not in (install["tmp"] / "audit-requests.json").read_text()
+
+
+def test_nothing_runs_without_the_confirmation_of_a_second_person(install, desk):
+    view = pr.create(_gate(desk), operation="export", sub=ANNA, requested_by=DANA,
+                     confirmed_by=EMIL)
+    modules = Modules(install)
+    with pytest.raises(person.PersonError, match="open"):
+        person.run(install["config"], REPO, request=view["id"], gate=_gate(desk),
+                   runner=modules)
+    # The requesting person cannot confirm it herself.
+    status, problem = desk.call("POST", f"/v1/person-requests/{view['id']}/confirm", DANA,
+                                roles=CONFIRM)
+    assert status == 403 and problem["code"] == "AUDIT-PERSON-REQ-SELF"
+    with pytest.raises(person.PersonError, match="open"):
+        person.run(install["config"], REPO, request=view["id"], gate=_gate(desk),
+                   runner=modules)
+    assert modules.steps == []
+    with pytest.raises(pr.RequestError, match="second person"):
+        pr.create(_gate(desk), operation="erase", sub=ANNA, requested_by=DANA,
+                  confirmed_by=DANA)
+
+
+def test_the_request_records_the_run_as_done_or_partial(install, desk):
+    modules = Modules(install)
+    modules.fail.add(("planner", person.EXPORT))
+    report, _ = _export(install, desk, modules)
+    request = report.archive.name.removesuffix(pr.ARCHIVE_SUFFIX)
+    assert pr.get(_gate(desk), request)["state"] == "partial"
+    erased = _erase(install, desk, Modules(install))
+    assert erased.state == "done"
+    states = sorted(r.state for r in desk.store.requests.values())
+    assert states == ["done", "partial"]
+
+
+def test_export_audits_every_module_call_without_content(install, desk):
+    _, passphrase = _export(install, desk, Modules(install))
 
     rows = _rows(install["config"])
     assert [r["operation"] for r in rows] == [
@@ -244,20 +338,17 @@ def test_export_audits_every_module_call_without_content(install):
     assert [r["effect"] for r in rows] == ["read", "read", "write"]
     assert {r["catalog_id"] for r in rows[:2]} == {"tasks.api", "planner.api"}
     text = rs.audit_path(install["config"]).read_text(encoding="utf-8")
-    assert SECRET_TEXT not in text and recipient not in text
+    assert SECRET_TEXT not in text and passphrase not in text
 
 
-def test_a_failed_module_is_named_in_the_archive_and_the_audit(install):
-    identity, recipient = age.generate_identity()
+def test_a_failed_module_is_named_in_the_archive_and_the_audit(install, desk):
     modules = Modules(install)
     modules.fail.add(("planner", person.EXPORT))
-    out = install["tmp"] / "anna.zip.age"
 
-    report = person.export(install["config"], REPO, sub=ANNA, out=out,
-                           recipients=[recipient], runner=modules)
+    report, passphrase = _export(install, desk, modules)
 
     assert not report.ok
-    index = json.loads(_open_archive(out, identity).read("index.json"))
+    index = json.loads(_open_archive(report.archive, passphrase).read("index.json"))
     by_module = {m["module"]: m for m in index["modules"]}
     assert by_module["planner"]["status"] == "unavailable"
     assert by_module["planner"]["file"] is None
@@ -267,8 +358,7 @@ def test_a_failed_module_is_named_in_the_archive_and_the_audit(install):
 
 
 @pytest.mark.parametrize("answer", [b"", b"[]", b"not json", b'{"a": 1, "a": 2}'])
-def test_an_export_that_is_not_one_json_object_is_unavailable(install, answer):
-    identity, recipient = age.generate_identity()
+def test_an_export_that_is_not_one_json_object_is_unavailable(install, desk, answer):
     modules = Modules(install)
 
     def runner(step):
@@ -277,34 +367,60 @@ def test_an_export_that_is_not_one_json_object_is_unavailable(install, answer):
             return person.Outcome(0, answer)
         return modules(step)
 
-    out = install["tmp"] / "anna.zip.age"
-    report = person.export(install["config"], REPO, sub=ANNA, out=out,
-                           recipients=[recipient], runner=runner)
+    report, passphrase = _export(install, desk, runner)
     assert not report.ok
-    index = json.loads(_open_archive(out, identity).read("index.json"))
+    index = json.loads(_open_archive(report.archive, passphrase).read("index.json"))
     assert {m["module"]: m["status"] for m in index["modules"]}["planner"] == "unavailable"
 
 
-def test_an_export_above_the_limit_is_truncated(install, monkeypatch):
-    identity, recipient = age.generate_identity()
+def test_an_export_above_the_limit_is_truncated(install, desk, monkeypatch):
     monkeypatch.setattr(person, "MAX_EXPORT_BYTES", 64)
-    out = install["tmp"] / "anna.zip.age"
-    report = person.export(install["config"], REPO, sub=ANNA, out=out,
-                           recipients=[recipient], runner=Modules(install))
+    report, passphrase = _export(install, desk, Modules(install))
     assert not report.ok
-    archive = _open_archive(out, identity)
+    archive = _open_archive(report.archive, passphrase)
     statuses = {m["module"]: m["status"] for m in json.loads(archive.read("index.json"))["modules"]}
     assert statuses == {"planner": "truncated", "tasks": "truncated"}
     assert "tasks.json" not in archive.namelist()
 
 
-@pytest.mark.parametrize("recipients", [[], ["age1notakey"], ["AGE-SECRET-KEY-1XYZ"]])
-def test_export_needs_a_valid_recipient(install, recipients):
+def test_a_request_not_run_within_a_day_of_its_confirmation_expires(install, desk):
+    request = _confirmed(install, desk, "export")
+    desk.now += 25 * 3600
     modules = Modules(install)
-    with pytest.raises(person.PersonError, match="recipient"):
-        person.export(install["config"], REPO, sub=ANNA, out=install["tmp"] / "a.age",
-                      recipients=recipients, runner=modules)
+    with pytest.raises(person.PersonError, match="expired"):
+        person.run(install["config"], REPO, request=request, gate=_gate(desk),
+                   runner=modules)
     assert modules.steps == []
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# the archive folder: hand-over and 14 days
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_the_archive_is_gone_after_14_days(install, desk):
+    from datetime import datetime, timedelta, timezone
+
+    written = datetime(2026, 11, 23, 9, 0, tzinfo=timezone.utc)
+    report, _ = _export(install, desk, Modules(install), now=written)
+    request = report.archive.name.removesuffix(pr.ARCHIVE_SUFFIX)
+    assert pr.sweep(install["config"], now=written + timedelta(days=13, hours=23)) == []
+    assert report.archive.exists()
+    assert pr.sweep(install["config"], now=written + timedelta(days=14)) == [request]
+    assert not report.archive.exists()
+    assert list(report.archive.parent.iterdir()) == []
+    gone = [r for r in _rows(install["config"]) if r["operation"] == "person.export_expired"]
+    assert len(gone) == 1 and gone[0]["effect"] == "delete"
+    assert gone[0]["object_ref"] == {"type": "person_request", "id": request}
+
+
+def test_a_handed_over_archive_is_deleted_at_once(install, desk):
+    report, _ = _export(install, desk, Modules(install))
+    request = report.archive.name.removesuffix(pr.ARCHIVE_SUFFIX)
+    assert pr.handover(install["config"], request) is True
+    assert not report.archive.exists()
+    assert pr.handover(install["config"], request) is False
+    assert [r["operation"] for r in _rows(install["config"])][-1] == "person.export_handed_over"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -317,9 +433,9 @@ def _journal_lines(install: dict, module: str) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_erase_of_a_deleted_account_writes_journal_entries_in_every_module(install):
+def test_erase_of_a_deleted_account_writes_journal_entries_in_every_module(install, desk):
     modules = Modules(install)
-    report = person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+    report = _erase(install, desk, modules)
 
     assert [(s.addon, s.action) for s in modules.steps] == [
         ("planner", person.ERASE), ("tasks", person.ERASE)
@@ -353,9 +469,9 @@ def test_erase_of_a_deleted_account_writes_journal_entries_in_every_module(insta
     assert "tasks" in text and "time_records" in text and "2028-12-31" in text
 
 
-def test_erase_with_transfer_hands_over_first_then_erases(install):
+def test_erase_with_transfer_hands_over_first_then_erases(install, desk):
     modules = Modules(install)
-    report = person.erase(install["config"], REPO, sub=ANNA, transfer_to=BEN, runner=modules)
+    report = _erase(install, desk, modules, transfer_to=BEN)
 
     assert [(s.addon, s.action) for s in modules.steps] == [
         ("planner", person.TRANSFER), ("tasks", person.TRANSFER),
@@ -375,34 +491,34 @@ def test_erase_with_transfer_hands_over_first_then_erases(install):
     assert all(list(SUBMISSION.iter_errors(r)) == [] for r in rows)
 
 
-def test_a_failed_transfer_stops_before_anything_is_erased(install):
+def test_a_failed_transfer_stops_before_anything_is_erased(install, desk):
     modules = Modules(install)
     modules.fail.add(("tasks", person.TRANSFER))
-    report = person.erase(install["config"], REPO, sub=ANNA, transfer_to=BEN, runner=modules)
+    report = _erase(install, desk, modules, transfer_to=BEN)
 
     assert report.state == "partial"
     assert person.ERASE not in {s.action for s in modules.steps}
     assert not (install["backup"] / "erasure-journal" / "tasks.jsonl").exists()
 
 
-def test_a_deletion_without_journal_entry_is_partial(install):
+def test_a_deletion_without_journal_entry_is_partial(install, desk):
     modules = Modules(install)
     modules.journal = False
-    report = person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+    report = _erase(install, desk, modules)
     assert report.state == "partial"
     errors = {r["catalog_id"]: r["error_code"] for r in _rows(install["config"])}
     assert errors == {"tasks.api": "no_journal_entry", "planner.api": "no_journal_entry"}
 
 
-def test_a_journal_entry_for_another_person_does_not_count(install):
+def test_a_journal_entry_for_another_person_does_not_count(install, desk):
     modules = Modules(install)
     modules.journal_subject = BEN
-    report = person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+    report = _erase(install, desk, modules)
     assert report.state == "partial"
     assert {r["error_code"] for r in _rows(install["config"])} == {"journal_mismatch"}
 
 
-def test_an_entry_not_yet_at_the_backup_target_is_reported_pending(install):
+def test_an_entry_not_yet_at_the_backup_target_is_reported_pending(install, desk):
     modules = Modules(install)
     modules.receipts["tasks"] = {
         "categories": [
@@ -412,7 +528,7 @@ def test_an_entry_not_yet_at_the_backup_target_is_reported_pending(install):
         ],
         "journal": [{"id": str(uuid.uuid4()), "seq": 9}],
     }
-    report = person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+    report = _erase(install, desk, modules)
     assert report.state == "done"
     proof = {(p["module"], p["category"]): p for p in report.proof}
     assert proof[("tasks", "tasks")]["journal"] == "pending"
@@ -434,41 +550,41 @@ def test_an_entry_not_yet_at_the_backup_target_is_reported_pending(install):
     {"categories": [{"id": c, "state": "done", "deleted": 0} for c in TASKS_CATEGORIES],
      "journal": [{"id": "not-a-uuid", "seq": 1}]},
 ])
-def test_a_receipt_outside_the_contract_is_a_failed_module(install, receipt):
+def test_a_receipt_outside_the_contract_is_a_failed_module(install, desk, receipt):
     modules = Modules(install)
     modules.receipts["tasks"] = receipt
-    report = person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+    report = _erase(install, desk, modules)
     assert report.state == "partial"
     errors = {r["catalog_id"]: r["error_code"] for r in _rows(install["config"])}
     assert errors["tasks.api"] == "invalid_receipt"
     assert errors["planner.api"] is None
 
 
-def test_a_deletion_lock_is_reported(install):
+def test_a_deletion_lock_is_reported(install, desk):
     modules = Modules(install)
     modules.receipts["tasks"] = {
         "categories": [{"id": c, "state": "kept", "until": "2027-06-30", "reason": "legal_hold"}
                        for c in TASKS_CATEGORIES],
         "journal": [],
     }
-    report = person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+    report = _erase(install, desk, modules)
     assert report.state == "done"
     assert "legal_hold" in person.render(report)
 
 
-def test_erase_needs_the_erasure_journal(install):
+def test_erase_needs_the_erasure_journal(install, desk):
     (install["config"] / "security" / "erasure-hmac").unlink()
     modules = Modules(install)
     with pytest.raises(person.PersonError, match="erasure"):
-        person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+        _erase(install, desk, modules)
     assert modules.steps == []
 
 
-def test_erase_needs_the_journal_at_the_backup_target(install):
+def test_erase_needs_the_journal_at_the_backup_target(install, desk):
     shutil.rmtree(install["backup"] / "erasure-journal")
     modules = Modules(install)
     with pytest.raises(person.PersonError, match="backup target"):
-        person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+        _erase(install, desk, modules)
     assert modules.steps == []
 
 
@@ -478,18 +594,20 @@ def test_erase_needs_the_journal_at_the_backup_target(install):
 
 
 @pytest.mark.parametrize("sub", ["", "a" * 256, "anna\n", "../etc", " anna", "an na"])
-def test_a_malformed_sub_is_refused_before_any_module_runs(install, sub):
-    modules = Modules(install)
+def test_a_malformed_sub_is_refused_before_a_request_exists(install, desk, sub):
+    with pytest.raises(pr.RequestError, match="400"):
+        pr.create(_gate(desk), operation="erase", sub=sub, requested_by=DANA,
+                  confirmed_by=EMIL)
+    assert desk.store.requests == {}
     with pytest.raises(person.PersonError, match="sub"):
-        person.erase(install["config"], REPO, sub=sub, runner=modules)
-    assert modules.steps == []
+        person.check_sub(sub)
 
 
-def test_transfer_to_the_person_herself_is_refused(install):
-    modules = Modules(install)
-    with pytest.raises(person.PersonError, match="transfer"):
-        person.erase(install["config"], REPO, sub=ANNA, transfer_to=ANNA, runner=modules)
-    assert modules.steps == []
+def test_transfer_to_the_person_herself_is_refused(install, desk):
+    with pytest.raises(pr.RequestError, match="400"):
+        pr.create(_gate(desk), operation="erase", sub=ANNA, requested_by=DANA,
+                  confirmed_by=EMIL, transfer_to=ANNA)
+    assert desk.store.requests == {}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -518,14 +636,36 @@ def test_the_person_actions_are_no_maintenance_actions_and_no_restore_steps():
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# the run in steps (papaia-ctl person: bash runs each step, py_cli checks it)
+# the run in steps (papaia-ctl person: bash runs each step, py_cli checks it); `docker`
+# is person_fake_docker.py, which answers as papaia-audit and papaia-lifecycle
 # ─────────────────────────────────────────────────────────────────────────
+
+
+def _fake_docker(install: dict, now: float) -> dict[str, str]:
+    folder = install["tmp"] / "bin"
+    folder.mkdir(exist_ok=True)
+    docker = folder / "docker"
+    docker.write_text(
+        f"#!/bin/sh\nexec '{sys.executable}' '{Path(__file__).parent / 'person_fake_docker.py'}'"
+        ' "$@"\n', encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    return {
+        **os.environ,
+        "PATH": f"{folder}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PERSON_FAKE_AUDIT_STORE": str(install["tmp"] / "audit-requests.json"),
+        "PERSON_FAKE_LIFECYCLE_KEYS": str(install["tmp"] / "lifecycle-keys"),
+        "PERSON_FAKE_NOW": str(now),
+        "TMPDIR": str(install["tmp"]),
+    }
+
 
 def _cli(install: dict, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "lib.cli", "--repo-root", str(REPO),
          "--config-dir", str(install["config"]), *args],
         cwd=REPO / "tools", capture_output=True, text=True, check=False,
+        env=_fake_docker(install, install.get("now", time.time())),
     )
 
 
@@ -535,11 +675,11 @@ def _work(install: dict) -> Path:
     return work
 
 
-def test_a_run_in_steps_names_each_step_and_takes_in_its_answer(install):
+def test_a_run_in_steps_names_each_step_and_takes_in_its_answer(install, desk):
     work = _work(install)
     modules = Modules(install)
-    begun = _cli(install, "person-begin", f"--work={work}", "--operation=erase",
-                 f"--sub={ANNA}", f"--transfer-to={BEN}")
+    request = _confirmed(install, desk, "erase", transfer_to=BEN)
+    begun = _cli(install, "person-begin", f"--work={work}", f"--request={request}")
     assert begun.returncode == 0, begun.stderr
     seen, code = [], []
     while True:
@@ -563,47 +703,49 @@ def test_a_run_in_steps_names_each_step_and_takes_in_its_answer(install):
     finished = _cli(install, "person-finish", f"--work={work}")
     assert finished.returncode == 0, finished.stderr
     assert "erased        tasks/tasks: 4" in finished.stdout
-    # One correlation id for the whole run, across the calls.
-    assert len({row["correlation_id"] for row in _rows(install["config"])}) == 1
+    # One correlation id for the whole run, across the calls: the request id.
+    assert {row["correlation_id"] for row in _rows(install["config"])} == {request}
+    assert FileRequestStore(install["tmp"] / "audit-requests.json").requests[
+        request].state == "done"
 
 
-def test_a_run_folder_others_can_open_is_refused(install):
+def test_a_run_folder_others_can_open_is_refused(install, desk):
     work = install["tmp"] / "open"
     work.mkdir(mode=0o755)
     work.chmod(0o755)
-    done = _cli(install, "person-begin", f"--work={work}", "--operation=export",
-                f"--sub={ANNA}", f"--out={install['tmp'] / 'a.age'}",
-                f"--recipient={age.generate_identity()[1]}")
+    request = _confirmed(install, desk, "export")
+    done = _cli(install, "person-begin", f"--work={work}", f"--request={request}")
     assert done.returncode == 2
     assert "0700" in done.stderr
+    assert desk.store.get_person_request(request).state == "confirmed"
 
 
-def test_a_step_cannot_be_reported_twice_or_skipped(install):
+def test_a_step_cannot_be_reported_twice_or_skipped(install, desk):
     work = _work(install)
-    assert _cli(install, "person-begin", f"--work={work}", "--operation=erase",
-                f"--sub={ANNA}").returncode == 0
+    request = _confirmed(install, desk, "erase")
+    assert _cli(install, "person-begin", f"--work={work}",
+                f"--request={request}").returncode == 0
     with pytest.raises(person.PersonError, match="exit code"):
         person.advance(install["config"], REPO, work)
         person.advance(install["config"], REPO, work)
     with pytest.raises(person.PersonError, match="steps to take"):
-        person.finish(install["config"], REPO, work)
+        person.finish(install["config"], REPO, work, gate=_gate(desk))
 
 
-def test_a_distributed_installation_is_refused(install):
+def test_a_distributed_installation_is_refused(install, desk):
     (install["config"] / "deployment.yaml").write_text(
         yaml.safe_dump({"topology": {"mode": "distributed"}, "addons": []}), encoding="utf-8"
     )
     modules = Modules(install)
     with pytest.raises(person.PersonError, match="single host"):
-        person.erase(install["config"], REPO, sub=ANNA, runner=modules)
+        _erase(install, desk, modules)
     assert modules.steps == []
 
 
-def test_cli_refuses_a_malformed_sub_with_exit_2(install):
-    done = _cli(install, "person-begin", f"--work={_work(install)}", "--operation=erase",
-                "--sub=anna\tx")
+def test_cli_refuses_a_malformed_request_id_with_exit_2(install):
+    done = _cli(install, "person-begin", f"--work={_work(install)}", "--request=anna")
     assert done.returncode == 2
-    assert "sub" in done.stderr
+    assert "request id" in done.stderr
 
 
 # The bash loop of `papaia-ctl person` with the real py_cli; `_addon_compose` stands in
@@ -646,43 +788,120 @@ def _bash(install: dict, *args: str, fail: str = "-") -> subprocess.CompletedPro
     script.write_text(text, encoding="utf-8")
     return subprocess.run([shutil.which("bash") or "bash", str(script), *args],
                           capture_output=True, text=True, check=False,
-                          env={**os.environ, "TMPDIR": str(install["tmp"])})
+                          env=_fake_docker(install, install.get("now", time.time())))
+
+
+def _request_id(stdout: str) -> str:
+    first = stdout.splitlines()[0]
+    assert first.startswith("request ")
+    return first.split()[1].rstrip(":")
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash missing")
-def test_papaia_ctl_person_export_runs_each_step_in_the_add_on_project(install):
-    identity, recipient = age.generate_identity()
-    out = install["tmp"] / "anna.zip.age"
-    done = _bash(install, "export", f"--sub={ANNA}", f"--out={out}", f"--recipient={recipient}")
+def test_papaia_ctl_person_export_files_a_request_and_runs_it_after_the_confirmation(
+    install, desk
+):
+    filed = _bash(install, "export", f"--sub={ANNA}", f"--requested-by={DANA}",
+                  f"--confirmed-by={EMIL}")
+    assert filed.returncode == 0, filed.stderr
+    request = _request_id(filed.stdout)
+    assert "Nothing ran" in filed.stdout
+    assert not (install["tmp"] / "compose.log").exists()
+    early = _bash(install, "run", request)
+    assert early.returncode == 2 and "open" in early.stderr
+    assert not (install["tmp"] / "compose.log").exists()
+
+    desk.store = FileRequestStore(install["tmp"] / "audit-requests.json")
+    desk.api.store = desk.store
+    status, answer = desk.call("POST", f"/v1/person-requests/{request}/confirm", EMIL,
+                               roles=CONFIRM)
+    assert status == 200, answer
+
+    done = _bash(install, "run", request)
     assert done.returncode == 0, done.stderr
     log = (install["tmp"] / "compose.log").read_text().splitlines()
     assert len(log) == 2
     assert log[0].startswith(f"compose run planner {install['tmp'] / 'addons' / 'planner'} "
-                             "--rm -T -e PAPAIA_CORRELATION_ID=")
+                             f"--rm -T -e PAPAIA_CORRELATION_ID={request}")
     assert f"-e {person.ENV_SUB}={ANNA}" in log[0]
     assert log[0].endswith("tasks-admin person-export")
-    with _open_archive(out, identity) as archive:
+    out = install["config"] / "state" / "person-export" / f"{request}{pr.ARCHIVE_SUFFIX}"
+    assert f"Archive written to {out}" in done.stdout
+    with _open_archive(out, answer["passphrase"]) as archive:
         assert json.loads(archive.read("tasks.json")) == {"contract": 2, "module": "tasks"}
-    # The run folder is gone.
+    # The run folder is gone; the passphrase never reached the host's output.
     assert not list(install["tmp"].glob("papaia-person.*"))
+    assert answer["passphrase"] not in done.stdout + done.stderr
+    status_out = _bash(install, "status", request)
+    assert "erledigt" in status_out.stdout and str(out) in status_out.stdout
+    handed = _bash(install, "handover", request)
+    assert handed.returncode == 0 and not out.exists()
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash missing")
-def test_papaia_ctl_person_export_names_a_failed_module_with_exit_1(install):
-    identity, recipient = age.generate_identity()
-    out = install["tmp"] / "anna.zip.age"
-    done = _bash(install, "export", f"--sub={ANNA}", f"--out={out}", f"--recipient={recipient}",
-                 fail="planner")
+def test_papaia_ctl_person_run_names_a_failed_module_with_exit_1(install, desk):
+    request = _confirmed(install, desk, "export")
+    done = _bash(install, "run", request, fail="planner")
     assert done.returncode == 1, done.stderr
     assert "planner: unavailable" in done.stdout
-    with _open_archive(out, identity) as archive:
+    out = install["config"] / "state" / "person-export" / f"{request}{pr.ARCHIVE_SUFFIX}"
+    with _open_archive(out, desk.passphrases[request]) as archive:
         index = json.loads(archive.read("index.json"))
     assert {m["module"]: m["status"] for m in index["modules"]}["planner"] == "unavailable"
+    assert FileRequestStore(install["tmp"] / "audit-requests.json").requests[
+        request].state == "partial"
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash missing")
-def test_papaia_ctl_person_erase_needs_now(install):
-    done = _bash(install, "erase", f"--sub={ANNA}")
+@pytest.mark.parametrize("args,message", [
+    (("erase", f"--sub={ANNA}", f"--requested-by={DANA}", f"--confirmed-by={EMIL}"), "--now"),
+    (("erase", f"--sub={ANNA}", "--now"), "--confirmed-by"),
+    (("export", f"--sub={ANNA}", f"--requested-by={DANA}"), "--confirmed-by"),
+    (("export", f"--sub={ANNA}", "--out=/tmp/a.age"), "Unknown option"),
+    (("run",), "request id"),
+])
+def test_papaia_ctl_person_refuses_incomplete_requests(install, args, message):
+    done = _bash(install, *args)
     assert done.returncode == 2
-    assert "--now" in done.stderr
+    assert message in done.stderr
     assert not (install["tmp"] / "compose.log").exists()
+    assert not (install["tmp"] / "audit-requests.json").exists()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# person find (papaia-lifecycle's name index and tombstones)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _lifecycle_state(install: dict, names: dict, tombstones: dict) -> None:
+    from tests.test_lifecycle import lc
+
+    keys = install["tmp"] / "lifecycle-keys"
+    keys.mkdir(mode=0o700, exist_ok=True)
+    state = lc._new_state()
+    state["names"], state["tombstones"] = names, tombstones
+    lc.Store(keys).save(state)
+
+
+def test_person_find_hashes_the_input_and_finds_a_deleted_account_by_mail(install):
+    from tests.test_lifecycle import lc
+
+    mail = "anna.berger@example.org"
+    ref = lc.name_ref(install["key"], mail)
+    _lifecycle_state(install, {}, {ANNA: {"name": None, "mail": ref, "deleted": 1_795_000_000}})
+    done = _bash(install, "find", "--email=Anna.Berger@Example.org ")
+    assert done.returncode == 0, done.stderr
+    assert ANNA in done.stdout and "deleted" in done.stdout
+    rows = _rows(install["config"])
+    assert [(r["operation"], r["detail"]) for r in rows] == [("person.find", {"count": 1})]
+    assert "berger" not in json.dumps(rows).casefold()
+    raw = (install["tmp"] / "lifecycle-keys" / lc.STATE_FILE).read_text().casefold()
+    assert "berger" not in raw
+
+
+def test_person_find_reports_nobody_and_needs_one_input(install):
+    _lifecycle_state(install, {}, {})
+    done = _bash(install, "find", "--name=nobody")
+    assert done.returncode == 0 and "no person found" in done.stdout
+    both = _cli(install, "person-find", "--name=a", "--email=a@b")
+    assert both.returncode == 2 and "exactly one" in both.stderr

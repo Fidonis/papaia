@@ -95,12 +95,20 @@
 #   papaia-ctl privacy-pack  --installation --out=FILE --backup-retention=DAYS
 #                            [--format=html|pdf|md] [--offsite=PLACE --offsite-retention=DAYS]
 #                            [--config-dir=PATH]
-#   papaia-ctl person export --sub=SUB --out=FILE --recipient=AGE1... [--config-dir=PATH]
-#                            — the data of a person whose account is gone, from every
-#                            module, as one archive encrypted with age
-#   papaia-ctl person erase  --sub=SUB --now [--transfer-to=SUB] [--config-dir=PATH]
-#                            — hand over her objects, then erase her data in every module
-#                            (erasure journal, proof per module and category)
+#   papaia-ctl person find --name=NAME|--email=MAIL [--config-dir=PATH]
+#                            — sub, state and last sign-in, also of deactivated and
+#                            deleted accounts (the input is hashed, never stored)
+#   papaia-ctl person export --sub=SUB --requested-by=SUB --confirmed-by=SUB
+#                            [--config-dir=PATH] — file a request for the data of a
+#                            person whose account is gone; prints the request id
+#   papaia-ctl person erase  --sub=SUB --now --requested-by=SUB --confirmed-by=SUB
+#                            [--transfer-to=SUB] [--config-dir=PATH] — file a request to
+#                            hand over her objects, then erase her data in every module
+#   papaia-ctl person status|run|handover REQUEST [--config-dir=PATH] — its state; run
+#                            it once the second person confirmed it in the manager
+#                            (archive in state/person-export/, encrypted to the
+#                            passphrase only she saw); delete the handed-over archive
+#   papaia-ctl person sweep  [--config-dir=PATH] — delete archives older than 14 days
 #   papaia-ctl report permissions --by=person|system [--format=json|csv]
 #                            --token-file=PATH|- [--config-dir=PATH] — the permission
 #                            report, released by papaia-audit (role papaia-auditor)
@@ -185,7 +193,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,178p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,186p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

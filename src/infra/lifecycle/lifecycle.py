@@ -87,6 +87,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -205,6 +206,8 @@ _STATE_KEYS = {
     "gap_revoke_at",
     "started_at",
     "federation",
+    "names",
+    "tombstones",
 }
 # Added with the reconciliation; a state written before it gets them on load.
 _RECONCILE_DEFAULTS = {
@@ -229,8 +232,20 @@ _RECONCILE_DEFAULTS = {
         "members": {},
         "last_full": 0,
     },
+    # Name index of the persons (security 1.14 no. 2b): sub -> HMAC of the normalized
+    # user name and mail, last seen state, day of the last sign-in. Never a clear name.
+    "names": {},
+    # Tombstones of deleted accounts: sub -> the two HMACs and the time of deletion. They
+    # stay like the erasure journal; a new account with the name of one is disabled.
+    "tombstones": {},
 }
 _PARKED_KEYS = {"time", "op", "type", "path"}
+_NAME_KEYS = {"name", "mail", "enabled", "login", "locked"}
+_TOMBSTONE_KEYS = {"name", "mail", "deleted"}
+_REF_RE = re.compile(r"^[0-9a-f]{64}$")
+DAY_SECONDS = 24 * 3600
+# `find` answers at most this many persons for one name or mail.
+FIND_MAX = 20
 # A parked event as CORE-012 stored it (account events only).
 _LEGACY_PARKED_KEYS = {"time", "sub", "op"}
 # Admin events the service reads: account changes, ended sessions and reset credentials
@@ -825,6 +840,7 @@ def _check_state(doc: object) -> dict:
     if not isinstance(doc["gap_pending"], bool):
         raise LifecycleError("state: gap_pending must be true or false")
     _check_federation(doc["federation"])
+    _check_names(doc["names"], doc["tombstones"])
     disabled = doc["disabled"]
     if not isinstance(disabled, dict) or len(disabled) > MAX_ENTRIES:
         raise LifecycleError("state: disabled is malformed")
@@ -886,6 +902,84 @@ def _check_state(doc: object) -> dict:
             raise LifecycleError("state: parked is malformed")
         _int(item["time"], "parked time")
     return doc
+
+
+def _ref_or_none(value: object) -> bool:
+    return value is None or (isinstance(value, str) and bool(_REF_RE.match(value)))
+
+
+def _check_names(names: object, tombstones: object) -> None:
+    if not isinstance(names, dict) or len(names) > MAX_ENTRIES:
+        raise LifecycleError("state: names is malformed")
+    for sub, item in names.items():
+        if (
+            not _SUB_RE.match(sub)
+            or not isinstance(item, dict)
+            or set(item) != _NAME_KEYS
+            or not _ref_or_none(item["name"])
+            or not _ref_or_none(item["mail"])
+            or item["enabled"] not in (True, False, None)
+            or not isinstance(item["locked"], bool)
+        ):
+            raise LifecycleError("state: names is malformed")
+        if item["login"] is not None:
+            _int(item["login"], "login")
+    if not isinstance(tombstones, dict) or len(tombstones) > MAX_ENTRIES:
+        raise LifecycleError("state: tombstones is malformed")
+    for sub, item in tombstones.items():
+        if (
+            not _SUB_RE.match(sub)
+            or not isinstance(item, dict)
+            or set(item) != _TOMBSTONE_KEYS
+            or not _ref_or_none(item["name"])
+            or not _ref_or_none(item["mail"])
+        ):
+            raise LifecycleError("state: tombstones is malformed")
+        _int(item["deleted"], "deleted")
+
+
+def normalized(value: str) -> str:
+    """User names and mail addresses as compared: NFKC, no outer blanks, case folded."""
+    return unicodedata.normalize("NFKC", value).strip().casefold()
+
+
+def name_ref(key: bytes, value: object) -> str | None:
+    """HMAC-SHA256(erasure-hmac, normalized value) of a user name or mail address; None
+    for no value. `papaia-ctl person find` hashes its input with the same function."""
+    if not isinstance(value, str) or not normalized(value):
+        return None
+    text = normalized(value)
+    if len(text) > 320 or _CONTROL_RE.search(text):
+        return None
+    return hmac.new(key, text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def find(store: Store, name: str | None, mail: str | None) -> list[dict]:
+    """The persons whose user name or mail has the HMAC `name` or `mail`, from the name
+    index and the tombstones: sub, status (active, disabled, deleted or unknown), day of
+    the last sign-in and day of the deletion. Never a name, never content."""
+    if not (name or mail) or not _ref_or_none(name) or not _ref_or_none(mail):
+        raise LifecycleError("find needs the HMAC of a name or of a mail address")
+    with store.locked():
+        state = store.load()
+
+    def hit(item: dict) -> bool:
+        return bool((name and item["name"] == name) or (mail and item["mail"] == mail))
+
+    def day(seconds: int | None) -> str | None:
+        return None if seconds is None else time.strftime("%Y-%m-%d", time.gmtime(seconds))
+
+    found: dict[str, dict] = {}
+    for sub, item in sorted(state["tombstones"].items()):
+        if hit(item):
+            found[sub] = {"sub": sub, "status": "deleted", "last_login": None,
+                          "deleted": day(item["deleted"])}
+    for sub, item in sorted(state["names"].items()):
+        if hit(item) and sub not in found:
+            status = {True: "active", False: "disabled", None: "unknown"}[item["enabled"]]
+            found[sub] = {"sub": sub, "status": status, "last_login": day(item["login"]),
+                          "deleted": None}
+    return list(found.values())[:FIND_MAX]
 
 
 def _check_federation(fed: object) -> None:
@@ -1648,6 +1742,7 @@ class Lifecycle:
         since = math.ceil(when_ms / 1000)
         correlation = _uuid7()
         if kind == "breakglass_login":
+            self._note_login(sub, when_ms)
             ids = getattr(self.api, "breakglass_ids", None)
             if ids is not None and sub in ids():
                 self._audit(
@@ -1678,6 +1773,10 @@ class Lifecycle:
                     self._disabled(sub, False)
                 if not isinstance(user, dict):
                     return
+                self._note_users([{**user, "id": sub}], complete=False)
+                with self.store.locked():
+                    if self.store.load()["names"].get(sub, {}).get("enabled") is False:
+                        user = {**user, "enabled": False}  # locked by its name just now
                 if user.get("enabled") is True:
                     self._activated(sub)
                     if int(self.clock() * 1000) - when_ms > LATE_EVENT_SECONDS * 1000:
@@ -1698,6 +1797,7 @@ class Lifecycle:
             self._list(sub, since, "account_deleted")
             self._journal(kind, sub, object_ref, correlation)
             self._disabled(sub, False)
+            self._tombstone(sub, since)
             return
         auth = event.get("authDetails")
         actor = auth.get("userId") if isinstance(auth, dict) else None
@@ -1776,6 +1876,113 @@ class Lifecycle:
         for client, _ in self._consents(sub):
             self._delete_consent(sub, client, correlation)
 
+    # name index and tombstones (security 1.14 no. 2b) ---------------
+    def _refs(self, user: dict) -> tuple[str | None, str | None]:
+        if self.journal is None:
+            return None, None
+        key = self.journal._key
+        return name_ref(key, user.get("username")), name_ref(key, user.get("email"))
+
+    def _note_users(self, users: list[dict], *, complete: bool) -> None:
+        """Record the HMACs of name and mail of the listed persons; disable a new account
+        that carries the name or mail of a deleted one (name lock), once per account.
+        With the complete list of members (`complete`), a person that is no longer
+        listed is looked up: deleted (404) becomes a tombstone, outside the group (403)
+        leaves the index."""
+        if self.journal is None:
+            return
+        listed: dict[str, dict] = {}
+        for user in users:
+            uid = user.get("id") if isinstance(user, dict) else None
+            if isinstance(uid, str) and _SUB_RE.match(uid):
+                listed[uid] = user
+        locks: list[str] = []
+        with self.store.locked():
+            state = self.store.load()
+            names, tombstones = state["names"], state["tombstones"]
+            dead_names = {t["name"] for t in tombstones.values() if t["name"]}
+            dead_mails = {t["mail"] for t in tombstones.values() if t["mail"]}
+            changed = False
+            for uid, user in listed.items():
+                name, mail = self._refs(user)
+                enabled = user.get("enabled")
+                enabled = enabled if isinstance(enabled, bool) else None
+                old = names.get(uid)
+                item = {
+                    "name": name, "mail": mail, "enabled": enabled,
+                    "login": old["login"] if old else None,
+                    "locked": old["locked"] if old else False,
+                }
+                if uid not in tombstones and enabled is True and not item["locked"] and (
+                    (name and name in dead_names) or (mail and mail in dead_mails)
+                ):
+                    item["locked"], item["enabled"] = True, False
+                    locks.append(uid)
+                if item != old and (old is not None or len(names) < MAX_ENTRIES):
+                    names[uid] = item
+                    changed = True
+            gone = sorted(set(names) - set(listed)) if complete else []
+            if changed:
+                self.store.save(state)
+        for uid in locks:
+            self._name_lock(uid)
+        for uid in gone:
+            try:
+                self.api.call("GET", f"/users/{uid}")
+            except HttpError as exc:
+                if exc.status == 404:
+                    self._tombstone(uid, int(self.clock()))
+                elif exc.status == 403:
+                    with self.store.locked():
+                        state = self.store.load()
+                        state["names"].pop(uid, None)
+                        self.store.save(state)
+
+    def _name_lock(self, uid: str) -> None:
+        """The name or mail of a deleted account came back: the new account is disabled
+        and reported; an administrator who enables it again is not overruled."""
+        correlation = _uuid7()
+        self._write(
+            "PUT",
+            f"/users/{uid}",
+            "account_name_locked",
+            "operation",
+            correlation,
+            uid,
+            body={"enabled": False},
+            effect="write",
+        )
+        _log(
+            f"ALERT: account {uid} carries the user name or mail of a deleted account and "
+            "was disabled; enable it again in Keycloak only after checking who it is"
+        )
+
+    def _tombstone(self, sub: str, deleted: int) -> None:
+        """A deleted person: the two HMACs move from the index to the tombstones."""
+        with self.store.locked():
+            state = self.store.load()
+            item = state["names"].pop(sub, None)
+            if item is None or sub in state["tombstones"]:
+                if item is not None:
+                    self.store.save(state)
+                return
+            if len(state["tombstones"]) < MAX_ENTRIES and (item["name"] or item["mail"]):
+                state["tombstones"][sub] = {
+                    "name": item["name"], "mail": item["mail"], "deleted": deleted,
+                }
+            self.store.save(state)
+
+    def _note_login(self, sub: str, when_ms: int) -> None:
+        """The day of the last sign-in of a person in the index (`find` shows it)."""
+        day = when_ms // 1000 // DAY_SECONDS * DAY_SECONDS
+        with self.store.locked():
+            state = self.store.load()
+            item = state["names"].get(sub)
+            if item is None or (item["login"] is not None and item["login"] >= day):
+                return
+            item["login"] = day
+            self.store.save(state)
+
     # reconciliation ---------------------------------------------------
     def _users(self, *, enabled: bool | None) -> list[str]:
         """Ids of the members of the persons group (the accounts the service may see),
@@ -1788,6 +1995,7 @@ class Lifecycle:
         """(id, enabled) of every member of the persons group, in the order listed."""
         group = urllib.parse.quote(self.api.persons_group(), safe="-")
         found: dict[str, bool | None] = {}
+        listed: list[dict] = []
         for page in range(MAX_USER_PAGES):
             params = [
                 ("briefRepresentation", "true"),
@@ -1805,7 +2013,9 @@ class Lifecycle:
                     continue
                 on = user.get("enabled")
                 found.setdefault(uid, on if isinstance(on, bool) else None)
+                listed.append(user)
             if len(batch) < USER_PAGE:
+                self._note_users(listed, complete=True)
                 return list(found.items())
         raise LifecycleError(f"more than {MAX_USER_PAGES * USER_PAGE} accounts")
 
@@ -1959,6 +2169,7 @@ class Lifecycle:
                 raise
             if exc.status == 404:
                 self._list(sub, now, "account_deleted")
+                self._tombstone(sub, now)
             with self.store.locked():
                 state = self.store.load()
                 state["disabled"].pop(sub, None)
@@ -2572,6 +2783,11 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--alert-from")
         if name == "global-since":
             cmd.add_argument("--at", type=int)
+    # `papaia-ctl person find` through `docker exec`: the HMACs only, never a name.
+    cmd = sub.add_parser("find")
+    cmd.add_argument("--key-dir", type=Path, required=True)
+    cmd.add_argument("--name-ref")
+    cmd.add_argument("--mail-ref")
     return parser
 
 
@@ -2618,6 +2834,10 @@ def main(argv: list[str] | None = None) -> int:
         code, report = health(args.state_dir, args.key_dir, journal=view)
         print(json.dumps(report, sort_keys=True))
         return code
+    if args.command == "find":
+        persons = find(Store(args.key_dir), args.name_ref, args.mail_ref)
+        print(json.dumps({"persons": persons}, sort_keys=True))
+        return 0
     store, publisher = Store(args.key_dir), Publisher(args.state_dir, Signer(args.key_dir))
     if args.command == "global-since":
         return _global_since(Lifecycle(None, store, publisher), args)

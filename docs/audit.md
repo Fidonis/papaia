@@ -108,9 +108,9 @@ Roles in `papaia-audit-db`:
 | Role | May |
 |---|---|
 | `audit_ingest` | execute `audit.append(source, event)` (security definer) — nothing else, no `SELECT`, no `INSERT` |
-| `audit_read` | `SELECT` on `audit.event` and on the tables of retention and export |
+| `audit_read` | `SELECT` on `audit.event` and on the tables of retention and export; on `audit.person_request` without the column `archive_key` |
 | `audit_retention` | execute `audit.prune`, and write the retention run's own events (`audit.next_seq`, `audit.append_own`, `audit.setting_put`) — nothing else |
-| `audit_hold` | the two-person deletion lock of the read API: `audit.legal_hold_request_add`, `audit.legal_hold_request_reject`, `audit.legal_hold_confirm` (which appends the lock event itself), and the request events only (`audit.append_hold`: `approval_changed`, writer `papaia-audit/hold`) — nothing else |
+| `audit_hold` | the two-person deletion lock of the read API: `audit.legal_hold_request_add`, `audit.legal_hold_request_reject`, `audit.legal_hold_confirm` (which appends the lock event itself), and the request events only (`audit.append_hold`: `approval_changed`, writer `papaia-audit/hold`); the requests for information and erasure (`audit.person_request_add`, `_decide`, `_advance`, `_take_key`, each appending its own event, writer `papaia-audit/person`) — nothing else |
 | `audit_owner` | owns the database; its password is a secret of the database container and of `papaia-audit-schema` only |
 
 Triggers refuse every `UPDATE` and `TRUNCATE` on `audit.event`, also for the owner, and
@@ -175,6 +175,7 @@ answers only these clients, recognised by their client certificate:
 | Client | Routes |
 |---|---|
 | `papaia-manager` (page "Audit-Log"), `papaia-ctl` | `/v1/events`, `/v1/exports`, `/v1/person-queries…`, `/v1/access-reports…`, `/v1/legal-holds…` |
+| `papaia-manager` | `/v1/person-requests`, `/v1/person-requests/<id>/confirm\|reject` (requests for information and erasure, see [person-requests.md](person-requests.md#requests-and-confirmation)) |
 | `papaia-me` (page "Aktivität") | `/v1/me/reads` |
 
 Every request carries the bearer token of a person (`Authorization: Bearer …`), obtained by
@@ -378,6 +379,19 @@ creates the realm role `papaia-legal-hold`, never part of `papaia-admin`. An adm
 assigns it in Keycloak. A person's token carries it only through a sign-in client that
 lists it in `visible_for_roles`. That is the administration's part (papaia-manager,
 MGR-007).
+
+### Requests for information and erasure
+
+`audit.person_request` holds the requests of `papaia-ctl person export|erase` for a person
+without an account: filed by the host (`python -m papaia_audit person`, reached only through
+`docker exec`, no token), confirmed or rejected by the second person it names through
+`papaia-manager` with a sign-in of at most 5 minutes ago, run by the host. The requesting
+person cannot confirm (`AUDIT-PERSON-REQ-SELF`), and the database refuses it as well. For an
+export, the confirmation returns a one-time passphrase; the store keeps only its scrypt key
+until the run takes it. Events: `person_request_created`, `person_request_confirmed`,
+`person_request_rejected` and one `operation` row (catalog entry `core.person`) per step of
+the run, all with `object_ref` `{type: person_request, id}`. The flow is described in
+[person-requests.md](person-requests.md#requests-and-confirmation).
 
 ## SIEM
 

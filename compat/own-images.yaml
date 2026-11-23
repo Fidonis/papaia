@@ -36,6 +36,7 @@ images:
       - src/infra/audit/papaia_audit/access.py
       - src/infra/audit/papaia_audit/core.py
       - src/infra/audit/papaia_audit/idp.py
+      - src/infra/audit/papaia_audit/person_requests.py
       - src/infra/audit/papaia_audit/read.py
       - src/infra/audit/papaia_audit/report.py
       - src/infra/audit/papaia_audit/retention.py
@@ -47,6 +48,7 @@ images:
       - src/infra/audit/papaia_audit/schema_retention.sql
       - src/infra/audit/papaia_audit/schema_access.sql
       - src/infra/audit/papaia_audit/schema_siem.sql
+      - src/infra/audit/papaia_audit/schema_person.sql
       - src/infra/audit/THIRD_PARTY_LICENSES.md
     services: [papaia-audit, papaia-audit-schema]
     license: MIT

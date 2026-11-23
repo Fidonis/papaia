@@ -705,10 +705,12 @@ class ReadApi:
         operation: str | None = None,
         object_ref: dict[str, str] | None = None,
         moment: datetime | None = None,
+        catalog_id: str | None = None,
     ) -> Any:
         """Run `write` with the builder of the own event; the store appends the event in
         the transaction of its own change, so there is no change without its event.
-        `object_ref` names another object than a person query (access.py)."""
+        `object_ref` names another object than a person query (access.py); an `operation`
+        event names its catalog entry (person_requests.py)."""
         stamp = time_text(moment or self._now())
         if query_id:
             object_ref = {"type": "person_query", "id": query_id}
@@ -736,6 +738,8 @@ class ReadApi:
             }
             if operation is not None:
                 body["operation"] = operation
+            if catalog_id is not None:
+                body["catalog_id"] = catalog_id
             _, canonical = self.check.check(json.dumps(body).encode("utf-8"), OWN_SOURCE)
             return canonical.decode("utf-8")
 

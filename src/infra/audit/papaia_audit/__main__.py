@@ -7,6 +7,7 @@ chain heads.
     python -I -m papaia_audit heads
     python -I -m papaia_audit retention
     python -I -m papaia_audit access < request.json
+    python -I -m papaia_audit person < request.json
     python -I -m papaia_audit siem-status
     python -I -m papaia_audit siem-skip      (request as JSON on stdin)
     python -I -m papaia_audit idmap          (token and request as JSON on stdin)
@@ -67,7 +68,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from psycopg import sql
 
-from papaia_audit import access, core, idp, read, retention, siem, watch
+from papaia_audit import access, core, idp, person_requests, read, retention, siem, watch
 from papaia_audit import report as permission_report
 
 CONFIG_DIR = Path(os.environ.get("PAPAIA_AUDIT_CONFIG_DIR", "/etc/papaia-audit"))
@@ -83,6 +84,7 @@ SCHEMA_READ_SQL = Path(__file__).with_name("schema_read.sql")
 SCHEMA_RETENTION_SQL = Path(__file__).with_name("schema_retention.sql")
 SCHEMA_ACCESS_SQL = Path(__file__).with_name("schema_access.sql")
 SCHEMA_SIEM_SQL = Path(__file__).with_name("schema_siem.sql")
+SCHEMA_PERSON_SQL = Path(__file__).with_name("schema_person.sql")
 SERVICE_ROLES = ("ingest", "read", "retention", "hold")
 HEADS_DIR = Path(os.environ.get("PAPAIA_AUDIT_HEADS_DIR", "/var/lib/papaia-audit/heads"))
 EXPORT_INTERVAL_SECONDS = 5
@@ -199,6 +201,17 @@ _HOLD_COLUMNS = (
 def _hold_row(row: tuple[Any, ...]) -> access.HoldRequest:
     request_id, *rest = row
     return access.HoldRequest(str(request_id), *rest)
+
+
+_PERSON_REQUEST_COLUMNS = (
+    "id, operation, sub, transfer_to, requested_by, confirmed_by, requested_at, state,"
+    " decided_by, decided_at, changed_at"
+)
+
+
+def _person_request_row(row: tuple[Any, ...]) -> person_requests.PersonRequest:
+    request_id, *rest = row
+    return person_requests.PersonRequest(str(request_id), *rest)
 
 
 _SEARCH_COLUMNS = {
@@ -445,6 +458,85 @@ class PgReadStore:
             self._append_hold_on(conn, build)
         return True
 
+    # -- person requests (person_requests.py; role audit_hold) ----------------
+
+    @staticmethod
+    def _next_own_seq(conn: psycopg.Connection) -> int:
+        row = conn.execute("SELECT audit.next_source_seq(%s)", (read.OWN_SOURCE,)).fetchone()
+        assert row is not None
+        return int(row[0])
+
+    @_guarded
+    def add_person_request(self, request: person_requests.PersonRequest, build: Any) -> None:
+        with connect("hold") as conn, conn.transaction():
+            conn.execute(
+                "SELECT audit.person_request_add(%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    request.id,
+                    request.operation,
+                    request.sub,
+                    request.transfer_to,
+                    request.requested_by,
+                    request.confirmed_by,
+                    request.requested_at,
+                    build(self._next_own_seq(conn)),
+                ),
+            )
+
+    @_guarded
+    def get_person_request(self, request_id: str) -> person_requests.PersonRequest | None:
+        with connect("read") as conn:
+            row = conn.execute(
+                f"SELECT {_PERSON_REQUEST_COLUMNS} FROM audit.person_request WHERE id = %s",
+                (request_id,),
+            ).fetchone()
+        return _person_request_row(row) if row else None
+
+    @_guarded
+    def person_requests_of(
+        self, sub: str, since: datetime
+    ) -> list[person_requests.PersonRequest]:
+        with connect("read") as conn:
+            rows = conn.execute(
+                f"SELECT {_PERSON_REQUEST_COLUMNS} FROM audit.person_request"
+                " WHERE (requested_by = %s OR confirmed_by = %s) AND requested_at > %s"
+                " ORDER BY requested_at DESC LIMIT %s",
+                (sub, sub, since, person_requests.LIST_MAX),
+            ).fetchall()
+        return [_person_request_row(row) for row in rows]
+
+    @_guarded
+    def decide_person_request(
+        self, request_id: str, state: str, by: str, at: datetime, key: bytes | None,
+        build: Any,
+    ) -> bool:
+        with connect("hold") as conn, conn.transaction():
+            row = conn.execute(
+                "SELECT audit.person_request_decide(%s, %s, %s, %s, %s, %s)",
+                (request_id, state, by, at, key, build(self._next_own_seq(conn))),
+            ).fetchone()
+        return bool(row and row[0])
+
+    @_guarded
+    def advance_person_request(
+        self, request_id: str, from_state: str, to_state: str, at: datetime, build: Any
+    ) -> bool:
+        with connect("hold") as conn, conn.transaction():
+            row = conn.execute(
+                "SELECT audit.person_request_advance(%s, %s, %s, %s, %s)",
+                (request_id, from_state, to_state, at, build(self._next_own_seq(conn))),
+            ).fetchone()
+        return bool(row and row[0])
+
+    @_guarded
+    def take_person_request_key(self, request_id: str, build: Any) -> bytes | None:
+        with connect("hold") as conn, conn.transaction():
+            row = conn.execute(
+                "SELECT audit.person_request_take_key(%s, %s)",
+                (request_id, build(self._next_own_seq(conn))),
+            ).fetchone()
+        return bytes(row[0]) if row and row[0] is not None else None
+
     @_guarded
     def identity(self, sub: str) -> read.PersonIdentity | None:
         with connect("read") as conn:
@@ -647,7 +739,7 @@ def serve() -> int:
     context.load_verify_locations(cafile=str(CONFIG_DIR / "ca.crt"))
     settings = ServiceSettings(os.environ)
     check = core.SubmissionCheck()
-    api = access.AccessApi(
+    api = person_requests.PersonRequestApi(
         PgReadStore(),
         TokenKeysFile(CONFIG_DIR / "token-keys.json"),
         _pseudonym_key(),
@@ -700,6 +792,12 @@ def schema() -> int:
         if not (identities and identities[0]):
             conn.execute(SCHEMA_SIEM_SQL.read_text(encoding="utf-8"))
             log("identity map, delivery state and skips added")
+        requests = conn.execute(
+            "SELECT to_regclass('audit.person_request') IS NOT NULL"
+        ).fetchone()
+        if not (requests and requests[0]):
+            conn.execute(SCHEMA_PERSON_SQL.read_text(encoding="utf-8"))
+            log("requests for information and erasure without an account added")
         for role, password in passwords.items():
             # ALTER ROLE takes no parameters; the literal is quoted by the driver and the
             # statement is never logged.
@@ -1223,6 +1321,28 @@ def access_call() -> int:
     return 0
 
 
+def person_call() -> int:
+    """`person`: one request of papaia-ctl person through `docker exec`
+    (person_requests.host_request); no token, never reachable over the network. Prints
+    {"status", "body"}."""
+    request = person_requests.host_request(
+        sys.stdin.read(person_requests.HOST_REQUEST_MAX + 1)
+    )
+    if request is None:
+        print(json.dumps({"status": 400, "body": {"code": "AUDIT-HOST-400"}}))
+        return 0
+    api = person_requests.PersonRequestApi(
+        PgReadStore(),
+        TokenKeysFile(CONFIG_DIR / "token-keys.json"),
+        _pseudonym_key(),
+        core.SubmissionCheck(),
+    )
+    response = api.host(request)
+    log(f"host person request status={response.status}")
+    print(json.dumps({"status": response.status, "body": json.loads(response.body)}))
+    return 0
+
+
 def siem_status() -> int:
     """`siem-status`: backlog, lag and delivery state per target, the measurements and
     the last hourly verification of every chain with its age, as one JSON line (`doctor
@@ -1327,6 +1447,7 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("heads")
     commands.add_parser("retention")
     commands.add_parser("access")
+    commands.add_parser("person")
     commands.add_parser("siem-status")
     commands.add_parser("siem-skip")
     commands.add_parser("idmap")
@@ -1342,6 +1463,8 @@ def main(argv: list[str] | None = None) -> int:
             return retention_now()
         if args.command == "access":
             return access_call()
+        if args.command == "person":
+            return person_call()
         if args.command == "siem-status":
             return siem_status()
         if args.command == "siem-skip":

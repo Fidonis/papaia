@@ -224,6 +224,7 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # source_protection: no SQL Server source
         SKIP,  # identity: no federation
         SKIP,  # rollback_window: no rollback key on this host
+        PASS,  # person_export: no archive of an information request
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -260,6 +261,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "source_protection",
         "identity",
         "rollback_window",
+        "person_export",
     )
 
 
@@ -2945,3 +2947,41 @@ def test_siem_fails_when_its_report_cannot_be_read(stack):
     found = siem_result(stack, siem_docker("not json", code=1),
                         PAPAIA_AUDIT_SIEM_TARGET="syslog-tls://siem.example.org")
     assert found.status == FAIL
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# person_export: archives of information requests (14 days at most)
+# ─────────────────────────────────────────────────────────────────────────
+
+_REQUEST = "5414c612-b79d-4c6c-b2f2-ededf8aee356"
+
+
+def _person_archive(stack, written: datetime) -> Path:
+    from lib import person_request
+
+    folder = person_request.archive_dir(stack["config"], create=True)
+    (folder / f"{_REQUEST}{person_request.ARCHIVE_SUFFIX}").write_bytes(b"age")
+    person_request.record_archive(stack["config"], _REQUEST, written)
+    return folder
+
+
+def test_person_export_warns_while_an_archive_waits_and_fails_after_14_days(stack):
+    _person_archive(stack, NOW - timedelta(days=3))
+    waiting = result(run_doctor(stack), "person_export")
+    assert waiting.status == WARN
+    assert waiting.details["archives"] == [{"request": _REQUEST, "age_days": 3}]
+    assert "handover" in waiting.summary
+
+    overdue = doctor.run_checks(stack["config"], stack["repo"], run=healthy_docker(),
+                                probes=probes(), now=NOW + timedelta(days=12))
+    check = result(overdue, "person_export")
+    assert check.status == FAIL
+    assert "papaia-ctl person sweep" in check.summary
+
+
+def test_person_export_fails_for_a_folder_others_can_open(stack):
+    folder = _person_archive(stack, NOW)
+    folder.chmod(0o755)
+    check = result(run_doctor(stack), "person_export")
+    assert check.status == FAIL
+    assert "0700" in check.summary
