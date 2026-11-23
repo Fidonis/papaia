@@ -180,6 +180,11 @@ launchctl print "gui/$(id -u)/de.fidonis.papaia.<project>.localai"
 - **"the stack is stopped, but LocalAI answers … without the launchd job"**: a LocalAI that
   `papaia-ctl` did not start (by hand, or a job of another tool) holds the port. Stop that
   process before the next `start`.
+- **"the launchd job … of the native LocalAI is still loaded although LocalAI runs in its
+  container"** (or "is not enabled") from `doctor`: LocalAI was switched off or back to its
+  container where launchd was out of reach, usually from papaia-manager, which warns about
+  it. The job may still hold `LOCALAI_EXT_PORT`. Run `tools/papaia-ctl stop` on the Mac to
+  unload it; the next `tools/papaia-ctl start` there also removes its plist.
 - **`logs/localai.log` keeps growing**: launchd does not rotate it. Empty it in place, which
   works while the job runs (do not delete or move it then, or LocalAI keeps writing to the
   unlinked file until the next restart):

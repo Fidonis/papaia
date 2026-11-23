@@ -1201,16 +1201,18 @@ def check_localai_native(ctx: Context) -> CheckResult:
     Whether /readyz answers (on the host at 127.0.0.1, in a container at
     host.docker.internal), whether the installed binary is the pinned release and, on the
     Mac, the state of the launchd job: `warn` when the job is loaded but LocalAI does not
-    answer, or when it is not loaded although the stack runs. `warn` at most: LocalAI is
+    answer, or when it is not loaded although the stack runs, or when it is still loaded
+    although LocalAI is switched off or runs in its container (a switch made where launchd
+    was out of reach, such as papaia-manager's container). `warn` at most: LocalAI is
     optional for the rest of the stack."""
     name = "localai_native"
     if not ctx.configured:
         return _not_set_up(name)
     env = ctx.env
     if localai_native.runtime(env) != localai_native.NATIVE:
-        return CheckResult(name, SKIP, "LocalAI runs in its container")
+        return _leftover_job(ctx, env, "LocalAI runs in its container")
     if LOCALAI_PROFILE not in ctx.active_profiles:
-        return CheckResult(name, SKIP, "LocalAI is not enabled")
+        return _leftover_job(ctx, env, "LocalAI is not enabled")
     try:
         home = localai_native.localai_home(env)
         pinned = localai_native.pinned_version(ctx.repo_root)
@@ -1289,6 +1291,24 @@ def check_localai_native(ctx: Context) -> CheckResult:
             details,
         )
     return CheckResult(name, SKIP, "the stack is stopped, and LocalAI with it", details)
+
+
+def _leftover_job(ctx: Context, env: dict[str, str], why: str) -> CheckResult:
+    """`skip` with why the native LocalAI is not in use, `warn` when its launchd job is
+    loaded all the same: it would keep LOCALAI_EXT_PORT and come back at the next login."""
+    name = "localai_native"
+    details: dict[str, Any] = {}
+    job = _launchd_job(ctx, env, details)
+    if job is None or not job.loaded:
+        return CheckResult(name, SKIP, why)
+    label = details["launchd"]["label"]
+    return CheckResult(
+        name,
+        WARN,
+        f"the launchd job {label} of the native LocalAI is still loaded although {why}: it"
+        f" may hold port {localai_native.port(env)}; run 'papaia-ctl stop' to remove it",
+        details,
+    )
 
 
 def _launchd_job(
