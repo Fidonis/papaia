@@ -528,6 +528,7 @@ def test_the_compose_file_publishes_no_port_and_keeps_the_database_internal():
     assert set(services["papaia-audit"]["networks"]) == {
         "papaia-audit-net",
         "papaia-audit-ingest-net",
+        "papaia-audit-idp-net",
     }
     assert all(net["internal"] is True for net in doc["networks"].values())
     assert all(service["profiles"] == ["audit"] for service in services.values())

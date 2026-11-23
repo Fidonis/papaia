@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -93,6 +94,11 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+_PRIVATE_KEY = re.compile(
+    r"(-----BEGIN ([A-Z ]*)PRIVATE KEY-----\n)[A-Za-z0-9+/=\n]+(-----END \2PRIVATE KEY-----)"
+)
+
+
 def _tree_digests(inst: Installation) -> dict[str, str]:
     """sha256 of every file under the config directory, normalised."""
     digests: dict[str, str] = {}
@@ -117,6 +123,9 @@ def _tree_digests(inst: Installation) -> dict[str, str]:
             for row in rows:
                 row["time"], row["correlation_id"] = "<TIME>", "<ID>"
             text = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
+        # A generated key pair (service accounts) differs on every run; its place and
+        # its PEM type are compared, not the key.
+        text = _PRIVATE_KEY.sub(r"\1<GENERATED KEY>\3", text)
         digests[rel] = _digest(inst.normalise(text))
     return digests
 

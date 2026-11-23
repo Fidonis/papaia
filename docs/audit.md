@@ -17,7 +17,7 @@ Reading is described under [Reading](#reading), retention and the deletion lock 
 
 | Container | Networks | Purpose |
 |---|---|---|
-| `papaia-audit` | `papaia-audit-net`, `papaia-audit-ingest-net` (and its egress network while a SIEM target is set) | ingest and read API on `:8443` (mutual TLS), `verify`, `heads`, retention, SIEM export |
+| `papaia-audit` | `papaia-audit-net`, `papaia-audit-ingest-net`, `papaia-audit-idp-net` (Keycloak only, for the permission report; and its egress network while a SIEM target is set) | ingest and read API on `:8443` (mutual TLS), `verify`, `heads`, retention, SIEM export |
 | `papaia-audit-schema` | `papaia-audit-net` | one shot before `papaia-audit`: creates the store and sets the role passwords |
 | `papaia-audit-db` | `papaia-audit-net` | PostgreSQL 17, volume `papaia-audit-pgdata` |
 
@@ -261,17 +261,35 @@ the requester as well.
 
 ### Permission report
 
-`papaia-ctl report permissions` (and later the manager) builds the permission report and
-has papaia-audit release it before showing anything ([permission-report.md](permission-report.md)):
+papaia-audit builds the permission report ([permission-report.md](permission-report.md),
+[ADR 0025](adr/0025-build-the-permission-report-in-papaia-audit.md)) for
+`papaia-ctl report permissions` and the manager's audit page:
 
-    POST /v1/access-reports   {"by": "person"|"system", "rows": N, "checksum": "sha256:…"}
+    POST /v1/access-reports/build   {"by": "person"|"system", "format": "json"|"csv"}
 
-needs the role `papaia-auditor`; `papaia-admin` alone is not enough. Every call with a valid
-token is the event `inventory_exported` (writer `papaia-audit/access`, `operation`
+needs a person's token (with `sid`; a service account's token is refused) and the role
+`papaia-auditor`; `papaia-admin` alone is not enough. Every call with a valid token is the
+event `inventory_exported` (writer `papaia-audit/access`, `operation`
 `access_report.person` or `access_report.system`, `object_ref` `access_report` with the
-checksum, `detail.rows`), also a refused one (`result` `denied`, `AUDIT-REPORT-403`). The
-answer lists the latest confirmation of every row (`key`, `digest`, `confirmed_at`,
-`confirmed_by` as pseudonym).
+checksum, `detail.rows`), recorded before the answer; also a refused one (`result`
+`denied`, `AUDIT-REPORT-403`) and a failed one (`result` `error`). Without the event there
+is no report (`503`). The answer is the report itself (`application/json` or
+`text/csv`), with the latest confirmation of every row (`last_confirmed_at`,
+`confirmation_due`). `POST /v1/access-reports` (the release of a report built on the host)
+is removed.
+
+papaia-audit reads the `papaia` realm as the core account `svc-papaia-audit-report`
+(client credentials with an ES256 client assertion; key in
+`security/service-accounts/svc-papaia-audit-report/`, mounted read-only into papaia-audit
+alone). The account holds `realm-management` `view-users` and nothing else; the realm sync
+removes any wider right. papaia-audit sends GET requests only, to the report's paths below
+`/admin/realms/papaia/users`, over `papaia-audit-idp-net` (internal, shared with Keycloak
+alone, row K-21) and checks Keycloak's certificate against `keycloak-ca.crt` in the
+service folder. What the account cannot read (clients, pairings, service-account owners,
+session limits, the emergency account's id, the recertification period) the realm sync
+writes into `infra/audit/service/access-report-inputs.json`, without secrets. Without that
+file the build answers `503` `AUDIT-REPORT-INPUTS` ("run `papaia-ctl realm sync`"); when
+Keycloak cannot be read, `503` `AUDIT-REPORT-SOURCE`.
 
     POST /v1/access-reports/confirmations   {"key": "person:<sub>"|"system:<audience>", "digest": "sha256:…"}
 
@@ -282,7 +300,7 @@ is the recertification of one row by the administration (role `papaia-admin`, el
 `approval_changed` (`operation` `access_report.confirmed`, `object_ref` `person` or
 `catalog_entry`); both or neither.
 
-From the host, `papaia-ctl` reaches these two routes through `docker exec` into the
+From the host, `papaia-ctl` reaches the build and the confirmation through `docker exec` into the
 container (`python -m papaia_audit access`, the request with the token on stdin), as the
 client `papaia-ctl`; no other route is reachable that way.
 

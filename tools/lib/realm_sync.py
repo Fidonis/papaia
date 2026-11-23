@@ -159,12 +159,19 @@ PAIRINGS_FORMAT = "papaia.pairings/1"
 
 SYNC_CLIENT = "svc-papaia-realm-sync"
 # Core accounts the realm sync keeps outside the module declarations: its own, the one
-# of papaia-lifecycle (lib/lifecycle_account.py) and the one of papaia-people
-# (lib/people_account.py). Keycloak's `admin-permissions` client (admin permissions
+# of papaia-lifecycle (lib/lifecycle_account.py), the one of papaia-people
+# (lib/people_account.py) and the report account of papaia-audit
+# (lib/audit_report_account.py). Keycloak's `admin-permissions` client (admin permissions
 # switched on for papaia-lifecycle) carries a service account Keycloak needs for its
 # authorization settings.
 CORE_ACCOUNTS = frozenset(
-    {SYNC_CLIENT, "svc-papaia-lifecycle", "svc-papaia-people", "admin-permissions"}
+    {
+        SYNC_CLIENT,
+        "svc-papaia-lifecycle",
+        "svc-papaia-people",
+        "svc-papaia-audit-report",
+        "admin-permissions",
+    }
 )
 SYNC_SECRET_KEY = "KC_REALM_SYNC_CLIENT_SECRET"
 # Measured against Keycloak 26.7.0: manage-clients creates clients and client scopes and
@@ -253,7 +260,14 @@ EXCHANGE_LIMITS = {"flow-console": ("papaia-data", "papaia-studio")}
 # Audiences only named clients may exchange for, with fixed effects (security 1.4): the
 # people lookup of the core is reached by the assistant's gate and, for the group members
 # of a share notice, by Studio's gateway, effect x; the service binds each to its route.
-AUDIENCE_LIMITS = {"papaia-people": (("assist-gate", "papaia-studio-gateway"), ("x",))}
+AUDIENCE_LIMITS = {
+    "papaia-people": (("assist-gate", "papaia-studio-gateway"), ("x",)),
+    "papaia-audit": (("papaia-manager",), ("r",)),
+}
+# Audiences the realm sync pairs itself (lib/audit_report_account.py): `pairings.yaml`
+# cannot name them, and their pairing is asked for and confirmed by `platform`.
+PLATFORM_AUDIENCES = frozenset({"papaia-audit"})
+PLATFORM_PERSON = "platform"
 
 # Delegation (offline sessions) is held at exactly one client per purpose family.
 HOLDERS = {"flow": ("papaia-flow", "flow-engine"), "assist": ("papaia-assist", "assist-gate")}
@@ -498,6 +512,8 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
         if not entry.token_exchange:
             raise RealmSyncError(f"{label}: {client!r} has no token exchange")
         audience = register.check(row["audience"], "audience", label)
+        if audience in PLATFORM_AUDIENCES:
+            raise RealmSyncError(f"{label}: {audience} is paired by the realm sync itself")
         if audience in exchange_clients and audience != CHAIN_HOLDER:
             raise RealmSyncError(f"{label}: {audience!r} exchanges tokens and is never an audience")
         limits = EXCHANGE_LIMITS.get(client)
@@ -740,6 +756,9 @@ class Plan:
     # `papaia.owner` values of modules `addon uninstall` removed and nobody installed again
     # (lib/uninstall_journal.py): their managed clients are deleted, not left in place.
     uninstalled: frozenset[str] = frozenset()
+    # Platform pairings whose client is still a client of the realm template (the
+    # manager): the `aud-*` scopes it keeps as optional scopes, with token exchange on.
+    template_scopes: dict[str, set[str]] = field(default_factory=dict)
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -1142,10 +1161,12 @@ def build_plan(
     pairings: list[Pairing],
     *,
     core_audiences: frozenset[str] = frozenset(),
+    platform_pairings: list[Pairing] | tuple[Pairing, ...] = (),
 ) -> Plan:
     """The target state of the managed objects; RealmSyncError for anything not
     acceptable. Nothing is read from or written to Keycloak here. `core_audiences` are
-    the audiences the core serves itself under its active profiles (persons only)."""
+    the audiences the core serves itself under its active profiles (persons only);
+    `platform_pairings` the exchange rights the sync sets itself for them."""
     clients: dict[str, ClientSpec] = {}
     own_roles: dict[str, set[str]] = {}
     visible: set[str] = set()
@@ -1281,6 +1302,24 @@ def build_plan(
             exchange_scopes[scope] = pairing.audience
             clients[pairing.client].optional_scopes.add(scope)
 
+    template_scopes: dict[str, set[str]] = {}
+    for pairing in platform_pairings:
+        text = f"{pairing.client} -> {pairing.audience} ({''.join(pairing.effects)})"
+        entry = register.clients.get(pairing.client)
+        if pairing.audience not in PLATFORM_AUDIENCES or entry is None or not entry.token_exchange:
+            raise RealmSyncError(f"platform pairing {text}: not one the realm sync sets")
+        if pairing.audience not in audiences:
+            notes.append(f"platform pairing inactive, {pairing.audience} is not served: {text}")
+            continue
+        scope = exchange_scope(pairing.audience)
+        exchange_scopes[scope] = pairing.audience
+        if pairing.client in clients:
+            clients[pairing.client].optional_scopes.add(scope)
+        else:
+            # Still a client of the realm template (keycloak_role_sync): the sync keeps
+            # this one scope on it and nothing else of its settings.
+            template_scopes.setdefault(pairing.client, set()).add(scope)
+
     # Sign-in scopes come from the declaration, not from a pairing: an optional `aud-*`
     # scope the client asks for at sign-in, while both sides are installed.
     for client_id, sign_in in SIGN_IN_AUDIENCES.items():
@@ -1375,6 +1414,7 @@ def build_plan(
         never_audiences=never,
         legacy_accounts=legacy,
         person_scope=any(PERSON_SCOPE in s.default_scopes for s in clients.values()),
+        template_scopes=template_scopes,
     )
 
 
@@ -2226,6 +2266,7 @@ class _Reconciler(_Actions):
         for client_id in sorted(self.plan.clients):
             self.client(self.plan.clients[client_id], clients.get(client_id), scopes)
         self.exchange_elsewhere(clients, scopes)
+        self.template_exchange(clients, scopes)
         self.undeclared_accounts(clients)
         self.never_audience()
         self.chain_holder_mark()
@@ -3153,9 +3194,13 @@ class _Reconciler(_Actions):
                 continue
             if attributes.get(MANAGED) == "true" and attributes.get(KIND) == SERVICE_ACCOUNT:
                 continue  # an undeclared account is removed as a whole
+            # A platform pairing of a template client (template_exchange) stays.
+            kept = self.plan.template_scopes.get(client_id, set())
             for kind in ("default", "optional"):
                 for name in sorted(client.get(f"{kind}ClientScopes") or []):
                     if name != OFFLINE and not is_exchange_scope(name):
+                        continue
+                    if kind == "optional" and name in kept:
                         continue
                     self.by_id(
                         Change(
@@ -3171,6 +3216,48 @@ class _Reconciler(_Actions):
                         (scopes.get(name) or {}).get("id"),
                         f"client scope {name}",
                     )
+
+    def template_exchange(self, clients: dict[str, dict], scopes: dict[str, dict]) -> None:
+        """The platform pairings of a client of the realm template (the manager for
+        papaia-audit): token exchange on and the pairing's `aud-*` optional scope. Nothing
+        else of the client is changed; `exchange_elsewhere` removes any other `aud-*`
+        scope from it. A template client that does not exist is noted, not created."""
+        for client_id, wanted in sorted(self.plan.template_scopes.items()):
+            client = clients.get(client_id)
+            if client is None:
+                self._note(f"platform pairing waits for client {client_id}: not in the realm")
+                continue
+            attributes = dict(client.get("attributes") or {})
+            if attributes.get(TOKEN_EXCHANGE) != "true":
+                attributes[TOKEN_EXCHANGE] = "true"
+                self.do(
+                    Change(
+                        "client",
+                        client_id,
+                        "token exchange switched on (platform pairing)",
+                        "update_client",
+                        "exchange_right_changed",
+                    ),
+                    "PUT",
+                    f"/clients/{client['id']}",
+                    # Only the attributes: no secret or other setting is sent back.
+                    {"clientId": client_id, "attributes": attributes},
+                )
+            have = set(client.get("optionalClientScopes") or [])
+            for name in sorted(wanted - have):
+                self.by_id(
+                    Change(
+                        "client",
+                        client_id,
+                        f"optional scope {name} added (platform pairing)",
+                        "add_scope",
+                        "exchange_right_changed",
+                    ),
+                    "PUT",
+                    f"/clients/{client['id']}/optional-client-scopes",
+                    (scopes.get(name) or {}).get("id"),
+                    f"client scope {name}",
+                )
 
     def never_audience(self) -> None:
         """No client that exchanges tokens is an audience, the chain holder aside: no
@@ -3617,13 +3704,15 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
     keycloak = tree.get(kcs._KEYCLOAK_NODE, {})
     try:
         register = load_register()
-        from . import people_account  # it imports this module
+        from . import audit_report_account, people_account  # they import this module
 
         plan = build_plan(
             register,
             load_modules(config_dir, repo_root),
             load_pairings(pairings_path(config_dir), register),
-            core_audiences=people_account.core_audiences(tree),
+            core_audiences=people_account.core_audiences(tree)
+            | audit_report_account.core_audiences(tree),
+            platform_pairings=audit_report_account.platform_pairings(tree),
         )
         plan.hardening = rh.load(
             {**root, **keycloak},
@@ -3718,6 +3807,18 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
                 apply=not check,
                 audit=audit,
             )
+            changes += audit_report_account.align(
+                MasterAdmin(base_url, ctx, admin_password).call,
+                keystore(config_dir),
+                enabled=audit_report_account.enabled(tree),
+                apply=not check,
+                audit=audit,
+            )
+            if not check and audit_report_account.enabled(tree):
+                # The inputs of the permission report papaia-audit builds (no secret).
+                write_report_inputs(
+                    MasterAdmin(base_url, ctx, admin_password).call, tree, config_dir
+                )
     except (RealmSyncError, sak.KeyFileError) as exc:
         print(f"Realm sync stopped: {exc}", file=sys.stderr, flush=True)
         return 1
@@ -3750,6 +3851,31 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             print(f"WARNING: {exc}", file=sys.stderr, flush=True)
     print(f"Realm sync complete: {len(changes)} change(s).", flush=True)
     return 0
+
+
+def write_report_inputs(call, tree: dict, config_dir: Path) -> Path:
+    """Write the inputs file of the permission report (lib/access_report.py) from the
+    realm (master admin, GET only), the pairings, the emergency account's record, the
+    delegation lifetime and the recertification period."""
+    from . import access_report, audit_report_account, breakglass  # they import this module
+
+    register = load_register()
+    try:
+        document = access_report.build_inputs(
+            call,
+            pairings=load_pairings(pairings_path(config_dir), register)
+            + audit_report_account.platform_pairings(tree),
+            delegations=delegation_lifetime.report(config_dir),
+            breakglass_ids=breakglass.recorded_ids(breakglass.record_store(config_dir)),
+            period=access_report.period_days(tree.get("", {})),
+        )
+    except (
+        access_report.ReportError,
+        breakglass.BreakglassError,
+        delegation_lifetime.SettingError,
+    ) as exc:
+        raise RealmSyncError(f"permission report inputs: {exc}") from None
+    return access_report.write_inputs(config_dir, document)
 
 
 def apply_keys(tree: dict, config_dir: Path, repo_root: Path, module: str) -> int:

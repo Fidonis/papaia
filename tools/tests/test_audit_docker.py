@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 import yaml
 
-from lib import audit, own_images
+from lib import audit, own_images, service_account_keys
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "src" / "infra" / "audit" / "docker-compose.yml"
@@ -239,19 +239,27 @@ def stack(tmp_path_factory) -> Iterator[Stack]:
     shutil.copyfile(
         st.config / "infra" / "audit" / "service" / "ca.crt", st.certs / "server-ca.crt"
     )
+    # The report account's key folder exists before the start, as `papaia-ctl render`
+    # makes it; Compose must not create it.
+    service_account_keys.KeyStore(st.config / "security" / "service-accounts").generate(
+        "svc-papaia-audit-report"
+    )
     (own,) = [i for i in own_images.load(REPO) if "papaia-audit" in i.services]
     context = own_images.stage_context(REPO, own, root / "build")
     built = _run("docker", "buildx", "build", "--load", "--provenance=false", "-t", IMAGE,
                  "-f", str(context / own.dockerfile), str(context), check=False)
     assert built.returncode == 0, built.stderr
-    halves = list(SUBNET.subnets(new_prefix=SUBNET.prefixlen + 1))
+    quarters = list(SUBNET.subnets(new_prefix=SUBNET.prefixlen + 2))
     st.override.write_text(
         yaml.safe_dump(
             {
                 "services": {name: {"image": IMAGE} for name in own.services},
                 "networks": {
-                    "papaia-audit-net": {"ipam": {"config": [{"subnet": str(halves[0])}]}},
-                    "papaia-audit-ingest-net": {"ipam": {"config": [{"subnet": str(halves[1])}]}},
+                    "papaia-audit-net": {"ipam": {"config": [{"subnet": str(quarters[0])}]}},
+                    "papaia-audit-ingest-net": {
+                        "ipam": {"config": [{"subnet": str(quarters[1])}]}
+                    },
+                    "papaia-audit-idp-net": {"ipam": {"config": [{"subnet": str(quarters[2])}]}},
                 }
             }
         ),

@@ -42,6 +42,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0019](./0019-issue-internal-tls-from-one-platform-ca.md) | Issue the certificates for internal TLS from one platform CA | Proposed | 2026-11-21 |
 | [0020](./0020-mein-bereich-and-the-preference-store-as-core-profile.md) | Ship Mein Bereich and the preference store as the core profile me from one pinned image | Proposed | 2026-11-22 |
 | [0022](./0022-one-security-profile-for-the-whole-installation.md) | Define one security profile for the whole installation in one place | Proposed | 2026-11-21 |
+| [0025](./0025-build-the-permission-report-in-papaia-audit.md) | Build the permission report in papaia-audit with an account that holds view-users only | Proposed | 2026-11-23 |
 
 ## Reserved numbers
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "papaia-access-report.schema.json",
-  "title": "papaia-ctl report permissions --format=json",
+  "title": "papaia-ctl report permissions --format=json (POST /v1/access-reports/build of papaia-audit)",
   "description": "The permission report (format papaia.access-report/1) by person or by system. Rows are sorted by key; digest covers one row's content, checksum the content of all rows and the session limits (not the confirmation state). No content, secret or credential is part of it. Additive changes keep the format; a breaking change increments it.",
   "type": "object",
   "required": ["format", "by", "checksum", "recertification_days", "sessions", "rows"],
@@ -11,6 +11,11 @@
     "by": {"enum": ["person", "system"]},
     "checksum": {"$ref": "#/$defs/digest"},
     "recertification_days": {"type": "integer", "minimum": 30, "maximum": 730},
+    "inputs_written_at": {
+      "description": "When papaia-ctl wrote the inputs file the report was built from (realm sync or start), UTC.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
     "sessions": {
       "type": "object",
       "required": ["offline", "delegations"],

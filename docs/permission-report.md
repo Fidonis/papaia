@@ -12,11 +12,19 @@ papaia-ctl report permissions --by=system --format=csv  --token-file=/run/user/1
 ```
 
 The token is the bearer token of the person who asks, for the audience `papaia-audit`
-(token exchange, like the manager's audit page). It is read from a file or stdin, never
-from the command line, and never printed. The person needs the role `papaia-auditor`;
-`papaia-admin` alone is refused (`403`, exit status 3). papaia-audit records every
-retrieval as the event `inventory_exported`, the refused ones too, before the report is
-printed. Without papaia-audit nothing is printed (exit status 1).
+(token exchange by `papaia-manager`, like the manager's audit page). It is read from a file
+or stdin, never from the command line, and never printed. The person needs the role
+`papaia-auditor`; `papaia-admin` alone is refused (`403`, exit status 3).
+
+papaia-audit builds the report ([ADR 0025](adr/0025-build-the-permission-report-in-papaia-audit.md)):
+it reads the realm with its own account (`view-users` only), records the retrieval as the
+event `inventory_exported`, the refused ones too, and only then answers. papaia-ctl prints
+the answer unchanged and does not sign in as the Keycloak administrator. Without
+papaia-audit, or when papaia-audit cannot build the report, nothing is printed (exit
+status 1). Clients, pairings, service-account owners, session limits and the
+recertification period come from the inputs file the realm sync writes; the report names
+when it was written (`inputs_written_at`). After a change to these, run
+`papaia-ctl realm sync` before the report.
 
 **By person**, one row per account of the `papaia` realm (service accounts are listed under
 their own account): realm roles, client roles by client, groups, the service accounts the

@@ -1,15 +1,17 @@
 """papaia-audit person routes for the permission report and the deletion lock
 (docs/audit.md, "Permission report" and "Deletion lock"; security 1.15 and 1.16).
 
-Standard library only, besides `read` and `core`. The routes are part of the read API
+Standard library only, besides `read`, `report` and `core`. The routes are part of the read API
 (`AccessApi` extends `read.ReadApi`) and answer the same clients
 (`read.AUDITOR_CALLERS`) with the same person tokens; each checks its own role here, on
 every request:
 
-- `POST /v1/access-reports` (`papaia-auditor`): the release of one permission report.
-  The caller states which report (`by`), how many rows and the checksum over its sorted
-  content; the answer is the recertification state of every row. Every call with a valid
-  token is one event `inventory_exported`, also the refused one (403 without the role).
+- `POST /v1/access-reports/build` (`papaia-auditor`): builds the permission report
+  (report.py) from the realm, read as `svc-papaia-audit-report` (idp.py), and the inputs
+  file papaia-ctl writes on `realm sync` and `start`, adds the recertification state of
+  every row and answers with the report as JSON or CSV. Every call with a valid token is
+  one event `inventory_exported` before the answer, also the refused one (403 without
+  the role) and the failed one (503); without the event there is no report.
 - `POST /v1/access-reports/confirmations` (`papaia-admin`): the administration confirms
   one row of the report (recertification) with the digest of the content it saw; nobody
   confirms their own row. Event `approval_changed`.
@@ -34,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from papaia_audit import read
+from papaia_audit import read, report
 from papaia_audit.read import Identity, Request, Response
 
 AUDITOR_ROLE = read.AUDITOR_ROLE
@@ -43,12 +45,14 @@ LEGAL_HOLD_ROLE = "papaia-legal-hold"
 REPORT_WRITER = "papaia-audit/access"
 HOLD_WRITER = "papaia-audit/hold"
 EVENTS = ("inventory_exported", "approval_changed", "legal_hold_set", "legal_hold_lifted")
-REPORT_KINDS = frozenset({"person", "system"})
-REPORT_FIELDS = frozenset({"by", "rows", "checksum"})
+REPORT_KINDS = frozenset(report.KINDS)
+REPORT_FORMATS = frozenset(report.FORMATS)
+BUILD_PATH = "/v1/access-reports/build"
+CONFIRM_PATH = "/v1/access-reports/confirmations"
+BUILD_FIELDS = frozenset({"by", "format"})
 CONFIRM_FIELDS = frozenset({"key", "digest"})
 HOLD_FIELDS = frozenset({"action", "person", "reason"})
 HOLD_ACTIONS = frozenset({"set", "lift"})
-MAX_ROWS = 100_000
 OPEN_LIFETIME = timedelta(hours=24)
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -60,12 +64,18 @@ _REF_ID_RE = re.compile(rf"^{_REF_ID}$")
 _KEY_RE = re.compile(rf"^(person|system):({_REF_ID})$")
 _HOLD_PATH_RE = re.compile(r"^/v1/legal-holds/([0-9a-f-]{36})/(confirm|reject)$")
 # What the host reaches through `docker exec` (papaia-ctl report), with the token on stdin.
-HOST_ROUTES = frozenset({"/v1/access-reports", "/v1/access-reports/confirmations"})
+HOST_ROUTES = frozenset({BUILD_PATH, CONFIRM_PATH})
 HOST_FIELDS = frozenset({"method", "path", "authorization", "body"})
 HOST_CALLER = "papaia-ctl"
 HOST_REQUEST_MAX = read.MAX_TOKEN_BYTES + read.MAX_JSON_BODY + 512
 # The object a confirmed row names in its event; `person` is shown as pseudonym.
 _KEY_OBJECT = {"person": "person", "system": "catalog_entry"}
+_MEDIA = {"json": "application/json; charset=utf-8", "csv": "text/csv; charset=utf-8"}
+
+# Builds the report's snapshot: the checked inputs file and the Admin API reader of the
+# report account (report.collect's `call`); raises report.InputsMissing,
+# report.InputsInvalid or report.SourceError.
+ReportSource = Callable[[], tuple[report.Inputs, report.Call]]
 
 
 def _problem(status: int, code: str, message: str, hint: str) -> read.Problem:
@@ -103,6 +113,21 @@ OWN_HOLD = _problem(
     "Sie können Ihren eigenen Antrag nicht bestätigen. Eine Löschsperre setzen und "
     "aufheben immer zwei Personen.",
     "Bitten Sie eine andere Person mit der Rolle Löschsperre, den Antrag zu bestätigen.",
+)
+NO_INPUTS = read.Problem(
+    503,
+    "upstream_unavailable",
+    "AUDIT-REPORT-INPUTS",
+    "Der Berechtigungsbericht ist auf diesem Server noch nicht eingerichtet.",
+    "Führen Sie auf dem Host „papaia-ctl realm sync“ aus und versuchen Sie es erneut.",
+)
+NO_SOURCE = read.Problem(
+    503,
+    "upstream_unavailable",
+    "AUDIT-REPORT-SOURCE",
+    "Der Berechtigungsbericht kann gerade nicht erstellt werden, weil die Anmeldung "
+    "(Keycloak) nicht antwortet.",
+    "Versuchen Sie es in einigen Minuten erneut.",
 )
 HOLD_EXISTS = _problem(
     409,
@@ -199,7 +224,11 @@ def _exact(document: dict[str, Any], fields: frozenset[str], what: str) -> None:
 
 class AccessApi(read.ReadApi):
     """The read API with the routes of the permission report and the deletion lock; the
-    store also implements `AccessStore`."""
+    store also implements `AccessStore`. Without `report_source` the build answers 503."""
+
+    def __init__(self, *args: Any, report_source: ReportSource | None = None, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.report_source = report_source
 
     def _route(self, request: Request, cid: str) -> Response:
         answer = self.access_route(request, cid)
@@ -210,8 +239,8 @@ class AccessApi(read.ReadApi):
         path, method = request.path, request.method
         decision = _HOLD_PATH_RE.match(path)
         known = {
-            ("POST", "/v1/access-reports"),
-            ("POST", "/v1/access-reports/confirmations"),
+            ("POST", BUILD_PATH),
+            ("POST", CONFIRM_PATH),
             ("GET", "/v1/legal-holds"),
             ("POST", "/v1/legal-holds"),
         }
@@ -220,9 +249,9 @@ class AccessApi(read.ReadApi):
         if request.caller not in read.AUDITOR_CALLERS:
             raise read._not_found()
         identity = self._identity(request)
-        if path == "/v1/access-reports":
-            return self._release_report(identity, request, cid)
-        if path == "/v1/access-reports/confirmations":
+        if path == BUILD_PATH:
+            return self._build_report(identity, request, cid)
+        if path == CONFIRM_PATH:
             return self._confirm_row(identity, request, cid)
         if LEGAL_HOLD_ROLE not in identity.roles:
             raise NO_LEGAL_HOLD
@@ -285,7 +314,40 @@ class AccessApi(read.ReadApi):
 
     # -- permission report ------------------------------------------------
 
-    def _release_report(self, identity: Identity, request: Request, cid: str) -> Response:
+    def _report_event(self, identity: Identity, cid: str, **fields: Any) -> None:
+        self._event(
+            self.store.append_own,
+            "inventory_exported",
+            identity,
+            cid,
+            writer=REPORT_WRITER,
+            effect="read",
+            **fields,
+        )
+
+    def _snapshot(self, identity: Identity, cid: str, by: str) -> tuple[report.Snapshot, int]:
+        """The realm and the inputs file, read now; a failure is an event and a 503."""
+        problem: read.Problem | None = None
+        try:
+            if self.report_source is None:
+                raise report.SourceError("no report source")
+            inputs, call = self.report_source()
+            return report.collect(call, inputs), inputs.recertification_days
+        except (report.InputsMissing, report.InputsInvalid):
+            problem = NO_INPUTS
+        except report.SourceError:
+            problem = NO_SOURCE
+        self._report_event(
+            identity,
+            cid,
+            operation=f"access_report.{by}",
+            object_ref=None,
+            result="error",
+            error_code=problem.code,
+        )
+        raise problem
+
+    def _build_report(self, identity: Identity, request: Request, cid: str) -> Response:
         if AUDITOR_ROLE not in identity.roles:
             # Every retrieval is an event, the refused one too (EXI-PLT-60-A4).
             self._denied(
@@ -299,23 +361,13 @@ class AccessApi(read.ReadApi):
                 effect="read",
             )
         document = read._json_body(request.body)
-        _exact(document, REPORT_FIELDS, "Berichtsart, Zeilenzahl und Prüfsumme")
-        by, rows, checksum = document["by"], document["rows"], document["checksum"]
-        if by not in REPORT_KINDS or type(rows) is not int or not 0 <= rows <= MAX_ROWS:
-            raise read._invalid("Berichtsart, Zeilenzahl und Prüfsumme")
-        if not isinstance(checksum, str) or not _DIGEST_RE.match(checksum):
-            raise read._invalid("Berichtsart, Zeilenzahl und Prüfsumme")
-        self._event(
-            self.store.append_own,
-            "inventory_exported",
-            identity,
-            cid,
-            writer=REPORT_WRITER,
-            operation=f"access_report.{by}",
-            object_ref={"type": "access_report", "id": checksum},
-            effect="read",
-            rows=rows,
-        )
+        _exact(document, BUILD_FIELDS, "Berichtsart und Format")
+        by, fmt = document["by"], document["format"]
+        if not isinstance(by, str) or not isinstance(fmt, str):
+            raise read._invalid("Berichtsart (person, system) und Format (json, csv)")
+        if by not in REPORT_KINDS or fmt not in REPORT_FORMATS:
+            raise read._invalid("Berichtsart (person, system) und Format (json, csv)")
+        snapshot, period = self._snapshot(identity, cid, by)
         confirmations = [
             {
                 "key": item.key,
@@ -325,7 +377,16 @@ class AccessApi(read.ReadApi):
             }
             for item in self.store.confirmations_latest()
         ]
-        return read._json(200, {"confirmations": confirmations})
+        doc = report.build(snapshot, by, confirmations, self._now(), period_days=period)
+        # Recorded before the answer: without the event there is no report.
+        self._report_event(
+            identity,
+            cid,
+            operation=f"access_report.{by}",
+            object_ref={"type": "access_report", "id": doc["checksum"]},
+            rows=len(doc["rows"]),
+        )
+        return Response(200, report.render(doc, fmt).encode("utf-8"), _MEDIA[fmt])
 
     def _confirm_row(self, identity: Identity, request: Request, cid: str) -> Response:
         if ADMIN_ROLE not in identity.roles:

@@ -1653,51 +1653,26 @@ def cmd_service_account_list(args: argparse.Namespace) -> int:
     return service_accounts.list_accounts(tree, config_dir, as_json=args.json)
 
 
-def _report_inputs(args: argparse.Namespace):
-    """The realm's Admin API call, the root env and the config dir of the report."""
-    config_dir = Path(args.config_dir)
-    tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
-    base_url, ctx, admin_password, _ = service_accounts._connection(tree, config_dir)
-    keycloak_role_sync._wait_for_keycloak(base_url, ctx)
-    return realm_sync.MasterAdmin(base_url, ctx, admin_password).call, tree.get("", {}), config_dir
-
-
 def cmd_report_permissions(args: argparse.Namespace) -> int:
-    """`papaia-ctl report permissions`: 0 printed, 3 refused by papaia-audit, 1 Keycloak
-    or papaia-audit unavailable, 2 invalid input."""
+    """`papaia-ctl report permissions`: papaia-audit builds the report (as its read-only
+    report account) and this prints it unchanged; no master admin, no realm read here.
+    0 printed, 3 refused by papaia-audit, 1 papaia-audit unavailable or the report not
+    buildable, 2 invalid input."""
     try:
         token = access_report.read_token(args.token_file)
-        call, root, config_dir = _report_inputs(args)
-        period = access_report.period_days(root)
-        snapshot = access_report.collect(
-            call,
-            service_accounts=service_accounts.describe(call),
-            pairings=realm_sync.load_pairings(
-                realm_sync.pairings_path(config_dir), realm_sync.load_register()
-            ),
-            delegations=delegation_lifetime.report(config_dir),
-            breakglass_ids=breakglass.recorded_ids(breakglass.record_store(config_dir)),
-        )
         return access_report.run(
-            snapshot,
             args.by,
             args.format,
             token,
-            access_report.service_gate(config_dir),
+            access_report.service_gate(Path(args.config_dir)),
             sys.stdout,
-            period=period,
         )
     except access_report.AuditUnavailable as exc:
         print(f"papaia-audit unavailable: {exc}", file=sys.stderr, flush=True)
         return 1
-    except (access_report.ReportError, service_accounts.RotationError,
-            realm_sync.RealmSyncError, delegation_lifetime.SettingError,
-            breakglass.BreakglassError) as exc:
+    except access_report.ReportError as exc:
         print(f"Report refused: {exc}", file=sys.stderr, flush=True)
         return 2
-    except (TimeoutError, OSError) as exc:
-        print(f"Keycloak not reachable: {type(exc).__name__}", file=sys.stderr, flush=True)
-        return 1
 
 
 def cmd_report_confirm(args: argparse.Namespace) -> int:

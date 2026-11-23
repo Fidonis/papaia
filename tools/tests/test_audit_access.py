@@ -1,10 +1,13 @@
-"""papaia-audit person routes of CORE-041 without containers
-(src/infra/audit/papaia_audit/access.py): the gate of the permission report (role
-`papaia-auditor`, one event per retrieval, also a refused one), the recertification of
-report rows (role `papaia-admin`), and the deletion lock set and lifted by two persons
-with `papaia-legal-hold`, each change in one transaction with its own event.
+"""papaia-audit person routes without containers (src/infra/audit/papaia_audit/access.py):
+the build of the permission report (role `papaia-auditor`, one event per retrieval
+before the answer, also a refused and a failed one; no report without its event), the
+recertification of report rows (role `papaia-admin`), and the deletion lock set and
+lifted by two persons with `papaia-legal-hold`, each change in one transaction with its
+own event. The wiring of the report account (key mount, network shared with Keycloak
+alone) is checked in the compose files.
 
-Tokens and the store double come from test_audit_read.py.
+Tokens and the store double come from test_audit_read.py, the realm double and the
+inputs file of the report from test_audit_report.py.
 """
 
 from __future__ import annotations
@@ -12,15 +15,17 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 import yaml
+from jsonschema import Draft202012Validator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "infra" / "audit"))
 
 from papaia_audit import access, read  # noqa: E402
+from papaia_audit import report as rp  # noqa: E402
 from test_audit_read import (  # noqa: E402
     ANNA,
     BERT,
@@ -38,11 +43,12 @@ from test_audit_read import (  # noqa: E402
     _event,
     signer,  # noqa: F401  (fixture)
 )
+from test_audit_report import BEN, FakeRealm, inputs_document  # noqa: E402
 
 from lib import audit  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
-CHECKSUM = "sha256:" + "ab" * 32
+REPORT_SCHEMA = REPO / "tools" / "schemas" / "access-report.schema.json"
 DIGEST = "sha256:" + "cd" * 32
 REASON = "Anordnung der Rechtsabteilung zum Verfahren 2026-031, Sicherung"
 LEGAL = ("papaia-legal-hold",)
@@ -120,12 +126,56 @@ def store() -> AccessStore:
     return AccessStore()
 
 
+class ReportSource:
+    """The inputs file and the realm double; `fail` makes the build fail like a missing
+    inputs file or an unreachable Keycloak."""
+
+    def __init__(self) -> None:
+        self.realm = FakeRealm()
+        self.document = inputs_document()
+        self.fail: Exception | None = None
+
+    def __call__(self):
+        if self.fail is not None:
+            raise self.fail
+        return rp.parse_inputs(self.document), self.realm.call
+
+
 class AccessCaller(Api):
     def __init__(self, signer, store) -> None:  # noqa: F811
         super().__init__(signer, store)
+        self.source = ReportSource()
         self.api = access.AccessApi(
-            store, lambda: signer.keys, PSEUDONYM_KEY, CHECK, clock=lambda: self.now
+            store,
+            lambda: signer.keys,
+            PSEUDONYM_KEY,
+            CHECK,
+            clock=lambda: self.now,
+            report_source=self.source,
         )
+        self.content_type = ""
+
+    def call(self, method, path, sub=DANA, **kwargs):
+        captured = {}
+        handle = self.api.handle
+
+        def keep(request):
+            response = handle(request)
+            captured["response"] = response
+            return response
+
+        self.api.handle = keep
+        try:
+            if path != access.BUILD_PATH:
+                return super().call(method, path, sub, **kwargs)
+            try:
+                return super().call(method, path, sub, **kwargs)
+            except ValueError:  # CSV: not JSON
+                response = captured["response"]
+                return response.status, response.body.decode("utf-8")
+        finally:
+            self.content_type = captured["response"].content_type if captured else ""
+            del self.api.handle
 
 
 @pytest.fixture
@@ -133,10 +183,9 @@ def api(signer, store) -> Api:  # noqa: F811
     return AccessCaller(signer, store)
 
 
-def _report(api: Api, sub: str = DANA, roles=("papaia-auditor",), by: str = "person", **kw):
-    body = {"by": by, "rows": 3, "checksum": CHECKSUM}
-    body.update(kw)
-    return api.call("POST", "/v1/access-reports", sub, roles=roles, body=body, caller="papaia-ctl")
+def _build(api: Api, sub: str = DANA, roles=("papaia-auditor",), body=None, caller="papaia-ctl"):
+    body = {"by": "person", "format": "json"} if body is None else body
+    return api.call("POST", access.BUILD_PATH, sub, roles=roles, body=body, caller=caller)
 
 
 def _valid(event: dict) -> None:
@@ -146,16 +195,26 @@ def _valid(event: dict) -> None:
     assert not errors, errors
 
 
+def _rows(doc: dict) -> dict[str, dict]:
+    return {row["key"]: row for row in doc["rows"]}
+
+
 # ─────────────────────────────────────────────────────────────────────────
-# permission report: the gate
+# permission report: the build
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_an_auditor_retrieves_the_report_and_each_retrieval_is_an_event(api):
+@pytest.mark.parametrize("caller", ["papaia-ctl", "papaia-manager"])
+def test_an_auditor_gets_the_report_and_each_retrieval_is_an_event(api, caller):
+    schema = json.loads(REPORT_SCHEMA.read_text(encoding="utf-8"))
+    checksums = []
     for _ in range(2):
-        status, answer = _report(api)
-        assert status == 200, answer
-        assert answer == {"confirmations": []}
+        status, doc = _build(api, caller=caller)
+        assert status == 200, doc
+        assert api.content_type.startswith("application/json")
+        assert not list(Draft202012Validator(schema).iter_errors(doc))
+        checksums.append(doc["checksum"])
+    assert checksums[0] == checksums[1]
 
     events = api.store.own("inventory_exported")
     assert len(events) == 2
@@ -163,58 +222,125 @@ def test_an_auditor_retrieves_the_report_and_each_retrieval_is_an_event(api):
         _valid(event)
         assert event["sub"] == DANA and event["result"] == "allowed"
         assert event["operation"] == "access_report.person"
-        assert event["object_ref"] == {"type": "access_report", "id": CHECKSUM}
-        assert event["detail"] == {"rows": 3} and event["effect"] == "read"
+        assert event["object_ref"] == {"type": "access_report", "id": checksums[0]}
+        assert event["detail"] == {"rows": 4} and event["effect"] == "read"
         assert event["writer"] == "papaia-audit/access"
+
+
+def test_after_a_role_is_taken_from_ben_the_third_report_differs_in_his_row_only(api):
+    first = _build(api)[1]
+    second = _build(api)[1]
+    api.source.realm.roles[BEN] = (["user"], {"studio": ["studio-member"]})
+    third = _build(api)[1]
+
+    assert first["checksum"] == second["checksum"] != third["checksum"]
+    before, after = _rows(first), _rows(third)
+    assert [key for key in before if before[key] != after[key]] == [f"person:{BEN}"]
+
+
+def test_the_csv_report_is_the_rendered_document(api):
+    status, text = _build(api, body={"by": "system", "format": "csv"})
+    assert status == 200 and api.content_type.startswith("text/csv")
+    doc = rp.build(
+        rp.collect(api.source.realm.call, rp.parse_inputs(api.source.document)),
+        "system",
+        [],
+        datetime.fromtimestamp(api.now, tz=timezone.utc),
+    )
+    assert text == rp.render(doc, "csv")
+    (event,) = api.store.own("inventory_exported")
+    assert event["operation"] == "access_report.system"
 
 
 @pytest.mark.parametrize(
     "roles", [(), ("papaia-admin",), ("papaia-operator", "papaia-admin"), ("papaia-legal-hold",)]
 )
 def test_without_the_auditor_role_the_report_is_refused_and_still_audited(api, roles):
-    status, problem = _report(api, DORA, roles)
+    status, problem = _build(api, DORA, roles)
 
     assert status == 403 and problem["code"] == "AUDIT-REPORT-403"
     (event,) = api.store.own("inventory_exported")
     _valid(event)
     assert event["result"] == "denied" and event["sub"] == DORA
     assert event["error_code"] == "AUDIT-REPORT-403"
+    assert api.source.realm.calls == []  # the realm is not read for a refused call
 
 
-def test_the_report_gate_answers_only_the_reading_clients(api):
-    status, _ = api.call(
-        "POST",
-        "/v1/access-reports",
-        DANA,
-        body={"by": "person", "rows": 1, "checksum": CHECKSUM},
-        caller="papaia-flow",
-    )
+def test_the_build_answers_only_the_reading_clients(api):
+    status, _ = _build(api, caller="papaia-flow")
     assert status == 404 and api.store.own() == []
+
+
+def test_the_removed_release_route_is_gone(api):
+    body = {"by": "person", "rows": 1, "checksum": "sha256:" + "ab" * 32}
+    for caller in ("papaia-ctl", "papaia-manager"):
+        status, _ = api.call("POST", "/v1/access-reports", DANA, body=body, caller=caller)
+        assert status == 404
+    assert api.store.own() == []
+
+
+def test_a_service_account_token_is_refused(api):
+    status, problem = api.call(
+        "POST",
+        access.BUILD_PATH,
+        DANA,
+        body={"by": "person", "format": "json"},
+        caller="papaia-manager",
+        sid=None,
+    )
+    assert status == 401 and problem["code"] == "AUDIT-AUTH-401"
+    assert api.store.own() == []
 
 
 @pytest.mark.parametrize(
     "body",
     [
-        {"by": "people", "rows": 1, "checksum": CHECKSUM},
-        {"by": "person", "rows": -1, "checksum": CHECKSUM},
-        {"by": "person", "rows": True, "checksum": CHECKSUM},
-        {"by": "person", "rows": 100_001, "checksum": CHECKSUM},
-        {"by": "person", "rows": 1, "checksum": "ab" * 32},
-        {"by": "person", "rows": 1, "checksum": CHECKSUM, "extra": 1},
-        {"by": "person", "rows": 1},
+        {"by": "people", "format": "json"},
+        {"by": "person", "format": "xml"},
+        {"by": "person", "format": "json", "extra": 1},
+        {"by": "person", "format": "json", "rows": 1},
+        {"by": "person"},
+        {"by": ["person"], "format": "json"},
+        {},
     ],
 )
-def test_the_report_gate_validates_its_body(api, body):
-    status, problem = api.call("POST", "/v1/access-reports", DANA, body=body, caller="papaia-ctl")
+def test_the_build_validates_its_body(api, body):
+    status, problem = _build(api, body=body)
     assert status == 400 and problem["class"] == "invalid_input"
     assert api.store.own() == []
+    assert api.source.realm.calls == []
+
+
+def test_without_its_event_there_is_no_report(api):
+    api.store.fail_own = True
+    status, problem = _build(api)
+    assert status == 503 and "rows" not in problem
+
+
+@pytest.mark.parametrize(
+    "failure, code",
+    [
+        (rp.InputsMissing("access-report-inputs.json"), "AUDIT-REPORT-INPUTS"),
+        (rp.InputsInvalid("the inputs file is not usable: fields"), "AUDIT-REPORT-INPUTS"),
+        (rp.SourceError("Keycloak answered HTTP 403"), "AUDIT-REPORT-SOURCE"),
+    ],
+)
+def test_a_report_that_cannot_be_built_is_a_503_and_an_event(api, failure, code):
+    api.source.fail = failure
+    status, problem = _build(api)
+    assert status == 503 and problem["code"] == code and problem["retryable"] is True
+    if code == "AUDIT-REPORT-INPUTS":
+        assert "papaia-ctl realm sync" in problem["hint"]
+    (event,) = api.store.own("inventory_exported")
+    _valid(event)
+    assert event["result"] == "error" and event["error_code"] == code
 
 
 def test_the_host_reaches_only_the_report_routes_with_the_token_on_stdin(api, signer):  # noqa: F811
     token = signer(_claims(DANA, ("papaia-auditor",)))
-    body = {"by": "system", "rows": 0, "checksum": CHECKSUM}
+    body = {"by": "system", "format": "json"}
     text = json.dumps(
-        {"method": "POST", "path": "/v1/access-reports", "authorization": f"Bearer {token}",
+        {"method": "POST", "path": access.BUILD_PATH, "authorization": f"Bearer {token}",
          "body": body}
     )
     request = access.host_request(text)
@@ -222,21 +348,16 @@ def test_the_host_reaches_only_the_report_routes_with_the_token_on_stdin(api, si
     response = api.api.handle(request)
     assert response.status == 200
     for bad in (
-        text.replace("/v1/access-reports", "/v1/events"),
+        text.replace(access.BUILD_PATH, "/v1/events"),
+        text.replace(access.BUILD_PATH, "/v1/access-reports"),
         text.replace('"POST"', '"GET"'),
-        json.dumps({"method": "POST", "path": "/v1/access-reports", "body": body}),
+        json.dumps({"method": "POST", "path": access.BUILD_PATH, "body": body}),
         text[:-1] + ', "caller": "papaia-manager"}',
         "[]",
         "{",
         " " * (access.HOST_REQUEST_MAX + 1),
     ):
         assert access.host_request(bad) is None, bad
-
-
-def test_without_its_event_the_report_is_not_released(api):
-    api.store.fail_own = True
-    status, _ = _report(api)
-    assert status == 503
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -266,13 +387,18 @@ def test_the_administration_confirms_a_row_and_the_report_carries_the_date(api):
     assert event["object_ref"] == {"type": "person", "id": BERT}
     assert event["time"] == answer["confirmed_at"]
 
-    status, report = _report(api)
-    assert status == 200
-    (row,) = report["confirmations"]
-    assert row["key"] == f"person:{BERT}" and row["digest"] == DIGEST
-    assert row["confirmed_at"] == answer["confirmed_at"]
-    # Who confirmed is shown as pseudonym, never as sub.
-    assert row["confirmed_by"] == read.pseudonym(PSEUDONYM_KEY, DORA)
+    # The report carries the date of the latest confirmation of a row (Ben's below).
+    ben = _rows(_build(api)[1])[f"person:{BEN}"]
+    assert ben["last_confirmed_at"] is None and ben["confirmation_due"] is True
+    status, answer = _confirm(api, f"person:{BEN}", digest=ben["digest"])
+    assert status == 201
+    ben = _rows(_build(api)[1])[f"person:{BEN}"]
+    assert ben["last_confirmed_at"] == answer["confirmed_at"]
+    assert ben["confirmation_due"] is False
+    # A period from the inputs file shorter than the confirmation's age marks it due.
+    api.now += 40 * 86400
+    api.source.document = inputs_document(recertification_days=30)
+    assert _rows(_build(api)[1])[f"person:{BEN}"]["confirmation_due"] is True
 
 
 def test_a_system_row_is_confirmed_with_its_catalog_entry(api):
@@ -618,3 +744,72 @@ def test_the_events_use_names_of_the_vendored_schema_and_are_documented():
     docs = REPO.joinpath("docs", "audit.md").read_text(encoding="utf-8")
     for route in ("/v1/access-reports", "/v1/access-reports/confirmations", "/v1/legal-holds"):
         assert f"`POST {route}" in docs or f"POST {route}" in docs, route
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# the report account's wiring
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _compose_files() -> dict[Path, dict]:
+    return {
+        path: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted((REPO / "src").rglob("docker-compose*.yml"))
+    }
+
+
+def test_the_idp_network_is_shared_by_keycloak_and_papaia_audit_alone():
+    compose = yaml.safe_load((SERVICE_DIR / "docker-compose.yml").read_text(encoding="utf-8"))
+    assert compose["networks"]["papaia-audit-idp-net"] == {"driver": "bridge", "internal": True}
+    on_it = sorted(
+        name
+        for doc in _compose_files().values()
+        for name, service in (doc.get("services") or {}).items()
+        if "papaia-audit-idp-net" in (service.get("networks") or [])
+    )
+    assert on_it == ["keycloak", "papaia-audit"]
+    services = compose["services"]
+    assert "papaia-audit-idp-net" in services["papaia-audit"]["networks"]
+    for name in ("papaia-audit-db", "papaia-audit-schema"):
+        assert "papaia-audit-idp-net" not in services[name]["networks"]
+    env = services["papaia-audit"]["environment"]
+    assert env["PAPAIA_AUDIT_KEYCLOAK_URL"] == "https://keycloak:8443"
+
+
+def test_the_report_key_is_mounted_read_only_into_papaia_audit_alone():
+    source = "${PAPAIA_CONFIG_DIR}/security/service-accounts/svc-papaia-audit-report"
+    holders = []
+    for doc in _compose_files().values():
+        for name, service in (doc.get("services") or {}).items():
+            for mount in service.get("volumes") or []:
+                text = mount if isinstance(mount, str) else mount.get("source", "")
+                if "svc-papaia-audit-report" in text:
+                    holders.append(name)
+                    assert mount["source"] == source and mount["read_only"] is True
+                    assert mount["bind"]["create_host_path"] is False
+                    assert mount["target"] == "/run/papaia-audit/report-account"
+    assert holders == ["papaia-audit"]
+
+
+def test_the_comm_matrix_names_the_one_new_route():
+    matrix = yaml.safe_load((REPO / "security" / "comm-matrix.yaml").read_text(encoding="utf-8"))
+    rows = [r for r in matrix["rows"] if r["from_network"] == "papaia-audit-idp-net"]
+    assert len(rows) == 1
+    (row,) = rows
+    assert (row["from"], row["to"], row["ports"], row["direction"]) == (
+        "papaia-audit",
+        "keycloak",
+        [8443],
+        "internal",
+    )
+    assert not [r for r in matrix["rows"] if r["from"] == "papaia-audit" and r is not row
+                and r["direction"] != "outbound"]
+
+
+def test_the_image_carries_the_report_builder_and_the_idp_client():
+    docker = (SERVICE_DIR / "Dockerfile").read_text(encoding="utf-8")
+    images = yaml.safe_load((REPO / "compat" / "own-images.yaml").read_text(encoding="utf-8"))
+    (audit_image,) = [i for i in images["images"] if i["name"] == "ghcr.io/fidonis/papaia-audit"]
+    for name in ("report.py", "idp.py"):
+        assert f"papaia_audit/{name}" in docker
+        assert f"src/infra/audit/papaia_audit/{name}" in audit_image["inputs"]

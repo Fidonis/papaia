@@ -423,7 +423,12 @@ def generate_siem_override(config_dir: Path) -> Path | None:
                 "environment": {
                     "PAPAIA_AUDIT_SIEM_PROXY": f"http://{egress.alias(SERVICE)}:{egress.PORT}",
                 },
-                "networks": {"papaia-audit-net": {}, "papaia-audit-ingest-net": {}, net: {}},
+                "networks": {
+                    "papaia-audit-net": {},
+                    "papaia-audit-ingest-net": {},
+                    "papaia-audit-idp-net": {},
+                    net: {},
+                },
             },
             egress.SERVICE: {
                 "networks": {

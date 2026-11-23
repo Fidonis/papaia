@@ -58,6 +58,8 @@ services:
       - papaia-net
       # Shared with papaia-lifecycle alone (profile `lifecycle`); internal.
       - papaia-lifecycle-net
+      # Shared with papaia-audit alone (permission report); internal.
+      - papaia-audit-idp-net
     labels:
       de.fidonis.module: papaia-keycloak
       de.fidonis.role:   identity-provider

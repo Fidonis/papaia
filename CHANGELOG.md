@@ -12,6 +12,20 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Permission report built by papaia-audit
+
+- papaia-audit builds the permission report: `POST /v1/access-reports/build` with
+  `{"by", "format"}` for a person with `papaia-auditor` (token exchange by
+  `papaia-manager`). `papaia-ctl report permissions` calls it and no longer signs in as the
+  Keycloak administrator.
+- **Removed:** `POST /v1/access-reports` (release of a report built on the host). A client
+  that still calls it gets `404`.
+- New core account `svc-papaia-audit-report` (profile `audit`) with `realm-management`
+  `view-users` only, the internal network `papaia-audit-idp-net` between papaia-audit and
+  Keycloak (row K-21), and the inputs file `infra/audit/service/access-report-inputs.json`
+  written by `papaia-ctl realm sync`. Run `papaia-ctl realm sync` after the upgrade before
+  the first report.
+
 ### Upgrade notice: installations with Paperless
 
 This is the first release that puts the gate `paperless-gate` in front of Paperless.

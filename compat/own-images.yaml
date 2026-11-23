@@ -35,7 +35,9 @@ images:
       - src/infra/audit/papaia_audit/__main__.py
       - src/infra/audit/papaia_audit/access.py
       - src/infra/audit/papaia_audit/core.py
+      - src/infra/audit/papaia_audit/idp.py
       - src/infra/audit/papaia_audit/read.py
+      - src/infra/audit/papaia_audit/report.py
       - src/infra/audit/papaia_audit/retention.py
       - src/infra/audit/papaia_audit/siem.py
       - src/infra/audit/papaia_audit/watch.py

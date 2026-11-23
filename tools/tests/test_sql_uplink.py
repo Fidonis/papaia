@@ -94,7 +94,7 @@ def test_the_shipped_matrix_is_valid_and_lists_every_row():
     rows = comm_matrix.load(REPO)
 
     ids = [r["id"] for r in rows]
-    assert ids == [f"K-{n:02d}" for n in range(1, 21)]
+    assert ids == [f"K-{n:02d}" for n in range(1, 22)]
     for row in rows:
         if row["direction"] == "outbound":
             assert row["via"] in ("egress", "direct"), row["id"]

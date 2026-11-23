@@ -270,3 +270,17 @@ rows:
     when: a model route outside the stack (the hosted test model, docs/hosted-test-model.md)
     required: false
     via: egress
+
+  - id: K-21
+    direction: internal
+    from: papaia-audit
+    from_network: papaia-audit-idp-net
+    to: keycloak
+    ports: [8443]
+    protocol: tcp
+    purpose: >-
+      the permission report: the realm read as svc-papaia-audit-report (view-users,
+      GET only); the network is shared by Keycloak and papaia-audit alone and has no
+      route out
+    when: always (profile audit, bundled Keycloak)
+    required: true

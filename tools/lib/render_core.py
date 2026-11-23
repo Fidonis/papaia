@@ -293,6 +293,7 @@ def render(config_dir: Path, repo_root: Path) -> None:
     except (federation.FederationError, service_account_keys.KeyFileError) as exc:
         raise RenderError(str(exc)) from exc
     ensure_people_key(config_dir)
+    ensure_audit_report_key(config_dir)
 
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
@@ -349,6 +350,23 @@ def ensure_people_key(config_dir: Path) -> None:
     try:
         if keys.public_jwk(PEOPLE_ACCOUNT) is None:
             keys.generate(PEOPLE_ACCOUNT)
+    except service_account_keys.KeyFileError as exc:
+        raise RenderError(str(exc)) from exc
+
+
+AUDIT_REPORT_ACCOUNT = "svc-papaia-audit-report"
+
+
+def ensure_audit_report_key(config_dir: Path) -> None:
+    """With the `audit` profile, the key pair of svc-papaia-audit-report exists before
+    `up`: papaia-audit mounts its folder and Compose must not create it. The realm sync
+    registers the public key after the start."""
+    if "audit" not in _active_profiles(config_dir):
+        return
+    keys = service_account_keys.KeyStore(config_dir / "security" / "service-accounts")
+    try:
+        if keys.public_jwk(AUDIT_REPORT_ACCOUNT) is None:
+            keys.generate(AUDIT_REPORT_ACCOUNT)
     except service_account_keys.KeyFileError as exc:
         raise RenderError(str(exc)) from exc
 

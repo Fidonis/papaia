@@ -15,15 +15,21 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import urllib.error
+from pathlib import Path
 
 import pytest
 
-from lib import access_report as ar
-from lib import breakglass as bg
-from lib import lifecycle_account as la
-from lib import realm_sync as rs
-from tests.test_realm_sync_live import PASSWORD, URL, _admin
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "infra" / "audit"))
+
+from papaia_audit import report as rp  # noqa: E402
+
+from lib import breakglass as bg  # noqa: E402
+from lib import lifecycle_account as la  # noqa: E402
+from lib import realm_sync as rs  # noqa: E402
+from tests.test_audit_report import inputs_document  # noqa: E402
+from tests.test_realm_sync_live import PASSWORD, URL, _admin  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not (URL and PASSWORD),
@@ -95,13 +101,12 @@ def test_create_status_rotate_and_the_report_mark_on_the_pinned_keycloak(realm):
         bg.create(_call, _Audit(), io.StringIO(), keys, records=records,
                   address="betrieb@example.test")
 
-    snapshot = ar.collect(
-        _call,
-        service_accounts=[],
-        pairings=[],
-        delegations={},
-        breakglass_ids=bg.recorded_ids(records),
+    inputs = rp.parse_inputs(
+        inputs_document(
+            module_clients=[], breakglass_ids=sorted(bg.recorded_ids(records))
+        )
     )
+    snapshot = rp.collect(lambda path: _call("GET", path), inputs)
     marked = {p["username"]: p["breakglass"] for p in snapshot.persons}
     assert marked[bg.USERNAME] is True
     assert json.dumps(status).count(uid) == 0  # the status names no id

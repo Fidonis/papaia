@@ -22,6 +22,13 @@
 #     passwords; the service never holds it.
 #   - Retention (role audit_retention, only audit.prune) shortens a chain only at its
 #     start and never past a deletion lock or an event a SIEM target has not taken.
+#   - The permission report (POST /v1/access-reports/build) is built here: the realm is
+#     read as svc-papaia-audit-report (realm-management view-users only, GET only) on
+#     papaia-audit-idp-net (internal, shared with Keycloak alone); its key is mounted
+#     read-only from $PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-audit-report
+#     into this service alone. The inputs file service/access-report-inputs.json and
+#     service/keycloak-ca.crt (the local CA certificate, to check Keycloak's TLS) come
+#     with the service folder; papaia-ctl writes both on realm sync and start.
 #   - The only way out is the SIEM export through papaia-egress (generated override,
 #     only while PAPAIA_AUDIT_SIEM_TARGET is set); the signed chain heads go to
 #     $PAPAIA_BACKUP_DIR/audit-heads, the one folder of the backup target it sees.
@@ -62,7 +69,7 @@ services:
   # empty database and sets the service role passwords. The only holder of the owner's
   # password besides the database.
   papaia-audit-schema:
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:baba99470151efe7e115e0614f01b1820ca138feb9e45f191aca0dd11b560c29
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:1188d3b5560c432274fabf5fd6925a23ad8f6b6176d821d4e206158a8a5f6d2b
     restart: "no"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["schema"]
@@ -88,7 +95,7 @@ services:
   papaia-audit:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml).
     # Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:baba99470151efe7e115e0614f01b1820ca138feb9e45f191aca0dd11b560c29
+    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:1188d3b5560c432274fabf5fd6925a23ad8f6b6176d821d4e206158a8a5f6d2b
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
     command: ["serve"]
@@ -100,6 +107,11 @@ services:
       PAPAIA_AUDIT_SIEM_PEN: ${PAPAIA_AUDIT_SIEM_PEN:-32473}
       PAPAIA_AUDIT_SIEM_IDENTITY: ${PAPAIA_AUDIT_SIEM_IDENTITY:-pseudonym}
       PAPAIA_AUDIT_SIEM_BASIS: ${PAPAIA_AUDIT_SIEM_BASIS:-}
+      # The permission report reads the realm as svc-papaia-audit-report (idp.py).
+      PAPAIA_AUDIT_KEYCLOAK_URL: https://keycloak:8443
+      # A copy of the local CA certificate in the service folder (realm sync writes it).
+      PAPAIA_AUDIT_KEYCLOAK_CA: /etc/papaia-audit/keycloak-ca.crt
+      PAPAIA_AUDIT_REPORT_ACCOUNT_DIR: /run/papaia-audit/report-account
       # The warning mail (relay, operations address and sender) comes from the generated
       # SIEM override, only with a target, PAPAIA_OPERATIONS_MAIL and the smtp profile.
     secrets:
@@ -117,6 +129,15 @@ services:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/infra/audit/service
         target: /etc/papaia-audit
+        read_only: true
+        bind:
+          create_host_path: false
+      # The key of svc-papaia-audit-report, mounted into this service alone. The
+      # folder, not the file: a rotation replaces the key file atomically. `papaia-ctl`
+      # makes the key pair before the start; Compose must not create the folder.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/security/service-accounts/svc-papaia-audit-report
+        target: /run/papaia-audit/report-account
         read_only: true
         bind:
           create_host_path: false
@@ -151,6 +172,8 @@ services:
     networks:
       - papaia-audit-net
       - papaia-audit-ingest-net
+      # Keycloak alone, for the permission report (K-21).
+      - papaia-audit-idp-net
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     labels:
@@ -184,6 +207,10 @@ networks:
     internal: true
   # papaia-audit and the audit sources; no route out.
   papaia-audit-ingest-net:
+    driver: bridge
+    internal: true
+  # papaia-audit and Keycloak alone: the report account reads the realm; no route out.
+  papaia-audit-idp-net:
     driver: bridge
     internal: true
 

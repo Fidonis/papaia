@@ -931,12 +931,15 @@ def test_the_service_gets_the_retention_role_the_settings_and_the_heads_folder()
     assert env["PAPAIA_AUDIT_RETENTION_MONTHS"] == "${PAPAIA_AUDIT_RETENTION_MONTHS:-12}"
     assert set(env) == {"PAPAIA_AUDIT_RETENTION_MONTHS", "PAPAIA_AUDIT_SIEM_TARGET",
                         "PAPAIA_AUDIT_SIEM_PEN", "PAPAIA_AUDIT_SIEM_IDENTITY",
-                        "PAPAIA_AUDIT_SIEM_BASIS"}
+                        "PAPAIA_AUDIT_SIEM_BASIS", "PAPAIA_AUDIT_KEYCLOAK_URL",
+                        "PAPAIA_AUDIT_KEYCLOAK_CA", "PAPAIA_AUDIT_REPORT_ACCOUNT_DIR"}
     (heads,) = [m for m in service["volumes"] if m["target"] == "/var/lib/papaia-audit/heads"]
     assert heads["source"] == "${PAPAIA_BACKUP_DIR}/audit-heads"
     assert heads["bind"]["create_host_path"] is False
-    # Still no way out of its internal networks without a SIEM target.
-    assert set(service["networks"]) == {"papaia-audit-net", "papaia-audit-ingest-net"}
+    # Still no way out of its internal networks without a SIEM target; the third one is
+    # shared with Keycloak alone (permission report).
+    assert set(service["networks"]) == {"papaia-audit-net", "papaia-audit-ingest-net",
+                                        "papaia-audit-idp-net"}
 
 
 def test_the_store_upgrade_gives_retention_only_prune_and_its_own_events():
@@ -1035,7 +1038,7 @@ def test_a_siem_target_puts_papaia_audit_behind_papaia_egress_only(tmp_path):
     override = yaml.safe_load(path.read_text(encoding="utf-8"))
     service = override["services"]["papaia-audit"]
     assert set(service["networks"]) == {"papaia-audit-net", "papaia-audit-ingest-net",
-                                        "papaia-papaia-audit-egress"}
+                                        "papaia-audit-idp-net", "papaia-papaia-audit-egress"}
     assert service["environment"] == {
         "PAPAIA_AUDIT_SIEM_PROXY": "http://egress-papaia-audit:3128"
     }

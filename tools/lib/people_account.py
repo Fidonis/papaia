@@ -23,6 +23,9 @@ alone, effect x) is part of the plan
 of `realm_sync` while the profile is active (`core_audiences`).
 
 Without the profile the client and its key folder are removed.
+
+The same alignment keeps `svc-papaia-audit-report` (lib/audit_report_account.py), with
+its own roles; `CoreAccount` names what differs.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import json
 import urllib.parse
+from dataclasses import dataclass
 
 from . import realm_sync as rs
 from . import service_account_keys as sak
@@ -38,6 +42,27 @@ CLIENT_ID = "svc-papaia-people"
 AUDIENCE = "papaia-people"
 PROFILE = "people"
 DIRECTORY_ROLES = ("query-users", "view-users", "query-groups")
+
+
+@dataclass(frozen=True)
+class CoreAccount:
+    """A service account of the core: client id, the profile it exists under, its
+    `realm-management` roles (exactly these), purpose and the prefix of its audit rows."""
+
+    client_id: str
+    profile: str
+    roles: tuple[str, ...]
+    purpose: dict
+    operation_prefix: str
+
+
+PEOPLE = CoreAccount(
+    CLIENT_ID,
+    PROFILE,
+    DIRECTORY_ROLES,
+    {"de": "Kern-Personensuche", "en": "Core people lookup"},
+    "people",
+)
 
 _FLAGS = {
     "protocol": "openid-connect",
@@ -56,11 +81,6 @@ _ATTRIBUTES = {
     "token.endpoint.auth.signing.alg": sak.ALGORITHM,
     rs.TOKEN_EXCHANGE: "false",
     rs.KIND: rs.SERVICE_ACCOUNT,
-    "papaia.purpose": json.dumps(
-        {"de": "Kern-Personensuche", "en": "Core people lookup"},
-        sort_keys=True,
-        ensure_ascii=False,
-    ),
 }
 
 
@@ -74,30 +94,40 @@ def core_audiences(tree: dict) -> frozenset[str]:
     return frozenset({AUDIENCE}) if enabled(tree) else frozenset()
 
 
-def _change(name: str, action: str, operation: str, effect: str = "write") -> rs.Change:
-    return rs.Change(rs.SERVICE_ACCOUNT, name, action, f"people_{operation}", effect=effect)
-
-
 class _Align:
-    def __init__(self, call, keys: sak.KeyStore, apply: bool, audit) -> None:
+    def __init__(self, call, keys: sak.KeyStore, apply: bool, audit, account: CoreAccount):
         self.call, self.keys, self.apply = call, keys, apply
+        self.account = account
         self.act = rs._Actions(call, apply, audit, master=True)
 
+    def _change(self, action: str, operation: str, effect: str = "write") -> rs.Change:
+        return rs.Change(
+            rs.SERVICE_ACCOUNT,
+            self.account.client_id,
+            action,
+            f"{self.account.operation_prefix}_{operation}",
+            effect=effect,
+        )
+
     def _client(self) -> dict | None:
-        found = self.call("GET", f"/clients?clientId={urllib.parse.quote(CLIENT_ID)}") or []
+        client_id = urllib.parse.quote(self.account.client_id)
+        found = self.call("GET", f"/clients?clientId={client_id}") or []
         return found[0] if found else None
 
     def client(self) -> dict | None:
         current = self._client()
-        jwk = self.keys.public_jwk(CLIENT_ID)
+        jwk = self.keys.public_jwk(self.account.client_id)
         if jwk is None and self.apply:
-            jwk = self.keys.generate(CLIENT_ID)
+            jwk = self.keys.generate(self.account.client_id)
         attributes = dict(_ATTRIBUTES)
+        attributes["papaia.purpose"] = json.dumps(
+            self.account.purpose, sort_keys=True, ensure_ascii=False
+        )
         attributes["jwks.string"] = json.dumps({"keys": [jwk]}, sort_keys=True) if jwk else ""
-        wanted = dict(_FLAGS, clientId=CLIENT_ID, attributes=attributes)
+        wanted = dict(_FLAGS, clientId=self.account.client_id, attributes=attributes)
         if current is None:
             self.act.do(
-                _change(CLIENT_ID, "created", "client"),
+                self._change("created", "client"),
                 "POST",
                 "/clients",
                 dict(wanted, attributes=dict(attributes, **{rs.ROTATED_AT: rs._now_iso()})),
@@ -117,7 +147,7 @@ class _Align:
             if "jwks.string" in off:
                 merged[rs.ROTATED_AT] = rs._now_iso()
             self.act.do(
-                _change(CLIENT_ID, f"realigned: {', '.join(sorted(off))}", "client"),
+                self._change(f"realigned: {', '.join(sorted(off))}", "client"),
                 "PUT",
                 f"/clients/{current['id']}",
                 dict(wanted, attributes=merged),
@@ -125,18 +155,18 @@ class _Align:
         return current
 
     def account_user(self, client: dict) -> None:
-        """Exactly the three directory roles of realm-management, in the user's mappings
+        """Exactly the account's roles of realm-management, in the user's mappings
         and in the client's token scope; no group, no other role."""
         found = self.call("GET", "/clients?clientId=realm-management") or []
         management = next((c for c in found if c.get("clientId") == "realm-management"), None)
         if management is None:
             raise rs.RealmSyncError("the realm has no realm-management client")
         rm = management["id"]
-        wanted = [self.call("GET", f"/clients/{rm}/roles/{r}") for r in DIRECTORY_ROLES]
+        wanted = [self.call("GET", f"/clients/{rm}/roles/{r}") for r in self.account.roles]
         user = self.call("GET", f"/clients/{client['id']}/service-account-user")["id"]
         for group in self.call("GET", f"/users/{user}/groups") or []:
             self.act.do(
-                _change(CLIENT_ID, f"left group {group.get('name')}", "account_group", "delete"),
+                self._change(f"left group {group.get('name')}", "account_group", "delete"),
                 "DELETE",
                 f"/users/{user}/groups/{group['id']}",
             )
@@ -148,9 +178,7 @@ class _Align:
         ]
         if extra_realm:
             self.act.do(
-                _change(
-                    CLIENT_ID,
-                    f"realm roles out of its rights: {rs._names(extra_realm)}",
+                self._change(f"realm roles out of its rights: {rs._names(extra_realm)}",
                     "account_roles",
                     "delete",
                 ),
@@ -162,14 +190,12 @@ class _Align:
         for name, entry in sorted((mappings.get("clientMappings") or {}).items()):
             roles = entry.get("mappings") or []
             own = name == "realm-management"
-            extra = [r for r in roles if not (own and r["name"] in DIRECTORY_ROLES)]
+            extra = [r for r in roles if not (own and r["name"] in self.account.roles)]
             if own:
                 held = {r["name"] for r in roles} - {r["name"] for r in extra}
             if extra:
                 self.act.do(
-                    _change(
-                        CLIENT_ID,
-                        f"{name} roles out of its rights: {rs._names(extra)}",
+                    self._change(f"{name} roles out of its rights: {rs._names(extra)}",
                         "account_roles",
                         "delete",
                     ),
@@ -180,9 +206,7 @@ class _Align:
         missing = [r for r in wanted if r["name"] not in held]
         if missing:
             self.act.do(
-                _change(
-                    CLIENT_ID,
-                    f"realm-management roles granted: {rs._names(missing)}",
+                self._change(f"realm-management roles granted: {rs._names(missing)}",
                     "account_roles",
                 ),
                 "POST",
@@ -190,12 +214,10 @@ class _Align:
                 missing,
             )
         scope = self.call("GET", f"/clients/{client['id']}/scope-mappings/clients/{rm}") or []
-        extra = [r for r in scope if r["name"] not in DIRECTORY_ROLES]
+        extra = [r for r in scope if r["name"] not in self.account.roles]
         if extra:
             self.act.do(
-                _change(
-                    CLIENT_ID,
-                    f"token scope out of its rights: {rs._names(extra)}",
+                self._change(f"token scope out of its rights: {rs._names(extra)}",
                     "account_scope",
                     "delete",
                 ),
@@ -206,7 +228,7 @@ class _Align:
         add = [r for r in wanted if r["name"] not in {s["name"] for s in scope}]
         if add:
             self.act.do(
-                _change(CLIENT_ID, f"token scope: {rs._names(add)}", "account_scope"),
+                self._change(f"token scope: {rs._names(add)}", "account_scope"),
                 "POST",
                 f"/clients/{client['id']}/scope-mappings/clients/{rm}",
                 add,
@@ -216,22 +238,31 @@ class _Align:
         current = self._client()
         if current is not None:
             self.act.do(
-                _change(CLIENT_ID, f"removed, profile {PROFILE} is off", "client", "delete"),
+                self._change(f"removed, profile {self.account.profile} is off", "client", "delete"),
                 "DELETE",
                 f"/clients/{current['id']}",
             )
-        if self.keys.public_jwk(CLIENT_ID) is not None:
+        if self.keys.public_jwk(self.account.client_id) is not None:
             if self.apply:
                 with contextlib.suppress(ValueError):
-                    self.keys.remove(CLIENT_ID)
+                    self.keys.remove(self.account.client_id)
             else:
-                self.act.changes.append(_change(CLIENT_ID, "key folder left", "key", "delete"))
+                self.act.changes.append(self._change("key folder left", "key", "delete"))
 
 
-def align(call, keys: sak.KeyStore, *, enabled: bool, apply: bool, audit=None) -> list:
-    """Compare (and with `apply` correct) the people account; `call` is the master
-    admin's Admin API call of the `papaia` realm. Returns the deviations."""
-    run = _Align(call, keys, apply, audit)
+def align(
+    call,
+    keys: sak.KeyStore,
+    *,
+    enabled: bool,
+    apply: bool,
+    audit=None,
+    account: CoreAccount = PEOPLE,
+) -> list:
+    """Compare (and with `apply` correct) a core account (the people account unless
+    `account` names another); `call` is the master admin's Admin API call of the `papaia`
+    realm. Returns the deviations."""
+    run = _Align(call, keys, apply, audit, account)
     if not enabled:
         run.remove()
         return run.act.changes

@@ -67,7 +67,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from psycopg import sql
 
-from papaia_audit import access, core, read, retention, siem, watch
+from papaia_audit import access, core, idp, read, retention, siem, watch
+from papaia_audit import report as permission_report
 
 CONFIG_DIR = Path(os.environ.get("PAPAIA_AUDIT_CONFIG_DIR", "/etc/papaia-audit"))
 SECRETS_DIR = Path(os.environ.get("PAPAIA_AUDIT_SECRETS_DIR", "/run/secrets"))
@@ -625,6 +626,19 @@ class IngestHandler(http.server.BaseHTTPRequestHandler):
     do_PUT = do_DELETE = do_PATCH = do_HEAD = _not_allowed  # noqa: N815
 
 
+def report_source() -> tuple[permission_report.Inputs, permission_report.Call]:
+    """The inputs file (re-read on every build) and the realm's Admin API as the report
+    account (access.ReportSource)."""
+    inputs = permission_report.load_inputs(CONFIG_DIR / permission_report.INPUTS_FILE)
+    try:
+        reader = idp.from_environment()
+    except (OSError, ValueError, ssl.SSLError) as error:
+        raise permission_report.SourceError(
+            f"Keycloak connection not usable ({type(error).__name__})"
+        ) from None
+    return inputs, reader
+
+
 def serve() -> int:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -634,7 +648,11 @@ def serve() -> int:
     settings = ServiceSettings(os.environ)
     check = core.SubmissionCheck()
     api = access.AccessApi(
-        PgReadStore(), TokenKeysFile(CONFIG_DIR / "token-keys.json"), _pseudonym_key(), check
+        PgReadStore(),
+        TokenKeysFile(CONFIG_DIR / "token-keys.json"),
+        _pseudonym_key(),
+        check,
+        report_source=report_source,
     )
     server = IngestServer(context, Sources(CONFIG_DIR / "sources.json"), api)
     Upkeep(settings).start()
@@ -1176,20 +1194,32 @@ def retention_now() -> int:
 
 def access_call() -> int:
     """`access`: one request of papaia-ctl to the read API through `docker exec`
-    (access.host_request). Prints {"status", "body"}; the API checks token and role."""
+    (access.host_request). Prints {"status", "content_type", "text"}: the answer's body as
+    the route sends it, so papaia-ctl prints the same bytes. The API checks token and role."""
     request = access.host_request(sys.stdin.read(access.HOST_REQUEST_MAX + 1))
     if request is None:
-        print(json.dumps({"status": 400, "body": {"code": "AUDIT-HOST-400"}}))
+        text = json.dumps({"code": "AUDIT-HOST-400"})
+        print(json.dumps({"status": 400, "content_type": "application/json", "text": text}))
         return 0
     api = access.AccessApi(
         PgReadStore(),
         TokenKeysFile(CONFIG_DIR / "token-keys.json"),
         _pseudonym_key(),
         core.SubmissionCheck(),
+        report_source=report_source,
     )
     response = api.handle(request)
     log(f"host request route={request.path} status={response.status}")
-    print(json.dumps({"status": response.status, "body": json.loads(response.body)}))
+    print(
+        json.dumps(
+            {
+                "status": response.status,
+                "content_type": response.content_type,
+                "text": response.body.decode("utf-8"),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
