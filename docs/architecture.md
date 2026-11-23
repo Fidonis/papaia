@@ -2,9 +2,10 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.9.0 |
-| **Date** | 2026-11-20 |
-| **Status** | Active — describes the 1.9.0 release as built |
+| **Version** | 1.10.0-rc.1 |
+| **Manager** | papaia-manager 1.8.0 |
+| **Date** | 2026-11-23 |
+| **Status** | Release candidate — describes 1.10.0-rc.1 as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |

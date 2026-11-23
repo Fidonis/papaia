@@ -90,6 +90,25 @@ Descriptions replaced by `exposes:` in this release (no parallel operation):
 - Free tool names in `knowledge.sources[].access[].key_tools` of a module that declares
   `exposes`: they must be operation names of its `exposes`; `addon check` refuses others.
 
+## [1.10.0-rc.1] - 2026-11-23
+
+Release candidate of 1.10.0 (suite 1.10.0). It is not published: its images are served
+from a test registry until the release publishes and signs them. The changes are the ones
+listed under [Unreleased].
+
+- `VERSION` is `1.10.0-rc.1`. The start check reads the bill of materials of suite
+  1.10.0 (`compat/suite-1.10.0.yaml`) and prints "(candidate)".
+- The own images papaia-audit, papaia-docker-gate, papaia-egress, papaia-lifecycle and
+  papaia-people are rebuilt with `tools/build-images build` for linux/amd64 and
+  linux/arm64 and pinned as `<name>:1.10.0-rc.1@sha256:<digest>`.
+- papaia-manager 1.8.0 is pinned (`ghcr.io/fidonis/papaia-manager:1.8.0@sha256:<digest>`),
+  the manager range of suite 1.10.0 (`>=1.8.0,<1.9.0`).
+- `tools/check-image-pins check --mode=candidate` resolves the own images and the
+  manager in the test registry. The pins of papaia-me and papaia-connections move with
+  their releases.
+- The release re-pins every image to its published digest (docs/compatibility.md,
+  "Pinned images resolve") before the 1.10.0 tag.
+
 ## [1.9.0] - 2026-11-20
 
 ### 🚀 Features

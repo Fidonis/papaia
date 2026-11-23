@@ -12,7 +12,7 @@
     {
       "id": "qdrant.collections",
       "provider": "core:rag",
-      "version": "1.9.0",
+      "version": "1.10.0-rc.1",
       "kind": "mcp",
       "state": "running",
       "trust": "platform",
@@ -685,7 +685,7 @@
         "describe_access",
         "check_access"
       ],
-      "content_hash": "sha256:35cd20401af36d526c0942ce7902d0c03764201a0f03a5e8aae44a1311151602"
+      "content_hash": "sha256:e52a87751bd1e99c194902960f41d92cece1d5765150add253f87775bbdc1f61"
     }
   ],
   "models": [],

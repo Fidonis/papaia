@@ -30,7 +30,7 @@ services:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base. Built, signed and pinned by
     # tools/build-images.
-    image: ghcr.io/fidonis/papaia-docker-gate:1.9.0@sha256:78dfdc1e118406d89803573f4146a07d552617b30ba550b1a09f94ee8d473b1e
+    image: ghcr.io/fidonis/papaia-docker-gate:1.10.0-rc.1@sha256:2246dcd471887f4a028c1c8d890fc1dc50d81ae10885a95b32075afb14ff495e
     restart: unless-stopped
     command: ["python3", "-I", "/opt/papaia-docker-gate/docker_gate.py"]
     environment:

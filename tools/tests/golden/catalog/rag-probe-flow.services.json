@@ -15,7 +15,7 @@
       "version": "0.1.4",
       "kind": "rest",
       "state": "stopped",
-      "trust": "addon",
+      "trust": "platform",
       "title": {
         "de": "Flow-Schnittstelle",
         "en": "Flow interface"
@@ -74,7 +74,7 @@
           "data_class_max": "internal"
         }
       ],
-      "content_hash": "sha256:04750a91a28bdb877917836eb75ef0f7541e77656216192797a0b5ae43c37b3e"
+      "content_hash": "sha256:3ead84a2ad7753f6938305a0efaed63dd6dff1a88162e6f4c58b59521f00943e"
     },
     {
       "id": "flow.console",
@@ -82,7 +82,7 @@
       "version": "0.1.4",
       "kind": "ui",
       "state": "stopped",
-      "trust": "addon",
+      "trust": "platform",
       "title": {
         "de": "Flow",
         "en": "Flow"
@@ -128,7 +128,7 @@
           "opens_in": "same_tab"
         }
       ],
-      "content_hash": "sha256:344d2bc6eb0842b7e704f243263907022b2734291e4bc7e92f0158b7d466f312"
+      "content_hash": "sha256:c62709386308d5f8d2af39e5500acc4d1e7047a653fd6ebb62561d8547da1a26"
     },
     {
       "id": "probe.echo",
@@ -268,7 +268,7 @@
     {
       "id": "qdrant.collections",
       "provider": "core:rag",
-      "version": "1.9.0",
+      "version": "1.10.0-rc.1",
       "kind": "mcp",
       "state": "running",
       "trust": "platform",
@@ -941,7 +941,7 @@
         "describe_access",
         "check_access"
       ],
-      "content_hash": "sha256:35cd20401af36d526c0942ce7902d0c03764201a0f03a5e8aae44a1311151602"
+      "content_hash": "sha256:e52a87751bd1e99c194902960f41d92cece1d5765150add253f87775bbdc1f61"
     }
   ],
   "models": [],

@@ -69,7 +69,7 @@ services:
   # empty database and sets the service role passwords. The only holder of the owner's
   # password besides the database.
   papaia-audit-schema:
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:1188d3b5560c432274fabf5fd6925a23ad8f6b6176d821d4e206158a8a5f6d2b
+    image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:178e0d6f240f2441c36da4ba129cf1dfc23283acc21387f708110fbf4c73dff1
     restart: "no"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["schema"]
@@ -95,7 +95,7 @@ services:
   papaia-audit:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml).
     # Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-audit:1.9.0@sha256:1188d3b5560c432274fabf5fd6925a23ad8f6b6176d821d4e206158a8a5f6d2b
+    image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:178e0d6f240f2441c36da4ba129cf1dfc23283acc21387f708110fbf4c73dff1
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
     command: ["serve"]

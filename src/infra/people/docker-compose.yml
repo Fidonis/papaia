@@ -38,7 +38,7 @@ services:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base, which brings the openssl
     # command line (ES256). Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-people:1.9.0@sha256:341fc71daa287ee731ba9f2f93f9e79a4cf7f270a0b1fbcfbf506cd364df3b33
+    image: ghcr.io/fidonis/papaia-people:1.10.0-rc.1@sha256:f12a0c196aed4dfc79be0aef42cc23ed5e263dfcaf33499a99aab675d6be1dc2
     restart: unless-stopped
     command:
       - python3
