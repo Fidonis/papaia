@@ -22,7 +22,9 @@ change one `papaia.audit/1` row of the sync):
   `realm_sync` while the profile is active, `core_audiences`), persons only;
 - one platform pairing `papaia-manager -> papaia-audit` (effect r): standard token
   exchange, one audience, a session required (the person policies of the realm sync).
-  No other client may exchange for `papaia-audit`, and `pairings.yaml` cannot name it.
+  `pairings.yaml` cannot name `papaia-audit`; the only other platform pairing is
+  `papaia-me -> papaia-audit` (effect x, a person's own read tickets) while the profile
+  `me` is on as well (lib/me_area.py).
   The pairing is listed in the permission report's system rows as asked for and
   confirmed by `platform`.
 

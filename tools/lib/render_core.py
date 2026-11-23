@@ -318,6 +318,14 @@ def render(config_dir: Path, repo_root: Path) -> None:
         catalog.render(config_dir, repo_root)
     except catalog.CatalogError as exc:
         raise RenderError(f"platform catalog: {exc}") from exc
+    # Mein Bereich (profile `me`): its module list and the module CAs, and the folder of
+    # the azp allow-list of prefs, before `up` mounts them (Compose must not create them).
+    from . import me_area  # it imports realm_sync, which imports the render path
+
+    try:
+        me_area.render(config_dir, repo_root)
+    except (me_area.rs.RealmSyncError, OSError) as exc:
+        raise RenderError(f"Mein Bereich: {exc}") from exc
 
 
 LIFECYCLE_ACCOUNT = "svc-papaia-lifecycle"

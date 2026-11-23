@@ -12,6 +12,24 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Signing in to Mein Bereich (profile `me`)
+
+- `src/infra/me/exposes.yaml` declares the profile for the realm sync: while `me` is on, it
+  plans the sign-in client `papaia-me`, the bearer client of the audience `papaia-prefs` and
+  the role `prefs-read` (`realm_sync.CORE_PROFILE_MODULES`); with the profile off, none of them.
+- `start` creates `papaia-me` with the generated `ME_OIDC_CLIENT_SECRET` and aligns its secret
+  (`keycloak_role_sync.CORE_PROFILE_SIGN_IN`); the client redirects only to
+  `<ME_PUBLIC_URL>/auth/callback`.
+- The realm sync writes the `azp` allow-list of `prefs`, `security/azp/azp-allowlist.json`,
+  from the confirmed and assigned pairings with `papaia-prefs` only (a write pairing after the
+  second person's approval), replaced in one step and removed with the profile. It pairs
+  `papaia-me` with `papaia-audit` (effect `x`) itself while `audit` is on.
+- `setup`, `start` and the add-on commands write the module list of Mein Bereich,
+  `personal-settings/registry.yaml`, from the `personal_settings:` sections of the active
+  add-ons, and `personal-settings/module-ca/<module>.pem` from the platform PKI. Every write
+  is one `papaia.audit/1` row (writer `papaia-ctl/me-area`).
+- The README no longer lists the known limit of the profile.
+
 ### Restore after the loss of the host
 
 - Every restore point carries an unencrypted `RELEASE` file (core tag, suite, installation

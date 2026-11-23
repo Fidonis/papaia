@@ -92,6 +92,11 @@ What it manages:
   recorded; undeclared service accounts are removed. The service-account users' roles
   and groups and the realm's event settings (last use = CLIENT_LOGIN events) are
   changed with the master admin, which the sync account cannot.
+- the `azp` allow-list of `prefs` (profile `me`, lib/me_area.py),
+  `$PAPAIA_CONFIG_DIR/security/azp/azp-allowlist.json`: the clients of the confirmed
+  pairings with `papaia-prefs` that are assigned, written after the realm and removed when
+  the profile is off. `papaia-me` -> `papaia-audit` (effect x) is a platform pairing like
+  the manager's, set while the profiles `me` and `audit` are both on.
 
 Every input is checked before the first write: a rejected declaration changes nothing. A
 second run reports 0 changes; `--check` compares without writing and reports every
@@ -264,8 +269,9 @@ AUDIENCE_LIMITS = {
     "papaia-people": (("assist-gate", "papaia-studio-gateway"), ("x",)),
     "papaia-audit": (("papaia-manager",), ("r",)),
 }
-# Audiences the realm sync pairs itself (lib/audit_report_account.py): `pairings.yaml`
-# cannot name them, and their pairing is asked for and confirmed by `platform`.
+# Audiences the realm sync pairs itself (lib/audit_report_account.py for the manager,
+# lib/me_area.py for Mein Bereich): `pairings.yaml` cannot name them, and their pairing is
+# asked for and confirmed by `platform`.
 PLATFORM_AUDIENCES = frozenset({"papaia-audit"})
 PLATFORM_PERSON = "platform"
 
@@ -434,6 +440,8 @@ PROFILE_ENTRIES: tuple[dict, ...] = (
 # The module owns the roles and clients the register gives it, as an add-on would.
 CORE_PROFILE_MODULES: dict[str, tuple[str, str]] = {
     "connections": ("papaia-connections", "src/infra/connections"),
+    # Mein Bereich: the sign-in client papaia-me, the audience papaia-prefs, prefs-read.
+    "me": ("papaia-me", "src/infra/me"),
 }
 
 
@@ -3743,15 +3751,17 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
     keycloak = tree.get(kcs._KEYCLOAK_NODE, {})
     try:
         register = load_register()
-        from . import audit_report_account, people_account  # they import this module
+        from . import audit_report_account, me_area, people_account  # they import this module
 
+        pairings = load_pairings(pairings_path(config_dir), register)
         plan = build_plan(
             register,
             load_modules(config_dir, repo_root),
-            load_pairings(pairings_path(config_dir), register),
+            pairings,
             core_audiences=people_account.core_audiences(tree)
             | audit_report_account.core_audiences(tree),
-            platform_pairings=audit_report_account.platform_pairings(tree),
+            platform_pairings=audit_report_account.platform_pairings(tree)
+            + me_area.platform_pairings(tree),
         )
         plan.hardening = rh.load(
             {**root, **keycloak},
@@ -3824,6 +3834,16 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             )
             changes += reconciler.run()
             skipped += reconciler.skipped
+            # The azp allow-list of prefs after the realm: a pairing is released at prefs
+            # only once its scope is assigned (and withdrawn on the same run it is revoked).
+            changes += me_area.sync_allowlist(
+                plan,
+                pairings,
+                config_dir,
+                enabled=me_area.enabled(root),
+                apply=not check,
+                audit=audit,
+            )
             from . import lifecycle_account  # it imports this module
 
             changes += lifecycle_account.align(
@@ -3896,14 +3916,15 @@ def write_report_inputs(call, tree: dict, config_dir: Path) -> Path:
     """Write the inputs file of the permission report (lib/access_report.py) from the
     realm (master admin, GET only), the pairings, the emergency account's record, the
     delegation lifetime and the recertification period."""
-    from . import access_report, audit_report_account, breakglass  # they import this module
+    from . import access_report, audit_report_account, breakglass, me_area  # they import this
 
     register = load_register()
     try:
         document = access_report.build_inputs(
             call,
             pairings=load_pairings(pairings_path(config_dir), register)
-            + audit_report_account.platform_pairings(tree),
+            + audit_report_account.platform_pairings(tree)
+            + me_area.platform_pairings(tree),
             delegations=delegation_lifetime.report(config_dir),
             breakglass_ids=breakglass.recorded_ids(breakglass.record_store(config_dir)),
             period=access_report.period_days(tree.get("", {})),

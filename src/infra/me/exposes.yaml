@@ -1,0 +1,68 @@
+# Declaration of the core profile `me` for the realm sync (ADR 0020), in the form it reads
+# for add-ons. `tools/lib/realm_sync.py` (CORE_PROFILE_MODULES) reads this file while the
+# profile is on; the module papaia-me then owns the clients the naming register gives it:
+# the sign-in client `papaia-me` (confidential, token exchange) and the bearer client of
+# the audience `papaia-prefs`. Every name is taken from the register of papaia-kit.
+#
+# The profile is not in the platform catalog: modules reach `prefs` after attaching it
+# (contract generation 8), and Mein Bereich is a page for persons, not an offer to
+# modules. Exchange rights are not declared here: `papaia-me` -> `papaia-prefs` comes from
+# the bill of materials and is confirmed with `papaia-ctl pairing confirm` and, as a write
+# pairing, approved by a second person (`papaia-ctl pairing approve`); `papaia-me` ->
+# `papaia-audit` (effect x, `GET /v1/me/reads`) is set by the realm sync itself while the
+# `audit` profile is on, like the manager's pairing.
+exposes:
+  - id: prefs
+    kind: rest
+    title: {de: "Vorlieben", en: "Preferences"}
+    description:
+      de: >-
+        Ablage der Vorlieben einer Person: Benachrichtigungskanal, Ausweichkanal und Ruhezeiten,
+        Sprache, Erscheinungsbild und Zeitzone.
+      en: >-
+        Store of a person's preferences: notification channel, fallback channel and quiet hours,
+        language, appearance and time zone.
+    address: {service: prefs, port: 8080, scheme: http}
+    audience: papaia-prefs
+    # Persons through Mein Bereich; the notify readers of the modules as service accounts.
+    identity: [person, service]
+    requires:
+      addon_api: [8]
+    # Only reads are offered to modules: a person changes her preferences in Mein Bereich
+    # alone (PUT /api/v1/preferences/me through papaia-me); prefs refuses every other writer.
+    operations:
+      - name: read_own
+        version: 1
+        title: {de: "Eigene Vorlieben lesen", en: "Read own preferences"}
+        via: rest
+        method: GET
+        path: /api/v1/preferences/me
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object}
+        data_class_max: personal
+        rights_check: server
+      - name: read_notifications
+        version: 1
+        title: {de: "Benachrichtigungsvorlieben lesen", en: "Read notification preferences"}
+        via: rest
+        method: GET
+        path: /api/v1/preferences/{sub}
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [sub]
+          properties:
+            sub: {type: string, maxLength: 255}
+        output_schema: {type: object}
+        data_class_max: personal
+        rights_check: server
+    roles:
+      - name: prefs-read
+        title: {de: "Benachrichtigungsvorlieben lesen", en: "Read notification preferences"}
+        description:
+          de: "Liest Benachrichtigungskanal, Ruhezeiten und Zeitzone einer Person; nie Sprache oder Erscheinungsbild."
+          en: "Reads a person's notification channel, quiet hours and time zone; never language or appearance."

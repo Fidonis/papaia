@@ -2596,11 +2596,35 @@ tools/papaia-ctl restore --restore-point=ID --only=module:me
 Only the profile `me` is taken down and started again; everything else keeps serving. A
 backup made with `backup --only=module:me` is restored with `restore-scoped --only=module:me`.
 
-**Known limit of this release.** The core does not yet register the sign-in client `papaia-me`
-in the realm, and it writes neither the module list of the area
-(`personal-settings/registry.yaml` in the config directory) nor the `azp` allow-list of `prefs`
-(`security/azp/`). Until it does, the profile starts and is reachable at its address, but nobody
-can sign in to Mein Bereich, and `prefs` refuses requests.
+**Sign-in and exchange rights.** While the profile is on, `start` creates the sign-in client
+`papaia-me` in the realm with the generated `ME_OIDC_CLIENT_SECRET`, and the realm sync manages it
+together with the bearer client of the audience `papaia-prefs` and the role `prefs-read`
+(declared in `src/infra/me/exposes.yaml`; with the profile off, none of them is planned). The
+client redirects only to `<ME_PUBLIC_URL>/auth/callback`. Mein Bereich may write to `prefs` only
+after its pairing is confirmed and, as a write pairing, approved by a second host account:
+
+```bash
+tools/papaia-ctl pairing list                                   # shows the list and its sha256
+tools/papaia-ctl pairing confirm --approve-pairings=<sha256>    # papaia-me -> papaia-prefs waits
+# as another host account than the one that confirmed:
+tools/papaia-ctl pairing approve --client=papaia-me --audience=papaia-prefs --effects=rw
+tools/papaia-ctl start                                          # the realm sync assigns it
+```
+
+The realm sync then writes the `azp` allow-list of `prefs`,
+`security/azp/azp-allowlist.json` in the config directory: the clients of the confirmed pairings
+with `papaia-prefs` and their effects, nothing else, replaced in one step; `prefs` re-reads it and
+refuses every token while it is missing. A pairing that waits for approval is not on it. The
+exchange right of Mein Bereich at the audit service (`papaia-me` -> `papaia-audit`, effect `x`,
+for a person's own read tickets) is set by the realm sync itself while the `audit` profile is
+on, like the manager's.
+
+**Module list.** `setup` and `start` write the module list of Mein Bereich,
+`personal-settings/registry.yaml` in the config directory, from the `personal_settings:`
+section of every active add-on whose section names the add-on itself; an inactive add-on has no
+entry, and `me-web` checks every entry again against the contract. For a module served over
+`https`, `personal-settings/module-ca/<module>.pem` holds the CA certificate the platform PKI
+issued its endpoint with. Only `me-web` mounts the folder, read-only; it holds no secret.
 
 ### Connection registry (`connections`)
 

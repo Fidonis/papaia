@@ -74,6 +74,16 @@ PROFILE_CLIENTS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Sign-in clients of a core profile that the realm template does not ship: the realm sync
+# owns their settings, but cannot hand them a secret (it never writes one). They are
+# created here, with the secret `setup` generated into the profile's `.env`, before the
+# realm sync adopts them, and their secret is aligned on every start. Profile ->
+# (client id, node of the profile's .env, secret key).
+CORE_PROFILE_SIGN_IN: dict[str, tuple[str, str, str]] = {
+    "me": ("papaia-me", "infra/me", "ME_OIDC_CLIENT_SECRET"),
+}
+
+
 def _compose_value(raw: str) -> str:
     """Resolve a raw .env value the way docker compose does. `parse_env_file`
     keeps a trailing ` # comment` (the shipped KC_ADMIN_PASSWORD line carries
@@ -535,6 +545,40 @@ def addon_clients(config_dir: Path, repo_root: Path, names: set[str] | None = No
     return clients
 
 
+def core_profile_clients(tree: EnvTree) -> list[dict]:
+    """The sign-in clients of the active core profiles (CORE_PROFILE_SIGN_IN), each with
+    the secret from its profile's `.env`; a profile whose secret is not generated yet has
+    none (the next start creates it). Only what a confidential sign-in client needs; the
+    realm sync sets the rest (owner, scopes, PKCE, redirect URIs)."""
+    profiles = common.cluster_profiles(tree.get("", {}))
+    clients = []
+    for profile, (client_id, node, key) in CORE_PROFILE_SIGN_IN.items():
+        if profile not in profiles:
+            continue
+        secret = _compose_value(tree.get(node, {}).get(key, ""))
+        if _unset(secret):
+            print(f"  client skipped, its secret is not generated yet: {client_id}",
+                  file=sys.stderr, flush=True)
+            continue
+        clients.append({
+            "clientId": client_id,
+            "enabled": True,
+            "protocol": "openid-connect",
+            "clientAuthenticatorType": "client-secret",
+            "secret": secret,
+            "publicClient": False,
+            "bearerOnly": False,
+            "standardFlowEnabled": True,
+            "implicitFlowEnabled": False,
+            "directAccessGrantsEnabled": False,
+            "serviceAccountsEnabled": False,
+            "fullScopeAllowed": False,
+            "redirectUris": [],
+            "webOrigins": [],
+        })
+    return clients
+
+
 def sync_addon_clients(
     tree: EnvTree,
     config_dir: Path,
@@ -891,6 +935,12 @@ def sync_roles(tree: EnvTree, config_dir: Path, repo_root: Path | None = None) -
         clients_created, secrets_updated = _sync_clients(
             base_url, ctx, token, realm_def, _active_profile_clients(root)
         )
+        core = core_profile_clients(tree)
+        created, updated = _sync_clients(
+            base_url, ctx, token, {"clients": core}, {c["clientId"] for c in core}
+        )
+        clients_created += created
+        secrets_updated += updated
         if repo_root is not None:
             extra = addon_clients(config_dir, repo_root)
             created, updated = _sync_clients(

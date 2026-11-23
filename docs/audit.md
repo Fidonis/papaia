@@ -184,7 +184,9 @@ audience exact (one audience), not expired, with a session (`sid`; a service acc
 token has none). The routes of the audit log further need the realm role
 `papaia-auditor`; without it every route answers `403` (`forbidden_or_not_found`). The
 routes of the permission report and the deletion lock check their own roles (below). Any
-other client or path answers `404`. Errors use the platform's error envelope
+other client or path answers `404`. The realm sync grants the two exchange rights for this
+audience itself, never through `pairings.yaml`: `papaia-manager` (effect `r`) while the
+`audit` profile is on, and `papaia-me` (effect `x`) while `me` is on as well. Errors use the platform's error envelope
 (`application/problem+json`: `class`, `code`, `message`, `hint`, `correlation_id`).
 
 **Signing keys.** The service checks tokens against `service/token-keys.json` (format

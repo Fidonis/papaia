@@ -231,6 +231,12 @@ def load(
             if not _unset(raw):
                 origin, path = _base(key, raw, https_only)
                 add(client_id, key, raw, f"{origin}{path}/*")
+    # Mein Bereich names its exact callback (`<ME_PUBLIC_URL>/auth/callback`); its client
+    # `papaia-me` exists only while the profile `me` is on (keycloak_role_sync).
+    me = _value(env, "ME_PUBLIC_URL")
+    if not _unset(me):
+        origin, path = _base("ME_PUBLIC_URL", me, https_only)
+        add("papaia-me", "ME_PUBLIC_URL", me, f"{origin}{path}/auth/callback")
     # oauth2-proxy names its exact callback (src/infra/oauth2-proxy/docker-compose.yml:
     # --redirect-url): its own name on the edge (OAUTH2_PROXY_PUBLIC_URL), else, with
     # direct port access, its own port of PAPAIA_HOST.
