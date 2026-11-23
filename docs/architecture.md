@@ -288,7 +288,11 @@ actions:                           # optional (addon_api 4): maintenance actions
                                    # add-on wrote outside its own volumes. A non-zero
                                    # exit stops the uninstall before anything is removed;
                                    # `--force` goes on with a warning. Plain `uninstall`
-                                   # (data kept) does not run it. Older cores ignore it.
+                                   # (data kept) does not run it. After `addon remove` it
+                                   # still runs with the add-on's join_addons and ssl-cert
+                                   # overrides. Single host only: a distributed
+                                   # installation refuses (exit 2) unless `--force`.
+                                   # Older cores ignore it.
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -638,7 +642,7 @@ No Core changes required.
 | `papaia-ctl addon stop <name> --clean-up` | `docker compose down` (remove containers, keep volumes) |
 | `papaia-ctl addon remove <name>` | Remove override → re-render Core → `active: false` in manifest. **Containers untouched, config bundle kept.** |
 | `papaia-ctl addon uninstall <name>` | Remove override + deployment entry → delete config bundle → `docker compose down` |
-| `papaia-ctl addon uninstall <name> --clean-up` | Run the action marked `on_uninstall: true` (if any; a failure stops here unless `--force`) → like `uninstall` + `docker compose down -v` (also delete volumes) |
+| `papaia-ctl addon uninstall <name> --clean-up` | Run the action marked `on_uninstall: true` (if any, also after `remove`, with the add-on's overrides; a failure, or a distributed installation, stops here unless `--force`) → like `uninstall` + `docker compose down -v` (also delete volumes) |
 
 The Compose calls above run with `-p <addon directory name>`, the add-on's `docker-compose.yml` and the
 core `.env`. When that file is missing (a deleted or half-written add-on directory), Compose cannot build

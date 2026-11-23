@@ -658,7 +658,9 @@ cmd_addon_list() {
 # add-on is still installed: it removes what the add-on wrote outside its own volumes,
 # for instance records in other add-ons, which `down -v` cannot reach. A failure stops
 # the uninstall before anything is removed (exit 3), so the action is still there to be
-# retried; with $3 = 1 (--force) it warns and the uninstall goes on.
+# retried; with $3 = 1 (--force) it warns and the uninstall goes on. Like `addon run` it
+# needs a single host: a distributed installation is refused up front (exit 2), and
+# --force uninstalls without the action there too.
 # $1 add-on name, $2 add-on path, $3 1 for --force
 _addon_run_uninstall_action() {
     local addon_name="$1" addon_path="$2" force="$3"
@@ -683,6 +685,18 @@ _addon_run_uninstall_action() {
     rm -f "$spec_file"
     [ "${#spec[@]}" -ge 2 ] || return 0
     local action="${spec[0]}"
+    local mode
+    mode="$(_topology_mode 2>/dev/null)" || mode="unknown"
+    if [ "$mode" = "distributed" ]; then
+        if [ "$force" -eq 1 ]; then
+            warn "Addon $addon_name declares the clean-up action '$action', which a distributed installation cannot run."
+            warn "--force: uninstalling without it. What it would have removed stays where the add-on wrote it."
+            return 0
+        fi
+        error "Addon $addon_name declares the clean-up action '$action'. It runs as 'docker compose run' in the add-on's project, which a distributed installation cannot do. Nothing was removed."
+        error "--force uninstalls it without the clean-up action and leaves what the action would have removed where the add-on wrote it."
+        exit 2
+    fi
     info "Running clean-up action '$action' of addon $addon_name (service ${spec[1]})..."
     local rc=0
     _addon_compose run "$addon_name" "$addon_path" --rm "${spec[@]:1}" || rc=$?
@@ -693,9 +707,24 @@ _addon_run_uninstall_action() {
         return 0
     fi
     error "Clean-up action '$action' of addon $addon_name failed (exit status $rc). Nothing was removed."
-    error "Fix the cause and run the uninstall again; 'papaia-ctl addon run $addon_name $action' retries the action alone."
+    # `addon run` refuses an add-on that `addon remove` deactivated; the uninstall itself
+    # runs the action again.
+    if _addon_is_active "$addon_name"; then
+        error "Fix the cause and run the uninstall again; 'papaia-ctl addon run $addon_name $action' retries the action alone."
+    else
+        error "Fix the cause and run the uninstall again, which runs the action first."
+    fi
     error "--force uninstalls anyway and leaves what the action did not remove where the add-on wrote it."
     exit 3
+}
+
+# Whether the add-on is registered and active (`addon remove` deactivates it). $1 name
+_addon_is_active() {
+    local name
+    while IFS= read -r name; do
+        [ "${name%$'\r'}" = "$1" ] && return 0
+    done < <(py_cli active-addons 2>/dev/null)
+    return 1
 }
 
 # Whether the add-on currently contributes LibreChat agents or prompts: the last render

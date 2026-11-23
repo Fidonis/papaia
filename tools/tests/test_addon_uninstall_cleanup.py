@@ -3,10 +3,10 @@ LibreChat agent and prompt sync after `addon remove` / `addon uninstall`.
 
 `py_cli` and `docker` are replaced by functions that log what they were called with.
 What is checked is the order: the clean-up action runs before anything is taken down,
-a failing one stops the uninstall unless --force, an add-on without one uninstalls as
-before, and LibreChat's init scripts run once in a one-off container after an add-on
-with agents or prompts is gone -- only while LibreChat runs, and never failing the
-add-on command.
+a failing one stops the uninstall unless --force, a distributed installation refuses an
+add-on that declares one, an add-on without one uninstalls as before, and LibreChat's
+init scripts run once in a one-off container after an add-on with agents or prompts is
+gone -- only while LibreChat runs, and never failing the add-on command.
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ py_cli() {
             printf 'purge\\0job\\0purge\\0two words\\0'
             ;;
         addon-dependents) return 0 ;;
+        active-addons) [ "@ACTIVE@" = 1 ] && echo importer || true ;;
         *) ;;
     esac
 }
@@ -66,6 +67,7 @@ docker() {
 _DEFAULTS = {
     "MODE": "single",
     "SPEC": "ok",
+    "ACTIVE": "1",
     "ACTION_RC": "0",
     "SYNC_RC": "0",
     "RUNNING": "1",
@@ -133,6 +135,51 @@ def test_a_failing_action_stops_the_uninstall(tmp_path: Path) -> None:
     assert "papaia-ctl addon run importer purge" in done.stderr
     assert not any(" down" in c for c in calls)
     assert not any(c.startswith("py_cli addon-uninstall --name") for c in calls)
+
+
+def test_a_removed_addon_is_told_to_run_the_uninstall_again(tmp_path: Path) -> None:
+    # `addon run` refuses an add-on that `addon remove` deactivated.
+    done, _ = _run(
+        tmp_path, "cmd_addon_uninstall importer --clean-up", ACTION_RC="4", ACTIVE="0"
+    )
+
+    assert done.returncode == 3
+    assert "run the uninstall again, which runs the action first" in done.stderr
+    assert "addon run" not in done.stderr
+
+
+def test_a_distributed_installation_refuses_the_clean_up_action(tmp_path: Path) -> None:
+    done, calls = _run(tmp_path, "cmd_addon_uninstall importer --clean-up", MODE="distributed")
+
+    assert done.returncode == 2
+    assert "a distributed installation cannot do" in done.stderr
+    assert "Nothing was removed" in done.stderr
+    assert not any(c.startswith("docker") for c in calls)
+    assert not any(c.startswith("py_cli addon-uninstall --name") for c in calls)
+
+
+def test_force_uninstalls_a_distributed_installation_without_the_action(
+    tmp_path: Path,
+) -> None:
+    done, calls = _run(
+        tmp_path, "cmd_addon_uninstall importer --clean-up --force", MODE="distributed"
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert "--force: uninstalling without it" in done.stderr
+    assert not any(" run " in c for c in calls)
+    assert "py_cli addon-uninstall --name=importer" in calls
+
+
+def test_a_distributed_installation_without_a_clean_up_action_uninstalls_as_before(
+    tmp_path: Path,
+) -> None:
+    done, calls = _run(
+        tmp_path, "cmd_addon_uninstall importer --clean-up", MODE="distributed", SPEC="none"
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert "py_cli addon-uninstall --name=importer" in calls
 
 
 def test_force_uninstalls_past_a_failing_action(tmp_path: Path) -> None:

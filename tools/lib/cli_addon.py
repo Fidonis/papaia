@@ -1034,8 +1034,12 @@ def cmd_addon_uninstall_action(args: argparse.Namespace) -> int:
 
     Unlike `addon-action` an inactive addon qualifies: `addon remove` keeps its
     registration and data, and the uninstall is the last chance to run the action.
-    An addon whose manifest is gone has nothing left to run; that is a warning.
-    Exit 2 for an unregistered addon or a malformed `actions` block."""
+    `addon remove` also dropped the addon's generated overrides, though, and the
+    action needs them to reach the addons it wrote into (`networks.join_addons`)
+    and, under external OIDC, to clear the CA variables. They are written again
+    for this run, as for an active addon; `addon-uninstall` removes them with the
+    addon. An addon whose manifest is gone has nothing left to run; that is a
+    warning. Exit 2 for an unregistered addon or a malformed `actions` block."""
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
     deployed = deployment.load(config_dir) or {}
@@ -1062,6 +1066,13 @@ def cmd_addon_uninstall_action(args: argparse.Namespace) -> int:
         return 0
     name, action = found
     addons.materialize_addon_env(config_dir, addon_path, args.name)
+    if not entry.get("active"):
+        tree = envtree.load_config_dir_tree(config_dir, repo_root)
+        auth_provider = tree.get("", {}).get("AUTH_PROVIDER", "internal_keycloak")
+        gen_override.generate_addon_ssl_cert_overrides(
+            config_dir, auth_provider, repo_root, also_active={args.name}
+        )
+        gen_override.generate_addon_join_overrides(config_dir, repo_root, also_active={args.name})
     sys.stdout.write(
         "".join(f"{part}\0" for part in [name, action["service"], *action["args"]])
     )

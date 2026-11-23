@@ -331,6 +331,24 @@ def test_addon_ssl_cert_override_removed_when_addon_inactive(config_dir, repo_ro
     assert not out_path.exists()
 
 
+def test_addon_ssl_cert_override_written_for_an_inactive_addon_named_active(
+    config_dir, repo_root
+):
+    # `addon uninstall --clean-up` runs the clean-up action of an add-on that
+    # `addon remove` deactivated, with the overrides of an active add-on.
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    _write_addon_deployment(config_dir, [_paperless_entry(active=False)])
+
+    gen_override.generate_addon_ssl_cert_overrides(
+        config_dir, "external_oidc", repo_root, also_active={"paperless"}
+    )
+
+    out_path = (
+        config_dir / "overrides" / "addons" / "docker-compose.paperless-ssl-cert.override.yml"
+    )
+    assert out_path.is_file()
+
+
 def test_addon_ssl_cert_override_not_created_without_deployment(config_dir, repo_root):
     envtree.init(config_dir, repo_root, env_name="papaia")
     # deployment.yaml has no addons entry → nothing to generate
@@ -487,6 +505,21 @@ def test_join_override_is_removed_for_an_inactive_addon(config_dir, repo_root, t
     _register(config_dir, wiki, joiner, active=False)
     gen_override.generate_addon_join_overrides(config_dir, repo_root)
     assert not _join_override(config_dir, "joiner").exists()
+
+
+def test_join_override_written_for_an_inactive_addon_named_active(
+    config_dir, repo_root, tmp_path
+):
+    # The clean-up action of a removed add-on still has to reach the add-ons it wrote into.
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    wiki, joiner = _joining_pair(tmp_path)
+    _register(config_dir, wiki, joiner, active=False)
+
+    gen_override.generate_addon_join_overrides(config_dir, repo_root, also_active={"joiner"})
+
+    override = yaml.safe_load(_join_override(config_dir, "joiner").read_text(encoding="utf-8"))
+    assert override["services"] == {"job": {"networks": ["own", "papaia-wiki-net"]}}
+    assert not _join_override(config_dir, "wiki").exists()
 
 
 def test_join_override_skips_a_target_without_app_network(
