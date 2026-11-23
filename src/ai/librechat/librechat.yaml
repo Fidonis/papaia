@@ -152,7 +152,7 @@ mcpServers:
     title: 'Web Crawler'
     description: 'Web crawling, scraping, search, site mapping, and structured data extraction via local Firecrawl.'
     type: streamable-http
-    url: http://mcp-firecrawl:8080/mcp
+    url: http://mcp-firecrawl:3000/mcp
     # No Authorization header — network isolation (internal papaia-net,
     # no external port binding) is the security boundary for this service.
     headers:
@@ -162,7 +162,7 @@ mcpServers:
 
 mcpSettings:
   allowedDomains:
-    - "http://mcp-firecrawl:8080"
+    - "http://mcp-firecrawl:3000"
     #- "example.com"                       # Specific domain
     # - "*.example.com"                    # All subdomains using wildcard
     # - "mcp-server"                       # Local Docker domain

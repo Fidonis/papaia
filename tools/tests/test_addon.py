@@ -1049,7 +1049,7 @@ def test_install_force_leaves_an_unresolvable_prompt_unset(
 # ── actions ───────────────────────────────────────────────────────────────────
 
 
-def _action_addon(tmp_path: Path) -> Path:
+def _action_addon(tmp_path: Path, extra_actions: dict | None = None) -> Path:
     path = tmp_path / "addon-actions"
     path.mkdir()
     manifest = {
@@ -1063,6 +1063,7 @@ def _action_addon(tmp_path: Path) -> Path:
                 "description": "Reset",
                 "destructive": True,
             },
+            **(extra_actions or {}),
         },
     }
     (path / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
@@ -1117,8 +1118,154 @@ def test_addon_actions_lists_as_json(repo_root, config_dir, tmp_path, capsys):
     )
     assert cmd_addon_actions(args) == 0
     assert yaml.safe_load(capsys.readouterr().out) == [
-        {"name": "reset", "service": "job", "description": "Reset", "destructive": True}
+        {
+            "name": "reset",
+            "service": "job",
+            "description": "Reset",
+            "destructive": True,
+            "on_uninstall": False,
+        }
     ]
+
+
+_PURGE = {"purge": {"service": "job", "args": ["purge", "--all"], "on_uninstall": True}}
+
+
+def _install_acting(config_dir: Path, repo_root: Path, addon: Path) -> None:
+    args = _install_args(config_dir, repo_root, name="acting", path=str(addon))
+    assert cmd_addon_install(args) == 0
+
+
+def _uninstall_action_args(config_dir: Path, repo_root: Path) -> argparse.Namespace:
+    return argparse.Namespace(config_dir=str(config_dir), repo_root=str(repo_root), name="acting")
+
+
+def test_uninstall_action_prints_name_service_and_arguments(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_uninstall_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path, _PURGE)
+    _install_acting(config_dir, repo_root, addon)
+    bundle = config_dir / "addons" / "acting"
+    bundle.mkdir(parents=True, exist_ok=True)
+    (bundle / ".env").write_text("A=1\n", encoding="utf-8")
+    capsys.readouterr()
+
+    assert cmd_addon_uninstall_action(_uninstall_action_args(config_dir, repo_root)) == 0
+    assert capsys.readouterr().out == "purge\0job\0purge\0--all\0"
+    # The action runs with the add-on's own env, like `addon run`.
+    assert (addon / ".env").read_text(encoding="utf-8") == "A=1\n"
+
+
+def test_uninstall_action_also_resolves_for_a_removed_addon(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_uninstall_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path, _PURGE)
+    _install_acting(config_dir, repo_root, addon)
+    _deactivate(config_dir, "acting")
+    capsys.readouterr()
+
+    assert cmd_addon_uninstall_action(_uninstall_action_args(config_dir, repo_root)) == 0
+    assert capsys.readouterr().out.startswith("purge\0")
+
+
+def test_uninstall_action_of_a_removed_addon_gets_its_join_override_back(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_uninstall_action
+
+    _setup(repo_root, config_dir)
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "papaia-app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "wiki",
+                "version": "1.0.0",
+                "papaia_compat": ">=0.8.0",
+                "networks": {"app_network": "papaia-wiki-net"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    wiki_args = _install_args(config_dir, repo_root, name="wiki", path=str(wiki))
+    assert cmd_addon_install(wiki_args) == 0
+    acting = _action_addon(tmp_path, _PURGE)
+    manifest = yaml.safe_load((acting / "papaia-app.yaml").read_text(encoding="utf-8"))
+    manifest["requires"] = {"addons": ["wiki"]}
+    manifest["networks"] = {"join_addons": [{"addon": "wiki", "services": ["job"]}]}
+    (acting / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    (acting / "docker-compose.yml").write_text(
+        yaml.safe_dump({"services": {"job": {"image": "busybox"}}}), encoding="utf-8"
+    )
+    _install_acting(config_dir, repo_root, acting)
+    join = config_dir / "overrides" / "addons" / "docker-compose.acting-join.override.yml"
+    assert join.is_file()
+    assert cmd_addon_remove(_name_args(config_dir, repo_root, name="acting")) == 0
+    assert not join.exists()
+    capsys.readouterr()
+
+    assert cmd_addon_uninstall_action(_uninstall_action_args(config_dir, repo_root)) == 0
+    assert capsys.readouterr().out.startswith("purge\0")
+    # The action reaches wiki over the joined network, as it would while active.
+    override = yaml.safe_load(join.read_text(encoding="utf-8"))
+    assert "papaia-wiki-net" in override["services"]["job"]["networks"]
+    # The add-on stays removed; only its overrides are back for the run.
+    deployed = yaml.safe_load((config_dir / "deployment.yaml").read_text(encoding="utf-8"))
+    assert [a["active"] for a in deployed["addons"] if a["name"] == "acting"] == [False]
+
+
+def test_uninstall_action_prints_nothing_without_a_marked_action(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_uninstall_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path)
+    _install_acting(config_dir, repo_root, addon)
+    capsys.readouterr()
+
+    assert cmd_addon_uninstall_action(_uninstall_action_args(config_dir, repo_root)) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_uninstall_action_of_an_addon_without_manifest_warns(
+    repo_root, config_dir, tmp_path, capsys
+):
+    from lib.cli_addon import cmd_addon_uninstall_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path, _PURGE)
+    _install_acting(config_dir, repo_root, addon)
+    (addon / "papaia-app.yaml").unlink()
+    capsys.readouterr()
+
+    assert cmd_addon_uninstall_action(_uninstall_action_args(config_dir, repo_root)) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no clean-up action" in captured.err
+
+
+def test_uninstall_action_refuses_two_marked_actions(repo_root, config_dir, tmp_path, capsys):
+    from lib.cli_addon import cmd_addon_uninstall_action
+
+    _setup(repo_root, config_dir)
+    addon = _action_addon(tmp_path, _PURGE)
+    _install_acting(config_dir, repo_root, addon)
+    manifest = yaml.safe_load((addon / "papaia-app.yaml").read_text(encoding="utf-8"))
+    manifest["actions"]["reset"]["on_uninstall"] = True
+    (addon / "papaia-app.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    capsys.readouterr()
+
+    assert cmd_addon_uninstall_action(_uninstall_action_args(config_dir, repo_root)) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "only one action may set on_uninstall" in captured.err
 
 
 def _install_dependent(repo_root, config_dir, tmp_path, requires: list) -> None:

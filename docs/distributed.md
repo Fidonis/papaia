@@ -164,7 +164,7 @@ Each node writes one line per command it receives, refused ones included, to
 `<root>/audit.log`.
 
 **Which release a node gets.** In a Git checkout, the nodes get the release tag of the
-controller's `VERSION` (`v1.8.0`), and only when the checkout is at that tag with no tracked
+controller's `VERSION` (`v1.9.0`), and only when the checkout is at that tag with no tracked
 file changed. Otherwise `start`, `node sync` and the join archive refuse, since a node would
 record a version its files do not match. A release tarball ships as it is. For development on a
 branch, `PAPAIA_ALLOW_UNTAGGED_CHECKOUT=1` ships the working tree, uncommitted changes
@@ -333,8 +333,10 @@ node as a whole, and the Upgrade page shows the release of each node. Module, ov
 changes run on the node of the module and then on the nodes of the proxy and of Keycloak; if one
 of those two does not answer, the change stays in place and the job names the `papaia-ctl start
 --profiles=<profile> --node=<node>` that catches the node up. Switching a module off keeps its
-data, because `stop --volumes` is refused across nodes. While an upgrade has not finished or a
-node runs another release, every admin page says so and refuses what `papaia-ctl` would refuse.
+data, because `stop --volumes` is refused across nodes. An add-on's maintenance actions are
+refused as well (papaia-manager 1.7.0), since `papaia-ctl addon run` is single-host. While an
+upgrade has not finished or a node runs another release, every admin page says so and refuses
+what `papaia-ctl` would refuse.
 The manager reaches the nodes only through the core's own commands, with the keys the core keeps
 in the configuration directory.
 

@@ -19,12 +19,35 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import common
 
 EnvTree = dict[str, dict[str, str]]
+
+# The addresses setup derives from the app host and then keeps. The template fills them
+# with host.docker.internal, which looks like a choice and is none.
+_DERIVED_ADDRESSES = (
+    ("", "AUTH_HOST"),
+    ("", "LITELLM_PUBLIC_URL"),
+    ("", "LOCALAI_PUBLIC_URL"),
+    ("", "MANAGER_PUBLIC_URL"),
+    ("", "NPM_ADMIN_HOST"),
+    ("ai/librechat", "DOMAIN_SERVER"),
+)
+# What setup decides. A value that differs from the template is a choice, also in a root
+# .env no setup has written.
+_SETUP_CHOICES = (
+    *_DERIVED_ADDRESSES,
+    ("", "PAPAIA_HOST"),
+    ("", "AUTH_PROVIDER"),
+    ("", "OIDC_ISSUER"),
+    ("", "QDRANT_PUBLIC_URL"),
+    ("", "COMPOSE_PROFILES"),
+    ("", "LOCALAI_IMAGE_VARIANT"),
+)
 
 
 def discover_env_examples(repo_root: Path) -> dict[str, Path]:
@@ -62,11 +85,59 @@ def load_config_dir_tree(config_dir: Path, repo_root: Path) -> EnvTree:
     return tree
 
 
+def load_setup_tree(
+    config_dir: Path, repo_root: Path, *, auth_provider: str | None = None
+) -> tuple[EnvTree, bool]:
+    """The tree `setup` starts from, and whether it holds a configuration to keep.
+
+    A root .env that a setup wrote (PAPAIA_VERSION) is taken as it is. In any other one an
+    address with the template's value was never chosen, so setup derives it:
+
+    - With one of _SETUP_CHOICES set to something else, it is a configuration to keep,
+      less those template addresses. Only those setup derives again: none with a stored
+      external_oidc, and not AUTH_HOST when this run switches to it (`auth_provider`).
+    - Without, it is still a first setup: a root .env prepared with, say, only
+      PAPAIA_WORKSPACE_DIR (what the native LocalAI refusal advises), or the template an
+      older release left behind when it refused a first setup. Its values are kept and the
+      keys it lacks come from the template."""
+    tree = load_config_dir_tree(config_dir, repo_root)
+    if not (config_dir / ".env").is_file():
+        return tree, False
+    root = tree.get("", {})
+    if root.get("PAPAIA_VERSION"):
+        return tree, True
+    seed = load_seed_tree(repo_root)
+
+    def chosen(rel_dir: str, key: str) -> bool:
+        value = tree.get(rel_dir, {}).get(key, "")
+        return bool(value) and value != seed.get(rel_dir, {}).get(key, "")
+
+    if not any(chosen(*choice) for choice in _SETUP_CHOICES):
+        tree[""] = {**seed.get("", {}), **root}
+        return tree, False
+    if root.get("AUTH_PROVIDER") != "external_oidc":
+        for rel_dir, key in _DERIVED_ADDRESSES:
+            if key == "AUTH_HOST" and auth_provider == "external_oidc":
+                continue
+            if not chosen(rel_dir, key):
+                tree.setdefault(rel_dir, {})[key] = ""
+    return tree, True
+
+
 def init(
-    config_dir: Path, repo_root: Path, *, env_name: str = "papaia", force: bool = False
+    config_dir: Path,
+    repo_root: Path,
+    *,
+    env_name: str = "papaia",
+    force: bool = False,
+    env_files: bool = True,
 ) -> None:
     """Create and seed $PAPAIA_CONFIG_DIR. Does not generate secrets or
-    touch src/**/.env -- purely seeds the config dir from shipped defaults."""
+    touch src/**/.env -- purely seeds the config dir from shipped defaults.
+
+    env_files=False creates only the directories and deployment.yaml. `setup` writes the
+    .env files itself, resolved: a template root .env must never be on disk, not even for
+    a moment."""
     common.ensure_dir(config_dir / "overlay")
     common.ensure_dir(config_dir / "overrides")
     common.ensure_dir(config_dir / "overrides" / "addons")
@@ -79,7 +150,7 @@ def init(
     common.ensure_dir(config_dir / "ai" / "rag" / "catalog")
     common.ensure_dir(config_dir / "ai" / "rag" / "documents")
 
-    seed = load_seed_tree(repo_root)
+    seed = load_seed_tree(repo_root) if env_files else {}
     for rel_dir, values in seed.items():
         target = config_dir / rel_dir / ".env" if rel_dir else config_dir / ".env"
         if target.is_file() and not force:
@@ -327,9 +398,20 @@ def write_run_summary(config_dir: Path, tree: EnvTree, *, fresh_init: bool, forc
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def persist_tree(tree: EnvTree, config_dir: Path, repo_root: Path) -> None:
+def persist_tree(
+    tree: EnvTree,
+    config_dir: Path,
+    repo_root: Path,
+    *,
+    before_root: Callable[[], None] | None = None,
+) -> None:
+    """Write the tree, the root .env last: it is what makes the config dir a configured
+    installation. `before_root` runs right before it, for what belongs to the same step."""
     seed = load_seed_tree(repo_root)
-    for rel_dir, values in tree.items():
+    for rel_dir in sorted(tree, key=lambda name: name == ""):
+        if rel_dir == "" and before_root is not None:
+            before_root()
+        values = tree[rel_dir]
         template = seed.get(rel_dir)
         template_path = (
             (repo_root / "src" / rel_dir / ".env.example")

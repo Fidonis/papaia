@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.8.0 |
-| **Date** | 2026-11-07 |
-| **Status** | Active — describes the 1.8.0 release as built |
+| **Version** | 1.9.0 |
+| **Date** | 2026-11-20 |
+| **Status** | Active — describes the 1.9.0 release as built |
 | **Scope** | Platform architecture, add-on contract, workspace topology, deployment model |
 | **Author(s)** | Marko Böhm |
 | **Maintainer** | [Fidonis GmbH](https://www.fidonis.de) |
@@ -278,6 +278,21 @@ actions:                           # optional (addon_api 4): maintenance actions
     description: "Restore the initial data"  # service a compose profile (e.g.
                                    # `profiles: [actions]`) so `addon start` skips it.
     destructive: true              # optional: callers (papaia-manager) confirm first
+  purge:
+    service: maintenance
+    args: ["purge"]
+    description: "Remove the records this add-on wrote into other add-ons"
+    on_uninstall: true             # optional (addon_api 8), at most one action: run
+                                   # by `addon uninstall --clean-up` before the add-on's
+                                   # containers and volumes are removed. For data the
+                                   # add-on wrote outside its own volumes. A non-zero
+                                   # exit stops the uninstall before anything is removed;
+                                   # `--force` goes on with a warning. Plain `uninstall`
+                                   # (data kept) does not run it. After `addon remove` it
+                                   # still runs with the add-on's join_addons and ssl-cert
+                                   # overrides. Single host only: a distributed
+                                   # installation refuses (exit 2) unless `--force`.
+                                   # Older cores ignore it.
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -299,6 +314,16 @@ knowledge:                         # optional (addon_api 6): the knowledge sourc
         classification: internal   # the operator decides in governance.yaml (ADR 0016)
         personal_data: ordinary
         data_subjects: [employees]
+
+exposes:                           # optional (addon_api 7): what this add-on offers
+  - id: <name>.mcp                 # other modules, for the platform services catalogue
+    kind: mcp                      # (ADR 0017): mcp | rest | llm_api | task_feed |
+    title: {de: "...", en: "..."}  # flow_provider. Older cores ignore the key.
+    url: http://<name>-mcp:8000/mcp
+    auth: oidc_bearer              # oidc_bearer (needs audience) | own_oauth | none
+    audience: mcp-<name>
+    max_class: internal            # highest data class the service may receive
+    consumable: true               # false needs `reason`; own_oauth is never consumable
 ```
 
 #### `.env.example` value markers
@@ -518,7 +543,14 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
 
 - **Tombstones:** An agent or prompt whose add-on no longer provides it is deleted,
   together with its access entries and project links. Agents and prompts created in
-  the UI or from the operator directories are never touched.
+  the UI or from the operator directories are never touched. `addon remove` and
+  `addon uninstall` of an add-on with agents or prompts run both init scripts once in a
+  one-off `librechat` container (`compose run --no-deps`, the compose files of `start`),
+  so its agents and prompts disappear without restarting LibreChat. Not the running
+  container: the render replaced the content directories, and the running container
+  still mounts the old, now empty one, which would read as "no add-on content" and
+  delete the agents of every other add-on. While LibreChat is down, and in a distributed
+  installation, its next start does it.
 - **Validation at render:** An agent that names an MCP server the rendered
   `librechat.yaml` does not define is skipped with a warning, because it would
   appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
@@ -540,6 +572,31 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
 - **Known limitation:** A distributed installation does not ship the override or
   the two directories to a node bundle, so add-on agents and prompts are not
   provisioned there (Fidonis/papaia#368).
+
+### Platform services catalogue (addon_api 7)
+
+What the core modules and add-ons offer other modules is rendered into
+`$PAPAIA_CONFIG_DIR/platform/services.json`, format `papaia.platform-services/1`
+(ADR 0017, schema `tools/schemas/platform-services.schema.json`). Consumers such as
+papaia Studio and papaia-work mount it read-only and read their MCP servers and APIs
+from it instead of from another product's configuration.
+
+- **Declarations:** core modules in an `exposes.yaml` next to their compose file
+  (`src/ai/mcp-firecrawl`, `src/ai/rag`, `src/ai/knowledge-map`; the latter two only
+  while their profile is active), add-ons under the manifest key `exposes:`.
+- **Rendered on every render** (`setup`, `start`, add-on install, upgrade, removal),
+  atomically, sorted by id, with `addon` (`core` or the add-on's name), `version`
+  and, for core modules, `profile`. A `digest` covers the services; `generated_at`
+  stays while the digest does not change, so a render without changes leaves the file
+  byte-identical.
+- **Checks:** ids are unique across the core and all add-ons; `oidc_bearer` needs an
+  `audience`; `own_oauth` is never `consumable`; `consumable: false` needs a `reason`.
+  `addon install` refuses an add-on whose entries fail these checks, and a render with
+  invalid entries stops with a named error.
+- **Nothing granted:** the file holds no secrets. An entry is an offer; each consumer
+  decides whether and how to connect it, with its own approval.
+- **Independent of LibreChat:** LibreChat keeps its own configuration (Seam 3); the
+  catalogue neither reads nor changes it.
 
 ### Seam 4 — Ingress (optional)
 
@@ -585,7 +642,7 @@ No Core changes required.
 | `papaia-ctl addon stop <name> --clean-up` | `docker compose down` (remove containers, keep volumes) |
 | `papaia-ctl addon remove <name>` | Remove override → re-render Core → `active: false` in manifest. **Containers untouched, config bundle kept.** |
 | `papaia-ctl addon uninstall <name>` | Remove override + deployment entry → delete config bundle → `docker compose down` |
-| `papaia-ctl addon uninstall <name> --clean-up` | Like `uninstall` + `docker compose down -v` (also delete volumes) |
+| `papaia-ctl addon uninstall <name> --clean-up` | Run the action marked `on_uninstall: true` (if any, also after `remove`, with the add-on's overrides; a failure, or a distributed installation, stops here unless `--force`) → like `uninstall` + `docker compose down -v` (also delete volumes) |
 
 The Compose calls above run with `-p <addon directory name>`, the add-on's `docker-compose.yml` and the
 core `.env`. When that file is missing (a deleted or half-written add-on directory), Compose cannot build
@@ -700,7 +757,7 @@ git-pristine; the source of truth lives in the config directory.
     ├── manager/                         # papaia-manager state: catalogs · installed · tiles · jobs
     ├── certs/                           # GENERATED local CA + Keycloak server certificate
     ├── migrations/applied.json          # Which release migrations have run
-    ├── overrides/                       # GENERATED docker-compose.<addon>.override.yml
+    ├── overrides/                       # GENERATED docker-compose.<name>.override.yml
     └── overlay/                         # Customer overlay (hand-authored, survives re-render)
         └── ai/librechat/librechat.yaml
 ```
@@ -1024,7 +1081,10 @@ render stops before `docker compose up`, so a running stack is not touched.
 **Applying an overlay means recreating the services that read it.** A render replaces each
 target with a new file, and most targets are bind-mounted single files, so a running
 container keeps the one it was created with. `papaia-ctl stop --clean-up --profiles=<profile>`
-followed by `start` recreates the group; a restart is not enough.
+followed by `start` recreates the group; a restart is not enough. LiteLLM needs no `stop`: every
+render labels it with a hash of its configuration
+(`overrides/docker-compose.litellm-config.override.yml`), so a `start` that includes the
+`litellm` profile recreates it when that configuration changed.
 
 **Previewing a draft.** `python3 -m lib.cli --repo-root R --config-dir C render-preview
 --target=<path> --overlay-file=<file>` merges a draft overlay onto the same layers `render`
@@ -1201,7 +1261,7 @@ reads from the same place.
 
 | Variable | Default | Grants |
 |---|---|---|
-| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, backup, mail, settings (modules and overlay) and, while the `rag` profile is active, the RAG pages |
+| `MANAGER_ADMIN_ROLE` | `manager-admin` | Full access except Users — add-ons, catalogues, jobs, dashboard, host, models, backup, mail, settings (modules and overlay), nodes, the AI map and, while the `rag` profile is active, the RAG pages |
 | `MANAGER_USER_ROLE` | `user` | Dashboard only; admins hold it implicitly |
 | `MANAGER_IDENTITY_ADMIN_ROLE` | `papaia-admin` | The Users page and `/api/v1/users`, `/api/v1/roles`: the accounts, their roles and sessions, and the realm's roles themselves. A tier above the admin role: `manager-admin` alone is not enough |
 
@@ -1253,6 +1313,21 @@ fails the add-on stays active. It is refused while the add-on's `docker-compose.
 a core before 1.7.0 aims its Compose call at the core project then (see the add-on lifecycle table
 above), so a manager on such a core could take its own stack down.
 
+### Add-on requirements and maintenance actions
+
+The manager reads `requires.addons` and `actions` from the manifest itself and leaves the decision
+to `papaia-ctl`. Each required add-on is shown with its state (active, inactive, missing, too old,
+or unchecked when a version or range cannot be read), and *Install* is disabled while one is unmet,
+unless the compatibility mode is `warn`, where `papaia-ctl` installs anyway. The other direction,
+the active add-ons that require an add-on, is shown as *Required by*; while there is one, *Remove*
+and *Uninstall* answer 409 in every compatibility mode, and the queued job checks again before it
+takes anything down, since an install queued ahead can add a dependent. A declared maintenance
+action is a button that queues exactly `papaia-ctl addon run <add-on> <action>`: the request
+carries the action's name only, never a command or an argument, `run` is not one of the generic
+verbs, and an undeclared action or an inactive add-on is a 404. Destructive actions ask for a
+confirmation; on a distributed installation actions are refused, as `addon run` is single-host.
+Both need a core with these manifest fields (1.9.0 or newer).
+
 ### Long-running operations
 
 Installs, upgrades and lifecycle verbs shell out to `papaia-ctl` and can take minutes
@@ -1297,20 +1372,24 @@ Settings has three tabs: *Manager* (the manager's own configuration), *Modules* 
 The last two keep no second source of truth; both drive the core.
 
 **Modules.** The tab is the one place in the manager that switches the optional modules
-(LocalAI with its accelerator variant, web search, the RAG system and the mail relay) on and off.
+(LocalAI with its accelerator variant, web search, the RAG system, voice, the mail relay and the
+knowledge map) on and off.
 It stores the choice with the core's own `setup`, so validation, sticky values and generated
 secrets stay in one implementation, and starts the module's profile. Which volumes a module owns,
 what its settings consist of and which questions `setup` still needs answered when the module is
 switched on (the public URL of LocalAI and of Qdrant, the relay's mail server) come from the core's
 read-only `module-info`; deleting a module's data (its volumes) and/or its settings is the core's
 `module-purge`, offered only for a module that is switched off, with the module's name typed back
-as confirmation. Both are internal commands of the core's Python entry point, not `papaia-ctl`
+as confirmation. The files an operator wrote by hand for a module (the knowledge map's
+declarations, governance records and gold set) are neither data nor settings: they go only when
+`module-purge --operator-files` asks for them, a separate choice that is off by default. Both are internal commands of the core's Python entry point, not `papaia-ctl`
 verbs, and the manager passes them typed options only: one module, never `--force`, `--env` or any
 other part of the configuration. A core without them (before 1.6.0) still switches LocalAI and web
 search and switches modules off keeping everything.
 
-**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM
-and SearXNG ([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
+**Overlay.** The tab edits the files under `$PAPAIA_CONFIG_DIR/overlay/` for LibreChat, LiteLLM,
+SearXNG and Chatterbox, the speech synthesis of the `voice` profile
+([§13](#13-customer-overlay--3rd-render-layer)). The effective result shown next to the
 draft is the core's `render-preview`: the draft merged in memory, nothing written. *Apply* saves
 the file and recreates the services that read it as a queued job. Before every Apply, Discard and
 roll-back the previous file is copied to `$PAPAIA_CONFIG_DIR/manager/overlay-history/` (the latest
@@ -1327,7 +1406,8 @@ process in its environment only, never in an argument or the log. While the rela
 recreated and the Keycloak realm gets it as its mail server (`papaia-ctl keycloak-role-sync`), which
 is what lets the Users page offer a mailed link. *Notifications* belongs to the manager: recipients
 (an email address or a webhook URL) choose which events they receive — a failed job, an overdue
-backup, a service that stopped or turned unhealthy, an available update, an expiring certificate.
+backup, a service that stopped or turned unhealthy, an available update, an expiring certificate,
+a new or changed high finding of the AI map that no exception covers.
 The checks run on an interval and after every job, each event is reported once per occurrence
 (`notifications-state.json` keeps what was reported), email goes through the relay and a webhook
 gets a JSON `POST`. A notification carries no job log and no error text.
@@ -1416,6 +1496,23 @@ The core's `upgrade.lock` and each node's `state.json` drive a banner and the sa
 core would make. Switching a module off keeps its data, because the core does not delete volumes
 across nodes. Without a topology in `deployment.yaml` none of this runs, and a single host
 behaves as before.
+
+### AI map
+
+The *AI map* page (`/knowledge-map`, administrators only) is the management view of the
+[knowledge map](knowledge-map.md) ([ADR 0013](adr/0013-knowledge-map-as-optional-core-profile.md)).
+It computes no rule of its own: the rendered map and `lints.yaml` come from the configuration
+directory, as the core's render wrote them, and the server's own view, usage, gold-set runs and
+mined refinements from the map server's admin API at `KNOWLEDGE_MAP_URL`
+(`http://knowledge-map-mcp:8200` on the stack network) with the bearer `KM_ADMIN_TOKEN`, read
+from `$PAPAIA_CONFIG_DIR/ai/knowledge-map/.env` when a request needs it. The only check it adds
+is a live comparison of the model tiers against LiteLLM (findings with `origin: manager`). Every
+change, an entry, an override of a declared entry, an operator file or a governance record under
+`overlay/knowledge-map/`, is a queued job that checks the file, writes it, renders the map and
+puts the previous file back when the render refuses it. A routing test or an entry probe asks
+the map server without recording anything. High findings that no exception covers feed the
+notifications. The module itself is switched in the Modules tab; deleting its operator files is
+the separate `module-purge --operator-files` choice described above.
 
 ---
 

@@ -8,6 +8,8 @@
 SETUP_TOPOLOGY_ARGS=()
 # The LocalAI runtime flag of the setup run in progress, same lifetime.
 SETUP_LOCALAI_ARGS=()
+# The knowledge map switch of the setup run in progress, same lifetime.
+SETUP_KNOWLEDGE_MAP_ARGS=()
 
 # Reads a py_cli subcommand's KEY=VALUE output into the current shell's
 # variables.
@@ -53,6 +55,7 @@ cmd_setup() {
     local auth_provider="" oidc_issuer=""
     local reverse_proxy_provider="" external_reverse_proxy="" allow_direct_port_access=0
     local web_search="" local_ai="" localai_variant="" localai_runtime="" manager="" rag="" voice="" voice_variant="" reranker_model="" backup_dir=""
+    local knowledge_map=""
     local smtp="" smtp_host="" smtp_port="" smtp_security="" smtp_user="" smtp_no_auth=0
     local smtp_from="" smtp_from_name="" smtp_password="${PAPAIA_SMTP_PASSWORD:-}"
     local force=0 non_interactive=0 env_only=0
@@ -63,6 +66,7 @@ cmd_setup() {
     # The topology of a distributed installation, same lifetime as the mail arguments.
     SETUP_TOPOLOGY_ARGS=()
     SETUP_LOCALAI_ARGS=()
+    SETUP_KNOWLEDGE_MAP_ARGS=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -140,6 +144,8 @@ cmd_setup() {
             --qdrant-host=*) qdrant_host="${1#*=}" ;;
             --voice) voice="true" ;;
             --no-voice) voice="false" ;;
+            --knowledge-map) knowledge_map="true" ;;
+            --no-knowledge-map) knowledge_map="false" ;;
             --smtp) smtp="true" ;;
             --no-smtp) smtp="false" ;;
             --smtp-host=*) smtp_host="${1#*=}" ;;
@@ -313,6 +319,11 @@ cmd_setup() {
             info "  Voice (STT/TTS)   = $_voice_label"
             [ "$VOICE_STICKY" = "true" ] && [ -n "${VOICE_VARIANT_STICKY:-}" ] && \
                 info "  Voice TTS Image   = $VOICE_VARIANT_STICKY"
+        fi
+        if [ -n "${KNOWLEDGE_MAP_STICKY:-}" ]; then
+            local _km_label="disabled"
+            [ "$KNOWLEDGE_MAP_STICKY" = "true" ] && _km_label="enabled"
+            info "  Knowledge map     = $_km_label"
         fi
         if [ -n "${SMTP_STICKY:-}" ]; then
             local _smtp_label="disabled"
@@ -557,6 +568,26 @@ cmd_setup() {
             load_localai_variants
             voice_variant="$(_prompt_voice_variant)"
         fi
+        if [ -z "$knowledge_map" ]; then
+            # Off for a fresh install (ADR 0013): the map pays off once several knowledge
+            # sources are connected. A previous opt-in stays the default so a re-run does
+            # not flip it.
+            local knowledge_map_default="2"
+            [ "${KNOWLEDGE_MAP_STICKY:-}" = "true" ] && knowledge_map_default="1"
+            printf '\n%sInstall Knowledge Map%s\n' "$CYAN" "$NC" >&2
+            printf '  1) Yes  — an MCP directory that tells the chat where knowledge lives, trimmed to the roles of each user\n' >&2
+            printf '  2) No   — skip the knowledge map (default)\n' >&2
+            local knowledge_map_choice
+            knowledge_map_choice="$(prompt_with_default "  Choose" "$knowledge_map_default")"
+            case "$knowledge_map_choice" in
+                1|[Yy]|[Yy]es|YES) knowledge_map="true" ;;
+                2|[Nn]|[Nn]o|NO)   knowledge_map="false" ;;
+                *)
+                    warn "Unrecognized choice '$knowledge_map_choice'; defaulting to disabled."
+                    knowledge_map="false"
+                    ;;
+            esac
+        fi
         if [ -z "$smtp" ]; then
             # Off for a fresh install: the relay needs a mail server only the operator
             # knows. A previous opt-in stays the default so a re-run does not flip it.
@@ -636,6 +667,7 @@ cmd_setup() {
     [ -n "$smtp_from_name" ] && SETUP_SMTP_ARGS+=(--smtp-from-name="$smtp_from_name")
     SETUP_SMTP_PASSWORD="$smtp_password"
     [ -n "$localai_runtime" ] && SETUP_LOCALAI_ARGS+=(--localai-runtime="$localai_runtime")
+    [ -n "$knowledge_map" ] && SETUP_KNOWLEDGE_MAP_ARGS+=(--enable-knowledge-map="$knowledge_map")
     # A variant is a property of the enabled profile: when voice ends up off
     # (an explicit --no-voice, a No at the prompt, or an untouched sticky
     # opt-out), no probed or flagged variant may be stored as a choice.
@@ -1126,6 +1158,9 @@ _run_setup_py() {
     # _run_setup_py already takes 23 positional arguments; new ones come bundled.
     if [ "${#SETUP_LOCALAI_ARGS[@]}" -gt 0 ]; then
         extra+=(${SETUP_LOCALAI_ARGS[@]+"${SETUP_LOCALAI_ARGS[@]}"})
+    fi
+    if [ "${#SETUP_KNOWLEDGE_MAP_ARGS[@]}" -gt 0 ]; then
+        extra+=(${SETUP_KNOWLEDGE_MAP_ARGS[@]+"${SETUP_KNOWLEDGE_MAP_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.

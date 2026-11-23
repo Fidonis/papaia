@@ -12,6 +12,67 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+## [1.9.0] - 2026-11-20
+
+### 🚀 Features
+
+- feat: switch the knowledge map like the other optional modules (#410) @marko-boehm
+- feat: knowledge map as an optional core profile with inventory and governance checks (#394) @WilhelmSebastian
+- feat(localai): manage the native localai through launchd (#389) @fwahl711
+- feat(localai): run localai natively on apple silicon macs (#388) @fwahl711
+- feat(librechat): add a command to clear a user's chat history (#375) @fwahl711
+- feat(localai): register the local models in litellm and authenticate with an api key (#373) @fwahl711
+- feat: add local voice (stt and tts) as an optional core profile (#393) @WilhelmSebastian
+- feat(ctl): pull images quietly when stderr is not a terminal (#374) @fwahl711
+- feat(keycloak): create add-on clients and their secrets automatically (#334) @fwahl711
+- feat(librechat): let add-ons provide agents and prompts (#321) @fwahl711
+- feat(addon): add add-on defined maintenance actions and addon run (#319) @fwahl711
+- feat(addon): fill an env prompt from a value another add-on exports (#317) @fwahl711
+- feat(addon): let selected services join a required add-on's network (#315) @fwahl711
+- feat(addon): let an add-on require other add-ons (#312) @fwahl711
+- feat(setup): support papaia-manager on docker desktop for macos (#299) @fwahl711
+
+### 🐛 Bug Fixes
+
+- fix(mcp-firecrawl): serve on node port 3000 after the image dropped nginx (#425) @marko-boehm
+- fix(keycloak): disable hsts while plain-http services share the auth hostname (#377) @WilhelmSebastian
+- fix(uninstall): delete root-owned data in the config dir through a container (#371) @fwahl711
+- fix(librechat): bump mongo to 8.3.17 for Linux >= 6.19 (#385) @WilhelmSebastian
+- fix(addon): describe a managed client's secret as generated in the checklist and plan (#384) @fwahl711
+- fix(librechat): keep an operator agent while its file fails and drop all its acl entries (#383) @fwahl711
+- fix(librechat): derive mcp tool keys for provisioned agents with an empty tools list (#376) @WilhelmSebastian
+- fix(addon): check dependents when install re-points an installed add-on (#370) @fwahl711
+- fix(setup): apply the stored auth_host rules to the interactive prompt (#342) @fwahl711
+- fix(certs): keep the local ca key private and limit what the ca can sign (#355) @fwahl711
+- fix(librechat): share provisioned agents and clean up their old documents (#360) @fwahl711
+- fix(keycloak): verify the host_ip connection as strictly as the default (#344) @fwahl711
+- fix(librechat): store provisioned agents under an agent_ id (#309) @fwahl711
+
+### 📖 Documentation
+
+- docs: lift the experimental flag off the distributed mode (#387) @WilhelmSebastian
+- docs(distributed): close validation-runbook gaps found in #262 (#386) @WilhelmSebastian
+- docs: describe how to replace an older local ca (#379) @fwahl711
+- docs: update five image versions in the third-party licenses (#357) @fwahl711
+
+### 🧹 Maintenance
+
+- chore: bump papaia-manager to 1.7.0 (#426) @marko-boehm
+- chore(rag): bump qdrant-mcp-rbac to 0.4.2 (#397) @fwahl711
+- test(golden): record the compose output after the latest image bumps (#390) @marko-boehm
+- chore(deps): bump firecrawl/firecrawl-mcp-server from `77f1a6f` to `d9015c8` in /src/ai/mcp-firecrawl (#364) @dependabot
+- chore(deps): bump localai/localai from v4.7.1 to v4.12.1 in /src/ai/localai (#363) @dependabot
+- chore(deps): bump prom/prometheus from v3.15.1 to v3.16.0 in /src/ai/litellm (#362) @dependabot
+- chore(deps): bump firecrawl/firecrawl from 2.11.703 to 2.11.705 in /src/services/firecrawl in the compose-patch group across 1 directory (#361) @dependabot
+- test(golden): record the compose output after the image bumps (#351) @marko-boehm
+- chore(deps): bump prom/prometheus from v3.13.1 to v3.15.1 in /src/ai/litellm (#349) @dependabot
+- chore(deps): bump librechat-ai/librechat-rag-api-dev-lite from v0.8.0 to v0.9.0 in /src/ai/librechat (#347) @dependabot
+- chore(deps): bump mongo from 8.0.20 to 8.3.13 in /src/ai/librechat (#346) @dependabot
+- chore(deps): bump the compose-patch group across 4 directories with 3 updates (#345) @dependabot
+- chore(litellm): bump proxy image to v1.108.3 (#352) @marko-boehm
+
+**Full Changelog**: https://github.com/Fidonis/papaia/compare/v1.8.0...v1.9.0
+
 ## [1.8.0] - 2026-11-07
 
 ### 🚀 Features
