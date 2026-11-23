@@ -22,7 +22,7 @@ import pytest
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parent
 FIXTURES = Path(__file__).parent / "fixtures" / "licenses"
-KIT_VERSION = "0.1.4"
+KIT_VERSION = "0.2.3"
 KIT_WHEEL = f"vendor/papaia-kit/{KIT_VERSION}/papaia_kit-{KIT_VERSION}-py3-none-any.whl"
 
 # The kit needs Python 3.12 (CI runs 3.12); papaia-ctl itself keeps running on 3.10.

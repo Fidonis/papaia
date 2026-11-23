@@ -331,6 +331,48 @@ def test_addon_upgrade_to_a_colliding_id_changes_nothing(tmp_path, capsys):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# create operations without resource.id_field (kit 0.2.3)
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_a_create_operation_without_id_field_passes_the_exposes_check():
+    section = _manifest("addon-probe")["exposes"]
+    write_note = section[0]["operations"][1]
+    assert (write_note["effect"], write_note["retry"]) == ("write", "at_most_once")
+    del write_note["resource"]["id_field"]
+    exposes.check(section, "probe")
+
+
+@pytest.mark.parametrize(
+    ("effect", "retry"),
+    [("write", "idempotent"), ("write", "safe"), ("delete", "idempotent"), ("check", "safe")],
+)
+def test_an_operation_other_than_a_create_without_id_field_is_refused(effect, retry):
+    section = _manifest("addon-probe")["exposes"]
+    operation = section[0]["operations"][1]
+    operation.update(effect=effect, retry=retry)
+    del operation["resource"]["id_field"]
+    with pytest.raises(exposes.ExposesError) as err:
+        exposes.check(section, "probe")
+    assert "probe: exposes/0/operations/1/resource/id_field" in str(err.value)
+
+
+def test_the_catalog_schema_accepts_a_create_without_id_field_and_nothing_else():
+    """platform-services.v1 states the same rule as exposes.v1 for the rendered entry."""
+    schema = _schema("platform-services.v1.schema.json")
+    operation = {
+        "name": "create_tag", "version": 1, "title": {"de": "Tag anlegen", "en": "Create tag"},
+        "via": "tools", "effect": "write", "retry": "at_most_once",
+        "input_schema": {"type": "object"}, "output_schema": {"type": "object"},
+        "data_class_max": "internal", "resource": {"type": "tag"}, "rights_check": "server",
+    }
+    rule = {**schema["$defs"]["Operation"], "$defs": schema["$defs"]}
+    schema_check.validate(operation, rule)
+    with pytest.raises(schema_check.SchemaError) as err:
+        schema_check.validate({**operation, "retry": "idempotent"}, rule)
+    assert err.value.path == "/resource/id_field"
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # canonical form and content hash (RFC 8785)
 # ─────────────────────────────────────────────────────────────────────────
 

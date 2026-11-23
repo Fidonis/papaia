@@ -164,7 +164,7 @@
         "resource": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "id_field"],
+          "required": ["type"],
           "properties": {
             "type": {"$ref": "#/$defs/Identifier"},
             "id_field": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$(?!\\n)"}
@@ -183,6 +183,14 @@
         {
           "if": {"properties": {"effect": {"enum": ["write", "delete", "check"]}}},
           "then": {"required": ["resource"]}
+        },
+        {
+          "$comment": "Only a create, a write that is never repeated automatically, may leave out resource.id_field: it names no existing object yet.",
+          "if": {
+            "required": ["effect", "retry"],
+            "properties": {"effect": {"const": "write"}, "retry": {"const": "at_most_once"}}
+          },
+          "else": {"properties": {"resource": {"required": ["id_field"]}}}
         }
       ]
     },

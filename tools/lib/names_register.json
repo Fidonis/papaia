@@ -140,7 +140,7 @@
     {"name": "flow", "successor": "aud-flow", "kinds": ["scope"]}
   ],
   "exchange_scopes": {
-    "kit": "0.1.4",
+    "kit": "0.2.3",
     "prefix": "aud-",
     "scopes": [
       {"audience": "flow", "scope": "aud-flow"},

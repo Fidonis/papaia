@@ -1,0 +1,13 @@
+{
+  "clientId": "mcp-paperless",
+  "name": "MCP Paperless",
+  "description": "OIDC resource server — validates forwarded LibreChat user tokens; no login flows",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "standardFlowEnabled": false,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": false,
+  "fullScopeAllowed": false
+}

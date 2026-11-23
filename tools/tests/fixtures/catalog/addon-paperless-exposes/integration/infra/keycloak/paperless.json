@@ -1,0 +1,32 @@
+{
+  "clientId": "paperless",
+  "name": "Paperless-ngx",
+  "description": "Paperless document management — OIDC login via Keycloak",
+  "enabled": true,
+  "clientAuthenticatorType": "client-secret",
+  "secret": "${env.KC_PAPERLESS_CLIENT_SECRET}",
+  "redirectUris": ["*"],
+  "webOrigins": ["+"],
+  "standardFlowEnabled": true,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "publicClient": false,
+  "protocol": "openid-connect",
+  "fullScopeAllowed": true,
+  "protocolMappers": [
+    {
+      "name": "groups",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-usermodel-realm-role-mapper",
+      "consentRequired": false,
+      "config": {
+        "multivalued": "true",
+        "userinfo.token.claim": "true",
+        "id.token.claim": "true",
+        "access.token.claim": "true",
+        "claim.name": "groups",
+        "jsonType.label": "String"
+      }
+    }
+  ]
+}

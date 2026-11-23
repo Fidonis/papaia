@@ -12,13 +12,13 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
     "jsonschema>=4.18",
-    "papaia-kit==0.1.4 ; python_version >= '3.12'",
+    "papaia-kit==0.2.3 ; python_version >= '3.12'",
 ]
 
 # The kit has no package index: its release wheel is vendored and pinned by sha256 in
 # kit.lock and uv.lock (tests/test_ci_checks.py keeps the three in step).
 [tool.uv.sources]
-papaia-kit = { path = "vendor/papaia-kit/0.1.4/papaia_kit-0.1.4-py3-none-any.whl" }
+papaia-kit = { path = "vendor/papaia-kit/0.2.3/papaia_kit-0.2.3-py3-none-any.whl" }
 
 [tool.ruff]
 line-length = 100

@@ -998,7 +998,11 @@ read-only; the core is their only writer.
   checked against the papaia-kit schema `exposes.v1`, vendored under
   `tools/schemas/kit` with the digests of `snapshot.json`. `addon check`, `addon
   install`, `addon start` and `addon upgrade` refuse an invalid section, name the field
-  and the reason, and leave the catalog unchanged.
+  and the reason, and leave the catalog unchanged. An operation with a `resource` names
+  the input field that identifies the object in `resource.id_field`; only a create
+  (`effect: write` with `retry: at_most_once`) may leave it out, since it names no
+  existing object yet (kit 0.2.3, `exposes.v1` 1.3.0). The catalog schema
+  `platform-services.v1` states the same rule for the rendered entry.
 - **`services.json`** (`papaia.platform-services/1`). `papaia-ctl catalog render`
   writes it, and so does every render (`setup`, `start`, every `addon` command) and
   `addon stop` and `stop --addons`. It holds one entry per declared id, sorted by id,

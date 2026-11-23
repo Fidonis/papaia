@@ -1,0 +1,689 @@
+name: paperless
+version: 2.0.0
+addon_repo: papaia-addon-paperless
+requires:
+  # Contract generations this add-on is built against; checked against the
+  # core's ADDON_API window. Generations are cumulative. The add-on uses
+  # `exposes:` (7) and declares 12, the generation every module add-on of
+  # this release is built against. Meanings as in the core's table:
+  #   7  `exposes:` (also `exposes.yaml` of core profiles), rendering of `services.json` and
+  #      `groups.json`, declared roles, exchange scopes `aud-<addon>`, service accounts,
+  #      `models.needs`; `keycloak`, `litellm`, `papaia-audit`, `papaia-egress` attachable
+  #      (ADR 0017, 0018)
+  #   12  add-on ingress `integration.nginx` (ADR 0023)
+  addon_api: [12]
+# Fallback axis for cores that do not read `requires` yet. 1.10.0 is the first
+# core serving addon_api 12.
+papaia_compat: ">=1.10.0"
+description: "Paperless-ngx document management + OIDC/RBAC MCP server"
+
+# The software this add-on packages. `version` above counts the add-on itself;
+# the `version` of each entry below is the default tag of its `image_var` in
+# docker-compose.yml, and tools/components.py keeps the two equal.
+components:
+  - id: paperless-ngx
+    name: Paperless-ngx
+    role: primary
+    kind: upstream
+    image_var: PAPERLESS_IMAGE
+    version: "3.0.5"
+    source: https://github.com/paperless-ngx/paperless-ngx
+  - id: paperless-mcp-rbac
+    name: paperless-mcp-rbac
+    role: primary
+    kind: fidonis
+    image_var: PAPERLESS_MCP_IMAGE
+    version: "0.2.0-rc.1"
+    source: https://github.com/Fidonis/paperless-mcp-rbac
+  - id: nginx
+    name: nginx
+    role: sidecar
+    kind: upstream
+    image_var: PAPERLESS_GATE_IMAGE
+    version: "1.31.2-alpine"
+    source: https://nginx.org
+  - id: valkey
+    name: Valkey
+    role: sidecar
+    kind: upstream
+    image_var: PAPERLESS_REDIS_IMAGE
+    version: "9.2.0-alpine"
+    source: https://github.com/valkey-io/valkey
+  - id: postgres
+    name: PostgreSQL
+    role: sidecar
+    kind: upstream
+    image_var: PAPERLESS_DB_IMAGE
+    version: "18.7"
+    source: https://www.postgresql.org
+  - id: gotenberg
+    name: Gotenberg
+    role: sidecar
+    kind: upstream
+    image_var: PAPERLESS_GOTENBERG_IMAGE
+    version: "8.34.0"
+    source: https://github.com/gotenberg/gotenberg
+  - id: tika
+    name: Apache Tika
+    role: sidecar
+    kind: upstream
+    image_var: PAPERLESS_TIKA_IMAGE
+    version: "3.2.3.0"
+    source: https://tika.apache.org
+
+networks:
+  # Resolved by papaia-ctl against the core .env, matching the add-on's own
+  # compose network name. Scopes the Seam-1 bridge per deployment; a default
+  # single-stack host resolves it to papaia-paperless-net.
+  app_network: "${PAPAIA_PROJECT:-papaia}-paperless-net"
+  # Only nginx-proxy-manager joins app_network. papaia-ctl attaches every other
+  # service listed here (librechat) to ${PAPAIA_PROJECT:-papaia}-paperless-front,
+  # whose only add-on member is paperless-mcp.
+  attach: [nginx-proxy-manager, librechat]
+
+# Env vars pointing at the bundled-Keycloak CA cert (mounted from
+# $PAPAIA_CONFIG_DIR/certs). papaia-ctl clears them via a generated override
+# when auth_provider=external_oidc, so requests/httpx fall back to the
+# system CA bundle instead of failing on the absent local-ca.crt.
+local_ca_env:
+  paperless: [REQUESTS_CA_BUNDLE]
+  paperless-mcp: [SSL_CERT_FILE]
+
+# Per-variable metadata: label (human-readable prompt text), hint (secondary
+# explanation), default (overrides .env.example value), default_from_core
+# (pulls value from core .env by key name), type (text|integer|url|decimal),
+# secret (bool — true forces masking, false opts out of name heuristic),
+# min/max (numeric bounds for integer/decimal), pattern (regex for text).
+# All fields are optional; add-ons without env_prompts entries continue to
+# work unchanged (readers ignore unknown manifest keys).
+env_prompts:
+
+  # ── Core OIDC ─────────────────────────────────────────────────────────────
+  PAPAIA_CONFIG_DIR:
+    label: "papAIa config directory"
+    hint: "Path to the directory created by papaia-ctl setup (PAPAIA_CONFIG_DIR)"
+    default_from_core: PAPAIA_CONFIG_DIR
+    type: text
+
+  OIDC_ISSUER:
+    label: "Keycloak issuer URL"
+    hint: "Browser-facing URL, must match OIDC_ISSUER from core setup"
+    default_from_core: OIDC_ISSUER
+    type: url
+
+  # ── Paperless-ngx — Public URL ────────────────────────────────────────────
+  PAPERLESS_PUBLIC_URL:
+    label: "Paperless public URL"
+    hint: "Address of the Paperless proxy host (scheme + host name, no port), e.g. https://docs.example.com; Paperless publishes no port of its own"
+    type: url
+    pattern: "^https?://[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?/?$"
+
+  # ── Paperless-ngx — Database ──────────────────────────────────────────────
+  PAPERLESS_DB:
+    label: "Database name"
+    type: text
+
+  PAPERLESS_DBUSER:
+    label: "Database user"
+    type: text
+
+  PAPERLESS_DBPASS:
+    label: "Database password"
+    secret: true    # name heuristic misses DBPASS; auto-generated by seed_addon_env
+
+  # ── Paperless-ngx — Security ──────────────────────────────────────────────
+  PAPERLESS_SECRET_KEY:
+    label: "Django secret key"
+    hint: "Long random string used for cryptographic signing; auto-generated on install"
+    secret: true
+
+  # ── Paperless-ngx — Bootstrap admin ──────────────────────────────────────
+  PAPERLESS_ADMIN_USER:
+    label: "Bootstrap admin username"
+    hint: "Break-glass account; SSO login via Keycloak is the default path"
+    type: text
+
+  PAPERLESS_ADMIN_PASSWORD:
+    label: "Bootstrap admin password"
+    hint: "Auto-generated; use only for emergency break-glass access"
+    secret: true
+
+  PAPERLESS_ADMIN_MAIL:
+    label: "Bootstrap admin e-mail"
+    type: text
+
+  # ── Keycloak OIDC client secrets ──────────────────────────────────────────
+  # These are filled after the Keycloak client import — see env_replace_secrets below.
+  KC_PAPERLESS_CLIENT_SECRET:
+    label: "Keycloak client secret (paperless)"
+    hint: "Copy from Keycloak Admin UI → Clients → paperless → Credentials → Client Secret"
+    secret: true
+
+  KC_MCP_PAPERLESS_CLIENT_SECRET:
+    label: "Keycloak client secret (mcp-paperless)"
+    hint: "Copy from Keycloak Admin UI → Clients → mcp-paperless → Credentials → Client Secret"
+    secret: true
+
+  # ── Paperless-ngx — OCR ───────────────────────────────────────────────────
+  PAPERLESS_OCR_LANGUAGE:
+    label: "Tesseract OCR primary language"
+    hint: "ISO 639-2/T code (e.g. deu, eng). Container ships with deu + eng."
+    type: text
+
+  # ── Paperless-ngx — HTTP protocol ────────────────────────────────────────
+  PAPERLESS_HTTP_PROTOCOL:
+    label: "HTTP protocol"
+    hint: "Set to https when PAPERLESS_PUBLIC_URL uses HTTPS, http otherwise"
+    type: text
+
+  # ── Paperless-ngx — SSO / Login behaviour ─────────────────────────────────
+  PAPERLESS_DISABLE_REGULAR_LOGIN:
+    label: "Disable password login"
+    hint: "true = SSO-only (Keycloak); emergency access via docker exec … createsuperuser"
+    type: text
+
+  PAPERLESS_REDIRECT_LOGIN_TO_SSO:
+    label: "Redirect login page to Keycloak"
+    hint: "true = bypass the Paperless login form and go straight to Keycloak"
+    type: text
+
+  PAPERLESS_SOCIAL_AUTO_SIGNUP:
+    label: "Auto-create account on first SSO login"
+    type: text
+
+  PAPERLESS_SOCIAL_ACCOUNT_SYNC_GROUPS:
+    label: "Sync Keycloak realm roles to Paperless groups on login"
+    hint: "Groups must already exist in Paperless; the sync does not create them"
+    type: text
+
+  PAPERLESS_SOCIAL_ACCOUNT_SYNC_GROUPS_CLAIM:
+    label: "Keycloak claim that carries the group names"
+    type: text
+
+  # ── Paperless-ngx — Document processing ───────────────────────────────────
+  PAPERLESS_TIKA_ENABLED:
+    label: "Enable Tika/Gotenberg (Office document support)"
+    hint: "1 = enabled (default), 0 = disabled. Office files (.docx, .xlsx) require Tika."
+    type: integer
+    min: 0
+    max: 1
+
+  # ── MCP server ────────────────────────────────────────────────────────────
+  PAPERLESS_MCP_OIDC_AUDIENCE:
+    label: "MCP server token audience"
+    hint: "Must match the mcp-paperless-audience mapper on the LibreChat Keycloak client"
+    type: text
+
+  PAPERLESS_MCP_OIDC_JWKS_CACHE_TTL:
+    label: "JWKS cache TTL (seconds)"
+    type: integer
+    min: 0
+
+  PAPERLESS_MCP_PAPERLESS_URL:
+    label: "Paperless internal URL (the gate, same Docker network)"
+    hint: "paperless-gate in front of Paperless; Paperless itself listens on its container's loopback only"
+    type: url
+
+  PAPERLESS_MCP_REMOTE_USER_HEADER:
+    label: "Remote-user header name"
+    type: text
+
+  PAPERLESS_MCP_USERNAME_CLAIM:
+    label: "Username JWT claim"
+    type: text
+
+  PAPERLESS_MCP_HTTP_TIMEOUT:
+    label: "MCP HTTP timeout (seconds)"
+    type: integer
+    min: 1
+
+  PAPERLESS_MCP_MAX_DOWNLOAD_BYTES:
+    label: "MCP maximum download size (bytes)"
+    type: integer
+    min: 1
+
+  PAPERLESS_MCP_PORT:
+    label: "MCP server port"
+    type: integer
+    min: 1
+    max: 65535
+
+  PAPERLESS_MCP_PATH:
+    label: "MCP endpoint path"
+    type: text
+
+  PAPERLESS_MCP_LOG_LEVEL:
+    label: "MCP log level"
+    hint: "One of: DEBUG, INFO, WARNING, ERROR"
+    type: text
+
+env_replace_secrets:
+  KC_PAPERLESS_CLIENT_SECRET:
+    hint: "Keycloak Admin UI → Clients → paperless → Credentials → Client Secret"
+  KC_MCP_PAPERLESS_CLIENT_SECRET:
+    hint: "Keycloak Admin UI → Clients → mcp-paperless → Credentials → Client Secret"
+
+integration:
+  keycloak:
+    clients:
+      - integration/infra/keycloak/paperless.json
+      - integration/infra/keycloak/mcp-paperless.json
+    client_mappers:
+      librechat:
+        - integration/infra/keycloak/librechat-audience-mapper.json
+  librechat: integration/ai/librechat/librechat.yaml
+  nginx: integration/infra/nginx/paperless.conf
+
+# The one description of what this add-on offers (contract generation 7,
+# schema exposes.v1 of papaia-kit). The core renders the platform catalog from
+# it; consumers read the catalog instead of keeping their own description of
+# the tool server. `operations` lists every tool paperless-mcp-rbac reports in
+# `tools/list`, plus the standard operations `describe_access` and
+# `check_access`. Rights are checked by Paperless for the person (or service
+# account) in the token on every call; `data_class_max` is the highest class
+# an operation returns or accepts, on the kit's eight-class scale. A general
+# archive can hold health data (Art. 9 GDPR) and professional secrets
+# (Section 203 StGB), and Paperless enforces no class limit, so every operation
+# that carries document content or titles declares `professional_secret`.
+exposes:
+  - id: paperless.documents
+    kind: mcp
+    title: {de: "Dokumentenarchiv", en: "Document archive"}
+    description:
+      de: "Dokumente in Paperless suchen, lesen, ablegen und mit Notizen versehen, mit den Rechten der Person."
+      en: "Search, read, file and annotate documents in Paperless with the rights of the person."
+    address: {service: paperless-mcp, port: 8000, scheme: http, path: /mcp}
+    audience: mcp-paperless
+    # `service`: event-started runs read through a declared service account of
+    # the consuming module, never with a person's identity.
+    identity: [person, service]
+    standard_operations: [describe_access, check_access]
+    operations:
+      - name: search_documents
+        version: 1
+        title: {de: "Dokumente suchen", en: "Search documents"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          properties:
+            query: {type: string, maxLength: 500}
+            page: {type: integer, minimum: 1}
+            page_size: {type: integer, minimum: 1, maximum: 100}
+            # A field name, optionally descending; Paperless checks the field.
+            ordering: {type: string, pattern: "^-?[a-z_]{1,40}$"}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        rights_check: server
+        timeout: 30s
+      - name: get_document
+        version: 1
+        title: {de: "Dokument lesen", en: "Read document"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server
+        timeout: 30s
+      - name: get_document_metadata
+        version: 1
+        title: {de: "Metadaten lesen", en: "Read metadata"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server
+        timeout: 30s
+      - name: get_document_content
+        version: 1
+        title: {de: "Text eines Dokuments lesen", en: "Read document text"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server
+        timeout: 30s
+      - name: download_document
+        version: 1
+        title: {de: "Originaldatei laden", en: "Download original file"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server
+        timeout: 30s
+      - name: list_tags
+        version: 1
+        title: {de: "Schlagwörter auflisten", en: "List tags"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+        timeout: 30s
+      - name: list_correspondents
+        version: 1
+        title: {de: "Korrespondenten auflisten", en: "List correspondents"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object}
+        data_class_max: partner_contact
+        rights_check: server
+        timeout: 30s
+      - name: list_document_types
+        version: 1
+        title: {de: "Dokumenttypen auflisten", en: "List document types"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+        timeout: 30s
+      - name: get_notes
+        version: 1
+        title: {de: "Notizen lesen", en: "Read notes"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server
+        timeout: 30s
+      - name: upload_document
+        version: 1
+        title: {de: "Dokument ablegen", en: "File document"}
+        via: tools
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [file_base64, filename]
+          properties:
+            # 100 MiB as base64, the upload limit of the proxy host.
+            file_base64: {type: string, contentEncoding: base64, minLength: 4, maxLength: 139810136}
+            filename: {type: string, minLength: 1, maxLength: 255}
+            title: {type: string, maxLength: 128}
+            correspondent: {type: integer, minimum: 1}
+            document_type: {type: integer, minimum: 1}
+            tags:
+              type: array
+              maxItems: 100
+              uniqueItems: true
+              items: {type: integer, minimum: 1}
+            created: {type: string, format: date, maxLength: 32}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document}
+        rights_check: server
+        timeout: 30s
+      - name: update_document
+        version: 1
+        title: {de: "Dokument ändern", en: "Update document"}
+        via: tools
+        effect: write
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+            title: {type: string, maxLength: 128}
+            tags:
+              type: array
+              maxItems: 100
+              uniqueItems: true
+              items: {type: integer, minimum: 1}
+            correspondent: {type: integer, minimum: 1}
+            document_type: {type: integer, minimum: 1}
+            owner: {type: integer, minimum: 1}
+            custom_fields:
+              type: array
+              maxItems: 100
+              items:
+                type: object
+                additionalProperties: false
+                required: [field, value]
+                properties:
+                  field: {type: integer, minimum: 1}
+                  # Text, number, date, monetary, boolean, select, empty, or
+                  # the document ids of a link field.
+                  value:
+                    type: [string, integer, number, boolean, "null", array]
+                    maxLength: 10000
+                    maxItems: 100
+                    items: {type: integer, minimum: 1}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server
+        timeout: 30s
+      - name: delete_document
+        version: 1
+        title: {de: "Dokument löschen", en: "Delete document"}
+        via: tools
+        effect: delete
+        retry: idempotent
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server_and_check_access
+        timeout: 30s
+      - name: add_note
+        version: 1
+        title: {de: "Notiz anfügen", en: "Add note"}
+        via: tools
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [id, note]
+          properties:
+            id: {type: integer, minimum: 1}
+            note: {type: string, minLength: 1, maxLength: 5000}
+        output_schema: {type: object}
+        data_class_max: professional_secret
+        resource: {type: document, id_field: id}
+        rights_check: server
+        timeout: 30s
+      - name: create_tag
+        version: 1
+        title: {de: "Schlagwort anlegen", en: "Create tag"}
+        via: tools
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [name]
+          properties:
+            name: {type: string, minLength: 1, maxLength: 128}
+            color: {type: string, pattern: "^#[0-9a-fA-F]{6}$"}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: tag}
+        rights_check: server
+        timeout: 30s
+      - name: create_correspondent
+        version: 1
+        title: {de: "Korrespondent anlegen", en: "Create correspondent"}
+        via: tools
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [name]
+          properties:
+            name: {type: string, minLength: 1, maxLength: 128}
+        output_schema: {type: object}
+        data_class_max: partner_contact
+        resource: {type: correspondent}
+        rights_check: server
+        timeout: 30s
+      - name: describe_access
+        version: 1
+        title: {de: "Eigene Rechte anzeigen", en: "Describe own access"}
+        via: tools
+        effect: read
+        retry: safe
+        input_schema: {type: object, additionalProperties: false}
+        output_schema: {type: object}
+        data_class_max: internal
+        rights_check: server
+        timeout: 30s
+      - name: check_access
+        version: 1
+        title: {de: "Rechte prüfen", en: "Check access"}
+        via: tools
+        effect: check
+        retry: safe
+        input_schema:
+          type: object
+          additionalProperties: false
+          required: [resources, right]
+          properties:
+            resources:
+              type: array
+              minItems: 1
+              maxItems: 100
+              items: {type: integer, minimum: 1}
+            right: {enum: [read, write, delete]}
+        output_schema: {type: object}
+        data_class_max: internal
+        resource: {type: document, id_field: resources}
+        rights_check: server
+        timeout: 30s
+    requires:
+      addon_api: [12]
+    # Every named volume of docker-compose.yml is one backup item. The bind
+    # mounts MEDIA_DIRECTORY, EXPORT_DIRECTORY and CONSUME_DIRECTORY are host
+    # paths the operator chooses and backs up (README, Backup).
+    volumes:
+      - name: paperless-data
+        backup: include
+      - name: paperless-pgdata
+        backup: include
+      - name: paperless-valkeydata
+        backup: exclude
+        reason:
+          de: "Aufgabenwarteschlange des Brokers; wird beim Start neu aufgebaut, offene Aufgaben werden neu eingereiht."
+          en: "Task queue of the broker; rebuilt on start, pending tasks are queued again."
+      - name: paperless-gate-mcp
+        backup: exclude
+        reason:
+          de: "Geheimnis des MCP-Servers für den Torwächter; fehlt es, erzeugt der Torwächter beim Start ein neues."
+          en: "The MCP server's secret for the gate; when it is missing, the gate generates a new one on start."
+    export:
+      exit: {format: paperless-ngx.document-exporter/1, schema: schemas/paperless-export-1.json}
+    storage:
+      personal_data: true
+      retention:
+        until: legal_obligation
+        note:
+          de: "Dokumente bleiben nach der Aufbewahrungsregel des Betreibers; Konten bis zu ihrer Löschung durch die Archivverwaltung."
+          en: "Documents follow the operator's retention rule; accounts last until the administration deletes them."
+      categories:
+        - id: accounts
+          title: {de: "Konten", en: "Accounts"}
+          purpose:
+            de: "Anmeldung über den Anmeldedienst und Zuordnung der Rechte in Paperless."
+            en: "Sign-in through the identity provider and assignment of rights in Paperless."
+          legal_basis: {de: "Art. 6 Abs. 1 lit. b und f DSGVO", en: "Art. 6(1)(b) and (f) GDPR"}
+          retention: {until: account_deleted}
+          data_class: personal
+          # No handler of the core or the tool server erases a Paperless
+          # account with the person; the administrator deletes it.
+          erasure: on_request
+          on_request:
+            action: delete-account
+            way:
+              de: "Nach der Löschung der Person im Anmeldedienst löscht die Archivverwaltung das Paperless-Konto; ihre Dokumente und Notizen werden wie unter „Dokumente“ behandelt."
+              en: "After the person is deleted in the identity provider, the archive administration deletes the Paperless account; their documents and notes are handled as under Documents."
+            responsible: {de: "Archivverwaltung", en: "Archive administration"}
+        - id: documents
+          title: {de: "Dokumente", en: "Documents"}
+          purpose: {de: "Ablage und Suche von Dokumenten", en: "Filing and searching documents"}
+          legal_basis:
+            de: "Art. 6 Abs. 1 lit. b, c und f DSGVO"
+            en: "Art. 6(1)(b), (c) and (f) GDPR"
+          retention: {until: legal_obligation}
+          data_class: professional_secret
+          erasure: on_request
+          on_request:
+            action: transfer-ownership
+            way:
+              de: "Dokumente der Person bleiben nach der Aufbewahrungsregel des Betreibers oder gehen an eine neue Eigentümerin über."
+              en: "Documents of the person are kept under the operator's retention rule or handed to a new owner."
+            responsible: {de: "Archivverwaltung", en: "Archive administration"}
+        - id: notes
+          title: {de: "Notizen", en: "Notes"}
+          purpose: {de: "Anmerkungen zu Dokumenten", en: "Annotations on documents"}
+          legal_basis: {de: "Art. 6 Abs. 1 lit. f DSGVO", en: "Art. 6(1)(f) GDPR"}
+          retention: {until: legal_obligation}
+          data_class: professional_secret
+          erasure: on_request
+          on_request:
+            action: transfer-ownership
+            way:
+              de: "Notizen bleiben mit ihrem Dokument erhalten und folgen dessen Aufbewahrung."
+              en: "Notes stay with their document and follow its retention."
+            responsible: {de: "Archivverwaltung", en: "Archive administration"}
+      secrets:
+        - {kind: database, location: paperless-pgdata}
+        - {kind: file, location: paperless-gate-mcp}

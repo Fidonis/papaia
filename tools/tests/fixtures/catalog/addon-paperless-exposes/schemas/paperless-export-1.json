@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Paperless-ngx exit export, manifest.json",
+  "description": "Exit export of the paperless add-on: the directory written by `manage.py document_exporter` of Paperless-ngx. This schema describes its manifest.json, a list of the exported database objects. Files named by the __exported_*__ keys lie next to it; metadata.json names the Paperless-ngx version. Restore with `manage.py document_importer` of the same version.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["model", "pk", "fields"],
+    "properties": {
+      "model": {
+        "description": "Application and model of the object, such as documents.document.",
+        "type": "string",
+        "pattern": "^[a-z_]+\\.[a-z_]+$"
+      },
+      "pk": {
+        "description": "Primary key of the object in the source installation.",
+        "type": ["integer", "string"]
+      },
+      "fields": {
+        "description": "Field values of the object; references to other objects are primary keys.",
+        "type": "object"
+      }
+    },
+    "patternProperties": {
+      "^__exported_[a-z_]+__$": {
+        "description": "Path of a file of the object (original, archive version, thumbnail), relative to the export directory.",
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": false
+  }
+}
