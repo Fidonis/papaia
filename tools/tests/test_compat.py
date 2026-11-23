@@ -443,7 +443,7 @@ def test_uninstall_action_is_the_one_marked_on_uninstall():
     ],
 )
 def test_without_a_marked_action_there_is_no_uninstall_action(manifest):
-    # Every manifest written before addon_api 7 lands here: nothing runs on uninstall.
+    # Every manifest written before addon_api 8 lands here: nothing runs on uninstall.
     assert compat.uninstall_action(manifest) is None
 
 

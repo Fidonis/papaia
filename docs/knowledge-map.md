@@ -30,17 +30,49 @@ Design decisions and their rationale: [ADR 0013](adr/0013-knowledge-map-as-optio
 
 ## Enabling
 
+Switch the module on in papaia-manager's Settings > Modules tab, or with
+`setup`:
+
 ```sh
-# in $PAPAIA_CONFIG_DIR/.env
-COMPOSE_PROFILES=...,knowledge-map
+tools/papaia-ctl setup -y --knowledge-map
+tools/papaia-ctl start
 ```
 
-On the next `papaia-ctl start` the map is rendered into
-`$PAPAIA_CONFIG_DIR/knowledge-map/` and the `KnowledgeMap` MCP server appears
-in LibreChat. The Keycloak realm template already carries the resource-server
-client `mcp-knowledge-map` and its audience mapper on the `librechat` client;
-external OIDC providers need an equivalent audience claim (see
-`src/infra/keycloak/README.md`).
+`setup` adds the profile to `COMPOSE_PROFILES` and generates the module's
+secrets (`KM_ADMIN_TOKEN`; `KM_EMBEDDING_API_KEY` is LiteLLM's master key).
+Adding the profile to `COMPOSE_PROFILES` by hand is not enough on an
+installation that was set up before the module existed: `start` copies only
+the module settings that `setup` has written, so the server would start without
+its secrets. `start` then renders the map into
+`$PAPAIA_CONFIG_DIR/knowledge-map/`, and the `KnowledgeMap` MCP server appears
+in LibreChat once LibreChat is recreated (the Modules tab does that; on the
+command line `papaia-ctl stop --clean-up --profiles=librechat`, then `start`). The
+Keycloak realm template carries the resource-server client `mcp-knowledge-map`
+and its audience mapper on the `librechat` client; on an existing realm `start`
+creates the client once the profile is on. External OIDC providers need an
+equivalent audience claim (see `src/infra/keycloak/README.md`).
+
+papaia-manager (1.7.0 and newer) shows the map on its *AI map* page, for
+administrators: the graph, the entries, the findings, a routing test, usage and
+refinements, an editor for entries and operator files, and the governance
+records with their findings and a facts export (see the
+[papaia-manager section of the README](../README.md#papaia-manager)).
+
+## Switching off
+
+`setup --no-knowledge-map` (or the Modules tab) removes the profile and keeps
+everything else. Three things can be deleted after that, each on its own
+request (in the Modules tab: the switch-off dialog):
+
+| What | Contains | Deleted by |
+|---|---|---|
+| Data | the routing telemetry volume `knowledge-map-telemetry` (personal data, see below) | `module-purge --data` / "delete the data" |
+| Settings | the module's `.env` (secrets are regenerated) and the rendered map | `module-purge --config` / "delete the data and the settings" |
+| Operator files | `overlay/knowledge-map/sources.yaml`, `overrides.yaml`, `governance.yaml`, `goldset.yaml`, and the rendered map built from them | `module-purge --operator-files` / the separate "also delete these files" choice, off by default |
+
+The operator files hold the installation's own declarations, governance
+records and gold set. Deleting the data or the settings never touches them, so
+switching the module on again later brings the map back as it was.
 
 An example navigator agent that routes through the map ships as
 `src/ai/knowledge-map/navigator.agent.yaml.example` for the LibreChat agents

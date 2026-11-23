@@ -403,7 +403,8 @@ _provisioning_step() {
 
 # The profiles of the optional modules. `stop --volumes` deletes data, so it is limited to
 # these: the always-on services (Keycloak, LibreChat, LiteLLM ...) and the manager keep theirs.
-_VOLUME_DELETE_PROFILES="localai librechat-websearch rag smtp voice"
+# The same set as the profiles of lib/modules.py's MODULES (tests/test_stop_volumes.py).
+_VOLUME_DELETE_PROFILES="localai librechat-websearch rag smtp voice knowledge-map"
 
 _require_deletable_profiles() {
     local profiles="$1" profile allowed

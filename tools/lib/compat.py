@@ -317,7 +317,7 @@ def addon_actions(manifest: dict) -> dict[str, dict]:
 
     Each action names a service of the addon's own compose file and optional fixed
     string arguments; `destructive: true` asks callers such as papaia-manager to
-    confirm before running it. `on_uninstall: true` (addon_api 7) marks the one
+    confirm before running it. `on_uninstall: true` (addon_api 8) marks the one
     action `addon uninstall --clean-up` runs before the add-on's containers and
     volumes go, so it can remove what the add-on wrote outside its own volumes.
     Raises ValueError for a malformed block."""

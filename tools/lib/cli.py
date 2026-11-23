@@ -195,13 +195,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if isinstance(requested_topology, int):
         return requested_topology
 
-    fresh_init = not (config_dir / ".env").is_file()
-    # The native LocalAI lives below the workspace. Checked before the config directory is
-    # seeded or anything is written, so a refused run leaves neither LOCALAI_RUNTIME=native
-    # in the root .env nor, on a fresh config directory, template files a later setup would
-    # take for an existing installation. It needs only the requested or stored runtime, the
-    # stored PAPAIA_WORKSPACE_DIR and the checkout name.
-    stored_root = {} if fresh_init else common.parse_env_file(config_dir / ".env")
+    # The native LocalAI lives below the workspace. Checked first: it needs only the
+    # requested or stored runtime, the stored PAPAIA_WORKSPACE_DIR and the checkout name.
+    stored_root = common.parse_env_file(config_dir / ".env")
     wanted_runtime = args.localai_runtime or localai_native.runtime(stored_root)
     if wanted_runtime == localai_native.NATIVE:
         workspace = envtree.stamp_workspace_dir({"": dict(stored_root)}, repo_root)
@@ -210,10 +206,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         except localai_native.InstallError as exc:
             print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
             return 3
-    envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    # Nothing is written before the whole configuration is resolved and checked, so a
+    # refused setup has nothing to take back.
+    tree, set_up = envtree.load_setup_tree(
+        config_dir, repo_root, auth_provider=args.auth_provider
+    )
+    fresh_init = not set_up
     runtime_before = localai_native.runtime(tree.get("", {})) if not fresh_init else ""
+    native_before = not fresh_init and _native_wanted(tree.get("", {}))
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     # Taken out of the environment so nothing started later inherits it. An empty
@@ -242,6 +243,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         enable_manager=_tristate(args.enable_manager),
         enable_rag=_tristate(args.enable_rag),
         enable_voice=_tristate(args.enable_voice),
+        enable_knowledge_map=_tristate(args.enable_knowledge_map),
         voice_variant=args.voice_variant or None,
         enable_smtp=_tristate(args.enable_smtp),
         smtp_host=args.smtp_host,
@@ -285,6 +287,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_rag(tree, setup_args)
         tree = resolve.resolve_voice(tree, setup_args)
         tree = resolve.resolve_voice_variant(tree, setup_args)
+        tree = resolve.resolve_knowledge_map(tree, setup_args)
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
     except resolve.SetupError as exc:
@@ -327,7 +330,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
     tree = envtree.stamp_host_uid_gid(tree)
-    envtree.persist_tree(tree, config_dir, repo_root)
+    # The first writes. The root .env goes last: until it is there, the next setup is still
+    # a first one and derives every URL again. The relay's password follows the revision
+    # that announces it, so a run cut short in between raises the revision once more
+    # instead of hiding the change from Compose.
+    envtree.init(config_dir, repo_root, env_name=args.env, env_files=False)
+    envtree.persist_tree(
+        tree,
+        config_dir,
+        repo_root,
+        before_root=lambda: resolve.store_smtp_password(setup_args),
+    )
     deployment.sync_manifest(config_dir, tree, repo_root)
     if requested_topology is not None:
         manifest = deployment.load(config_dir)
@@ -351,7 +364,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not _native_wanted(stored_root):
         # After a switch back to the container a job left from the native runtime would
         # hold the port until the next `stop` (quiet when there is none).
-        _retire_native_job(stored_root)
+        _retire_native_job(stored_root, was_native=native_before)
     if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE and (
         runtime_before != localai_native.NATIVE
     ):
@@ -485,25 +498,46 @@ def _native_wanted(root: dict[str, str]) -> bool:
     )
 
 
-def _retire_native_job(root: dict[str, str]) -> bool:
+def _without_native(root: dict[str, str]) -> str:
+    """Why the native LocalAI is no longer wanted, for the messages about its job."""
+    if "localai" not in common.cluster_profiles(root):
+        return "LocalAI is switched off"
+    return "LocalAI runs in its container now"
+
+
+def _retire_native_job(root: dict[str, str], *, was_native: bool = False) -> bool:
     """Unload and disable a launchd job the native LocalAI no longer needs, and remove its
     plist, so it neither keeps LOCALAI_EXT_PORT nor comes back at the next login. For
     `start` and `setup` after the runtime went back to the container (or LocalAI was
     switched off); `stop` handles the same case through localai-native-stop. Messages on
     stderr, so the KEY=VALUE output of the install step stays clean. False when a job is
-    left behind."""
+    left behind.
+
+    `was_native`: this run is the one that ended the native runtime (`setup`). Inside a
+    container (papaia-manager) the plist below the Mac user's home is out of sight, so
+    whether a job is left cannot be told there; the switch itself is what warns."""
+    reason = _without_native(root)
     try:
         label = localai_native.label_for(root)
     except localai_native.LaunchdError:
         return True
     plist = localai_native.plist_path(label)
     if not plist.is_file():
+        if was_native and common.in_container():
+            print(
+                f"WARNING: {reason}, but the launchd job of the native LocalAI on the Mac"
+                " cannot be removed from inside a container and may still hold port"
+                f" {localai_native.port(root)}. Run 'papaia-ctl stop' on the Mac;"
+                " 'papaia-ctl doctor' there reports a job that is still loaded.",
+                file=sys.stderr,
+            )
+            return False
         return True
     available, why = localai_native.launchd_host()
     if not available:
         print(
-            f"WARNING: the launchd job of the native LocalAI ({plist}) is still installed and"
-            f" cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
+            f"WARNING: {reason}, but the launchd job of the native LocalAI ({plist}) is still"
+            f" installed and cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
             file=sys.stderr,
         )
         return False
@@ -518,11 +552,7 @@ def _retire_native_job(root: dict[str, str]) -> bool:
         )
         return False
     plist.unlink(missing_ok=True)
-    print(
-        f"Removed the launchd job of the native LocalAI ({label}): LocalAI runs in its"
-        " container now.",
-        file=sys.stderr,
-    )
+    print(f"Removed the launchd job of the native LocalAI ({label}): {reason}.", file=sys.stderr)
     return True
 
 
@@ -854,13 +884,18 @@ def cmd_module_info(args: argparse.Namespace) -> int:
 
 
 def cmd_module_purge(args: argparse.Namespace) -> int:
-    """Delete the data (volumes) and/or reset the settings of a module that is switched off.
+    """Delete the data (volumes), reset the settings and/or delete the operator files of a
+    module that is switched off.
 
-    Both are separate options. The settings of a module whose data depends on them (the RAG
-    system) are only deleted together with the data. Exit 3 when the request is refused or
-    a step fails, with an `ERROR:` line."""
-    if not (args.data or args.config):
-        print("ERROR: name what to delete: --data, --config or both", file=sys.stderr)
+    All three are separate options. The settings of a module whose data depends on them (the
+    RAG system) are only deleted together with the data. Operator files go only when
+    `--operator-files` asks for them. Exit 3 when the request is refused or a step fails, with
+    an `ERROR:` line."""
+    if not (args.data or args.config or args.operator_files):
+        print(
+            "ERROR: name what to delete: --data, --config, --operator-files or a combination",
+            file=sys.stderr,
+        )
         return 2
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -871,8 +906,14 @@ def cmd_module_purge(args: argparse.Namespace) -> int:
                 f"the settings of {module.name} can only be deleted together with its data"
                 " (--data): its stored credentials and grants depend on them"
             )
+        if args.operator_files and not module.operator_files:
+            # Checked before anything is deleted, so a refused request changes nothing.
+            raise modules.ModuleError(f"{module.name} keeps no operator files")
         removed = modules.purge_data(config_dir, repo_root, args.module) if args.data else []
         touched = modules.reset_config(config_dir, repo_root, args.module) if args.config else []
+        operator = (
+            modules.purge_operator_files(config_dir, args.module) if args.operator_files else []
+        )
     except modules.ModuleError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
@@ -881,6 +922,8 @@ def cmd_module_purge(args: argparse.Namespace) -> int:
         print(f"removed {'directory' if name.startswith('/') else 'volume'} {name}")
     for item in touched:
         print(f"reset {item}")
+    for item in operator:
+        print(f"removed file {item}")
     return 0
 
 
@@ -1533,6 +1576,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--enable-rag", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-voice", choices=["true", "false"], default=None)
     p_setup.add_argument("--voice-variant", choices=["cpu", "nvidia", "hipblas"], default=None)
+    p_setup.add_argument("--enable-knowledge-map", choices=["true", "false"], default=None)
     p_setup.add_argument("--enable-smtp", choices=["true", "false"], default=None)
     p_setup.add_argument("--smtp-host", default=None)
     p_setup.add_argument("--smtp-port", default=None)
@@ -1635,6 +1679,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_module_purge.add_argument("--module", required=True, choices=sorted(modules.MODULES))
     p_module_purge.add_argument("--data", action="store_true")
     p_module_purge.add_argument("--config", action="store_true")
+    p_module_purge.add_argument("--operator-files", action="store_true")
     p_module_purge.set_defaults(func=cmd_module_purge)
 
     p_preview = sub.add_parser("render-preview")

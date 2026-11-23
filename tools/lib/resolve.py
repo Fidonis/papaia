@@ -52,6 +52,7 @@ class SetupArgs:
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
     enable_voice: bool | None = None  # None = sticky / no change
+    enable_knowledge_map: bool | None = None  # None = sticky / no change
     # Voice TTS accelerator image variant ("cpu", "nvidia", "hipblas"); None = sticky
     voice_variant: str | None = None
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
@@ -64,12 +65,15 @@ class SetupArgs:
     smtp_from: str | None = None  # sender address
     smtp_from_name: str | None = None
     smtp_password: str | None = field(default=None, repr=False)  # never printed or stored in env
+    # Set by resolve_smtp, written by store_smtp_password once the setup is validated.
+    smtp_password_to_store: str | None = field(default=None, repr=False)
     reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
     force: bool = False
-    # Whether $PAPAIA_CONFIG_DIR/.env existed before this invocation. A
-    # *fresh* config dir's tree is seeded straight from .env.example, whose
+    # Whether this is a first setup, as envtree.load_setup_tree decides: the
+    # config dir holds no configuration to keep. The tree of such a *fresh*
+    # config dir comes straight from .env.example, whose
     # PAPAIA_HOST already holds a real-looking illustrative default
     # (http://host.docker.internal) rather than a GENERATE_*-style
     # placeholder -- so it must NOT be treated as a genuine sticky value
@@ -811,6 +815,17 @@ def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
     return _toggle_profile(tree, "voice", args.enable_voice)
 
 
+def resolve_knowledge_map(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `knowledge-map` Compose profile based on the operator's choice.
+
+    When `enable_knowledge_map` is None the call is a no-op -- whatever was already written
+    to COMPOSE_PROFILES on a prior run is preserved (sticky). The module's secrets need no
+    step of their own: `setup` generates the missing ones of every module before this runs."""
+    if args.enable_knowledge_map is None:
+        return tree
+    return _toggle_profile(tree, "knowledge-map", args.enable_knowledge_map)
+
+
 def resolve_voice_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Write VOICE_TTS_IMAGE_VARIANT into the root env when the operator chose one.
 
@@ -930,7 +945,8 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
     The password is not an env value. It goes to a file the relay mounts, and every
     change of it raises SMTP_RELAY_PASSWORD_REV so that Compose recreates the relay
     (the file is read once, at start, and a changed file does not alter the config
-    hash). Everything is validated before the first write."""
+    hash). Nothing is written here: a later check may still refuse the setup, so the
+    password waits in `args` for store_smtp_password."""
     if args.enable_smtp is None and not _smtp_fields_given(args):
         return tree
     root = tree.setdefault("", {})
@@ -948,13 +964,20 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
         raise SetupError(str(exc)) from exc
 
     module.update(values)
-    if smtp.write_password(args.config_dir, password):
+    args.smtp_password_to_store = password
+    if smtp.read_password(args.config_dir) != password:
         module[smtp.KEY_PASSWORD_REV] = _next_revision(module.get(smtp.KEY_PASSWORD_REV, ""))
     if args.enable_smtp is True:
         root["COMPOSE_PROFILES"] = ",".join([*others, smtp.PROFILE])
     elif args.enable_smtp is False:
         root["COMPOSE_PROFILES"] = ",".join(others)
     return tree
+
+
+def store_smtp_password(args: SetupArgs) -> None:
+    """Write the password resolve_smtp settled on. Only for a setup that passed its checks."""
+    if args.smtp_password_to_store is not None:
+        smtp.write_password(args.config_dir, args.smtp_password_to_store)
 
 
 def resolve_reranker_model(tree: EnvTree, args: SetupArgs) -> EnvTree:

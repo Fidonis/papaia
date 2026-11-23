@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "papaia-platform-services.schema.json",
+  "title": "papaia platform services catalogue (papaia.platform-services/1)",
+  "description": "What the core modules and add-ons of one installation offer to other modules, rendered by the core into $PAPAIA_CONFIG_DIR/platform/services.json (ADR 0017). An entry is an offer: consumers decide themselves whether and how to connect it. Additive fields keep the format version; a breaking change increments it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "generated_at", "services"],
+  "properties": {
+    "format": { "const": "papaia.platform-services/1" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "addon_api": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The add-on API generation of the core that rendered the file."
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "sha256 over the canonical JSON of the services array."
+    },
+    "services": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "dataClass": {
+      "enum": [
+        "public",
+        "internal",
+        "partner_contact",
+        "personal",
+        "employee",
+        "confidential",
+        "special",
+        "professional_secret"
+      ]
+    },
+    "text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["de"],
+      "properties": {
+        "de": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "en": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "access", "class"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+        "access": { "enum": ["read", "write", "delete"] },
+        "class": { "$ref": "#/$defs/dataClass" },
+        "title": { "$ref": "#/$defs/text" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "addon", "version", "kind", "title", "url", "auth", "consumable"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
+        "addon": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "description": "The add-on's name, or 'core' for a core module."
+        },
+        "version": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,40}$" },
+        "profile": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "description": "The Compose profile of the core module, if it has one."
+        },
+        "kind": { "enum": ["mcp", "rest", "llm_api", "task_feed", "flow_provider"] },
+        "title": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text" },
+        "url": { "type": "string", "pattern": "^https?://\\S+$", "maxLength": 1000 },
+        "auth": { "enum": ["oidc_bearer", "own_oauth", "none"] },
+        "audience": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "token_exchange": {
+          "type": "boolean",
+          "description": "Accepts tokens exchanged at the installation's identity provider (RFC 8693)."
+        },
+        "context_assertion": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["log", "enforce"] }
+        },
+        "max_class": { "$ref": "#/$defs/dataClass" },
+        "data_owner_group": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "suggested_tools": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/tool" }
+        },
+        "classification_hint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attribute", "match_on"],
+          "properties": {
+            "attribute": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "match_on": { "enum": ["name", "id"] }
+          }
+        },
+        "links": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "item": { "type": "string", "pattern": "^https://", "maxLength": 1000 }
+          }
+        },
+        "consumable": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "consumable": { "const": false } } },
+          "then": { "required": ["reason"] }
+        },
+        {
+          "if": { "properties": { "auth": { "const": "oidc_bearer" } } },
+          "then": { "required": ["audience"] }
+        },
+        {
+          "if": { "properties": { "auth": { "const": "own_oauth" } } },
+          "then": { "properties": { "consumable": { "const": false } } }
+        }
+      ]
+    }
+  }
+}

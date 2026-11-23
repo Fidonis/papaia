@@ -653,7 +653,7 @@ cmd_addon_list() {
     py_cli addon-list ${extra[@]+"${extra[@]}"}
 }
 
-# Runs the clean-up action an add-on marks with `on_uninstall: true` (addon_api 7), as
+# Runs the clean-up action an add-on marks with `on_uninstall: true` (addon_api 8), as
 # `docker compose run --rm <service> <args>` in its project like `addon run`, while the
 # add-on is still installed: it removes what the add-on wrote outside its own volumes,
 # for instance records in other add-ons, which `down -v` cannot reach. A failure stops

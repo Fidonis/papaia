@@ -124,7 +124,6 @@ def test_generate_ssl_cert_override_creates_file_for_external_oidc(config_dir, r
     assert out_path.is_file()
     override = yaml.safe_load(out_path.read_text(encoding="utf-8"))
     services = override["services"]
-    assert services["litellm"]["environment"]["SSL_CERT_FILE"] == ""
     assert services["oauth2-proxy"]["environment"]["SSL_CERT_FILE"] == ""
     assert services["localai"]["environment"]["SSL_CERT_FILE"] == ""
 
@@ -142,6 +141,16 @@ def test_ssl_cert_override_covers_every_rag_service_that_mounts_the_ca(config_di
     # knowledge-map-mcp mounts the same CA cert; without the cleared variable
     # the module's httpx client crash-loops on the absent file.
     assert services["knowledge-map-mcp"]["environment"]["SSL_CERT_FILE"] == ""
+
+
+def test_ssl_cert_override_leaves_litellm_on_its_ca_bundle(config_dir, repo_root):
+    """LiteLLM's image has no hashed CA directory, so an empty SSL_CERT_FILE leaves
+    Python's default SSL context without a single root."""
+    envtree.init(config_dir, repo_root, env_name="papaia")
+    gen_override.generate_ssl_cert_override(config_dir, "external_oidc")
+
+    out_path = config_dir / "overrides" / "docker-compose.ssl-cert.override.yml"
+    assert "litellm" not in yaml.safe_load(out_path.read_text(encoding="utf-8"))["services"]
 
 
 def test_generate_ssl_cert_override_removes_file_for_internal_keycloak(config_dir, repo_root):

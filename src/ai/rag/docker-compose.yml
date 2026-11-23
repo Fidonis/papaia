@@ -42,7 +42,7 @@ services:
   #  gRPC (6334) is not published.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant:
-    image: qdrant/qdrant:v1.19.0
+    image: qdrant/qdrant:v1.20.2
     restart: unless-stopped
     environment:
       QDRANT__SERVICE__API_KEY: ${QDRANT_JWT_SECRET}
@@ -164,7 +164,7 @@ services:
   #  and a different value would lock everybody out.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest:
-    image: ghcr.io/fidonis/qdrant-ingest:1.0.1
+    image: ghcr.io/fidonis/qdrant-ingest:1.1.0
     restart: unless-stopped
     # Jobs stop cooperatively between documents; give them room to finish.
     stop_grace_period: 60s
@@ -223,9 +223,11 @@ services:
   #  A JVM plus roughly 200 parsers, kept out of the ingester image so that
   #  image stays small and a parser OOM has its own blast radius. OCR for
   #  scanned PDFs needs the -full image variant, which also wants a larger heap.
+  #  Tika 4 takes its OCR settings from its own configuration, not from the
+  #  ingester's QI_TIKA_OCR_* variables, and needs qdrant-ingest 1.1.0 or later.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest-tika:
-    image: docker.io/apache/tika:3.2.3.0
+    image: docker.io/apache/tika:4.2.0-1
     restart: unless-stopped
     environment:
       JAVA_OPTS: "-Xmx${QI_TIKA_HEAP:-2g}"

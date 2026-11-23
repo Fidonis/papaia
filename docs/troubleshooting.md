@@ -180,6 +180,11 @@ launchctl print "gui/$(id -u)/de.fidonis.papaia.<project>.localai"
 - **"the stack is stopped, but LocalAI answers … without the launchd job"**: a LocalAI that
   `papaia-ctl` did not start (by hand, or a job of another tool) holds the port. Stop that
   process before the next `start`.
+- **"the launchd job … of the native LocalAI is still loaded although LocalAI runs in its
+  container"** (or "is not enabled") from `doctor`: LocalAI was switched off or back to its
+  container where launchd was out of reach, usually from papaia-manager, which warns about
+  it. The job may still hold `LOCALAI_EXT_PORT`. Run `tools/papaia-ctl stop` on the Mac to
+  unload it; the next `tools/papaia-ctl start` there also removes its plist.
 - **`logs/localai.log` keeps growing**: launchd does not rotate it. Empty it in place, which
   works while the job runs (do not delete or move it then, or LocalAI keeps writing to the
   unlinked file until the next restart):
@@ -238,8 +243,12 @@ The image alone is not enough — the host prerequisites have to be in place:
   variant instead. Cards ROCm does not target by default need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env`.
 - **Intel:** a render node under `/dev/dri`. Upstream also reports hangs with memory-mapped
-  models — set `mmap: false` in the model YAMLs under
-  `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+  models — set `mmap: false` at the top level of the model's YAML under
+  `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` (a change to a shipped YAML in the rendered
+  `ai/localai/models/` is overwritten by the next render). For a shipped model, an overlay file
+  of the same name with only that line is enough. Then run `tools/papaia-ctl start` and restart
+  LocalAI, which keeps the settings it started with: `docker restart papaia-localai-1` (the
+  container name of your project).
 
 ### Password-reset and other mails do not arrive
 
