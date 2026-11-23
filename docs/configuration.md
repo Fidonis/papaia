@@ -109,6 +109,7 @@ compile but never reach the container.
 | `MANAGER_IDENTITY_ADMIN_ROLE` | Realm role that may manage the realm's users and roles (the Users page); `papaia-admin` by default, which carries Keycloak's user and role administration rights ([ADR 0006](adr/0006-manage-accounts-with-the-signed-in-users-token.md)) |
 | `MANAGER_DEFAULT_LOCALE` | Optional. Language of the interface for an account that has not chosen one and whose browser asks for none the manager ships (`de`, `en`); anything else means `en`. Every account picks its own language in the account menu |
 | `LITELLM_URL` | Optional. Where the manager reaches LiteLLM's HTTP API for the Models & Usage page (default `http://litellm:4000`, on the stack network). The page only reads; the master key is read from `ai/litellm/.env` at request time and is not a setting |
+| `KNOWLEDGE_MAP_URL` | Optional. Where the manager reaches the admin API of the knowledge-map server for the AI map page (default `http://knowledge-map-mcp:8200`, on the stack network). Its bearer `KM_ADMIN_TOKEN` is read from `ai/knowledge-map/.env` at request time and is not a setting |
 | `LOG_LEVEL` | Manager application log level |
 
 ## RAG variables
@@ -179,7 +180,8 @@ needs no login) and the relay mounts that file read-only. An `.env` file is writ
 quotes and Compose reads `$` and ` #` in it, so a password stored there would not survive; a file
 keeps it byte for byte. A non-interactive `setup` takes it from the environment variable
 `PAPAIA_SMTP_PASSWORD`, which is not a stack variable and is removed from the process environment
-as soon as it has been read.
+as soon as it has been read. The file is written only after the whole setup has passed its checks:
+a refused `setup` leaves the stored password as it was.
 
 ## Where values come from
 

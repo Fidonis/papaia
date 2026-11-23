@@ -1,0 +1,18 @@
+# What this module offers to other modules: entries of the platform services catalogue
+# (papaia.platform-services/1), rendered into $PAPAIA_CONFIG_DIR/platform/services.json
+# while the `knowledge-map` profile is active. See docs/architecture.md, "Platform services
+# catalogue".
+exposes:
+  - id: knowledge-map
+    kind: mcp
+    title:
+      de: "Wissenslandkarte"
+      en: "Knowledge map"
+    description:
+      de: "Wo welches Wissen liegt: Verweise auf Systeme, nie Inhalte"
+      en: "Where knowledge lives: references to systems, never content"
+    url: http://knowledge-map-mcp:8200/mcp
+    auth: oidc_bearer
+    audience: mcp-knowledge-map
+    max_class: internal
+    consumable: true

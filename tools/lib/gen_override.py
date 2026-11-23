@@ -211,8 +211,9 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For
 # external OIDC the cert file is absent, so SSL_CERT_FILE must be cleared to
 # let Python's ssl module fall back to the system CA bundle.
+# LiteLLM is not listed: it points at a bundle it builds itself, and its image
+# has no hashed CA directory that Python could fall back to.
 _SSL_CERT_SERVICES = (
-    "litellm",
     "oauth2-proxy",
     "localai",
     "papaia-manager",

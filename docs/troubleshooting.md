@@ -243,8 +243,12 @@ The image alone is not enough — the host prerequisites have to be in place:
   variant instead. Cards ROCm does not target by default need `HSA_OVERRIDE_GFX_VERSION` /
   `GPU_TARGETS` in `src/ai/localai/.env`.
 - **Intel:** a render node under `/dev/dri`. Upstream also reports hangs with memory-mapped
-  models — set `mmap: false` in the model YAMLs under
-  `$PAPAIA_CONFIG_DIR/ai/localai/models/`.
+  models — set `mmap: false` at the top level of the model's YAML under
+  `$PAPAIA_CONFIG_DIR/overlay/ai/localai/models/` (a change to a shipped YAML in the rendered
+  `ai/localai/models/` is overwritten by the next render). For a shipped model, an overlay file
+  of the same name with only that line is enough. Then run `tools/papaia-ctl start` and restart
+  LocalAI, which keeps the settings it started with: `docker restart papaia-localai-1` (the
+  container name of your project).
 
 ### Password-reset and other mails do not arrive
 

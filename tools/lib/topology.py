@@ -236,7 +236,9 @@ CORE_OVERRIDES = (
     "docker-compose.ssl-cert.override.yml",
     "docker-compose.localai-gpu.override.yml",
     "docker-compose.localai-runtime.override.yml",
+    "docker-compose.localai-models.override.yml",
     "docker-compose.voice-gpu.override.yml",
+    "docker-compose.litellm-config.override.yml",
 )
 
 # Root keys that point at the controller's own directories. On another node they are

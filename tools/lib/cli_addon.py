@@ -24,6 +24,7 @@ from . import (
     envtree,
     gen_override,
     keycloak_role_sync,
+    platform_services,
     render_core,
     reporting,
     semver,
@@ -303,6 +304,22 @@ def _render_integration(config_dir: Path, repo_root: Path) -> None:
     gen_override.generate_addon_join_overrides(config_dir, repo_root)
 
 
+def _exposes_problem(
+    name: str, addon_path: Path, deployed: dict, config_dir: Path, repo_root: Path
+) -> str | None:
+    """Why the add-on's `exposes:` entries cannot join the platform services catalogue
+    (invalid entries, or an id another active add-on or core module already uses)."""
+    others = [a for a in deployment.active_addons(deployed) if a.get("name") != name]
+    candidate = {"name": name, "path": str(addon_path), "active": True}
+    profiles_raw = common.parse_env_file(config_dir / ".env").get("COMPOSE_PROFILES", "")
+    profiles = {p.strip() for p in profiles_raw.split(",") if p.strip()}
+    try:
+        platform_services.collect(repo_root, profiles, [*others, candidate])
+    except platform_services.ServicesError as exc:
+        return f"exposes: {exc}"
+    return None
+
+
 def cmd_addon_install(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     repo_root = Path(args.repo_root)
@@ -360,6 +377,12 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         node=node,
         dependents=existing is not None,
     ):
+        return 2
+    # What the add-on offers other modules goes into the platform services catalogue;
+    # an invalid or clashing `exposes:` is refused here, before anything is written.
+    problem = _exposes_problem(name, addon_path, deployed, config_dir, repo_root)
+    if problem:
+        print(f"ERROR: addon '{name}': {problem}", file=sys.stderr)
         return 2
     try:
         addon_defaults = addons.resolve_addon_defaults(
