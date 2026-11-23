@@ -1,0 +1,19 @@
+services:
+  nginx-proxy-manager:
+    networks:
+    - papaia-docs-net
+  keycloak:
+    networks:
+    - papaia-docs-net
+  litellm:
+    networks:
+    - papaia-docs-net
+  papaia-audit:
+    networks:
+    - papaia-docs-net
+  smtp-relay:
+    networks:
+    - papaia-docs-net
+networks:
+  papaia-docs-net:
+    external: true

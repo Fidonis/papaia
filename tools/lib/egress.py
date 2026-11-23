@@ -240,7 +240,7 @@ def _project(env: dict[str, str]) -> str:
     return env.get("PAPAIA_PROJECT") or env.get("COMPOSE_PROJECT_NAME") or "papaia"
 
 
-def _core_networks(env: dict[str, str]) -> dict[str, str]:
+def core_networks(env: dict[str, str]) -> dict[str, str]:
     """Every name a core network can have on this host, with what it is."""
     project = _project(env)
     core = {"papaia-net": "the core network", EGRESS_NETWORK: "the exit network"}
@@ -321,7 +321,7 @@ def addon_egress(manifest: dict, config_dir: Path, addon_path: Path) -> dict | N
         network = gen_override.resolve_app_network(declared["network"], config_dir)
         if not _NETWORK_RE.match(network):
             raise ValueError(f"bad network name {network!r}")
-        core = _core_networks(env)
+        core = core_networks(env)
         if network in core:
             raise ValueError(f"{network!r} is {core[network]}")
         prefix = f"{_project(env)}-{name}-"
@@ -344,7 +344,7 @@ def addon_egress(manifest: dict, config_dir: Path, addon_path: Path) -> dict | N
     return {"name": name, "network": network, "allow": allow}
 
 
-def _claims(manifest: dict, fallback: str, config_dir: Path) -> list[tuple[str, str, str]]:
+def claims_of(manifest: dict, fallback: str, config_dir: Path) -> list[tuple[str, str, str]]:
     """(network, add-on, kind) for every network an add-on manifest names."""
     from . import gen_override
 
@@ -360,6 +360,14 @@ def _claims(manifest: dict, fallback: str, config_dir: Path) -> list[tuple[str, 
     if isinstance(declared, dict) and isinstance(declared.get("network"), str):
         raw = declared["network"]
         found.append((gen_override.resolve_app_network(raw, config_dir), name, "egress network"))
+    # addon_api 16: the add-on's isolated networks (compat.isolated_networks).
+    isolated = networks.get("isolated")
+    for entry in isolated if isinstance(isolated, list) else ():
+        if isinstance(entry, dict) and isinstance(entry.get("network"), str):
+            raw = entry["network"]
+            found.append(
+                (gen_override.resolve_app_network(raw, config_dir), name, "isolated network")
+            )
     return found
 
 
@@ -375,7 +383,7 @@ def declarations(config_dir: Path, repo_root: Path | None = None) -> list[dict]:
         manifest, _ = deployment.load_addon_manifest(path)
         if manifest is None:
             continue
-        claims.extend(_claims(manifest, str(addon.get("name")), config_dir))
+        claims.extend(claims_of(manifest, str(addon.get("name")), config_dir))
         if addon.get("active"):
             declaration = addon_egress(manifest, config_dir, path)
             if declaration is not None:

@@ -1,0 +1,7 @@
+services:
+  nginx-proxy-manager:
+    networks:
+    - papaia-appdemo-net
+networks:
+  papaia-appdemo-net:
+    external: true

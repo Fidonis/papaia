@@ -43,7 +43,12 @@ def test_resolve_core_target_signature():
 def test_evaluate_addon_signature():
     sig = inspect.signature(compat.evaluate_addon)
     params = list(sig.parameters)
-    assert params == ["name", "manifest", "core", "active_profiles"], _SURFACE_CHANGED
+    # `addon_path` (keyword, default None; addon_api 16) is additive: a caller without it
+    # keeps working and gets a warning that `internal: true` of networks.isolated was not
+    # checked.
+    assert params == ["name", "manifest", "core", "active_profiles", "addon_path"], (
+        _SURFACE_CHANGED
+    )
 
 
 def test_resolve_core_services_signature():

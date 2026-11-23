@@ -2210,7 +2210,7 @@ The manifest declares every seam in machine-readable form, so integrating an add
 
 | Seam | Mechanism |
 |---|---|
-| Network | The add-on declares its bridge network and which core containers must attach; `papaia-ctl` writes the Compose override |
+| Network | The add-on declares its bridge network and which core containers must attach; `papaia-ctl` writes the Compose override. Since contract generation 16 it may also declare internal networks that only LiteLLM joins (`networks.isolated`, see [docs/isolated-networks.md](docs/isolated-networks.md)) |
 | OIDC | Keycloak clients and protocol mappers registered additively |
 | LibreChat / MCP | `mcpServers` and `allowedDomains` fragments merged at render time |
 | Ingress | `integration.nginx`: since contract generation 12 a list of interfaces the core gives host names and proxy hosts (see [Host names and add-on interfaces](#host-names-and-add-on-interfaces)); before, a Nginx Proxy Manager fragment merged at render time (optional) |

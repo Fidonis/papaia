@@ -238,6 +238,13 @@ networks:
                                    # no wildcards. The protected hosts override the
                                    # list; internal addresses need the operator's
                                    # security/egress-internal-targets.yaml
+  isolated:                        # optional (addon_api 16): internal networks the
+    - network: ${PAPAIA_PROJECT:-papaia}-<name>-reader-net   # core joins with litellm
+      attach: [litellm]            # only (docs/isolated-networks.md, ADR 0026); the
+                                   # add-on's compose file creates each with
+                                   # internal: true (checked); at most 8, scoped like
+                                   # app_network, never app_network, the egress
+                                   # network, another entry or a core network
 
 client_keys:                       # optional: public keys of the module's own clients
   - client: flow-engine            # a registered client of this module (not public,
@@ -402,8 +409,9 @@ Only values that differ from the `.env.example` literal are written to the confi
 > **Generation-gated keys.** From generation 7 on, a manifest key that needs a
 > newer core is never silently ignored: a manifest using `exposes` (7),
 > `personal_settings` (8), `pki` (11), the ingress-entry list of
-> `integration.nginx` (12) or `volumes` (13, the backup declaration: a core
-> below it would archive a volume the add-on leaves out) is `INCOMPATIBLE` on
+> `integration.nginx` (12), `volumes` (13, the backup declaration: a core
+> below it would archive a volume the add-on leaves out) or `networks.isolated`
+> (16) is `INCOMPATIBLE` on
 > a core whose window ends below
 > that generation, even when `requires.addon_api` lists an older generation
 > the core serves. The reason names every missing generation and its meaning,
@@ -411,7 +419,10 @@ Only values that differ from the `.env.example` literal are written to the confi
 > `missing generations 4, …, 12; 12: add-on ingress integration.nginx (ADR 0023)`.
 > A key above the generations the manifest declares is a warning; malformed
 > ingress entries (unknown field, port outside 1..65535, duplicate `host_key`)
-> are a malformed manifest.
+> are a malformed manifest, and so is every `networks.isolated` entry that
+> would widen the isolation (a service other than `litellm`, a network that is
+> not `internal: true` in the add-on's compose file, the add-on's own
+> `app_network`; see [isolated-networks.md](isolated-networks.md)).
 
 #### Contract generations
 
@@ -425,7 +436,8 @@ records for generations 7 to 12 use the numbers reserved in
 README, generation 14 (the reserved actions `erasure-replay` and
 `post-restore`) with `restore`, generation 15 (the reserved actions
 `person-export`, `person-erase` and `transfer-ownership`) in
-[`person-requests.md`](person-requests.md).
+[`person-requests.md`](person-requests.md), generation 16 (`networks.isolated`) in
+[`isolated-networks.md`](isolated-networks.md).
 
 | Gen. | Meaning | ADR |
 |---|---|---|
@@ -444,6 +456,7 @@ README, generation 14 (the reserved actions `erasure-replay` and
 | 13 | `volumes[]` with `backup: include\|exclude` and a reason, read by `backup` | — |
 | 14 | Reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the add-on starts | — |
 | 15 | Reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by `papaia-ctl person export\|erase` | — |
+| 16 | `networks.isolated`: internal add-on networks only `litellm` joins | 0026 |
 
 This table fixes what each generation means. The rendering and runtime
 behaviour behind generations 7 to 12 arrive with their own changes; until a
@@ -575,6 +588,16 @@ The service exists from `ADDON_API` generation 3, so such an add-on declares
 `requires.addon_api: 3`; an older core reports it incompatible instead of failing on an
 unknown service. The profile `smtp` has to be on for the service to exist, and every
 container on an attached network can use the relay, so attach it only to add-ons you trust.
+
+**Isolated networks (addon_api 16).** Next to `app_network`, an add-on may declare up to
+eight internal networks under `networks.isolated`; the override puts exactly the services
+listed in each entry's `attach` on that network, and only `litellm` may be listed
+(`ISOLATED_ATTACHABLE`,
+[ADR 0026](adr/0026-isolated-add-on-networks-that-reach-only-the-model-gateway.md)).
+A service of the add-on that only joins such a network shares it with the model gateway
+alone and has no route out of the host. Every other attachment, the ingress proxy and the
+egress attachment included, stays as without the key; without the key the override is
+byte-identical. Author's guide and refusals: [isolated-networks.md](isolated-networks.md).
 
 ### Seam 2 — OIDC
 

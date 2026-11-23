@@ -105,7 +105,11 @@ _SURFACE_CHANGED = (
 # Gen 15 (additive): the reserved `actions` `person-export`, `person-erase` and
 # `transfer-ownership`; `papaia-ctl person export|erase` runs them for a person whose
 # account is gone, never `addon run` and never `restore` (OPS-08, OPS-03).
-ADDON_API_WINDOW = (1, 15)
+#
+# Gen 16 (additive): `networks.isolated` -- internal networks of an add-on that the core
+# joins with `litellm` and nothing else (ISOLATED_ATTACHABLE), so a service that reads
+# foreign content shares a network with the model gateway alone. ADR 0026.
+ADDON_API_WINDOW = (1, 16)
 
 # The binding meaning of every generation the core serves. Changing a line here is a
 # contract change, not a wording fix.
@@ -149,6 +153,7 @@ ADDON_API_GENERATIONS = {
         "reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by"
         " `papaia-ctl person export|erase`"
     ),
+    16: "`networks.isolated`: internal add-on networks only `litellm` joins (ADR 0026)",
 }
 
 # Manifest keys whose use requires a core of at least this generation.
@@ -165,7 +170,12 @@ GENERATION_FEATURES = {
     "actions.person-export": 15,
     "actions.person-erase": 15,
     "actions.transfer-ownership": 15,
+    "networks.isolated": 16,
 }
+
+# The core services an add-on may put on one of its isolated networks (addon_api 16).
+# Closed: widening it is a new generation and a new ADR (ADR 0026).
+ISOLATED_ATTACHABLE = frozenset({"litellm"})
 
 # Seam 1: core services an addon may attach to (and their profiles).
 ATTACHABLE_SERVICES = {
@@ -294,6 +304,8 @@ MANIFEST_KEYS = [
     "personal_settings",
     "pki",
     "integration.nginx (ingress entries)",
+    # Since addon_api 16: internal networks the core joins with litellm only (ADR 0026).
+    "networks.isolated",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -364,6 +376,12 @@ def test_generation_features_match_snapshot():
         assert generation in ADDON_API_GENERATIONS, _SURFACE_CHANGED
 
 
+def test_isolated_attachable_services_match_snapshot():
+    assert compat.ISOLATED_ATTACHABLE == ISOLATED_ATTACHABLE, _SURFACE_CHANGED
+    assert not ISOLATED_ATTACHABLE & compat.NEVER_ATTACHABLE, _SURFACE_CHANGED
+    assert ISOLATED_ATTACHABLE <= set(ATTACHABLE_SERVICES), _SURFACE_CHANGED
+
+
 def test_attachable_services_match_snapshot():
     # Deliberately read from the checkout's real src/docker-compose.yml,
     # not from a test fixture -- only then does an actual service rename
@@ -396,4 +414,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 24, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 25, _SURFACE_CHANGED

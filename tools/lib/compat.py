@@ -92,6 +92,7 @@ ADDON_API_GENERATIONS: dict[int, str] = {
         "reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by"
         " `papaia-ctl person export|erase`"
     ),
+    16: "`networks.isolated`: internal add-on networks only `litellm` joins (ADR 0026)",
 }
 
 # Manifest keys that need a core of at least this generation. A core below it
@@ -115,9 +116,13 @@ GENERATION_FEATURES: dict[str, int] = {
     "actions.person-export": 15,
     "actions.person-erase": 15,
     "actions.transfer-ownership": 15,
+    # A core below 16 would start the add-on without putting LiteLLM on its isolated
+    # network, and the service there would reach nothing at all.
+    "networks.isolated": 16,
 }
 
 INGRESS_AXIS = "integration.nginx"
+ISOLATED_AXIS = "networks.isolated"
 EXPOSES_AXIS = "exposes"
 KNOWLEDGE_AXIS = "knowledge"
 
@@ -148,6 +153,8 @@ class CoreTarget:
     platform_version: str | None = None
     addon_api: tuple[int, int] | None = None  # (min, current)
     services: dict[str, list[str]] | None = None  # service name -> profiles
+    # Every name a core network can have (key, `name:`, `<project>_<key>`), addon_api 16.
+    networks: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +231,164 @@ NEVER_ATTACHABLE = frozenset(
 )
 
 
+# The core services an add-on may put on one of its isolated networks (addon_api 16,
+# ADR 0026): the model gateway and nothing else. A service that reads foreign content
+# runs there and must not reach the proxy, the identity provider, the audit store, the
+# mail relay or anything of the add-on. The set is closed on purpose: widening it is a
+# new contract generation with its own decision record.
+ISOLATED_ATTACHABLE = frozenset({"litellm"})
+
+_MAX_ISOLATED = 8
+_ISOLATED_FIELDS = frozenset({"network", "attach"})
+# Docker's own networks; no add-on network may take one of their names.
+_DOCKER_NETWORKS = frozenset({"bridge", "host", "none"})
+_DEFAULT_REF_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::-([^}]*))?\}")
+
+
+def _with_defaults(raw: str) -> str:
+    """A compose network name with every `${VAR:-default}` replaced by its default and
+    every bare `${VAR}` by nothing: the name on a host that sets none of them. Two
+    declarations that agree here name the same network on every host."""
+    return _DEFAULT_REF_RE.sub(lambda match: match.group(1) or "", raw)
+
+
+def resolve_core_networks(repo_root: Path) -> frozenset[str] | None:
+    """Every name a core network can have: its compose key, its `name:` with defaults,
+    `papaia_<key>` (the name Compose gives it under the default project) and Docker's
+    own networks. None when src/docker-compose.yml is absent, like
+    `resolve_core_services`."""
+    root_compose = repo_root / "src" / "docker-compose.yml"
+    if not root_compose.is_file():
+        return None
+    names = set(_DOCKER_NETWORKS) | {"papaia-net", "papaia_papaia-net"}
+    for compose_path in compose_files(root_compose):
+        if not compose_path.is_file():
+            continue
+        doc = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+        networks = doc.get("networks") if isinstance(doc, dict) else None
+        for key, config in (networks or {}).items() if isinstance(networks, dict) else ():
+            names.update({str(key), f"papaia_{key}"})
+            name = config.get("name") if isinstance(config, dict) else None
+            if isinstance(name, str) and _with_defaults(name):
+                names.add(_with_defaults(name))
+    return frozenset(names)
+
+
+def isolated_networks(
+    manifest: dict, core_networks: frozenset[str] | None = None
+) -> list[tuple[str, list[str]]]:
+    """The `networks.isolated` entries (addon_api 16) as (network, [service, ...]), in
+    manifest order; [] when the key is absent.
+
+    Each entry is `{network, attach}` and nothing else. `network` follows the template
+    rule of `app_network` (`${PAPAIA_PROJECT:-papaia}-<name>-...` or its literal
+    default), is neither the add-on's `app_network` nor its egress network nor another
+    entry's network nor a core network; `attach` lists services of
+    ISOLATED_ATTACHABLE, at least one, each once. Raises ValueError naming the entry.
+    Whether the add-on's compose file creates the network as internal is checked by
+    `check_isolated_internal`, which needs the add-on's directory."""
+    networks = manifest.get("networks")
+    if networks is None:
+        return []
+    if not isinstance(networks, dict):
+        raise ValueError("networks: must be a mapping")
+    entries = networks.get("isolated")
+    if entries is None:
+        return []
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("networks.isolated must be a non-empty list")
+    if len(entries) > _MAX_ISOLATED:
+        raise ValueError(f"networks.isolated must have at most {_MAX_ISOLATED} entries")
+    name = manifest.get("name")
+    if not isinstance(name, str) or not _REQUIREMENT_NAME_RE.match(name):
+        raise ValueError("networks.isolated needs a valid add-on `name`")
+    scoped = re.compile(
+        r"^(?:\$\{PAPAIA_PROJECT:-papaia\}|papaia)-" + re.escape(name)
+        + r"-[a-z0-9][a-z0-9_.-]{0,62}$"
+    )
+    taken: dict[str, str] = {}
+    for key in ("app_network",):
+        if isinstance(networks.get(key), str):
+            taken[_with_defaults(networks[key])] = "the add-on's app_network"
+    egress = networks.get("egress")
+    if isinstance(egress, dict) and isinstance(egress.get("network"), str):
+        taken[_with_defaults(egress["network"])] = "the add-on's egress network"
+    core = (core_networks or frozenset()) | _DOCKER_NETWORKS | {"papaia-net"}
+    result: list[tuple[str, list[str]]] = []
+    for index, entry in enumerate(entries):
+        where = f"networks.isolated[{index}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{where} must be a mapping with `network` and `attach`")
+        unknown = sorted(str(key) for key in set(entry) - _ISOLATED_FIELDS)
+        if unknown:
+            raise ValueError(f"{where} has unknown field(s): {', '.join(unknown)}")
+        network = entry.get("network")
+        if not isinstance(network, str) or not network:
+            raise ValueError(f"{where}.network must be a network name")
+        if not scoped.match(network):
+            raise ValueError(
+                f"{where}.network {network!r} must be scoped to the add-on:"
+                f" ${{PAPAIA_PROJECT:-papaia}}-{name}-..."
+            )
+        resolved = _with_defaults(network)
+        if resolved in core:
+            raise ValueError(f"{where}.network {network!r} is a core network")
+        if resolved in taken:
+            raise ValueError(f"{where}.network {network!r} is {taken[resolved]}")
+        attach = entry.get("attach")
+        if not isinstance(attach, list) or not attach:
+            raise ValueError(f"{where}.attach must list at least one service")
+        if not all(isinstance(service, str) for service in attach):
+            raise ValueError(f"{where}.attach must list service names")
+        twice = sorted({service for service in attach if attach.count(service) > 1})
+        if twice:
+            raise ValueError(f"{where}.attach names {', '.join(twice)} twice")
+        sealed = [service for service in attach if service in NEVER_ATTACHABLE]
+        if sealed:
+            raise ValueError(
+                f"{where}: no add-on may attach " + ", ".join(f"'{s}'" for s in sealed)
+            )
+        outside = [service for service in attach if service not in ISOLATED_ATTACHABLE]
+        if outside:
+            raise ValueError(
+                f"{where}: " + ", ".join(f"'{s}'" for s in outside)
+                + " may not join an isolated network; only "
+                + ", ".join(sorted(ISOLATED_ATTACHABLE)) + " may"
+            )
+        taken[resolved] = where
+        result.append((network, list(attach)))
+    return result
+
+
+def check_isolated_internal(
+    entries: list[tuple[str, list[str]]], addon_path: Path
+) -> None:
+    """The add-on's own compose file must create every isolated network with
+    `internal: true` (and not as `external`), or the service on it would have a route
+    out of the host. Raises ValueError naming the entry."""
+    if not entries:
+        return
+    compose = addon_path / "docker-compose.yml"
+    declared: dict[str, dict] = {}
+    if compose.is_file():
+        try:
+            doc = yaml.safe_load(compose.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError(f"{compose.name} is not valid YAML: {exc}") from None
+        networks = doc.get("networks") if isinstance(doc, dict) else None
+        for config in networks.values() if isinstance(networks, dict) else ():
+            name = config.get("name") if isinstance(config, dict) else None
+            if isinstance(name, str):
+                declared.setdefault(_with_defaults(name), config)
+    for index, (network, _) in enumerate(entries):
+        config = declared.get(_with_defaults(network))
+        if config is None or config.get("internal") is not True or config.get("external"):
+            raise ValueError(
+                f"networks.isolated[{index}]: the add-on's docker-compose.yml must create"
+                f" the network {network!r} (as its `name:`) with internal: true"
+            )
+
+
 def resolve_core_services(repo_root: Path) -> dict[str, list[str]] | None:
     """Map every core compose service to its `profiles` list, walking the
     root compose's `include:` entries.
@@ -255,6 +420,7 @@ def resolve_core_target(repo_root: Path) -> CoreTarget:
         platform_version=envtree.resolve_platform_version(repo_root),
         addon_api=resolve_addon_api_window(repo_root),
         services=resolve_core_services(repo_root),
+        networks=resolve_core_networks(repo_root),
     )
 
 
@@ -370,6 +536,8 @@ def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
         ):
             if name in actions:
                 used.append((f"actions.{name}", GENERATION_FEATURES[f"actions.{name}"]))
+    if isinstance(networks, dict) and networks.get("isolated") is not None:
+        used.append(("networks.isolated", GENERATION_FEATURES["networks.isolated"]))
     return used
 
 
@@ -379,8 +547,12 @@ def evaluate_addon(
     core: CoreTarget,
     *,
     active_profiles: list[str] | None = None,
+    addon_path: Path | None = None,
 ) -> CompatResult:
     """Evaluate one addon manifest against one core target.
+
+    `addon_path` is the add-on's directory; with it, the add-on's compose file is
+    checked for what the manifest promises about it (isolated networks are internal).
 
     Returns ERROR only for malformed manifests -- those are bugs, not
     policy calls, and `gate()` treats them as fatal even under --force."""
@@ -478,7 +650,20 @@ def evaluate_addon(
         except exposes.ExposesError as exc:
             return CompatResult(name, STATUS_ERROR, axis=KNOWLEDGE_AXIS, reason=str(exc))
 
+    # Isolated networks (generation 16): a declaration that would widen the isolation is
+    # a malformed manifest, whatever the core serves, so not even --force lets it in.
+    try:
+        isolated = isolated_networks(manifest, core.networks)
+        if addon_path is not None:
+            check_isolated_internal(isolated, addon_path)
+    except ValueError as exc:
+        return CompatResult(name, STATUS_ERROR, axis=ISOLATED_AXIS, reason=str(exc))
+
     warnings: list[str] = []
+    if isolated and addon_path is None:
+        warnings.append(
+            "networks.isolated: internal: true not checked without the add-on's directory"
+        )
     if features and generations is not None:
         for key, generation in features:
             if generation > max(generations):

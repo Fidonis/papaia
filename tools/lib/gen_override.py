@@ -88,6 +88,12 @@ def generate_override(
         # Generation 12: the bundled proxy reaches the interfaces of `integration.nginx`
         # on the add-on's network (lib/ingress.py), without the manifest attaching it.
         attach.append(INGRESS_PROXY)
+    # Generation 16: the add-on's isolated networks, validated again here so that no
+    # path around the compatibility check puts more than LiteLLM on one of them.
+    isolated = _isolated_networks(addon_manifest, config_dir, addon_path)
+    if name and isolated and not (app_network and attach):
+        return _write_override(name, _with_isolated({"services": {}, "networks": {}}, isolated),
+                               config_dir)
     if not name or not app_network or not attach:
         return None
 
@@ -126,17 +132,74 @@ def generate_override(
         override["services"] = services
         if any(body["networks"] == [front] for body in services.values()):
             override["networks"][front] = {"external": True}
-        if not services:
+        if not services and not isolated:
             (config_dir / "overrides" / f"docker-compose.{name}.override.yml").unlink(
                 missing_ok=True
             )
             return None
 
+    return _write_override(name, _with_isolated(override, isolated), config_dir)
+
+
+def _write_override(name: str, override: dict, config_dir: Path) -> Path:
     out_path = config_dir / "overrides" / f"docker-compose.{name}.override.yml"
     common.atomic_write(
         out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
     )
     return out_path
+
+
+def _isolated_networks(
+    addon_manifest: dict, config_dir: Path, addon_path: Path | None
+) -> list[tuple[str, list[str]]]:
+    """The add-on's `networks.isolated` entries (addon_api 16) with each network name
+    resolved against the root .env, or [] when it declares none.
+
+    Raises ValueError for every declaration the compatibility check refuses, and also
+    when the add-on's directory is unknown: without its compose file, `internal: true`
+    cannot be checked, and an isolated network with a route out is no isolation."""
+    entries = compat.isolated_networks(addon_manifest)
+    if not entries:
+        return []
+    name = addon_manifest.get("name")
+    if addon_path is None:
+        raise ValueError(
+            f"add-on '{name}': networks.isolated needs the add-on's directory to check"
+            " internal: true"
+        )
+    compat.check_isolated_internal(entries, addon_path)
+    env = common.parse_env_file(config_dir / ".env")
+    core = egress.core_networks(env)
+    networks = addon_manifest.get("networks") or {}
+    app_network = networks.get("app_network")
+    own = resolve_app_network(app_network, config_dir) if isinstance(app_network, str) else None
+    resolved: list[tuple[str, list[str]]] = []
+    for index, (raw, attach) in enumerate(entries):
+        network = resolve_app_network(raw, config_dir)
+        if network in core:
+            raise ValueError(
+                f"add-on '{name}': networks.isolated[{index}].network {network!r} is"
+                f" {core[network]}"
+            )
+        if network == own:
+            raise ValueError(
+                f"add-on '{name}': networks.isolated[{index}].network {network!r} is the"
+                " add-on's app_network"
+            )
+        resolved.append((network, attach))
+    return resolved
+
+
+def _with_isolated(override: dict, isolated: list[tuple[str, list[str]]]) -> dict:
+    """`override` with each isolated network joined by exactly its listed services, after
+    the networks they already have here. Nothing else joins an isolated network."""
+    for network, attach in isolated:
+        for service in attach:
+            body = override["services"].setdefault(service, {"networks": []})
+            if network not in body["networks"]:
+                body["networks"].append(network)
+        override["networks"][network] = {"external": True}
+    return override
 
 
 # The bundled proxy's service in the core compose (src/infra/nginx/docker-compose.yml).
@@ -224,6 +287,7 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
         return written
 
     base = repo_root if repo_root is not None else Path.cwd()
+    _check_isolated_claims(deployed, base, config_dir)
     for addon in deployment.active_addons(deployed):
         addon_path = deployment.resolve_addon_path(addon, base)
         manifest, _ = deployment.load_addon_manifest(addon_path)
@@ -234,6 +298,34 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
             written.append(result)
     written.extend(egress.generate_overrides(config_dir, base))
     return written
+
+
+def _check_isolated_claims(deployed: dict, base: Path, config_dir: Path) -> None:
+    """An isolated network (addon_api 16) belongs to one add-on: refuse the render when
+    the isolated network of an active add-on is a network another add-on (active or not)
+    names. The scope prefix alone does not ensure it: `papaia-a-b-net` is scoped to both
+    `a` and `a-b`."""
+    claims: list[tuple[str, str, str]] = []
+    for addon in deployed.get("addons") or []:
+        if not addon.get("path"):
+            continue
+        manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(addon, base))
+        if manifest is not None:
+            claims.extend(
+                (network, owner, kind, bool(addon.get("active")))
+                for network, owner, kind in egress.claims_of(
+                    manifest, str(addon.get("name")), config_dir
+                )
+            )
+    for network, owner, kind, active in claims:
+        if not active or kind != "isolated network":
+            continue
+        for other_network, other, other_kind, _ in claims:
+            if other_network == network and other != owner:
+                raise ValueError(
+                    f"add-on '{owner}': networks.isolated: {network!r} is also the"
+                    f" {other_kind} of add-on '{other}'"
+                )
 
 
 def external_networks(override_path: Path) -> list[str]:

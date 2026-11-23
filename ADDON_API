@@ -36,5 +36,6 @@
 #      add-on starts
 #   15  reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by
 #      `papaia-ctl person export|erase`
-current=15
+#   16  `networks.isolated`: internal add-on networks only `litellm` joins (ADR 0026)
+current=16
 min=1

@@ -26,6 +26,24 @@ based on merged pull requests; this file mirrors the published releases.
   restore exits with code 3. One audit row `erasure_probe` and `erasure_probe=` in
   `backup.log`.
 
+### Isolated add-on networks (add-on contract generation 16)
+
+- New manifest key `networks.isolated: [{network, attach: [litellm]}]`: internal networks of
+  an add-on that the core joins with LiteLLM and nothing else, so a service that reads
+  foreign content shares a network with the model gateway alone (ADR 0026,
+  `docs/isolated-networks.md`).
+- `ADDON_API` `current=16` (`min` stays 1); the generation table, `GENERATION_FEATURES`,
+  the contract snapshot and the suite matrix (`compat/suite.yaml`) carry it.
+- The compatibility check and the override render refuse, naming the entry, a service other
+  than `litellm` (`ISOLATED_ATTACHABLE`), an empty `attach`, a network that the add-on's
+  compose file does not create with `internal: true`, the add-on's own `app_network` or
+  egress network, a duplicate entry, a core or Docker network, and a name not scoped to the
+  add-on; the render also refuses a network another add-on declares. A core below
+  generation 16 reports such an add-on `INCOMPATIBLE`.
+- `addon install`, `start`, `upgrade`, `rollback`, `check` and `list` pass the add-on's
+  directory to the check, so its compose file is read. Overrides of add-ons without the key
+  are byte-identical.
+
 ### Kit 0.1.0 in the core tools
 
 - The core tools vendor papaia-kit 0.1.0, the kit's first public release (MIT): wheel and

@@ -14,6 +14,9 @@ Welcome to the papAIa documentation.
   the distributed mode on two machines
 - [The single exit](./egress.md) — papaia-egress: allow lists per add-on, protected hosts,
   corporate proxy
+- [Isolated add-on networks](./isolated-networks.md) — `networks.isolated`: an internal
+  network of an add-on whose only core peer is the model gateway LiteLLM, and what the core
+  refuses
 - [Network routes](./network.md) — the communication matrix, the direct route of the SQL
   source (`papaia-sql-uplink`, host rules, `doctor network`) and `topology firewall`
 - [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on

@@ -1,0 +1,12 @@
+services:
+  nginx-proxy-manager:
+    networks:
+    - papaia-paperless-net
+  librechat:
+    networks:
+    - papaia-paperless-front
+networks:
+  papaia-paperless-net:
+    external: true
+  papaia-paperless-front:
+    external: true

@@ -1,0 +1,10 @@
+services:
+  librechat:
+    networks:
+    - papaia-docs-net
+  litellm:
+    networks:
+    - papaia-docs-net
+networks:
+  papaia-docs-net:
+    external: true

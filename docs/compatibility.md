@@ -20,7 +20,7 @@ A `candidate` row describes a suite whose release is still being prepared.
 | Suite | Status | Core | Add-on API | Manager | Me | Studio | Data | Flow | Assistant | Paperless | Connections |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 1.9.0 | released | `>=1.9.0,<1.10.0` | 1..6 | `>=1.7.0,<1.8.0` | – | – | – | – | – | `>=2.0.0,<3.0.0` | – |
-| 1.10.0 | candidate | `>=1.10.0,<1.11.0` | 1..15 | `>=1.8.0,<1.9.0` | `>=0.1.0,<0.2.0` | `>=0.2.0,<0.3.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=2.0.0,<3.0.0` | `>=0.1.0,<0.2.0` |
+| 1.10.0 | candidate | `>=1.10.0,<1.11.0` | 1..16 | `>=1.8.0,<1.9.0` | `>=0.1.0,<0.2.0` | `>=0.2.0,<0.3.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=0.1.0,<0.2.0` | `>=2.0.0,<3.0.0` | `>=0.1.0,<0.2.0` |
 
 Columns map to add-on names: Me `papaia-me`, Studio `papaia-studio`, Data
 `papaia-data`, Flow `papaia-flow`, Assistant `papaia-assist`, Paperless

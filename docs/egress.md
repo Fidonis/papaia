@@ -83,7 +83,8 @@ The render checks the declaration and stops, naming the add-on, when
   `host`, `none`);
 - it is the add-on's own `networks.app_network` (core services join that one through
   `attach` and would count as the add-on), or a network another add-on in `deployment.yaml`
-  declares as its app network or egress network;
+  declares as its app network, egress network or isolated network
+  ([isolated-networks.md](isolated-networks.md));
 - the add-on's `docker-compose.yml` does not create it with `internal: true` (a network
   created elsewhere, `external: true`, is refused too): otherwise the add-on's services would
   reach the outside around the proxy;

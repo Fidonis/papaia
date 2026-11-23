@@ -278,6 +278,7 @@ def _evaluate_gate(
     force: bool,
     node: str | None = None,
     dependents: bool = False,
+    addon_path: Path | None = None,
 ) -> tuple[compat.CompatResult, int]:
     """The verdict on one addon against this checkout's core, and what the gate
     policy makes of it: 0 (proceed) or 2 (abort).
@@ -291,7 +292,9 @@ def _evaluate_gate(
     mode lets an unplaceable add-on through."""
     core = compat.resolve_core_target(repo_root)
     profiles = (deployed.get("core") or {}).get("profiles")
-    result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+    result = compat.evaluate_addon(
+        name, manifest, core, active_profiles=profiles, addon_path=addon_path
+    )
     result = _with_required_addons(result, name, manifest, deployed, repo_root)
     if dependents:
         result = _fold(result, dependents_result(name, manifest, deployed, repo_root))
@@ -313,12 +316,14 @@ def _compat_gate_addon(
     force: bool,
     node: str | None = None,
     dependents: bool = False,
+    addon_path: Path | None = None,
 ) -> int:
     """Evaluate one addon against this checkout's core and apply the gate
     policy. Returns 0 (proceed) or 2 (abort). Must run before any mutation,
     so a refused install/start leaves no trace."""
     result, exit_code = _evaluate_gate(
-        name, manifest, deployed, repo_root, force=force, node=node, dependents=dependents
+        name, manifest, deployed, repo_root, force=force, node=node, dependents=dependents,
+        addon_path=addon_path,
     )
     _report_compat_result(result, fatal=bool(exit_code), force=force)
     return exit_code
@@ -480,6 +485,7 @@ def cmd_addon_install(args: argparse.Namespace) -> int:
         force=args.force,
         node=node,
         dependents=existing is not None,
+        addon_path=addon_path,
     ):
         return 2
     # Under the kritis security profile an add-on without a `pki:` request is refused
@@ -585,7 +591,9 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     if manifest is None:
         print(f"ERROR: {manifest_error}", file=sys.stderr)
         return 2
-    if _compat_gate_addon(name, manifest, deployed, repo_root, force=args.force):
+    if _compat_gate_addon(
+        name, manifest, deployed, repo_root, force=args.force, addon_path=addon_path
+    ):
         return 2
     # `addon start` sets the state the catalog shows; `addon stop` sets it back. Checked
     # before anything is written: the installation may have changed since install (a
@@ -694,13 +702,14 @@ def evaluate_active_addons(
     results: list[compat.CompatResult] = []
     for addon in deployment.active_addons(deployed):
         name = addon.get("name", "?")
-        manifest, manifest_error = deployment.load_addon_manifest(
-            deployment.resolve_addon_path(addon, repo_root)
-        )
+        addon_path = deployment.resolve_addon_path(addon, repo_root)
+        manifest, manifest_error = deployment.load_addon_manifest(addon_path)
         if manifest is None:
             results.append(compat.CompatResult(name, compat.STATUS_ERROR, reason=manifest_error))
             continue
-        result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+        result = compat.evaluate_addon(
+            name, manifest, core, active_profiles=profiles, addon_path=addon_path
+        )
         result = _with_required_addons(result, name, manifest, deployed, repo_root)
         if result.status != compat.STATUS_ERROR:
             # A placement problem outranks a compatible verdict: it cannot be forced.
@@ -882,6 +891,7 @@ def cmd_addon_upgrade_plan(args: argparse.Namespace) -> int:
         Path(args.repo_root),
         force=args.force,
         dependents=True,
+        addon_path=candidate.new_path,
     )
     plan = addon_upgrade.build_plan(candidate, Path(args.config_dir))
     plan["compat"] = _compat_json(result)
@@ -952,7 +962,8 @@ def cmd_addon_upgrade_apply(args: argparse.Namespace) -> int:
     name = args.name
 
     if _compat_gate_addon(
-        name, candidate.new_manifest, deployed, repo_root, force=args.force, dependents=True
+        name, candidate.new_manifest, deployed, repo_root, force=args.force, dependents=True,
+        addon_path=candidate.new_path,
     ):
         return 2
     plan = addon_upgrade.build_plan(candidate, config_dir)
@@ -1009,7 +1020,8 @@ def _rollback_target(args: argparse.Namespace) -> tuple[dict, dict, Path, dict] 
     if _gate_refuses(args.name, target, repo_root):
         return None
     if _compat_gate_addon(
-        args.name, manifest, deployed, repo_root, force=args.force, dependents=True
+        args.name, manifest, deployed, repo_root, force=args.force, dependents=True,
+        addon_path=target,
     ):
         return None
     return deployed, entry, target, manifest
@@ -1070,7 +1082,9 @@ def _list_row(entry: dict, deployed: dict, config_dir: Path, repo_root: Path) ->
         )["components"]
         core = compat.resolve_core_target(repo_root)
         profiles = (deployed.get("core") or {}).get("profiles")
-        result = compat.evaluate_addon(name, manifest, core, active_profiles=profiles)
+        result = compat.evaluate_addon(
+            name, manifest, core, active_profiles=profiles, addon_path=path
+        )
         # The same verdict `addon check` gives, `requires.addons` included.
         row["compat"] = _compat_json(
             _with_required_addons(result, name, manifest, deployed, repo_root)
