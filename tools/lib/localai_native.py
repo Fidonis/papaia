@@ -16,7 +16,9 @@ Everything lives below one directory per installation, `localai_home`:
                                  or key) that no `start` has carried out yet
         models/                model files and YAMLs (bind-mounted into the init job)
         backends/                the Metal backend LocalAI downloads on its first start
-        data/, configuration/    LocalAI's own state (written into its working directory)
+        data/, configuration/,   LocalAI's own state (written into its working directory;
+        cache/, downloading/     cache/ and downloading/ since v4.12)
+        docker/                  an empty registry configuration for the backend pull
         logs/localai.log         stdout and stderr of the launchd job
 
 It lies outside $PAPAIA_CONFIG_DIR, which the backup archives in full, and below /Users,
@@ -324,7 +326,13 @@ def run_script(home: Path, binary: Path, config_dir: Path, listen_port: str) -> 
 
     No LOCALAI_AUTH: the darwin binary is built without the SQLite user database and does
     not start with it. The key alone protects /v1, /api and /metrics; /readyz is open.
-    LocalAI writes data/ and configuration/ into its working directory, hence the cd."""
+    LocalAI writes data/ and configuration/ into its working directory, hence the cd.
+
+    DOCKER_CONFIG points at an empty directory: LocalAI pulls its Metal backend as an OCI
+    image and reads the registry credentials Docker's way. Docker Desktop's
+    ~/.docker/config.json names the `osxkeychain` helper, which lies in /usr/local/bin,
+    outside the PATH launchd gives a job, so the pull failed and LocalAI ran without a
+    backend. The backend images are public; an empty configuration pulls them anonymously."""
     q = shlex.quote
     env_file = config_dir / "ai" / "localai" / ".env"
     return (
@@ -343,8 +351,9 @@ def run_script(home: Path, binary: Path, config_dir: Path, listen_port: str) -> 
         f"LOCALAI_MODELS_PATH={q(str(home / 'models'))}\n"
         f"LOCALAI_BACKENDS_PATH={q(str(home / 'backends'))}\n"
         "LOCALAI_EXTERNAL_BACKENDS=llama-cpp\n"
+        f"DOCKER_CONFIG={q(str(home / 'docker'))}\n"
         "export LOCALAI_API_KEY LOCALAI_ADDRESS LOCALAI_MODELS_PATH LOCALAI_BACKENDS_PATH"
-        " LOCALAI_EXTERNAL_BACKENDS\n"
+        " LOCALAI_EXTERNAL_BACKENDS DOCKER_CONFIG\n"
         f"exec {q(str(binary))} run\n"
     )
 
@@ -432,7 +441,7 @@ def install_for(
     root = common.parse_env_file(config_dir / ".env")
     home = localai_home(root)
     version = pinned_version(repo_root)
-    for sub in ("models", "backends"):
+    for sub in ("models", "backends", "docker"):
         common.ensure_dir(home / sub)
     pending = restart_pending(home)
     binary, changed, replaced = install(home, version, opener=opener, announce=announce)
@@ -777,7 +786,10 @@ def stop_job(
 
 # What LocalAI downloads and writes for itself; the model files come from the init job.
 DATA_DIRS = ("models", "backends")
-_STATE_DIRS = ("logs", "data", "configuration")
+# LocalAI's own state below its working directory: data/ and configuration/ since v4.7,
+# cache/ (gallery index, VRAM estimates) and downloading/ since v4.12; docker/ is the empty
+# registry configuration of the start script.
+_STATE_DIRS = ("logs", "data", "configuration", "cache", "downloading", "docker")
 
 
 def purge_data(home: Path) -> list[Path]:
