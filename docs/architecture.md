@@ -320,6 +320,12 @@ actions:                           # optional (addon_api 4): maintenance actions
   post-restore:                    # reserved (addon_api 14): the holder's own step after a
     service: migrate               # restore, after erasure-replay
     args: ["post-restore"]
+  person-export:                   # reserved (addon_api 15): run by `papaia-ctl person
+    service: migrate               # export|erase` for a person without an account, with
+    args: ["person-export"]        # PAPAIA_PERSON_SUB (docs/person-requests.md); also
+  person-erase:                    # `person-erase` and `transfer-ownership`
+    service: migrate
+    args: ["person-erase"]
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -416,7 +422,9 @@ records for generations 7 to 12 use the numbers reserved in
 [`docs/adr/README.md`](adr/README.md). Generation 13 (`volumes[]` with
 `backup: include|exclude` and a reason) is described with `backup` in the
 README, generation 14 (the reserved actions `erasure-replay` and
-`post-restore`) with `restore`.
+`post-restore`) with `restore`, generation 15 (the reserved actions
+`person-export`, `person-erase` and `transfer-ownership`) in
+[`person-requests.md`](person-requests.md).
 
 | Gen. | Meaning | ADR |
 |---|---|---|
@@ -434,6 +442,7 @@ README, generation 14 (the reserved actions `erasure-replay` and
 | 12 | Add-on ingress `integration.nginx` | 0023 |
 | 13 | `volumes[]` with `backup: include\|exclude` and a reason, read by `backup` | — |
 | 14 | Reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the add-on starts | — |
+| 15 | Reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by `papaia-ctl person export\|erase` | — |
 
 This table fixes what each generation means. The rendering and runtime
 behaviour behind generations 7 to 12 arrive with their own changes; until a
@@ -1058,6 +1067,8 @@ No Core changes required.
 | `papaia-ctl settings show\|set\|unset` | Contact point, brand and the four-eyes rule `approvals.four_eyes` in `overlay/platform/` (README, `settings`). Each change is audited (`four_eyes_changed` with old and new value for the rule) and renders the catalog. Exit 1 when profile `kritis` refuses switching four eyes off |
 | `papaia-ctl privacy-pack [--out=DIR] [--check]` | Write the records of processing `docs/de/datenschutz/vvt/<module>.md` from the `storage` declarations of the core profiles; only the part between the `privacy-pack` markers is generated, text around it is kept. `--check` writes nothing and exits 1 when a generated part differs from the declarations, a module file is missing or stale, a generated table has an empty cell, or a claim of a technical lock in the package names no acceptance criterion (a test runs it in CI). An entry without a `storage` declaration is listed as such and warned about |
 | `papaia-ctl privacy-pack --installation --out=FILE --backup-retention=DAYS [--format=html\|pdf\|md] [--offsite=PLACE --offsite-retention=DAYS]` | Write the data protection package of this installation as one document (default HTML): the processors it actually sends data to (the hosted model route, the mail server behind the relay, the host service provider), the places that keep copies with their deadlines (backup target, copy off site), and the records of every active core profile and installed add-on. One `papaia.audit/1` row (`privacy_pack.installation_write`) |
+| `papaia-ctl person export --sub=SUB --out=FILE --recipient=AGE1...` | The data of a person whose account is gone: runs `person-export` of every module (contract generation 15) and writes one archive in the format of the personal area's export, encrypted with age to the recipients, never over an existing file. Lists every row of the records of processing as included or not included with the reason. One audit row per module call and one for the archive. Exit 1 when a module is missing (named in the archive), 2 when refused before any module ran ([person-requests.md](person-requests.md)) |
+| `papaia-ctl person erase --sub=SUB --now [--transfer-to=SUB]` | Hand the person's objects to `--transfer-to` (`transfer-ownership`; a failed transfer stops before anything is erased), then run `person-erase` of every module and check the erasure journal entries each module names at the backup target against the person. Prints the proof per module and category (erased with count, or kept until a date with the reason). Refused without the erasure journal. One audit row per module call. Exit 1 partial, 2 refused |
 | `papaia-ctl realm sync [--check]` | Reconcile the clients, roles, exchange scopes and service accounts the installed modules declare and `security/pairings.yaml` confirms, write the name list of the Paperless gate (see "Realm sync of declared clients") and the group list `platform/groups.json`. `--check` changes nothing and exits 1 on any deviation. Exit 2 when a declaration is refused; nothing is changed then |
 | `papaia-ctl realm keys apply <module>` | Register the public keys the module wrote to the files of its `client_keys` (see "Realm sync of declared clients", row "Client keys") without a full sync; every declaration is checked as for `realm sync`. Exit 2 when the module declares no `client_keys` or a declaration or key file is refused, 1 when a client does not exist yet |
 | `papaia-ctl pairing list [--json]` | Read-only. The pairings of the signed bill of materials with read or write, their state in `security/pairings.yaml` and the sha256 of the list (see "Pairing approval"). Exit 2 when the bill of materials does not verify |

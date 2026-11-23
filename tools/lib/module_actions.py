@@ -38,6 +38,9 @@ MARKER = "module-actions.pending"
 FORMAT = "papaia.module-actions-pending/1"
 # In the order they run: the deletions first, then the holder's own step.
 RESERVED = ("erasure-replay", "post-restore")
+# Reserved as well (contract generation 15), run only by `papaia-ctl person export|erase`
+# (lib/person.py), never by a restore and never by `addon run`.
+PERSON_ACTIONS = ("person-export", "person-erase", "transfer-ownership")
 TRIGGERS = ("restore", "rollback")
 GENERATION = 14
 
@@ -57,7 +60,7 @@ class ModuleActionError(Exception):
 
 
 def is_reserved(name: str) -> bool:
-    return name in RESERVED
+    return name in RESERVED or name in PERSON_ACTIONS
 
 
 def reserved_actions(manifest: dict) -> list[str]:

@@ -66,6 +66,7 @@ from . import (
     npm_provision,
     pairing_approval,
     paperless_gate,
+    person,
     post_restore,
     privacy_pack,
     realm_sync,
@@ -890,6 +891,47 @@ def cmd_settings_unset(args: argparse.Namespace) -> int:
         return outcome
 
     return _settings_change(args, change)
+
+
+def cmd_person_begin(args: argparse.Namespace) -> int:
+    """`papaia-ctl person export|erase`, first call: check the request and plan the module
+    steps in the run folder --work. 2 when refused; nothing has run then."""
+    try:
+        person.begin(
+            Path(args.config_dir), Path(args.repo_root), args.work,
+            operation=args.operation, sub=args.sub, out=args.out,
+            recipients=args.recipient or [], transfer_to=args.transfer_to,
+        )
+    except person.PersonError as exc:
+        print(f"ERROR: person {args.operation}: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_person_next(args: argparse.Namespace) -> int:
+    """Take in the step that ran (--exit-code, its output in the run folder) and print the
+    next one as a tab-separated line, or nothing when every step ran."""
+    try:
+        step = person.advance(Path(args.config_dir), Path(args.repo_root), args.work,
+                              args.exit_code)
+    except person.PersonError as exc:
+        print(f"ERROR: person: {exc}", file=sys.stderr)
+        return 2
+    if step is not None:
+        print(person.step_line(step))
+    return 0
+
+
+def cmd_person_finish(args: argparse.Namespace) -> int:
+    """The result of the run: the archive written (export) or the proof (erase). 0 every
+    module done, 1 a module missing or failed (named in the output), 2 refused."""
+    try:
+        report = person.finish(Path(args.config_dir), Path(args.repo_root), args.work)
+    except person.PersonError as exc:
+        print(f"ERROR: person: {exc}", file=sys.stderr)
+        return 2
+    print(person.render(report), end="")
+    return 0 if report.ok else 1
 
 
 def cmd_privacy_pack(args: argparse.Namespace) -> int:
@@ -3173,6 +3215,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_privacy.add_argument("--offsite", default=None)
     p_privacy.add_argument("--offsite-retention", type=int, default=None)
     p_privacy.set_defaults(func=cmd_privacy_pack)
+
+    p_person_begin = sub.add_parser("person-begin")
+    p_person_begin.add_argument("--work", required=True)
+    p_person_begin.add_argument("--operation", required=True, choices=("export", "erase"))
+    p_person_begin.add_argument("--sub", required=True)
+    p_person_begin.add_argument("--out", default=None)
+    p_person_begin.add_argument("--recipient", action="append")
+    p_person_begin.add_argument("--transfer-to", default=None)
+    p_person_begin.set_defaults(func=cmd_person_begin)
+
+    p_person_next = sub.add_parser("person-next")
+    p_person_next.add_argument("--work", required=True)
+    p_person_next.add_argument("--exit-code", type=int, default=None)
+    p_person_next.set_defaults(func=cmd_person_next)
+
+    p_person_finish = sub.add_parser("person-finish")
+    p_person_finish.add_argument("--work", required=True)
+    p_person_finish.set_defaults(func=cmd_person_finish)
 
     p_addon_remove = sub.add_parser("addon-remove")
     p_addon_remove.add_argument("--name", required=True)

@@ -1,0 +1,69 @@
+# A task list add-on that keeps personal data in three categories and declares the
+# reserved person actions of contract generation 15: the sample module of
+# `papaia-ctl person export|erase` (tests/test_person.py).
+name: tasks
+version: 2.0.0
+requires:
+  addon_api: [7, 15]
+exposes:
+  - id: tasks.api
+    kind: rest
+    title: {de: "Aufgaben", en: "Tasks"}
+    address: {service: tasks-api, port: 8080, path: /api}
+    audience: papaia-tasks
+    identity: [person]
+    operations:
+      - name: list_tasks
+        version: 1
+        title: {de: "Aufgaben auflisten", en: "List tasks"}
+        via: rest
+        method: GET
+        path: /tasks
+        effect: read
+        retry: safe
+        input_schema: {type: object}
+        output_schema: {type: object}
+        data_class_max: employee
+        rights_check: server
+    export:
+      exit: {format: tasks-export/1, schema: schemas/export.json}
+    storage:
+      personal_data: true
+      retention:
+        until: account_deleted
+      categories:
+        - id: tasks
+          title: {de: "Aufgaben", en: "Tasks"}
+          purpose: {de: "Eigene Aufgaben planen", en: "Plan own tasks"}
+          legal_basis: {de: "Art. 6 Abs. 1 lit. b DSGVO", en: "Art. 6(1)(b) GDPR"}
+          retention: {until: deleted_by_person}
+          data_class: employee
+          erasure: me_api
+        - id: assignments
+          title: {de: "Zuweisungen", en: "Assignments"}
+          purpose: {de: "Aufgaben anderen Personen zuweisen", en: "Assign tasks"}
+          legal_basis: {de: "Art. 6 Abs. 1 lit. f DSGVO", en: "Art. 6(1)(f) GDPR"}
+          retention: {until: account_deleted}
+          data_class: employee
+          erasure: on_request
+          on_request:
+            action: transfer-ownership
+            way: {de: "Die Verwaltung übergibt Zuweisungen an eine benannte Person.", en: "Handed over."}
+            responsible: {de: "Aufgabenverwaltung", en: "Task administration"}
+        - id: time_records
+          title: {de: "Zeiterfassung", en: "Time records"}
+          purpose: {de: "Arbeitszeit nachweisen", en: "Record working time"}
+          legal_basis: {de: "Art. 6 Abs. 1 lit. c DSGVO", en: "Art. 6(1)(c) GDPR"}
+          retention: {days: 730, until: legal_obligation}
+          data_class: employee
+          erasure: retention
+actions:
+  person-export:
+    service: tasks-admin
+    args: ["person-export"]
+  person-erase:
+    service: tasks-admin
+    args: ["person-erase"]
+  transfer-ownership:
+    service: tasks-admin
+    args: ["transfer-ownership"]

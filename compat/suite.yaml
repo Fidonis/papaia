@@ -30,7 +30,7 @@ suites:
     core: ">=1.10.0,<1.11.0"
     addon_api:
       min: 1
-      current: 14
+      current: 15
     versions:
       manager: ">=1.8.0,<1.9.0"
       papaia-me: ">=0.1.0,<0.2.0"

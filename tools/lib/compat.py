@@ -88,6 +88,10 @@ ADDON_API_GENERATIONS: dict[int, str] = {
         "reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the"
         " add-on starts"
     ),
+    15: (
+        "reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by"
+        " `papaia-ctl person export|erase`"
+    ),
 }
 
 # Manifest keys that need a core of at least this generation. A core below it
@@ -106,6 +110,11 @@ GENERATION_FEATURES: dict[str, int] = {
     # A core below 14 would start a restored add-on without applying its erasure journal.
     "actions.erasure-replay": 14,
     "actions.post-restore": 14,
+    # A core below 15 would install the add-on and never export or erase the data of a
+    # person whose account is gone.
+    "actions.person-export": 15,
+    "actions.person-erase": 15,
+    "actions.transfer-ownership": 15,
 }
 
 INGRESS_AXIS = "integration.nginx"
@@ -346,7 +355,10 @@ def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
         )
     actions = manifest.get("actions")
     if isinstance(actions, dict):
-        for name in ("erasure-replay", "post-restore"):
+        for name in (
+            "erasure-replay", "post-restore", "person-export", "person-erase",
+            "transfer-ownership",
+        ):
             if name in actions:
                 used.append((f"actions.{name}", GENERATION_FEATURES[f"actions.{name}"]))
     return used

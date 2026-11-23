@@ -101,7 +101,11 @@ _SURFACE_CHANGED = (
 #
 # Gen 14 (additive): the reserved `actions` `erasure-replay` and `post-restore`; `restore`
 # runs them before the add-on starts, never `addon run` (RE-06, BE-16, BE-17).
-ADDON_API_WINDOW = (1, 14)
+#
+# Gen 15 (additive): the reserved `actions` `person-export`, `person-erase` and
+# `transfer-ownership`; `papaia-ctl person export|erase` runs them for a person whose
+# account is gone, never `addon run` and never `restore` (OPS-08, OPS-03).
+ADDON_API_WINDOW = (1, 15)
 
 # The binding meaning of every generation the core serves. Changing a line here is a
 # contract change, not a wording fix.
@@ -141,6 +145,10 @@ ADDON_API_GENERATIONS = {
         "reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the"
         " add-on starts"
     ),
+    15: (
+        "reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by"
+        " `papaia-ctl person export|erase`"
+    ),
 }
 
 # Manifest keys whose use requires a core of at least this generation.
@@ -154,6 +162,9 @@ GENERATION_FEATURES = {
     "volumes": 13,
     "actions.erasure-replay": 14,
     "actions.post-restore": 14,
+    "actions.person-export": 15,
+    "actions.person-erase": 15,
+    "actions.transfer-ownership": 15,
 }
 
 # Seam 1: core services an addon may attach to (and their profiles).

@@ -95,6 +95,12 @@
 #   papaia-ctl privacy-pack  --installation --out=FILE --backup-retention=DAYS
 #                            [--format=html|pdf|md] [--offsite=PLACE --offsite-retention=DAYS]
 #                            [--config-dir=PATH]
+#   papaia-ctl person export --sub=SUB --out=FILE --recipient=AGE1... [--config-dir=PATH]
+#                            — the data of a person whose account is gone, from every
+#                            module, as one archive encrypted with age
+#   papaia-ctl person erase  --sub=SUB --now [--transfer-to=SUB] [--config-dir=PATH]
+#                            — hand over her objects, then erase her data in every module
+#                            (erasure journal, proof per module and category)
 #   papaia-ctl report permissions --by=person|system [--format=json|csv]
 #                            --token-file=PATH|- [--config-dir=PATH] — the permission
 #                            report, released by papaia-audit (role papaia-auditor)
@@ -179,7 +185,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,172p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,178p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -337,6 +343,7 @@ case "$cmd" in
         ;;
     settings)      cmd_settings "$@" ;;
     privacy-pack)  cmd_privacy_pack "$@" ;;
+    person)        cmd_person "$@" ;;
     service-account) cmd_service_account "$@" ;;
     certs)         cmd_certs "$@" ;;
     secrets)

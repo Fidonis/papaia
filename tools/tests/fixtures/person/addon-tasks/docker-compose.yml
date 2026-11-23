@@ -1,0 +1,6 @@
+services:
+  tasks-api:
+    image: example.invalid/tasks-api:2.0.0
+  tasks-admin:
+    image: example.invalid/tasks-api:2.0.0
+    profiles: [actions]

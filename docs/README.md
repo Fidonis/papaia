@@ -35,6 +35,9 @@ Welcome to the papAIa documentation.
   notices, its service account and audience
 - [Platform PKI and trust bundle](./pki.md) — certificates for TLS between services, their
   renewal, company CA certificates, the security profile `kritis`
+- [Information and erasure without an account](./person-requests.md) — `papaia-ctl person
+  export|erase`: the person actions of the modules, the encrypted archive, the erasure journal
+  check and the proof per module and category
 - [Hosted test model](./hosted-test-model.md) — a model outside the stack, in the test stack
   only
 - [Wiederherstellung](./de/wiederherstellung.md) — the operator steps of a restore, in
@@ -50,6 +53,8 @@ Welcome to the papAIa documentation.
   technical and organisational measures, points for a works agreement
 - [Lizenz und Bezug](./de/betrieb/lizenz-und-bezug.md) — license, cost and contract per
   component, image sourcing and availability, exit, support and security fixes
+- [Auskunft und Löschung ohne Konto](./de/betrieb/auskunft-und-loeschung.md) — the operator
+  steps for a person whose account is gone, and what an erasure means for the backups
 - [Nachweis mit dem ausgelieferten Modell](./de/betrieb/modellnachweis.md) — how the modules are
   checked with the smallest shipped model and what the report holds
 

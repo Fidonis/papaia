@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tasks-export/1",
+  "type": "object",
+  "required": ["contract", "tasks"],
+  "properties": {
+    "contract": {"const": 2},
+    "tasks": {"type": "array", "items": {"type": "object"}}
+  }
+}

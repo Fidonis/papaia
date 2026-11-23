@@ -34,5 +34,7 @@
 #   13  `volumes[]` with `backup: include|exclude` and a reason, read by `backup`
 #   14  reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the
 #      add-on starts
-current=14
+#   15  reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by
+#      `papaia-ctl person export|erase`
+current=15
 min=1

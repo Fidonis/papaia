@@ -1189,9 +1189,13 @@ def cmd_addon_action(args: argparse.Namespace) -> int:
         print(f"ERROR: addon '{args.name}': {exc}", file=sys.stderr)
         return 2
     if module_actions.is_reserved(args.action):
+        runner = (
+            "papaia-ctl person export|erase runs it for one person"
+            if args.action in module_actions.PERSON_ACTIONS
+            else "only restore runs it, before the add-on starts"
+        )
         print(
-            f"ERROR: '{args.action}' of addon '{args.name}' is a restore step: only restore runs"
-            " it, before the add-on starts.",
+            f"ERROR: '{args.action}' of addon '{args.name}' is a reserved step: {runner}.",
             file=sys.stderr,
         )
         return 2

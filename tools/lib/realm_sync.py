@@ -1586,18 +1586,7 @@ class AuditLog:
         acted alone, without any identity of the realm and with no token (the platform halt,
         or a file write in the configuration directory). `detail`: counters, hashes or values
         the event's schema allows (papaia.audit/1 `detail`), never content."""
-        if self._fd is None:
-            raise RealmSyncError("the audit log is closed")
-        now = time.time()
-        stamp = (
-            time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now % 1 * 1000):03d}Z"
-        )
-        row = {
-            "format": "papaia.audit/1",
-            "time": stamp,
-            "source_seq": self._seq + 1,
-            "correlation_id": self.correlation_id,
-            "writer": self.writer,
+        self.append({
             "role": "caller",
             "sub": self.host_account,
             "identity_kind": None if master or host else "service",
@@ -1618,6 +1607,24 @@ class AuditLog:
             "client_ip": None,
             "detail": dict(detail) if detail else None,
             "event": change.event,
+        })
+
+    def append(self, fields: dict) -> None:
+        """One row of the caller's own shape: `fields` holds everything but `format`,
+        `time`, `source_seq`, `correlation_id` and `writer`, which this log sets."""
+        if self._fd is None:
+            raise RealmSyncError("the audit log is closed")
+        now = time.time()
+        stamp = (
+            time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now % 1 * 1000):03d}Z"
+        )
+        row = {
+            "format": "papaia.audit/1",
+            "time": stamp,
+            "source_seq": self._seq + 1,
+            "correlation_id": self.correlation_id,
+            "writer": self.writer,
+            **fields,
         }
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as fh:

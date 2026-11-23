@@ -757,6 +757,86 @@ cmd_privacy_pack() {
     py_cli privacy-pack ${flags[@]+"${flags[@]}"}
 }
 
+# papaia-ctl person export|erase: information and erasure for a person whose account is
+# gone (lib/person.py). Runs the reserved person actions of every module in its own
+# project; every module call is one audit row.
+cmd_person() {
+    local sub="${1:-}" config_dir="$DEFAULT_CONFIG_DIR"
+    shift || true
+    case "$sub" in
+        export|erase) ;;
+        *) error "Unknown 'person' subcommand: '${sub:-<none>}'. Valid: export, erase."; exit 2 ;;
+    esac
+    local -a flags=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            --sub=*) flags+=("$1") ;;
+            --out=*|--recipient=*)
+                if [ "$sub" != "export" ]; then
+                    error "Unknown option for person $sub: $1"; exit 2
+                fi
+                flags+=("$1") ;;
+            --transfer-to=*|--now)
+                if [ "$sub" != "erase" ]; then
+                    error "Unknown option for person $sub: $1"; exit 2
+                fi
+                flags+=("$1") ;;
+            *) error "Unknown option for person $sub: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    _person_run "$sub" ${flags[@]+"${flags[@]}"}
+}
+
+# The run of `person export|erase` (lib/person.py): py_cli plans the module steps and
+# checks every answer, this loop runs each step as `docker compose run --rm -T` of the
+# declared service in the add-on's own project, standard input closed, its answer into the
+# run folder. The run folder is private to this account (mktemp -d, mode 0700) and is
+# removed when the command ends.
+_person_run() {
+    local operation="$1"
+    shift
+    if [ "$operation" = "erase" ]; then
+        local -a kept=() flag
+        for flag in "$@"; do [ "$flag" = "--now" ] || kept+=("$flag"); done
+        if [ "${#kept[@]}" -eq "$#" ]; then
+            error "person erase deletes the person's data in every module; pass --now."
+            exit 2
+        fi
+        set -- ${kept[@]+"${kept[@]}"}
+    fi
+    local work
+    work="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/papaia-person.XXXXXX")"
+    # shellcheck disable=SC2064  # the folder is fixed now, on purpose
+    trap "rm -rf '$work'" EXIT
+    py_cli person-begin --work="$work" --operation="$operation" "$@" || exit 2
+    local line rc=0 status addon_name addon_path
+    local -a code=() parts=()
+    while :; do
+        line="$(py_cli person-next --work="$work" ${code[@]+"${code[@]}"})" || exit 2
+        [ -n "$line" ] || break
+        IFS=$'\t' read -r -a parts <<< "$line"
+        addon_name="${parts[0]}"
+        addon_path="$(_addon_path "$addon_name")" || exit 2
+        info "  addon $addon_name: ${parts[$((${#parts[@]} - 1))]}"
+        status=0
+        (umask 077 && _addon_compose run "$addon_name" "$addon_path" --rm -T \
+            "${parts[@]:1}" < /dev/null > "$work/step.out") || status=$?
+        code=(--exit-code="$status")
+    done
+    py_cli person-finish --work="$work" || rc=$?
+    if [ "$operation" = "export" ] && [ "$rc" -lt 2 ]; then
+        local out=""
+        for flag in "$@"; do case "$flag" in --out=*) out="${flag#*=}" ;; esac; done
+        success "Archive written to $out (encrypted with age)."
+    fi
+    exit "$rc"
+}
+
 # papaia-ctl service-account list [--json] | rotate <id> [--grace=SECONDS]
 # The declared service accounts; created and kept by the realm sync, so this runs where
 # the realm sync runs (Keycloak's node).
