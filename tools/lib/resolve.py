@@ -47,8 +47,14 @@ class SetupArgs:
     enable_local_ai: bool | None = None  # None = sticky / no change
     # LocalAI accelerator image variant (gpu_detect.VARIANTS); None = sticky / no change
     localai_variant: str | None = None
+    # Where LocalAI runs: "container" | "native" (Apple Silicon, ADR 0012); None = sticky
+    localai_runtime: str | None = None
     enable_manager: bool | None = None  # None = sticky / no change
     enable_rag: bool | None = None  # None = sticky / no change
+    enable_voice: bool | None = None  # None = sticky / no change
+    enable_knowledge_map: bool | None = None  # None = sticky / no change
+    # Voice TTS accelerator image variant ("cpu", "nvidia", "hipblas"); None = sticky
+    voice_variant: str | None = None
     # Outbound mail relay (profile smtp). Every field None = sticky / no change.
     enable_smtp: bool | None = None
     smtp_host: str | None = None  # upstream mail server host
@@ -94,6 +100,43 @@ def derive_auth_host_default(app_host: str, keycloak_ext_port: str) -> str:
     if is_fqdn:
         return f"{scheme}://auth.{hostname}"
     return f"https://{hostname}:{keycloak_ext_port}"
+
+
+def _is_local_host(hostname: str) -> bool:
+    """A host derive_auth_host_default treats as local: no FQDN, so https and a port."""
+    return (
+        hostname in _HOSTLIKE_NO_FQDN or bool(_IPV4_RE.match(hostname)) or "." not in hostname
+    )
+
+
+def sticky_auth_host(
+    stored: str, *, prior_provider: str, stored_app_host: str, keycloak_ext_port: str
+) -> str:
+    """The stored AUTH_HOST if the operator chose it, else "" (derive it again).
+
+    Only Keycloak's own setup writes a value worth keeping: after external_oidc the
+    stored one never served this installation's Keycloak. That also drops a value
+    chosen before a switch to external_oidc and back, which an explicit provider
+    switch accepts.
+
+    A value that is just the stored app host's derivation was never chosen either: it
+    follows a changed app host instead of pinning the old one. That covers an
+    --auth-host equal to the derivation as well: the two look the same. Local hosts
+    are compared without the scheme, since older releases derived them as http; the
+    old KEYCLOAK_EXT_PORT is gone by now, so a local value with another port counts as
+    chosen. An FQDN keeps the app host's scheme in the derivation, so it is compared
+    with it."""
+    if prior_provider != "internal_keycloak" or not stored or common.is_placeholder(stored):
+        return ""
+    if stored_app_host:
+        old_derived = urlsplit(derive_auth_host_default(stored_app_host, keycloak_ext_port))
+        value = urlsplit(stored)
+        same_host = value.netloc.lower() == old_derived.netloc.lower()
+        if same_host and (
+            _is_local_host(old_derived.hostname or "") or value.scheme == old_derived.scheme
+        ):
+            return ""
+    return stored
 
 
 def derive_librechat_url_default(app_host: str, librechat_port: str) -> str:
@@ -259,27 +302,18 @@ def resolve_hostnames(tree: EnvTree, args: SetupArgs) -> EnvTree:
         # A prior run's AUTH_HOST wins over the derived default, like LITELLM_PUBLIC_URL:
         # an upgrade re-runs setup non-interactively without --auth-host, and
         # re-deriving here moved KC_HOSTNAME and the issuer of every client.
-        # Only Keycloak's own setup writes it: after external_oidc the stored value is
-        # still the shipped seed, which says nothing about this installation.
-        sticky_auth_host = ""
-        if not args.fresh_init and prior_auth_provider == "internal_keycloak":
-            sticky_auth_host = root.get("AUTH_HOST", "")
-        if sticky_auth_host and common.is_placeholder(sticky_auth_host):
-            sticky_auth_host = ""
-        # A value that is just the old app host's derivation was never chosen by
-        # the operator: it follows a changed --app-host instead of pinning the old one.
-        # That covers a --auth-host equal to the derivation as well: the two look the same.
-        # Compared without the scheme -- older releases derived local hosts as http.
-        # The old KEYCLOAK_EXT_PORT is gone by now, so a local value with another port
-        # counts as chosen and stays until --auth-host replaces it.
-        if sticky_app_host and sticky_auth_host:
-            old_derived = derive_auth_host_default(sticky_app_host, keycloak_port)
-            if urlsplit(sticky_auth_host).netloc == urlsplit(old_derived).netloc:
-                sticky_auth_host = ""
-        auth_host = args.auth_host or sticky_auth_host or derived_auth_host
+        # `papaia-ctl defaults` applies the same rules to the interactive prompt.
+        stored_auth_host = "" if args.fresh_init else root.get("AUTH_HOST", "")
+        sticky_auth = sticky_auth_host(
+            stored_auth_host,
+            prior_provider=prior_auth_provider,
+            stored_app_host=sticky_app_host,
+            keycloak_ext_port=keycloak_port,
+        )
+        auth_host = args.auth_host or sticky_auth or derived_auth_host
         if not args.auth_host and not args.non_interactive and args.prompt is not None:
             auth_host = args.prompt(
-                "Public Keycloak URL (AUTH_HOST)", sticky_auth_host or derived_auth_host
+                "Public Keycloak URL (AUTH_HOST)", sticky_auth or derived_auth_host
             )
         root["AUTH_HOST"] = auth_host
         keycloak["KC_HOSTNAME"] = auth_host
@@ -636,6 +670,31 @@ def resolve_localai_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
     return tree
 
 
+def resolve_localai_runtime(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write LOCALAI_RUNTIME and the LocalAI URL that goes with it.
+
+    `native` runs LocalAI as a process on the Mac (ADR 0012): its web UI is reachable there
+    only, at http://localhost:<LOCALAI_EXT_PORT>, so the URL is set without asking and no
+    OIDC client or proxy host is used for it. Going back to `container` replaces that URL
+    with the derivation from the app host, unless the operator gave one. Runs after
+    resolve_hostnames. When localai_runtime is None the stored runtime stays (sticky)."""
+    from . import localai_native
+
+    root = tree.setdefault("", {})
+    before = localai_native.runtime(root)
+    if args.localai_runtime is not None:
+        root[localai_native.RUNTIME_KEY] = args.localai_runtime
+    after = localai_native.runtime(root)
+    if after == localai_native.NATIVE:
+        root["LOCALAI_PUBLIC_URL"] = localai_native.public_url(root)
+    elif before == localai_native.NATIVE and not args.localai_host:
+        if root.get("LOCALAI_PUBLIC_URL", "") == localai_native.public_url(root):
+            root["LOCALAI_PUBLIC_URL"] = derive_localai_url_default(
+                root.get("PAPAIA_HOST", ""), root.get("LOCALAI_EXT_PORT", "8080")
+            )
+    return tree
+
+
 def resolve_manager(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Add or remove the `manager` Compose profile based on the operator's choice.
 
@@ -720,6 +779,16 @@ def _refuse_conflicting_rag_addons(config_dir: Path) -> None:
         )
 
 
+def _toggle_profile(tree: EnvTree, name: str, enabled: bool) -> EnvTree:
+    """Add or remove one Compose profile in COMPOSE_PROFILES, keeping the others."""
+    root = tree.setdefault("", {})
+    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != name]
+    if enabled:
+        profiles.append(name)
+    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return tree
+
+
 def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
     """Add or remove the `rag` Compose profile based on the operator's choice.
 
@@ -730,11 +799,39 @@ def resolve_rag(tree: EnvTree, args: SetupArgs) -> EnvTree:
         return tree
     if args.enable_rag:
         _refuse_conflicting_rag_addons(args.config_dir)
-    root = tree.setdefault("", {})
-    profiles = [p for p in root.get("COMPOSE_PROFILES", "").split(",") if p and p != "rag"]
-    if args.enable_rag:
-        profiles.append("rag")
-    root["COMPOSE_PROFILES"] = ",".join(profiles)
+    return _toggle_profile(tree, "rag", args.enable_rag)
+
+
+def resolve_voice(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `voice` Compose profile based on the operator's choice.
+
+    When `enable_voice` is None the call is a no-op -- whatever was already written to
+    COMPOSE_PROFILES on a prior run is preserved (sticky)."""
+    if args.enable_voice is None:
+        return tree
+    return _toggle_profile(tree, "voice", args.enable_voice)
+
+
+def resolve_knowledge_map(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Add or remove the `knowledge-map` Compose profile based on the operator's choice.
+
+    When `enable_knowledge_map` is None the call is a no-op -- whatever was already written
+    to COMPOSE_PROFILES on a prior run is preserved (sticky). The module's secrets need no
+    step of their own: `setup` generates the missing ones of every module before this runs."""
+    if args.enable_knowledge_map is None:
+        return tree
+    return _toggle_profile(tree, "knowledge-map", args.enable_knowledge_map)
+
+
+def resolve_voice_variant(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """Write VOICE_TTS_IMAGE_VARIANT into the root env when the operator chose one.
+
+    Same contract as resolve_localai_variant: only the variant id is stored,
+    the image pins stay in ai/voice/docker-compose.yml, and None preserves
+    whatever a prior run wrote (sticky)."""
+    if args.voice_variant is None:
+        return tree
+    tree.setdefault("", {})["VOICE_TTS_IMAGE_VARIANT"] = args.voice_variant
     return tree
 
 

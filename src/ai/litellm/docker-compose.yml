@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:v1.100.0
+    image: ghcr.io/berriai/litellm:1.110.2
     restart: unless-stopped
     env_file:
       - ./.env
@@ -15,6 +15,13 @@ services:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/ai/litellm/config.yaml
         target: /app/config.yaml
+      # Code, not operator config, hence mounted from the repo and not
+      # rendered: LiteLLM resolves the callback module registered in
+      # config.yaml against the config file's directory.
+      - type: bind
+        source: ./papaia_hooks.py
+        target: /app/papaia_hooks.py
+        read_only: true
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/certs
         target: /certs

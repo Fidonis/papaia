@@ -1,0 +1,25 @@
+# LibreChat MCP registration of the knowledge-map profile. render_core merges
+# this fragment into ai/librechat/librechat.yaml only while the profile is
+# active, so a stack without the map lists no such server.
+mcpServers:
+  KnowledgeMap:
+    title: 'Knowledge Map'
+    description: >-
+      Directory of this installation's knowledge sources. Ask it WHERE
+      information lives before searching: find_knowledge_source routes a
+      distilled need to the right system and names the tools to use there.
+      References only, never content; results are trimmed to your roles.
+    type: streamable-http
+    url: http://knowledge-map-mcp:8200/mcp
+    headers:
+      Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
+    # Lazy init: knowledge-map-mcp validates a real user Bearer token. Without
+    # startup: false, LibreChat attempts to connect at process start with the
+    # unsubstituted placeholder, sees a 401, then falls back to MCP dynamic
+    # OAuth discovery (which this server does not speak) and burns 120 s in
+    # OAuth handling timeout per retry cycle.
+    startup: false
+
+mcpSettings:
+  allowedDomains:
+    - "http://knowledge-map-mcp:8200"

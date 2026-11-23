@@ -111,7 +111,7 @@ verification on that hop. A plain-HTTP `proxy_pass` to port 8110 cannot work. Se
 [External reverse proxy](../README.md#external-reverse-proxy) for working Caddy and nginx
 configurations.
 
-### "host.docker.internal: cannot resolve" on Linux
+### "host.docker.internal: cannot resolve" on Linux or macOS
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
@@ -129,6 +129,87 @@ through LiteLLM:
 ```bash
 tools/papaia-ctl setup --no-local-ai
 tools/papaia-ctl start
+```
+
+### The native LocalAI on a Mac does not answer
+
+With `LOCALAI_RUNTIME=native`, LocalAI is a process on the Mac, run by launchd, not a
+container. `tools/papaia-ctl doctor` says in `localai_native` whether it answers and what
+launchd reports about the job. Its output is in
+`$PAPAIA_WORKSPACE_DIR/localai/<project>/logs/localai.log`, and launchd's view of it in
+
+```bash
+launchctl print "gui/$(id -u)/de.fidonis.papaia.<project>.localai"
+```
+
+(`state`, `pid` and `last exit code`; "Could not find service" means the job is not loaded).
+
+- **"not loaded although the stack runs"**: the job was stopped by hand (`launchctl bootout`)
+  or `start` could not load it. Run `tools/papaia-ctl start`, which loads it again, and read
+  its output.
+- **"is loaded … but LocalAI does not answer"**: LocalAI is still starting (the first start
+  downloads the Metal backend) or exits right away and launchd restarts it every 10 s. The
+  log says which.
+- **"LOCALAI_API_KEY is missing"** in the log: run `tools/papaia-ctl start`, which fills the
+  key into `$PAPAIA_CONFIG_DIR/ai/localai/.env`.
+- **"is installed, this release pins"**: run `tools/papaia-ctl start`; it installs the pinned
+  binary and restarts the job.
+- **"Operation not permitted"** in the log, or launchd cannot open the log file: the
+  workspace lies below `~/Documents`, `~/Desktop` or `~/Downloads`, which macOS may keep a
+  launchd job out of. Move the workspace elsewhere and run `setup` and `start` again.
+- **`start` says "Bootstrap failed: 5: Input/output error"**: the job was disabled by another
+  tool, or a job with the same label is still being unloaded. Run `tools/papaia-ctl stop`,
+  then `start`.
+- **papaia-manager started the stack, but LocalAI did not start**: the manager runs in a
+  container and cannot reach launchd; it says so and skips LocalAI. Run
+  `tools/papaia-ctl start` on the Mac.
+- **The download of the binary failed or its checksum did not match**: `start` says so and
+  installs nothing. Check the network and run `start` again; a checksum mismatch that
+  persists means the file served is not the published one.
+- **The first start hangs**: LocalAI downloads its Metal backend on the first start, which
+  needs internet access. The models come from the init job (`docker logs` of
+  `localai-model-init`); a 5.4 GB model can take an hour or more.
+- **The port is busy**: another process listens on `LOCALAI_EXT_PORT`. Stop it, or change the
+  port and re-run `setup` and `start`.
+- **Models in LiteLLM answer 404 or connection refused**: LiteLLM reaches the process at
+  `http://host.docker.internal:<LOCALAI_EXT_PORT>/v1`, which only Docker Desktop resolves.
+- **Models in LiteLLM answer 401**: LocalAI still runs with an older `LOCALAI_API_KEY`. Run
+  `tools/papaia-ctl start`, which restarts the job when the key changed, also after an
+  earlier `start` that ended before the restart (for example at a failed
+  `docker compose up`).
+- **"the stack is stopped, but LocalAI answers … without the launchd job"**: a LocalAI that
+  `papaia-ctl` did not start (by hand, or a job of another tool) holds the port. Stop that
+  process before the next `start`.
+- **`logs/localai.log` keeps growing**: launchd does not rotate it. Empty it in place, which
+  works while the job runs (do not delete or move it then, or LocalAI keeps writing to the
+  unlinked file until the next restart):
+
+  ```bash
+  : > "$PAPAIA_WORKSPACE_DIR/localai/<project>/logs/localai.log"
+  ```
+
+- **"native LocalAI skipped"** from `start`, or `setup` warning that `LOCALAI_RUNTIME=native`
+  is stored: this host cannot run the native process (no Apple Silicon Mac, another Docker
+  engine, or Docker Desktop not running). Start Docker Desktop, or go back to the container
+  with `tools/papaia-ctl setup --localai-runtime=container` and `tools/papaia-ctl start`.
+
+### LocalAI comes back after a reboot although the stack is stopped
+
+The native LocalAI of a Mac is a launchd job with `RunAtLoad`: launchd starts it at every
+login unless the job is disabled. `tools/papaia-ctl stop` disables it; stopping the stack in
+another way (`docker compose stop`, quitting Docker Desktop, `papaia-manager`) does not. Run
+
+```bash
+tools/papaia-ctl stop
+```
+
+on the Mac. LocalAI then stays off after a logout or a restart until the next
+`tools/papaia-ctl start`. `uninstall` removes the job altogether. A job left behind by a
+checkout that is gone can be removed by hand:
+
+```bash
+launchctl bootout "gui/$(id -u)/de.fidonis.papaia.<project>.localai"
+rm ~/Library/LaunchAgents/de.fidonis.papaia.<project>.localai.plist
 ```
 
 ### LocalAI ignores the GPU

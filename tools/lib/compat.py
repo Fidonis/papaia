@@ -20,12 +20,17 @@ the running checkout and against an update candidate (`addon check
 Additionally, `networks.attach` entries are validated structurally against
 the core compose's service names -- the one seam break that has actually
 happened (a core service rename) is detectable without any version number.
+
+`requires.addons` (addon_api 4) names other addons an addon builds on;
+`evaluate_required_addons` checks it against the addons active in a
+deployment.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -263,6 +268,11 @@ def evaluate_addon(
     else:
         reason = "manifest declares no compatibility requirement"
 
+    try:
+        addon_actions(manifest)
+    except ValueError as exc:
+        return CompatResult(name, STATUS_ERROR, axis="actions", reason=str(exc))
+
     warnings: list[str] = []
     attach = (manifest.get("networks") or {}).get("attach") or []
     if attach and not isinstance(attach, list):
@@ -292,6 +302,168 @@ def evaluate_addon(
         requirement=requirement,
         core_value=core_value,
         reason=reason,
+        warnings=tuple(warnings),
+    )
+
+
+REQUIRES_AXIS = "requires"
+
+_ACTION_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def addon_actions(manifest: dict) -> dict[str, dict]:
+    """The `actions` block (addon_api 4) as {name: {service, args, description,
+    destructive}}.
+
+    Each action names a service of the addon's own compose file and optional fixed
+    string arguments; `destructive: true` asks callers such as papaia-manager to
+    confirm before running it. Raises ValueError for a malformed block."""
+    actions = manifest.get("actions")
+    if actions is None:
+        return {}
+    if not isinstance(actions, dict):
+        raise ValueError("actions: must be a mapping")
+    result: dict[str, dict] = {}
+    for name, spec in actions.items():
+        if not isinstance(name, str) or not _ACTION_NAME_RE.match(name):
+            raise ValueError(f"actions: '{name}' is not a valid name (a-z, 0-9, -)")
+        if not isinstance(spec, dict) or not isinstance(spec.get("service"), str):
+            raise ValueError(f"actions.{name}: needs a 'service'")
+        args = spec.get("args") or []
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            raise ValueError(f"actions.{name}.args must be a list of strings")
+        description = spec.get("description") or ""
+        if not isinstance(description, str):
+            raise ValueError(f"actions.{name}.description must be a string")
+        destructive = spec.get("destructive", False)
+        if not isinstance(destructive, bool):
+            raise ValueError(f"actions.{name}.destructive must be true or false")
+        result[name] = {
+            "service": spec["service"],
+            "args": list(args),
+            "description": description,
+            "destructive": destructive,
+        }
+    return result
+
+
+def required_addons(manifest: dict) -> list[tuple[str, str | None]]:
+    """The `requires.addons` entries of a manifest as (name, version range or None).
+
+    An entry is a name or a mapping with `name` and an optional SemVer `version`
+    range. Raises ValueError for a malformed list, entry or range."""
+    requires = manifest.get("requires") or {}
+    if not isinstance(requires, dict):
+        raise ValueError("requires: must be a mapping")
+    entries = requires.get("addons")
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("requires.addons must be a list")
+    result: list[tuple[str, str | None]] = []
+    for entry in entries:
+        if isinstance(entry, str) and entry:
+            result.append((entry, None))
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise ValueError("requires.addons entries must be a name or a mapping with 'name'")
+        if not entry["name"]:
+            raise ValueError("requires.addons entries must be a name or a mapping with 'name'")
+        version = entry.get("version")
+        if version is not None:
+            if not isinstance(version, str):
+                raise ValueError(f"requires.addons '{entry['name']}': version must be a string")
+            semver.parse_constraint(version)
+        result.append((entry["name"], version))
+    return result
+
+
+def joined_addons(manifest: dict) -> list[tuple[str, list[str]]]:
+    """The `networks.join_addons` entries as (addon, [service, ...]).
+
+    Each entry names an addon from `requires.addons` and the services of this
+    addon that join that addon's network. Raises ValueError for a malformed
+    entry or an addon that is not required."""
+    networks = manifest.get("networks") or {}
+    if not isinstance(networks, dict):
+        raise ValueError("networks: must be a mapping")
+    entries = networks.get("join_addons")
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("networks.join_addons must be a list")
+    required = {name for name, _ in required_addons(manifest)}
+    result: list[tuple[str, list[str]]] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("addon"), str):
+            raise ValueError("networks.join_addons entries must be mappings with 'addon'")
+        services = entry.get("services")
+        if (
+            not isinstance(services, list)
+            or not services
+            or not all(isinstance(s, str) and s for s in services)
+        ):
+            raise ValueError(
+                f"networks.join_addons '{entry['addon']}': services must be a non-empty list"
+            )
+        if entry["addon"] not in required:
+            raise ValueError(
+                f"networks.join_addons '{entry['addon']}' is not listed in requires.addons"
+            )
+        result.append((entry["addon"], list(services)))
+    return result
+
+
+def evaluate_required_addons(
+    name: str, manifest: dict, active: dict[str, str | None]
+) -> CompatResult | None:
+    """Check `requires.addons` against the active addons of a deployment.
+
+    `active` maps each active addon's name to its version (None when unknown).
+    Returns None when the manifest requires nothing or every requirement is met;
+    an ERROR result for a malformed field; otherwise an INCOMPATIBLE result naming
+    what is missing. A requirement on a version the active addon does not state
+    passes with a warning."""
+    try:
+        requirements = required_addons(manifest)
+        joined_addons(manifest)
+    except ValueError as exc:
+        return CompatResult(name, STATUS_ERROR, axis=REQUIRES_AXIS, reason=str(exc))
+    if not requirements:
+        return None
+    problems: list[str] = []
+    warnings: list[str] = []
+    for required, version_range in requirements:
+        if required not in active:
+            problems.append(f"add-on '{required}' is not installed and active")
+            continue
+        if version_range is None:
+            continue
+        version = active[required]
+        if version is None:
+            warnings.append(
+                f"add-on '{required}' states no version; '{version_range}' not checked"
+            )
+            continue
+        try:
+            ok = semver.satisfies(version, version_range)
+        except ValueError:
+            warnings.append(
+                f"add-on '{required}' has version '{version}'; '{version_range}' not checked"
+            )
+            continue
+        if not ok:
+            problems.append(
+                f"add-on '{required}' {version} does not satisfy '{version_range}'"
+            )
+    if not problems and not warnings:
+        return None
+    return CompatResult(
+        name,
+        STATUS_INCOMPATIBLE if problems else STATUS_OK,
+        axis=REQUIRES_AXIS,
+        requirement=[n if r is None else f"{n} {r}" for n, r in requirements],
+        reason="; ".join(problems) if problems else None,
         warnings=tuple(warnings),
     )
 

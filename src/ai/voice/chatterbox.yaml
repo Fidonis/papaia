@@ -1,0 +1,48 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Voice · Chatterbox-TTS-Server configuration
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+# Rendered to $PAPAIA_CONFIG_DIR/ai/voice/chatterbox.yaml and mounted
+# read-only at /app/config.yaml (read-only so that neither the server's UI
+# nor its unauthenticated settings endpoints can write into the rendered
+# file on the host). The server deep-merges this over its built-in defaults
+# and reads NO environment variables, so every deliberate setting must be
+# listed here. Changes belong in the overlay
+# ($PAPAIA_CONFIG_DIR/overlay/ai/voice/chatterbox.yaml) and reach the server
+# with the next container restart.
+
+server:
+  host: 0.0.0.0
+  # The built-in default is 8000, but the port is part of the module contract:
+  # the container healthcheck and the LiteLLM voice-tts route both address
+  # chatterbox:8004. Changing it through the overlay breaks both, so it is
+  # not overlay material.
+  port: 8004
+
+model:
+  # The multilingual checkpoint carries the 23 supported languages, German
+  # among them. The default (chatterbox-turbo) is English-only.
+  repo_id: chatterbox-multilingual
+
+tts_engine:
+  # `auto` resolves to the CPU on the default image and to the GPU on the
+  # accelerator images (papaia-ctl setup --voice-variant), so one rendered
+  # config serves every variant.
+  device: auto
+  # A server-side voice filename: one of the German clips the module mounts
+  # (src/ai/voice/voices/) or of the English set shipped inside the image.
+  # The engine clones the reference voice, accent included, so German output
+  # wants a German reference. LibreChat's voice list must name the same
+  # files — see integration/ai/librechat/librechat.yaml.
+  default_voice_id: Karlsson.wav
+
+generation_defaults:
+  # Callers may override per request; LibreChat does not send a language, so
+  # this default decides how replies are pronounced.
+  language: de
+  # Picked by ear against the shipped German references: the engine's own
+  # defaults drone slightly on German; these keep the delivery steady without
+  # flattening it.
+  temperature: 0.6
+  exaggeration: 0.4
+  cfg_weight: 0.5

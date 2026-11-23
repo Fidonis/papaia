@@ -57,6 +57,7 @@ from . import (
     deployment,
     envtree,
     gpu_detect,
+    localai_native,
     semver,
     smtp,
     status,
@@ -122,6 +123,8 @@ KERNEL_CLOCK_SYNCED_MAXERROR_US = 16_000_000
 LOCALAI_PROFILE = "localai"
 LOCALAI_SERVICE = "localai"
 GPU_OVERRIDE = Path("overrides") / "docker-compose.localai-gpu.override.yml"
+VOICE_PROFILE = "voice"
+VOICE_GPU_OVERRIDE = Path("overrides") / "docker-compose.voice-gpu.override.yml"
 
 _SEVERITY = {FAIL: 0, WARN: 1, PASS: 2, SKIP: 3}
 
@@ -346,6 +349,10 @@ class Probes:
     smtp_probe: Callable[..., smtp.ProbeResult] = smtp.probe_upstream
     # Where device nodes live; the same seam `gpu_detect.compose_fragment` has.
     dev_root: Path = Path("/dev")
+    # Whether the native LocalAI answers on a /readyz URL.
+    localai_ready: Callable[[str], bool] = localai_native.probe
+    # Whether launchctl of the logged-in user is at hand (a Mac, not a container).
+    launchd_host: Callable[[], bool] = lambda: localai_native.launchd_host()[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -970,7 +977,12 @@ def _exec_failure(result: status.CommandResult) -> str | None:
 
 
 def _gpu_nvidia(
-    ctx: Context, variant: str, details: dict[str, Any], *, container: str | None = None
+    ctx: Context,
+    variant: str,
+    details: dict[str, Any],
+    *,
+    container: str | None = None,
+    subject: str = "LocalAI",
 ) -> CheckResult:
     """`nvidia-smi` on this host, or, given a `container`, inside that one.
 
@@ -1023,19 +1035,19 @@ def _gpu_nvidia(
             name,
             FAIL,
             "the 'nvidia' runtime is not registered with Docker: install the NVIDIA Container"
-            " Toolkit, otherwise LocalAI cannot start",
+            f" Toolkit, otherwise {subject} cannot start",
             details,
         )
     return _gpu_measured(name, gpus, details)
 
 
-def _gpu_amd(ctx: Context, details: dict[str, Any]) -> CheckResult:
+def _gpu_amd(ctx: Context, details: dict[str, Any], *, subject: str = "LocalAI") -> CheckResult:
     name = "gpu"
     if not (ctx.probes.dev_root / "kfd").exists():
         return CheckResult(
             name,
             FAIL,
-            "/dev/kfd is missing: the ROCm kernel driver is not loaded, LocalAI cannot start",
+            f"/dev/kfd is missing: the ROCm kernel driver is not loaded, {subject} cannot start",
             details,
         )
     result = ctx.run(
@@ -1083,16 +1095,63 @@ def _gpu_render_node(ctx: Context, variant: str, details: dict[str, Any]) -> Che
     )
 
 
+# Which voice TTS variant a LocalAI accelerator probe already proves: the engines
+# share the host prerequisites per vendor (NVIDIA: driver plus Container Toolkit;
+# AMD: the ROCm kernel driver), so one probe per vendor is enough. Intel and
+# Vulkan prove neither.
+_LOCALAI_COVERS_VOICE = {
+    gpu_detect.NVIDIA_CUDA_12: "nvidia",
+    gpu_detect.NVIDIA_CUDA_13: "nvidia",
+    gpu_detect.HIPBLAS: "hipblas",
+}
+
+
+def _worse_gpu(a: CheckResult, b: CheckResult) -> CheckResult:
+    """One verdict for two accelerator demands: the more alarming one leads,
+    the other survives in the details so neither probe's outcome is lost."""
+    if _SEVERITY[b.status] < _SEVERITY[a.status]:
+        a, b = b, a
+    details = dict(a.details or {})
+    details["other_accelerator"] = {
+        "variant": (b.details or {}).get("variant"),
+        "status": b.status,
+        "summary": b.summary,
+    }
+    return CheckResult(a.name, a.status, a.summary, details)
+
+
 def check_gpu(ctx: Context) -> CheckResult:
     name = "gpu"
     if not ctx.configured:
         return _not_set_up(name)
+    localai_result: CheckResult | None = None
+    covered: str | None = None
+    native = localai_native.runtime(ctx.env) == localai_native.NATIVE
+    if LOCALAI_PROFILE in ctx.active_profiles and not native:
+        variant = ctx.env.get("LOCALAI_IMAGE_VARIANT", "").strip() or gpu_detect.CPU
+        if variant != gpu_detect.CPU:
+            localai_result = _gpu_localai(ctx, variant)
+            covered = _LOCALAI_COVERS_VOICE.get(variant)
+    voice_result = _gpu_voice(ctx, covered)
+    if localai_result is not None and voice_result is not None:
+        return _worse_gpu(localai_result, voice_result)
+    if localai_result is not None:
+        return localai_result
+    if voice_result is not None:
+        return voice_result
     if LOCALAI_PROFILE not in ctx.active_profiles:
         return CheckResult(name, SKIP, "LocalAI is not enabled")
-    variant = ctx.env.get("LOCALAI_IMAGE_VARIANT", "").strip() or gpu_detect.CPU
-    if variant == gpu_detect.CPU:
-        return CheckResult(name, SKIP, "LocalAI runs on the CPU image")
+    if native:
+        # Metal is not measured here and no variant is reported: papaia-manager maps
+        # details.variant to labels of its own. The process is checked by localai_native.
+        return CheckResult(
+            name, SKIP, "LocalAI runs natively on the Apple GPU (see localai_native)"
+        )
+    return CheckResult(name, SKIP, "LocalAI runs on the CPU image")
 
+
+def _gpu_localai(ctx: Context, variant: str) -> CheckResult:
+    name = "gpu"
     details: dict[str, Any] = {
         "variant": variant,
         "override_present": (ctx.config_dir / GPU_OVERRIDE).is_file(),
@@ -1136,6 +1195,182 @@ def check_gpu(ctx: Context) -> CheckResult:
     return _gpu_render_node(ctx, variant, details)
 
 
+def check_localai_native(ctx: Context) -> CheckResult:
+    """The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native, ADR 0012).
+
+    Whether /readyz answers (on the host at 127.0.0.1, in a container at
+    host.docker.internal), whether the installed binary is the pinned release and, on the
+    Mac, the state of the launchd job: `warn` when the job is loaded but LocalAI does not
+    answer, or when it is not loaded although the stack runs. `warn` at most: LocalAI is
+    optional for the rest of the stack."""
+    name = "localai_native"
+    if not ctx.configured:
+        return _not_set_up(name)
+    env = ctx.env
+    if localai_native.runtime(env) != localai_native.NATIVE:
+        return CheckResult(name, SKIP, "LocalAI runs in its container")
+    if LOCALAI_PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "LocalAI is not enabled")
+    try:
+        home = localai_native.localai_home(env)
+        pinned = localai_native.pinned_version(ctx.repo_root)
+    except localai_native.InstallError as exc:
+        return CheckResult(name, WARN, str(exc))
+    installed = localai_native.installed_version(home)
+    url = localai_native.probe_url(env, inside_container=ctx.probes.in_container())
+    ready = ctx.probes.localai_ready(url)
+    log = localai_native.log_path(home)
+    details: dict[str, Any] = {
+        "url": url,
+        "home": str(home),
+        "pinned": pinned,
+        "installed": installed,
+        "ready": ready,
+        "log": str(log),
+    }
+    if installed is None:
+        return CheckResult(
+            name, WARN, "the LocalAI binary is not installed yet: run 'papaia-ctl start'", details
+        )
+    if installed != pinned:
+        return CheckResult(
+            name,
+            WARN,
+            f"LocalAI {installed} is installed, this release pins {pinned}:"
+            " run 'papaia-ctl start'",
+            details,
+        )
+    job = _launchd_job(ctx, env, details)
+    if job is None:
+        # In a container (papaia-manager), or launchctl did not answer: the probe alone.
+        if not ready:
+            return CheckResult(
+                name,
+                WARN,
+                f"LocalAI {installed} does not answer on {url}: run 'papaia-ctl start' on the"
+                f" Mac (log: {log})",
+                details,
+            )
+        return CheckResult(name, PASS, f"LocalAI {installed} answers on {url}", details)
+    label = details["launchd"]["label"]
+    if job.loaded:
+        if not ready:
+            state = job.state or "unknown"
+            return CheckResult(
+                name,
+                WARN,
+                f"the launchd job {label} is loaded ({state}) but LocalAI does not answer on"
+                f" {url}: see {log}",
+                details,
+            )
+        return CheckResult(
+            name, PASS, f"LocalAI {installed} answers on {url} (launchd: {label})", details
+        )
+    if _stack_runs(ctx):
+        cause = (
+            "LocalAI answers but not through launchd (started by hand?)"
+            if ready
+            else "LocalAI is stopped"
+        )
+        return CheckResult(
+            name,
+            WARN,
+            f"the launchd job {label} is not loaded although the stack runs: {cause};"
+            " run 'papaia-ctl start'",
+            details,
+        )
+    if ready:
+        # Not through launchd, so not papaia-ctl's: it would keep the port at the next start.
+        return CheckResult(
+            name,
+            WARN,
+            f"the stack is stopped, but LocalAI answers on {url} without the launchd job"
+            f" {label} (started by hand?): stop that process before 'papaia-ctl start'",
+            details,
+        )
+    return CheckResult(name, SKIP, "the stack is stopped, and LocalAI with it", details)
+
+
+def _launchd_job(
+    ctx: Context, env: dict[str, str], details: dict[str, Any]
+) -> localai_native.JobState | None:
+    """The launchd job of the native LocalAI, or None where launchctl cannot be asked."""
+    if ctx.probes.in_container() or not ctx.probes.launchd_host():
+        return None
+    try:
+        label = localai_native.label_for(env)
+        job = localai_native.state(label, run=ctx.run)
+    except localai_native.LaunchdError:
+        return None
+    details["launchd"] = {"label": label, **job.to_dict()}
+    return job
+
+
+def _stack_runs(ctx: Context) -> bool:
+    """Whether any container of the core is running."""
+    report = ctx.status_report()
+    return any(
+        container.state == "running" for module in report.core for container in module.containers
+    )
+
+
+def _gpu_voice(ctx: Context, covered: str | None = None) -> CheckResult | None:
+    """The voice TTS accelerator, probed with the engine named in the verdict.
+
+    `covered` is the voice variant a LocalAI probe of this same run already proves
+    (see _LOCALAI_COVERS_VOICE); matching demands collapse into that one probe. A
+    cross-vendor setup (say LocalAI on CUDA, the TTS engine on ROCm) keeps both
+    probes, and check_gpu merges the verdicts. None means nothing to check."""
+    name = "gpu"
+    if VOICE_PROFILE not in ctx.active_profiles:
+        return None
+    variant = ctx.env.get("VOICE_TTS_IMAGE_VARIANT", "").strip() or "cpu"
+    if variant == "cpu" or variant == covered:
+        return None
+    details: dict[str, Any] = {
+        "variant": f"{variant} (voice)",
+        "override_present": (ctx.config_dir / VOICE_GPU_OVERRIDE).is_file(),
+    }
+    if variant not in ("nvidia", "hipblas"):
+        return CheckResult(
+            name,
+            WARN,
+            f"unknown VOICE_TTS_IMAGE_VARIANT '{variant}' (one of: cpu, nvidia, hipblas)",
+            details,
+        )
+    if ctx.probes.in_container():
+        # Unlike LocalAI there is no container that is guaranteed to carry the
+        # vendor tools, so the host is the only place this can be measured.
+        return CheckResult(
+            name,
+            SKIP,
+            "not measurable from inside a container: the host's driver tools and devices"
+            " are not visible",
+            details,
+        )
+    if variant == "nvidia":
+        # The nvidia image carries a CUDA floor the runtime enforces (see
+        # gpu_detect.VOICE_NVIDIA_MIN_CUDA); the banner names the highest
+        # CUDA the driver supports. An unreadable banner is not held against
+        # the host — the generic probe below still judges driver and runtime.
+        banner = ctx.run(["nvidia-smi"], GPU_PROBE_TIMEOUT_SECONDS)
+        cuda = gpu_detect.cuda_version(banner.stdout) if banner.returncode == 0 else None
+        if cuda is not None:
+            details["cuda_version"] = f"{cuda[0]}.{cuda[1]}"
+            if cuda < gpu_detect.VOICE_NVIDIA_MIN_CUDA:
+                floor = ".".join(str(part) for part in gpu_detect.VOICE_NVIDIA_MIN_CUDA)
+                return CheckResult(
+                    name,
+                    FAIL,
+                    f"the driver supports CUDA {cuda[0]}.{cuda[1]}, but the voice TTS"
+                    f" accelerator image needs >= {floor} — the NVIDIA runtime refuses"
+                    " the container",
+                    details,
+                )
+        return _gpu_nvidia(ctx, variant, details, subject="the voice TTS engine")
+    return _gpu_amd(ctx, details, subject="the voice TTS engine")
+
+
 def _published_host_port(entry: str, env: dict[str, str]) -> tuple[str, int] | None:
     """(bind address, host port) of one short-syntax `ports:` entry, or None
     when the host side is not a single resolvable port (ephemeral, range,
@@ -1159,7 +1394,10 @@ def check_ports(ctx: Context) -> CheckResult:
         return _not_set_up(name)
 
     env = ctx.env
-    expected = status.core_inventory(ctx.repo_root, ctx.active_profiles)
+    # A native LocalAI holds its port as a host process; that is no conflict.
+    expected = status.core_inventory(
+        ctx.repo_root, ctx.active_profiles, status.native_skip(ctx.config_dir)
+    )
     wanted: dict[int, tuple[str, list[str]]] = {}
     for item in expected:
         for entry in item.ports:
@@ -1590,6 +1828,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("memory", check_memory),
     ("cpu", check_cpu),
     ("gpu", check_gpu),
+    ("localai_native", check_localai_native),
     ("ports", check_ports),
     ("dns", check_dns),
     ("time_sync", check_time_sync),

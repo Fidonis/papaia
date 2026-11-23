@@ -29,3 +29,15 @@ def stack(tmp_path: Path) -> dict[str, Path]:
     """A synthetic checkout with core fragments, a config dir and one active
     add-on; see stack_helpers.build_stack."""
     return build_stack(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_launchd(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`setup`, `start` and `stop` remove a launchd job of the native LocalAI when they find
+    its plist below the user's home. On a Mac with such a job a test must not reach the real
+    launchctl: tests that exercise launchd patch this back and pass a fake runner."""
+    from lib import localai_native
+
+    monkeypatch.setattr(
+        localai_native, "launchd_host", lambda: (False, "launchd is not used in tests")
+    )

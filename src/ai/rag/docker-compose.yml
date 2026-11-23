@@ -42,7 +42,7 @@ services:
   #  gRPC (6334) is not published.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant:
-    image: qdrant/qdrant:v1.19.0
+    image: qdrant/qdrant:v1.20.2
     restart: unless-stopped
     environment:
       QDRANT__SERVICE__API_KEY: ${QDRANT_JWT_SECRET}
@@ -82,7 +82,7 @@ services:
   #  to read and write the same two collections.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-mcp:
-    image: ghcr.io/fidonis/qdrant-mcp-rbac:0.4.1
+    image: ghcr.io/fidonis/qdrant-mcp-rbac:0.4.2
     restart: unless-stopped
     environment:
       OIDC_ISSUER_URL:        ${OIDC_ISSUER}
