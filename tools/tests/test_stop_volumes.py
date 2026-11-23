@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from lib import modules
+
 TOOLS = Path(__file__).resolve().parents[1]
 LIFECYCLE = TOOLS / "lib" / "sh" / "lifecycle.sh"
 CTL = TOOLS / "papaia-ctl"
@@ -64,7 +66,22 @@ def _stop(tmp_path: Path, *args: str) -> tuple[subprocess.CompletedProcess[str],
     return done, [c for c in calls if " config --services" not in c]
 
 
-@pytest.mark.parametrize("profile", ["localai", "librechat-websearch", "rag", "smtp"])
+def test_the_deletable_profiles_are_the_profiles_of_the_optional_modules() -> None:
+    """`module-purge --data` follows a `stop --volumes` of the module's profile (the manager's
+    Modules tab runs both), so a module whose profile is missing here cannot have its data
+    deleted at all."""
+    line = next(
+        ln
+        for ln in LIFECYCLE.read_text(encoding="utf-8").splitlines()
+        if ln.startswith("_VOLUME_DELETE_PROFILES=")
+    )
+    shell = set(line.split("=", 1)[1].strip('"').split())
+    assert shell == {m.profile for m in modules.MODULES.values()}
+
+
+@pytest.mark.parametrize(
+    "profile", ["localai", "librechat-websearch", "rag", "smtp", "voice", "knowledge-map"]
+)
 def test_volumes_are_deleted_with_the_containers_of_exactly_the_named_profile(
     tmp_path: Path, profile: str
 ) -> None:

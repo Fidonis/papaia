@@ -55,6 +55,13 @@ def _on(config_dir, **kwargs) -> resolve.SetupArgs:
     return _args(config_dir, **values)
 
 
+def _resolve_smtp(tree, args):
+    """resolve_smtp and, as setup does once everything is checked, the write it prepared."""
+    tree = resolve.resolve_smtp(tree, args)
+    resolve.store_smtp_password(args)
+    return tree
+
+
 def _profiles(tree) -> list[str]:
     return [p for p in tree[""]["COMPOSE_PROFILES"].split(",") if p]
 
@@ -67,8 +74,8 @@ def _profiles(tree) -> list[str]:
 def test_enabling_stores_the_settings_the_derived_keys_and_the_profile_once(repo_root, config_dir):
     tree = _tree(repo_root)
 
-    tree = resolve.resolve_smtp(tree, _on(config_dir))
-    tree = resolve.resolve_smtp(tree, _on(config_dir))
+    tree = _resolve_smtp(tree, _on(config_dir))
+    tree = _resolve_smtp(tree, _on(config_dir))
 
     module = tree[smtp.MODULE_DIR]
     assert module[smtp.KEY_HOST] == "smtp.example.org"
@@ -83,26 +90,38 @@ def test_enabling_stores_the_settings_the_derived_keys_and_the_profile_once(repo
 
 
 def test_the_password_goes_to_the_file_and_into_no_env_value(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
 
     assert smtp.read_password(config_dir) == PASSWORD
     assert not any(PASSWORD in str(value) for values in tree.values() for value in values.values())
+
+
+def test_resolving_writes_nothing_until_the_password_is_stored(repo_root, config_dir):
+    args = _on(config_dir)
+    tree = resolve.resolve_smtp(_tree(repo_root), args)
+
+    assert tree[smtp.MODULE_DIR][smtp.KEY_PASSWORD_REV] == "1"
+    assert not config_dir.exists() or not smtp.password_path(config_dir).exists()
+    assert PASSWORD not in repr(args)
+
+    resolve.store_smtp_password(args)
+    assert smtp.read_password(config_dir) == PASSWORD
 
 
 def test_without_a_flag_or_a_value_nothing_changes(repo_root, config_dir):
     tree = _tree(repo_root, "keycloak,smtp")
     before = {k: dict(v) for k, v in tree.items()}
 
-    resolve.resolve_smtp(tree, _args(config_dir))
+    _resolve_smtp(tree, _args(config_dir))
 
     assert tree == before
     assert not smtp.password_path(config_dir).exists()
 
 
 def test_disabling_removes_only_the_profile_and_keeps_the_settings(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, enable_smtp=False))
+    tree = _resolve_smtp(tree, _args(config_dir, enable_smtp=False))
 
     assert _profiles(tree) == ["keycloak", "librechat"]
     assert tree[smtp.MODULE_DIR][smtp.KEY_HOST] == "smtp.example.org"
@@ -110,10 +129,10 @@ def test_disabling_removes_only_the_profile_and_keeps_the_settings(repo_root, co
 
 
 def test_enabling_again_reuses_what_was_stored(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
-    tree = resolve.resolve_smtp(tree, _args(config_dir, enable_smtp=False))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(tree, _args(config_dir, enable_smtp=False))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, enable_smtp=True))
+    tree = _resolve_smtp(tree, _args(config_dir, enable_smtp=True))
 
     assert "smtp" in _profiles(tree)
     assert tree[smtp.MODULE_DIR][smtp.KEY_USER] == "mailer"
@@ -123,21 +142,21 @@ def test_enabling_again_reuses_what_was_stored(repo_root, config_dir):
 def test_a_changed_password_raises_the_revision_and_an_unchanged_one_does_not(
     repo_root, config_dir
 ):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
     first = tree[smtp.MODULE_DIR][smtp.KEY_PASSWORD_REV]
 
-    tree = resolve.resolve_smtp(tree, _on(config_dir))  # the same password again
+    tree = _resolve_smtp(tree, _on(config_dir))  # the same password again
     assert tree[smtp.MODULE_DIR][smtp.KEY_PASSWORD_REV] == first
 
-    tree = resolve.resolve_smtp(tree, _on(config_dir, smtp_password="another"))
+    tree = _resolve_smtp(tree, _on(config_dir, smtp_password="another"))
     assert int(tree[smtp.MODULE_DIR][smtp.KEY_PASSWORD_REV]) == int(first) + 1
 
 
 def test_changing_only_the_server_keeps_the_stored_password(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
     revision = tree[smtp.MODULE_DIR][smtp.KEY_PASSWORD_REV]
 
-    tree = resolve.resolve_smtp(
+    tree = _resolve_smtp(
         tree, _args(config_dir, smtp_host="smtp2.example.org", smtp_password=None)
     )
 
@@ -147,30 +166,30 @@ def test_changing_only_the_server_keeps_the_stored_password(repo_root, config_di
 
 
 def test_a_new_security_mode_without_a_port_takes_that_modes_default_port(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
     assert tree[smtp.MODULE_DIR][smtp.KEY_PORT] == "587"
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_security="tls"))
+    tree = _resolve_smtp(tree, _args(config_dir, smtp_security="tls"))
     assert tree[smtp.MODULE_DIR][smtp.KEY_PORT] == "465"
     assert tree[smtp.MODULE_DIR][smtp.KEY_TLS_WRAPPER] == "yes"
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_security="tls", smtp_port="2465"))
+    tree = _resolve_smtp(tree, _args(config_dir, smtp_security="tls", smtp_port="2465"))
     assert tree[smtp.MODULE_DIR][smtp.KEY_PORT] == "2465"
 
 
 def test_a_stored_port_is_kept_while_the_mode_stays(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir, smtp_port="2525"))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir, smtp_port="2525"))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_from="other@example.org"))
+    tree = _resolve_smtp(tree, _args(config_dir, smtp_from="other@example.org"))
 
     assert tree[smtp.MODULE_DIR][smtp.KEY_PORT] == "2525"
     assert tree[smtp.MODULE_DIR][smtp.KEY_FROM] == "other@example.org"
 
 
 def test_no_login_drops_the_user_and_the_stored_password(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_no_auth=True))
+    tree = _resolve_smtp(tree, _args(config_dir, smtp_no_auth=True))
 
     assert tree[smtp.MODULE_DIR][smtp.KEY_USER] == ""
     assert smtp.read_password(config_dir) == ""
@@ -178,16 +197,16 @@ def test_no_login_drops_the_user_and_the_stored_password(repo_root, config_dir):
 
 
 def test_an_emptied_user_drops_the_stored_password_too(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_user=""))
+    tree = _resolve_smtp(tree, _args(config_dir, smtp_user=""))
 
     assert tree[smtp.MODULE_DIR][smtp.KEY_USER] == ""
     assert smtp.read_password(config_dir) == ""
 
 
 def test_a_server_without_encryption_takes_no_login(repo_root, config_dir):
-    tree = resolve.resolve_smtp(
+    tree = _resolve_smtp(
         _tree(repo_root),
         _args(
             config_dir,
@@ -234,7 +253,7 @@ def test_an_unusable_value_is_refused_and_nothing_is_written(
     before = {k: dict(v) for k, v in tree.items()}
 
     with pytest.raises(resolve.SetupError, match=message):
-        resolve.resolve_smtp(tree, _on(config_dir, **overrides))
+        _resolve_smtp(tree, _on(config_dir, **overrides))
 
     assert tree == before
     assert not smtp.password_path(config_dir).exists()
@@ -243,7 +262,7 @@ def test_an_unusable_value_is_refused_and_nothing_is_written(
 def test_values_are_stored_while_the_relay_is_off_without_switching_it_on(repo_root, config_dir):
     tree = _tree(repo_root)
 
-    tree = resolve.resolve_smtp(tree, _on(config_dir, enable_smtp=None))
+    tree = _resolve_smtp(tree, _on(config_dir, enable_smtp=None))
 
     assert "smtp" not in _profiles(tree)
     module = tree[smtp.MODULE_DIR]
@@ -254,9 +273,9 @@ def test_values_are_stored_while_the_relay_is_off_without_switching_it_on(repo_r
 
 
 def test_values_stored_while_off_are_what_a_later_switch_on_uses(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir, enable_smtp=None))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir, enable_smtp=None))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, enable_smtp=True))
+    tree = _resolve_smtp(tree, _args(config_dir, enable_smtp=True))
 
     assert "smtp" in _profiles(tree)
     assert tree[smtp.MODULE_DIR][smtp.KEY_USER] == "mailer"
@@ -265,9 +284,9 @@ def test_values_stored_while_off_are_what_a_later_switch_on_uses(repo_root, conf
 
 
 def test_values_with_a_switch_off_are_stored_and_the_profile_stays_off(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root, "keycloak,librechat,smtp"), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root, "keycloak,librechat,smtp"), _on(config_dir))
 
-    tree = resolve.resolve_smtp(
+    tree = _resolve_smtp(
         tree, _args(config_dir, enable_smtp=False, smtp_from_name="Example Mail")
     )
 
@@ -281,16 +300,16 @@ def test_an_unusable_value_is_refused_while_the_relay_is_off_too(repo_root, conf
     before = {k: dict(v) for k, v in tree.items()}
 
     with pytest.raises(resolve.SetupError, match="--smtp-host is required"):
-        resolve.resolve_smtp(tree, _args(config_dir, smtp_from="noreply@example.org"))
+        _resolve_smtp(tree, _args(config_dir, smtp_from="noreply@example.org"))
 
     assert tree == before
     assert not smtp.password_path(config_dir).exists()
 
 
 def test_an_option_is_accepted_once_the_relay_is_on(repo_root, config_dir):
-    tree = resolve.resolve_smtp(_tree(repo_root), _on(config_dir))
+    tree = _resolve_smtp(_tree(repo_root), _on(config_dir))
 
-    tree = resolve.resolve_smtp(tree, _args(config_dir, smtp_from_name="Example Mail"))
+    tree = _resolve_smtp(tree, _args(config_dir, smtp_from_name="Example Mail"))
 
     assert tree[smtp.MODULE_DIR][smtp.KEY_FROM_NAME] == "Example Mail"
 
@@ -452,7 +471,8 @@ def test_setup_refuses_with_exit_code_3_and_changes_nothing(repo_root, config_di
     assert code == 3
     assert "--smtp-host is required" in capsys.readouterr().err
     assert not smtp.password_path(config_dir).exists()
-    assert "smtp" not in common.parse_env_file(config_dir / ".env")["COMPOSE_PROFILES"]
+    # A first setup: refused before the config directory is created.
+    assert not config_dir.exists()
 
 
 def test_a_login_without_a_password_is_refused_with_a_hint(repo_root, config_dir, capsys):

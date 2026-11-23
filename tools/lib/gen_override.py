@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Collection
 from pathlib import Path
 
 import yaml
@@ -142,7 +143,9 @@ def _service_networks(addon_path: Path, service: str) -> list[str]:
     return ["default"]
 
 
-def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
+def generate_addon_join_overrides(
+    config_dir: Path, repo_root: Path, also_active: Collection[str] = ()
+) -> None:
     """Write or remove each addon's `networks.join_addons` override.
 
     For an active addon that declares
@@ -156,6 +159,11 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
     (declared external); every other service of the addon stays off it. The
     file lives in overrides/addons/ and is applied to the addon's own compose
     project by `papaia-ctl addon start`, like the ssl-cert overrides.
+
+    `also_active` names registered addons to write the override for although
+    they are inactive: `addon uninstall --clean-up` runs the clean-up action of
+    an addon that `addon remove` deactivated, and that action needs the networks
+    of the addons it wrote into.
     """
     deployed = deployment.load(config_dir)
     entries = deployed.get("addons") or [] if deployed else []
@@ -175,7 +183,8 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
         out_path = config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
         manifest, path = manifests.get(name, ({}, Path()))
         try:
-            joins = compat.joined_addons(manifest) if addon.get("active") else []
+            active = addon.get("active") or name in also_active
+            joins = compat.joined_addons(manifest) if active else []
         except ValueError:
             joins = []  # the compatibility gate reports the malformed manifest
         services: dict[str, list[str]] = {}
@@ -211,8 +220,9 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For
 # external OIDC the cert file is absent, so SSL_CERT_FILE must be cleared to
 # let Python's ssl module fall back to the system CA bundle.
+# LiteLLM is not listed: it points at a bundle it builds itself, and its image
+# has no hashed CA directory that Python could fall back to.
 _SSL_CERT_SERVICES = (
-    "litellm",
     "oauth2-proxy",
     "localai",
     "papaia-manager",
@@ -235,7 +245,7 @@ def _load_addon_local_ca_env(addon: dict, repo_root: Path) -> dict:
 
 
 def generate_addon_ssl_cert_overrides(
-    config_dir: Path, auth_provider: str, repo_root: Path
+    config_dir: Path, auth_provider: str, repo_root: Path, also_active: Collection[str] = ()
 ) -> None:
     """Write or remove the per-addon SSL cert overrides for external OIDC.
 
@@ -251,7 +261,7 @@ def generate_addon_ssl_cert_overrides(
     core compose loop (which globs overrides/docker-compose.*.override.yml)
     does not pick them up; `papaia-ctl addon start` instead applies the
     files there that `py_cli addon-override-files` attributes to the addon
-    being started.
+    being started. `also_active` as for `generate_addon_join_overrides`.
     """
     deployed = deployment.load(config_dir)
 
@@ -263,7 +273,8 @@ def generate_addon_ssl_cert_overrides(
             config_dir / "overrides" / "addons" / f"docker-compose.{name}-ssl-cert.override.yml"
         )
         local_ca_env = _load_addon_local_ca_env(addon, repo_root)
-        if not addon.get("active") or auth_provider != "external_oidc" or not local_ca_env:
+        active = addon.get("active") or name in also_active
+        if not active or auth_provider != "external_oidc" or not local_ca_env:
             out_path.unlink(missing_ok=True)
             continue
 

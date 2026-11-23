@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:v1.108.3
+    image: ghcr.io/berriai/litellm:1.110.2
     restart: unless-stopped
     env_file:
       - ./.env
@@ -27,8 +27,10 @@ services:
         target: /certs
         read_only: true
     entrypoint: ["/bin/sh", "-c"]
+    # SSL_CERT_FILE replaces Python's trust store, so the bundle starts from the
+    # public roots. The local CA is generated only for the bundled Keycloak.
     command:
-      - "python -c 'import certifi,shutil; shutil.copy(certifi.where(), \"/tmp/ca-bundle.crt\")' && cat /certs/local-ca.crt >> /tmp/ca-bundle.crt && exec litellm --config=/app/config.yaml"
+      - "python -c 'import certifi,shutil; shutil.copy(certifi.where(), \"/tmp/ca-bundle.crt\")' && if [ -e /certs/local-ca.crt ]; then cat /certs/local-ca.crt >> /tmp/ca-bundle.crt; fi && exec litellm --config=/app/config.yaml"
     depends_on:
       litellm-db:
         condition: service_healthy
