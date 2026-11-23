@@ -1107,6 +1107,13 @@ endpoints:
         default: ["gpt-4o"]
 ```
 
+Conversation titles of chats and agents on this endpoint follow LibreChat's default
+title prompt, which produces English titles. The shipped `Private-LLM` endpoint sets
+a `titlePrompt` that asks for the title in the user's language; copy it from
+`src/ai/librechat/librechat.yaml` into the new endpoint to get the same. Leave
+`endpoints.all` unset: when it is set, LibreChat takes the title settings of every
+endpoint from it and ignores the per-endpoint ones.
+
 **Enable the LibreChat memory agent** (`overlay/ai/librechat/librechat.yaml`). The
 base config ships no memory model, and automatic extraction is opt-in. The overlay
 adds the agent to the base `memory` section; the model must exist in LiteLLM:
