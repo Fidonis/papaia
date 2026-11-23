@@ -618,7 +618,8 @@ last part of every `keycloak-role-sync` step, so of every `start`) reconciles th
 `papaia` realm with three sources:
 
 - the naming register `tools/lib/names_register.json`, a snapshot of the platform kit's
-  register (release and commit in its `source`): every client, audience, role and
+  register (release and commit in its `source`, written by `tools/kit_snapshot.py` from
+  the vendored release): every client, audience, role and
   service account with its owning repository and whether a client may exchange tokens,
   and the exchange scope of every registered audience as the vendored kit's
   `exchange_scope()` builds it (`exchange_scopes`, read by `tools/lib/kit_names.py`; the
@@ -1001,7 +1002,7 @@ read-only; the core is their only writer.
   and the reason, and leave the catalog unchanged. An operation with a `resource` names
   the input field that identifies the object in `resource.id_field`; only a create
   (`effect: write` with `retry: at_most_once`) may leave it out, since it names no
-  existing object yet (kit 0.2.3, `exposes.v1` 1.3.0). The catalog schema
+  existing object yet (kit 0.1.0, `exposes.v1` 1.3.0). The catalog schema
   `platform-services.v1` states the same rule for the rendered entry.
 - **`services.json`** (`papaia.platform-services/1`). `papaia-ctl catalog render`
   writes it, and so does every render (`setup`, `start`, every `addon` command) and

@@ -70,7 +70,7 @@ is never closed by `papaia-audit`: it means that rows were removed from a source
 The service logs reason codes, sources and line counts only, never an event.
 
 The schema file `src/infra/audit/papaia_audit/audit.v1.schema.json` is a copy of the
-`papaia.audit/1` schema of the platform kit, schema version 1.4.0 (kit 0.1.4); the test suite
+`papaia.audit/1` schema of the platform kit, schema version 1.4.0 (kit 0.1.0); the test suite
 runs the kit's submission vectors against the ingest. Revision 1.1.0 adds the optional token
 time fields `token_iat`, `token_auth_time` and `token_remaining_s` (integers from 0, or
 `null`); a value other than `null` is accepted only in the server's row of an operation

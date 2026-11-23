@@ -93,7 +93,13 @@ The core's own images (`compat/own-images.yaml`) are pinned by the digest their 
 
 ### Repository checks
 
-Five more CI jobs guard every pull request. They use the platform's shared contract package `papaia-kit`, vendored as its release wheel under `tools/vendor/papaia-kit/<version>/` and pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; it is a development dependency only (Python 3.12) and never part of `papaia-ctl` or an image.
+Six more CI jobs guard every pull request. They use the platform's shared contract package `papaia-kit`, vendored as its release wheel under `tools/vendor/papaia-kit/<version>/` and pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; it is a development dependency only (Python 3.12) and never part of `papaia-ctl` or an image.
+
+- **Kit release and suite kit versions** - the files the core copies from the vendored kit release (the contract schemas under `tools/schemas/kit/` with `snapshot.json`, and the naming register `tools/lib/names_register.json`) must be exactly what `tools/kit_snapshot.py` builds from it; nothing in them is edited by hand. The kit versions of the candidate suite (`compat/suite-kit.yaml`) must pass the kit's suite check `pk-check bom`. To move to a new kit release: rebuild its wheel and source tarball from the release commit with the kit's release build, put them under `tools/vendor/papaia-kit/<version>/`, take `tools/kit.lock` from the release, bump the pin and path in `tools/pyproject.toml`, run `uv lock --upgrade-package papaia-kit`, then write the snapshots and set the core's entry in `compat/suite-kit.yaml`.
+
+      cd tools
+      uv run --locked --extra dev python kit_snapshot.py write   # or: check
+      uv run --locked --extra dev pk-check bom ../compat/suite-kit.yaml
 
 - **License check** - every package of `tools/uv.lock` and the base image of the own images (`licenses/base-images.json`) against the kit's license policy. Packages with missing or ambiguous metadata carry a `[[verified]]` entry with its source in `license-exceptions.toml`; an exception for a weak-copyleft package needs an ADR and an approval. The job also checks that a seeded package under a forbidden license is rejected.
 

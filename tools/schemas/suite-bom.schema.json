@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "papaia-suite-bom.schema.json",
   "title": "papaia suite bill of materials (suite-<version>.yaml)",
-  "description": "Every repo of one suite with tag and commit, every image with digest, container and image counts, the kit snapshot checksum and the public key the file is signed with. Checked by `papaia-ctl suite verify`, which also enforces what a schema cannot express: tag equals 'v' + version, exactly one core, manager and kit, totals equal the entries, the fingerprint matches the key, a delivery names at least one module, one add-on repo and two MCP servers.",
+  "description": "Every repo of one suite with tag and commit, every image with digest, container and image counts, the kit snapshot checksum, per repo the kit version it vendors and whether it renders kit UI (field `kit`, taken unchanged from the kit's suite-bom-kit schema and checked by `pk-check bom`) and the public key the file is signed with. Checked by `papaia-ctl suite verify`, which also enforces what a schema cannot express: tag equals 'v' + version, exactly one core, manager and kit, totals equal the entries, the kit repo carries no `kit` field, the fingerprint matches the key, a delivery names at least one module, one add-on repo and two MCP servers.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "suite", "scope", "created", "contract_generation", "signing_key", "repos", "totals"],
@@ -82,9 +82,11 @@
         "min_core": {"$ref": "#/$defs/version"},
         "schema_version": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"},
         "snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Kit only: checksum of the kit snapshot."},
+        "kit": {"$ref": "#/$defs/module_kit"},
         "images": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/image"}}
       }
     },
+    "module_kit": {"type": "object", "additionalProperties": false, "required": ["version"], "description": "Kit carried by one repo of the suite.", "properties": {"version": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,5})\\.(0|[1-9][0-9]{0,5})\\.(0|[1-9][0-9]{0,5})$", "description": "Kit version of the repo's kit.lock."}, "renders_ui": {"type": "boolean", "default": true, "description": "false for a repo that renders no kit UI (core tools, connections, MCP servers): the visual rule does not apply to it, the matrix and major-version rule still do. Without the field the repo renders kit UI."}}},
     "image": {
       "type": "object",
       "additionalProperties": false,

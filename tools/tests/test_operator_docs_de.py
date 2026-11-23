@@ -328,9 +328,29 @@ def test_the_license_document_names_sourcing_availability_support_and_reporting(
 def test_the_kit_row_names_where_its_license_files_lie():
     row = _license_rows()["Kit"]
     assert "`tools/vendor/papaia-kit/<version>/`" in row[4]
-    assert "`LICENSE` und `NOTICE` liegen im Paket" in row[4]
+    assert "`LICENSE` liegt im Paket" in row[4]
     versions = [p for p in (REPO / "tools" / "vendor" / "papaia-kit").iterdir() if p.is_dir()]
     assert versions and all(any(v.glob("*.whl")) for v in versions)
+
+
+def test_the_kit_row_states_the_license_and_version_of_the_vendored_wheel():
+    """Kit 0.1.0 is MIT without a NOTICE duty: the row names the license the vendored
+    wheel declares, the vendored version, and no NOTICE."""
+    import zipfile
+
+    import tomllib
+
+    lock = tomllib.loads(_text(REPO / "tools" / "kit.lock"))
+    (wheel,) = [f for f in lock["files"] if f["name"].endswith(".whl")]
+    with zipfile.ZipFile(REPO / "tools" / wheel["path"]) as archive:
+        (meta,) = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
+        metadata = archive.read(meta).decode("utf-8")
+        assert not [n for n in archive.namelist() if n.rsplit("/", 1)[-1] == "NOTICE"]
+    declared = re.search(r"^License-Expression: (.+)$", metadata, re.M)
+    row = _license_rows()["Kit"]
+    assert declared and row[1] == declared.group(1).strip() == "MIT"
+    assert f"Version {lock['version']}" in row[4]
+    assert "NOTICE" not in row[4]
 
 
 def test_the_offline_archive_names_a_reference_image_for_n8n():

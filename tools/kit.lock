@@ -1,18 +1,20 @@
 # papaia-kit release for consumers that vendor the kit.
-# Copy the files into vendor/papaia-kit/<version>/, keep this file next to the
-# pyproject.toml that binds the wheel as a path source; uv.lock carries the
-# same sha256. Rebuild and compare with: make release-verify TAG=v<version>
+# Copy the files you use into vendor/papaia-kit/<version>/, keep this file next
+# to the pyproject.toml that binds the wheel as a path source; uv.lock carries
+# the same sha256. The .tgz is the npm package (pk-conform, pk-audit), the
+# refimg archive the reference images for --kit-dir. Rebuild and compare with:
+# make release-verify TAG=v<version>
 
-version = "0.2.3"
-commit = "181e8655c274e0597f8fe41e3b8122f42e31515d"
-source_date_epoch = 1795443889
-
-[[files]]
-name = "papaia_kit-0.2.3-py3-none-any.whl"
-path = "vendor/papaia-kit/0.2.3/papaia_kit-0.2.3-py3-none-any.whl"
-sha256 = "fd17f7d74227b9176e880b43083b388f6e669da938631ba18566970722f026ed"
+version = "0.1.0"
+commit = "0ce412759e840ce6f8dfce0c6ad14e7180ac8a55"
+source_date_epoch = 1795451882
 
 [[files]]
-name = "papaia_kit-0.2.3.tar.gz"
-path = "vendor/papaia-kit/0.2.3/papaia_kit-0.2.3.tar.gz"
-sha256 = "5828db43cacc22500223090dc21d3b3eda4df6c1e1f28aec0d5f1d9edaf1fe50"
+name = "papaia_kit-0.1.0-py3-none-any.whl"
+path = "vendor/papaia-kit/0.1.0/papaia_kit-0.1.0-py3-none-any.whl"
+sha256 = "6ce3870703605ec0a710256abe74d94c29e2f8bbac681294477471ef36419299"
+
+[[files]]
+name = "papaia_kit-0.1.0.tar.gz"
+path = "vendor/papaia-kit/0.1.0/papaia_kit-0.1.0.tar.gz"
+sha256 = "3110c463f6e870ee179c420bbbba416df1c13a79a5dd8111150d0def6f5ffca3"

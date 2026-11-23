@@ -80,6 +80,12 @@ lists:
 - in a `delivery` bill of materials at least one module, one add-on repo (the
   Paperless add-on lives there) and both MCP servers (role `mcp`, two entries);
 - the checksum of the kit snapshot;
+- per repo that vendors the kit, the field `kit`: `version` (the kit release of the
+  repo's `kit.lock`) and `renders_ui` (`false` for a repo that renders no kit UI; without
+  the field the repo counts as rendering kit UI). The kit repo itself carries no `kit`
+  field. The shape is the kit's own (`$defs/module_kit` of its
+  `contract/suite-bom-kit.schema.json`, taken over unchanged); see
+  [Kit versions of the suite](#kit-versions-of-the-suite);
 - the contract generation window of the suite;
 - the public key the file is signed with and its fingerprint;
 - optionally the exchange-right pairings the suite ships with (`pairings:`, each
@@ -93,6 +99,30 @@ key pair. The signature file holds the base64 signature. Real
 `cosign sign-blob` output (cosign 2.4.1, `--tlog-upload=false`) is part of the
 tests (`tools/tests/fixtures/suite/`). Write the public key as a YAML block
 scalar (`public_key: |`) so that it can be found without parsing the file.
+
+### Kit versions of the suite
+
+Every repo of a suite vendors one release of the platform kit. The kit decides which of
+its releases may be combined: `pk-check bom` (part of the kit) refuses a suite where a
+repo is on a release outside the kit's compatibility matrix, where two repos differ in
+the major version, or where a `visual` kit release lies between two repos that render kit
+UI. Repos without kit UI (the core, the connection register, the add-ons, the MCP
+servers) are held to the matrix and the major version only.
+
+[`compat/suite-kit.yaml`](../compat/suite-kit.yaml) holds the `kit` fields of the
+candidate suite, one entry per repo of the candidate row of the matrix plus the
+connection register, both MCP servers and the kit itself. The bill of materials copies
+these fields unchanged. CI (job "Kit release and suite kit versions") runs the check:
+
+```sh
+cd tools && uv run --locked --extra dev pk-check bom ../compat/suite-kit.yaml
+# bom: 11 modules (6 render kit UI), kit 0.1.0 may be combined
+```
+
+The core's entry names the release in `tools/kit.lock` (the tests check it). The core
+itself vendors kit 0.1.0; the files it copies from it (contract schemas under
+`tools/schemas/kit/`, the naming register `tools/lib/names_register.json`) are written by
+`tools/kit_snapshot.py` from the vendored release and checked in the same CI job.
 
 ### Verify a bill of materials
 

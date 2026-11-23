@@ -1,7 +1,9 @@
 """Suite bill of materials and the core x manager x module compatibility matrix.
 
 The bill of materials (`suite-<version>.yaml`, schema `papaia.suite-bom/1`)
-names every repo of one suite with tag and commit, every image with digest,
+names every repo of one suite with tag and commit and, where the repo vendors
+the kit, its kit version and whether it renders kit UI (`kit:`, checked by the
+kit's `pk-check bom`), every image with digest,
 the container and image counts, the kit snapshot checksum, the public key
 the suite is signed with and, optionally, the exchange-right pairings the suite
 ships with (confirmed at installation by `pairing_approval`). It is signed like
@@ -245,7 +247,11 @@ def _parse_yaml(data: bytes, what: str) -> object:
 # ── bill of materials ────────────────────────────────────────────────────────
 
 _REPO_REQUIRED = {"name", "role", "version", "tag", "commit", "containers", "images"}
-_REPO_OPTIONAL = {"addon_api", "min_core", "schema_version", "snapshot_sha256"}
+_REPO_OPTIONAL = {"addon_api", "min_core", "schema_version", "snapshot_sha256", "kit"}
+# The kit release a repo vendors (`kit:`), in the shape the kit defines for its suite
+# check `pk-check bom` (papaia-kit contract/suite-bom-kit.schema.json, `$defs/module_kit`):
+# a release version without prerelease, and whether the repo renders kit UI.
+_KIT_VERSION_RE = re.compile(r"\A(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\Z")
 _IMAGE_REQUIRED = {"name", "tag", "digest", "license", "license_class", "sbom_digest", "delivery"}
 
 
@@ -279,6 +285,14 @@ def _validate_image(image: object, where: str, scope: str, role: str) -> None:
         raise SuiteError(f"{where}: test-only image in a delivery bill of materials")
 
 
+def validate_module_kit(value: object, where: str) -> None:
+    """The kit a repo of the suite vendors: `version` and optionally `renders_ui`."""
+    kit = _mapping(value, where, {"version"}, {"renders_ui"})
+    _text(kit["version"], f"{where}.version", _KIT_VERSION_RE)
+    if "renders_ui" in kit and not isinstance(kit["renders_ui"], bool):
+        raise SuiteError(f"{where}.renders_ui: must be true or false")
+
+
 def _validate_repo(repo: object, where: str, scope: str) -> None:
     _mapping(repo, where, _REPO_REQUIRED, _REPO_OPTIONAL)
     _text(repo["name"], f"{where}.name", _NAME_RE)
@@ -298,6 +312,10 @@ def _validate_repo(repo: object, where: str, scope: str) -> None:
         raise SuiteError(f"{where}: snapshot_sha256 is required for the kit and only there")
     if role == "kit":
         _text(repo["snapshot_sha256"], f"{where}.snapshot_sha256", _SHA256_RE)
+        if "kit" in repo:
+            raise SuiteError(f"{where}.kit: the kit carries no kit version of its own")
+    elif "kit" in repo:
+        validate_module_kit(repo["kit"], f"{where}.kit")
     if not isinstance(repo["images"], list) or len(repo["images"]) > 256:
         raise SuiteError(f"{where}.images: must be a list of at most 256 entries")
     for index, image in enumerate(repo["images"]):

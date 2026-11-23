@@ -22,7 +22,9 @@ import pytest
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parent
 FIXTURES = Path(__file__).parent / "fixtures" / "licenses"
-KIT_VERSION = "0.2.3"
+# Kit 0.1.0, the first public release, built from this commit of the kit.
+KIT_VERSION = "0.1.0"
+KIT_COMMIT = "0ce412759e840ce6f8dfce0c6ad14e7180ac8a55"
 KIT_WHEEL = f"vendor/papaia-kit/{KIT_VERSION}/papaia_kit-{KIT_VERSION}-py3-none-any.whl"
 
 # The kit needs Python 3.12 (CI runs 3.12); papaia-ctl itself keeps running on 3.10.
@@ -62,7 +64,7 @@ def _sha256(path: Path) -> str:
 def test_kit_lock_pins_every_vendored_file():
     lock = _toml(TOOLS / "kit.lock")
     assert lock["version"] == KIT_VERSION
-    assert re.fullmatch(r"[0-9a-f]{40}", lock["commit"])
+    assert lock["commit"] == KIT_COMMIT
     listed = {entry["path"]: entry["sha256"] for entry in lock["files"]}
     vendored = {
         path.relative_to(TOOLS).as_posix()

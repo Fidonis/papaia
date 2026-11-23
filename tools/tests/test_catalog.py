@@ -331,7 +331,7 @@ def test_addon_upgrade_to_a_colliding_id_changes_nothing(tmp_path, capsys):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# create operations without resource.id_field (kit 0.2.3)
+# create operations without resource.id_field (kit 0.1.0)
 # ─────────────────────────────────────────────────────────────────────────
 
 def test_a_create_operation_without_id_field_passes_the_exposes_check():

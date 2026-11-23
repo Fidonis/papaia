@@ -1,5 +1,5 @@
 """`addon install` of an add-on whose create tools leave out `resource.id_field`
-(papaia-kit 0.2.3): the catalog lists the entry and the chat gets the add-on's fragment;
+(papaia-kit 0.1.0): the catalog lists the entry and the chat gets the add-on's fragment;
 an update without `id_field` is still refused and leaves the installation unchanged.
 
 The fixture is the Paperless add-on of the papaia-addons 1.4.0 milestone (`paperless/` at

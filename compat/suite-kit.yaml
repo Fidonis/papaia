@@ -1,0 +1,74 @@
+# Kit versions of the candidate suite: the field `kit` of the suite bill of materials
+# (papaia.suite-bom/1) for every repo of the candidate row of compat/suite.yaml.
+#
+# `version` is the kit release the repo vendors (its kit.lock); `renders_ui` says
+# whether the repo renders kit UI. The core, the connection register, the add-ons and
+# the MCP servers render none: for them the kit's visual rule does not apply, its
+# matrix and major-version rules still do. The bill of materials of the suite copies
+# these fields unchanged. CI runs the kit's suite check over this file:
+#
+#   cd tools && uv run --locked --extra dev pk-check bom ../compat/suite-kit.yaml
+#
+# The entry of the core must name the release in tools/kit.lock, and the kit entry the
+# same release (tools/tests/test_kit_vendor.py). docs/compatibility.md explains the file.
+schema: papaia.suite-bom/1
+suite: 1.10.0
+repos:
+  - name: papaia
+    role: core
+    kit:
+      version: 0.1.0
+      renders_ui: false
+  - name: papaia-manager
+    role: manager
+    kit:
+      version: 0.1.0
+      renders_ui: true
+  - name: papaia-me
+    role: module
+    kit:
+      version: 0.1.0
+      renders_ui: true
+  - name: papaia-studio
+    role: module
+    kit:
+      version: 0.1.0
+      renders_ui: true
+  - name: papaia-data
+    role: module
+    kit:
+      version: 0.1.0
+      renders_ui: true
+  - name: papaia-flow
+    role: module
+    kit:
+      version: 0.1.0
+      renders_ui: true
+  - name: papaia-assist
+    role: module
+    kit:
+      version: 0.1.0
+      renders_ui: true
+  - name: papaia-connections
+    role: registry
+    kit:
+      version: 0.1.0
+      renders_ui: false
+  - name: papaia-addons
+    role: addon
+    kit:
+      version: 0.1.0
+      renders_ui: false
+  - name: qdrant-mcp-rbac
+    role: mcp
+    kit:
+      version: 0.1.0
+      renders_ui: false
+  - name: paperless-mcp-rbac
+    role: mcp
+    kit:
+      version: 0.1.0
+      renders_ui: false
+  - name: papaia-kit
+    role: kit
+    version: 0.1.0

@@ -193,6 +193,49 @@ def test_malformed_entries_are_rejected(mutate, message):
         suite.validate_bom(doc)
 
 
+def _with_kit(doc: dict) -> dict:
+    """Per-repo kit versions (PLT-37-A2, KIT-R4): the core and the MCP servers render
+    no kit UI, the manager and the modules do."""
+    for repo in doc["repos"]:
+        if repo["role"] != "kit":
+            repo["kit"] = {"version": "0.1.0", "renders_ui": repo["role"] in ("manager", "module")}
+    return doc
+
+
+def test_per_repo_kit_versions_pass_both_validators():
+    doc = _with_kit(_bom())
+    del doc["repos"][2]["kit"]["renders_ui"]  # optional: without it the repo renders kit UI
+    suite.validate_bom(doc)
+    assert list(Draft202012Validator(BOM_SCHEMA).iter_errors(doc)) == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda d: d["repos"][0]["kit"].update(colour="x"), "unknown field"),
+        (lambda d: d["repos"][0]["kit"].pop("version"), "missing field"),
+        (lambda d: d["repos"][0].update(kit="0.1.0"), "must be a mapping"),
+        (lambda d: d["repos"][0]["kit"].update(version="0.1"), "kit.version"),
+        (lambda d: d["repos"][0]["kit"].update(version="0.1.0-rc.1"), "kit.version"),
+        (lambda d: d["repos"][0]["kit"].update(version="01.1.0"), "kit.version"),
+        (lambda d: d["repos"][0]["kit"].update(version="1234567.0.0"), "kit.version"),
+        (lambda d: d["repos"][0]["kit"].update(version=1), "kit.version"),
+        (lambda d: d["repos"][0]["kit"].update(renders_ui="no"), "renders_ui"),
+        (lambda d: d["repos"][0]["kit"].update(renders_ui=0), "renders_ui"),
+        (lambda d: d["repos"][6].update(kit={"version": "0.1.0"}), "the kit carries no kit"),
+    ],
+    ids=["unknown", "no-version", "scalar", "short", "prerelease", "leading-zero", "long",
+         "number", "flag-text", "flag-int", "kit-repo"],
+)
+def test_malformed_kit_fields_are_rejected_by_both_validators(mutate, message):
+    doc = _with_kit(_bom())
+    mutate(doc)
+    with pytest.raises(suite.SuiteError, match=message):
+        suite.validate_bom(doc)
+    if message != "the kit carries no kit":  # a cross-field rule only the validator has
+        assert list(Draft202012Validator(BOM_SCHEMA).iter_errors(doc))
+
+
 def test_totals_must_match_the_entries():
     doc = _bom()
     doc["totals"]["containers"] = 7

@@ -12,6 +12,18 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Kit 0.1.0 in the core tools
+
+- The core tools vendor papaia-kit 0.1.0, the kit's first public release (MIT): wheel and
+  source tarball under `tools/vendor/papaia-kit/0.1.0/`, pinned in `tools/kit.lock` and
+  `tools/uv.lock`. The contract schemas are byte-identical to those of the previous kit;
+  the schema snapshot and the naming register snapshot now name kit 0.1.0.
+- `tools/kit_snapshot.py` writes and checks the schema and naming register snapshots from
+  the vendored kit; CI fails when they differ.
+- Suite bill of materials: optional per-repo field `kit` (`version`, `renders_ui`) in the
+  kit's own shape; `papaia-ctl suite verify` validates it. `compat/suite-kit.yaml` holds
+  the kit versions of the candidate suite, and CI runs the kit's `pk-check bom` over it.
+
 ### Permission report built by papaia-audit
 
 - papaia-audit builds the permission report: `POST /v1/access-reports/build` with

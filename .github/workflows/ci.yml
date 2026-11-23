@@ -124,7 +124,7 @@ jobs:
         run: .github/scripts/install-gitleaks.sh
       - name: Run ruff
         working-directory: tools
-        run: uv run --locked --extra dev python -m ruff check lib tests
+        run: uv run --locked --extra dev python -m ruff check lib tests kit_snapshot.py
       - name: Run pytest
         working-directory: tools
         run: uv run --locked --extra dev python -m pytest tests/ -rs
@@ -177,6 +177,30 @@ jobs:
           name: licenses-report
           path: licenses-report.json
           retention-days: 30
+
+  kit:
+    name: Kit release and suite kit versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      # The schema and naming register snapshots are what the vendored kit release builds;
+      # nothing in them is edited by hand.
+      - name: Snapshots of the vendored kit are current
+        working-directory: tools
+        run: uv run --locked --extra dev python kit_snapshot.py check
+      # The kit's suite check over the kit versions of the candidate suite: every repo on a
+      # release of the kit's matrix, one major version, no visual release between the
+      # repos that render kit UI.
+      - name: Kit versions of the candidate suite may be combined
+        working-directory: tools
+        run: uv run --locked --extra dev pk-check bom ../compat/suite-kit.yaml
 
   words:
     name: Word check
