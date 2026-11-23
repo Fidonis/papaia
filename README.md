@@ -58,12 +58,16 @@ Internal support containers (no published ports): `keycloak-postgres`,
 | Voice | `voice` | — | Local speech-to-text (Whisper) and text-to-speech (Chatterbox) behind LiteLLM, wired into LibreChat's speech panel. All internal-only — see [Voice](#voice-local-speech). |
 | People lookup | `people` | — | Exact-match lookup of persons with an assistant role for the assistant's gate, and the members (`sub` only, at most 50) of a share group for Studio's notices: whole name, mail or group id only, role filter, rate limit, audit. No published port — see [docs/people.md](docs/people.md). |
 | Knowledge map | `knowledge-map` | — | An OIDC-secured MCP directory of the installation's knowledge sources: tells the chat where knowledge lives, trimmed to the caller's roles. Internal-only — see [docs/knowledge-map.md](docs/knowledge-map.md). |
-| Connection registry | `connections` | — | One store for the saved credentials of mail, calendar and database accounts: a person adds an account once, a module receives it sealed for one call, every use is audited. Mutual TLS, two database logins, keys in their own volume. Reachable by Me and the add-ons that attach it only — see [ADR 0021](docs/adr/0021-connection-registry-as-a-core-profile.md) and [its variables](docs/configuration.md#connection-registry-variables). |
+| Mein Bereich | `me` | — | The page where every person sees and changes their own settings of the installation's modules (`me-web`), and the preference store the modules read: notification channel, language, appearance, time zone (`prefs`, `prefs-db`). One pinned image, no host port; browsers reach it as `me.<domain>` through the proxy — see [Mein Bereich](#mein-bereich-me). |
+| Connection registry | `connections` | — | One store for the saved credentials of mail, calendar and database accounts: a person adds an account once, a module receives it sealed for one call, every use is audited. Mutual TLS, two database logins, keys in their own volume. Reachable by Me and the add-ons that attach it only — see [Connection registry](#connection-registry-connections). |
 
 `localai`, `manager`, `librechat-websearch`, `rag`, `smtp`, `voice`, `knowledge-map` and `connections` are toggled by `papaia-ctl setup`
 (`--local-ai`, `--manager`, `--web-search`, `--rag`, `--smtp`, `--voice`, `--knowledge-map`, `--connections`). When LocalAI is enabled, setup also asks
 which accelerator image to install — see [GPU acceleration](#gpu-acceleration-for-localai).
-The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
+The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`. Mein Bereich has no `setup`
+option: `me` is switched on by adding it to `COMPOSE_PROFILES` as well. How to enable, address and
+disable both, and what an upgrade and a backup do with them: [Mein Bereich](#mein-bereich-me) and
+[Connection registry](#connection-registry-connections).
 
 > Everything else — document management, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
@@ -620,7 +624,8 @@ key. `-y` skips the confirmation prompt; without a TTY it is required.
 | 0 `preflight` | add-on check against the target and its suite matrix, image check, backup key check |
 | 1 `restore-point` | restore point R0; from here on the write lock is on |
 | 2 `core` | core and manager: tag change, migrations, render, start |
-| 3 `me`, 4 `data`, 5 `studio`, 6 `flow`, 7 `assist` | `addon upgrade` of the module from the checkout given with `--addon-path=NAME=DIR` |
+| 3 `me` | nothing for the core profile `me`: its image is pinned in the core's compose file and changes with the core in stage 2. Only an installation that still runs Me as an add-on gets an `addon upgrade` here, from `--addon-path=papaia-me=DIR`; otherwise the plan lists the stage as `absent` |
+| 4 `data`, 5 `studio`, 6 `flow`, 7 `assist` | `addon upgrade` of the module from the checkout given with `--addon-path=NAME=DIR` |
 | 8 `finish` | write lock off; the duration of each stage is printed |
 
 `--stage=core` runs stages 0 to 2 only; after stage 2 the module stages may run one at a
@@ -1532,7 +1537,7 @@ raw values behind its summary in `details`.
 | `rollback_window` | The rollback key of the last upgrade (see *Rollback key* under [`upgrade`](#upgrade)): how long `rollback` still works without the operator key, and the window (`PAPAIA_ROLLBACK_WINDOW_HOURS`). | `fail` for a key still there after its window or after its run ended, for a key file or folder others can read, a key without a recorded upgrade older than 168 h and a window outside 24–168 h; `warn` for a younger key without a recorded upgrade; `skip` without a rollback key |
 | `person_export` | Archives of information requests without an account in `state/person-export/` (see [docs/person-requests.md](docs/person-requests.md)). | `warn` while an archive waits for its hand-over; `fail` for one older than 14 days or a folder others can open; `pass` without any |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
-| `contact_point` | A contact point for users is set (`contact.name`, see [Installation settings](#installation-settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set, `fail` for a malformed `overlay/platform/branding.yaml` |
+| `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set, `fail` for a malformed `overlay/platform/branding.yaml` |
 
 Before `setup` has run, the checks that need the installation's configuration report `skip`
 instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as
@@ -2069,7 +2074,7 @@ project `papaia` has none). Browsers resolve every name below `localhost` to the
 address without an `/etc/hosts` entry (RFC 6761, section 6.3); Safari on macOS may not, so
 use a Chromium-based browser or Firefox for a local installation. A fresh local setup
 behind the bundled proxy derives Keycloak (`auth`), LibreChat (`chat`), LiteLLM (`litellm`),
-LocalAI (`localai`), papaia-manager (`manager`), Qdrant (`qdrant`), oauth2-proxy (`oauth2`)
+LocalAI (`localai`), papaia-manager (`manager`), Mein Bereich (`me`), Qdrant (`qdrant`), oauth2-proxy (`oauth2`)
 and the NPM admin UI (`npm`) this way. A port address an earlier release derived moves to
 the host name; an address the operator chose is kept. The edge port follows `INGRESS_HTTPS_EXT_PORT` (443 is left out of
 the URL). The proxy hosts `papaia-ctl` creates carry no certificate of their own, like the
@@ -2362,6 +2367,164 @@ server {
   publishes the core ports through the generated direct-ports override. `setup` asks for
   confirmation and refuses it while a protected add-on is active
   ([Published ports](#published-ports)). Development only.
+
+### Mein Bereich (`me`)
+
+Mein Bereich is the page where every person sees and changes their own settings of the
+installation's modules. Next to it runs the preference store `prefs`, which several modules
+read: notification channel, fallback channel and quiet hours, language, appearance and time
+zone. The profile has three services, `me-web`, `prefs` and `prefs-db`; `me-web` and `prefs`
+run from one pinned image of `papaia-me` ([ADR 0020](docs/adr/0020-mein-bereich-and-the-preference-store-as-core-profile.md)).
+No service of the profile publishes a host port.
+
+**Enable.** There is no `setup` option for `me`. Add the profile to `COMPOSE_PROFILES` in the
+root `.env` of the config directory, run `setup` once so it derives the address, and start:
+
+```bash
+# $PAPAIA_CONFIG_DIR/.env: append me to the list that is there, for example
+COMPOSE_PROFILES=keycloak,nginx,oauth2-proxy,librechat,litellm,egress,audit,me
+
+tools/papaia-ctl setup
+tools/papaia-ctl start
+```
+
+`setup` keeps a profile it does not switch itself, on every later run and during an upgrade.
+It seeds `infra/me/.env` in the config directory and fills its generated values
+(`ME_OIDC_CLIENT_SECRET`, `ME_SESSION_SECRET`, `PREFS_DB_PASSWORD`); do not edit them by hand. The
+database password reaches `prefs` and `prefs-db` as a secret file, never as a variable. The other
+settings, such as `ME_DEFAULT_LANG` or `PREFS_DEFAULT_TIME_ZONE`, are listed under
+[Mein Bereich variables](docs/configuration.md#mein-bereich-variables). `prefs` delivers one
+audit row per write to `papaia-audit`, so keep the `audit` profile on (it is in the default list).
+In a [distributed installation](#distributed-installations) the profile runs on the controller.
+
+**Address.** Browsers open `me-web` at `ME_PUBLIC_URL`. `setup` derives it as `me.<domain>`
+with the scheme of [Host names and add-on interfaces](#host-names-and-add-on-interfaces), for
+example `https://me.example.org`; an address you set yourself in the root `.env` is kept.
+
+- Bundled proxy (`internal_nginx`): `start` creates the proxy host `me.<domain>`.
+- External proxy (`external_proxy`): set up the forward that `tools/papaia-ctl proxy list`
+  prints for `me` (target `me-web`, port 8000).
+- `no_proxy` or `--allow-direct-port-access`: nothing is derived and `me-web` has no address,
+  because it never publishes a port.
+
+Add-ons reach the store `prefs` after they list it under `networks.attach` (add-on contract
+generation 8, see [`docs/architecture.md`](docs/architecture.md)); `prefs-db` is never attachable.
+
+**Disable.** Remove `me` from `COMPOSE_PROFILES` in `$PAPAIA_CONFIG_DIR/.env`, then remove the
+profile's containers:
+
+```bash
+tools/papaia-ctl stop --clean-up --profiles=me
+```
+
+What stays on disk: the volume `prefs-pgdata` with every person's saved preferences,
+`infra/me/.env` in the config directory with its generated values, and `ME_PUBLIC_URL` in the
+root `.env`. Adding `me` again and starting finds all of it. `stop --volumes` does not take the
+profile `me`; to delete the preferences as well, remove the volume after the stop with
+`docker volume rm <project>_prefs-pgdata` (`<project>` is `papaia`, or `papaia-<env>` for a
+named environment). Take a [backup](#backup) first if the preferences may be needed again.
+
+**Upgrade.** The image of `me-web` and `prefs` is pinned in `src/infra/me/docker-compose.yml`, so
+[`upgrade`](#upgrade) changes it together with the core in stage 2 (`core`) and starts the new
+image on the same volume. Stage 3 `me` only applies to an installation that still runs Me as an
+add-on; for the profile the plan lists it as `absent`, and no add-on checkout is needed. The
+restore point R0 of the upgrade holds `prefs-pgdata`, so [`rollback`](#rollback) brings the
+preferences back with the core.
+
+**Backup and restore.** [`backup`](#backup) archives `prefs-pgdata`, encrypted like every core
+volume, under the module `me`. `me-web` keeps no state of its own. To bring back the preferences
+alone from a backup of the whole installation:
+
+```bash
+tools/papaia-ctl restore --restore-point=ID --only=module:me
+```
+
+Only the profile `me` is taken down and started again; everything else keeps serving. A
+backup made with `backup --only=module:me` is restored with `restore-scoped --only=module:me`.
+
+**Known limit of this release.** The core does not yet register the sign-in client `papaia-me`
+in the realm, and it writes neither the module list of the area
+(`personal-settings/registry.yaml` in the config directory) nor the `azp` allow-list of `prefs`
+(`security/azp/`). Until it does, the profile starts and is reachable at its address, but nobody
+can sign in to Mein Bereich, and `prefs` refuses requests.
+
+### Connection registry (`connections`)
+
+The connection registry is the one store for the saved credentials of mail, calendar and
+database accounts: a person adds an account once, a module that may use it receives it sealed
+for one call and never keeps a copy, and every use is audited. The profile has three services:
+`connections` (the registry), `connections-migrate` (a one-shot container that applies the
+database migrations as the owner of the schema) and `connections-db`. None publishes a host
+port. See [ADR 0021](docs/adr/0021-connection-registry-as-a-core-profile.md).
+
+**Enable.** The profile is off on a fresh install. Switch it on with `setup` and start:
+
+```bash
+tools/papaia-ctl setup --connections
+tools/papaia-ctl start
+```
+
+An interactive `setup` asks for it (default off); the answer is kept on later runs and during an
+upgrade. When the profile is on, `setup` adds `connections` to `COMPOSE_PROFILES` and generates
+the two database passwords once (`CONNECTIONS_OWNER_DB_PASSWORD`,
+`CONNECTIONS_SERVICE_DB_PASSWORD` in `infra/connections/.env` of the config directory; do not
+edit them by hand). It also requests the registry's server certificate from the platform PKI and
+plans the realm role `connections-admin` (part of `papaia-admin`) and the bearer client
+`papaia-connections`. The clients whose tokens the registry accepts (`CONNECTIONS_PERSON_CLIENTS`,
+`CONNECTIONS_SERVICE_CLIENTS`, `CONNECTIONS_DELEGATE_CLIENTS`) are empty in the core; a module
+that uses the registry names its entries. Every setting is listed under
+[Connection registry variables](docs/configuration.md#connection-registry-variables). The
+registry sends its journal to `papaia-audit`, so keep the `audit` profile on. In a
+[distributed installation](#distributed-installations) the profile runs on the controller.
+
+**Address.** The registry has no browser address and no administration page of its own. It
+answers at `https://connections:8080` with TLS 1.3 and, by default, mutual TLS: every caller
+needs a client certificate of the platform CA (`CONNECTIONS_TLS_CLIENT_CA`). Only its declared
+consumers reach it: `me-web` on `papaia-connections-net`, and add-ons that list `connections`
+under `networks.attach`. It is not on `papaia-net`. `me-web` does not present a client
+certificate yet, so with the default `CONNECTIONS_TLS_CLIENT_CA` its calls to the registry fail;
+clearing the variable allows one-sided TLS, which the security profile `kritis` refuses.
+
+**Disable.** Switch the profile off and remove its containers:
+
+```bash
+tools/papaia-ctl setup --no-connections
+tools/papaia-ctl stop --clean-up --profiles=connections
+```
+
+What stays on disk: the volumes `connections-db` (the accounts and the journal of uses) and
+`connections-keys` (the master key), and `infra/connections/.env` with both database passwords.
+Keep the `.env` as long as you keep the volumes: the database logins were created with these
+passwords, and a new value locks the registry out of its own database. The realm keeps the role
+`connections-admin` and the client `papaia-connections` until you remove them. To delete every
+stored credential as well, add `--volumes`:
+
+```bash
+tools/papaia-ctl stop --clean-up --profiles=connections --volumes
+```
+
+This removes both volumes and cannot be undone except from a backup.
+
+**Upgrade.** The registry's image is pinned in `src/infra/connections/docker-compose.yml`, so
+[`upgrade`](#upgrade) changes it together with the core in stage 2 (`core`); there is no stage
+of its own. At every start `connections-migrate` applies the pending migrations before the
+registry starts. The restore point R0 of the upgrade holds both volumes, so
+[`rollback`](#rollback) brings the database and its keys back together.
+
+**Backup and restore.** [`backup`](#backup) archives `connections-db` and `connections-keys`,
+each encrypted like every core volume, under the module `connections`. A database without its
+keys cannot be read, so they are restored together:
+
+```bash
+tools/papaia-ctl restore --restore-point=ID --only=module:connections
+```
+
+A backup made with `backup --only=module:connections` is restored with
+`restore-scoped --only=module:connections`. `tools/papaia-ctl secrets rotate connections/credentials`
+makes a new master key active and seals every stored credential again (see
+[`secrets rotate`](#secrets-rotate)); take a new backup after it. With `CONNECTIONS_KEY_PROVIDER`
+set to `openbao` or `pkcs11` (required under `kritis`) the master key lives outside the volume,
+and that key store needs its own backup.
 
 ### RAG system
 
@@ -2987,6 +3150,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 │   │   ├── .env.example        # all stack-wide variables (source of truth)
 │   │   ├── infra/              # keycloak · nginx · oauth2-proxy · smtp-relay (optional, profile: smtp)
 │   │   │                       # link-gateway (distributed installations only, not in the include list)
+│   │   │                       # me (optional, profile: me) · connections (optional, profile: connections)
 │   │   ├── ai/                 # librechat · litellm · localai · mcp-firecrawl · jinaai · rag
 │   │   ├── manager/            # papaia-manager (optional, profile: manager)
 │   │   └── services/           # searxng · firecrawl

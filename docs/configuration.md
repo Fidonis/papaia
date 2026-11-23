@@ -96,7 +96,7 @@ next to it, even when it has an inline `:-` default.
 | `NPM_ADMIN_HOST` | Public URL of the Nginx Proxy Manager admin UI |
 | `MANAGER_EXT_PORT` | Host port of the manager (profile `manager`) with direct port access only |
 | `MANAGER_PUBLIC_URL` | Browser-facing papaia-manager URL, derived by setup — interpolated as `MANAGER_HOST` in `src/manager/docker-compose.yml` |
-| `ME_PUBLIC_URL` | Browser-facing URL of Mein Bereich (`me-web`, profile `me`), derived by setup as `me.<domain>` on the edge and behind an external proxy; never a port address, since `me-web` publishes no port ([ADR 0020](adr/0020-mein-bereich-and-the-preference-store-as-core-profile.md)) |
+| `ME_PUBLIC_URL` | Browser-facing URL of Mein Bereich (`me-web`, profile `me`), derived by setup as `me.<domain>` on the edge and behind an external proxy; never a port address, since `me-web` publishes no port ([ADR 0020](adr/0020-mein-bereich-and-the-preference-store-as-core-profile.md)); the profile's own settings are under [Mein Bereich variables](#mein-bereich-variables) |
 | `QDRANT_EXT_PORT` | Host port of the Qdrant REST API and dashboard (profile `rag`) with direct port access only, on `127.0.0.1` |
 | `QDRANT_PUBLIC_URL` | Browser-facing Qdrant URL — the dashboard lives under `/dashboard` |
 | `QDRANT_INGEST_EXT_PORT` | Host port of the ingester's REST API and MCP endpoint (profile `rag`) with direct port access only, on `127.0.0.1`; the ingester has no web interface, papaia-manager manages it |
@@ -196,10 +196,41 @@ keeps it byte for byte. A non-interactive `setup` takes it from the environment 
 `PAPAIA_SMTP_PASSWORD`, which is not a stack variable and is removed from the process environment
 as soon as it has been read.
 
+## Mein Bereich variables
+
+`src/infra/me/.env` (profile `me`, [ADR 0020](adr/0020-mein-bereich-and-the-preference-store-as-core-profile.md)).
+The profile has no `setup` option: it is on while `me` is in `COMPOSE_PROFILES` (see
+[Mein Bereich in the README](../README.md#mein-bereich-me)). The compose file reads every key
+through `${VAR}` interpolation (path 1); `python -m lib.me_profile check` keeps this file, the
+compose file and the variables the image reads in step. The browser address is
+`ME_PUBLIC_URL` in the root `.env` (above).
+
+| Variable | Purpose |
+|---|---|
+| `ME_OIDC_CLIENT_SECRET` | Generated. Secret of the confidential client `papaia-me`, which signs the person in and exchanges the person's token per module |
+| `ME_SESSION_SECRET` | Generated. Signing key of the session cookie, at least 32 bytes |
+| `PREFS_DB_PASSWORD` | Generated. Password of `prefs-db`; it reaches `prefs` and `prefs-db` as a secret file under `/run/secrets`, never as a variable of either service |
+| `ME_OIDC_LOGOUT_URL`, `ME_OIDC_INTERNAL_ISSUER` | Sign-in details beyond the shared `OIDC_*` variables. Empty: derived from the issuer (end-session endpoint, back channel on the issuer itself) |
+| `ME_OIDC_SCOPE` | Scopes of the sign-in (default `openid profile`) |
+| `ME_ACCOUNT_URL` | Account console of the sign-in service. Empty: `<issuer>/account` |
+| `ME_SECURITY_PROFILE` | Empty follows `PAPAIA_SECURITY_PROFILE`; `kritis` turns off plain-http module calls of the area even under `standard`. Stricter than the platform only |
+| `ME_MODULE_TIMEOUT` | Seconds after which a module that does not answer is shown as unreachable (default 2) |
+| `ME_EXPORT_TIMEOUT`, `ME_EXPORT_MAX_BYTES` | Time limit in seconds and size limit in bytes of one module's part of an export (defaults 10 and 16777216) |
+| `ME_MODULE_PORT` | Port of a module's API when its declaration names none (default 8080) |
+| `ME_DEFAULT_LANG` | Language of the area for a person without a saved language: `de` or `en` (default `de`) |
+| `ME_INSTALLATION_NAME` | Name of the installation in page titles while the catalog carries no branding, at most 60 characters. Empty: the name the image ships |
+| `PREFS_DEFAULT_TIME_ZONE` | Time zone of a person who never saved one (default `Europe/Berlin`) |
+| `PREFS_DEFAULT_CHANNEL` | Notification channel of a person who never saved one: `mail` or `chat_window` (default `mail`) |
+| `PREFS_LANG` | Language of the store's messages: `de` or `en` (default `de`) |
+
+The volume `prefs-pgdata` belongs to the module `me` in a backup
+(`papaia-ctl restore --only=module:me`).
+
 ## Connection registry variables
 
 `src/infra/connections/.env` (profile `connections`, [ADR 0021](adr/0021-connection-registry-as-a-core-profile.md)),
-written by `papaia-ctl setup --connections`. The profile is off on a fresh install. The compose
+written by `papaia-ctl setup --connections`. The profile is off on a fresh install. How to enable,
+address and disable it: [Connection registry in the README](../README.md#connection-registry-connections). The compose
 file reads every key through `${VAR}` interpolation (path 1).
 
 | Variable | Purpose |
