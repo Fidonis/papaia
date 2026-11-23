@@ -427,6 +427,46 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
     # The direct route of `mcp-mssql` to the SQL source (lib/sql_uplink.py), also an
     # override of the add-on's own project.
     sql_uplink.generate_override(config_dir, repo_root)
+    generate_addon_logging_overrides(config_dir, repo_root)
+
+
+# Log rotation of every container (BE-27): the core fragments set it per service; an
+# add-on's compose file is not the core's to change, so its project gets this override.
+LOGGING = {"driver": "json-file", "options": {"max-size": "10m", "max-file": "5"}}
+
+
+def _addon_services(addon_path: Path) -> list[str]:
+    try:
+        document = yaml.safe_load((addon_path / "docker-compose.yml").read_text("utf-8"))
+    except (OSError, yaml.YAMLError):
+        return []
+    services = (document or {}).get("services") if isinstance(document, dict) else None
+    return [str(name) for name in services] if isinstance(services, dict) else []
+
+
+def generate_addon_logging_overrides(config_dir: Path, repo_root: Path) -> None:
+    """Write `docker-compose.<name>-logging.override.yml` for every active add-on (the
+    rotation of every one of its services) and remove it for every other one; `addon
+    start` applies it to the add-on's project like the other files in overrides/addons/."""
+    deployed = deployment.load(config_dir)
+    for addon in deployed.get("addons") or [] if deployed else []:
+        name = addon.get("name")
+        if not name:
+            continue
+        out_path = (
+            config_dir / "overrides" / "addons" / f"docker-compose.{name}-logging.override.yml"
+        )
+        services = (
+            _addon_services(deployment.resolve_addon_path(addon, repo_root))
+            if addon.get("active") and addon.get("path") else []
+        )
+        if not services:
+            out_path.unlink(missing_ok=True)
+            continue
+        override = {"services": {service: {"logging": LOGGING} for service in services}}
+        common.atomic_write(
+            out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+        )
 
 
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For

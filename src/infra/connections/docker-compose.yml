@@ -36,9 +36,18 @@
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env merged
 # with src/infra/connections/.env. Values come through environment:, never env_file:.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   connections:
+    logging: *papaia-logging
     # Candidate digest: reproducible build of papaia-connections 82e6177 (make image
     # VERSION=v0.1.0). Re-pinned to the published digest when the module is released.
     image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:ad0b8201f34c081baca32e7c841f3859b9ac9b98c0a70154bd55b3091bd75aa5
@@ -127,6 +136,7 @@ services:
     profiles: [connections]
 
   connections-migrate:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:ad0b8201f34c081baca32e7c841f3859b9ac9b98c0a70154bd55b3091bd75aa5
     command: ["migrate"]
     restart: "no"
@@ -153,6 +163,7 @@ services:
     profiles: [connections]
 
   connections-db:
+    logging: *papaia-logging
     image: postgres:18.3@sha256:7e32e9833a6fb1c92c32552794cb6ed569d51b445a54907d35fc112ef39684db
     restart: unless-stopped
     environment:

@@ -82,6 +82,7 @@ from . import (
     stack_network,
     status,
     suite,
+    support,
     topology,
     upgrade,
     upgrade_stages,
@@ -2886,6 +2887,66 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
+def cmd_logs(args: argparse.Namespace) -> int:
+    """`papaia-ctl logs <module|service>`: every container of it, merged in time order,
+    with the correlation id per line. 0 shown, 2 refused input or nothing found."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    try:
+        target = support.check_target(args.target)
+        since = support.check_since(args.since)
+        lines = support.check_lines(args.lines)
+        report = status.collect(config_dir, repo_root, include_addons=True)
+        found = support.resolve(report, target)
+    except (support.SupportError, status.StatusError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if args.follow:
+        return support.follow(found, since=since)
+    for line in support.format_entries(
+        support.collect(status.run_command, found, since=since, lines=lines)
+    ):
+        print(line)
+    return 0
+
+
+def cmd_support_bundle(args: argparse.Namespace) -> int:
+    """`papaia-ctl support-bundle`: one archive for a support case, masked and scanned.
+    0 written, 1 a secret survived the masking (nothing written), 2 refused input."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    try:
+        lines = support.check_lines(args.lines)
+        path, correlation_id = support.bundle(config_dir, repo_root, out=args.out, lines=lines)
+    except support.LeakError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except support.SupportError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except (realm_sync.RealmSyncError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(f"Support bundle written: {path} (correlation id {correlation_id})")
+    return 0
+
+
+def cmd_metrics(args: argparse.Namespace) -> int:
+    """`papaia-ctl metrics [--out=FILE.prom]`: the platform's measurements in the
+    Prometheus text format, on stdout or atomically into a textfile collector's file."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    now = support.now_utc()
+    try:
+        report = doctor.run_checks(config_dir, repo_root, now=now)
+        text = support.metrics(report, config_dir, now)
+        if args.out:
+            support.write_metrics(args.out, text)
+        else:
+            sys.stdout.write(text)
+    except (support.SupportError, doctor.DoctorError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # distributed lifecycle
 # ─────────────────────────────────────────────────────────────────────────
@@ -3712,6 +3773,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--skip", action="append", default=None)
     p_doctor.add_argument("--json", action="store_true")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_logs = sub.add_parser("logs")
+    p_logs.add_argument("target")
+    p_logs.add_argument("--since", default=None)
+    p_logs.add_argument("--lines", default=str(support.LOG_LINES))
+    p_logs.add_argument("--follow", action="store_true")
+    p_logs.set_defaults(func=cmd_logs)
+
+    p_bundle = sub.add_parser("support-bundle")
+    p_bundle.add_argument("--out", default=None)
+    p_bundle.add_argument("--lines", default=str(support.LOG_LINES))
+    p_bundle.set_defaults(func=cmd_support_bundle)
+
+    p_metrics = sub.add_parser("metrics")
+    p_metrics.add_argument("--out", default=None)
+    p_metrics.set_defaults(func=cmd_metrics)
 
     p_clear = sub.add_parser("librechat-clear-history")
     p_clear.add_argument("--email", required=True)

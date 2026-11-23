@@ -14,8 +14,17 @@
 #    - MCP_FIRECRAWL_IMAGE in root .env
 #    - firecrawl service running (profile: librechat-websearch) on papaia-net
 # ═══════════════════════════════════════════════════════════════════════════
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   mcp-firecrawl:
+    logging: *papaia-logging
     image: ghcr.io/firecrawl/firecrawl-mcp-server@sha256:d9015c8ced7fc4c7186e8c07d8cae206803252c381992534f05e4e15242f2164
     # Upstream publishes this image for linux/amd64 only. Pinning the platform lets an
     # arm64 host run it emulated (Rosetta on Docker Desktop, QEMU/binfmt on Linux arm64)

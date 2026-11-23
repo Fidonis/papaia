@@ -31,11 +31,20 @@
 #   - Runs as the user that owns the config dir, read-only, without capabilities.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   # Hands the two named volumes to the unprivileged user of the service; runs before
   # every start of papaia-lifecycle and must succeed again on volumes it handed over.
   papaia-lifecycle-init:
+    logging: *papaia-logging
     image: python:3.12.16-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
     restart: "no"
     user: "0:0"
@@ -69,6 +78,7 @@ services:
     profiles: [lifecycle]
 
   papaia-lifecycle:
+    logging: *papaia-logging
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base, which brings the openssl
     # command line (Ed25519, ES256). Built, signed and pinned by tools/build-images.

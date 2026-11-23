@@ -1574,9 +1574,11 @@ raw values behind its summary in `details`.
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
 | `certs` | Days until expiry of `certs/*.crt` and of the Let's Encrypt certificates under `infra/nginx/nginx-letsencrypt/live/`. Needs `openssl`. | `warn` below 30 days, `fail` below 7 days or expired |
-| `smtp` | Only while the `smtp` profile is on: the [mail relay](#outbound-mail) container runs, the mail server behind it answers (greeting, EHLO, STARTTLS or TLS and the login; no mail is sent), and how many messages wait in the relay's queue. Reports `not configured` while the profile is off. | `warn` for an unreachable mail server, a stopped relay or a non-empty queue; never `fail`; inside a container the mail server is not contacted (see below) |
+| `smtp` | Only while the `smtp` profile is on: the [mail relay](#outbound-mail) container runs, the mail server behind it answers (greeting, EHLO, STARTTLS or TLS and the login; no mail is sent), and how many messages wait in the relay's queue. Reports `not configured` while the profile is off. | `fail` for a mail server that does not answer (notices and warning mails stop); `warn` for a stopped relay or a non-empty queue; inside a container the mail server is not contacted (see below) |
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
+| `model_gateway` | LiteLLM's container runs and LiteLLM answers `GET /health/readiness`, asked inside its container (the master key stays there). | `fail` for a stopped container, no answer or not ready; `skip` without the `litellm` profile |
+| `model_ready` | The default model (`PAPAIA_DEFAULT_MODEL`) answers one request for one token through the alias `papaia-chat`, bounded at 30 s; only status code and seconds are read. | `fail` for an error answer or no answer within 30 s; `skip` while the gateway does not run or no default model is set |
 | `modules` | One row per module of the platform catalog (`platform/services.json`, see `papaia-ctl catalog render`) and per active add-on: version and state from the catalog, the container state from [`status`](#status), the answer of `GET /healthz` of every running entry, and the network path to every core service the add-on attaches (`networks.attach`, read with `docker network inspect`). `/healthz` is asked from inside the module's own network by a short-lived probe container: the pinned `papaia-manager` image, never pulled, read-only, without capabilities, volumes or ports, removed when it exits. It sends no token and follows no redirect. | `fail` for a module that reports `down`, answers with a server error or does not answer from its network, for an attached neighbour that is not on the add-on's app network or does not run, and for a catalog that cannot be read; `warn` for `degraded`, a missing `/healthz`, an answer outside the kit form `{"status": ...}` and a probe container that cannot start (for example the manager image is not on the host); `skip` without a catalog and without active add-ons |
 | `revocations_age` | The gauge `revocations_age_seconds` every module reports under `/metrics` (age of the revocation list it last applied), read by the same probe. | `fail` above 300 s, `warn` above 60 s, when the gauge is missing or `/metrics` cannot be read; a module whose `/metrics` asks for the operations token is listed as `skip`; `skip` without a catalog |
 | `image_signatures` | Every running container of the core project runs an image pinned by digest, listed with that digest in the signed bill of materials of the checkout and signed with its key (see [Image pinning and signatures](#image-pinning-and-signatures)). | `fail` for an unpinned, unlisted or unsigned image, for a running image whose digest is not the pinned one, and while containers run without the pinned release key or bill of materials; `warn` if the registry cannot be asked (no connection, rate limit, server error) or Docker does not say what runs |
@@ -1587,7 +1589,9 @@ raw values behind its summary in `details`.
 | `siem` | Only while the `audit` profile is on: the SIEM report of `papaia-audit` (see [docs/audit.md](docs/audit.md#siem)), read with `docker exec`: backlog, lag and failing deliveries per target, targets no longer configured that hold events back, the last hourly chain verification, and the fill level of the `papaia-audit-db` volume (`df` in its container). | `fail` when a target has taken no events for more than 10 minutes, a chain does not verify, the volume is 95 % full or more, or the service does not run; `warn` for more than 60 s behind, from 80 %, for a removed target that still holds events back, when no target is set, when the hourly verification is missing or older than 2 h, and when `PAPAIA_OPERATIONS_MAIL` is set without an active mail relay; `skip` while the profile is off or where the service runs on another node |
 | `identity` | Only with a federation (`security/idp.yaml`, see [docs/federation.md](docs/federation.md)): the status sync of `papaia-lifecycle` with the upstream directory, from the same health report. | `fail` when the status sync has failed for longer than 300 s, has not succeeded in the last 300 s or never ran, when `idp.yaml` or the group map is not usable, when the `lifecycle` profile is off or the service does not run; `skip` without a federation or where the service runs on another node |
 | `rollback_window` | The rollback key of the last upgrade (see *Rollback key* under [`upgrade`](#upgrade)): how long `rollback` still works without the operator key, and the window (`PAPAIA_ROLLBACK_WINDOW_HOURS`). | `fail` for a key still there after its window or after its run ended, for a key file or folder others can read, a key without a recorded upgrade older than 168 h and a window outside 24–168 h; `warn` for a younger key without a recorded upgrade; `skip` without a rollback key |
+| `realm` | The realm matches the declarations: `papaia-ctl realm sync --check`, without a write. A removed scope assignment of a client shows up here. | `fail` for every deviation (`papaia-ctl realm sync` corrects it) or a refused declaration; `warn` when the comparison could not run; `skip` with external OIDC, before the sync account exists, inside a container and while Keycloak is not healthy |
 | `person_export` | Archives of information requests without an account in `state/person-export/` (see [docs/person-requests.md](docs/person-requests.md)). | `warn` while an archive waits for its hand-over; `fail` for one older than 14 days or a folder others can open; `pass` without any |
+| `halt` | The platform's emergency halt (`state/halt.json`, see `papaia-ctl halt`). | `fail` while the halt is set (every write, send and delete is stopped) and for a halt file that cannot be used, which every service treats as set; `skip` before the first start |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
 | `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set, `fail` for a malformed `overlay/platform/branding.yaml` |
 
@@ -1652,6 +1656,104 @@ checks are added (on one host they never appear):
 | `file_modes` | The controller's config dir keeps the file modes it sets. The link CA and the link keys are written with mode 600; a Windows drive under `/mnt` in WSL2 mounted without the `metadata` option refuses or ignores that. `setup`, `start` (also of an existing installation) and `node sync` refuse such a config dir as well. | `fail` when a mode does not stick; move the config dir to a Linux filesystem (inside the WSL distribution) or mount the drive with `metadata` |
 
 `--skip=nodes,links,file_modes` is accepted on every installation.
+
+#### Causes in German
+
+Below every `fail` row, `doctor` names the cause in one German sentence and the section of the
+troubleshooting guide in the operations handbook (`siehe Handbuch §S-n`); `--json` carries the
+same as `causes` (`text`, `section`, `reference`) on each failing check. The sentences of the nine
+documented faults:
+
+| Section | Fault | Check | Sentence |
+|---|---|---|---|
+| S-1 | Model gateway stopped | `container_health`, `model_gateway` | Das Modell-Gateway (LiteLLM) läuft nicht; Module können keine Modelle nutzen. |
+| S-2 | Model not loaded | `model_ready` | Das Modell <name> ist nicht geladen; Anfragen schlagen fehl. |
+| S-3 | Identity service stopped | `container_health` | Der Anmeldedienst (Keycloak) ist nicht erreichbar; niemand kann sich anmelden. |
+| S-4 | Database of a module stopped | `container_health` | Die Datenbank von <Modul> läuft nicht. |
+| S-5 | Emergency halt set | `halt` | Die Plattform ist per Not-Aus abgeschaltet (gesetzt von <Konto> um <Zeit>). |
+| S-6 | Scope assignment removed | `realm` | Dem Client <id> fehlt der Scope <scope>; Zugriffe auf <Modul> werden abgelehnt. |
+| S-7 | Data disk full | `disk_space` | Auf <Pfad> ist kein Platz mehr; Schreiben ist gestoppt. |
+| S-8 | Certificate expired | `certs` | Das Zertifikat für <host> ist seit <Datum> abgelaufen. |
+| S-9 | Mail server not reachable | `smtp` | Der Mailserver <host:port> antwortet nicht; <n> Nachrichten warten. |
+
+A failing check none of them explains points at the diagnosis section of the handbook. The
+sentences carry host names, paths, module, client and scope names, dates and counts, never a
+secret or content.
+
+### `logs`
+
+```bash
+tools/papaia-ctl logs <module|service> [--since=30m|DATE] [--lines=N] [--follow] [--config-dir=PATH]
+```
+
+The logs of every container of a module (`keycloak` or `papaia-keycloak`), of an add-on (its
+name) or of one service, merged in time order. Each line shows the time, the service and the
+correlation id (`X-Papaia-Correlation-Id`, `-` when the line has none), then the line as the
+service wrote it, so one request can be followed through every service it touched. `--lines`
+(default 1000, at most 10000) is per container; `--since` takes a duration (`30m`, `2h`) or a date
+or time (`2026-09-27`, `2026-09-27T10:15:00Z`); `--follow` keeps reading until Ctrl-C.
+
+### Logs and log rotation
+
+Every service writes its log through Docker's `json-file` driver and keeps at most 5 files of 10
+MiB, 50 MiB per container
+([json-file driver](https://docs.docker.com/engine/logging/drivers/json-file/)). The core fragments
+set this for each of their 47 core services; with every core profile on, the core's logs therefore
+stay below 2350 MiB. Every active add-on gets the same rotation for each of its services through the
+generated `overrides/addons/docker-compose.<name>-logging.override.yml`, which `addon start`
+applies; add 50 MiB per add-on container to the bound. A container that is recreated starts a new
+log.
+
+### `support-bundle`
+
+```bash
+tools/papaia-ctl support-bundle [--out=FILE.tar.gz] [--lines=N] [--config-dir=PATH]
+```
+
+One archive for a support case, by default `support/papaia-support-<time>.tar.gz` in the config
+directory, mode 600:
+
+| File | Content |
+|---|---|
+| `doctor.json`, `status.json` | `doctor --json` and `status --json` |
+| `versions.json` | Platform, Docker and Compose versions, add-on versions, the image of every container |
+| `bom.yaml` | The bill of materials of the checkout (`compat/suite.yaml`) |
+| `config.txt` | Every key of every `.env` in the config directory; values only for host names, URLs, ports, profiles, variants and models, otherwise `(set)` or `(empty)`; the add-ons of `deployment.yaml` |
+| `logs/<project>/<service>.log` | The last `--lines` (default 1000) lines of every container |
+
+Before anything is written, every file is masked: the installation's secrets (the values of
+secret keys in every `.env` of the config directory and small secret files), private keys, age
+keys, JWTs, bearer and basic credentials, API keys, mail addresses, values of password, token,
+secret, `sub` and user name fields, and long random strings. Then every file is searched again;
+a single hit stops the command with exit code 1 and nothing is written. An existing file is never
+replaced. Writing the archive, or the stop, is one `papaia.audit/1` row in the audit outbox with
+the correlation id the command prints. The archive holds what the masking leaves of the log lines;
+read it before you pass it on.
+
+### `metrics`
+
+```bash
+tools/papaia-ctl metrics [--out=FILE.prom] [--config-dir=PATH]
+```
+
+The platform's measurements in the Prometheus text format, on stdout or written atomically to a
+`.prom` file for the textfile collector of a node exporter (run it from a timer, for example every
+five minutes). It runs `doctor` and prints:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `papaia_check_status` | `check` | 0 pass, 1 warn, 2 fail (skipped checks are left out) |
+| `papaia_certificate_days_left` | `file` | Days until a certificate expires |
+| `papaia_module_revocations_age_seconds` | `module` | Age of the revocation list of a module |
+| `papaia_audit_export_backlog`, `papaia_audit_export_lag_seconds` | `target` | Undelivered audit events per SIEM target and the age of the oldest |
+| `papaia_backup_last_ok_age_seconds` | — | Age of the last successful restore point |
+| `papaia_smtp_queue_messages` | — | Messages waiting in the mail relay |
+| `papaia_status_sync_age_seconds` | — | Age of the last status sync with an upstream directory |
+| `papaia_model_ready_seconds` | — | Seconds the default model took for one token |
+| `papaia_metrics_generated_timestamp_seconds` | — | When the values were read |
+
+No label carries a person. Request, error and duration counts per operation are the modules' own
+`/metrics` endpoints.
 
 ### Configuration & render lifecycle
 

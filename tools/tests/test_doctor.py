@@ -212,17 +212,21 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # smtp: the mail relay is not enabled
         PASS,  # addon_compat
         PASS,  # container_health
+        SKIP,  # model_gateway: the fixture has no litellm profile
+        SKIP,  # model_ready: idem
         PASS,  # modules: the add-on attaches nothing, no catalog to probe
         SKIP,  # revocations_age: no platform catalog
         PASS,  # image_signatures: nothing runs in the fake
         SKIP,  # lifecycle: the lifecycle profile is off
         SKIP,  # siem: the audit profile is off
         PASS,  # approvals: four eyes off by default
+        SKIP,  # halt: no halt folder before the first start
         PASS,  # contact_point
         SKIP,  # network: no SQL source, no direct route
         WARN,  # egress: the fixture's profiles predate the always-on egress profile
         SKIP,  # source_protection: no SQL Server source
         SKIP,  # identity: no federation
+        SKIP,  # realm: no realm sync account in the fixture
         SKIP,  # rollback_window: no rollback key on this host
         PASS,  # person_export: no archive of an information request
     ]
@@ -249,17 +253,21 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "smtp",
         "addon_compat",
         "container_health",
+        "model_gateway",
+        "model_ready",
         "modules",
         "revocations_age",
         "image_signatures",
         "lifecycle",
         "siem",
         "approvals",
+        "halt",
         "contact_point",
         "network",
         "egress",
         "source_protection",
         "identity",
+        "realm",
         "rollback_window",
         "person_export",
     )
@@ -2246,18 +2254,18 @@ def test_smtp_unreachable_names_the_stage_and_the_reason(stack):
 
     check = result(run_doctor(stack, docker=smtp_docker(), smtp_probe=spy), "smtp")
 
-    assert check.status == WARN
+    assert check.status == FAIL
     assert check.summary.startswith("unreachable (connect: [Errno 111] Connection refused)")
     assert "relay running" in check.summary
 
 
-def test_smtp_warns_about_a_login_the_server_refuses(stack):
+def test_smtp_fails_for_a_login_the_server_refuses(stack):
     enable_smtp(stack)
     spy = ProbeSpy(smtp.ProbeResult(False, "auth", "login refused: (535, b'bad credentials')"))
 
     check = result(run_doctor(stack, docker=smtp_docker(), smtp_probe=spy), "smtp")
 
-    assert check.status == WARN
+    assert check.status == FAIL
     assert check.summary.startswith("unreachable (auth:")
 
 
@@ -2308,15 +2316,20 @@ def test_smtp_does_not_contact_the_upstream_from_inside_a_container(stack):
     assert "relay running" in check.summary and "queue empty" in check.summary
 
 
-def test_smtp_never_fails_the_run(stack):
+def test_an_unreachable_mail_server_fails_the_run_other_mail_trouble_does_not(stack):
+    # BE-29 no. 9: notices and warning mails stop while the mail server does not answer.
     enable_smtp(stack)
     spy = ProbeSpy(smtp.ProbeResult(False, "resolve", "cannot resolve smtp.example.org"))
 
     report = run_doctor(stack, docker=smtp_docker(QUEUE_TWO), smtp_probe=spy)
 
-    assert result(report, "smtp").status == WARN
+    assert result(report, "smtp").status == FAIL
     assert "unreachable" in result(report, "smtp").summary
-    assert report.exit_code == 0, "mail trouble does not stop the run"
+    assert report.exit_code == 2
+
+    queued_only = run_doctor(stack, docker=smtp_docker(QUEUE_TWO))
+    assert result(queued_only, "smtp").status == WARN
+    assert queued_only.exit_code == 0
 
 
 def test_smtp_report_validates_and_holds_no_secret(stack):

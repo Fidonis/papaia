@@ -28,6 +28,14 @@
 # operators may append QI_SECRET_<NAME> keys for their own sources and those
 # names are unknown here. Nothing listed under its environment: is also set in
 # ai/rag/.env, as environment: would win and blank it.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -44,6 +52,7 @@ services:
   #  never published.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant:
+    logging: *papaia-logging
     image: qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
     restart: unless-stopped
     environment:
@@ -82,6 +91,7 @@ services:
   #  to read and write the same two collections.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-mcp:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/qdrant-mcp-rbac:0.4.2@sha256:aa1181d4e2f03f22ee5ee95c294b4cdc03cc0244b5e060897774c32f78ea8462
     restart: unless-stopped
     environment:
@@ -164,6 +174,7 @@ services:
   #  and a different value would lock everybody out.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/qdrant-ingest:1.0.1@sha256:d715048a85f615741fbdea20b398a5865d9c346f551a4b585d22444e234ff98e
     restart: unless-stopped
     # Jobs stop cooperatively between documents; give them room to finish.
@@ -223,6 +234,7 @@ services:
   #  scanned PDFs needs the -full image variant, which also wants a larger heap.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest-tika:
+    logging: *papaia-logging
     image: docker.io/apache/tika:3.2.3.0@sha256:c0154cb95587cde64be74f35ada1a2bd7892219f3f0ac3c9dc6cab34046b3573
     restart: unless-stopped
     environment:

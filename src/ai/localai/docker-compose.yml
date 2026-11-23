@@ -14,11 +14,20 @@ x-papaia-localai-gpu-images:
   hipblas: localai/localai:v4.12.1-gpu-hipblas@sha256:dd1780d582213e98b06ec90e4b7425e2d91a28170b6eb214529ff39d75839126
   vulkan: localai/localai:v4.12.1-gpu-vulkan@sha256:34d1f9fe3acd8e93504a275e496a8f9bfc057faab5abc94914f74aee3f2b6dba
 
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   # ═══════════════════════════════════════════════════════════════════════════
   # LocalAI Model Init
   # ═══════════════════════════════════════════════════════════════════════════
   localai-model-init:
+    logging: *papaia-logging
     image: curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
     user: "0"
     restart: "no"
@@ -72,6 +81,7 @@ services:
   # LocalAI
   # ═══════════════════════════════════════════════════════════════════════════
   localai:
+    logging: *papaia-logging
     # CPU image. `papaia-ctl setup` rewrites this to the matching accelerator
     # tag (-gpu-nvidia-cuda-13, -gpu-intel, ...) via a generated override in
     # $PAPAIA_CONFIG_DIR/overrides/, reusing the version pinned right here.

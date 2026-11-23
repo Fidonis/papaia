@@ -2,8 +2,17 @@
 # papAIa — Keycloak · Identity & Access Management
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   keycloak:
+    logging: *papaia-logging
     image: quay.io/keycloak/keycloak:26.7.0@sha256:0f198be292568439d700cdbfb893e69a6009bb43a94a06a945b1d3d506c76b13
     restart: unless-stopped
     # No host port: browsers reach Keycloak through the edge proxy, the stack's services
@@ -72,6 +81,7 @@ services:
     profiles: [keycloak]
 
   keycloak-postgres:
+    logging: *papaia-logging
     image: postgres:18.3@sha256:7e32e9833a6fb1c92c32552794cb6ed569d51b445a54907d35fc112ef39684db
     restart: unless-stopped
     environment:

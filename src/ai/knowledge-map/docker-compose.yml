@@ -19,9 +19,18 @@
 # embeddings go through LiteLLM, so they stay local on local-first
 # installations; without a configured embedding model the server falls back to
 # a lexical scorer and keeps working.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   knowledge-map-mcp:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/papaia-knowledge-map:0.2.0@sha256:074ad9fc73ef1d25e01b0f7686e3751aadb15cddc3f2362aeafd302484ca3de9
     restart: unless-stopped
     environment:

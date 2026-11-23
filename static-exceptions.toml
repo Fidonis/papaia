@@ -233,6 +233,16 @@ approved_by = "core maintainers (security officer countersignature pending)"
 
 [[exception]]
 rule = "code-exec"
+path = "tools/lib/support.py"
+within = "follow"
+subject = "subprocess.Popen"
+input = "operator-config"
+reason = "papaia-ctl logs --follow streams docker logs of each container without a shell; program and options are literals of this file, the container names come from docker ps of the installation and --since is checked against a fixed pattern first."
+expires = 2027-05-20
+approved_by = "core maintainers (security officer countersignature pending)"
+
+[[exception]]
+rule = "code-exec"
 path = "tools/lib/modules.py"
 within = "_docker"
 subject = "subprocess.run"

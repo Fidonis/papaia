@@ -39,6 +39,14 @@ x-papaia-voice-tts-gpu-images:
   nvidia: ghcr.io/devnen/chatterbox-tts-server:sha-915ae28-cu128@sha256:bdf8f7050e9b68aac9a80204666e9a6713c39a8ddc1eb1fdc5544e65b31edc12
   hipblas: ghcr.io/devnen/chatterbox-tts-server:sha-915ae28-rocm@sha256:8ef7a9a89355cb3f4ac8d1075e25bed0f1bca028db47cacaa8ec8576aff40f58
 
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -55,6 +63,7 @@ services:
   #  transcription endpoint would accept audio from any of them.
   # ═══════════════════════════════════════════════════════════════════════════
   speaches:
+    logging: *papaia-logging
     image: ghcr.io/speaches-ai/speaches:0.8.3-cpu@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
     restart: unless-stopped
     environment:
@@ -103,6 +112,7 @@ services:
   # `papaia-ctl start` instead of degrading to an unhealthy engine. The retry
   # loop below covers engine startup on its own.
   speaches-model-init:
+    logging: *papaia-logging
     image: curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
     restart: "no"
     depends_on:
@@ -159,6 +169,7 @@ services:
   #  voice-cloning surface are documented in ADR 0011.
   # ═══════════════════════════════════════════════════════════════════════════
   chatterbox:
+    logging: *papaia-logging
     image: ghcr.io/devnen/chatterbox-tts-server:sha-915ae28-cpu@sha256:848adb0dce2f0274bad4214a056320a0c8c32d82267e717a4caeffce7169a4e3
     # The upstream CPU image is published for linux/amd64 only. Declared so an
     # ARM host (Apple Silicon under Docker Desktop) runs it under emulation

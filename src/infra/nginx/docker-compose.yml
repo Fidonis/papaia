@@ -2,8 +2,17 @@
 # papAIa — Nginx Proxy Manager · Reverse Proxy
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   nginx-proxy-manager:
+    logging: *papaia-logging
     image: jc21/nginx-proxy-manager:2.15.1@sha256:52b2c59994f3d36acfcf70a1626f29734df0ed8c71bacc0269f78b6f939858bb
     restart: unless-stopped
     volumes:
@@ -52,6 +61,7 @@ services:
   # No host port: the edge serves it under its own host name (NPM_ADMIN_HOST);
   # NPM admin (port 81) is only reachable inside Docker and on 127.0.0.1 for the API.
   nginx-proxy-manager-auth:
+    logging: *papaia-logging
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6@sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048
     restart: unless-stopped
     command:

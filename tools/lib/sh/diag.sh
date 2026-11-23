@@ -48,3 +48,71 @@ cmd_doctor() {
     # configuration report 'skip' instead.
     py_cli doctor ${extra[@]+"${extra[@]}"}
 }
+
+cmd_logs() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    local target=""
+    local -a extra=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --since=*) extra+=(--since="${1#*=}") ;;
+            --lines=*) extra+=(--lines="${1#*=}") ;;
+            --follow|-f) extra+=(--follow) ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option for logs: $1"; exit 2 ;;
+            *)
+                if [ -n "$target" ]; then
+                    error "logs takes one module or service, got '$target' and '$1'"; exit 2
+                fi
+                target="$1" ;;
+        esac
+        shift
+    done
+    if [ -z "$target" ]; then
+        error "Usage: papaia-ctl logs <module|service> [--since=30m] [--lines=N] [--follow]"
+        exit 2
+    fi
+    # shellcheck disable=SC2034  # read by py_cli
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    # `--` keeps a name from being read as an option; Python validates it.
+    py_cli logs ${extra[@]+"${extra[@]}"} -- "$target"
+}
+
+cmd_support_bundle() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    local -a extra=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --out=*) extra+=(--out="${1#*=}") ;;
+            --lines=*) extra+=(--lines="${1#*=}") ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for support-bundle: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    # shellcheck disable=SC2034  # read by py_cli
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli support-bundle ${extra[@]+"${extra[@]}"}
+}
+
+cmd_metrics() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    local -a extra=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --out=*) extra+=(--out="${1#*=}") ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for metrics: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    # shellcheck disable=SC2034  # read by py_cli
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    py_cli metrics ${extra[@]+"${extra[@]}"}
+}

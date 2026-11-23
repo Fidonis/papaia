@@ -28,6 +28,21 @@
           "details": {
             "type": "object",
             "description": "Raw values behind the summary (bytes, ports, days left, ...), so a consumer does not have to parse the text. Keys differ per check."
+          },
+          "causes": {
+            "type": "array",
+            "description": "Only on a failing check, never empty there: the cause in one German sentence each and the section of the troubleshooting guide (S-1 ... S-9; null for the general diagnosis section).",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["text", "section", "reference"],
+              "additionalProperties": false,
+              "properties": {
+                "text": { "type": "string", "minLength": 1 },
+                "section": { "type": ["string", "null"], "pattern": "^S-[0-9]+$" },
+                "reference": { "type": "string", "minLength": 1 }
+              }
+            }
           }
         }
       }

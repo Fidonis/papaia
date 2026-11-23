@@ -38,9 +38,18 @@
 #     sees the database volume read-only and only for its fill level.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   papaia-audit-db:
+    logging: *papaia-logging
     image: postgres:17.12-alpine3.24@sha256:526f86d93c6ea08fd3f1fe5605650cacc781b2c6013169a0ad8f42c7d3d84f32
     restart: unless-stopped
     environment:
@@ -69,6 +78,7 @@ services:
   # empty database and sets the service role passwords. The only holder of the owner's
   # password besides the database.
   papaia-audit-schema:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:178e0d6f240f2441c36da4ba129cf1dfc23283acc21387f708110fbf4c73dff1
     restart: "no"
     user: "${UID:-1000}:${GID:-1000}"
@@ -93,6 +103,7 @@ services:
     profiles: [audit]
 
   papaia-audit:
+    logging: *papaia-logging
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml).
     # Built, signed and pinned by tools/build-images.
     image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:178e0d6f240f2441c36da4ba129cf1dfc23283acc21387f708110fbf4c73dff1

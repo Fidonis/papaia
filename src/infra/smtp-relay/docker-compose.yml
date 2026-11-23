@@ -32,9 +32,18 @@
 # (mode 0600, empty when the upstream needs no login) and it is mounted read-only.
 # Every default below keeps the relay inert, so a profile enabled by hand before
 # `setup` has run starts without sending anything.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   smtp-relay:
+    logging: *papaia-logging
     # Postfix in a small Alpine image (MIT). Pinned to the Alpine variant: the
     # default tags are the Debian image, about 20 MB larger. Everything specific
     # to this image is in this file and in tools/lib/smtp.py, so swapping the

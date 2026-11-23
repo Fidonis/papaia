@@ -44,6 +44,16 @@ based on merged pull requests; this file mirrors the published releases.
   directory to the check, so its compose file is read. Overrides of add-ons without the key
   are byte-identical.
 
+### Diagnostics: causes, logs, support bundle and metrics
+
+- `papaia-ctl doctor` names the cause of every failing check in one German sentence with the
+  section of the troubleshooting guide (`siehe Handbuch §S-n`), also as `causes` in `--json`.
+  New checks `model_gateway`, `model_ready`, `halt` and `realm`; an unreachable mail server is
+  now `fail`.
+- New commands `papaia-ctl logs`, `papaia-ctl support-bundle` and `papaia-ctl metrics`.
+- Every core service rotates its log (json-file, 5 x 10 MiB); active add-ons get the same
+  through a generated override.
+
 ### Kit 0.1.0 in the core tools
 
 - The core tools vendor papaia-kit 0.1.0, the kit's first public release (MIT): wheel and

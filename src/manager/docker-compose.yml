@@ -16,8 +16,17 @@
 # Authentication: native OIDC in the FastAPI backend.  No oauth2-proxy
 # sidecar (arch doc §3).  The manager registers as OIDC client `papaia-manager`
 # in the papaia realm.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   papaia-manager:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/papaia-manager:1.8.0@sha256:52142c4a321f23a496a2c6dd2e3294db647cfe47588edff025a606c37800645f
     restart: unless-stopped
     env_file:

@@ -171,6 +171,7 @@ def _probes() -> Probes:
         kernel_clock_synchronized=lambda: True,
         smtp_probe=lambda *args: smtp.ProbeResult(True, "ok", login="ok"),
         dev_root=Path("/papaia-test-has-no-devices"),
+        realm_check=lambda config_dir, repo_root: (0, "Realm check: ok (0 deviation(s)).\n"),
     )
 
 
@@ -188,10 +189,15 @@ def _status_json(inst: Installation) -> str:
 class _HealthyDocker(FakeDocker):
     """FakeDocker plus the `doctor modules` probe container, answered as a healthy
     installation answers it: every module in the kit /healthz form `ok` and a revocation
-    list 5 s old."""
+    list 5 s old. LiteLLM's probe answers ready, and the default model in 0.5 s."""
 
     def __call__(self, cmd, timeout):
         cmd = list(cmd)
+        if cmd[:2] == ["docker", "exec"] and cmd[3:6] == ["python", "-I", "-c"]:
+            self.calls.append(cmd)
+            answer = {"ready": 200, "model": 200, "seconds": 0.5} if len(cmd) > 7 else {
+                "ready": 200}
+            return CommandResult(0, json.dumps(answer) + "\n", "")
         if cmd[:2] == ["docker", "run"] and (
             f"de.fidonis.role={module_health.PROBE_LABEL_ROLE}" in cmd
         ):

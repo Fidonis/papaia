@@ -2,8 +2,17 @@
 # papAIa — SearXNG · Metasearch Engine
 # by Fidonis GmbH · https://fidonis.de
 # ═══════════════════════════════════════════════════════════════════════════
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   searxng:
+    logging: *papaia-logging
     image: searxng/searxng:2026.7.10-6a4d5148d@sha256:4ebe6ab0297397426fe7ca015caab8f5ed3b50784cf968bfbda7887ea6b16f6e
     restart: unless-stopped
     env_file:

@@ -124,6 +124,13 @@
 #   papaia-ctl certs status  [--json] [--config-dir=PATH]
 #   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
 #   papaia-ctl doctor        [CHECK...] [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+#   papaia-ctl logs          <module|service> [--since=30m|DATE] [--lines=N] [--follow]
+#                            [--config-dir=PATH] — every container of it, merged in time
+#                            order, with the correlation id of each line
+#   papaia-ctl support-bundle [--out=FILE.tar.gz] [--lines=N] [--config-dir=PATH] — doctor,
+#                            status, versions, configuration and logs without secrets
+#   papaia-ctl metrics       [--out=FILE.prom] [--config-dir=PATH] — measurements in the
+#                            Prometheus text format
 #   papaia-ctl topology show [--json] [--config-dir=PATH]
 #   papaia-ctl topology validate [--config-dir=PATH]
 #   papaia-ctl topology firewall [--format=table|json|csv] [--config-dir=PATH]
@@ -194,7 +201,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,187p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,194p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -311,6 +318,9 @@ case "$cmd" in
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;
     doctor)        cmd_doctor "$@" ;;
+    logs)          cmd_logs "$@" ;;
+    support-bundle) cmd_support_bundle "$@" ;;
+    metrics)       cmd_metrics "$@" ;;
     topology)      cmd_topology "$@" ;;
     node)          cmd_node "$@" ;;
     node-shell)    cmd_node_shell "$@" ;;

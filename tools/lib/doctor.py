@@ -59,13 +59,16 @@ from . import (
     common,
     compat,
     deployment,
+    diagnosis,
     direct_ports,
     egress,
     envtree,
     federation,
     gpu_detect,
+    halt,
     images,
     localai_native,
+    model_gateway,
     module_health,
     pki,
     semver,
@@ -384,6 +387,21 @@ def _kernel_clock_synchronized() -> bool | None:
     return state.maxerror < KERNEL_CLOCK_SYNCED_MAXERROR_US
 
 
+def _realm_check(config_dir: Path, repo_root: Path) -> tuple[int, str]:
+    """`realm sync --check` in this process: (exit code, what it printed). It reads the
+    realm with the sync account and the master admin and writes nothing."""
+    import contextlib
+    import io
+
+    from . import realm_sync
+
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        code = realm_sync.sync(tree, config_dir, repo_root, check=True)
+    return code, out.getvalue()
+
+
 @dataclass
 class Probes:
     disk_usage: Callable[[Path], tuple[int, int]] = _disk_usage
@@ -403,6 +421,8 @@ class Probes:
     localai_ready: Callable[[str], bool] = localai_native.probe
     # Whether launchctl of the logged-in user is at hand (a Mac, not a container).
     launchd_host: Callable[[], bool] = lambda: localai_native.launchd_host()[0]
+    # `realm sync --check`: (config_dir, repo_root) -> (exit code, printed lines).
+    realm_check: Callable[[Path, Path], tuple[int, str]] = _realm_check
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1711,8 +1731,9 @@ def check_smtp(ctx: Context) -> CheckResult:
     the relay container runs, whether the upstream answers (greeting, EHLO, STARTTLS or
     TLS and the login -- no mail is sent, so a run never delivers anything), and how
     many messages wait in the relay's queue. The relay accepts mail even while the
-    upstream is down, so only this check tells that apart. All of it is a `warn` at
-    most: mail trouble does not keep the stack from running.
+    upstream is down, so only this check tells that apart. A mail server that does not
+    answer is `fail` (BE-29 no. 9: notices and warning mails stop); everything else about
+    mail is a `warn` at most.
 
     Inside a container (papaia-manager polls `doctor`) the upstream is not contacted:
     the check would reach the provider on every poll, and the relay's own state and
@@ -1740,6 +1761,7 @@ def check_smtp(ctx: Context) -> CheckResult:
 
     issues: list[str] = []
     notes: list[str] = []
+    unreachable = False
     container, state = _smtp_relay_container(ctx)
     details["relay"] = state or "not created"
 
@@ -1764,6 +1786,7 @@ def check_smtp(ctx: Context) -> CheckResult:
         if probe.ok:
             notes.append(f"reachable ({relay.security}, login {probe.login})")
         else:
+            unreachable = True
             issues.append(f"unreachable ({probe.stage}: {probe.reason})")
 
     if state is None:
@@ -1783,7 +1806,10 @@ def check_smtp(ctx: Context) -> CheckResult:
             notes.append("queue empty")
 
     summary = "; ".join(issues + notes)
-    return CheckResult(name, WARN if issues else PASS, summary, details)
+    # A mail server that does not answer stops every notice and warning mail (BE-29 no. 9):
+    # `fail`. Everything else about mail is a warning.
+    verdict = FAIL if unreachable else WARN if issues else PASS
+    return CheckResult(name, verdict, summary, details)
 
 
 def check_addon_compat(ctx: Context) -> CheckResult:
@@ -3128,6 +3154,228 @@ def check_person_export(ctx: Context) -> CheckResult:
     )
 
 
+# ─── model_gateway / model_ready ─────────────────────────────────────────
+
+# LiteLLM answers on its own port inside its container; the probe runs there with the
+# container's interpreter, reads the master key from the container's environment (it never
+# leaves the container) and prints one JSON line with status codes and seconds only, never
+# a body. With an alias it also asks for one token of that model (BE-26 `model_ready`).
+_GATEWAY_PROBE = (
+    "import json,os,sys,time,urllib.error,urllib.request\n"
+    "m=sys.argv[1] if len(sys.argv)>1 else ''\n"
+    "o=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
+    "h={'Authorization':'Bearer '+os.environ.get('LITELLM_MASTER_KEY',''),"
+    "'Content-Type':'application/json'}\n"
+    "def ask(p,b,t):\n"
+    "    q=urllib.request.Request('http://127.0.0.1:4000'+p,headers=h,"
+    "data=None if b is None else json.dumps(b).encode(),method='GET' if b is None else 'POST')\n"
+    "    s=time.monotonic()\n"
+    "    try:\n"
+    "        with o.open(q,timeout=t) as r: r.read(65536); c=r.status\n"
+    "    except urllib.error.HTTPError as e: c=e.code\n"
+    "    except OSError: c=0\n"
+    "    return c,round(time.monotonic()-s,1)\n"
+    "out={'ready':ask('/health/readiness',None,10)[0]}\n"
+    "if m and out['ready']==200:\n"
+    "    out['model'],out['seconds']=ask('/v1/chat/completions',{'model':m,'max_tokens':1,"
+    "'messages':[{'role':'user','content':'ping'}]},MODEL_TIMEOUT)\n"
+    "print(json.dumps(out))\n"
+)
+# BE-26: one request with one token per default model, bounded at 30 s.
+MODEL_READY_TIMEOUT_SECONDS = 30
+GATEWAY_PROBE_TIMEOUT_SECONDS = 50.0
+MODEL_ALIAS = "papaia-chat"
+_ALIAS_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
+
+
+def _gateway_container(ctx: Context) -> tuple[str | None, str | None] | None:
+    """(name, state) of LiteLLM's container, or None when the installation has none."""
+    return _core_container(ctx, model_gateway.SERVICE)
+
+
+def _gateway_probe(ctx: Context, container: str, alias: str = "") -> dict[str, Any] | None:
+    """The probe's answer, validated: {"ready": int, "model"?: int, "seconds"?: float}."""
+    if alias and not _ALIAS_RE.fullmatch(alias):
+        raise ValueError(f"{alias!r} is not a model alias")
+    script = _GATEWAY_PROBE.replace("MODEL_TIMEOUT", str(MODEL_READY_TIMEOUT_SECONDS))
+    argv = ["docker", "exec", container, "python", "-I", "-c", script]
+    if alias:
+        argv.append(alias)
+    done = ctx.run(argv, GATEWAY_PROBE_TIMEOUT_SECONDS)
+    try:
+        answer = json.loads(status.first_line(done.stdout)) if done.returncode == 0 else None
+    except ValueError:
+        return None
+    if not isinstance(answer, dict) or set(answer) - {"ready", "model", "seconds"}:
+        return None
+    for key in ("ready", "model"):
+        value = answer.get(key)
+        if key in answer and (isinstance(value, bool) or not isinstance(value, int)
+                              or not 0 <= value <= 599):
+            return None
+    seconds = answer.get("seconds")
+    if "seconds" in answer and (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+                                or not 0 <= seconds <= 3600):
+        return None
+    if "ready" not in answer:
+        return None
+    return answer
+
+
+def check_model_gateway(ctx: Context) -> CheckResult:
+    """LiteLLM runs and is ready (`doctor model_gateway`, BE-26, BE-29 no. 1): its
+    container state and `GET /health/readiness` asked inside its container."""
+    name = "model_gateway"
+    if not ctx.configured:
+        return _not_set_up(name)
+    found = _gateway_container(ctx)
+    if found is None:
+        return CheckResult(name, SKIP, "the model gateway is not part of this installation")
+    container, state = found
+    details: dict[str, Any] = {"state": state or "not created"}
+    if container is None or state != "running":
+        return CheckResult(
+            name, FAIL, f"LiteLLM is {state or 'not created'}; no module can use a model", details
+        )
+    probe = _gateway_probe(ctx, container)
+    if probe is None:
+        return CheckResult(name, FAIL, "LiteLLM does not answer inside its container", details)
+    details["readiness"] = probe["ready"]
+    if probe["ready"] != 200:
+        code = probe["ready"] or "no answer"
+        return CheckResult(name, FAIL, f"LiteLLM is not ready (readiness: {code})", details)
+    return CheckResult(name, PASS, "LiteLLM running and ready", details)
+
+
+def check_model_ready(ctx: Context) -> CheckResult:
+    """The default model answers (`doctor model_ready`, BE-26, BE-29 no. 2): one request
+    for one token through LiteLLM's alias `papaia-chat`, bounded at 30 s."""
+    name = "model_ready"
+    if not ctx.configured:
+        return _not_set_up(name)
+    found = _gateway_container(ctx)
+    if found is None:
+        return CheckResult(name, SKIP, "the model gateway is not part of this installation")
+    container, state = found
+    if container is None or state != "running":
+        return CheckResult(name, SKIP, "the model gateway does not run (see model_gateway)")
+    model = ctx.env.get(model_gateway.DEFAULT_MODEL_VAR, "").strip()
+    if not model or common.is_placeholder(model):
+        return CheckResult(name, SKIP, f"no default model ({model_gateway.DEFAULT_MODEL_VAR})")
+    details: dict[str, Any] = {"alias": MODEL_ALIAS, "model": model}
+    probe = _gateway_probe(ctx, container, MODEL_ALIAS)
+    if probe is None:
+        return CheckResult(name, FAIL, "LiteLLM does not answer inside its container", details)
+    if probe["ready"] != 200:
+        return CheckResult(name, SKIP, "the model gateway is not ready (see model_gateway)",
+                           details)
+    code, seconds = probe.get("model", 0), probe.get("seconds")
+    details.update(http_status=code, seconds=seconds)
+    if code == 200:
+        return CheckResult(name, PASS, f"{model} answered in {seconds} s", details)
+    if code == 0:
+        return CheckResult(
+            name, FAIL,
+            f"{model} did not answer within {MODEL_READY_TIMEOUT_SECONDS} s", details,
+        )
+    return CheckResult(name, FAIL, f"{model} does not answer (HTTP {code})", details)
+
+
+# ─── halt ────────────────────────────────────────────────────────────────
+
+
+def check_halt(ctx: Context) -> CheckResult:
+    """The platform's emergency halt (`doctor halt`, BE-29 no. 5): `fail` while it is set,
+    because every write, send and delete of every module is stopped; also for a halt file
+    that cannot be used, which every service reads as set."""
+    name = "halt"
+    if not ctx.configured:
+        return _not_set_up(name)
+    path = halt.state_path(ctx.config_dir)
+    if not path.parent.is_dir():
+        return CheckResult(name, SKIP, "no halt folder yet ('papaia-ctl start' creates it)")
+    state = halt.read(path)
+    if not state.active:
+        return CheckResult(name, PASS, "no emergency halt", {"active": False})
+    if state.problem:
+        return CheckResult(
+            name, FAIL, f"{state.problem}; every service treats the platform as halted",
+            {"active": True, "problem": state.problem},
+        )
+    since = (
+        datetime.fromtimestamp(state.since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if state.since is not None else "?"
+    )
+    return CheckResult(
+        name, FAIL,
+        f"emergency halt set by {state.by} since {since}; lift it with "
+        "'papaia-ctl halt clear --reason=...'",
+        {"active": True, "since": state.since, "by": state.by},
+    )
+
+
+# ─── realm ───────────────────────────────────────────────────────────────
+
+# Lines `realm sync --check` prints for a deviation; more are cut off in the details.
+REALM_DEVIATIONS_MAX = 50
+
+
+def check_realm(ctx: Context) -> CheckResult:
+    """The realm matches the declarations (`doctor realm`, BE-26 `identity` scope
+    comparison, BE-29 no. 6): `realm sync --check` without a write. `fail` for every
+    deviation (a missing scope assignment first of all), `warn` when the comparison could
+    not run. Skipped with external OIDC, before the sync account exists, inside a container
+    and while Keycloak does not run (container_health reports that)."""
+    name = "realm"
+    if not ctx.configured:
+        return _not_set_up(name)
+    from . import keycloak_role_sync as kcs
+    from . import realm_sync
+
+    root = ctx.tree.get("", {})
+    if root.get("AUTH_PROVIDER", "internal_keycloak") != "internal_keycloak":
+        return CheckResult(name, SKIP, "external OIDC: the realm is not managed here")
+    secret = (
+        ctx.tree.get(kcs._KEYCLOAK_NODE, {}).get(realm_sync.SYNC_SECRET_KEY)
+        or common.parse_env_file(ctx.config_dir / kcs._KEYCLOAK_NODE / ".env").get(
+            realm_sync.SYNC_SECRET_KEY, "")
+    )
+    if not secret or common.is_placeholder(secret) or secret.startswith("GENERATE_"):
+        return CheckResult(name, SKIP, "no realm sync account yet ('papaia-ctl setup')")
+    if ctx.probes.in_container():
+        return CheckResult(name, SKIP, "the realm is only compared on the host")
+    # Only against a healthy Keycloak: the comparison waits up to 90 s for one that does
+    # not answer, and container_health already reports it.
+    healthy = any(
+        c.service == "keycloak" and c.health == status.Health.HEALTHY
+        for m in ctx.status_report().modules if m.kind == "core" for c in m.containers
+    )
+    if not healthy:
+        return CheckResult(name, SKIP, "Keycloak is not healthy (see container_health)")
+    code, output = ctx.probes.realm_check(ctx.config_dir, ctx.repo_root)
+    deviations = [line.strip() for line in output.splitlines()
+                  if line.strip().startswith("fail: ")]
+    details: dict[str, Any] = {
+        "deviations": deviations[:REALM_DEVIATIONS_MAX], "count": len(deviations),
+    }
+    if code == 0:
+        return CheckResult(name, PASS, "the realm matches the declarations", details)
+    if deviations:
+        shown = "; ".join(d.removeprefix("fail: ") for d in deviations[:3])
+        more = f" (+{len(deviations) - 3} more)" if len(deviations) > 3 else ""
+        return CheckResult(
+            name, FAIL,
+            f"{len(deviations)} deviation(s) from the declarations: {shown}{more} "
+            "('papaia-ctl realm sync' corrects them)",
+            details,
+        )
+    last = status.first_line("\n".join(reversed(output.strip().splitlines())))
+    if code == 2:
+        return CheckResult(name, FAIL, last or "a declaration was refused", details)
+    return CheckResult(name, WARN, f"the realm could not be compared: {last or 'no answer'}",
+                       details)
+
+
 CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_version", check_docker_version),
     ("disk_space", check_disk_space),
@@ -3145,17 +3393,21 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("smtp", check_smtp),
     ("addon_compat", check_addon_compat),
     ("container_health", check_container_health),
+    ("model_gateway", check_model_gateway),
+    ("model_ready", check_model_ready),
     ("modules", check_modules),
     ("revocations_age", check_revocations_age),
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
     ("siem", check_siem),
     ("approvals", check_approvals),
+    ("halt", check_halt),
     ("contact_point", check_contact_point),
     ("network", check_network),
     ("egress", check_egress),
     ("source_protection", check_source_protection),
     ("identity", check_identity),
+    ("realm", check_realm),
     ("rollback_window", check_rollback_window),
     ("person_export", check_person_export),
 ]
@@ -3177,6 +3429,14 @@ class DoctorReport:
     generated_at: str
     platform_version: str
     checks: list[CheckResult]
+    # The German sentence(s) behind each failing check (lib/diagnosis.py); a failing check
+    # without an entry gets the general sentence when the report is rendered.
+    causes: dict[str, list[diagnosis.Cause]] = field(default_factory=dict)
+
+    def causes_of(self, check: CheckResult) -> list[diagnosis.Cause]:
+        if check.status != FAIL:
+            return []
+        return self.causes.get(check.name) or [diagnosis.general(check.name)]
 
     @property
     def summary(self) -> dict[str, int]:
@@ -3200,13 +3460,21 @@ class DoctorReport:
             "schema_version": SCHEMA_VERSION,
             "generated_at": self.generated_at,
             "platform_version": self.platform_version,
-            "checks": [
-                {"name": c.name, "status": c.status, "summary": c.summary, "details": c.details}
-                for c in self.checks
-            ],
+            "checks": [self._check_dict(c) for c in self.checks],
             "summary": self.summary,
             "ok": self.ok,
         }
+
+
+    def _check_dict(self, check: CheckResult) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "name": check.name, "status": check.status, "summary": check.summary,
+            "details": check.details,
+        }
+        causes = self.causes_of(check)
+        if causes:
+            out["causes"] = [cause.to_dict() for cause in causes]
+        return out
 
 
 def parse_skip(values: Sequence[str] | None) -> list[str]:
@@ -3247,10 +3515,18 @@ def run_checks(
             results.append(check(ctx))
         except Exception as exc:  # noqa: BLE001 - one broken probe must not hide the others
             results.append(CheckResult(name, FAIL, f"check crashed: {type(exc).__name__}: {exc}"))
+    failing = [r for r in results if r.status == FAIL]
+    report = None
+    if failing and ctx.configured:
+        try:
+            report = ctx.status_report()
+        except Exception:  # noqa: BLE001 - the rows above already say what is wrong
+            report = None
     return DoctorReport(
         generated_at=moment.strftime("%Y-%m-%dT%H:%M:%SZ"),
         platform_version=envtree.resolve_platform_version(repo_root),
         checks=results,
+        causes=diagnosis.explain(failing, report),
     )
 
 
@@ -3260,8 +3536,9 @@ def format_table(report: DoctorReport) -> str:
     widths = [max(len(header[i]), *(len(r[i]) for r in rows)) for i in range(2)]
     lines = [f"papAIa {report.platform_version} - doctor", ""]
     lines.append("  ".join(header[i].ljust(widths[i]) for i in range(2)) + "  " + header[2])
-    for row in rows:
+    for check, row in zip(report.checks, rows, strict=True):
         lines.append("  ".join(row[i].ljust(widths[i]) for i in range(2)) + "  " + row[2])
+        lines.extend(diagnosis.format_lines(report.causes_of(check)))
     counts = report.summary
     lines.append("")
     lines.append(

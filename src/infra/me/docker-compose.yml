@@ -30,9 +30,18 @@
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env merged
 # with src/infra/me/.env.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   me-web:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:7d8e5165cbda151723d31d322e8cd6524bc9449f4372345a57cd3302f88d2c99
     restart: unless-stopped
     environment:
@@ -100,6 +109,7 @@ services:
     profiles: [me]
 
   prefs:
+    logging: *papaia-logging
     image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:7d8e5165cbda151723d31d322e8cd6524bc9449f4372345a57cd3302f88d2c99
     entrypoint: ["python", "-m", "prefs"]
     restart: unless-stopped
@@ -162,6 +172,7 @@ services:
     profiles: [me]
 
   prefs-db:
+    logging: *papaia-logging
     image: postgres:18.3@sha256:7e32e9833a6fb1c92c32552794cb6ed569d51b445a54907d35fc112ef39684db
     restart: unless-stopped
     environment:

@@ -24,9 +24,18 @@
 #     read-only, without capabilities.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   papaia-docker-gate:
+    logging: *papaia-logging
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base. Built, signed and pinned by
     # tools/build-images.
