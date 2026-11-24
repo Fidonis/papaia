@@ -24,6 +24,7 @@ from . import (
     compat,
     deployment,
     egress,
+    erasure_journal,
     federation,
     gpu_detect,
     hosted_model,
@@ -438,6 +439,13 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
     # override of the add-on's own project.
     sql_uplink.generate_override(config_dir, repo_root)
     generate_addon_logging_overrides(config_dir, repo_root)
+    # Each add-on's own erasure journal file and nothing else of the backup target.
+    try:
+        erasure_journal.generate_overrides(config_dir, repo_root)
+    except erasure_journal.ErasureJournalError as exc:
+        from .render_core import RenderError  # render_core does not import this module
+
+        raise RenderError(str(exc)) from None
 
 
 # Log rotation of every container (BE-27): the core fragments set it per service; an

@@ -1231,6 +1231,24 @@ and stops with exit code 3 without starting the stack. Only a whole restore repl
 audit journal `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`. The journals of the core itself
 (accounts, chat, model gateway) are applied by the core start gate, not here.
 
+**Each module reaches its own journal alone.** With the `lifecycle` profile, the core creates
+`<module>.jsonl` for every active add-on that writes a journal (empty, mode 0600, owned by the
+account that owns `$PAPAIA_CONFIG_DIR`) and mounts that one file read-write into the add-on's
+writer services: the services of the reserved actions `erasure-replay` and `person-erase` and
+the service behind its personal-area entry (`exposes` kind `me`). They find it at
+`/var/lib/papaia-backup/erasure-journal/<module>.jsonl`, inside an empty folder of their own
+(tmpfs); run them as that account. The override is
+`$PAPAIA_CONFIG_DIR/overrides/addons/docker-compose.<name>-erasure-journal.override.yml`, applied
+by `addon start` like the other add-on overrides. No add-on sees the journal of another one,
+`epoch` or the journals of the core; only `papaia-lifecycle` mounts the folder read-write. An
+add-on whose own compose file mounts `PAPAIA_BACKUP_DIR` or anything under `erasure-journal` is
+refused by the compatibility gate, even with `--force`. A link, a second name, a file of another
+account or one that others can write in place of a journal stops `render` (and with it `setup`
+and `start`). `doctor erasure_journal` reports a container that can write the folder, the
+target or a file not its own, and a line of one module in the journal of another (the replay
+refuses such a journal). Root on the host can still change every file; the mirror outside the
+house and the audit trail are the anchors against that.
+
 **The release of the point.** A whole restore replaces the configuration the checkout renders
 from, so it stops with exit code 2, before the key is asked for and before anything is touched,
 when the checkout is another release than the point's `RELEASE` names; the message names the
@@ -1749,6 +1767,7 @@ raw values behind its summary in `details`.
 | `rollback_window` | The rollback key of the last upgrade (see *Rollback key* under [`upgrade`](#upgrade)): how long `rollback` still works without the operator key, and the window (`PAPAIA_ROLLBACK_WINDOW_HOURS`). | `fail` for a key still there after its window or after its run ended, for a key file or folder others can read, a key without a recorded upgrade older than 168 h and a window outside 24–168 h; `warn` for a younger key without a recorded upgrade; `skip` without a rollback key |
 | `realm` | The realm matches the declarations: `papaia-ctl realm sync --check`, without a write. A removed scope assignment of a client shows up here. | `fail` for every deviation (`papaia-ctl realm sync` corrects it) or a refused declaration; `warn` when the comparison could not run; `skip` with external OIDC, before the sync account exists, inside a container and while Keycloak is not healthy |
 | `person_export` | Archives of information requests without an account in `state/person-export/` (see [docs/person-requests.md](docs/person-requests.md)). | `warn` while an archive waits for its hand-over; `fail` for one older than 14 days or a folder others can open; `pass` without any |
+| `erasure_journal` | Only while the `lifecycle` profile is on: every file of `$PAPAIA_BACKUP_DIR/erasure-journal` and the bind mounts of every container of the core and the add-ons (see *Each module reaches its own journal alone* under [`restore`](#restore)). | `fail` for a missing folder (target not mounted), a container other than `papaia-lifecycle` that can write the folder, the backup target, `epoch` or a journal not its own (a shared read-write mount), a journal or `epoch` that is a link, has a second name, belongs to another account or can be written by others, and a journal holding a line of another module; `warn` for an add-on that can read journals not its own and when Docker does not answer; `skip` while the profile is off |
 | `halt` | The platform's emergency halt (`state/halt.json`, see `papaia-ctl halt`). | `fail` while the halt is set (every write, send and delete is stopped) and for a halt file that cannot be used, which every service treats as set; `skip` before the first start |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
 | `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set or while it is still the one `setup` derived (`Verwaltung von <domain>`), `fail` for a malformed `overlay/platform/branding.yaml` |

@@ -42,7 +42,7 @@ from pathlib import Path
 
 import yaml
 
-from . import client_addresses, exposes, semver
+from . import client_addresses, erasure_journal, exposes, semver
 
 STATUS_OK = "OK"
 STATUS_INCOMPATIBLE = "INCOMPATIBLE"
@@ -138,6 +138,7 @@ GENERATION_FEATURES: dict[str, int] = {
 INGRESS_AXIS = "integration.nginx"
 ISOLATED_AXIS = "networks.isolated"
 JOIN_AXIS = "networks.join_addons"
+ERASURE_JOURNAL_AXIS = "erasure_journal"
 EXPOSES_AXIS = "exposes"
 KNOWLEDGE_AXIS = "knowledge"
 CLIENT_ADDRESSES_AXIS = client_addresses.KEY
@@ -907,6 +908,19 @@ def evaluate_addon(
         client_addresses.check_manifest(manifest, name)
     except client_addresses.ClientAddressError as exc:
         return CompatResult(name, STATUS_ERROR, axis=CLIENT_ADDRESSES_AXIS, reason=str(exc))
+
+    # The erasure journals at the backup target (PLT-66): the core alone mounts them, each
+    # module its own file. A compose file that mounts the target would let the add-on write
+    # the journal of another module, so not even --force lets it in.
+    if addon_path is not None:
+        mounts = erasure_journal.compose_problems(addon_path)
+        if mounts:
+            return CompatResult(
+                name, STATUS_ERROR, axis=ERASURE_JOURNAL_AXIS,
+                reason="the backup target and its erasure journals are mounted by the core"
+                " only (each module gets its own journal file); write refused: "
+                + "; ".join(mounts),
+            )
 
     warnings: list[str] = []
     if isolated and addon_path is None:

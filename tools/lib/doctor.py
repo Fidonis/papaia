@@ -64,6 +64,7 @@ from . import (
     direct_ports,
     egress,
     envtree,
+    erasure_journal,
     federation,
     gen_override,
     gpu_detect,
@@ -3330,6 +3331,102 @@ def check_source_protection(ctx: Context) -> CheckResult:
     )
 
 
+def check_erasure_journal(ctx: Context) -> CheckResult:
+    """Each module reaches its own erasure journal alone (`doctor erasure_journal`, PLT-66,
+    BE-16; lib/erasure_journal.py). `fail` for a container other than papaia-lifecycle
+    that can write the journal folder, the backup target or a journal or `epoch` not its
+    own, for a file that is a link, has a second name, belongs to another account or can
+    be written by others, and for a journal holding a line of another module (planted;
+    the kit does not replay it); `warn` for a module that can read journals not its own."""
+    name = "erasure_journal"
+    if not ctx.configured:
+        return _not_set_up(name)
+    try:
+        folder = erasure_journal.journal_folder(ctx.config_dir)
+    except erasure_journal.ErasureJournalError as exc:
+        return CheckResult(name, FAIL, str(exc))
+    if folder is None:
+        return CheckResult(name, SKIP, "the lifecycle profile is off: no erasure journal")
+    if not folder.is_dir():
+        return CheckResult(
+            name, FAIL, f"{folder} is missing: the backup target is not mounted"
+        )
+    try:
+        findings = erasure_journal.inspect_folder(folder, os.stat(ctx.config_dir).st_uid)
+    except OSError as exc:
+        return CheckResult(name, FAIL, f"{folder} cannot be read ({exc.strerror})")
+    journals = sum(1 for f in findings if f.subject.endswith(".jsonl"))
+    report = ctx.status_report()
+    if not report.docker.reachable:
+        findings.append(erasure_journal.Finding(
+            "mounts", WARN, "Docker not reachable; the mounts of the containers are unchecked"
+        ))
+    else:
+        findings.extend(_journal_mounts(ctx, report, folder))
+    overall = _worst(f.status for f in findings) if findings else PASS
+    shown = [f for f in findings if f.status != PASS]
+    summary = (
+        "; ".join(f"{f.subject}: {f.text}" for f in shown)
+        or f"{journals} journal(s); every module reaches its own alone"
+    )
+    return CheckResult(
+        name, overall, summary,
+        {"findings": [{"subject": f.subject, "status": f.status, "text": f.text}
+                      for f in findings]},
+    )
+
+
+def _journal_mounts(
+    ctx: Context, report: status.StatusReport, folder: Path
+) -> list[erasure_journal.Finding]:
+    """The bind mounts of every container of the core and the add-ons, from one
+    `docker inspect`, judged by `erasure_journal.inspect_mounts`."""
+    roles: dict[str, tuple[str, str | None]] = {}
+    for module in report.core:
+        for container in module.containers:
+            if container.name:
+                role = (
+                    "lifecycle" if container.service == erasure_journal.LIFECYCLE_SERVICE
+                    else "core"
+                )
+                roles[container.name] = (role, None)
+    projects = {a.project: a.name for a in module_health.active_addons(
+        ctx.config_dir, ctx.repo_root)}
+    for module in report.addons:
+        owner = projects.get(module.compose_project, module.name)
+        for container in module.containers:
+            if container.name:
+                roles[container.name] = ("module", f"{owner}.jsonl")
+    if not roles:
+        return []
+    done = ctx.run(
+        ["docker", "inspect", "--format", "{{.Name}}\t{{json .Mounts}}", *sorted(roles)],
+        DOCKER_PROBE_TIMEOUT_SECONDS,
+    )
+    findings: list[erasure_journal.Finding] = []
+    seen: set[str] = set()
+    for line in done.stdout.splitlines():
+        container, _, raw = line.partition("\t")
+        container = container.strip().lstrip("/")
+        if container not in roles:
+            continue
+        try:
+            mounts = json.loads(raw)
+        except ValueError:
+            continue
+        seen.add(container)
+        role, own = roles[container]
+        findings.extend(
+            erasure_journal.inspect_mounts(container, mounts, folder, role=role, own=own)
+        )
+    unread = sorted(set(roles) - seen)
+    if unread:
+        findings.append(erasure_journal.Finding(
+            "mounts", WARN, f"the mounts of {', '.join(unread)} could not be read"
+        ))
+    return findings
+
+
 def check_person_export(ctx: Context) -> CheckResult:
     """Archives of information requests (`doctor person_export`, security 1.14 no. 2b):
     `warn` while one waits for its hand-over in state/person-export/, `fail` for one
@@ -3627,6 +3724,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("realm", check_realm),
     ("rollback_window", check_rollback_window),
     ("person_export", check_person_export),
+    ("erasure_journal", check_erasure_journal),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

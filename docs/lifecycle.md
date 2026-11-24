@@ -228,6 +228,13 @@ target the service sees this folder only. Each write is one audit line
 (`lifecycle.journal`, object `erasure_journal` `identity:<seq>`, the correlation id of
 the event; `error`/`journal_unavailable` when the local copy fails).
 
+**The modules' journals.** The service is the only one that mounts the folder read-write:
+it writes `identity` and `epoch` and compares every journal. Each add-on gets its own file
+`<module>.jsonl` alone, created by `render` and mounted into its writer services under an
+empty folder of their own; no add-on sees `epoch`, the core journals or the journal of
+another add-on, and `doctor erasure_journal` fails for any other mount of the folder that
+can write (README, *Each module reaches its own journal alone*).
+
 The writer also accepts the core sources `core-chat` (`erase`, `erase_subject`) and
 `model-gateway` (`erase`, `erase_subject`, `key_revoke`) in their own files; the deletion
 of a person in chat and model gateway and the revocation of gateway keys write them.

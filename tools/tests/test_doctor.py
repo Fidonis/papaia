@@ -231,6 +231,7 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # realm: no realm sync account in the fixture
         SKIP,  # rollback_window: no rollback key on this host
         PASS,  # person_export: no archive of an information request
+        SKIP,  # erasure_journal: the lifecycle profile is off
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -274,6 +275,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "realm",
         "rollback_window",
         "person_export",
+        "erasure_journal",
     )
 
 

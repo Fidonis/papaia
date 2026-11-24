@@ -71,6 +71,15 @@ höchstens 60 Minuten.
   `post-restore` der Vollmachtshalter. Erst dann startet das Modul. Scheitert ein Schritt,
   bleibt das Modul aus; der nächste `start --addons` oder `addon start <name>` wiederholt den
   Schritt zuerst.
+- **Jedes Modul schreibt nur sein eigenes Löschjournal.** Ein Modul sieht am Sicherungsziel
+  nur seine eigene Datei `erasure-journal/<modul>.jsonl`; `epoch`, die Journale des Kerns und
+  die anderer Module erreicht es nicht. So kann kein Modul Einträge eines anderen entfernen
+  oder ihm eine Löschung unterschieben. `papaia-ctl doctor erasure_journal` meldet `fail`,
+  wenn ein Container außer `papaia-lifecycle` den Ordner, das Sicherungsziel oder eine fremde
+  Datei beschreiben kann, wenn eine Datei ein Verweis ist, einen zweiten Namen hat, einem
+  anderen Konto gehört oder von anderen beschreibbar ist, und wenn in einem Journal eine Zeile
+  eines anderen Moduls steht. Ein solches Journal spielt das Modul nicht ein: Herkunft der
+  Zeile klären, erst dann die Zeile entfernen.
 - **Vollmachten sind ungültig.** Die Vollmachtsschlüssel liegen nicht in der Sicherung;
   Anmeldedienst und Module beenden die alten Sitzungen und Vollmachten. Die Personen erteilen
   ihre Vollmachten neu.

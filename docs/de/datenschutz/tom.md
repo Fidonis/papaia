@@ -49,6 +49,7 @@ Abnahmebericht der Version.
 |---|---|---|---|
 | Wiederherstellung auf einem zweiten Host nach Anleitung | PLT-35 | Betriebshandbuch | Plattform |
 | Löschungen und Kontosperren bleiben nach einer Wiederherstellung wirksam (Löschjournal am Sicherungsziel) | PLT-66 | [Kontolebenszyklus](../../lifecycle.md#the-erasure-journal-identity) | Plattform |
+| Jedes Modul erreicht am Sicherungsziel nur sein eigenes Löschjournal; `doctor erasure_journal` prüft Einhängungen und Dateien | PLT-66 | [Wiederherstellung](../wiederherstellung.md#was-nach-dem-zurückspielen-geschieht) | Plattform |
 | Wiederherstellung regelmäßig üben | PLT-35 | Betriebshandbuch | Betreiber |
 
 ## Überprüfung
