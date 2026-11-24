@@ -440,7 +440,9 @@ Because rendering happens on **every** `start`, new templates, new add-on fragme
 edits under `overlay/` are rendered into the configuration directory automatically. A
 container that is already running keeps the file it was created with (most targets are
 bind-mounted single files, and a render replaces the file), so an edit takes effect once the
-service is recreated: `papaia-ctl stop --clean-up --profiles=<profile>` followed by `start`.
+service is recreated. `start` does that itself for LiteLLM (see
+[LocalAI models in LiteLLM](#localai-models-in-litellm)); for another service run
+`papaia-ctl stop --clean-up --profiles=<profile>` followed by `start`.
 To move the installation to a newer
 release, use [`upgrade`](#upgrade) rather than `git pull` — it also runs the migrations
 the release ships with.
@@ -815,7 +817,7 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `stop` | Stops the add-on's containers. `--clean-up` removes them; volumes are kept. |
 | `remove` | Deactivates the add-on (`active: false`) and drops its integration fragments from the render. The config bundle and its secrets are **kept**, so `install` can reactivate it later. Refused while another active add-on lists it under `requires.addons`; `--force` proceeds with a warning. |
 | `run` | Runs a maintenance action the add-on declares under `actions:` — `docker compose run --rm <service> <args>` in the add-on's project, with the files and env of `addon start` — and exits with the action's code. Only declared actions with their fixed arguments run; without an action, lists the declared ones (`--json` for tools). Single host only. |
-| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. |
+| `uninstall` | Deletes the add-on's entry from `deployment.yaml` entirely. `--clean-up` also removes its volumes, and first runs the clean-up action the add-on marks with `on_uninstall: true` under `actions:` (for data it wrote outside its own volumes, such as records in other add-ons). This includes an add-on that `remove` deactivated: the action then runs with the add-on's generated overrides, such as its `join_addons` networks, as if it were active. A failing clean-up action stops the uninstall before anything is removed (exit 3), so it can be fixed and retried. Like `run`, the clean-up action needs a single host: a distributed installation refuses to uninstall an add-on that declares one (exit 2). Refused, before anything is taken down, while another active add-on requires it. `--force` proceeds past each of these with a warning. LibreChat agents and prompts the add-on contributed are removed from the running LibreChat right away (see below). |
 | `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). |
 
@@ -832,6 +834,15 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 
 After `addon install`, `addon upgrade`, `addon rollback` or `addon remove`, run
 `tools/papaia-ctl start` to apply the changed core configuration.
+
+When `addon remove` or `addon uninstall` takes away an add-on that contributed LibreChat
+agents or prompts, the command runs LibreChat's agent and prompt provisioning once in a
+one-off container, so they disappear from the chat while LibreChat keeps running. When
+LibreChat is not running, its next start removes them; in a distributed installation, or
+when the one-off run fails, the command says to run `tools/papaia-ctl start`, which
+recreates LibreChat with the new content. The provisioning scripts log what they cannot
+do (lines starting with `[agents-init]` or `[prompts-init]`, for instance when MongoDB is
+not reachable) but never fail the command, so look there when an agent is still listed.
 
 #### Upgrading an add-on
 
@@ -996,7 +1007,7 @@ raw values behind its summary in `details`.
 | `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
 | `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
 | `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, for the native runtime, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
-| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`), the installed binary is the release the checkout pins and, on the Mac, the state of its launchd job (`launchctl print`). | `warn` when it does not answer, is not installed or is another version, when the job is loaded but LocalAI does not answer, or when the job is not loaded although the stack runs; never `fail`; `skip` for the container runtime and while the stack and the job are both stopped |
+| `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`), the installed binary is the release the checkout pins and, on the Mac, the state of its launchd job (`launchctl print`). | `warn` when it does not answer, is not installed or is another version, when the job is loaded but LocalAI does not answer, when the job is not loaded although the stack runs, or when the job is still loaded although LocalAI is switched off or runs in its container; never `fail`; `skip` for the container runtime and while LocalAI is off (unless the job is still loaded) and while the stack and the job are both stopped |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
 | `dns` | The public hostnames in the configuration resolve from this host. Local names and IP addresses are not looked up. | `warn` if a name does not resolve, `skip` if the resolver cannot be reached |
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
@@ -1083,8 +1094,8 @@ for every `.env` file:
 
 | Moment | What happens |
 |---|---|
-| First `setup` | Seeds one `.env` per service directory from the shipped `src/**/.env.example`, plus `deployment.yaml`. Existing files are left alone unless `--force`. |
-| Every `setup` | Resolves all values, fills `GENERATE_*` secrets, and writes each `.env` to **both** the config directory and the checkout. |
+| First `setup` | Starts from the shipped `src/**/.env.example` and creates one `.env` per service directory, plus `deployment.yaml`. What a root `.env` prepared by hand sets (`PAPAIA_WORKSPACE_DIR`, a port, a URL) is kept; a service URL that still has the template's value is derived from the server URL. |
+| Every `setup` | Resolves all values and fills `GENERATE_*` secrets, checks them, and only then writes each `.env` to **both** the config directory and the checkout, the root `.env` last. A `setup` refused by these checks writes nothing. |
 | Every `start` | Copies the config directory's `.env` files into the checkout. A clean checkout — or a manually deleted `src/.env` — can therefore never start the stack with stale values. |
 | `addon start` | Copies `addons/<name>/.env` from the config directory into the add-on's own directory. |
 
@@ -1121,8 +1132,9 @@ Render targets: `ai/librechat/librechat.yaml` · `ai/litellm/config.yaml` +
 
 The same pass also bakes the Keycloak realm (substituting secrets into
 `realm-import/papaia-realm.json`) and regenerates the Compose overrides in `overrides/` — one
-per active add-on, attaching the core containers to that add-on's isolated bridge network.
-With no add-ons installed, no override files are produced.
+per active add-on, attaching the core containers to that add-on's isolated bridge network, and
+`docker-compose.litellm-config.override.yml`, which labels LiteLLM with a hash of its rendered
+configuration so that `start` recreates it when the configuration changes.
 
 **Directory layout of `$PAPAIA_CONFIG_DIR`** — it mirrors `src/`:
 
@@ -1139,7 +1151,7 @@ ${PAPAIA_CONFIG_DIR}/
 │                           #   tiles.yaml · jobs/ · audit.log
 ├── addons/<name>/.env      # per-add-on secrets
 ├── overlay/                # customer config overrides (highest merge layer)
-└── overrides/              # auto-generated add-on network overrides
+└── overrides/              # auto-generated Compose overrides
 ```
 
 To customise a rendered config, drop your changes into `overlay/` — mirroring the target's
@@ -1526,8 +1538,10 @@ tools/papaia-ctl setup \
 
 `--oidc-issuer` is mandatory the first time you switch, if you are running non-interactively.
 `setup` derives all OIDC endpoints from the issuer URL (RFC 8414 layout), drops the `keycloak`
-profile, and clears `SSL_CERT_FILE` for LiteLLM, oauth2-proxy, and LocalAI so they validate
-the issuer against the system CA bundle instead of the bundled self-signed CA.
+profile, and clears `SSL_CERT_FILE` for oauth2-proxy, LocalAI, papaia-manager, the RAG
+services and the knowledge map so they validate the issuer against the system CA bundle
+instead of the bundled self-signed CA. LiteLLM builds its own bundle from the public roots
+and adds `certs/local-ca.crt` only when that file exists.
 
 Client secrets cannot be generated for an issuer papAIa does not control, so each one is
 written as the literal placeholder `REPLACE_WITH_VALID_SECRET`. `setup` prints the full list.
@@ -1823,13 +1837,15 @@ mkdir -p "$PAPAIA_CONFIG_DIR/overlay/ai/localai"
 cp src/ai/localai/models.txt "$PAPAIA_CONFIG_DIR/overlay/ai/localai/models.txt"
 # uncomment e.g. the Qwen2.5-1.5B and nomic-embed-text lines, then
 tools/papaia-ctl start
-docker restart papaia-litellm-1   # the container name of your project
 ```
 
-`start` renders the new `model_list`, but LiteLLM reads its configuration only when it starts,
-and a running LiteLLM is not recreated for a changed configuration file. Restart it after every
-change of the list (and after any other edit of the LiteLLM overlay), as above; until then it
-lists the models it had.
+`start` renders the new `model_list`. LiteLLM reads its configuration only when it starts, so
+the rendered file's hash is a label of the `litellm` service
+(`overrides/docker-compose.litellm-config.override.yml`): `start` recreates LiteLLM whenever the
+configuration changed, after any other edit of the LiteLLM overlay too, and leaves it running
+when nothing changed (except on Docker Desktop, where `start` recreates every container). A
+`start --profiles=LIST` without `litellm` does not touch LiteLLM; the next `start` that includes
+it does.
 
 The shipped YAMLs cover every line of the list. For a model of your own, put its YAML (named
 `<name>.yaml` after its `name`, which is how LocalAI finds it on the first request) in
@@ -1838,6 +1854,14 @@ the `*.yaml` files at the top of that directory are used, as the init job copies
 other files there (a `.yml`, a dotfile) are ignored. Runtime settings such as `context_size`,
 `threads` and `f16` are top-level keys of a model YAML; LocalAI ignores them under `parameters`.
 An entry of the LiteLLM overlay with the same `model_name` replaces the generated one.
+
+A YAML you delete from the overlay leaves the rendered directory on the next render. The next
+`start` removes it from LocalAI's models directory and recreates LocalAI, which would list the
+model until then (restart a [native LocalAI](#native-localai-on-apple-silicon) yourself). Only
+YAMLs that papAIa wrote are removed: the render records its files in `ai/localai/.rendered-models`,
+the init job in `.papaia-model-configs.txt` in the models directory. Downloaded model files, models
+from LocalAI's gallery and YAMLs you put into the rendered directory by hand stay, as do YAMLs
+installed by a release without these records; delete those by hand.
 
 LiteLLM authenticates with `LOCALAI_API_KEY`, which `setup` generates in `ai/localai/.env` and
 copies to `ai/litellm/.env`; an existing installation receives it on the next `start`. A key
@@ -2033,8 +2057,11 @@ Interactively, `setup` asks on such a Mac (default *native*). What changes with 
   removes the override. It works on any host, also on a Mac whose Docker Desktop is not
   running and with a configuration restored on another machine. `setup` unloads and disables
   the launchd job and removes its plist, so the job neither keeps `LOCALAI_EXT_PORT` nor comes
-  back at the next login; where `setup` cannot reach launchd (papaia-manager), the next
-  `start` on the Mac does it before the container starts. `bin/`, `run-localai` and the
+  back at the next login. The same happens when LocalAI is switched off
+  (`--enable-local-ai=false`); the message names which of the two it was. Where `setup`
+  cannot reach launchd (papaia-manager), it warns: the next `start` on the Mac removes the
+  job before the container starts, `stop` there unloads it, and until then `doctor` on the
+  Mac reports it. `bin/`, `run-localai` and the
   models stay for a later switch back (`uninstall` removes them). The seeded model list
   stays, and models in the old `localai-models` volume are not moved in either direction.
 - An interactive `setup` on a host that can never run the native process (no Apple Silicon or
@@ -2180,7 +2207,7 @@ Common failure modes — OIDC redirect mismatches, cookie loops behind oauth2-pr
 └── papaia-config/             ← PAPAIA_CONFIG_DIR (generated, never committed)
     ├── deployment.yaml         # installation manifest
     ├── overlay/                # customer config overrides (highest merge layer)
-    └── overrides/              # auto-generated add-on network overrides
+    └── overrides/              # auto-generated Compose overrides
 ```
 
 ---

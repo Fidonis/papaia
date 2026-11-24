@@ -30,12 +30,14 @@ Apple GPU with the same engine, the same model list and the same LiteLLM registr
 (Fidonis/papaia#365) as the container on Linux.
 
 Measured on an M4 Max (128 GB, macOS 27.2) with Docker Desktop (Docker Engine 29.8.2) and
-Compose 5.6.0, the Docker VM at 8 GB, LocalAI v4.7.1 (Fidonis/papaia#366):
+Compose 5.6.0, the Docker VM at 8 GB, first with LocalAI v4.7.1 (Fidonis/papaia#366), then
+again with v4.12.1, the release the stack pins, installed and started by `papaia-ctl` through
+launchd (Fidonis/papaia#401):
 
-| | native (Metal) | CPU container in the VM |
-|---|---|---|
-| Chat, Qwen2.5-7B-Instruct Q5_K_M | 57.6 tokens/s | killed by the VM's OOM killer while loading the model next to the stack |
-| Embeddings, nomic-embed-text v1.5 Q8_0 | about 0.44 s per paragraph (same on CPU and Metal) | about ten times faster |
+| | native (Metal), v4.7.1 | native (Metal), v4.12.1 through LiteLLM | CPU container in the VM |
+|---|---|---|---|
+| Chat, Qwen2.5-7B-Instruct Q5_K_M | 57.6 tokens/s | 61.2 tokens/s | killed by the VM's OOM killer while loading the model next to the stack |
+| Embeddings, nomic-embed-text v1.5 Q8_0 | about 0.44 s per paragraph (same on CPU and Metal) | about 0.38 s per paragraph | about ten times faster |
 
 Also checked on that Mac:
 
@@ -47,15 +49,19 @@ Also checked on that Mac:
 - the darwin binary does **not start with `LOCALAI_AUTH=true`** ("SQLite auth database
   requires building with -tags auth (CGO)"). Without it, `LOCALAI_API_KEY` still protects
   `/v1`, `/api` and `/metrics`, and `/readyz` needs no key;
-- LocalAI writes `data/` and `configuration/` into its working directory.
+- LocalAI writes `data/` and `configuration/` into its working directory, and from v4.12 also
+  `cache/` (gallery index and VRAM estimates) and `downloading/`;
+- LocalAI pulls its Metal backend as an OCI image and reads registry credentials Docker's way.
+  Started by launchd, it found the `osxkeychain` helper that Docker Desktop's
+  `~/.docker/config.json` names nowhere on the job's PATH, and ran without a backend while
+  `/readyz` answered. The start script therefore points `DOCKER_CONFIG` at an empty directory
+  below the LocalAI home; the backend images are public.
 
-All of these findings and numbers are from **LocalAI v4.7.1**. The native runtime installs the
-release that the `localai` image pins, which has since moved to v4.12.1. A re-check with that
-release on a Mac is pending: checksum and signature, the first start with the Metal backend,
-chat and embeddings through LiteLLM, the behaviour with `LOCALAI_AUTH=true` and the key on
-`/v1`, `/api`, `/metrics` and `/readyz`, where `data/` and `configuration/` are written, and the
-upgrade from an installed v4.7.1. Until then the list above describes v4.7.1 only, and any
-difference found updates it.
+The findings hold for **LocalAI v4.7.1 and v4.12.1** (re-checked in Fidonis/papaia#401): the
+v4.12.1 binary matches its checksum line and is notarised, the first start downloads the Metal
+backend (85 MB, about 5 s) and the second does not, all layers run on the GPU, `LOCALAI_AUTH=true`
+still stops the darwin binary, and the key protects `/v1`, `/api` and `/metrics` with
+`/readyz` open. `start` after a changed pin replaces the binary and restarts the job.
 
 The 16 GB baseline is **not measured**. The numbers come from a 128 GB Mac, and generation
 speed scales with memory bandwidth, so a base Mac is slower by an unknown factor. With the

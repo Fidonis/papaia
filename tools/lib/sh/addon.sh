@@ -324,7 +324,12 @@ cmd_addon_remove() {
     CONFIG_DIR="$config_dir"
     _require_setup_done
     _addon_refuse_while_required "$addon_name" "$force"
+    local chat_content=0
+    _addon_has_chat_content "$addon_name" && chat_content=1
     py_cli addon-remove --name="$addon_name"
+    if [ "$chat_content" -eq 1 ]; then
+        _librechat_sync_addon_content "$addon_name"
+    fi
     if declare -F _pki_sync >/dev/null; then
         _pki_sync || warn "The certificates of $addon_name stay until the next 'papaia-ctl pki renew'."
     fi
@@ -653,6 +658,90 @@ cmd_addon_list() {
     py_cli addon-list ${extra[@]+"${extra[@]}"}
 }
 
+# Runs the clean-up action an add-on marks with `on_uninstall: true` (addon_api 8), as
+# `docker compose run --rm <service> <args>` in its project like `addon run`, while the
+# add-on is still installed: it removes what the add-on wrote outside its own volumes,
+# for instance records in other add-ons, which `down -v` cannot reach. A failure stops
+# the uninstall before anything is removed (exit 3), so the action is still there to be
+# retried; with $3 = 1 (--force) it warns and the uninstall goes on. Like `addon run` it
+# needs a single host: a distributed installation is refused up front (exit 2), and
+# --force uninstalls without the action there too.
+# $1 add-on name, $2 add-on path, $3 1 for --force
+_addon_run_uninstall_action() {
+    local addon_name="$1" addon_path="$2" force="$3"
+    local spec_file
+    spec_file="$(mktemp)"
+    # Not a process substitution: py_cli's exit 2 (malformed actions) must stop here.
+    if ! py_cli addon-uninstall-action --name="$addon_name" > "$spec_file"; then
+        rm -f "$spec_file"
+        if [ "$force" -eq 1 ]; then
+            warn "--force: uninstalling $addon_name without its clean-up action."
+            return 0
+        fi
+        error "Cannot tell which clean-up action addon $addon_name declares. Nothing was removed."
+        error "Fix its manifest, or re-run with --force to uninstall it without the clean-up action."
+        exit 2
+    fi
+    local -a spec=()
+    local part
+    while IFS= read -r -d '' part; do
+        spec+=("$part")
+    done < "$spec_file"
+    rm -f "$spec_file"
+    [ "${#spec[@]}" -ge 2 ] || return 0
+    local action="${spec[0]}"
+    local mode
+    mode="$(_topology_mode 2>/dev/null)" || mode="unknown"
+    if [ "$mode" = "distributed" ]; then
+        if [ "$force" -eq 1 ]; then
+            warn "Addon $addon_name declares the clean-up action '$action', which a distributed installation cannot run."
+            warn "--force: uninstalling without it. What it would have removed stays where the add-on wrote it."
+            return 0
+        fi
+        error "Addon $addon_name declares the clean-up action '$action'. It runs as 'docker compose run' in the add-on's project, which a distributed installation cannot do. Nothing was removed."
+        error "--force uninstalls it without the clean-up action and leaves what the action would have removed where the add-on wrote it."
+        exit 2
+    fi
+    info "Running clean-up action '$action' of addon $addon_name (service ${spec[1]})..."
+    local rc=0
+    _addon_compose run "$addon_name" "$addon_path" --rm "${spec[@]:1}" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    if [ "$force" -eq 1 ]; then
+        warn "Clean-up action '$action' of addon $addon_name failed (exit status $rc)."
+        warn "--force: uninstalling anyway. What the action did not remove stays where the add-on wrote it."
+        return 0
+    fi
+    error "Clean-up action '$action' of addon $addon_name failed (exit status $rc). Nothing was removed."
+    # `addon run` refuses an add-on that `addon remove` deactivated; the uninstall itself
+    # runs the action again.
+    if _addon_is_active "$addon_name"; then
+        error "Fix the cause and run the uninstall again; 'papaia-ctl addon run $addon_name $action' retries the action alone."
+    else
+        error "Fix the cause and run the uninstall again, which runs the action first."
+    fi
+    error "--force uninstalls anyway and leaves what the action did not remove where the add-on wrote it."
+    exit 3
+}
+
+# Whether the add-on is registered and active (`addon remove` deactivates it). $1 name
+_addon_is_active() {
+    local name
+    while IFS= read -r name; do
+        [ "${name%$'\r'}" = "$1" ] && return 0
+    done < <(py_cli active-addons 2>/dev/null)
+    return 1
+}
+
+# Whether the add-on currently contributes LibreChat agents or prompts: the last render
+# put them into $CONFIG_DIR/ai/librechat/addon-{agents,prompts}/ as <addon>__<file>.
+_addon_has_chat_content() {
+    local dir
+    for dir in addon-agents addon-prompts; do
+        compgen -G "$CONFIG_DIR/ai/librechat/$dir/${1}__*" >/dev/null && return 0
+    done
+    return 1
+}
+
 cmd_addon_uninstall() {
     local config_dir="$DEFAULT_CONFIG_DIR" addon_name="" clean_up=0 force=0
     while [ $# -gt 0 ]; do
@@ -675,6 +764,13 @@ cmd_addon_uninstall() {
     _addon_refuse_while_required "$addon_name" "$force"
     local addon_path
     addon_path="$(_addon_path "$addon_name")"
+    # Only --clean-up deletes the add-on's own data. Without it the data stays for a
+    # later install, and so does what the add-on wrote elsewhere.
+    if [ "$clean_up" -eq 1 ]; then
+        _addon_run_uninstall_action "$addon_name" "$addon_path" "$force"
+    fi
+    local chat_content=0
+    _addon_has_chat_content "$addon_name" && chat_content=1
     info "Removing containers for addon $addon_name..."
     if [ "$clean_up" -eq 1 ]; then
         _addon_compose down "$addon_name" "$addon_path" -v
@@ -682,6 +778,9 @@ cmd_addon_uninstall() {
         _addon_compose down "$addon_name" "$addon_path"
     fi
     py_cli addon-uninstall --name="$addon_name"
+    if [ "$chat_content" -eq 1 ]; then
+        _librechat_sync_addon_content "$addon_name"
+    fi
     if declare -F _pki_sync >/dev/null; then
         _pki_sync || warn "The certificates of $addon_name stay until the next 'papaia-ctl pki renew'."
     fi

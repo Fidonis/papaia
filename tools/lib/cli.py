@@ -196,13 +196,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if isinstance(requested_topology, int):
         return requested_topology
 
-    fresh_init = not (config_dir / ".env").is_file()
-    # The native LocalAI lives below the workspace. Checked before the config directory is
-    # seeded or anything is written, so a refused run leaves neither LOCALAI_RUNTIME=native
-    # in the root .env nor, on a fresh config directory, template files a later setup would
-    # take for an existing installation. It needs only the requested or stored runtime, the
-    # stored PAPAIA_WORKSPACE_DIR and the checkout name.
-    stored_root = {} if fresh_init else common.parse_env_file(config_dir / ".env")
+    # The native LocalAI lives below the workspace. Checked first: it needs only the
+    # requested or stored runtime, the stored PAPAIA_WORKSPACE_DIR and the checkout name.
+    stored_root = common.parse_env_file(config_dir / ".env")
     wanted_runtime = args.localai_runtime or localai_native.runtime(stored_root)
     if wanted_runtime == localai_native.NATIVE:
         workspace = envtree.stamp_workspace_dir({"": dict(stored_root)}, repo_root)
@@ -211,10 +207,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         except localai_native.InstallError as exc:
             print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
             return 3
-    envtree.init(config_dir, repo_root, env_name=args.env, force=False)
 
-    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    # Nothing is written before the whole configuration is resolved and checked, so a
+    # refused setup has nothing to take back.
+    tree, set_up = envtree.load_setup_tree(
+        config_dir, repo_root, auth_provider=args.auth_provider
+    )
+    fresh_init = not set_up
     runtime_before = localai_native.runtime(tree.get("", {})) if not fresh_init else ""
+    native_before = not fresh_init and _native_wanted(tree.get("", {}))
     rag_was_enabled = "rag" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     smtp_was_enabled = "smtp" in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",")
     # Taken out of the environment so nothing started later inherits it. An empty
@@ -330,7 +331,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
     tree = envtree.stamp_docker_gid(tree)
     tree = envtree.stamp_host_uid_gid(tree)
-    envtree.persist_tree(tree, config_dir, repo_root)
+    # The first writes. The root .env goes last: until it is there, the next setup is still
+    # a first one and derives every URL again. The relay's password follows the revision
+    # that announces it, so a run cut short in between raises the revision once more
+    # instead of hiding the change from Compose.
+    envtree.init(config_dir, repo_root, env_name=args.env, env_files=False)
+    envtree.persist_tree(
+        tree,
+        config_dir,
+        repo_root,
+        before_root=lambda: resolve.store_smtp_password(setup_args),
+    )
     deployment.sync_manifest(config_dir, tree, repo_root)
     if requested_topology is not None:
         manifest = deployment.load(config_dir)
@@ -354,7 +365,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not _native_wanted(stored_root):
         # After a switch back to the container a job left from the native runtime would
         # hold the port until the next `stop` (quiet when there is none).
-        _retire_native_job(stored_root)
+        _retire_native_job(stored_root, was_native=native_before)
     if localai_native.runtime(tree.get("", {})) == localai_native.NATIVE and (
         runtime_before != localai_native.NATIVE
     ):
@@ -488,25 +499,46 @@ def _native_wanted(root: dict[str, str]) -> bool:
     )
 
 
-def _retire_native_job(root: dict[str, str]) -> bool:
+def _without_native(root: dict[str, str]) -> str:
+    """Why the native LocalAI is no longer wanted, for the messages about its job."""
+    if "localai" not in common.cluster_profiles(root):
+        return "LocalAI is switched off"
+    return "LocalAI runs in its container now"
+
+
+def _retire_native_job(root: dict[str, str], *, was_native: bool = False) -> bool:
     """Unload and disable a launchd job the native LocalAI no longer needs, and remove its
     plist, so it neither keeps LOCALAI_EXT_PORT nor comes back at the next login. For
     `start` and `setup` after the runtime went back to the container (or LocalAI was
     switched off); `stop` handles the same case through localai-native-stop. Messages on
     stderr, so the KEY=VALUE output of the install step stays clean. False when a job is
-    left behind."""
+    left behind.
+
+    `was_native`: this run is the one that ended the native runtime (`setup`). Inside a
+    container (papaia-manager) the plist below the Mac user's home is out of sight, so
+    whether a job is left cannot be told there; the switch itself is what warns."""
+    reason = _without_native(root)
     try:
         label = localai_native.label_for(root)
     except localai_native.LaunchdError:
         return True
     plist = localai_native.plist_path(label)
     if not plist.is_file():
+        if was_native and common.in_container():
+            print(
+                f"WARNING: {reason}, but the launchd job of the native LocalAI on the Mac"
+                " cannot be removed from inside a container and may still hold port"
+                f" {localai_native.port(root)}. Run 'papaia-ctl stop' on the Mac;"
+                " 'papaia-ctl doctor' there reports a job that is still loaded.",
+                file=sys.stderr,
+            )
+            return False
         return True
     available, why = localai_native.launchd_host()
     if not available:
         print(
-            f"WARNING: the launchd job of the native LocalAI ({plist}) is still installed and"
-            f" cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
+            f"WARNING: {reason}, but the launchd job of the native LocalAI ({plist}) is still"
+            f" installed and cannot be removed here: {why}. Run 'papaia-ctl stop' on the Mac.",
             file=sys.stderr,
         )
         return False
@@ -521,11 +553,7 @@ def _retire_native_job(root: dict[str, str]) -> bool:
         )
         return False
     plist.unlink(missing_ok=True)
-    print(
-        f"Removed the launchd job of the native LocalAI ({label}): LocalAI runs in its"
-        " container now.",
-        file=sys.stderr,
-    )
+    print(f"Removed the launchd job of the native LocalAI ({label}): {reason}.", file=sys.stderr)
     return True
 
 
@@ -1730,6 +1758,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_addon_actions.add_argument("--name", required=True)
     p_addon_actions.add_argument("--json", action="store_true")
     p_addon_actions.set_defaults(func=cli_addon.cmd_addon_actions)
+
+    p_addon_uninstall_action = sub.add_parser("addon-uninstall-action")
+    p_addon_uninstall_action.add_argument("--name", required=True)
+    p_addon_uninstall_action.set_defaults(func=cli_addon.cmd_addon_uninstall_action)
 
     p_addon_dependents = sub.add_parser("addon-dependents")
     p_addon_dependents.add_argument("--name", required=True)

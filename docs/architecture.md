@@ -278,6 +278,21 @@ actions:                           # optional (addon_api 4): maintenance actions
     description: "Restore the initial data"  # service a compose profile (e.g.
                                    # `profiles: [actions]`) so `addon start` skips it.
     destructive: true              # optional: callers (papaia-manager) confirm first
+  purge:
+    service: maintenance
+    args: ["purge"]
+    description: "Remove the records this add-on wrote into other add-ons"
+    on_uninstall: true             # optional (addon_api 8), at most one action: run
+                                   # by `addon uninstall --clean-up` before the add-on's
+                                   # containers and volumes are removed. For data the
+                                   # add-on wrote outside its own volumes. A non-zero
+                                   # exit stops the uninstall before anything is removed;
+                                   # `--force` goes on with a warning. Plain `uninstall`
+                                   # (data kept) does not run it. After `addon remove` it
+                                   # still runs with the add-on's join_addons and ssl-cert
+                                   # overrides. Single host only: a distributed
+                                   # installation refuses (exit 2) unless `--force`.
+                                   # Older cores ignore it.
 
 install_notes:                     # optional: further numbered steps in the checklist,
                                    # a list or a single string; display only
@@ -299,6 +314,16 @@ knowledge:                         # optional (addon_api 6): the knowledge sourc
         classification: internal   # the operator decides in governance.yaml (ADR 0016)
         personal_data: ordinary
         data_subjects: [employees]
+
+exposes:                           # optional (addon_api 7): what this add-on offers
+  - id: <name>.mcp                 # other modules, for the platform services catalogue
+    kind: mcp                      # (ADR 0017): mcp | rest | llm_api | task_feed |
+    title: {de: "...", en: "..."}  # flow_provider. Older cores ignore the key.
+    url: http://<name>-mcp:8000/mcp
+    auth: oidc_bearer              # oidc_bearer (needs audience) | own_oauth | none
+    audience: mcp-<name>
+    max_class: internal            # highest data class the service may receive
+    consumable: true               # false needs `reason`; own_oauth is never consumable
 ```
 
 #### `.env.example` value markers
@@ -518,7 +543,14 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
 
 - **Tombstones:** An agent or prompt whose add-on no longer provides it is deleted,
   together with its access entries and project links. Agents and prompts created in
-  the UI or from the operator directories are never touched.
+  the UI or from the operator directories are never touched. `addon remove` and
+  `addon uninstall` of an add-on with agents or prompts run both init scripts once in a
+  one-off `librechat` container (`compose run --no-deps`, the compose files of `start`),
+  so its agents and prompts disappear without restarting LibreChat. Not the running
+  container: the render replaced the content directories, and the running container
+  still mounts the old, now empty one, which would read as "no add-on content" and
+  delete the agents of every other add-on. While LibreChat is down, and in a distributed
+  installation, its next start does it.
 - **Validation at render:** An agent that names an MCP server the rendered
   `librechat.yaml` does not define is skipped with a warning, because it would
   appear without its tools. So is a file that is not valid UTF-8 or YAML, or whose
@@ -540,6 +572,31 @@ the content changes, the add-on is removed included. On start, `agents-init.js` 
 - **Known limitation:** A distributed installation does not ship the override or
   the two directories to a node bundle, so add-on agents and prompts are not
   provisioned there (Fidonis/papaia#368).
+
+### Platform services catalogue (addon_api 7)
+
+What the core modules and add-ons offer other modules is rendered into
+`$PAPAIA_CONFIG_DIR/platform/services.json`, format `papaia.platform-services/1`
+(ADR 0017, schema `tools/schemas/platform-services.schema.json`). Consumers such as
+papaia Studio and papaia-work mount it read-only and read their MCP servers and APIs
+from it instead of from another product's configuration.
+
+- **Declarations:** core modules in an `exposes.yaml` next to their compose file
+  (`src/ai/mcp-firecrawl`, `src/ai/rag`, `src/ai/knowledge-map`; the latter two only
+  while their profile is active), add-ons under the manifest key `exposes:`.
+- **Rendered on every render** (`setup`, `start`, add-on install, upgrade, removal),
+  atomically, sorted by id, with `addon` (`core` or the add-on's name), `version`
+  and, for core modules, `profile`. A `digest` covers the services; `generated_at`
+  stays while the digest does not change, so a render without changes leaves the file
+  byte-identical.
+- **Checks:** ids are unique across the core and all add-ons; `oidc_bearer` needs an
+  `audience`; `own_oauth` is never `consumable`; `consumable: false` needs a `reason`.
+  `addon install` refuses an add-on whose entries fail these checks, and a render with
+  invalid entries stops with a named error.
+- **Nothing granted:** the file holds no secrets. An entry is an offer; each consumer
+  decides whether and how to connect it, with its own approval.
+- **Independent of LibreChat:** LibreChat keeps its own configuration (Seam 3); the
+  catalogue neither reads nor changes it.
 
 ### Seam 4 — Ingress (optional)
 
@@ -585,7 +642,7 @@ No Core changes required.
 | `papaia-ctl addon stop <name> --clean-up` | `docker compose down` (remove containers, keep volumes) |
 | `papaia-ctl addon remove <name>` | Remove override → re-render Core → `active: false` in manifest. **Containers untouched, config bundle kept.** |
 | `papaia-ctl addon uninstall <name>` | Remove override + deployment entry → delete config bundle → `docker compose down` |
-| `papaia-ctl addon uninstall <name> --clean-up` | Like `uninstall` + `docker compose down -v` (also delete volumes) |
+| `papaia-ctl addon uninstall <name> --clean-up` | Run the action marked `on_uninstall: true` (if any, also after `remove`, with the add-on's overrides; a failure, or a distributed installation, stops here unless `--force`) → like `uninstall` + `docker compose down -v` (also delete volumes) |
 
 The Compose calls above run with `-p <addon directory name>`, the add-on's `docker-compose.yml` and the
 core `.env`. When that file is missing (a deleted or half-written add-on directory), Compose cannot build
@@ -700,7 +757,7 @@ git-pristine; the source of truth lives in the config directory.
     ├── manager/                         # papaia-manager state: catalogs · installed · tiles · jobs
     ├── certs/                           # GENERATED local CA + Keycloak server certificate
     ├── migrations/applied.json          # Which release migrations have run
-    ├── overrides/                       # GENERATED docker-compose.<addon>.override.yml
+    ├── overrides/                       # GENERATED docker-compose.<name>.override.yml
     └── overlay/                         # Customer overlay (hand-authored, survives re-render)
         └── ai/librechat/librechat.yaml
 ```
@@ -1046,7 +1103,10 @@ render stops before `docker compose up`, so a running stack is not touched.
 **Applying an overlay means recreating the services that read it.** A render replaces each
 target with a new file, and most targets are bind-mounted single files, so a running
 container keeps the one it was created with. `papaia-ctl stop --clean-up --profiles=<profile>`
-followed by `start` recreates the group; a restart is not enough.
+followed by `start` recreates the group; a restart is not enough. LiteLLM needs no `stop`: every
+render labels it with a hash of its configuration
+(`overrides/docker-compose.litellm-config.override.yml`), so a `start` that includes the
+`litellm` profile recreates it when that configuration changed.
 
 **Previewing a draft.** `python3 -m lib.cli --repo-root R --config-dir C render-preview
 --target=<path> --overlay-file=<file>` merges a draft overlay onto the same layers `render`
@@ -1068,6 +1128,13 @@ endpoints:
       models:
         default: ["gpt-4o"]
 ```
+
+Conversation titles of chats and agents on this endpoint follow LibreChat's default
+title prompt, which produces English titles. The shipped `Private-LLM` endpoint sets
+a `titlePrompt` that asks for the title in the user's language; copy it from
+`src/ai/librechat/librechat.yaml` into the new endpoint to get the same. Leave
+`endpoints.all` unset: when it is set, LibreChat takes the title settings of every
+endpoint from it and ignores the per-endpoint ones.
 
 **Enable the LibreChat memory agent** (`overlay/ai/librechat/librechat.yaml`). The
 base config ships no memory model, and automatic extraction is opt-in. The overlay

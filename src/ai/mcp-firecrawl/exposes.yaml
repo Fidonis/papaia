@@ -1,0 +1,17 @@
+# What this module offers to other modules: entries of the platform services catalogue
+# (papaia.platform-services/1), rendered into $PAPAIA_CONFIG_DIR/platform/services.json.
+# Part of every installation. See docs/architecture.md, "Platform services catalogue".
+exposes:
+  - id: firecrawl.web
+    kind: mcp
+    title:
+      de: "Web-Crawler"
+      en: "Web crawler"
+    description:
+      de: "Webseiten abrufen und durchsuchen"
+      en: "Fetch and search web pages"
+    url: http://mcp-firecrawl:3000/mcp
+    auth: none
+    # Requests go out to the internet, so only public content may be sent along.
+    max_class: public
+    consumable: true
