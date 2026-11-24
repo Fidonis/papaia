@@ -120,10 +120,56 @@ checked the case enables the account again; the service does not disable it a se
 
 `person run` prints one line per row of the records of processing (every `exposes` entry with
 `personal_data: true`): `included`, or `not included` with the reason. A row is never left
-out. Core services that keep personal data without a module contract (chat, model gateway,
-identity service, `papaia-lifecycle`, `papaia-audit`) are listed as not included while
-their path for one person is not part of this version; the audit trail is kept on erasure
-as evidence.
+out. Chat, model gateway and identity provider are included through the core paths
+([below](#the-core-services)); `papaia-lifecycle` (its tombstone stays as long as the
+erasure journal), `papaia-audit` (the audit trail is kept on erasure as evidence) and the
+contents of uploaded chat files are listed as not included, with the reason.
+
+## The core services
+
+Chat, model gateway and identity provider keep personal data without a module contract.
+The core brings one export and one erasure path for each; the operator never reaches into
+a database. Each path runs where its service runs, through `docker exec`:
+
+| Service | Export | Erasure | Path |
+|---|---|---|---|
+| Chat (`core-chat`) | the chat accounts whose OIDC id is the `sub` (name, user name, mail, provider, times), conversations, messages, file records, presets, prompts, shared links, tags, tool calls, memories, balances and transactions | all of these, plus stored keys, plugin settings, tokens and sessions, then the accounts | a `mongosh` script in the chat database container. It creates a role and a login for this one call (read only for an export, find and remove for an erasure, on the chat's collections only), signs in with it and drops both before it ends. The password is made for the call and lives only in memory and on the script's standard input |
+| Model gateway (`model-gateway`) | the usage sum (`spend`) of every end user that is the `sub`, a chat account id of the person or her mail address | those end users | the gateway's management API inside its container: `GET /customer/info`, `POST /customer/delete` (the gateway's per-request spend-log rows are not touched; they keep counts, never content, see [model-gateway.md](model-gateway.md)) |
+| Identity provider (`identity`) | the account (user name, name, mail, attributes, state, creation), groups, realm roles, linked upstream identities, consents (no tokens), stored sign-in events (time, type, client, address) | the account, last | `papaia-lifecycle`'s command `person` as `svc-papaia-lifecycle`, the one account that may end sessions and delete persons; no other account gets these rights |
+
+Stored keys, plugin settings, tokens and sessions of the chat are sign-in material, not data
+about the person: they are erased, never exported. A `sub` that cannot be an id of the
+identity provider has no account there.
+
+**Order of an erasure.** First the account is disabled and its sessions and consents end
+(`person.identity_revoke`); then the transfers, the modules, the chat and the gateway; the
+core writes the journal entries `core-chat` and `model-gateway` (`erase_subject`,
+`object_ref` `person_request:<request>`, the person as `subject_ref` only); the account is
+deleted last (`person.identity_delete`). The running `papaia-lifecycle` journals the
+deactivation and the deletion in `identity` from their admin events and keeps the
+tombstone. When any step before fails, the account is not deleted: it stays disabled, the
+request ends `partial`, and the `sub` stays assigned for a new request. A failed transfer
+stops every erasure, in the core as in the modules.
+
+**Reconciliation (governance GV-30 for the core services).** After an erasure the core
+asks chat, gateway and identity provider once more for anything that still names the
+person: chat documents filed under her accounts, chat accounts with her `sub` or mail
+address, gateway end users with her `sub`, account id or mail, her account. The output
+names the place and the number, never content (`left core-chat/chat_messages: 2`). Every
+find, and every service that cannot be asked, makes the request `partial`. One audit row
+`person.reconcile` with the number of finds.
+
+**Audit.** Every call of a core path is one row with the request id as the correlation id:
+`person.export` (`detail.bytes`), `person.identity_revoke` and `person.identity_delete`
+(`detail.count`), one `person.erase` row per chat collection or gateway kind
+(`detail.objects`, `count`, the journal `kind` and `seq`), and `person.reconcile`. A failed
+call is a row with `result: error` and a code (`backend_failed`, `not_running`,
+`invalid_answer`, `journal_failed`).
+
+**Content in the gateway.** `doctor model_gateway_content` fails when the rendered gateway
+configuration would keep request or response content (prompts in the spend logs, message
+logging, a logging callback, a response cache, the log level `DEBUG`): the usage the core
+exports and erases must not hold any.
 
 ## The module side (contract generation 15)
 
@@ -222,10 +268,11 @@ the entries the modules wrote here are applied again (see
 
 - The manager page that lists and confirms requests and shows the passphrase; until it is
   there, the manager calls the routes above.
-- The paths of the core services (chat, model gateway, identity service with the deletion of
-  the account last, `papaia-lifecycle`, the pseudonymous extract of the audit trail); they
+- The pseudonymous extract of the audit trail and the entries of `papaia-lifecycle`; they
   are listed as not included.
-- The check after erasure that no trace of the `sub` is left outside the listed retention
-  duties.
+- The contents of uploaded chat files on the chat's file volume and the chat's search
+  index (the file records are erased); listed as not included.
+- The reconciliation over every volume, log and backup (governance GV-30 in full); the
+  reconciliation after an erasure covers the core services.
 - A central deletion lock in the core; modules report their own (`legal_hold`).
 - Distributed installations.

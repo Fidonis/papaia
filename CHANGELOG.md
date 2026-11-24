@@ -12,6 +12,21 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Information and erasure in chat, model gateway and identity provider
+
+- `papaia-ctl person run` now covers the core services: the chat by the person's `sub`
+  (a login of the chat database made for the one call and dropped after it), the model
+  gateway's usage by `sub`, chat account or mail, and the identity provider's account,
+  groups, roles, consents and sign-in events through `svc-papaia-lifecycle`, whose purpose
+  now names this; no further account gets `manage-users`.
+- An erasure disables the account and ends its sessions first and deletes it last; when a
+  step fails the account stays disabled and the request ends `partial`. The core writes the
+  journal entries `core-chat` and `model-gateway`, and reconciles afterwards: every place
+  that still names the person by `sub`, chat account or mail is listed with its count and
+  makes the request `partial`.
+- New `doctor model_gateway_content`: `fail` when the model gateway would keep request or
+  response content.
+
 ### German operator handbook
 
 - `docs/de/betrieb/handbuch.md` is the entry of the German operator handbook. New chapters:

@@ -125,6 +125,9 @@ _ADMIN_PATHS = (
     ("POST", "/key/delete"),
     ("GET", "/key/list?"),
     ("GET", "/health/readiness"),
+    # Usage per end user, for `papaia-ctl person export|erase` (lib/person_core.py).
+    ("GET", "/customer/info?"),
+    ("POST", "/customer/delete"),
 )
 
 # Runs inside the LiteLLM container with `python -I -c`; the request comes in on stdin

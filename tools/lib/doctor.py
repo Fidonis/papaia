@@ -3830,6 +3830,60 @@ def check_model_ready(ctx: Context) -> CheckResult:
     return CheckResult(name, FAIL, f"{model} does not answer (HTTP {code})", details)
 
 
+
+def check_model_gateway_content_file(config_dir: Path) -> CheckResult:
+    """The rendered gateway configuration keeps no request or response content
+    (`doctor model_gateway_content`, security 1.14 no. 2a, PLT-67, RE-100): prompts out of
+    the usage logs, message logging off, no logging callback, no response cache, no
+    payload log level. `fail` when the gateway would keep content."""
+    import copy
+
+    import yaml
+
+    name = "model_gateway_content"
+    if "litellm" not in common.cluster_profiles(common.parse_env_file(config_dir / ".env")):
+        return CheckResult(name, SKIP, "the model gateway is not part of this installation")
+    path = config_dir / "ai" / "litellm" / "config.yaml"
+    try:
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        config = None
+    if not isinstance(config, dict):
+        return CheckResult(
+            name, FAIL,
+            f"{path} cannot be read: whether the model gateway keeps request content is "
+            "unknown; run 'papaia-ctl start' to render it",
+        )
+    missing = [
+        f"{section}.{key}: {str(value).lower()}"
+        for section, key, value in model_gateway.NO_CONTENT_SETTINGS
+        if not isinstance(config.get(section), dict) or config[section].get(key) is not value
+    ]
+    if missing:
+        return CheckResult(
+            name, FAIL,
+            "the model gateway keeps request or response content in its usage logs; set "
+            + ", ".join(missing) + " (docs/model-gateway.md)",
+            {"settings": missing},
+        )
+    try:
+        model_gateway._check_no_contents(copy.deepcopy(config))
+        model_gateway.check_gateway_env(
+            common.parse_env_file(config_dir / "ai" / "litellm" / ".env")
+        )
+    except model_gateway.ModelGatewayError as exc:
+        return CheckResult(name, FAIL, f"request content would be kept: {exc}")
+    return CheckResult(
+        name, PASS, "the model gateway keeps no request or response content (usage only)"
+    )
+
+
+def check_model_gateway_content(ctx: Context) -> CheckResult:
+    if not ctx.configured:
+        return _not_set_up("model_gateway_content")
+    return check_model_gateway_content_file(ctx.config_dir)
+
+
 # ─── halt ────────────────────────────────────────────────────────────────
 
 
@@ -3946,6 +4000,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("container_health", check_container_health),
     ("model_gateway", check_model_gateway),
     ("model_ready", check_model_ready),
+    ("model_gateway_content", check_model_gateway_content),
     ("modules", check_modules),
     ("revocations_age", check_revocations_age),
     ("image_signatures", check_image_signatures),

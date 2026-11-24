@@ -483,12 +483,25 @@ While the profile is active, `papaia-ctl realm sync` (also run by every `start`)
 | Admin events | stored (`adminEventsEnabled`), without representations, kept 7 days (realm attribute `adminEventsExpiration` = 604800; a retention the operator set is kept, none or 0 is replaced). They name actor, address and resource path; the lasting record is papaia-audit |
 | User events | stored (`eventsEnabled`) at least for `UPDATE_PASSWORD`, `REMOVE_CREDENTIAL`, `LOGOUT` and `LOGIN` (the alert on the emergency account); types already stored stay. Without a retention set, kept 180 days (`eventsExpiration`). Keycloak has one retention for all user events of a realm, and the sign-ins of service accounts (`CLIENT_LOGIN`, the last use of a service account) are kept that long, two rotation intervals, so the person events share it. They name account, client, address and session; the service reads type, account, time and the id of a removed credential only and needs them only until its next poll plus an outage buffer. If the evaluation of service sign-ins allows it, set a shorter `eventsExpiration`; a retention the operator set is kept. Record the retention in the records of processing |
 
+**Purpose.** Account lifecycle, revocation, and information and erasure in a confirmed
+request (`papaia.purpose` of the client). For `papaia-ctl person run`
+([person-requests.md](person-requests.md#the-core-services)) the host calls the service's
+command `person` through `docker exec`, one JSON object `{operation, sub}` on stdin:
+`export` (account, groups, realm roles, linked upstream identities, consents, stored
+sign-in events of the person; never credentials), `revoke` (disable, `POST /logout`,
+remove every consent), `delete` (`DELETE /users/{id}`), `check` (does the account still
+exist). The answer is one JSON line; the host writes one audit row per call with the
+request id. The deactivation and the deletion are journaled in `identity` by the running
+service from their admin events, like any other; the deletion also leaves the tombstone.
+These operations need no further right: no other account gets `manage-users` or the
+group scopes.
+
 That permission is the smallest set with which logout and consent removal work in
 Keycloak 26.7.0. **Residual risk:** it is finer than `manage-users` by reach (members of
 `papaia-persons` only; no account creation, no role mapping, no group membership changes,
 nothing outside the group), not by operation. Whoever holds the private key can also
 change the mail address or password of, disable or delete any member of the group and so
-take over the account. Measures: the service has no other function, its networks are
+take over the account. Measures: the service has no function beyond its purpose above, its networks are
 `papaia-lifecycle-net` (internal, shared with Keycloak alone) and `papaia-replay-net`
 (internal, shared with papaia-replay alone; it reaches neither the chat database nor the
 model gateway), no port, a read-only file system without capabilities, the key is

@@ -36,11 +36,24 @@ The module learns the person from `PAPAIA_PERSON_SUB`, the step from
 rights: no client, role, token or network is created for it, and the right lasts as long
 as the one-off container.
 
+The core services without a module contract have paths of their own (lib/person_core.py):
+the chat by `sub`, the model gateway's usage by `sub`, chat account or mail, the identity
+provider's account and sessions through papaia-lifecycle (`svc-papaia-lifecycle`). An
+erasure runs in a fixed order (security 1.14 no. 2): the account is disabled and its
+sessions and consents end first, then transfers, modules, chat and gateway erase, the
+journal entries `core-chat` and `model-gateway` are written, and the account is deleted
+last, only when every step before succeeded; otherwise it stays disabled and the request
+is `partial`, so the `sub` stays assigned. Last, the reconciliation (governance GV-30 for
+the core services) asks chat, gateway and identity provider again for anything that
+still names the person by `sub`, chat account or mail; every find makes the run
+`partial`.
+
 Every row of the records of processing (an `exposes` entry with `personal_data: true`)
 is named in the result: included, or not included with the reason (a module without the
-action, a core service whose path is not part of this version). Every module call is one
-`papaia.audit/1` row in the core's audit outbox, with the person as `object_ref` and the
-host account as the acting identity, never with content.
+action, a core service or a part whose path is not part of this version). Every module
+call and every call of a core path is one `papaia.audit/1` row in the core's audit
+outbox, with the person as `object_ref` and the host account as the acting identity,
+never with content.
 """
 
 from __future__ import annotations
@@ -60,6 +73,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import age, catalog, common, compat, deployment, exposes, topology
+from . import person_core as pc
 from . import person_request as pr
 from . import realm_sync as rs
 
@@ -90,16 +104,35 @@ JOURNAL_FOLDER = "erasure-journal"
 KEPT_REASONS = ("legal_obligation", "legal_hold")
 
 # Core services that hold personal data without a module contract, by compose profile:
-# (profile, row name, entry, reason for export, reason for erase).
+# (profile, row name, entry, core path or None).
 _NO_PATH = "core service: no path for one person in this version"
 CORE_SERVICES = (
-    ("librechat", "core:chat", "librechat", _NO_PATH, _NO_PATH),
-    ("litellm", "core:model-gateway", "litellm", _NO_PATH, _NO_PATH),
-    ("keycloak", "core:identity", "keycloak", _NO_PATH, _NO_PATH),
-    ("lifecycle", "core:lifecycle", "papaia-lifecycle", _NO_PATH, _NO_PATH),
-    ("audit", "core:audit", "papaia-audit", _NO_PATH,
-     "kept: the audit trail is evidence and is not erased"),
+    ("librechat", "core:chat", "librechat", pc.CHAT),
+    ("librechat", "core:chat", "librechat-files", None),
+    ("litellm", "core:model-gateway", "litellm", pc.GATEWAY),
+    ("keycloak", "core:identity", "keycloak", pc.IDENTITY),
+    ("lifecycle", "core:lifecycle", "papaia-lifecycle", None),
+    ("audit", "core:audit", "papaia-audit", None),
 )
+# (reason for export, reason for erase) of the rows without a core path.
+_CORE_REASONS = {
+    "librechat-files": (
+        "the contents of uploaded files on the chat's file volume and its search index are "
+        "not part of this version (the file records are)",
+    ) * 2,
+    "papaia-lifecycle": (
+        _NO_PATH,
+        "kept: the tombstone stays as long as the erasure journal (security 1.14 no. 2b)",
+    ),
+    "papaia-audit": (_NO_PATH, "kept: the audit trail is evidence and is not erased"),
+}
+_NO_LIFECYCLE = (
+    "needs the lifecycle profile: the identity provider is reached as svc-papaia-lifecycle"
+)
+# Steps of the core paths in the queue of a run: [service, "core:<operation>"].
+CORE_STEP = "core:"
+RECONCILE = "core"
+_CORE_JOURNAL_LOCAL = Path("state") / "erasure-journal"
 
 _SUB_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{0,254}")
 _ADDON_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
@@ -193,6 +226,9 @@ class Report:
     proof: list[dict] = field(default_factory=list)
     transfers: list[dict] = field(default_factory=list)
     archive: Path | None = None
+    # The reconciliation after an erasure: what still names the person, by place.
+    findings: list[dict] = field(default_factory=list)
+    reconciled: bool = False
 
     @property
     def state(self) -> str:
@@ -282,7 +318,7 @@ def collect(config_dir: Path, repo_root: Path) -> tuple[list[Module], list[tuple
         if not personal:
             continue
         if source.provider.startswith("core:"):
-            core += [(source.provider, e["id"], _NO_PATH, _NO_PATH) for e in personal]
+            core += [(source.provider, e["id"], _NO_PATH, _NO_PATH, None) for e in personal]
             continue
         if not _ADDON_RE.fullmatch(source.provider):
             raise PersonError(f"add-on name {source.provider!r} is not valid")
@@ -292,8 +328,20 @@ def collect(config_dir: Path, repo_root: Path) -> tuple[list[Module], list[tuple
             raise PersonError(f"add-on {source.provider}: {problem}")
         modules.append(_module(source.provider, path, manifest, personal))
     profiles = common.cluster_profiles(common.parse_env_file(config_dir / ".env"))
-    core += [row[1:] for row in CORE_SERVICES if row[0] in profiles]
+    for profile, row, entry, path in CORE_SERVICES:
+        if profile not in profiles:
+            continue
+        export_reason, erase_reason = _CORE_REASONS.get(entry, (None, None))
+        if path == pc.IDENTITY and "lifecycle" not in profiles:
+            export_reason = erase_reason = _NO_LIFECYCLE
+        core.append((row, entry, export_reason, erase_reason,
+                     path if export_reason is None else None))
     return modules, core
+
+
+def _core_paths(core: list[tuple]) -> list[str]:
+    """The core paths this installation has, in the order of security 1.14 no. 2."""
+    return [p for p in pc.SERVICES if any(row[4] == p for row in core)]
 
 
 def _rows(modules: list[Module], core: list[tuple], action: str) -> list[Row]:
@@ -305,8 +353,9 @@ def _rows(modules: list[Module], core: list[tuple], action: str) -> list[Row]:
             else:
                 rows.append(Row(module.name, entry, False,
                                 f"the module declares no {action} action"))
-    for name, entry, export_reason, erase_reason in core:
-        rows.append(Row(name, entry, False, erase_reason if action == ERASE else export_reason))
+    for name, entry, export_reason, erase_reason, _ in core:
+        reason = erase_reason if action == ERASE else export_reason
+        rows.append(Row(name, entry, reason is None, reason or ""))
     return rows
 
 
@@ -673,12 +722,22 @@ def render(report: Report) -> str:
         if item["state"] == "done":
             journal = {"at_target": "journal at the backup target",
                        "pending": "journal entry pending, not yet at the backup target",
+                       "via_event": "journaled by papaia-lifecycle from the deletion event",
                        "none": "nothing to journal"}[item["journal"]]
             lines.append(f"  erased        {where}: {item['deleted']} ({journal})")
         elif item["state"] == "kept":
             lines.append(f"  kept          {where}: until {item['until']} ({item['reason']})")
+        elif item["state"] == "held":
+            lines.append(f"  kept          {where}: disabled, not deleted (a step failed; the "
+                         "sub stays assigned until a new request succeeds)")
         else:
             lines.append(f"  failed        {where}")
+    if report.reconciled:
+        for item in report.findings:
+            count = "could not be checked" if item["count"] is None else item["count"]
+            lines.append(f"  left          {item['place']}: {count}")
+        if not report.findings:
+            lines.append("  reconciliation: nothing of the person left in the core services")
     return "\n".join(lines) + "\n"
 
 
@@ -697,7 +756,7 @@ STATE_FORMAT = "papaia.person-run/1"
 _OPERATIONS = {EXPORT: "export", ERASE: "erase", TRANSFER: "transfer"}
 _STATE_FIELDS = {
     "format", "operation", "sub", "transfer_to", "request", "correlation_id",
-    "queue", "pending", "ok", "modules", "proof", "transfers",
+    "queue", "pending", "ok", "modules", "proof", "transfers", "core",
 }
 
 
@@ -803,13 +862,22 @@ def begin(config_dir: Path, repo_root: Path, work: Path | str, *, request: str,
         _journal_setup(config_dir, repo_root)
     else:
         raise PersonError("the operation is export or erase")
-    modules, _ = collect(config_dir, repo_root)
+    modules, core = collect(config_dir, repo_root)
+    paths = _core_paths(core)
     if operation == "export":
         queue = [[m.name, EXPORT] for m in modules if EXPORT in m.actions]
+        queue += [[p, CORE_STEP + "export"] for p in paths]
     else:
-        queue = [[m.name, TRANSFER] for m in modules
-                 if transfer_to is not None and TRANSFER in m.actions]
+        # Sessions and consents end first; the account goes last (security 1.14 no. 2).
+        queue = [[pc.IDENTITY, CORE_STEP + "revoke"]] if pc.IDENTITY in paths else []
+        queue += [[m.name, TRANSFER] for m in modules
+                  if transfer_to is not None and TRANSFER in m.actions]
         queue += [[m.name, ERASE] for m in modules if ERASE in m.actions]
+        queue += [[p, CORE_STEP + "erase"] for p in (pc.CHAT, pc.GATEWAY) if p in paths]
+        if pc.IDENTITY in paths:
+            queue.append([pc.IDENTITY, CORE_STEP + "delete"])
+        if paths:
+            queue.append([RECONCILE, CORE_STEP + "check"])
     _gate_call(pr.start, gate, request)
     _save(work, {
         "format": STATE_FORMAT,
@@ -825,6 +893,10 @@ def begin(config_dir: Path, repo_root: Path, work: Path | str, *, request: str,
         "modules": {},
         "proof": [],
         "transfers": [],
+        # What the core paths learned about the person (chat account ids, mail
+        # addresses) for the gateway and the reconciliation; only in the run folder.
+        "core": {"paths": paths, "accounts": [], "mails": [], "findings": [],
+                 "reconciled": False},
     })
 
 
@@ -847,8 +919,10 @@ def _take(config_dir: Path, repo_root: Path, work: Path, state: dict, module: Mo
             if result is None:
                 state["ok"] = False
                 state["modules"][module.name] = "transfer_failed"
-                # Nothing is erased while an object could not be handed over.
-                state["queue"] = [step for step in state["queue"] if step[1] != ERASE]
+                # Nothing is erased while an object could not be handed over; the account
+                # stays disabled (the deletion step finds the run failed and holds it).
+                state["queue"] = [step for step in state["queue"] if step[1] not in (
+                    ERASE, CORE_STEP + "erase", CORE_STEP + "check")]
             else:
                 state["transfers"].append(result)
         else:
@@ -867,10 +941,161 @@ def _take(config_dir: Path, repo_root: Path, work: Path, state: dict, module: Mo
                 state["proof"] += proof
 
 
+def _core_module(repo_root: Path, service: str) -> Module:
+    """A core path as a part of the archive."""
+    return Module(name=service, path=repo_root, actions={}, entries=[], categories=[],
+                  catalog_id=pc.CATALOG_IDS[service], title=pc.TITLES[service],
+                  contract=None, schema=None)
+
+
+def _core_request(state: dict, service: str) -> dict:
+    known = state["core"]
+    if service == pc.CHAT:
+        return {"sub": state["sub"], "mails": known["mails"], "accounts": known["accounts"]}
+    if service == pc.GATEWAY:
+        ids = [state["sub"], *known["accounts"], *known["mails"]]
+        return {"ids": list(dict.fromkeys(ids))}
+    return {"sub": state["sub"]}
+
+
+def _core_call(core, state: dict, service: str, operation: str) -> tuple[dict | None, str | None]:
+    """(answer, error code) of one core path; what it learned is kept for the next ones."""
+    try:
+        answer = pc.check_answer(service, operation,
+                                 core.call(service, operation, _core_request(state, service)))
+    except pc.CoreError as exc:
+        return None, str(exc) or "backend_failed"
+    known = state["core"]
+    for name in ("accounts", "mails"):
+        for value in answer.get(name, []):
+            if value not in known[name] and len(known[name]) < pc.MAX_ACCOUNTS:
+                known[name].append(value)
+    return answer, None
+
+
+def _core_journal(config_dir: Path, repo_root: Path, service: str, sub: str,
+                  request: str) -> tuple[str, int]:
+    """The entry `erase_subject` of the core journal `core-chat` or `model-gateway`
+    (written by the host, as lib/model_gateway.py writes `key_revoke`): (`at_target` or
+    `pending`, seq). Raises PersonError when no journal can take it."""
+    key, folder = _journal_setup(config_dir, repo_root)
+    lifecycle = _lifecycle(repo_root)
+    local = config_dir / _CORE_JOURNAL_LOCAL
+    try:
+        local.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        journal = lifecycle.ErasureJournal(service, key=key, target_dir=folder, local_dir=local)
+        entry = journal.record("erase_subject", object_ref=f"person_request:{request}",
+                               sub=sub, reason="person_erase")
+        at_target = entry["id"] in _journal_entries(folder, service)
+    except (OSError, lifecycle.LifecycleError, _Invalid):
+        raise PersonError(f"the erasure journal {service} cannot take the entry") from None
+    return ("at_target" if at_target else "pending"), entry["seq"]
+
+
+def _core_step(config_dir: Path, repo_root: Path, work: Path, state: dict, service: str,
+               operation: str, core) -> None:
+    """Run one step of a core path and take in its answer: audited, journaled, proven."""
+    sub = state["sub"]
+    with _log(config_dir, state) as log:
+        if operation == "check":
+            _reconcile(log, state, core)
+            return
+        if operation == "delete" and not state["ok"]:
+            # A step failed: the account stays disabled and the sub stays assigned.
+            state["modules"][service] = "held"
+            state["proof"].append({"module": service, "category": "account", "state": "held"})
+            return
+        catalog_id = pc.CATALOG_IDS[service]
+        answer, error = _core_call(core, state, service, operation)
+        if operation == "export":
+            data = None
+            if answer is not None:
+                part = {"service": service, "data": answer["data"]}
+                if "found" in answer:
+                    part["found"] = answer["found"]
+                if service == pc.CHAT:
+                    part["not_exported"] = {
+                        "collections": list(pc.CHAT_NOT_EXPORTED),
+                        "reason": "sign-in material of the chat account, not data about you",
+                    }
+                data = json.dumps(part, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            status = "ok" if data is not None else "unavailable"
+            if data is not None and len(data) > MAX_EXPORT_BYTES:
+                status, data, error = "truncated", None, "too_large"
+            _record(log, catalog_id=catalog_id, operation="person.export", effect="read",
+                    sub=sub, error=error,
+                    detail={"bytes": len(data)} if data is not None else None)
+            state["modules"][service] = status
+            state["ok"] = state["ok"] and status == "ok"
+            if data is not None:
+                _write_private(work / f"part-{service}.json", data)
+            return
+        counts = answer["counts"] if answer is not None else {}
+        if operation in ("revoke", "delete"):
+            _record(log, catalog_id=catalog_id, operation=f"person.identity_{operation}",
+                    effect="write" if operation == "revoke" else "delete", sub=sub,
+                    error=error, detail={"count": sum(counts.values())})
+            if error is not None:
+                state["ok"] = False
+                state["modules"][service] = "failed"
+            elif operation == "revoke":
+                state["modules"][service] = "disabled" if answer["found"] else "no account"
+            else:
+                state["modules"][service] = "done"
+                state["proof"].append({
+                    "module": service, "category": "account", "state": "done",
+                    "deleted": counts.get("identity_accounts", 0), "journal": "via_event",
+                })
+            return
+        journal = seq = None
+        if error is None:
+            try:
+                journal, seq = _core_journal(config_dir, repo_root, service, sub,
+                                             state["request"])
+            except PersonError:
+                error = "journal_failed"
+        if error is not None:
+            _record(log, catalog_id=catalog_id, operation="person.erase", effect="delete",
+                    sub=sub, error=error, detail=None)
+            state["ok"] = False
+            state["modules"][service] = "failed"
+            state["proof"].append({"module": service, "category": "all", "state": "failed"})
+            return
+        # One row per collection or kind, with its count (security 1.14 no. 2a).
+        for name, count in sorted(counts.items()):
+            _record(log, catalog_id=catalog_id, operation="person.erase", effect="delete",
+                    sub=sub, error=None,
+                    detail={"objects": [name], "count": count, "kind": "erase_subject",
+                            "seq": seq})
+            state["proof"].append({"module": service, "category": name, "state": "done",
+                                   "deleted": count, "journal": journal})
+        state["modules"][service] = "done"
+
+
+def _reconcile(log: rs.AuditLog, state: dict, core) -> None:
+    """GV-30 for the core paths after an erasure: every place that still names the person
+    by sub, chat account or mail is a find; a path that cannot be asked is one too."""
+    known = state["core"]
+    findings: list[dict] = []
+    for service in known["paths"]:
+        answer, error = _core_call(core, state, service, "check")
+        if error is not None:
+            findings.append({"place": service, "count": None})
+            continue
+        findings += [{"place": f"{service}/{name}", "count": count}
+                     for name, count in sorted(answer["counts"].items()) if count]
+    known["findings"], known["reconciled"] = findings, True
+    if findings:
+        state["ok"] = False
+    _record(log, catalog_id=CORE_CATALOG_ID, operation="person.reconcile", effect="read",
+            sub=state["sub"], error=None, detail={"count": len(findings)})
+
+
 def advance(config_dir: Path, repo_root: Path, work: Path | str,
-            exit_code: int | None = None) -> Step | None:
+            exit_code: int | None = None, *, core=None) -> Step | None:
     """Take in the answer of the step that ran (its exit code, its output in `step.out`)
-    and return the next step, or None when every step ran."""
+    and return the next step, or None when every step ran. The steps of the core paths
+    run here, through `core` (lib/person_core.py; DockerCore when not given)."""
     work = _work(work)
     config_dir, repo_root = Path(config_dir), Path(repo_root)
     state = _load(work)
@@ -893,14 +1118,21 @@ def advance(config_dir: Path, repo_root: Path, work: Path | str,
     elif exit_code is not None:
         raise PersonError("no step of this run is running")
     step = None
-    if state["queue"]:
+    while state["queue"]:
         name, action = state["queue"].pop(0)
+        if action.startswith(CORE_STEP):
+            if core is None:
+                core = pc.DockerCore(config_dir, repo_root)
+            _core_step(config_dir, repo_root, work, state, name, action[len(CORE_STEP):], core)
+            _save(work, state)
+            continue
         env = {ENV_SUB: state["sub"], ENV_OPERATION: _OPERATIONS[action],
                ENV_CORRELATION: state["correlation_id"]}
         if action == TRANSFER:
             env[ENV_NEW_OWNER] = state["transfer_to"]
         step = _step(module(name), action, env)
         state["pending"] = [name, action]
+        break
     _save(work, state)
     return step
 
@@ -932,9 +1164,11 @@ def _result(config_dir: Path, repo_root: Path, work: Path, state: dict, gate: pr
     report = Report(
         operation, state["sub"], _rows(modules, core, EXPORT if operation == "export" else ERASE),
         ok=state["ok"], modules=dict(state["modules"]), proof=list(state["proof"]),
-        transfers=list(state["transfers"]),
+        transfers=list(state["transfers"]), findings=list(state["core"]["findings"]),
+        reconciled=state["core"]["reconciled"],
     )
     if operation == "export":
+        modules += [_core_module(repo_root, p) for p in state["core"]["paths"]]
         parts = [
             (m, state["modules"][m.name], _read_private(work / f"part-{m.name}.json",
                                                         MAX_EXPORT_BYTES))
@@ -964,20 +1198,20 @@ def step_line(step: Step) -> str:
     return "\t".join(fields)
 
 
-def _drive(config_dir: Path, repo_root: Path, work: Path, runner: Runner) -> None:
+def _drive(config_dir: Path, repo_root: Path, work: Path, runner: Runner, core=None) -> None:
     code = None
-    while (step := advance(config_dir, repo_root, work, code)) is not None:
+    while (step := advance(config_dir, repo_root, work, code, core=core)) is not None:
         outcome = runner(step)
         _write_private(work / STEP_OUT, outcome.stdout)
         code = outcome.exit_code
 
 
 def run(config_dir: Path, repo_root: Path, *, request: str, gate: pr.Gate, runner: Runner,
-        now: datetime | None = None) -> Report:
+        now: datetime | None = None, core=None) -> Report:
     """A whole confirmed request in one process, each step run by `runner`. An erasure
     runs the transfers first; a failed transfer stops before anything is erased, a failed
     erasure leaves the run `partial` and the other modules go ahead."""
     with tempfile.TemporaryDirectory(prefix="papaia-person-") as work:
         begin(config_dir, repo_root, work, request=request, gate=gate)
-        _drive(config_dir, repo_root, Path(work), runner)
+        _drive(config_dir, repo_root, Path(work), runner, core)
         return finish(config_dir, repo_root, work, gate=gate, now=now)

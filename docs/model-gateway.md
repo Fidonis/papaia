@@ -139,6 +139,15 @@ What the gateway keeps: per request one spend-log row with the key id, the alias
 counts and the cost, without the `user` field (modules never send it). Usage is therefore
 counted per module key and never per person.
 
+Callers that do send `user` (the chat sends its account id) make the gateway keep a usage
+record per end user. `papaia-ctl person export|erase` reads the usage sum of the person's
+end users (`GET /customer/info` for her `sub`, chat account ids and mail address) and
+deletes them (`POST /customer/delete`), through the management connection inside the
+gateway's container; no other route is added (see
+[person-requests.md](person-requests.md#the-core-services)). `doctor model_gateway_content`
+fails when the rendered configuration or `ai/litellm/.env` breaks one of the settings
+above, so a usage record never holds content.
+
 Checking it: send a request with a unique marker through a module key, then search the
 LiteLLM database (`pg_dump --data-only` and the data directory of `litellm-postgresql`)
 and `docker logs` of LiteLLM for the marker; there is no hit. The test

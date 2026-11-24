@@ -29,6 +29,12 @@ While the Compose profile `lifecycle` is active, `papaia-ctl realm sync` makes s
   the realm sync chose stay; with none set, user events are kept as long as the sign-ins
   of service accounts (`EVENTS_EXPIRATION`).
 
+The same account answers the identity provider's part of a confirmed request for
+information or erasure (`papaia-ctl person run`, docs/person-requests.md): export of the
+account, disabling it, ending its sessions and consents, and deleting it last. That is
+the purpose its attribute `papaia.purpose` names; the rights above cover it, so no
+further account gets `manage-users` or the group scopes.
+
 Without the profile the client, its key folder and the permission are removed; the
 group and the realm switches stay.
 """
@@ -77,7 +83,12 @@ _ATTRIBUTES = {
     rs.TOKEN_EXCHANGE: "false",
     rs.KIND: rs.SERVICE_ACCOUNT,
     "papaia.purpose": json.dumps(
-        {"de": "Kontolebenszyklus und Entzug", "en": "Account lifecycle and revocation"},
+        {
+            "de": "Kontolebenszyklus, Entzug sowie Auskunft und Löschung im bestätigten "
+            "Antrag (papaia-ctl person)",
+            "en": "Account lifecycle, revocation, and information and erasure in a "
+            "confirmed request (papaia-ctl person)",
+        },
         sort_keys=True,
         ensure_ascii=False,
     ),

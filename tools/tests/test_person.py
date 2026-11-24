@@ -67,16 +67,25 @@ def _copy_tasks(tmp_path: Path, name: str) -> Path:
     return path
 
 
+# The core services with a path of their own (chat, model gateway, identity provider) are
+# off here and tested in test_person_core.py; lifecycle and audit stay listed.
+CORE_PROFILES = "lifecycle,audit"
+
+
 @pytest.fixture()
 def install(tmp_path: Path) -> dict:
     """An installation whose account of Anna is deleted: two modules that declare the
     person actions (tasks, planner), one with personal data and no action (notes), the
-    chat, the identity service and the audit service as core profiles."""
+    lifecycle and the audit service as core profiles."""
+    return make_install(tmp_path, CORE_PROFILES)
+
+
+def make_install(tmp_path: Path, profiles: str) -> dict:
     config = tmp_path / "config"
     backup = tmp_path / "backup"
     (backup / "erasure-journal").mkdir(parents=True)
     _write_env(config / ".env", {
-        "COMPOSE_PROFILES": "librechat,keycloak,lifecycle,audit",
+        "COMPOSE_PROFILES": profiles,
         "PAPAIA_BACKUP_DIR": str(backup),
     })
     key = os.urandom(32)
@@ -175,6 +184,10 @@ def _open_archive(path: Path, passphrase: str) -> zipfile.ZipFile:
 def desk(install, signer) -> Caller:  # noqa: F811
     """papaia-audit with its request routes; the store is shared with the subprocess
     tests through a file."""
+    return make_desk(install, signer)
+
+
+def make_desk(install: dict, signer) -> Caller:  # noqa: F811
     caller = Caller(signer, FileRequestStore(install["tmp"] / "audit-requests.json"))
     caller.passphrases = {}
     install["now"] = caller.now
@@ -252,8 +265,7 @@ def test_export_of_a_deleted_account_contains_every_module_part(install, desk):
     missing = {(m["module"], m["entry"]): m["reason"] for m in index["not_connected"]}
     assert ("notes", "notes.store") in missing
     assert "person-export" in missing[("notes", "notes.store")]
-    assert {("core:chat", "librechat"), ("core:identity", "keycloak"),
-            ("core:audit", "papaia-audit"), ("core:lifecycle", "papaia-lifecycle")} <= set(
+    assert {("core:audit", "papaia-audit"), ("core:lifecycle", "papaia-lifecycle")} <= set(
         missing
     )
     assert all(reason for reason in missing.values())

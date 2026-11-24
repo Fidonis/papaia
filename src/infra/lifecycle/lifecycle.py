@@ -985,6 +985,97 @@ def find(store: Store, name: str | None, mail: str | None) -> list[dict]:
     return list(found.values())[:FIND_MAX]
 
 
+# `papaia-ctl person export|erase` through `docker exec` (security 1.14 no. 2, 2a; RE-100):
+# the identity provider's part of a confirmed request, run as svc-papaia-lifecycle, the one
+# account that may end sessions and delete persons. The host audits every call with the
+# request id; the running service journals the deactivation and the deletion from their
+# admin events and keeps the tombstone.
+PERSON_OPERATIONS = ("export", "revoke", "delete", "check")
+PERSON_ACCOUNT_FIELDS = (
+    "id", "username", "firstName", "lastName", "email", "emailVerified", "enabled",
+    "createdTimestamp", "attributes", "requiredActions",
+)
+PERSON_EVENT_FIELDS = ("time", "type", "clientId", "ipAddress")
+PERSON_CONSENT_FIELDS = ("clientId", "createdDate", "lastUpdatedDate", "grantedClientScopes")
+PERSON_LINK_FIELDS = ("identityProvider", "userId", "userName")
+PERSON_MAX_EVENTS = 1000
+
+
+def person_request(client, request: object) -> dict:
+    """One operation for one person: `export` (account, groups, realm roles, linked
+    upstream identity, consents and stored sign-in events; never credentials), `revoke`
+    (disable, end every session, remove every consent), `delete`, `check` (does the
+    account still exist). An account that is gone answers `found: false` or a count of 0."""
+    if not isinstance(request, dict) or set(request) != {"operation", "sub"}:
+        raise LifecycleError("the request must hold exactly operation and sub")
+    operation, sub = request["operation"], request["sub"]
+    if operation not in PERSON_OPERATIONS:
+        raise LifecycleError(f"operation must be one of {', '.join(PERSON_OPERATIONS)}")
+    if not isinstance(sub, str) or not _SUB_RE.fullmatch(sub):
+        raise LifecycleError("malformed account id")
+
+    def get(path: str):
+        try:
+            return client.call("GET", path)
+        except HttpError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    account = get(f"/users/{sub}")
+    if account is not None and not isinstance(account, dict):
+        raise LifecycleError("the identity provider answered no account")
+    if operation == "check":
+        return {"counts": {"identity_accounts": int(account is not None)}}
+    if operation == "delete":
+        if account is None:
+            return {"counts": {"identity_accounts": 0}}
+        try:
+            client.call("DELETE", f"/users/{sub}")
+        except HttpError as exc:
+            if exc.status != 404:
+                raise
+            return {"counts": {"identity_accounts": 0}}
+        return {"counts": {"identity_accounts": 1}}
+    if account is None:
+        empty: dict = {"found": False, "mails": []}
+        return empty | ({"data": {"account": None}} if operation == "export" else {"counts": {}})
+    mail = account.get("email")
+    mails = [mail] if isinstance(mail, str) and _MAIL_RE.fullmatch(mail) else []
+    consents = [c for c in get(f"/users/{sub}/consents") or [] if isinstance(c, dict)]
+    if operation == "export":
+
+        def pick(row: object, fields: tuple) -> dict:
+            return {k: row[k] for k in fields if k in row} if isinstance(row, dict) else {}
+
+        query = urllib.parse.urlencode({"user": sub, "max": PERSON_MAX_EVENTS})
+        data = {
+            "account": pick(account, PERSON_ACCOUNT_FIELDS),
+            "groups": [g.get("path") for g in get(f"/users/{sub}/groups") or []
+                       if isinstance(g, dict)],
+            "roles": [r.get("name") for r in get(f"/users/{sub}/role-mappings/realm") or []
+                      if isinstance(r, dict)],
+            "links": [pick(x, PERSON_LINK_FIELDS)
+                      for x in get(f"/users/{sub}/federated-identity") or []],
+            "consents": [pick(c, PERSON_CONSENT_FIELDS) for c in consents],
+            "events": [pick(e, PERSON_EVENT_FIELDS) for e in get(f"/events?{query}") or []],
+        }
+        return {"found": True, "mails": mails, "data": data}
+    counts = {"accounts_disabled": 0, "sessions_ended": 0, "consents_removed": 0}
+    if account.get("enabled") is not False:
+        client.call("PUT", f"/users/{sub}", {"enabled": False})
+        counts["accounts_disabled"] = 1
+    client.call("POST", f"/users/{sub}/logout")
+    counts["sessions_ended"] = 1
+    for consent in consents:
+        holder = consent.get("clientId")
+        if not isinstance(holder, str) or not _CLIENT_ID_RE.fullmatch(holder):
+            raise LifecycleError("the identity provider answered a malformed client id")
+        client.call("DELETE", f"/users/{sub}/consents/{urllib.parse.quote(holder, safe='')}")
+        counts["consents_removed"] += 1
+    return {"found": True, "mails": mails, "counts": counts}
+
+
 def _check_federation(fed: object) -> None:
     keys = set(_RECONCILE_DEFAULTS["federation"])
     if not isinstance(fed, dict) or set(fed) != keys:
@@ -4202,6 +4293,11 @@ def _parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("gate-check")
     cmd.add_argument("--state-dir", type=Path, required=True)
     cmd.add_argument("--listen", default="0.0.0.0:8080")
+    # `papaia-ctl person run` through `docker exec`: {operation, sub} on stdin.
+    cmd = sub.add_parser("person")
+    cmd.add_argument("--keycloak-url", required=True)
+    cmd.add_argument("--ca-file", type=Path)
+    cmd.add_argument("--account-dir", type=Path, required=True)
     # `papaia-ctl person find` through `docker exec`: the HMACs only, never a name.
     cmd = sub.add_parser("find")
     cmd.add_argument("--key-dir", type=Path, required=True)
@@ -4312,6 +4408,26 @@ def _startgate_acknowledge(args) -> int:
     return 4
 
 
+def _person(args) -> int:
+    """One `person_request` read from stdin; the answer is one JSON line on stdout. A
+    refusal or a failed call is exit 1 with a code, never a response body."""
+    try:
+        try:
+            request = _strict_json(sys.stdin.buffer.read(4097)[:4096])
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            raise LifecycleError("the request on stdin is not JSON") from None
+        ctx = None
+        if urllib.parse.urlsplit(keycloak_url(args.keycloak_url)).scheme == "https":
+            ctx = ssl.create_default_context(cafile=str(args.ca_file) if args.ca_file else None)
+        answer = person_request(AccountClient(args.keycloak_url, ctx, args.account_dir), request)
+    except RETRYABLE as exc:
+        _log(f"person: refused or failed ({exc.__class__.__name__})")
+        print(json.dumps({"error": "failed"}))
+        return 1
+    print(json.dumps(answer, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "health":
@@ -4321,6 +4437,8 @@ def main(argv: list[str] | None = None) -> int:
         code, report = health(args.state_dir, args.key_dir, journal=view)
         print(json.dumps(report, sort_keys=True))
         return code
+    if args.command == "person":
+        return _person(args)
     if args.command == "find":
         persons = find(Store(args.key_dir), args.name_ref, args.mail_ref)
         print(json.dumps({"persons": persons}, sort_keys=True))

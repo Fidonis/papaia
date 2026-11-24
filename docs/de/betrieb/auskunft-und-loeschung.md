@@ -51,8 +51,16 @@ technischen Einzelheiten stehen in [Information and erasure without an account](
    ```
 
    Die Ausgabe nennt je Zeile des Verzeichnisses der Verarbeitungstätigkeiten „included“ oder
-   „not included“ mit Grund. Exit 1 heißt „teilweise“: ein Modul fehlt (Auskunft) oder eine
-   Übergabe bzw. Löschung scheiterte (Löschung). Nach Behebung einen neuen Antrag stellen.
+   „not included“ mit Grund. Chat, Modell-Gateway und Anmeldedienst sind enthalten (für den
+   Anmeldedienst muss das Profil `lifecycle` aktiv sein). Exit 1 heißt „teilweise“: ein Modul
+   oder Kerndienst fehlt (Auskunft) oder eine Übergabe, Löschung oder der Abgleich scheiterte
+   (Löschung). Nach Behebung einen neuen Antrag stellen.
+
+   Reihenfolge einer Löschung: Zuerst wird das Konto deaktiviert, Sitzungen und
+   Einwilligungen enden. Dann folgen Übergaben, Module, Chat und Modell-Gateway mit je einem
+   Eintrag im Löschjournal (`core-chat`, `model-gateway`). Das Konto wird zuletzt gelöscht.
+   Scheitert vorher ein Schritt, bleibt das Konto deaktiviert und wird nicht gelöscht
+   („disabled, not deleted“); die Kennung bleibt für einen neuen Antrag zugeordnet.
 
 5. **Übergeben (Auskunft).** Das Archiv liegt in
    `<config-dir>/state/person-export/<antrag>.zip.age`. Archiv und Passphrase gehen auf
@@ -70,10 +78,13 @@ technischen Einzelheiten stehen in [Information and erasure without an account](
    Sicherungsziel liegt („pending“: noch nicht am Ziel, das Modul liefert ihn nach), oder bei
    Daten mit Aufbewahrungspflicht bzw. Löschsperre das Datum, bis zu dem sie bleiben. Ohne
    `--transfer-to` bleiben eigene Objekte mit dem Kennzeichen „Eigentümer nicht mehr aktiv“
-   stehen; scheitert eine Übergabe, wird nichts gelöscht. Den Nachweis in der Betriebsablage
-   aufbewahren und mit Datum und Kennung in die Liste der Löschnachweise eintragen; sie wird
-   gebraucht, wenn von einer älteren Kopie wiederhergestellt wird (siehe
-   [Kopien außer Haus](sicherung.md#kopien-außer-haus)).
+   stehen; scheitert eine Übergabe, wird nichts gelöscht. Am Ende steht der Abgleich: Chat,
+   Modell-Gateway und Anmeldedienst werden erneut nach der Kennung, den Chat-Konten und der
+   Mail-Adresse der Person gefragt. „reconciliation: nothing of the person left“ heißt ohne
+   Fund; jede Zeile „left“ nennt Ort und Anzahl (nie Inhalte) und macht den Antrag
+   „teilweise“. Den Nachweis in der Betriebsablage aufbewahren und mit Datum und Kennung in
+   die Liste der Löschnachweise eintragen; sie wird gebraucht, wenn von einer älteren Kopie
+   wiederhergestellt wird (siehe [Kopien außer Haus](sicherung.md#kopien-außer-haus)).
 
 Die Antwort an die Person ist ohne Verzögerung, spätestens innerhalb eines Monats nach Eingang
 der Anfrage fällig (Art. 12 Abs. 3 DSGVO,
@@ -83,8 +94,13 @@ festzuhalten.
 Wer `person export` ausführt und die Passphrase erhält, kann das Archiv lesen. Antrag und
 Bestätigung durch zwei Personen machen das sichtbar, verhindern es aber nicht.
 
-Antrag, Bestätigung, jeder Schritt des Laufs und jeder Aufruf eines Moduls stehen im
-Audit-Log (ohne Inhalte), mit der Antragskennung als Korrelationskennung.
+Antrag, Bestätigung, jeder Schritt des Laufs, jeder Aufruf eines Moduls und jeder Aufruf
+eines Kerndienstes (je Sammlung des Chats eine Zeile mit Anzahl) stehen im Audit-Log (ohne
+Inhalte), mit der Antragskennung als Korrelationskennung.
+
+`doctor model_gateway_content` schlägt fehl, wenn das Modell-Gateway Inhalte von Anfragen
+oder Antworten speichern würde; die Nutzung, die Auskunft und Löschung erfassen, enthält
+dann keine Inhalte.
 
 ## Namenssperre
 
@@ -103,6 +119,7 @@ ein (siehe [Wiederherstellung](../wiederherstellung.md)).
 
 ## Noch nicht enthalten
 
-Chat, Modell-Gateway, Anmeldedienst (einschließlich der Löschung des Kontos), `papaia-lifecycle`
-und der pseudonyme Auszug aus dem Audit-Log werden als „not included“ gelistet. Die Seite im
-Manager zum Bestätigen folgt.
+`papaia-lifecycle` (der Grabstein bleibt so lange wie das Löschjournal), der pseudonyme Auszug
+aus dem Audit-Log und die Inhalte hochgeladener Chat-Dateien auf dem Datei-Volume samt
+Suchindex werden als „not included“ gelistet; die Dateieinträge in der Chat-Datenbank werden
+gelöscht. Die Seite im Manager zum Bestätigen folgt.
