@@ -123,7 +123,8 @@ def test_the_registry_and_the_init_container_run_locked_down():
 
 def test_the_registry_network_reaches_only_the_declared_consumers():
     members = {name for name, body in _core_services().items() if CONSUMER_NET in _networks(body)}
-    assert members == {"connections", "me-web"}
+    # me-web joins only through the override of both profiles (tests/test_me_connections.py).
+    assert members == {"connections"}
     registry = _compose()["services"]["connections"]
     assert "papaia-net" not in _networks(registry)
     assert _networks(registry) == {CONSUMER_NET, DB_NET, "papaia-audit-ingest-net"}

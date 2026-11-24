@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from lib import me_connections
 from tests.test_operator_docs_de import _FENCE, _HEADING, _LINK, _anchors, _prose_lines
 
 REPO = Path(__file__).resolve().parents[2]
@@ -52,7 +53,12 @@ def _env_names(path: Path) -> set[str]:
 
 
 def _shipped_names() -> set[str]:
-    return _env_names(ROOT_ENV) | _env_names(ME_ENV) | _env_names(CONNECTIONS_ENV)
+    """The names an operator sets in the shipped `.env` files, and the paths the generated
+    override hands to `me-web` while the registry runs (lib/me_connections.py)."""
+    return (
+        _env_names(ROOT_ENV) | _env_names(ME_ENV) | _env_names(CONNECTIONS_ENV)
+        | set(me_connections.ME_ENV)
+    )
 
 
 def _matches(name: str, names: set[str]) -> bool:

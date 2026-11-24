@@ -16,7 +16,11 @@ when
   every listed name, one name of each alias group, the names the HTTP client of the image
   honours (`RUNTIME_READS`), and nothing else; no `env_file:`;
 - the profile's `.env.example` documents exactly the variables the compose file
-  interpolates that the root `src/.env.example` does not hold.
+  interpolates that the root `src/.env.example` does not hold;
+- the names a service gets only while another profile is on as well (`with_profiles`,
+  set by a generated override, `HANDED_OVER`) are listed as such and are not in the
+  compose file: the paths of me-web's client certificate for the connection registry
+  (lib/me_connections.py).
 
 Every problem is one line that names the service or file and the variable.
 """
@@ -34,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common
+from . import common, me_connections
 
 PROFILE = "me"
 SERVICES = ("me-web", "prefs")
@@ -52,6 +56,12 @@ SOURCES = {"me-web": Path("src/app/config.py"), "prefs": Path("src/prefs/config.
 # Read by the HTTP client of both services (httpx honours it for the trust store), not by
 # the configuration module: the local CA of the realm's internal address.
 RUNTIME_READS = ("SSL_CERT_FILE",)
+# Names a service gets only while another profile is on as well, from an override the core
+# generates, never from the compose file: service -> profile -> names.
+HANDED_OVER: dict[str, dict[str, tuple[str, ...]]] = {
+    "me-web": {me_connections.CONNECTIONS_PROFILE: tuple(sorted(me_connections.ME_ENV))},
+    "prefs": {},
+}
 
 PINNED_IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 _NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
@@ -125,7 +135,14 @@ def generate(source: Path, *, image: str, commit: str) -> dict:
     services = {}
     for service, rel in SOURCES.items():
         reads, groups = _reads(source / rel)
-        services[service] = {"reads": reads, "one_of": groups, "runtime": list(RUNTIME_READS)}
+        handed = HANDED_OVER[service]
+        apart = {name for names in handed.values() for name in names}
+        services[service] = {
+            "reads": [name for name in reads if name not in apart],
+            "one_of": groups,
+            "runtime": list(RUNTIME_READS),
+            "with_profiles": {profile: list(names) for profile, names in handed.items()},
+        }
     return {
         "format": FORMAT,
         "image": image,
@@ -185,7 +202,15 @@ def _service_problems(name: str, service: dict, listed: dict) -> list[str]:
         return [f"{name}: environment must be a mapping"]
     if "env_file" in service:
         problems.append(f"{name}: env_file is not allowed; values come through environment")
-    present = set(environment)
+    handed = {
+        v: profile for profile, names in (listed.get("with_profiles") or {}).items() for v in names
+    }
+    wanted = {profile: list(names) for profile, names in HANDED_OVER.get(name, {}).items()}
+    if (listed.get("with_profiles") or {}) != wanted:
+        problems.append(f"{name}: with_profiles must be {json.dumps(wanted, sort_keys=True)}")
+    for v in sorted(set(environment) & set(handed)):
+        problems.append(f"{name}: {v} is set by the override of the profile {handed[v]} only")
+    present = set(environment) - set(handed)
     expected = expected_names(listed, present)
     problems += [
         f"{name}: {v} is read by the service but missing" for v in sorted(expected - present)

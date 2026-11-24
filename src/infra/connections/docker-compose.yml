@@ -21,9 +21,11 @@
 #     connects as `connections_service`, which can read and append the journal but
 #     cannot create, alter or drop a table. It refuses to start with the owner's
 #     login or with CONNECTIONS_MIGRATE_DB_URL in its environment.
-#   - Reachable only by its declared consumers: me-web on papaia-connections-net, and
-#     add-ons that list `connections` under `networks.attach` (flow-control,
-#     assist-gate), which puts the registry on their own network. It is not on
+#   - Reachable only by its declared consumers: me-web on papaia-connections-net while
+#     the profile `me` runs on the host as well (generated override, with a client
+#     certificate of the platform PKI), and add-ons that list `connections` under
+#     `networks.attach` (flow-control, assist-gate), which puts the registry on their
+#     own network. It is not on
 #     papaia-net. The database is on papaia-connections-db-net (internal) with the
 #     registry and the init container only; no add-on may attach either of them.
 #   - Credentials are sealed with one data key per account, wrapped by the master
@@ -63,7 +65,10 @@ services:
       CONNECTIONS_OIDC_ISSUER: ${OIDC_ISSUER}
       CONNECTIONS_AUDIENCE: papaia-connections
       # Which clients may call, as person, as service, or as a gate with the person's
-      # own token. Empty in the core: the modules that use the registry name theirs.
+      # own token. Empty in the core: the modules that use the registry name theirs. The
+      # override docker-compose.me-connections.override.yml sets the person clients to
+      # this value with papaia-me added while the profile `me` is on, and taken out
+      # while it is off (tools/lib/me_connections.py).
       CONNECTIONS_PERSON_CLIENTS: ${CONNECTIONS_PERSON_CLIENTS:-}
       CONNECTIONS_SERVICE_CLIENTS: ${CONNECTIONS_SERVICE_CLIENTS:-}
       CONNECTIONS_DELEGATE_CLIENTS: ${CONNECTIONS_DELEGATE_CLIENTS:-}

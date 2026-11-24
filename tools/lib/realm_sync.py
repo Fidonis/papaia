@@ -102,7 +102,9 @@ What it manages:
   `$PAPAIA_CONFIG_DIR/security/azp/azp-allowlist.json`: the clients of the confirmed
   pairings with `papaia-prefs` that are assigned, written after the realm and removed when
   the profile is off. `papaia-me` -> `papaia-audit` (effect x) is a platform pairing like
-  the manager's, set while the profiles `me` and `audit` are both on.
+  the manager's, set while the profiles `me` and `audit` are both on. `papaia-me` ->
+  `papaia-connections` is a pairing of the bill of materials with exactly the effects r
+  and d, so a second person always approves it (`PAIRING_EFFECTS`, lib/me_connections.py).
 
 Every input is checked before the first write: a rejected declaration changes nothing. A
 second run reports 0 changes; `--check` compares without writing and reports every
@@ -276,6 +278,12 @@ AUDIENCE_LIMITS = {
     "papaia-people": (("assist-gate", "papaia-studio-gateway"), ("x",)),
     "papaia-audit": (("papaia-manager",), ("r",)),
 }
+# Pairings with fixed effects (security 1.4): Mein Bereich lists a person's accounts,
+# mandates and uses at the connection registry and ends a mandate (lib/me_connections.py).
+# The pair holds exactly these effects: the registry does not limit the operations of a
+# person client, so the exchanged token is the same whatever the letters say, and a pairing
+# that ends mandates always needs a second person.
+PAIRING_EFFECTS = {("papaia-me", "papaia-connections"): ("r", "d")}
 # Audiences the realm sync pairs itself (lib/audit_report_account.py for the manager,
 # lib/me_area.py for Mein Bereich): `pairings.yaml` cannot name them, and their pairing is
 # asked for and confirmed by `platform`.
@@ -576,6 +584,15 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
             or not all(e in EFFECTS for e in effects)
         ):
             raise RealmSyncError(f"{label}: effects must be distinct letters out of {EFFECTS}")
+        limited = PAIRING_EFFECTS.get((client, audience))
+        # Exactly these effects, never a subset: the audience does not limit the
+        # operations per client, so a narrower pairing would grant the same token while
+        # skipping the second person a deleting pairing needs.
+        if limited is not None and set(effects) != set(limited):
+            raise RealmSyncError(
+                f"{label}: {client} -> {audience} holds the effects "
+                f"{''.join(limited)} only, no fewer and no more"
+            )
         if row["state"] not in ("confirmed", "pending"):
             raise RealmSyncError(f"{label}: state must be confirmed or pending")
         if (client, audience) in seen:

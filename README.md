@@ -2895,6 +2895,39 @@ exchange right of Mein Bereich at the audit service (`papaia-me` -> `papaia-audi
 for a person's own read tickets) is set by the realm sync itself while the `audit` profile is
 on, like the manager's.
 
+**Connection registry.** With the profile [`connections`](#connection-registry-connections)
+on as well, Mein Bereich lists a person's accounts, mandates and uses at the registry and lets
+her end a mandate, always for the person of the token. The core wires the two profiles only
+while both are on:
+
+- the platform PKI issues `me-web` a client certificate next to its server certificate
+  (`pki/core/me-web/client.crt` in the config directory, readable by uid 10001 only); the
+  registry asks every caller for one;
+- `start` writes the override `overrides/docker-compose.me-connections.override.yml`: `me-web`,
+  and no other service of the profile, joins `papaia-connections-net` and gets the certificate's
+  directory read-only with the paths `ME_CONNECTIONS_CA_FILE`, `ME_CONNECTIONS_CERT_FILE` and
+  `ME_CONNECTIONS_KEY_FILE`; the registry gets `papaia-me` added to the
+  `CONNECTIONS_PERSON_CLIENTS` you set (your value is kept, and `papaia-me` is taken out again
+  when `me` is off);
+- Me gets a token for the registry only through the pairing `papaia-me` -> `papaia-connections`
+  with the effects `r` (list accounts, mandates and uses) and `d` (end a mandate). It is part of
+  the bill of materials and, because it ends mandates, needs a second host account:
+
+```bash
+tools/papaia-ctl pairing list                                   # shows the list and its sha256
+tools/papaia-ctl pairing confirm --approve-pairings=<sha256>    # papaia-me -> papaia-connections waits
+# as another host account than the one that confirmed:
+tools/papaia-ctl pairing approve --client=papaia-me --audience=papaia-connections --effects=rd
+tools/papaia-ctl start                                          # the realm sync assigns aud-papaia-connections
+```
+
+The pairing holds exactly `r` and `d`: the realm sync refuses a `pairings.yaml` that gives
+`papaia-me` more or fewer effects on `papaia-connections`, so a second host account always
+approves it. Until the approval, Me shows no registry data. Me calls only the routes that list
+accounts, mandates and uses and the one that ends a mandate. The registry itself does not yet
+limit a person client to these operations: it accepts a `papaia-me` token like the person's
+own, so a per-client operation limit at the registry is still open.
+
 **Module list.** `setup` and `start` write the module list of Mein Bereich,
 `personal-settings/registry.yaml` in the config directory, from the `personal_settings:`
 section of every active add-on whose section names the add-on itself; an inactive add-on has no
@@ -2926,7 +2959,8 @@ edit them by hand). It also requests the registry's server certificate from the 
 plans the realm role `connections-admin` (part of `papaia-admin`) and the bearer client
 `papaia-connections`. The clients whose tokens the registry accepts (`CONNECTIONS_PERSON_CLIENTS`,
 `CONNECTIONS_SERVICE_CLIENTS`, `CONNECTIONS_DELEGATE_CLIENTS`) are empty in the core; a module
-that uses the registry names its entries. Every setting is listed under
+that uses the registry names its entries, and `papaia-me` is added to the person clients while
+the profile `me` is on. Every setting is listed under
 [Connection registry variables](docs/configuration.md#connection-registry-variables). The
 registry sends its journal to `papaia-audit`, so keep the `audit` profile on. In a
 [distributed installation](#distributed-installations) the profile runs on the controller.
@@ -2935,9 +2969,10 @@ registry sends its journal to `papaia-audit`, so keep the `audit` profile on. In
 answers at `https://connections:8080` with TLS 1.3 and, by default, mutual TLS: every caller
 needs a client certificate of the platform CA (`CONNECTIONS_TLS_CLIENT_CA`). Only its declared
 consumers reach it: `me-web` on `papaia-connections-net`, and add-ons that list `connections`
-under `networks.attach`. It is not on `papaia-net`. `me-web` does not present a client
-certificate yet, so with the default `CONNECTIONS_TLS_CLIENT_CA` its calls to the registry fail;
-clearing the variable allows one-sided TLS, which the security profile `kritis` refuses.
+under `networks.attach`. It is not on `papaia-net`. `me-web` joins `papaia-connections-net`
+only while the profile `me` runs on the same host, and calls with its own client certificate of
+the platform CA (see [Mein Bereich](#mein-bereich-me), "Connection registry"). Clearing
+`CONNECTIONS_TLS_CLIENT_CA` allows one-sided TLS, which the security profile `kritis` refuses.
 
 **Disable.** Switch the profile off and remove its containers:
 

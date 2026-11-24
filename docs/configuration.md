@@ -239,7 +239,7 @@ file reads every key through `${VAR}` interpolation (path 1).
 |---|---|
 | `CONNECTIONS_OWNER_DB_PASSWORD` | Generated. The owner of the schema; only the one-shot container `connections-migrate` uses it |
 | `CONNECTIONS_SERVICE_DB_PASSWORD` | Generated. The registry's own login, with data rights only. Both passwords reach the database as secret files; a new value locks the registry out of its database |
-| `CONNECTIONS_PERSON_CLIENTS`, `CONNECTIONS_SERVICE_CLIENTS`, `CONNECTIONS_DELEGATE_CLIENTS` | The OIDC clients whose tokens the registry accepts: as a person, as a service account (`client=service`), or as a gate with the person's own token. Empty in the core; a module that uses the registry names its entries |
+| `CONNECTIONS_PERSON_CLIENTS`, `CONNECTIONS_SERVICE_CLIENTS`, `CONNECTIONS_DELEGATE_CLIENTS` | The OIDC clients whose tokens the registry accepts: as a person, as a service account (`client=service`), or as a gate with the person's own token. Empty in the core; a module that uses the registry names its entries. While the profile `me` is on, `papaia-ctl` adds `papaia-me` to the person clients in a generated override and keeps the value set here; while it is off, `papaia-me` is taken out ([README, Mein Bereich](../README.md#mein-bereich-me)) |
 | `CONNECTIONS_MANDATE_DAYS` | Days after which a mandate ends unless the person is active. Empty: the registry's default |
 | `CONNECTIONS_PERSON_TOKEN_SERVICES` | Services that never use an account without the person's own token |
 | `CONNECTIONS_USE_PERSONS_PER_HOUR` | Brake: a service asking for credentials of more persons within an hour is held until an administrator releases it (default 500, 0 = off) |

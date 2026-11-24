@@ -29,6 +29,7 @@ from . import (
     gpu_detect,
     hosted_model,
     images,
+    me_connections,
     module_tls,
     paperless_gate,
     sql_uplink,
@@ -278,6 +279,10 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
     tls = generate_module_tls_override(config_dir)
     if tls is not None:
         written.append(tls)
+    # me-web as a person client of the connection registry while both profiles are on.
+    registry = me_connections.generate_override(config_dir)
+    if registry is not None:
+        written.append(registry)
     # papaia-audit behind papaia-egress while a SIEM target is set (lib/audit.py).
     siem = audit.generate_siem_override(config_dir)
     if siem is not None:

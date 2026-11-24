@@ -25,7 +25,9 @@
 #   - The environment of me-web and prefs holds exactly the variables the image
 #     reads: src/infra/me/service-env.json, generated from the image's source and
 #     compared by `python -m lib.me_profile check` (tools/tests/test_me_profile.py).
-#     No env_file: a second source of values is how names drift apart.
+#     No env_file: a second source of values is how names drift apart. The paths of
+#     me-web's client certificate for the connection registry (`with_profiles` in the
+#     list) come only from the override of both profiles, never from this file.
 #   - Read-only root file systems, no capabilities, no new privileges.
 #
 # Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env merged
@@ -96,11 +98,12 @@ services:
       start_period: 15s
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # The connection registry (profile `connections`, ADR 0021): only while both profiles
+    # run on the host, the generated override docker-compose.me-connections.override.yml
+    # puts me-web on papaia-connections-net with its client certificate of the platform
+    # PKI (tools/lib/me_connections.py). No other service of the profile joins it.
     networks:
       - papaia-net
-      # The connection registry (profile `connections`, ADR 0021): me-web is one of
-      # its declared consumers. The network exists whether the profile is on or not.
-      - papaia-connections-net
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     labels:

@@ -206,8 +206,9 @@ def test_the_chain_holder_is_the_only_exchange_client_that_is_an_audience():
 
 
 def test_more_than_twelve_confirmed_exchange_scopes_per_client_stop_the_sync():
-    # Audiences reserved for named clients (the core's people lookup) are left out.
-    limited = set(rs.AUDIENCE_LIMITS)
+    # Audiences reserved for named clients (the core's people lookup) and audiences whose
+    # pairing with papaia-me has fixed effects (the connection registry) are left out.
+    limited = set(rs.AUDIENCE_LIMITS) | {a for c, a in rs.PAIRING_EFFECTS if c == "papaia-me"}
     audiences = sorted(REGISTER.audiences - REGISTER.exchange_clients() - limited)[:13]
     assert len(audiences) == 13
     with pytest.raises(rs.RealmSyncError, match="at most 12"):

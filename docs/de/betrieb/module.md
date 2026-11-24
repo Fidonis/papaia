@@ -27,6 +27,33 @@ Funktion zusätzlich; „unabhängig“ heißt, keines der beiden sieht das ande
   Module. Mein Bereich startet vor jedem Modul.
 - Es gibt keinen Kreis aus „nötig“: Jedes Modul lässt sich allein mit dem Kern betreiben.
 
+## Mein Bereich und das Verbindungsregister
+
+Sind beide Profile an (`me` und `connections`), zeigt Mein Bereich einer Person ihre Konten,
+Vollmachten und Nutzungen im Verbindungsregister, und sie kann dort eine Vollmacht beenden.
+Dafür erhält `me-web` ein Client-Zertifikat der Plattform-PKI, tritt dem Netz des Registers
+bei, und das Register nimmt `papaia-me` als Personen-Client an. Ein selbst gesetzter Wert von
+`CONNECTIONS_PERSON_CLIENTS` bleibt erhalten. Ist eines der beiden Profile aus, entfällt all das.
+
+Das Tauschrecht kommt aus der Kopplung `papaia-me` -> `papaia-connections` der Stückliste,
+Wirkungen `r` (lesen) und `d` (Vollmacht beenden). Weil sie löscht, braucht sie nach der
+Bestätigung die Freigabe durch ein zweites Konto des Hosts:
+
+```sh
+papaia-ctl pairing list
+papaia-ctl pairing confirm --approve-pairings=<sha256>
+# als zweites Konto des Hosts, nicht dasselbe wie oben:
+papaia-ctl pairing approve --client=papaia-me --audience=papaia-connections --effects=rd
+papaia-ctl start
+```
+
+Vor der Freigabe zeigt Mein Bereich keine Daten des Registers. Die Kopplung hat genau die
+Wirkungen `r` und `d`; mehr oder weniger lehnt der Kern ab, die Freigabe durch ein zweites Konto
+ist also immer nötig. Mein Bereich ruft nur die Routen auf, die Konten, Mandate und Nutzungen
+auflisten, und die eine, die ein Mandat beendet. Das Register selbst beschränkt einen
+Personen-Client noch nicht auf diese Aufrufe: Es nimmt ein Token von `papaia-me` wie das der
+Person selbst an. Eine Beschränkung der Aufrufe je Client im Register steht noch aus.
+
 Ein Stapel aus Kern, Manager, Mein Bereich und Assistant ohne Flow, Studio und Data ist
 vollständig: Assistant läuft ohne Flow und bietet dann nur das Starten von Abläufen nicht an.
 

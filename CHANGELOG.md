@@ -21,6 +21,21 @@ based on merged pull requests; this file mirrors the published releases.
   never receives the shared chat token; opt-in, revoke and every relayed call are audited.
   The relay and the opt-in commands are not implemented yet.
 
+### Mein Bereich at the connection registry
+
+- With the profiles `me` and `connections` both on, `me-web` gets a client certificate of
+  the platform PKI next to its server certificate. A core `pki.yaml` may tie a client
+  certificate to further profiles (`client.with_profiles`).
+- New generated override `docker-compose.me-connections.override.yml`: `me-web` joins
+  `papaia-connections-net` only while both profiles run on the host, with its certificate
+  directory read-only and the paths `ME_CONNECTIONS_CA_FILE`, `ME_CONNECTIONS_CERT_FILE` and
+  `ME_CONNECTIONS_KEY_FILE` (listed under `with_profiles` in `src/infra/me/service-env.json`).
+  The registry's `CONNECTIONS_PERSON_CLIENTS` gets `papaia-me` while `me` is on, and keeps
+  the operator's value. Each change of the override is one `papaia.audit/1` row.
+- `me-web` is no longer on `papaia-connections-net` in the base compose file.
+- The pairing `papaia-me` -> `papaia-connections` may hold the effects `r` and `d` only;
+  the realm sync refuses any other effect for it. It is approved by a second host account.
+
 ### Information and erasure in chat, model gateway and identity provider
 
 - `papaia-ctl person run` now covers the core services: the chat by the person's `sub`

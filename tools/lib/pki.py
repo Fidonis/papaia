@@ -53,6 +53,8 @@ CORE_REQUEST_FILE = "pki.yaml"
 RESERVED_MODULES = frozenset({"ca", CORE_MODULE})
 MAX_SERVICES = 64
 MAX_DNS = 32
+# Profiles a core request's client certificate may additionally depend on.
+MAX_PROFILES = 8
 MAX_BUNDLE_BYTES = 1024 * 1024
 MAX_UID = 2**31 - 1
 # How long a run waits for another one (`certs renew` from a timer, `start`, `addon start`).
@@ -155,10 +157,37 @@ def _unknown(where: str, entry: dict, allowed: set[str]) -> None:
         raise PkiError(f"{where} has unknown keys: {', '.join(map(str, unknown))}")
 
 
+def _client_wanted(value: object, where: str, addon: bool, profiles: set[str] | None) -> bool:
+    """`client` of one service: true or false; in a core request also
+    `{with_profiles: [...]}`, a client certificate only while every named profile is on as
+    well (None: the profiles are not known, as when only server names are read)."""
+    if isinstance(value, bool):
+        return value
+    if addon or not isinstance(value, dict):
+        raise PkiError(f"{where}.client must be true or false")
+    _unknown(f"{where}.client", value, {"with_profiles"})
+    names = value.get("with_profiles")
+    if (
+        not isinstance(names, list)
+        or not 1 <= len(names) <= MAX_PROFILES
+        or not all(isinstance(n, str) and _LABEL_RE.match(n) for n in names)
+    ):
+        raise PkiError(
+            f"{where}.client.with_profiles must list 1 to {MAX_PROFILES} profile names"
+        )
+    return profiles is not None and set(names) <= profiles
+
+
 def parse_request(
-    block: object, module: str, source: str, *, addon: bool = False
+    block: object,
+    module: str,
+    source: str,
+    *,
+    addon: bool = False,
+    profiles: set[str] | None = None,
 ) -> list[ServiceRequest]:
-    """The service requests of one `pki:` block; `source` names the file in messages."""
+    """The service requests of one `pki:` block; `source` names the file in messages.
+    `profiles` are the active profiles a core request's `client.with_profiles` is held to."""
     if not _LABEL_RE.match(module) or (addon and module in RESERVED_MODULES):
         raise PkiError(f"{source}: '{module}' cannot name a module directory of the PKI")
     if block is None:
@@ -185,9 +214,7 @@ def parse_request(
             isinstance(uid, bool) or not isinstance(uid, int) or not 0 <= uid <= MAX_UID
         ):
             raise PkiError(f"{where}.uid must be the numeric user of the service, not {uid!r}")
-        client = entry.get("client", False)
-        if not isinstance(client, bool):
-            raise PkiError(f"{where}.client must be true or false")
+        client = _client_wanted(entry.get("client", False), where, addon, profiles)
         dns: list[str] = []
         server = entry.get("server")
         if server is not None:
@@ -212,7 +239,8 @@ def parse_request(
 
 def core_requests(repo_root: Path, profiles: set[str]) -> list[ServiceRequest]:
     """Requests of core modules: `src/**/pki.yaml` with the `pki:` block, an optional
-    `profile` it belongs to (always on without one) and an optional `module` name."""
+    `profile` it belongs to (always on without one) and an optional `module` name. A
+    service's client certificate may depend on further profiles (`client.with_profiles`)."""
     found: list[ServiceRequest] = []
     for path in sorted((repo_root / "src").rglob(CORE_REQUEST_FILE)):
         source = path.relative_to(repo_root).as_posix()
@@ -226,7 +254,9 @@ def core_requests(repo_root: Path, profiles: set[str]) -> list[ServiceRequest]:
         profile = doc.get("profile")
         if profile is not None and profile not in profiles:
             continue
-        found += parse_request(doc.get("pki"), str(doc.get("module") or CORE_MODULE), source)
+        found += parse_request(
+            doc.get("pki"), str(doc.get("module") or CORE_MODULE), source, profiles=profiles
+        )
     return found
 
 

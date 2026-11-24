@@ -121,6 +121,24 @@ pki:
 
 The release ships one: `src/infra/lifecycle/pki.yaml`.
 
+In a core request, `client` may also depend on further profiles: a client certificate is
+issued only while every profile named in `with_profiles` is on as well, and removed when one
+of them goes. `src/infra/me/pki.yaml` uses it for `me-web`, which calls the connection
+registry with mutual TLS only while the profile `connections` is on too:
+
+```yaml
+profile: me
+pki:
+  services:
+    - name: me-web
+      uid: 10001
+      server: {dns: [me-web]}
+      client:
+        with_profiles: [connections]
+```
+
+An add-on's `client` is `true` or `false` only.
+
 ## What a service gets
 
 ```

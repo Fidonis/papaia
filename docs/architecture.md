@@ -756,6 +756,15 @@ module serving the audience limits such a pairing to these two routes (any other
 is answered with 403). `flow-console` may be paired with these two audiences only; a
 pairing on any other audience (a connection `mcp-*` included) refuses the file.
 
+Mein Bereich at the connection registry (profiles `me` and `connections`) is a pairing of the
+bill of materials as well: `papaia-me` -> `papaia-connections` with the effects `r` (list the
+person's accounts, mandates and uses) and `d` (end a mandate). It deletes, so it waits after
+the confirmation until a second host account approves it. A `pairings.yaml` that gives this
+pair any other effect (`w`, `x`) is refused (`realm_sync.PAIRING_EFFECTS`). The rest of the
+wiring (client certificate of `me-web`, `papaia-connections-net`, `papaia-me` in
+`CONNECTIONS_PERSON_CLIENTS`) exists only while both profiles are on
+(`tools/lib/me_connections.py`).
+
 What the sync manages:
 
 | Object | Rule |
