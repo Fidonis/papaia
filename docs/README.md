@@ -62,6 +62,8 @@ Welcome to the papAIa documentation.
   steps for a person whose account is gone, and what an erasure means for the backups
 - [Nachweis mit dem ausgelieferten Modell](./de/betrieb/modellnachweis.md) — how the modules are
   checked with the smallest shipped model and what the report holds
+- [Anmeldung, Abmeldung und Einstiegsseite](./de/betrieb/anmeldung-und-einstieg.md) — the
+  entry page behind the main address, the shared login page and the sign-out in every module
 
 ## Conventions
 

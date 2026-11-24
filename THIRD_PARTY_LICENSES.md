@@ -78,6 +78,16 @@ not part of `papaia-ctl` and not part of any image.
 
 ---
 
+## Bundled files
+
+Files of other packages that this repository ships with the product.
+
+| Files | Version | License | Location | Notes |
+|---|---|---|---|---|
+| papaia-kit login theme resources | 0.1.0 | MIT (stylesheets); SIL OFL 1.1 (fonts Manrope, IBM Plex Sans, IBM Plex Mono) | `src/infra/keycloak/themes/papaia/login/resources/{css,fonts}/` | copied from the vendored kit by `tools/kit_snapshot.py`; served by Keycloak as the login theme `papaia`; the font licences travel with the fonts (`fonts/LICENSE-OFL-1.1-*.txt`) |
+
+---
+
 ## License key
 
 | Identifier | Full name |

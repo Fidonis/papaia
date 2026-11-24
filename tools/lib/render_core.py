@@ -730,6 +730,29 @@ def _effective_text(
     return text
 
 
+# Binary files of a rendered directory (the fonts of the login theme): the highest layer
+# present (add-on fragment, then overlay) is copied byte for byte, never read as text.
+BINARY_SUFFIXES = frozenset({".woff2", ".woff", ".png", ".ico"})
+
+
+def _render_binary(
+    rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
+) -> None:
+    content_path = repo_root / "src" / rel_path
+    for addon in active_addons:
+        frag_path = repo_root / addon["path"] / "integration" / rel_path
+        if frag_path.is_file():
+            content_path = frag_path
+    overlay_path = config_dir / "overlay" / rel_path
+    if overlay_path.is_file():
+        content_path = overlay_path
+    target = config_dir / rel_path
+    common.ensure_dir(target.parent)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    tmp_path.write_bytes(content_path.read_bytes())
+    os.replace(tmp_path, target)
+
+
 def _render_file(
     rel_path: str, repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> None:
@@ -789,7 +812,10 @@ def _render_dir(
     for file_path in sorted(base_dir.rglob("*")):
         if file_path.is_file():
             sub_rel = file_path.relative_to(src_root).as_posix()
-            _render_file(sub_rel, repo_root, config_dir, active_addons)
+            if file_path.suffix in BINARY_SUFFIXES:
+                _render_binary(sub_rel, repo_root, config_dir, active_addons)
+            else:
+                _render_file(sub_rel, repo_root, config_dir, active_addons)
     # Files only the overlay has are rendered for the LocalAI models alone, and there only the
     # model YAMLs the init job copies: an operator's own model. Every other overlay-only file
     # (a Finder `.DS_Store`, a theme `logo.png`, ...) stays ignored, as it always was.

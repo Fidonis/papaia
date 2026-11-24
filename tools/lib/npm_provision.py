@@ -17,7 +17,16 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import catalog, common, deployment, ingress, paperless_gate, startgate, uninstall_journal
+from . import (
+    catalog,
+    common,
+    deployment,
+    ingress,
+    paperless_gate,
+    sign_in,
+    startgate,
+    uninstall_journal,
+)
 from .envtree import EnvTree
 
 # Env-tree node holding the bundled proxy's own configuration. The NPM admin
@@ -160,6 +169,66 @@ def core_host_body(
         allow_websocket=websocket,
         advanced_config=advanced,
     )
+
+
+# The fields of the main address's host that setup owns (lib/sign_in.py): the redirect to
+# the entry page. A certificate or HSTS the operator set stays.
+ENTRY_OWNED_FIELDS = ("forward_scheme", "forward_host", "forward_port", "advanced_config")
+
+
+def entry_host_body(entry: sign_in.Entry) -> dict:
+    """The NPM API body of the main address: every request is redirected to the entry
+    page before anything is forwarded; the identity and gate headers are cleared."""
+    return proxy_host_body(
+        entry.hostname,
+        sign_in.ME_SERVICE,
+        sign_in.ME_PORT,
+        "http",
+        advanced_config=paperless_gate.strip_config() + sign_in.redirect_config(entry.target),
+    )
+
+
+def _is_entry_host(host: dict) -> bool:
+    """Whether setup created `host` as the main address's host: it forwards to Mein
+    Bereich's service and redirects (entry_host_body). An operator's host or another
+    interface's host at the domain is neither."""
+    return host.get("forward_host") == sign_in.ME_SERVICE and "return 302 " in (
+        host.get("advanced_config") or ""
+    )
+
+
+def _entry_host(
+    base_url: str, token: str, root: dict[str, str], tree, edge, found: list[ingress.Route]
+) -> str | None:
+    """Create or correct the host of the main address; its host name, or None when the
+    installation has no entry page. A host at the domain that does not forward to Mein
+    Bereich (another interface's, an operator's) stays as it is, with a note. Without an
+    entry page, a host setup created there is removed."""
+    hosts = _list_proxy_hosts(base_url, token)
+    domain = sign_in.main_hostname(tree)
+    current = next(
+        (h for h in hosts if domain is not None and domain in (h.get("domain_names") or [])),
+        None,
+    )
+    main, note = sign_in.entry_and_note(tree, found)
+    if main is None or not _is_subdomain_url(main.public_url, edge):
+        if note:
+            print(f"  {note}", file=sys.stderr, flush=True)
+        if current is not None and _is_entry_host(current):
+            _delete_proxy_host(base_url, token, current.get("id"))
+            print(f"  removed proxy host: {domain} (no entry page)", flush=True)
+        return None
+    if current is not None and current.get("forward_host") != sign_in.ME_SERVICE:
+        print(
+            f"  entry page: the main address {domain} has a proxy host setup did not"
+            f" create (-> {current.get('forward_host')}); left as it is",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    route = main.route(root.get("DOCKER_NETWORK") or "papaia-net")
+    _correct_host(base_url, token, route, entry_host_body(main), hosts, owned=ENTRY_OWNED_FIELDS)
+    return main.hostname
 
 
 def route_body(route: ingress.Route) -> dict:
@@ -451,13 +520,26 @@ def provision_npm_hosts(
         return False
 
     token = _get_token(base_url, email, password)
+
+    # Every interface first: the main address must not take a host name one of them
+    # serves (lib/sign_in.py).
+    edge = ingress.edge_ports(root)
+    found: list[ingress.Route] | None = None
+    routes_error: ingress.IngressError | None = None
+    if config_dir is not None and repo_root is not None:
+        try:
+            found = ingress.routes(tree, Path(config_dir), Path(repo_root))
+        except ingress.IngressError as exc:
+            routes_error = exc
+    main = _entry_host(
+        base_url, token, root, tree, edge, found if found is not None else ingress.core_routes(tree)
+    )
     existing = _existing_domains(base_url, token)
 
     created = 0
     skipped_existing = 0
     skipped_port_based = 0
 
-    edge = ingress.edge_ports(root)
     served: set[str] = set()  # host names an installed interface serves
     for spec in ingress.CORE_PROXY_HOSTS:
         profile, node, key, label, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws = spec
@@ -498,13 +580,13 @@ def provision_npm_hosts(
         print(f"  created proxy host: {domain} -> {fwd_scheme}://{fwd_host}:{fwd_port}", flush=True)
         created += 1
 
+    if main is not None:
+        served.add(main)
+
     ok = True
-    found: list = []
     if config_dir is not None and repo_root is not None:
-        try:
-            found = ingress.routes(tree, Path(config_dir), Path(repo_root))
-        except ingress.IngressError as exc:
-            print(f"Add-on proxy hosts skipped: {exc}", file=sys.stderr, flush=True)
+        if found is None:
+            print(f"Add-on proxy hosts skipped: {routes_error}", file=sys.stderr, flush=True)
             ok = False
         else:
             # The Paperless route goes to its gate with the proxy's secret (below).
@@ -514,7 +596,7 @@ def provision_npm_hosts(
             ok = _uninstalled_hosts(base_url, token, Path(config_dir), served) and ok
     if config_dir is not None:
         try:
-            block = _startgate_block(tree, Path(config_dir), found)
+            block = _startgate_block(tree, Path(config_dir), found or [])
         except startgate.StartgateError as exc:
             # Without the block the edge would forward while the gate is closed.
             print(f"ERROR: the start gate cannot be set up at the edge: {exc}", file=sys.stderr)

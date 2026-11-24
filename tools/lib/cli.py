@@ -1627,12 +1627,18 @@ def cmd_proxy_list(args: argparse.Namespace) -> int:
     except ingress.IngressError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    from . import sign_in
+
+    main, note = sign_in.entry_and_note(tree, found)
+    if note:
+        print(f"NOTE: {note}", file=sys.stderr)
+    entry = (main.hostname, main.target) if main is not None else None
     if args.json:
-        print(ingress.to_json(provider, found))
+        print(ingress.to_json(provider, found, entry))
     else:
         if args.if_external:
             print("Forwards to set up at the external proxy (papaia-ctl proxy list):")
-        print(ingress.format_table(provider, found), end="")
+        print(ingress.format_table(provider, found, entry), end="")
     return 0
 
 

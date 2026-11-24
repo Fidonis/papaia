@@ -3768,6 +3768,16 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             tree.get("ai/librechat", {}),
             lifetime=delegation_lifetime.stored(config_dir),
         )
+        from . import sign_in  # through ingress and gen_override it imports this module
+
+        plan.hardening.sign_in_clients = sign_in.client_ids()
+        plan.hardening.sign_out_owned = sign_in.owned_addresses()
+        plan.hardening.sign_out, notes = sign_in.installation_targets(tree, config_dir, repo_root)
+        plan.hardening.notes.extend(notes)
+        for client_id, url in sorted(plan.hardening.sign_out.items()):
+            problem = rh.backchannel_problem(url)
+            if problem is not None:
+                raise rh.HardeningError(f"back-channel logout of {client_id}: {problem}")
         removed = _uninstalled(config_dir, plan)
         from . import federation  # it imports this module
 

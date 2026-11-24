@@ -7,6 +7,10 @@ dependency only). It therefore reads copies of what it needs from the vendored r
   validate against, with `schemas/kit/snapshot.json` (release and sha256 of each file);
 - `lib/names_register.json`, the naming register with the exchange scope of every
   audience as the kit builds it.
+- the resources of the kit's login theme (`dist/keycloak/papaia/login/resources/`: token
+  values, the theme's stylesheet, fonts and their licences) under
+  `src/infra/keycloak/themes/papaia/login/resources/`. The core's `theme.properties`
+  loads them first and its own brand layer (`css/papaia.css`, logo) after them.
 
 This tool writes those files from the installed kit, and only from it: the release named
 in `kit.lock` must be the installed one. After vendoring a new release:
@@ -37,7 +41,32 @@ SCHEMAS = (
 SCHEMA_DIR = "schemas/kit"
 SCHEMA_SNAPSHOT = f"{SCHEMA_DIR}/snapshot.json"
 REGISTER = "lib/names_register.json"
-OUTPUTS = (*(f"{SCHEMA_DIR}/{name}" for name in SCHEMAS), SCHEMA_SNAPSHOT, REGISTER)
+# The login theme's resources, relative to the kit's theme and to the core's (from `root`).
+THEME_FILES = (
+    "css/tokens.css",
+    "css/papaia-login.css",
+    *(
+        f"fonts/{name}"
+        for name in (
+            "LICENSE-OFL-1.1-IBM-Plex-Mono.txt",
+            "LICENSE-OFL-1.1-IBM-Plex-Sans.txt",
+            "LICENSE-OFL-1.1-Manrope.txt",
+            "ibm-plex-mono-latin-400-normal.woff2",
+            "ibm-plex-sans-latin-400-normal.woff2",
+            "ibm-plex-sans-latin-500-normal.woff2",
+            "ibm-plex-sans-latin-600-normal.woff2",
+            "manrope-latin-500-normal.woff2",
+            "manrope-latin-700-normal.woff2",
+            "manrope-latin-800-normal.woff2",
+        )
+    ),
+)
+KIT_THEME = ("_data", "dist", "keycloak", "papaia", "login", "resources")
+THEME_DIR = "../src/infra/keycloak/themes/papaia/login/resources"
+THEME_OUTPUTS = tuple(f"{THEME_DIR}/{name}" for name in THEME_FILES)
+OUTPUTS = (
+    *(f"{SCHEMA_DIR}/{name}" for name in SCHEMAS), SCHEMA_SNAPSHOT, REGISTER, *THEME_OUTPUTS,
+)  # fmt: skip
 
 _VERSION_RE = re.compile(r"\A\d{1,6}\.\d{1,6}\.\d{1,6}\Z")
 _COMMIT_RE = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -154,6 +183,9 @@ def build(root: Path = TOOLS) -> dict[str, bytes]:
     from papaia_kit import names
 
     files[REGISTER] = _register_text(release, names).encode("utf-8")
+    theme = resources.files(kit).joinpath(*KIT_THEME)
+    for name in THEME_FILES:
+        files[f"{THEME_DIR}/{name}"] = theme.joinpath(*name.split("/")).read_bytes()
     return files
 
 

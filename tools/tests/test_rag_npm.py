@@ -29,6 +29,8 @@ def _provision(monkeypatch, tree, existing=()):
     monkeypatch.setattr(npm_provision, "_wait_for_npm", lambda base_url, timeout=60: None)
     monkeypatch.setattr(npm_provision, "_get_token", lambda base_url, email, password: "token")
     monkeypatch.setattr(npm_provision, "_existing_domains", lambda base_url, token: set(existing))
+    hosts = [{"id": i, "domain_names": [d]} for i, d in enumerate(existing, 1)]
+    monkeypatch.setattr(npm_provision, "_list_proxy_hosts", lambda base_url, token: hosts)
 
     def record(base_url, token, domain, host, port, scheme, ssl_verify, ws):
         created.append({"domain": domain, "forward": f"{scheme}://{host}:{port}"})

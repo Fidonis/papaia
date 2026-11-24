@@ -30,6 +30,14 @@ Keycloak's own clients keep their relative URIs.
 A public client never carries `standard.token.exchange.enabled` (only confidential
 clients exchange tokens).
 
+Sign-out (PLT-29, lib/sign_in.py): a sign-in client with a back-channel logout address
+(`sign_out`) gets exactly that address, the session id required, offline sessions kept
+(a delegation outlives a browser session) and the front channel off. Each module's
+sign-in client (`sign_in_clients`) gets the login theme `papaia` when it has none. A
+client without an address loses one the core set on the stack network
+(`sign_out_owned`), so a profile turned off leaves no call to a missing service; the
+attribute is emptied, which Keycloak reads as no address.
+
 Client policy `papaia-hardening`: for every client with `papaia.managed=true`, PKCE is
 enforced and the password grant and the implicit flow are rejected, whatever a client's
 own switches say. Keycloak refuses any update of such a client whose PKCE method is not
@@ -63,6 +71,11 @@ MANAGED = "papaia.managed"
 SWITCHES = ("directAccessGrantsEnabled", "implicitFlowEnabled")
 POST_LOGOUT = "post.logout.redirect.uris"
 TOKEN_EXCHANGE = "standard.token.exchange.enabled"
+BACKCHANNEL_URL = "backchannel.logout.url"
+BACKCHANNEL_SESSION = "backchannel.logout.session.required"
+BACKCHANNEL_OFFLINE = "backchannel.logout.revoke.offline.tokens"
+LOGIN_THEME, THEME = "login_theme", "papaia"
+MAX_URL = 2048
 CLIENT_POLICY = "papaia-hardening"
 REALM_ADMIN_PASSWORD_KEY = "KC_REALM_ADMIN_PASSWORD"
 # A generated value is far longer; this only refuses a hand-typed word.
@@ -141,6 +154,12 @@ class Hardening:
     settings: Settings = field(default_factory=Settings)
     clients: dict[str, ClientUris] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    # Back-channel logout address per sign-in client and the sign-in clients of the
+    # modules (lib/sign_in.py; `realm sync` sets both).
+    sign_out: dict[str, str] = field(default_factory=dict)
+    sign_in_clients: frozenset[str] = frozenset()
+    # The addresses the core sets on the stack network, by client (cleared when unset).
+    sign_out_owned: dict[str, str] = field(default_factory=dict)
     # KC_REALM_ADMIN_PASSWORD (a secret: never printed, never in an audit row); None when
     # it is not set.
     realm_admin_password: str | None = field(default=None, repr=False)
@@ -309,6 +328,43 @@ def _absolute_root(client: dict) -> bool:
     return redirect_problem(root, https_only=False) is None and "*" not in root
 
 
+def backchannel_problem(url: object) -> str | None:
+    """Why `url` cannot be a back-channel logout address, or None: an absolute http(s)
+    URL with a fully named host, without user name, query, fragment or wildcard. Plain
+    http is allowed: the provider calls a core service on the stack network that way."""
+    if not isinstance(url, str) or not 0 < len(url) <= MAX_URL:
+        return f"not a text of 1 to {MAX_URL} characters"
+    if "*" in url or any(c.isspace() for c in url):
+        return "a wildcard or white space"
+    problem = redirect_problem(url, https_only=False)
+    if problem is not None:
+        return problem
+    parts = urllib.parse.urlsplit(url)
+    if parts.query or parts.fragment:
+        return "a query or fragment"
+    return None
+
+
+def _sign_out(client_id: str, attributes: dict, hardening: Hardening) -> tuple[dict, dict]:
+    """The fields and attributes that give a sign-in client its sign-out and theme."""
+    body: dict = {}
+    wanted: dict = {}
+    if client_id in hardening.sign_in_clients and not attributes.get(LOGIN_THEME):
+        wanted[LOGIN_THEME] = THEME
+    url = hardening.sign_out.get(client_id)
+    if url is None:
+        owned = hardening.sign_out_owned.get(client_id)
+        if owned is not None and attributes.get(BACKCHANNEL_URL) == owned:
+            wanted[BACKCHANNEL_URL] = ""
+        return body, wanted
+    problem = backchannel_problem(url)
+    if problem is not None:
+        raise HardeningError(f"back-channel logout of {client_id}: {problem}")
+    wanted.update({BACKCHANNEL_URL: url, BACKCHANNEL_SESSION: "true", BACKCHANNEL_OFFLINE: "false"})
+    body["frontchannelLogout"] = False
+    return body, wanted
+
+
 def _kept(uris: list[str], client: dict, https_only: bool) -> list[str]:
     """The entries of a client without a configured host that may stay."""
     kept = []
@@ -344,6 +400,9 @@ def harden_client(
         wanted_attributes[PKCE] = "S256"
     if client.get("publicClient") and str(attributes.get(TOKEN_EXCHANGE, "")).lower() == "true":
         wanted_attributes[TOKEN_EXCHANGE] = "false"
+    sign_out_fields, sign_out_attributes = _sign_out(client_id, attributes, hardening)
+    body.update({k: v for k, v in sign_out_fields.items() if client.get(k) != v})
+    wanted_attributes.update(sign_out_attributes)
     if not builtin:
         configured = hardening.clients.get(client_id)
         redirects = list(client.get("redirectUris") or [])

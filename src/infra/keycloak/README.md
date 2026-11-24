@@ -218,12 +218,55 @@ theme `papaia` (`src/infra/keycloak/themes/papaia`, rendered to
 assigned per client through the client attribute `login_theme`, never through the realm's
 login theme, which stays unset. The realm template sets the attribute on the core clients;
 on an existing installation the start-time sync adds it where it is missing and leaves a
-`login_theme` somebody set by hand alone. To rebrand, replace `resources/css/papaia.css`
-or `resources/img/papaia-logo.svg` through the overlay
+`login_theme` somebody set by hand alone. `papaia-ctl realm sync` gives the sign-in client
+of each module (Mein Bereich `papaia-me`, Flow `flow-console`, Studio
+`papaia-studio-gateway`, the assistant `assist-api`, Data `papaia-data-ui`) the same theme
+when it has none. The theme is the kit's login theme: `resources/css/tokens.css`,
+`resources/css/papaia-login.css` and `resources/fonts/` are copies of the vendored
+papaia-kit release (`tools/kit_snapshot.py write`; CI checks them with `check`), loaded in
+the kit's order. `resources/css/papaia.css` is the brand layer on top (logo, button and
+header), with values from the kit's tokens only. To rebrand, replace
+`resources/css/papaia.css` or `resources/img/papaia-logo.svg` through the overlay
 (`$PAPAIA_CONFIG_DIR/overlay/infra/keycloak/themes/papaia/login/…`); Keycloak caches themes,
 so restart the `keycloak` service afterwards. An add-on that registers its own client sets
 `login_theme: papaia` in that client's `attributes` to get the same page. With an external
 OIDC provider this does not apply.
+
+**Sign-out in every module (PLT-29).** Signing out in one module ends the single sign-on
+session; Keycloak then calls the back-channel logout address (OpenID Connect Back-Channel
+Logout 1.0) of every other module's sign-in client, and that module ends its sessions at
+once. `papaia-ctl realm sync` sets the address at each sign-in client that exists, with
+`backchannel.logout.session.required=true`, offline sessions kept and the front channel off:
+
+| Client | Back-channel logout address |
+|---|---|
+| `papaia-me` | `http://me-web:8000/auth/backchannel-logout` (stack network, profile `me`) |
+| `flow-console` | `<Flow host>/auth/backchannel-logout` |
+| `papaia-studio-gateway` | `<Studio host>/gw/v1/auth/backchannel-logout` |
+| `assist-api` | `<assistant host>/signin/backchannel-logout` |
+
+The hosts are those of `papaia-ctl proxy list`; without a proxy (`no_proxy`) the add-ons'
+addresses are not set and stay a step in the admin console. When the add-on routes cannot
+be read (a scheme value, an unreadable or malformed `deployment.yaml` or manifest), the
+sync prints a note, sets only Mein Bereich's address and goes on. Data's interface has no
+back-channel route: its session ends when the next token refresh fails, at the latest when
+the access token runs out (240 s). After the sign-out the browser lands on the module's own
+`/_kit/signed-out` page from the kit.
+
+*Fallback when a call fails.* Keycloak calls the add-ons' addresses from inside its
+container, by their public host names. Where those names do not lead to the proxy from
+there, the call fails and that module is not told at once (how Keycloak reports the failed
+call to the browser is part of the joint test):
+
+- the local scheme (`<label>.<env>.papaia.localhost`): `.localhost` resolves to the
+  container's own loopback; `realm sync` prints a note naming the affected clients;
+- a server domain whose public address the host cannot reach from inside (no hairpin NAT,
+  split DNS).
+
+Such a module then learns of the sign-out at its next token refresh, which fails: within
+the 240 s access token lifetime, and so within 300 s, only if its session depends on that
+refresh. The joint sign-out test (PLT-29-A1) checks both schemes. Turning profile `me` off
+clears the address `realm sync` had set at `papaia-me`.
 
 **Realm account**
 

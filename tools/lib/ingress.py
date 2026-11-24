@@ -416,8 +416,11 @@ def is_installation_url(url: str, found: list[Route]) -> bool:
     return False
 
 
-def format_table(provider: str, found: list[Route]) -> str:
-    """The list of forwards for an operator: host name -> internal target."""
+def format_table(
+    provider: str, found: list[Route], entry: tuple[str, str] | None = None
+) -> str:
+    """The list of forwards for an operator: host name -> internal target, and the main
+    address -> the entry page (`entry`: host name and target, lib/sign_in.py)."""
     if provider == "no_proxy":
         return (
             "REVERSE_PROXY_PROVIDER=no_proxy: no proxy serves the interfaces; they are\n"
@@ -437,6 +440,8 @@ def format_table(provider: str, found: list[Route]) -> str:
             rows.append(
                 (hostname, route.target, route.network, route.module, ",".join(options) or "-")
             )
+    if entry is not None:
+        rows.append((entry[0], f"redirect 302 {entry[1]}", "-", "core", "entry-page"))
     widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
     lines = [
         "  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip()
@@ -445,7 +450,8 @@ def format_table(provider: str, found: list[Route]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def to_json(provider: str, found: list[Route]) -> str:
-    return json.dumps(
-        {"provider": provider, "routes": [r.as_dict() for r in found]}, indent=2, sort_keys=True
-    )
+def to_json(provider: str, found: list[Route], entry: tuple[str, str] | None = None) -> str:
+    doc: dict = {"provider": provider, "routes": [r.as_dict() for r in found]}
+    if entry is not None:
+        doc["entry"] = {"hostname": entry[0], "redirect": entry[1]}
+    return json.dumps(doc, indent=2, sort_keys=True)
