@@ -324,6 +324,13 @@ exposes:                           # optional (addon_api 7): what this add-on of
     audience: mcp-<name>
     max_class: internal            # highest data class the service may receive
     consumable: true               # false needs `reason`; own_oauth is never consumable
+
+pki:                               # optional, additive (no addon_api bump): server and
+  services:                        # client certificates from the internal CA of the
+    - name: <name>-gateway         # `pki` profile (ADR 0019, docs/pki.md); a DNS label,
+      uid: 10001                   # also the client CN. Files are owned by `uid`. Served
+      server: {dns: [<name>-gateway]}  # only while the profile is on; older cores
+      client: true                 # ignore the key.
 ```
 
 #### `.env.example` value markers
@@ -861,8 +868,10 @@ pki:                               # optional; ignored by a core without the pro
 
 The files land in `<PAPAIA_PKI_DIR>/<module>/<service>/` (`ca.crt`, `tls.crt`, `tls.key`,
 `client.crt`, `client.key`, `generation`), owned by that uid, and are renewed at two thirds of
-their lifetime with a restart of what changed. The edge certificates of the reverse proxy are
-not affected. The operator guide is [pki.md](pki.md).
+their lifetime with a restart of what changed, whenever papaia-ctl runs the issuer (`setup`,
+`start`, the add-on commands, `pki renew` from a daily timer). In a distributed installation
+the issuer runs on the controller and names what has to be restarted instead. The edge
+certificates of the reverse proxy are not affected. The operator guide is [pki.md](pki.md).
 
 ---
 

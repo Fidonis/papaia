@@ -1619,10 +1619,11 @@ def check_certs(ctx: Context) -> CheckResult:
             continue
         days = (not_after - ctx.now).days
         # A leaf is renewed with a third of its lifetime left; under 14 days the renewal
-        # has not run (papaia-ctl pki renew).
+        # has not run (papaia-ctl pki renew). The active CA is reported a leaf lifetime
+        # ahead, when a rotation is due.
         if days < CERT_FAIL_DAYS:
             verdict = FAIL
-        elif days < pki.EXPIRY_WARN_DAYS:
+        elif days < entry.get("warn_days", pki.EXPIRY_WARN_DAYS):
             verdict = WARN
         else:
             verdict = PASS

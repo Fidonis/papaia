@@ -59,6 +59,32 @@ _pki_restart_changed() {
         esac
     done < "$output"
 
+    # In a distributed installation an add-on is neither listed nor restarted from here
+    # (_addon_compose_distributed refuses `ps` and `restart`), and the core services run
+    # from the nodes' bundles. Name what needs a restart instead of skipping it.
+    local mode="single"
+    if declare -F _topology_mode >/dev/null; then
+        mode="$(_topology_mode 2>/dev/null)" || mode="single"
+    fi
+    if [ "$mode" = "distributed" ]; then
+        local active addon
+        local -a pending=()
+        pending+=(${core_services[@]+"${core_services[@]}"})
+        if [ "${#addons[@]}" -gt 0 ]; then
+            active="$(py_cli active-addons 2>/dev/null || true)"
+            for addon in ${addons[@]+"${addons[@]}"}; do
+                printf '%s\n' "$active" | tr -d '\r' | grep -qx "$addon" && pending+=("add-on $addon")
+            done
+        fi
+        if [ "${#pending[@]}" -gt 0 ]; then
+            warn "New certificates for: ${pending[*]}."
+            warn "  A distributed installation does not restart them from here: restart each one"
+            warn "  (an add-on with 'papaia-ctl addon stop <name>' and 'papaia-ctl addon start <name>')"
+            warn "  so it loads the new files."
+        fi
+        return 0
+    fi
+
     if [ "${#core_services[@]}" -gt 0 ]; then
         local env_file="$REPO_ROOT/src/.env" running name
         running="$(docker compose -f "$COMPOSE_FILE" --env-file "$env_file" ps --status running --services 2>/dev/null || true)"
@@ -172,14 +198,16 @@ _pki_summary() {
 }
 
 # Before `uninstall` deletes the config dir: the service directories belong to other users
-# and only the issuer can delete them. With --clean-up the CA volume goes as well.
+# and only the issuer can delete them. It deletes only what it wrote, so a directory
+# outside the config dir is cleared as well. With --clean-up the CA volume goes too.
 _pki_uninstall() {
     local clean_up="$1"
     _pki_load_state >/dev/null 2>&1 || return 0
     docker info >/dev/null 2>&1 || return 0
-    if [ "${PKI_INSIDE_CONFIG:-false}" = "true" ] && [ -d "$PKI_DIR" ]; then
+    if [ -d "$PKI_DIR" ]; then
         info "Deleting the internal certificates in $PKI_DIR..."
         _pki_issuer purge >/dev/null || warn "Could not delete $PKI_DIR through the issuer."
+        [ "${PKI_INSIDE_CONFIG:-false}" = "true" ] || rmdir "$PKI_DIR" 2>/dev/null || true
     fi
     if [ "$clean_up" -eq 1 ]; then
         docker volume rm "${PKI_PROJECT}_pki-ca" >/dev/null 2>&1 || true
@@ -286,9 +314,13 @@ _pki_purge() {
         error "The internal CA is still on; 'papaia-ctl setup --no-pki' switches it off first."
         exit 2
     fi
-    warn "This deletes every file in $PKI_DIR."
+    warn "This deletes the internal certificates in $PKI_DIR (other files there stay)."
     [ "$ca" -eq 1 ] && warn "  --ca: the CA key in the volume ${PKI_PROJECT}_pki-ca is deleted as well."
-    if [ "$non_interactive" -eq 0 ] && is_tty; then
+    if [ "$non_interactive" -eq 0 ]; then
+        if ! is_tty; then
+            error "Refusing to delete without confirmation. Re-run with -y in non-interactive contexts."
+            exit 2
+        fi
         confirm "Delete the internal certificates?" "N" || { error "Aborted."; exit 3; }
     fi
     if [ -d "$PKI_DIR" ]; then
@@ -298,5 +330,6 @@ _pki_purge() {
     if [ "$ca" -eq 1 ]; then
         docker volume rm "${PKI_PROJECT}_pki-ca" >/dev/null 2>&1 || true
     fi
+    py_cli pki-forget || true
     success "pki purge complete."
 }

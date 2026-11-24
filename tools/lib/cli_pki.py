@@ -19,7 +19,7 @@ def _print_kv(values: dict[str, str]) -> None:
         print(f"{key}={value}")
 
 
-def _fail(exc: Exception) -> int:
+def _fail(exc: Exception | str) -> int:
     print(f"ERROR: {exc}", file=sys.stderr)
     return 3
 
@@ -69,6 +69,10 @@ def cmd_pki_plan(args: argparse.Namespace) -> int:
         values = pki.settings(config_dir)
     except pki.PkiError as exc:
         return _fail(exc)
+    except OSError as exc:
+        # A directory that cannot be created or written here, e.g. one that is not
+        # mounted where papaia-ctl runs: a message, not a traceback.
+        return _fail(f"cannot write the request list of the internal CA: {exc}")
     for line in plan.skipped:
         print(f"WARNING: no certificates for {line}", file=sys.stderr)
     _print_kv(values)
@@ -86,6 +90,13 @@ def cmd_pki_status(args: argparse.Namespace) -> int:
     return 1 if report.get("attention") else 0
 
 
+def cmd_pki_forget(args: argparse.Namespace) -> int:
+    """After `pki purge`: drop the directory remembered for a switched-off profile."""
+    config_dir, _repo = _paths(args)
+    pki.forget_dir(config_dir)
+    return 0
+
+
 def add_parsers(sub) -> None:
     p = sub.add_parser("pki-state")
     p.set_defaults(func=cmd_pki_state)
@@ -101,3 +112,6 @@ def add_parsers(sub) -> None:
     p = sub.add_parser("pki-status")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_pki_status)
+
+    p = sub.add_parser("pki-forget")
+    p.set_defaults(func=cmd_pki_forget)

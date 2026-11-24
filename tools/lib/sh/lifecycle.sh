@@ -143,6 +143,9 @@ cmd_start() {
             py_cli cluster-lock --clear
             UPGRADE_IN_PROGRESS=1
         fi
+        # The internal certificates are issued on the controller (profile pki); what has
+        # to be restarted on a node is named, not restarted from here.
+        if declare -F _pki_sync >/dev/null; then _pki_sync || exit 3; fi
         _start_distributed "$node" "$profiles" "$addons" "$force"
         return
     fi

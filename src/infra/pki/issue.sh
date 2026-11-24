@@ -15,7 +15,8 @@
 #               then sync: every bundle then trusts both
 #   promote-ca  make the staged CA the active one, keep the old one in the bundle until its
 #               last certificate has expired, then sync: every leaf is issued again
-#   purge       delete everything under /pki and the bookkeeping in /ca/state
+#   purge       delete what the CA wrote under /pki (its files, the module directories it
+#               issued into) and the bookkeeping in /ca/state; other files stay
 #
 # Settings (environment): PKI_MODE issue|external, PKI_LEAF_DAYS (1-90), PKI_CA_DAYS,
 # PKI_CA_NAME, PKI_FORCE=1 (issue every leaf again), PKI_HOST_DIR (the host path of /pki,
@@ -126,6 +127,20 @@ cn_of() {
     subject_of "$1" | tr ',' '\n' | sed -n 's/^CN=//p' | head -n 1
 }
 
+# Owner $2:$2 and mode $3 (octal, as `stat -c %a` prints it) for $1, set only where they
+# differ: a run with nothing to do changes nothing, not even a file's ctime.
+own() {
+    ow_now="$(stat -c '%u:%g %a' "$1" 2>/dev/null)" || ow_now=""
+    [ "$ow_now" = "$2:$2 $3" ] && return 0
+    chown "$2:$2" "$1"
+    chmod "$3" "$1"
+}
+
+# Mode $2 for $1 (owner unchanged), set only where it differs.
+mode() {
+    [ "$(stat -c '%a' "$1" 2>/dev/null)" = "$2" ] || chmod "$2" "$1"
+}
+
 # Writes $1 to $2 by rename in the target directory, owner $3 and mode $4.
 install_file() {
     if_tmp="$(dirname "$2")/.$(basename "$2").new"
@@ -231,10 +246,13 @@ build_bundle() {
             bb_until="$(cat "${bb_crt%.crt}.until" 2>/dev/null || echo 0)"
             if [ "$bb_until" -le "$NOW" ]; then
                 log "Removing the retired CA '$(subject_of "$bb_crt")' from the bundle: its last certificate has expired."
-                rm -f "$bb_crt" "${bb_crt%.crt}.until"
+                rm -f "$bb_crt" "${bb_crt%.crt}.until" "${bb_crt%.crt}.chain" "${bb_crt%.crt}.source"
                 continue
             fi
             bundle_add "$bb_crt"
+            # An imported CA's issuers up to its root: without them a verifier that needs a
+            # self-signed anchor rejects the leaves it signed.
+            bundle_add "${bb_crt%.crt}.chain"
         done
     fi
 }
@@ -263,6 +281,16 @@ build_intermediates() {
 # prefix ($4.key, $4.crt with the intermediates after the leaf).
 sign_leaf() {
     sl_kind="$1" sl_service="$2" sl_dns="$3" sl_out="$4"
+    # A leaf never outlives the CA that signs it: shortened to the CA's end, and refused
+    # once less than a day is left.
+    sl_days="$LEAF_DAYS"
+    sl_ca_end="$(cert_epoch "$CA/active/ca.crt" end)" || die "cannot read the end date of the issuing CA"
+    sl_left=$(( (sl_ca_end - $(date -u +%s)) / 86400 ))
+    [ "$sl_left" -ge 1 ] || die "the issuing CA ends within a day; replace it with 'papaia-ctl pki rotate-ca'"
+    if [ "$sl_left" -lt "$sl_days" ]; then
+        log "The issuing CA ends in $sl_left days: the $sl_kind certificate of $sl_service ends with it."
+        sl_days="$sl_left"
+    fi
     ossl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$sl_out.key" \
         || die "could not create a key for $sl_service"
     ossl req -new -key "$sl_out.key" -subj "/CN=$sl_service" -out "$TMP/leaf.csr" \
@@ -287,7 +315,7 @@ sign_leaf() {
         fi
     } > "$TMP/leaf.ext"
     ossl x509 -req -in "$TMP/leaf.csr" -CA "$CA/active/ca.crt" -CAkey "$CA/active/ca.key" \
-        -set_serial "0x$(openssl rand -hex 16)" -days "$LEAF_DAYS" -extfile "$TMP/leaf.ext" \
+        -set_serial "0x$(openssl rand -hex 16)" -days "$sl_days" -extfile "$TMP/leaf.ext" \
         -out "$TMP/leaf.crt" \
         || die "could not sign the $sl_kind certificate of $sl_service"
     cat "$TMP/leaf.crt" "$TMP/intermediates.crt" > "$sl_out.crt"
@@ -331,7 +359,7 @@ sync_service() {
     dir="$PKI/$module/$service"
     state="$CA/state/$module/$service"
     mkdir -p "$PKI/$module" "$state" "$dir"
-    chmod 0755 "$PKI/$module"
+    mode "$PKI/$module" 755
     staged="$TMP/staged"
     rm -rf "$staged"
     mkdir -p "$staged"
@@ -401,14 +429,12 @@ sync_service() {
     # Owner and modes of what is there, also of files someone else put there.
     for name in tls.key client.key; do
         if [ -f "$dir/$name" ]; then
-            chown "$uid:$uid" "$dir/$name"
-            chmod 0400 "$dir/$name"
+            own "$dir/$name" "$uid" 400
         fi
     done
     for name in tls.crt client.crt ca.crt; do
         if [ -f "$dir/$name" ]; then
-            chown "$uid:$uid" "$dir/$name"
-            chmod 0444 "$dir/$name"
+            own "$dir/$name" "$uid" 444
         fi
     done
 
@@ -421,8 +447,7 @@ sync_service() {
         echo "$module" >> "$TMP/changed"
         echo "service $module $service" >> "$TMP/services"
     fi
-    chown "$uid:$uid" "$dir"
-    chmod 0500 "$dir"
+    own "$dir" "$uid" 500
 
     printf '%s\n' "$uid$TAB$dns$TAB$client" > "$state/request"
     if [ "$MODE" = issue ]; then
@@ -506,7 +531,7 @@ write_inventory() {
             for wi_crt in "$CA"/retired/*.crt; do
                 [ -f "$wi_crt" ] || continue
                 printf ',\n'
-                ca_entry "$wi_crt" retired pki
+                ca_entry "$wi_crt" retired "$(cat "${wi_crt%.crt}.source" 2>/dev/null || echo pki)"
             done
         fi
         printf '\n  ],\n  "services": [\n'
@@ -520,6 +545,11 @@ write_inventory() {
         fi
         printf '\n  ]\n}\n'
     } > "$TMP/inventory.json"
+    # `generated_at` differs on every run; the file is replaced only when anything else did.
+    if [ -f "$PKI/inventory.json" ] && [ "$(grep -v '"generated_at"' "$TMP/inventory.json")" = \
+        "$(grep -v '"generated_at"' "$PKI/inventory.json")" ]; then
+        return 0
+    fi
     if ! cmp -s "$TMP/inventory.json" "$PKI/inventory.json"; then
         cp "$TMP/inventory.json" "$PKI/.inventory.json.new"
         chmod 0444 "$PKI/.inventory.json.new"
@@ -547,7 +577,7 @@ cmd_sync() {
         chmod 0444 "$PKI/.ca-bundle.crt.new"
         mv -f "$PKI/.ca-bundle.crt.new" "$PKI/ca-bundle.crt"
     fi
-    chmod 0755 "$PKI"
+    mode "$PKI" 755
 
     : > "$TMP/wanted"
     : > "$TMP/inventory.parts"
@@ -630,6 +660,12 @@ cmd_promote_ca() {
     mkdir -p "$CA/retired"
     old_fp="$(fingerprint "$CA/active/ca.crt")"
     cp "$CA/active/ca.crt" "$CA/retired/$old_fp.crt"
+    # An imported CA keeps its issuers and its source: the bundle still leads its leaves to
+    # their root, and the inventory still names it `enterprise`.
+    if [ -s "$CA/active/chain.crt" ]; then
+        cp "$CA/active/chain.crt" "$CA/retired/$old_fp.chain"
+    fi
+    cat "$CA/active/source" 2>/dev/null > "$CA/retired/$old_fp.source" || echo pki > "$CA/retired/$old_fp.source"
     # Its leaves live LEAF_DAYS at most; a day of margin for clocks and slow restarts.
     echo $((NOW + (LEAF_DAYS + 1) * 86400)) > "$CA/retired/$old_fp.until"
     rm -rf "$CA/active.old"
@@ -641,9 +677,30 @@ cmd_promote_ca() {
 }
 
 cmd_purge() {
-    find "$PKI" -mindepth 1 -delete 2>/dev/null || rm -rf "${PKI:?}"/* "${PKI:?}"/.[!.]* 2>/dev/null || true
+    # Only what the PKI wrote: its files at the top and the module directories it issued
+    # into, as its bookkeeping, the request list and the inventory name them. Anything else
+    # in the directory stays.
+    : > "$TMP/modules"
+    for pg_state in "$CA"/state/*; do
+        if [ -d "$pg_state" ]; then basename "$pg_state" >> "$TMP/modules"; fi
+    done
+    if [ -f "$REQUESTS" ]; then cut -f1 "$REQUESTS" >> "$TMP/modules"; fi
+    if [ -f "$PKI/inventory.json" ]; then
+        sed -n 's/^ *{"module": "\([^"]*\)".*/\1/p' "$PKI/inventory.json" >> "$TMP/modules"
+    fi
+    sort -u "$TMP/modules" > "$TMP/modules.sorted"
+    while IFS= read -r pg_module; do
+        case "$pg_module" in ''|.*|*/*|*[!a-z0-9._-]*) continue ;; esac
+        if [ -d "$PKI/$pg_module" ]; then rm -rf "${PKI:?}/$pg_module"; fi
+    done < "$TMP/modules.sorted"
+    rm -f "$PKI/ca-bundle.crt" "$PKI/inventory.json" "$REQUESTS" \
+        "$PKI/.ca-bundle.crt.new" "$PKI/.inventory.json.new"
     rm -rf "$CA/state"
     log "Removed the certificates in $(host_path "$PKI")."
+    pg_left="$(ls -A "$PKI" 2>/dev/null | tr '\n' ' ')"
+    if [ -n "$pg_left" ]; then
+        log "Left in place, not written by the internal CA: $pg_left"
+    fi
 }
 
 mkdir -p "$CA"

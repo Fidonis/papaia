@@ -67,10 +67,11 @@ The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 > [add-on](#add-ons), not as a profile in this repository.
 
 > **Internal TLS between services:** the optional `pki` profile (`setup --pki`, off by default)
-> runs no container. It is one certificate authority per installation that issues server and
-> client certificates to the add-ons and core services that ask for them, renews them and
-> restarts what changed. It is separate from the edge certificates of the reverse proxy — see
-> [docs/pki.md](docs/pki.md).
+> adds no long-running container, only a one-shot issuer. It is one certificate authority per
+> installation that issues server and client certificates to the add-ons and core services
+> that ask for them. It renews them on `start`, `setup`, the add-on commands and
+> `papaia-ctl pki renew` (run that daily from a timer) and restarts what changed. It is
+> separate from the edge certificates of the reverse proxy — see [docs/pki.md](docs/pki.md).
 
 > **Tip:** all `*_EXT_PORT` variables are listed in `src/.env.example`, grouped per service.
 > Change a single number to relocate a port.

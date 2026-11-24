@@ -176,6 +176,9 @@ MANIFEST_KEYS = [
     # Since addon_api 7: declares what the add-on offers other modules, for the platform
     # services catalogue (ADR 0017). Read by platform_services.collect.
     "exposes",
+    # Additive, no ADDON_API bump: the certificates an add-on asks the internal CA of the
+    # pki profile for (ADR 0019). Read by pki.collect; an older core ignores it.
+    "pki",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -235,4 +238,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 22, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 23, _SURFACE_CHANGED

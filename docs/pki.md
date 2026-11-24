@@ -38,8 +38,9 @@ add-ons. The `pki` profile is the one place for it:
   private key is in a Docker volume that only the one-shot issuer ever mounts.
 - **Leaf certificates per service**, server and client, with the DNS names the service
   is reached under.
-- **Automatic renewal** at two thirds of the lifetime (90 days by default), with a
-  restart of what changed.
+- **Renewal** at two thirds of the lifetime (90 days by default), with a restart of what
+  changed, on every `start`, `setup`, add-on command and `pki renew`. A stack that keeps
+  running needs a daily `pki renew` (see [Renewal and restarts](#renewal-and-restarts)).
 - **Rotation of the CA** without downtime of the trust: old and new CA are in the bundle
   until the last old certificate has expired.
 - **Bring your own CA**: an intermediate of the company PKI, or certificates issued
@@ -57,10 +58,16 @@ The choice is kept: a later `setup` without either flag leaves it as it is. Swit
 (default `<PAPAIA_CONFIG_DIR>/pki`), records the profile in `deployment.yaml` and issues
 the certificates right away when Docker answers.
 
-`PAPAIA_PKI_DIR` can point elsewhere (an absolute path of its own; the config directory
-itself or one of its parents is refused). Leaving it inside the config directory means it
-is part of the config backup; moving it outside keeps the leaf keys out of what
-papaia-manager mounts.
+Then set up the daily renewal (a cron entry or a systemd timer that runs
+`papaia-ctl pki renew`, see [Renewal and restarts](#renewal-and-restarts)): without it,
+certificates are only renewed when papaia-ctl runs anyway.
+
+`PAPAIA_PKI_DIR` can point elsewhere: an absolute path of its own, new or empty (a
+directory that already holds other files, the config directory itself and its parents are
+refused). Inside the config directory it is part of the config backup. Outside it is
+possible only while papaia-manager is off: the manager runs papaia-ctl with only the
+config directory mounted and could not write there. After `setup --no-pki`,
+`deployment.yaml` remembers the directory until `pki purge` has cleared it.
 
 ## Asking for certificates
 
@@ -143,13 +150,43 @@ The issuer runs on `setup`, `start`, `addon install|start|remove|uninstall` and
 4. restarts the running core services and add-ons whose files changed. A stopped one
    reads the new files when it starts.
 
-A run that finds nothing to do changes nothing, not even a timestamp in a service
-directory. To renew without waiting for a start, run `papaia-ctl pki renew` from a daily
-timer; `pki renew --force` issues every certificate again.
+A run that finds nothing to do changes nothing in `PAPAIA_PKI_DIR`, not even a timestamp
+(`inventory.json` keeps its `generated_at`). `pki renew --force` issues every certificate
+again.
+
+Nothing renews on its own while the stack just keeps running, so run `papaia-ctl pki renew`
+once a day, for example from cron (with the paths of your checkout and config directory):
+
+```
+15 3 * * *  /opt/papaia/tools/papaia-ctl pki renew --config-dir=/opt/papaia-config
+```
+
+or from a systemd timer:
+
+```ini
+# /etc/systemd/system/papaia-pki-renew.service
+[Service]
+Type=oneshot
+ExecStart=/opt/papaia/tools/papaia-ctl pki renew --config-dir=/opt/papaia-config
+
+# /etc/systemd/system/papaia-pki-renew.timer
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Run it as the user that runs papaia-ctl otherwise (the owner of the config directory, in
+the `docker` group).
 
 `papaia-ctl pki status` lists every certificate with its days left and exits 1 when one
-ends within 14 days or the inventory is missing; `papaia-ctl doctor` reports the same in
-its `certs` check (warning under 14 days, failure under 7 or expired).
+ends within 14 days, the active or staged CA within 90 days, or the inventory is missing;
+`papaia-ctl doctor` reports the same in its `certs` check (warning at those limits,
+failure under 7 days or expired). A leaf never outlives its CA: in the CA's last 90 days
+new leaves end with it, and once less than a day is left the issuer refuses until the CA
+is rotated.
 
 ## A new CA
 
@@ -162,7 +199,8 @@ works in two steps, each followed by the restart of what changed:
 1. A new CA is created and **added to every bundle**. Every service now trusts both.
 2. The new CA becomes the active one and **every certificate is issued again** by it.
    The old CA stays in the bundle, as `retired`, until its last certificate has expired
-   (the leaf lifetime plus a day); a later run removes it.
+   (the leaf lifetime plus a day); a later run removes it. A retired company sub-CA keeps
+   its chain in the bundle, so its leaves still lead to their root.
 
 No service ever sees a peer certificate from a CA it does not trust yet.
 
@@ -186,9 +224,11 @@ first `rotate-ca` with `--cert` simply makes the imported CA the active one.
 `.env` papAIa issues nothing. The operator puts `ca-bundle.crt` into `PAPAIA_PKI_DIR` and
 the requested `tls.crt`/`tls.key` and `client.crt`/`client.key` into each service
 directory. Every run checks all of them (names, key usage, key match, chain against the
-bundle, at least one day left) before it changes anything, names every problem at once and
-stops with exit code 3 on the first set that cannot be used. A good set is then installed
-like an issued one: owner, modes, `ca.crt`, `generation`, restart.
+bundle, not expired) before it changes anything. When any of them cannot be used, it
+names every problem at once, changes nothing and stops with exit code 3. A good set is
+then installed like an issued one: owner, modes, `ca.crt`, `generation`, restart. After
+the first run the service directories belong to the services' users (0500), so replacing
+a certificate later takes root (`sudo cp …`).
 
 ## Edge certificates stay separate
 
@@ -218,18 +258,25 @@ well. It authenticates nodes, not services, and stays as it is.
 - The issued files are in `PAPAIA_PKI_DIR`. Inside the config directory they are part of
   its backup; elsewhere they need not be backed up, since the next `start` issues them
   again from the restored CA.
-- `papaia-ctl pki purge` (only while the profile is off) deletes the issued files;
-  `--ca` deletes the CA volume as well. `papaia-ctl uninstall` deletes the files when they
-  are inside the config directory, and `uninstall --clean-up` the CA volume.
+- `papaia-ctl pki purge` (only while the profile is off) deletes what the CA wrote into
+  `PAPAIA_PKI_DIR`: its files at the top and the module directories it issued into. Other
+  files there stay. `--ca` deletes the CA volume as well. Without a terminal it needs
+  `-y`. `papaia-ctl uninstall` deletes the issued files too, inside or outside the config
+  directory, and `uninstall --clean-up` the CA volume.
 - The service directories belong to the services' users. Delete them with `pki purge`,
   not with `rm` as an ordinary user.
 
 ## Distributed installations
 
-The CA key never leaves the controller, and certificates are issued there only. Add-ons
-placed on the controller are served as on a single host. An add-on placed on another node
-is skipped with a warning: its certificates would have to travel with the node's bundle,
-which this version does not do. Core services that opt in are served on the controller.
+The CA key never leaves the controller, and certificates are issued there only, on
+`setup`, `start`, the add-on commands and `pki renew` run on the controller. Add-ons
+placed on the controller get their certificates as on a single host, but papaia-ctl does
+not restart them from the controller: it names every add-on and core service whose files
+changed, and each one has to be restarted by hand (an add-on with `papaia-ctl addon stop`
+and `papaia-ctl addon start`) to load them. Watch for that warning after `pki renew` and
+`pki rotate-ca`. An add-on placed on another node is skipped with a warning: its
+certificates would have to travel with the node's bundle, which this version does not do.
+Core services that opt in are served on the controller.
 
 ## Relation to the KRITIS profile
 
@@ -246,7 +293,7 @@ useful on its own.
 | `papaia-ctl pki status [--json]` | CAs and certificates with their days left; exit 1 when something needs a look |
 | `papaia-ctl pki renew [--force]` | Issue what is due (or, with `--force`, everything) now |
 | `papaia-ctl pki rotate-ca [--cert --key [--chain]]` | A new CA in two steps; with `--cert`/`--key` an imported one |
-| `papaia-ctl pki purge [--ca] [-y]` | Delete the issued files (and the CA) once the profile is off |
+| `papaia-ctl pki purge [--ca] [-y]` | Delete what the CA wrote (and, with `--ca`, the CA) once the profile is off |
 
 | Root `.env` key | Default | |
 |---|---|---|

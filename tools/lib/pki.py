@@ -57,6 +57,19 @@ FORMAT = "papaia.platform-pki/1"
 # is renewed when a third of its lifetime is left (30 days of 90), so a warning means the
 # renewal did not run.
 EXPIRY_WARN_DAYS = 14
+# The active and the staged CA are reported a whole leaf lifetime ahead: from then on the
+# issuer shortens every new leaf to the CA's end, and a rotation (`pki rotate-ca`) is due.
+CA_EXPIRY_WARN_DAYS = 90
+
+# papaia-manager runs papaia-ctl with the config directory mounted at the same path and
+# nothing else of the host (src/manager/docker-compose.yml).
+MANAGER_PROFILE = "manager"
+# What the issuer and papaia-ctl write at the top of the PKI directory. A directory that
+# holds other files and none of these is not taken over.
+OWN_FILES = ("requests.tsv", "ca-bundle.crt", "inventory.json")
+# Where the files of a switched-off profile are, in deployment.yaml under `core`: off
+# removes PAPAIA_PKI_DIR from `.env`, and `pki purge` still has to find them.
+REMEMBERED_DIR = "pki_dir"
 
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _MODULE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -226,11 +239,57 @@ def check_dir(path: Path, config_dir: Path) -> Path:
     return path
 
 
+def check_manager(directory: Path, config_dir: Path, profiles: list[str]) -> None:
+    """Refuses a PKI directory papaia-manager cannot reach. The manager runs papaia-ctl
+    (setup, start, the add-on commands) with only the config directory of the host
+    mounted, so a directory elsewhere does not exist where it writes the requests."""
+    if MANAGER_PROFILE in profiles and not _inside(directory, config_dir):
+        raise PkiError(
+            f"{KEY_DIR}={directory} is outside the config directory, and papaia-manager"
+            " runs papaia-ctl with only the config directory mounted. Leave it inside"
+            f" (the default is {default_dir(config_dir)}) or switch the manager off."
+        )
+
+
+def check_own(directory: Path) -> None:
+    """Refuses a directory that already holds other files: the issuer hands every module
+    directory in it to other users and writes its own files at the top."""
+    if not directory.is_dir():
+        return
+    try:
+        names = {entry.name for entry in directory.iterdir()}
+    except OSError as exc:
+        raise PkiError(f"cannot read {KEY_DIR}={directory}: {exc}") from exc
+    if names and not names & set(OWN_FILES):
+        raise PkiError(
+            f"{KEY_DIR}={directory} already holds other files; give the internal CA a"
+            " directory of its own (a new or an empty one)"
+        )
+
+
+def _remembered_dir(config_dir: Path) -> str:
+    core = deployment.load(config_dir).get("core") or {}
+    value = core.get(REMEMBERED_DIR) if isinstance(core, dict) else None
+    return value.strip() if isinstance(value, str) else ""
+
+
+def forget_dir(config_dir: Path) -> None:
+    """Drops the remembered directory of a switched-off profile once `pki purge` ran."""
+    manifest = deployment.load(config_dir)
+    core = manifest.get("core")
+    if isinstance(core, dict) and REMEMBERED_DIR in core:
+        del core[REMEMBERED_DIR]
+        deployment.save(config_dir, manifest)
+
+
 def settings(config_dir: Path) -> dict[str, str]:
-    """The profile's settings as the issuer gets them, validated."""
+    """The profile's settings as the issuer gets them, validated. While the profile is
+    off, the directory is the one it used last (for `pki purge` and `uninstall`)."""
     root = common.parse_env_file(config_dir / ".env")
-    raw_dir = root.get(KEY_DIR, "").strip()
+    raw_dir = root.get(KEY_DIR, "").strip() or _remembered_dir(config_dir)
     directory = check_dir(Path(raw_dir), config_dir) if raw_dir else default_dir(config_dir)
+    if enabled(config_dir):
+        check_manager(directory, config_dir, _profiles(root))
     mode = root.get(KEY_MODE, "").strip() or DEFAULT_MODE
     if mode not in MODES:
         raise PkiError(f"{KEY_MODE} must be one of {', '.join(MODES)}, not '{mode}'")
@@ -264,24 +323,29 @@ def configure(
     `deployment.yaml`; None keeps the stored choice. Returns whether it is on.
 
     Off removes `PAPAIA_PKI_DIR`, so an add-on sees the same `.env` as on an installation
-    that never had the profile; the files already issued stay until `pki purge`."""
+    that never had the profile; the files already issued stay until `pki purge`, which
+    finds them through the directory remembered in `deployment.yaml`."""
     env_path = config_dir / ".env"
     root = common.parse_env_file(env_path)
     profiles = _profiles(root)
     on = (PROFILE in profiles) if enable is None else enable
     before = dict(root)
+    remembered = ""
     if on:
         if PROFILE not in profiles:
             profiles.append(PROFILE)
             root["COMPOSE_PROFILES"] = ",".join(profiles)
         current = directory or root.get(KEY_DIR, "").strip()
         chosen = Path(current) if current else default_dir(config_dir)
-        root[KEY_DIR] = str(check_dir(chosen, config_dir))
+        checked = check_dir(chosen, config_dir)
+        check_manager(checked, config_dir, profiles)
+        check_own(checked)
+        root[KEY_DIR] = str(checked)
     else:
         if PROFILE in profiles:
             profiles = [p for p in profiles if p != PROFILE]
             root["COMPOSE_PROFILES"] = ",".join(profiles)
-        root.pop(KEY_DIR, None)
+        remembered = root.pop(KEY_DIR, "").strip()
     if root != before:
         template = repo_root / "src" / ".env.example"
         for target in (env_path, repo_root / "src" / ".env"):
@@ -293,7 +357,12 @@ def configure(
                     _drop_key(target, KEY_DIR)
         manifest = deployment.load(config_dir)
         if manifest:
-            manifest.setdefault("core", {})["profiles"] = profiles
+            core = manifest.setdefault("core", {})
+            core["profiles"] = profiles
+            if on:
+                core.pop(REMEMBERED_DIR, None)
+            elif remembered:
+                core[REMEMBERED_DIR] = remembered
             deployment.save(config_dir, manifest)
     return on
 
@@ -317,6 +386,7 @@ def write_requests(config_dir: Path, repo_root: Path) -> Plan:
     """Writes the request list into the PKI directory for the issuer."""
     plan = collect(config_dir, repo_root)
     directory = Path(settings(config_dir)["PKI_DIR"])
+    check_own(directory)
     common.ensure_dir(directory)
     lines = ["# Written by papaia-ctl from the pki requests; read by the pki-issuer."]
     lines += [request.line() for request in plan.requests]
@@ -361,6 +431,7 @@ def certificates(inventory: dict) -> list[dict]:
                 {
                     "label": f"CA {ca.get('subject', '?')} ({ca.get('role', '?')})",
                     "kind": "ca",
+                    "role": ca.get("role"),
                     "not_after": _parse_time(ca.get("not_after")),
                 }
             )
@@ -383,6 +454,13 @@ def certificates(inventory: dict) -> list[dict]:
 
 def _iso(value: datetime) -> str:
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def warn_days(row: dict) -> int:
+    """How many days before its end a certificate of the inventory is reported."""
+    if row.get("kind") == "ca" and row.get("role") in ("active", "next"):
+        return CA_EXPIRY_WARN_DAYS
+    return EXPIRY_WARN_DAYS
 
 
 def status(config_dir: Path, *, now: datetime | None = None) -> dict:
@@ -410,7 +488,7 @@ def status(config_dir: Path, *, now: datetime | None = None) -> dict:
         state = "ok"
         if days is None or days < 0:
             state = "expired" if days is not None else "unknown"
-        elif days < EXPIRY_WARN_DAYS:
+        elif days < warn_days(row):
             state = "expiring"
         if state != "ok":
             report["attention"] = True
@@ -456,6 +534,11 @@ def doctor_items(config_dir: Path, now: datetime) -> list[dict]:
     if inventory is None:
         return []
     return [
-        {"path": f"pki:{row['label']}", "not_after": row["not_after"], "kind": row["kind"]}
+        {
+            "path": f"pki:{row['label']}",
+            "not_after": row["not_after"],
+            "kind": row["kind"],
+            "warn_days": warn_days(row),
+        }
         for row in certificates(inventory)
     ]
