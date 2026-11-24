@@ -126,6 +126,18 @@ based on merged pull requests; this file mirrors the published releases.
 - New commands `papaia-ctl logs`, `papaia-ctl support-bundle` and `papaia-ctl metrics`.
 - Every core service rotates its log (json-file, 5 x 10 MiB); active add-ons get the same
   through a generated override.
+### Edge refuses platform writes from Studio app hosts
+
+- Every proxy host of the bundled proxy refuses a request other than `GET`, `HEAD` or
+  `OPTIONS` whose `Origin` is a Studio app host (`apps.<domain>`, `INGRESS_APP_DOMAIN`, or a
+  host below one of them) with `403` and `X-Papaia-Error: app_origin_refused`, and writes one
+  `papaia.audit/1` line (`protected_host_denied`, writer `papaia-edge`) to
+  `infra/nginx/nginx-data/logs/papaia-audit.log`. `npm-provision` installs the rule into the
+  proxy manager's `http_top.conf` and `server_proxy.conf`, tests the configuration and rolls
+  it back when the proxy refuses it.
+- New `doctor edge_app_origin`: the refusal is in place, and no platform cookie (identity
+  provider, forward-auth proxies, modules, read as an anonymous browser) carries a `Domain`
+  that covers an app host.
 
 ### Kit 0.1.0 in the core tools
 

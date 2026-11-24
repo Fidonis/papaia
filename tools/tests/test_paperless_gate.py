@@ -17,7 +17,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import cli, cli_addon, common, envtree, gen_override, npm_provision, paperless_gate
+from lib import (
+    cli,
+    cli_addon,
+    common,
+    edge_guard,
+    envtree,
+    gen_override,
+    npm_provision,
+    paperless_gate,
+)
 
 REAL_REPO = Path(__file__).resolve().parents[2]
 SAFE_SECRET = re.compile(r"\A[A-Za-z0-9._~+/=-]{32,512}\Z")
@@ -391,6 +400,8 @@ class _FakeNpm:
             "reload_proxy",
             lambda project: setattr(self, "reloads", self.reloads + 1) or True,
         )
+        # The app-origin guard has its own tests (test_edge_guard.py).
+        monkeypatch.setattr(edge_guard, "install", lambda project, bases: False)
         monkeypatch.setattr(
             paperless_gate,
             "install_strip_file",

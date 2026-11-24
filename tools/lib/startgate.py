@@ -436,6 +436,8 @@ def doctor_result(gate: object) -> tuple[str, str]:
 
 _BLOCK_BEGIN = "# >>> papaia: core start gate (managed by papaia-ctl, do not edit)"
 _BLOCK_END = "# <<< papaia start gate"
+BLOCK_BEGIN = _BLOCK_BEGIN
+BLOCK_END = _BLOCK_END
 
 
 def _contact_header(contact: str | None) -> str | None:

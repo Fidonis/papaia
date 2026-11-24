@@ -62,6 +62,8 @@ def probes(**overrides) -> Probes:
         "dev_root": Path("/papaia-test-has-no-devices"),
         # Not a Mac unless a test says so, wherever the suite runs.
         "launchd_host": lambda: False,
+        # No request leaves the test: every platform host answers without a cookie.
+        "http_get": lambda address, url, ca_file: (200, [], None),
     }
     values.update(overrides)
     return Probes(**values)
@@ -233,6 +235,7 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # rollback_window: no rollback key on this host
         PASS,  # person_export: no archive of an information request
         SKIP,  # erasure_journal: the lifecycle profile is off
+        SKIP,  # edge_app_origin: the bundled proxy is not enabled
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -278,6 +281,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "rollback_window",
         "person_export",
         "erasure_journal",
+        "edge_app_origin",
     )
 
 

@@ -66,6 +66,9 @@ Welcome to the papAIa documentation.
   checked with the smallest shipped model and what the report holds
 - [Anmeldung, Abmeldung und Einstiegsseite](./de/betrieb/anmeldung-und-einstieg.md) — the
   entry page behind the main address, the shared login page and the sign-out in every module
+- [Studio-Apps und der Rand des Stapels](./de/betrieb/app-hosts-am-rand.md) — what the
+  edge does for Studio app hosts, how `doctor edge_app_origin` checks it, and what to do
+  about a finding (German operator text)
 
 ## Conventions
 

@@ -1822,6 +1822,7 @@ raw values behind its summary in `details`.
 | `person_export` | Archives of information requests without an account in `state/person-export/` (see [docs/person-requests.md](docs/person-requests.md)). | `warn` while an archive waits for its hand-over; `fail` for one older than 14 days or a folder others can open; `pass` without any |
 | `erasure_journal` | Only while the `lifecycle` profile is on: every file of `$PAPAIA_BACKUP_DIR/erasure-journal` and the bind mounts of every container of the core and the add-ons (see *Each module reaches its own journal alone* under [`restore`](#restore)). | `fail` for a missing folder (target not mounted), a container other than `papaia-lifecycle` that can write the folder, the backup target, `epoch` or a journal not its own (a shared read-write mount), a journal or `epoch` that is a link, has a second name, belongs to another account or can be written by others, and a journal holding a line of another module; `warn` for an add-on that can read journals not its own and when Docker does not answer; `skip` while the profile is off |
 | `halt` | The platform's emergency halt (`state/halt.json`, see `papaia-ctl halt`). | `fail` while the halt is set (every write, send and delete is stopped) and for a halt file that cannot be used, which every service treats as set; `skip` before the first start |
+| `edge_app_origin` | Studio app hosts at the edge (see [Studio app hosts at the edge](#studio-app-hosts-at-the-edge)): the bundled proxy holds the current refusal of writes from the app hosts in `http_top.conf` and `server_proxy.conf` (counting the refusals in its audit log), and no cookie an anonymous browser gets from a platform host, the sign-in included, carries a `Domain` that covers an app host. | `fail` for a missing or outdated refusal (run `npm-provision`), a covering cookie (named with its host, never its value) or an unusable app domain; `warn` for a host that could not be read, a proxy that does not run or an external proxy (it must refuse the writes itself); `skip` without a proxy, without host names or while the bundled proxy is not enabled |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
 | `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set or while it is still the one `setup` derived (`Verwaltung von <domain>`), `fail` for a malformed `overlay/platform/branding.yaml` |
 
@@ -2527,6 +2528,41 @@ With an external proxy (`external_proxy`), configure the same yourself: clear bo
 on every host, set `X-Papaia-Gate` to the content of
 `$PAPAIA_CONFIG_DIR/secrets/paperless-gate/proxy/secret` only on the Paperless host, and
 forward that host to the gate.
+
+### Studio app hosts at the edge
+
+Studio apps are served from the app host (host key `apps`): on the second domain when
+`INGRESS_APP_DOMAIN` names one, otherwise on `apps.<domain>` and its subdomains. Without a
+second domain the apps share the site of the platform, and `SameSite` no longer keeps a
+browser from sending the platform's cookies with a request an app makes. Two controls of the
+core make up for that, in both modes:
+
+- **The edge refuses writes from the app hosts.** Every proxy host of the bundled proxy
+  refuses a request whose method is not `GET`, `HEAD` or `OPTIONS` when its `Origin` is an
+  app host: `apps.<domain>`, the app domain, or a host below one of them, with any scheme and
+  port. The answer is `403` with `X-Papaia-Error: app_origin_refused` and
+  `X-Papaia-Correlation-Id`. `npm-provision` (part of `start`) writes the rule as managed
+  blocks into the proxy manager's `http_top.conf` and `server_proxy.conf`, so hosts created
+  by hand are covered too; the proxy's configuration is tested before the reload, and a
+  configuration it refuses is rolled back (`npm-provision` then exits 1). Your own lines in
+  both files below the managed blocks are kept. `Origin: null` is not refused at the edge:
+  browsers also send it after redirects across sites. Studio's gateway refuses it, and the
+  app frame's content security policy allows no request at all.
+- **Each refusal is audited.** One line in the shape of `papaia.audit/1` per refusal in
+  `$PAPAIA_CONFIG_DIR/infra/nginx/nginx-data/logs/papaia-audit.log`: `writer`
+  `papaia-edge`, `event` `protected_host_denied`, `operation` `edge.write`, `result`
+  `denied`, `error_code` `app_origin_refused`, the refused host as `object_ref`, the proxy's
+  request id (the `X-Papaia-Correlation-Id` of the answer) as `correlation_id`. No person,
+  origin value, path or body is written. Times are UTC; do not set `TZ` for the proxy
+  (`doctor edge_app_origin` warns about lines without a UTC time).
+- **Platform cookies are host-only.** Neither the identity provider, the forward-auth
+  proxies nor the core modules set a cookie with a `Domain` attribute. [`doctor
+  edge_app_origin`](#doctor) reads the cookies an anonymous browser gets from every
+  platform host (following the redirects to the sign-in on the installation's hosts) and
+  fails for one whose `Domain` covers an app host.
+
+With an external proxy (`external_proxy`), configure the same refusal yourself on every
+platform host; `doctor edge_app_origin` reminds you of it.
 
 ### Add-ons
 

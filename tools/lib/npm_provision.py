@@ -21,6 +21,7 @@ from . import (
     catalog,
     common,
     deployment,
+    edge_guard,
     ingress,
     module_tls,
     paperless_gate,
@@ -720,10 +721,37 @@ def _gate_steps(
             flush=True,
         )
     ok = _paperless_route(base_url, token, config_dir)
-    if changed and not paperless_gate.reload_proxy(project):
+    guarded = _app_origin_guard(project, root)
+    if guarded is None:
+        ok = False
+    if (changed or guarded) and not paperless_gate.reload_proxy(project):
         print(
             "WARNING: the proxy did not reload; server_proxy.conf takes effect at its next start.",
             file=sys.stderr,
             flush=True,
         )
     return ok
+
+
+def _app_origin_guard(project: str, root: dict[str, str]) -> bool | None:
+    """The edge's refusal of writes from Studio app hosts (lib/edge_guard.py): whether it
+    changed, None when it is not in place."""
+    try:
+        bases = edge_guard.app_host_bases(root)
+    except ingress.IngressError as exc:
+        print(
+            f"ERROR: the edge cannot refuse writes from the app hosts: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    guarded = edge_guard.install(project, bases)
+    if guarded is None:
+        print(
+            "ERROR: could not put the refusal of writes from the app hosts into the proxy"
+            " (http_top.conf, server_proxy.conf); the previous configuration stays. Run"
+            " 'papaia-ctl npm-provision' again once the proxy runs.",
+            file=sys.stderr,
+            flush=True,
+        )
+    return guarded

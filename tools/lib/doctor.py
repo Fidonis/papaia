@@ -62,6 +62,7 @@ from . import (
     deployment,
     diagnosis,
     direct_ports,
+    edge_guard,
     egress,
     envtree,
     erasure_journal,
@@ -71,6 +72,7 @@ from . import (
     halt,
     host_size,
     images,
+    ingress,
     localai_native,
     model_gateway,
     module_health,
@@ -428,6 +430,8 @@ class Probes:
     launchd_host: Callable[[], bool] = lambda: localai_native.launchd_host()[0]
     # `realm sync --check`: (config_dir, repo_root) -> (exit code, printed lines).
     realm_check: Callable[[Path, Path], tuple[int, str]] = _realm_check
+    # (edge address, URL, CA file) -> (status, Set-Cookie headers, Location); one GET.
+    http_get: Callable[..., edge_guard.Answer] = edge_guard.http_get
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -3331,6 +3335,120 @@ def check_egress(ctx: Context) -> CheckResult:
     )
 
 
+EDGE_SERVICE = "nginx-proxy-manager"
+EDGE_PROFILE = "nginx"
+
+
+def _edge_address(root: dict[str, str], provider: str, url: str) -> str:
+    """Where the cookie probe connects: the bundled proxy on this host's edge address,
+    or the URL's own host behind an external proxy."""
+    if provider != "internal_nginx":
+        return urlsplit(url).hostname or ""
+    address = (root.get("INGRESS_HOST_IP") or root.get("HOST_IP") or "").strip()
+    return "127.0.0.1" if address in ("", "0.0.0.0", "::") else address
+
+
+def _platform_cookies(
+    ctx: Context, root: dict[str, str], provider: str, bases: list[str]
+) -> tuple[list[str], list[str]]:
+    """(cookies whose Domain covers an app host, hosts that could not be read)."""
+    tree = {**ctx.tree, "": root}
+    found = edge_guard.platform_urls(tree, ctx.config_dir, ctx.repo_root)
+    ca_file = ctx.config_dir / "certs" / "local-ca.crt"
+
+    def read(start: str) -> tuple[list[str], str | None]:
+        return edge_guard.read_cookies(
+            start,
+            found,
+            bases,
+            lambda url: ctx.probes.http_get(_edge_address(root, provider, url), url, ca_file),
+        )
+
+    starts = edge_guard.start_urls(tree, found)
+    covering: list[str] = []
+    unread: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for hits, problem in pool.map(read, starts):
+            covering.extend(h for h in hits if h not in covering)
+            if problem is not None and problem not in unread:
+                unread.append(problem)
+    return covering, unread
+
+
+def check_edge_app_origin(ctx: Context) -> CheckResult:
+    """The edge's controls for Studio app hosts (security §4.1, E-20; docs in README,
+    "Studio app hosts at the edge"): the bundled proxy refuses writes whose `Origin` is
+    an app host, and no platform cookie carries a `Domain` that covers an app host."""
+    name = "edge_app_origin"
+    if not ctx.configured:
+        return _not_set_up(name)
+    root = {**ctx.tree.get("", {}), **common.parse_env_file(ctx.config_dir / ".env")}
+    provider = root.get("REVERSE_PROXY_PROVIDER") or "internal_nginx"
+    if provider == "no_proxy":
+        return CheckResult(name, SKIP, "no proxy serves the interfaces, so there is no app host")
+    if provider == "internal_nginx" and EDGE_PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "the bundled proxy is not enabled")
+    try:
+        bases = edge_guard.app_host_bases(root)
+    except ingress.IngressError as exc:
+        return CheckResult(name, FAIL, f"the app hosts cannot be named: {exc}")
+    if not bases:
+        return CheckResult(name, SKIP, "the interfaces have no host names, so no app host")
+    details: dict[str, Any] = {"app_hosts": bases}
+    problems: list[str] = []
+    unchecked: list[str] = []
+    if provider == "internal_nginx":
+        found = _core_container(ctx, EDGE_SERVICE)
+        if found is None:
+            unchecked.append(f"the write refusal: {EDGE_SERVICE} runs on another node")
+        elif found[0] is None or found[1] != "running":
+            unchecked.append(f"the write refusal: {EDGE_SERVICE} is {found[1] or 'not created'}")
+        else:
+            missing = edge_guard.guard_in_place(ctx.config_dir, bases)
+            if missing:
+                problems.append(
+                    "the proxy does not refuse writes from the app hosts ("
+                    + "; ".join(missing)
+                    + "); run 'papaia-ctl npm-provision'"
+                )
+            details["refused_writes"] = edge_guard.refusals(ctx.config_dir)
+            untimed = edge_guard.lines_without_time(ctx.config_dir)
+            if untimed:
+                unchecked.append(
+                    f"{untimed} audit line(s) of the edge without a UTC time; remove the TZ"
+                    f" setting of {EDGE_SERVICE}"
+                )
+    else:
+        unchecked.append(
+            "the write refusal: the external proxy must refuse writes from the app hosts itself"
+        )
+    try:
+        covering, unread = _platform_cookies(ctx, root, provider, bases)
+    except ingress.IngressError as exc:
+        return CheckResult(name, FAIL, f"the platform's hosts cannot be named: {exc}", details)
+    details["covering_cookies"] = covering
+    details["unread_hosts"] = unread
+    if covering:
+        problems.append(
+            "platform cookies with a Domain that covers the app hosts: " + ", ".join(covering)
+        )
+    if unread:
+        unchecked.append("cookies of " + ", ".join(unread))
+    if problems:
+        return CheckResult(name, FAIL, "; ".join(problems), details)
+    if unchecked:
+        return CheckResult(name, WARN, "not checked: " + "; ".join(unchecked), details)
+    refused = details.get("refused_writes")
+    counted = f"; {refused} write(s) from app hosts refused" if refused else ""
+    return CheckResult(
+        name,
+        PASS,
+        f"writes from {', '.join(bases)} are refused and every platform cookie is host-only"
+        + counted,
+        details,
+    )
+
+
 # mssql-mcp-rbac reports the SQL Server version and the encryption in effect in its
 # commissioning check (`selftest`, one line `version + encryption [<alias>]` per database).
 MSSQL_COMPONENT = "mssql-mcp-rbac"
@@ -3822,6 +3940,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("rollback_window", check_rollback_window),
     ("person_export", check_person_export),
     ("erasure_journal", check_erasure_journal),
+    ("edge_app_origin", check_edge_app_origin),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

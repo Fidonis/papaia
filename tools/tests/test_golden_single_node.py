@@ -188,6 +188,8 @@ def _probes() -> Probes:
         smtp_probe=lambda *args: smtp.ProbeResult(True, "ok", login="ok"),
         dev_root=Path("/papaia-test-has-no-devices"),
         realm_check=lambda config_dir, repo_root: (0, "Realm check: ok (0 deviation(s)).\n"),
+        # Every platform host answers without a cookie; no request leaves the test.
+        http_get=lambda address, url, ca_file: (200, [], None),
     )
 
 

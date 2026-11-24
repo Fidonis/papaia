@@ -71,6 +71,7 @@ ROTATE_TARGETS = ("paperless-gate/proxy",)
 STRIP_FILE = "infra/nginx/nginx-data/nginx/custom/server_proxy.conf"
 _STRIP_BEGIN = "# >>> papaia: clear the gate headers (managed by papaia-ctl, do not edit)"
 _STRIP_END = "# <<< papaia"
+STRIP_BEGIN = _STRIP_BEGIN
 
 # Header-safe and safe inside a double-quoted nginx string: no quote, backslash, `$`,
 # whitespace or control character. The same rule the MCP server applies to its own.

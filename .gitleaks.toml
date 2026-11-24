@@ -43,3 +43,13 @@ regexes = [
   '''"--rollback-key=0b0c64c1-6f39-4f33-9d0f-0c3c8a7d1c11"''',
   '''TOKEN = "eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJ4In0\.c2lnbmF0dXJl"''',
 ]
+
+# The doctor's cookie test sends a cookie whose value is the base64 of the readable marker
+# "session-value-never-shown" and checks that no finding repeats it. It is not a credential.
+# Only this exact value, only in that test file.
+[[allowlists]]
+description = "cookie value marker in the edge doctor test"
+condition = "AND"
+paths = ['''^tools/tests/test_doctor_edge\.py$''']
+regexTarget = "secret"
+regexes = ['''^c2Vzc2lvbi12YWx1ZS1uZXZlci1zaG93bg$''']
