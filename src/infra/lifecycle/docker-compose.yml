@@ -85,7 +85,7 @@ services:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base, which brings the openssl
     # command line (Ed25519, ES256). Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-lifecycle:1.10.0-rc.1@sha256:3be6fe9daa56bb8f0d5aba9a3acb6a341d8b89544ffbade4ce124c2aeab84082
+    image: ghcr.io/fidonis/papaia-lifecycle:1.10.0-rc.1@sha256:2a0b2734d83072f66d27e464280041c73d196fcfd2f7e9d7251a41d5f14537f6
     restart: unless-stopped
     depends_on:
       papaia-lifecycle-init:
@@ -177,7 +177,7 @@ services:
   # the maintenance page; the proxy's own administration host stays open.
   papaia-startgate-check:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-lifecycle:1.10.0-rc.1@sha256:3be6fe9daa56bb8f0d5aba9a3acb6a341d8b89544ffbade4ce124c2aeab84082
+    image: ghcr.io/fidonis/papaia-lifecycle:1.10.0-rc.1@sha256:2a0b2734d83072f66d27e464280041c73d196fcfd2f7e9d7251a41d5f14537f6
     restart: unless-stopped
     command:
       - python3

@@ -23,7 +23,7 @@ images:
       - src/infra/lifecycle/Dockerfile
       - src/infra/lifecycle/lifecycle.py
       - src/infra/lifecycle/THIRD_PARTY_LICENSES.md
-    services: [papaia-lifecycle]
+    services: [papaia-lifecycle, papaia-startgate-check]
     license: MIT
     license_class: P
   - name: ghcr.io/fidonis/papaia-audit
