@@ -3863,7 +3863,7 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
         from . import sign_in  # through ingress and gen_override it imports this module
 
         plan.hardening.sign_in_clients = sign_in.client_ids()
-        plan.hardening.sign_out_owned = sign_in.owned_addresses()
+        plan.hardening.sign_out_owned = sign_in.owned_addresses(tree)
         plan.hardening.sign_out, notes = sign_in.installation_targets(tree, config_dir, repo_root)
         plan.hardening.notes.extend(notes)
         for client_id, url in sorted(plan.hardening.sign_out.items()):

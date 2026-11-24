@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import common, compat, deployment, gen_override
+from . import common, compat, deployment, gen_override, module_tls, security_profile
 
 APP_HOST_KEY = "apps"
 LOCAL_SUFFIX = "papaia.localhost"
@@ -130,6 +130,8 @@ class Route:
     websocket: bool = False
     max_body: str | None = None
     verify_tls: bool = True
+    # https checked against the platform CA under the service's name (lib/module_tls.py).
+    platform_tls: bool = False
 
     @property
     def target(self) -> str:
@@ -282,8 +284,23 @@ def addon_routes(manifest: dict, root: dict[str, str]) -> list[Route]:
             " the proxy joins to reach the interfaces"
         )
     network = gen_override._expand_env_refs(raw_network, root)
+    tls = _module_tls(root) and name in module_tls.ADDONS
+    names: dict = {}
+    if tls:
+        try:
+            names = module_tls.server_names(
+                manifest.get("pki"), name, f"{name}/papaia-app.yaml", addon=True
+            )
+        except module_tls.ModuleTlsError as exc:
+            raise IngressError(f"add-on '{name}': {exc}") from exc
     routes = []
     for entry in nginx:
+        if tls:
+            where = f"add-on '{name}': integration.nginx host_key {entry['host_key']}"
+            try:
+                module_tls.tls_host(names, entry["service"], (entry["service"],), where)
+            except module_tls.ModuleTlsError as exc:
+                raise IngressError(str(exc)) from exc
         host_key = entry["host_key"]
         if host_key == APP_HOST_KEY:
             if scheme.app_domain is None:
@@ -306,13 +323,30 @@ def addon_routes(manifest: dict, root: dict[str, str]) -> list[Route]:
                 public_url=public_url,
                 service=entry["service"],
                 port=entry["port"],
-                scheme="http",
+                scheme="https" if tls else "http",
                 network=network,
                 websocket=bool(entry.get("websocket", False)),
                 max_body=entry.get("max_body"),
+                platform_tls=tls,
             )
         )
     return routes
+
+
+def _module_tls(root: dict[str, str]) -> bool:
+    try:
+        return module_tls.required(root)
+    except security_profile.ProfileError as exc:
+        raise IngressError(str(exc)) from exc
+
+
+def core_upstream(root: dict[str, str], label: str, service: str, scheme: str,
+                  verify: bool) -> tuple[str, bool, bool]:  # fmt: skip
+    """(scheme, verify TLS, platform TLS) of the core interface `label`: a module service
+    (module_tls.CORE_ROUTES) is https under `kritis`, everything else as declared."""
+    if module_tls.CORE_ROUTES.get(label) == service and _module_tls(root):
+        return "https", True, True
+    return scheme, verify, False
 
 
 def public_url_of(tree: dict, node: str, key: str) -> str:
@@ -362,6 +396,7 @@ def core_routes(tree: dict) -> list[Route]:
         if profile not in active or not is_proxied_url(url, edge):
             continue
         hostname = (urlsplit(url).hostname or "").lower()
+        scheme, verify, tls = core_upstream(root, label, service, scheme, verify)
         routes.append(
             Route(
                 module="core",
@@ -374,6 +409,7 @@ def core_routes(tree: dict) -> list[Route]:
                 network=network,
                 websocket=ws,
                 verify_tls=verify,
+                platform_tls=tls,
             )
         )
     return routes
@@ -457,7 +493,9 @@ def format_table(
             options.append("websocket")
         if route.max_body:
             options.append(f"max_body={route.max_body}")
-        if route.scheme == "https" and not route.verify_tls:
+        if route.platform_tls:
+            options.append("tls-platform-ca")
+        elif route.scheme == "https" and not route.verify_tls:
             options.append("tls-no-verify")
         for hostname in route.hostnames:
             rows.append(

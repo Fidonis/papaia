@@ -243,7 +243,7 @@ def test_local_add_on_addresses_come_with_a_note_on_the_token_fallback(monkeypat
 def test_mein_bereich_turned_off_loses_the_back_channel_the_core_set():
     internal = "http://me-web:8000/auth/backchannel-logout"
     hardening = _hardening()
-    hardening.sign_out_owned = sign_in.owned_addresses()
+    hardening.sign_out_owned = sign_in.owned_addresses(ME_TREE)
     attributes = {rh.BACKCHANNEL_URL: internal, rh.LOGIN_THEME: "papaia"}
     client = {"clientId": "papaia-me", "frontchannelLogout": False, "attributes": attributes}
     body, drift = rh.harden_client(client, hardening, uris_only=True)
@@ -322,7 +322,7 @@ def test_the_redirect_takes_an_origin_only(target):
 
 
 def test_the_proxy_host_of_the_main_address_redirects_before_forwarding():
-    body = npm_provision.entry_host_body(sign_in.entry(_entry_tree()))
+    body = npm_provision.entry_host_body(sign_in.entry(_entry_tree()), _entry_tree()[""])
     assert body["domain_names"] == ["papaia.example.org"]
     advanced = body["advanced_config"]
     assert advanced.startswith(paperless_gate.strip_config())
@@ -347,18 +347,23 @@ def _provision(monkeypatch, tree: dict, hosts: list[dict]) -> list[tuple[str, ob
     return writes
 
 
+def _me_host(tree: dict) -> dict:
+    """Mein Bereich's proxy host as setup creates it (npm-provision corrects a drifted one)."""
+    return {**npm_provision.core_route_body(tree[""], "me"), "id": 1}
+
+
 def test_the_bundled_proxy_gets_the_main_address(monkeypatch):
     tree = _entry_tree()
     existing = [{"id": 1, "domain_names": ["me.papaia.example.org"]}]
     writes = _provision(monkeypatch, tree, existing)
     entry = [w for w in writes if "papaia.example.org" in w[2].get("domain_names", [])]
-    assert entry == [("POST", None, npm_provision.entry_host_body(sign_in.entry(tree)))]
+    assert entry == [("POST", None, npm_provision.entry_host_body(sign_in.entry(tree), tree[""]))]
 
 
 def test_a_drifted_main_address_gets_back_its_redirect_and_keeps_its_certificate(monkeypatch):
     tree = _entry_tree()
-    wanted = npm_provision.entry_host_body(sign_in.entry(tree))
-    me = {"id": 1, "domain_names": ["me.papaia.example.org"]}
+    wanted = npm_provision.entry_host_body(sign_in.entry(tree), tree[""])
+    me = _me_host(tree)
     host = dict(wanted, id=7, certificate_id=3, advanced_config="")
     writes = _provision(monkeypatch, tree, [host, me])
     assert writes == [("PUT", 7, {k: wanted[k] for k in npm_provision.ENTRY_OWNED_FIELDS})]
@@ -438,7 +443,7 @@ def test_an_operators_host_at_the_main_address_is_not_overwritten(monkeypatch, c
         "id": 9, "domain_names": ["papaia.example.org"], "forward_host": "intranet",
         "forward_port": 80, "advanced_config": "",
     }  # fmt: skip
-    me = {"id": 1, "domain_names": ["me.papaia.example.org"]}
+    me = _me_host(_entry_tree())
     deleted = _record_deletes(monkeypatch)
     assert _provision(monkeypatch, _entry_tree(), [own, me]) == []
     assert deleted == []
@@ -446,7 +451,7 @@ def test_an_operators_host_at_the_main_address_is_not_overwritten(monkeypatch, c
 
 
 def test_without_mein_bereich_the_entry_host_setup_created_is_removed(monkeypatch):
-    wanted = npm_provision.entry_host_body(sign_in.entry(_entry_tree()))
+    wanted = npm_provision.entry_host_body(sign_in.entry(_entry_tree()), _entry_tree()[""])
     deleted = _record_deletes(monkeypatch)
     tree = _entry_tree(COMPOSE_PROFILES="keycloak,nginx")
     own = {"id": 9, "domain_names": ["papaia.example.org"], "forward_host": "intranet"}

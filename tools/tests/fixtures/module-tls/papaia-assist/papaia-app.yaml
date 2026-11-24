@@ -1,0 +1,29 @@
+# Fixture shaped like the assistant bundle: one service behind the proxy and the
+# address Mein Bereich calls, with a server certificate of the platform PKI.
+name: papaia-assist
+version: 0.1.0
+requires:
+  addon_api: [12]
+networks:
+  app_network: "${PAPAIA_PROJECT:-papaia}-papaia-assist-net"
+  attach: [nginx-proxy-manager, me-web]
+pki:
+  services:
+    - name: assist-api
+      uid: 10001
+      server: {dns: [assist-api]}
+      client: true
+integration:
+  nginx:
+    - host_key: assistant
+      service: assist-api
+      port: 8080
+      websocket: false
+      max_body: "10m"
+exposes:
+  - id: assist.me
+    kind: me
+    title: {de: "Assistant in Mein Bereich", en: "Assistant in my area"}
+    address: {service: assist-api, port: 8080, path: /api/v2/me}
+    audience: assist-api
+    identity: [person]

@@ -74,6 +74,7 @@ Abnahmebericht der Version.
 | Maßnahme | Kriterium | Ort | Verantwortlich |
 |---|---|---|---|
 | TLS auf allen internen Wegen mit der internen Zertifizierungsstelle; Zertifikate des Audit-Eingangs je Quelle | PLT-23 | [Der Audit-Speicher](../../audit.md#certificates-of-the-sources) | Plattform |
+| Im Sicherheitsprofil `kritis` erreichen Proxy und Katalog Flow, Assistant, Mein Bereich und das Verbindungsregister nur über TLS der Plattform-CA, mit Prüfung von Zertifikat und Dienstname; ein Moduldienst ohne passendes Serverzertifikat bricht das Rendern ab, statt im Klartext angebunden zu werden | PLT-23, FLO-44-A4, ME-24-A2 | [TLS zu den Moduldiensten](../../pki.md#tls-to-the-module-services) | Plattform |
 | TLS an allen öffentlichen Hostnamen mit Zertifikaten des Betreibers | EXI-PLT-65-A2 | Betriebshandbuch | Betreiber |
 | Sicherungen mit age an zwei Empfänger verschlüsselt | PLT-35 | [Sicherungsschlüssel](../../../README.md#backup-keys-and-target) | Plattform |
 | Verschlüsselung der Datenträger des Hosts | keines (organisatorische Maßnahme des Betreibers) | Betriebshandbuch | Betreiber |

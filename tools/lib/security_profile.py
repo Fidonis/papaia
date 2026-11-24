@@ -12,16 +12,22 @@ PKI, the service catalog) asks it, and modules read the same variable from the r
 | Configured public hosts                  | http or https        | https only            |
 | Offline sessions: idle / max age (days)  | default 90 / 180, up | default and upper     |
 |                                          | to 365 / 365         | bound 7 / 30          |
-| TLS between containers                   | ends at the reverse  | same as `standard`;   |
-|                                          | proxy; the audit     | links between core    |
-|                                          | ingest uses mutual   | containers do not use |
-|                                          | TLS with its own CA  | TLS yet               |
+| TLS between containers                   | ends at the reverse  | as `standard`, and    |
+|                                          | proxy; the audit     | Flow, the assistant,  |
+|                                          | ingest uses mutual   | Me and the connection |
+|                                          | TLS with its own CA  | registry are reached  |
+|                                          |                      | over TLS of the       |
+|                                          |                      | platform CA; a plain  |
+|                                          |                      | upstream of them is   |
+|                                          |                      | refused at render     |
 | Platform certificates                    | issued for every     | issued for every      |
 |                                          | `pki:` request       | `pki:` request        |
 | Add-on without a `pki:` request          | allowed              | refused               |
 
 The table says what the core enforces today. Under `kritis` an add-on cannot run without
-certificates of the platform PKI; whether it uses them on its links is up to the add-on.
+certificates of the platform PKI. The proxy and the catalog reach the module services
+named in lib/module_tls.py over TLS; whether another add-on uses its certificates on its
+links is up to the add-on.
 
 The same table is in docs/configuration.md; `TABLE` below is what both are checked against.
 """
@@ -49,6 +55,8 @@ class Profile:
     offline_max_limit: int
     # An add-on must declare a `pki:` request to be installed or started.
     addon_pki_required: bool
+    # The proxy and the catalog reach the module services over TLS (lib/module_tls.py).
+    module_tls: bool
 
 
 PROFILES = {
@@ -61,6 +69,7 @@ PROFILES = {
         offline_idle_limit=365,
         offline_max_limit=365,
         addon_pki_required=False,
+        module_tls=False,
     ),
     "kritis": Profile(
         name="kritis",
@@ -71,6 +80,7 @@ PROFILES = {
         offline_idle_limit=7,
         offline_max_limit=30,
         addon_pki_required=True,
+        module_tls=True,
     ),
 }
 
@@ -86,7 +96,8 @@ TABLE = (
     (
         "TLS between containers",
         "ends at the reverse proxy; the audit ingest uses mutual TLS with its own CA",
-        "same as `standard`; links between core containers do not use TLS yet",
+        "as `standard`, and Flow, the assistant, Me and the connection registry are"
+        " reached over TLS of the platform CA; a plain upstream of them is refused at render",
     ),
     ("Platform certificates", "issued for every `pki:` request", "issued for every `pki:` request"),
     ("Add-on without a `pki:` request", "allowed", "refused"),

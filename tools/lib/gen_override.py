@@ -29,6 +29,7 @@ from . import (
     gpu_detect,
     hosted_model,
     images,
+    module_tls,
     paperless_gate,
     sql_uplink,
 )
@@ -273,6 +274,10 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
     # LiteLLM behind papaia-egress while the test stack's hosted model is on.
     hosted = hosted_model.generate_override(config_dir, repo_root)
     written: list[Path] = [hosted] if hosted is not None else []
+    # The proxy and me-web with their platform certificates under kritis.
+    tls = generate_module_tls_override(config_dir)
+    if tls is not None:
+        written.append(tls)
     # papaia-audit behind papaia-egress while a SIEM target is set (lib/audit.py).
     siem = audit.generate_siem_override(config_dir)
     if siem is not None:
@@ -887,6 +892,25 @@ def generate_image_mirror_override(config_dir: Path, repo_root: Path, mirror: st
     common.atomic_write(
         out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
     )
+
+
+def generate_module_tls_override(config_dir: Path) -> Path | None:
+    """Write or remove the override that gives the proxy and me-web their directory of
+    the platform PKI under the `kritis` security profile (lib/module_tls.py): the proxy
+    checks the module services against the platform CA, me-web listens with its server
+    certificate. Only for the services whose profile runs on this host; removed under
+    `standard`. ValueError for a security profile that is not one."""
+    out_path = config_dir / "overrides" / module_tls.OVERRIDE
+    root = common.parse_env_file(config_dir / ".env")
+    profiles = {p.strip() for p in root.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
+    override = module_tls.override(profiles) if module_tls.required(root) else None
+    if override is None:
+        out_path.unlink(missing_ok=True)
+        return None
+    common.atomic_write(
+        out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+    )
+    return out_path
 
 
 def generate_ssl_cert_override(config_dir: Path, auth_provider: str) -> None:

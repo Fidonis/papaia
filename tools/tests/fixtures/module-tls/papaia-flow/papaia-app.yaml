@@ -1,0 +1,56 @@
+# Fixture shaped like the Flow bundle: the proxy reaches the way in of flow-api, other
+# modules reach the relay under its network alias. Both have a server certificate of
+# the platform PKI for the name they are reached under.
+name: papaia-flow
+version: 0.1.0
+requires:
+  addon_api: [12]
+networks:
+  app_network: "${PAPAIA_PROJECT:-papaia}-papaia-flow-app"
+  attach: [nginx-proxy-manager]
+pki:
+  services:
+    - name: flow-api
+      uid: 10001
+      server: {dns: [flow-api]}
+    - name: flow-module-relay
+      uid: 10001
+      server: {dns: [papaia-flow-api]}
+integration:
+  nginx:
+    - host_key: flow
+      service: flow-api
+      port: 8080
+      websocket: false
+      max_body: "2m"
+exposes:
+  - id: flow.runs
+    kind: rest
+    title: {de: "Abläufe starten (Flow)", en: "Start workflows (Flow)"}
+    address: {service: flow-module-relay, port: 8080}
+    audience: flow
+    identity: [person]
+    operations:
+      - name: start_run
+        version: 1
+        title: {de: "Lauf starten", en: "Start run"}
+        via: rest
+        method: POST
+        path: "/runs/{flow_id}"
+        effect: write
+        retry: at_most_once
+        input_schema:
+          type: object
+          required: [flow_id]
+          properties:
+            flow_id: {type: string}
+        output_schema: {type: object}
+        data_class_max: confidential
+        resource: {type: flow, id_field: flow_id}
+        rights_check: server
+  - id: flow.me
+    kind: me
+    title: {de: "Flow in Mein Bereich", en: "Flow in my area"}
+    address: {service: flow-api, port: 8444, scheme: https, path: /api/v1/me/settings}
+    audience: flow
+    identity: [person]

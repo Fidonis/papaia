@@ -1,0 +1,12 @@
+# The certificate me-web requests from the platform PKI (docs/pki.md, contract
+# papaia.platform-pki/1): a server certificate for https://me-web:8000. Issued while the
+# profile `me` is on, into $PAPAIA_CONFIG_DIR/pki/core/me-web/, readable by the image's
+# user 10001. me-web listens with it, and checks the modules it calls against the
+# platform CA, only under the security profile kritis (tools/lib/module_tls.py).
+profile: me
+pki:
+  services:
+    - name: me-web
+      uid: 10001
+      server:
+        dns: [me-web]

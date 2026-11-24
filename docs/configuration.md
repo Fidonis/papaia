@@ -325,13 +325,19 @@ switch of their own. The table is the same as in that module (a test compares th
 | Realm `sslRequired` | `external` | `all` |
 | Configured public hosts | http or https | https only |
 | Offline sessions, idle / max age (days) | default 90 / 180, up to 365 / 365 | default and upper bound 7 / 30 |
-| TLS between containers | ends at the reverse proxy; the audit ingest uses mutual TLS with its own CA | same as `standard`; links between core containers do not use TLS yet |
+| TLS between containers | ends at the reverse proxy; the audit ingest uses mutual TLS with its own CA | as `standard`, and Flow, the assistant, Me and the connection registry are reached over TLS of the platform CA; a plain upstream of them is refused at render |
 | Platform certificates | issued for every `pki:` request | issued for every `pki:` request |
 | Add-on without a `pki:` request | allowed | refused |
 
 The table says what the core enforces today. Under `kritis` an add-on cannot run without
-certificates of the platform PKI ([pki.md](pki.md)); whether it uses them on its own
-links is up to the add-on. The core services do not use their platform certificates yet.
+certificates of the platform PKI ([pki.md](pki.md)). The proxy forwards to the interfaces
+of Flow, the assistant and Me (`me-web`) with https, checks the certificate against the
+platform CA under the service's name and presents its own client certificate; the catalog
+gives Flow, the assistant and the connection registry https addresses, so Me calls the
+assistant over TLS. A module service without a server certificate for the name it is
+reached under stops the render ([pki.md](pki.md#tls-to-the-module-services)). Whether
+another add-on uses its certificates on its own links is up to the add-on; the other core
+services do not use their platform certificates yet.
 
 ### Realm settings per profile
 

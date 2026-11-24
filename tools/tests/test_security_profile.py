@@ -11,8 +11,9 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
-from lib import realm_hardening, security_profile
+from lib import module_tls, realm_hardening, security_profile
 
 REPO = Path(__file__).resolve().parents[2]
 LIB = REPO / "tools" / "lib"
@@ -42,8 +43,10 @@ def test_kritis_requires_add_on_certificates_and_standard_does_not():
 
     assert kritis.addon_pki_required and kritis.ssl_required == "all"
     assert not standard.addon_pki_required and standard.ssl_required == "external"
-    # No field promises TLS on links that the core does not encrypt (docs/pki.md).
-    assert not any("tls" in field for field in security_profile.Profile.__dataclass_fields__)
+    # The one TLS promise is the links to the module services (lib/module_tls.py).
+    tls = [f for f in security_profile.Profile.__dataclass_fields__ if "tls" in f]
+    assert tls == ["module_tls"]
+    assert kritis.module_tls and not standard.module_tls
 
 
 def _tls_row() -> tuple[str, str, str]:
@@ -55,13 +58,17 @@ def _tls_row() -> tuple[str, str, str]:
 def test_the_table_promises_tls_only_where_the_core_provides_it():
     _, standard, kritis = _tls_row()
     assert "reverse proxy" in standard and "audit ingest" in standard
-    assert "do not use TLS yet" in kritis
-    # A core service named in the row must have its certificates mounted.
-    for request in (REPO / "src" / "infra").glob("*/pki.yaml"):
-        compose = (request.parent / "docker-compose.yml").read_text(encoding="utf-8")
-        for name in re.findall(r"name:\s*([a-z0-9-]+)", request.read_text(encoding="utf-8")):
-            if name in standard or name in kritis:
-                assert "${PAPAIA_PKI_DIR}" in compose, f"{name} is named but has no certificates"
+    assert "TLS" not in standard.replace("mutual TLS", "")
+    # Under kritis exactly the module services of lib/module_tls.py, and their
+    # certificates are mounted where the core runs them.
+    assert "Flow, the assistant, Me and the connection registry" in kritis
+    assert module_tls.ADDONS == {"papaia-flow", "papaia-assist"}
+    assert module_tls.CORE_PROFILES == {"me", "connections"}
+    mounted = yaml.safe_dump(module_tls.override({"nginx", "me"}))
+    for service in (module_tls.EDGE_SERVICE, module_tls.ME_SERVICE):
+        assert f"${{PAPAIA_PKI_DIR}}/core/{service}:" in mounted
+    registry = (REPO / "src" / "infra" / "connections" / "docker-compose.yml").read_text()
+    assert "/pki/core/connections:/run/papaia/tls:ro" in registry
 
 
 def test_realm_hardening_takes_its_values_from_the_profile():

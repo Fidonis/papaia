@@ -51,6 +51,7 @@ from . import (
     deployment,
     exposes,
     hosted_model,
+    module_tls,
     schema_check,
     security_profile,
     semver,
@@ -209,6 +210,7 @@ class Source:
     section: list
     compose: Path
     host_env: dict  # where `<HOST_KEY>_HOST` is looked up, most specific first
+    pki: object = None  # the module's `pki:` block (lib/module_tls.py)
 
 
 def _profiles(env: dict[str, str]) -> set[str]:
@@ -231,9 +233,21 @@ def _core_sources(repo_root: Path, env: dict[str, str], version: str) -> list[So
             raise CatalogError(f"{where}: {path} must hold exactly the key exposes")
         sources.append(
             Source(where, version, "platform", RUNNING, doc["exposes"],
-                   repo_root / directory / "docker-compose.yml", env)
+                   repo_root / directory / "docker-compose.yml", env,
+                   _core_pki(repo_root / directory / "pki.yaml", where))
         )
     return sources
+
+
+def _core_pki(path: Path, where: str) -> object:
+    """The `pki:` block of a core profile's pki.yaml, None without the file."""
+    if not path.is_file():
+        return None
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise CatalogError(f"{where}: {path} is not valid YAML: {exc}") from None
+    return doc.get("pki") if isinstance(doc, dict) else None
 
 
 def _trust(name: str, version: str, matrix: dict | None, core_version: str | None) -> str:
@@ -286,6 +300,7 @@ def _addon_sources(
                 manifest["exposes"],
                 addon_path / "docker-compose.yml",
                 {**env, **bundle},
+                manifest.get("pki"),
             )
         )
     return sources
@@ -318,18 +333,42 @@ def _compose_services(path: Path, where: str) -> dict:
     return services if isinstance(services, dict) else {}
 
 
-def _address(declared: dict, services: dict, where: str) -> str:
+def _aliases(body: dict) -> tuple[str, ...]:
+    """The network aliases of one compose service, in file order."""
+    networks = body.get("networks")
+    found: list[str] = []
+    if isinstance(networks, dict):
+        for value in networks.values():
+            aliases = (value or {}).get("aliases") if isinstance(value, dict) else None
+            for alias in aliases if isinstance(aliases, list) else ():
+                if isinstance(alias, str) and "$" not in alias and alias not in found:
+                    found.append(alias)
+    return tuple(found)
+
+
+def _address(declared: dict, services: dict, where: str, tls: dict | None = None) -> str:
+    """The internal address of an entry. With `tls` (service -> server certificate
+    names, lib/module_tls.py) always https, under a name the certificate covers."""
     service = declared["service"]
     if service not in services:
         raise CatalogError(
             f"{where}/address/service: no service '{service}' in the module's docker-compose.yml"
         )
-    container = (services[service] or {}).get("container_name")
+    body = services[service] or {}
+    container = body.get("container_name")
     # The container name is the stable DNS name; a templated one is not known here, the
     # service name resolves on every network the service joins.
     host = container if isinstance(container, str) and "$" not in container else service
+    scheme = declared.get("scheme", "http")
+    if tls is not None:
+        candidates = (host, *(a for a in _aliases(body) if a != host))
+        try:
+            host = module_tls.tls_host(tls, service, candidates, f"{where}/address")
+        except module_tls.ModuleTlsError as exc:
+            raise CatalogError(str(exc)) from None
+        scheme = "https"
     path = declared.get("path", "/")
-    return f"{declared.get('scheme', 'http')}://{host}:{declared['port']}{path}"
+    return f"{scheme}://{host}:{declared['port']}{path}"
 
 
 def _public_url(host_key: str, path: str, host_env: dict, where: str) -> str:
@@ -373,7 +412,9 @@ def _ui(item: dict, host_env: dict, where: str) -> dict:
     return result
 
 
-def _entry(source: Source, index: int, declared: dict, services: dict) -> dict:
+def _entry(
+    source: Source, index: int, declared: dict, services: dict, tls: dict | None = None
+) -> dict:
     where = f"{source.provider}: exposes/{index}"
     entry: dict = {
         "id": declared["id"],
@@ -387,7 +428,7 @@ def _entry(source: Source, index: int, declared: dict, services: dict) -> dict:
     if "description" in declared:
         entry["description"] = _text(declared["description"])
     if "address" in declared:
-        entry["address"] = _address(declared["address"], services, where)
+        entry["address"] = _address(declared["address"], services, where, tls)
     for key in ("audience", "identity"):
         if key in declared:
             entry[key] = declared[key]
@@ -589,6 +630,9 @@ def build(
             raise CatalogError(f"{key} is not set in the root .env")
     core = compat.resolve_core_target(repo_root)
     sources = installation_sources(config_dir, repo_root, deployed=deployed)
+    # Fails closed: no catalog (and so no four-eyes value) from an unknown profile.
+    profile = profile_name(env)
+    module_tls_on = security_profile.PROFILES[profile].module_tls
 
     entries: dict[str, dict] = {}
     for source in sources:
@@ -597,17 +641,16 @@ def build(
         except exposes.ExposesError as exc:
             raise CatalogError(str(exc)) from None
         services = _compose_services(source.compose, source.provider)
+        tls = _tls_names(source) if module_tls_on else None
         for index, declared in enumerate(source.section):
             if declared["id"] in entries:
                 raise CatalogError(
                     f"catalog id '{declared['id']}' is declared by "
                     f"{entries[declared['id']]['provider']} and {source.provider}"
                 )
-            entries[declared["id"]] = _entry(source, index, declared, services)
+            entries[declared["id"]] = _entry(source, index, declared, services, tls)
 
     assert core.addon_api is not None  # skip_reason
-    # Fails closed: no catalog (and so no four-eyes value) from an unknown profile.
-    profile = profile_name(env)
     branding, _ = _branding(config_dir)
     four_eyes = four_eyes_in_effect(profile, stored_four_eyes(config_dir))
     try:
@@ -633,6 +676,21 @@ def build(
         "platform_notices": [TEST_MODE_NOTICE] if hosted_model.enabled(env) else [],
         "delegations": delegations,
     }
+
+
+def _tls_names(source: Source) -> dict | None:
+    """Service -> server certificate names of a module service under `kritis`
+    (lib/module_tls.py); None for a provider it does not cover."""
+    if not module_tls.covers_provider(source.provider):
+        return None
+    core = source.provider.startswith("core:")
+    module = "core" if core else source.provider
+    try:
+        return module_tls.server_names(
+            source.pki, module, f"{source.provider}: pki", addon=not core
+        )
+    except module_tls.ModuleTlsError as exc:
+        raise CatalogError(str(exc)) from None
 
 
 def _check_document(doc: dict) -> None:

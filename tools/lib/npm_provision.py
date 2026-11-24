@@ -22,6 +22,7 @@ from . import (
     common,
     deployment,
     ingress,
+    module_tls,
     paperless_gate,
     sign_in,
     startgate,
@@ -176,15 +177,21 @@ def core_host_body(
 ENTRY_OWNED_FIELDS = ("forward_scheme", "forward_host", "forward_port", "advanced_config")
 
 
-def entry_host_body(entry: sign_in.Entry) -> dict:
+def entry_host_body(entry: sign_in.Entry, root: dict[str, str]) -> dict:
     """The NPM API body of the main address: every request is redirected to the entry
-    page before anything is forwarded; the identity and gate headers are cleared."""
+    page before anything is forwarded; the identity and gate headers are cleared. Its
+    upstream is Mein Bereich's service with the scheme the security profile asks for
+    (https with the platform CA under `kritis`, lib/module_tls.py)."""
+    scheme, _, tls = ingress.core_upstream(root, "me", sign_in.ME_SERVICE, "http", False)
+    advanced = paperless_gate.strip_config()
+    if tls:
+        advanced += module_tls.proxy_config(sign_in.ME_SERVICE)
     return proxy_host_body(
         entry.hostname,
         sign_in.ME_SERVICE,
         sign_in.ME_PORT,
-        "http",
-        advanced_config=paperless_gate.strip_config() + sign_in.redirect_config(entry.target),
+        scheme,
+        advanced_config=advanced + sign_in.redirect_config(entry.target),
     )
 
 
@@ -227,15 +234,47 @@ def _entry_host(
         )
         return None
     route = main.route(root.get("DOCKER_NETWORK") or "papaia-net")
-    _correct_host(base_url, token, route, entry_host_body(main), hosts, owned=ENTRY_OWNED_FIELDS)
+    _correct_host(
+        base_url, token, route, entry_host_body(main, root), hosts, owned=ENTRY_OWNED_FIELDS
+    )
     return main.hostname
+
+
+# The fields of a module service's host (module_tls.CORE_ROUTES) that setup owns and
+# corrects, so a change of the security profile reaches a host created before it.
+MODULE_OWNED_FIELDS = IDP_OWNED_FIELDS
+
+
+def _core_spec(label: str) -> tuple:
+    return next(spec for spec in ingress.CORE_PROXY_HOSTS if spec[3] == label)
+
+
+def core_route(root: dict[str, str], label: str, url: str) -> ingress.Route:
+    """The route of the core interface `label` served at `url`, with the upstream the
+    security profile asks for."""
+    _, _, _, _, service, port, scheme, verify, ws = _core_spec(label)
+    scheme, verify, tls = ingress.core_upstream(root, label, service, scheme, verify)
+    hostname = urlsplit(url).hostname or ""
+    return ingress.Route(
+        "core", label, (hostname,), url, service, port, scheme, "", websocket=ws,
+        verify_tls=verify, platform_tls=tls,
+    )  # fmt: skip
+
+
+def core_route_body(root: dict[str, str], label: str) -> dict:
+    """The NPM API body of the module service `label` of the core (module_tls.CORE_ROUTES)
+    at its public URL in the root `.env`."""
+    _, node, key, *_ = _core_spec(label)
+    return route_body(core_route(root, label, ingress.public_url_of({"": root}, node, key)))
 
 
 def route_body(route: ingress.Route) -> dict:
     """The NPM API body of an add-on interface (lib/ingress.py): its host names to its
     service, the identity and gate headers cleared, the upload limit of `max_body`."""
     advanced = paperless_gate.strip_config()
-    if route.scheme == "https" and not route.verify_tls:
+    if route.platform_tls:
+        advanced += module_tls.proxy_config(route.service)
+    elif route.scheme == "https" and not route.verify_tls:
         advanced += "proxy_ssl_verify off;\n"
     if route.max_body:
         advanced += f"client_max_body_size {route.max_body};\n"
@@ -551,6 +590,16 @@ def provision_npm_hosts(
             skipped_port_based += 1
             continue
         domain = urlsplit(url).hostname or ""
+        if module_tls.CORE_ROUTES.get(label) == fwd_host:
+            # Created or corrected, so the upstream follows the security profile.
+            route = core_route(root, label, url)
+            if _correct_host(base_url, token, route, route_body(route),
+                             owned=MODULE_OWNED_FIELDS):  # fmt: skip
+                existing.add(domain)
+                created += 1
+            else:
+                skipped_existing += 1
+            continue
         if fwd_host == IDP_SERVICE:
             # Created or corrected, so an earlier host without the admin block gets it.
             body = core_host_body(domain, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws)

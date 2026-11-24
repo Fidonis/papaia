@@ -590,6 +590,14 @@ def test_the_kritis_profile_refuses_the_command_for_a_plain_http_edge(
         rs.kcs, "_wait_for_keycloak", lambda *a, **k: pytest.fail("Keycloak contacted")
     )
     config_dir, repo_root = _installed(tmp_path, [ENGINE])
+    # Under kritis the proxy reaches Flow's interface over TLS only (lib/module_tls.py):
+    # the add-on requests the server certificate of its interface's service.
+    manifest_path = repo_root / "papaia-flow" / "papaia-app.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text())
+    manifest["pki"] = {
+        "services": [{"name": "flow-console", "uid": 10001, "server": {"dns": ["flow-console"]}}]
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest))
     tree = _tree()
     tree[""].update({"PAPAIA_HOST": "http://papaia.example.org", rh.PROFILE_KEY: "kritis"})
     assert rs.sync(tree, config_dir, repo_root) == 2

@@ -49,6 +49,23 @@ based on merged pull requests; this file mirrors the published releases.
   is one `papaia.audit/1` row (writer `papaia-ctl/me-area`).
 - The README no longer lists the known limit of the profile.
 
+### TLS to the module services under `kritis`
+
+- Under `PAPAIA_SECURITY_PROFILE=kritis` the proxy forwards to Flow, the assistant and
+  Me (`me-web`) with https. It checks the certificate against the platform CA under the
+  service's name and presents its own client certificate (`src/infra/nginx/pki.yaml`).
+  `npm-provision` corrects a host that still forwards in plain HTTP. The host of the main
+  address names `me-web` with the same upstream.
+- Keycloak calls Me's back-channel logout at `ME_PUBLIC_URL` through the proxy instead of
+  `http://me-web:8000`, which listens with TLS of the platform CA only under `kritis`.
+- The catalog gives Flow, the assistant and the connection registry https addresses under
+  a name their server certificate covers, so Me calls the assistant over TLS.
+- `me-web` gets a server certificate (`src/infra/me/pki.yaml`). Under `kritis` the
+  override `docker-compose.module-tls.override.yml` lets it listen with TLS and check the
+  modules it calls against the platform CA.
+- A module service without a server certificate for its name stops the render instead of
+  being forwarded in plain text. `standard` is unchanged.
+
 ### Restore after the loss of the host
 
 - Every restore point carries an unencrypted `RELEASE` file (core tag, suite, installation

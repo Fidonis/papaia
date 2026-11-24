@@ -1,0 +1,17 @@
+services:
+  flow-api:
+    image: example.invalid/papaia-flow:0.1.0
+    networks: [app, flow-relay]
+  flow-module-relay:
+    image: example.invalid/papaia-flow:0.1.0
+    networks:
+      flow-relay: {}
+      flow-modules: {aliases: [papaia-flow-api]}
+networks:
+  app:
+    name: "${PAPAIA_PROJECT:-papaia}-papaia-flow-app"
+  flow-relay:
+    internal: true
+  flow-modules:
+    name: "${PAPAIA_PROJECT:-papaia}-papaia-flow-modules"
+    internal: true

@@ -1,0 +1,28 @@
+# Fixture: the assistant bundle without a server certificate for assist-api, so
+# the core has no TLS upstream for it and refuses it under kritis.
+name: papaia-assist
+version: 0.1.0
+requires:
+  addon_api: [12]
+networks:
+  app_network: "${PAPAIA_PROJECT:-papaia}-papaia-assist-net"
+  attach: [nginx-proxy-manager, me-web]
+pki:
+  services:
+    - name: assist-api
+      uid: 10001
+      client: true
+integration:
+  nginx:
+    - host_key: assistant
+      service: assist-api
+      port: 8080
+      websocket: false
+      max_body: "10m"
+exposes:
+  - id: assist.me
+    kind: me
+    title: {de: "Assistant in Mein Bereich", en: "Assistant in my area"}
+    address: {service: assist-api, port: 8080, path: /api/v2/me}
+    audience: assist-api
+    identity: [person]

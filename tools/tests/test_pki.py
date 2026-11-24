@@ -520,10 +520,12 @@ def test_the_cli_issues_and_reports_what_changed(install, capsys):
 def test_the_shipped_core_requests_are_valid_and_follow_their_profiles():
     repo = Path(__file__).resolve().parents[2]
 
-    on = pki.core_requests(repo, {"lifecycle", "audit"})
+    on = pki.core_requests(repo, {"lifecycle", "audit", "me", "nginx"})
     off = pki.core_requests(repo, set())
 
     assert {r.label: (r.dns, r.client) for r in on} == {
         "core/papaia-lifecycle": (("papaia-lifecycle",), True),
+        "core/me-web": (("me-web",), False),
+        "core/nginx-proxy-manager": ((), True),
     }
     assert off == []

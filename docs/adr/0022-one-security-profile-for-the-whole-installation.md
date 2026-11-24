@@ -40,11 +40,17 @@ checked against the module by a test.
   issued for every request.
 - `kritis`: realm `sslRequired: all`; every configured host https; offline sessions at most
   7 / 30 days (default and upper bound); an add-on without a `pki:` request is refused at
-  `addon install`, and `start` refuses an active one.
+  `addon install`, and `start` refuses an active one; the proxy and the catalog reach the
+  module services (Flow, the assistant, Me, the connection registry) over TLS of the
+  platform CA, and a module service without a server certificate for the name it is
+  reached under stops the render (`tools/lib/module_tls.py`, docs/pki.md).
 
-The table states only what the core enforces. Links between core containers do not use
-TLS in either profile yet; when a later change wires them to the platform PKI, it adds
-the row to the table and the test that holds the table to the code.
+The table states only what the core enforces. Apart from the module services, links
+between core containers do not use TLS in either profile yet; when a later change wires
+them to the platform PKI, it changes the row of the table and the test that holds the
+table to the code. The module services are a fixed list rather than every add-on with a
+certificate: whether another add-on listens with TLS under `kritis` is not known to the
+core, and forwarding to it with https would break it.
 
 Any other value stops the render, the realm sync and the issuing of certificates.
 
@@ -65,4 +71,5 @@ Any other value stops the render, the realm sync and the issuing of certificates
 ## References
 
 - `tools/lib/security_profile.py`
+- `tools/lib/module_tls.py` — TLS to the module services under `kritis`
 - [ADR 0019](0019-issue-internal-tls-from-one-platform-ca.md) — the platform PKI

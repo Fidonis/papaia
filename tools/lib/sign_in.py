@@ -49,6 +49,8 @@ ME_PROFILE = "me"
 ME_URL_KEY = "ME_PUBLIC_URL"
 ME_SERVICE, ME_PORT = "me-web", 8000
 ENTRY_HOST_KEY = "entry"
+# Core profile -> root key of its public address (its back-channel under `kritis`).
+_PUBLIC_URL_KEYS = {ME_PROFILE: ME_URL_KEY}
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,9 @@ def backchannel_targets(tree: dict, found: list[ingress.Route]) -> dict[str, str
             continue
         if client.internal is not None:
             if client.module in active:
-                targets[client.client_id] = client.internal + client.path
+                url = _core_target(tree.get("", {}), client)
+                if url is not None:
+                    targets[client.client_id] = url
             continue
         route = next(
             (r for r in found if r.module == client.module and r.host_key == client.host_key),
@@ -108,11 +112,28 @@ def backchannel_targets(tree: dict, found: list[ingress.Route]) -> dict[str, str
     return targets
 
 
-def owned_addresses() -> dict[str, str]:
-    """The back-channel addresses the core sets on the stack network, by client: the
-    realm sync clears one of them again when its profile is off (an add-on's client
-    goes with the add-on)."""
-    return {c.client_id: c.internal + c.path for c in SIGN_IN_CLIENTS if c.internal and c.path}
+def _core_target(root: dict, client: SignInClient) -> str | None:
+    """The back-channel address of a core profile's sign-in client: on the stack network,
+    or under `kritis` (the module service listens with TLS of the platform PKI only,
+    lib/module_tls.py, which the identity provider does not trust) at the profile's
+    public address through the proxy, like an add-on; None when that is not set."""
+    if client.internal is None or client.path is None:
+        return None
+    service = urlsplit(client.internal).hostname or ""
+    scheme, _, _ = ingress.core_upstream(root, client.module, service, "http", False)
+    if scheme == "http":
+        return client.internal + client.path
+    public = (root.get(_PUBLIC_URL_KEYS[client.module]) or "").strip()
+    return public.rstrip("/") + client.path if public else None
+
+
+def owned_addresses(tree: dict) -> dict[str, str]:
+    """The back-channel addresses the core sets for its own profiles under the security
+    profile of `tree`, by client: the realm sync clears one of them again when its
+    profile is off (an add-on's client goes with the add-on)."""
+    root = tree.get("", {})
+    owned = {c.client_id: _core_target(root, c) for c in SIGN_IN_CLIENTS if c.internal}
+    return {client_id: url for client_id, url in owned.items() if url is not None}
 
 
 # What reading the add-on routes can raise on unreadable add-on data: a scheme value or a

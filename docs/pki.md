@@ -8,6 +8,7 @@ added to that bundle in one place. The decision behind it is
 asks of it is [ADR 0022](adr/0022-one-security-profile-for-the-whole-installation.md).
 
 - [When TLS between containers is required](#when-tls-between-containers-is-required)
+- [TLS to the module services](#tls-to-the-module-services)
 - [Asking for certificates](#asking-for-certificates)
 - [What a service gets](#what-a-service-gets)
 - [The CA key](#the-ca-key)
@@ -27,10 +28,12 @@ The security profile `PAPAIA_SECURITY_PROFILE` decides
   request.
 - `kritis`: the same, and an add-on must request certificates: an add-on without a `pki:`
   request is refused by `papaia-ctl addon install`, and `papaia-ctl start` stops before
-  anything starts while such an add-on is active. Whether an add-on uses its certificates
-  on its own links is up to the add-on.
+  anything starts while such an add-on is active. The core reaches the module services
+  over TLS ([below](#tls-to-the-module-services)). Whether another add-on uses its
+  certificates on its own links is up to the add-on.
 
-In neither profile do the links between core containers use TLS yet. papaia-lifecycle
+Apart from the module services, the links between core containers do not use TLS yet in
+either profile. papaia-lifecycle
 gets its certificates (`src/infra/lifecycle/pki.yaml`), but its compose file does not
 mount them and its calls do not present a client certificate; wiring the core links to
 the platform PKI is a later step.
@@ -41,6 +44,41 @@ installations stay as they are. So does the ingest CA of the audit store
 ([audit.md](audit.md)): mutual TLS at `papaia-audit:8443` accepts only client certificates
 of that CA whose fingerprint is listed for their source (`papaia-ctl audit cert <source>`),
 so a certificate of the platform PKI is not an audit source.
+
+## TLS to the module services
+
+Under `kritis` the core points at Flow (`papaia-flow`), the assistant (`papaia-assist`),
+Me (`me-web`) and the connection registry (`connections`) only over TLS of the platform
+CA (`tools/lib/module_tls.py`):
+
+- **Proxy.** The proxy host of each of their interfaces (`integration.nginx`, and
+  `ME_PUBLIC_URL` for `me-web`) forwards with https. The proxy checks the certificate
+  against the platform CA under the service's name (`proxy_ssl_verify on`,
+  `proxy_ssl_name`), speaks TLS 1.3 and presents its own client certificate
+  (`src/infra/nginx/pki.yaml`). `papaia-ctl npm-provision` corrects a host that still
+  forwards in plain HTTP. `papaia-ctl proxy list` marks these forwards `tls-platform-ca`.
+  The host of the main address, which redirects every request to Mein Bereich, names
+  `me-web` with the same https upstream.
+- **Sign-out.** Keycloak does not trust the platform CA, so it no longer calls Me's
+  back-channel logout on the stack network (`http://me-web:8000`). The realm sync sets it
+  to `ME_PUBLIC_URL` + `/auth/backchannel-logout`, through the proxy, as for the add-ons
+  (`tools/lib/sign_in.py`; with a local `.localhost` name the call fails and Me learns of
+  the sign-out at the next token refresh).
+- **Catalog.** Their addresses in `platform/services.json` are https, under a name their
+  server certificate covers (the service, its container name or a network alias of the
+  service, in that order). Me calls the assistant at that address and checks it against
+  the platform CA.
+- **me-web.** The override `overrides/docker-compose.module-tls.override.yml` mounts
+  `<config>/pki/core/me-web/` into `me-web`, which then listens with its server
+  certificate (`src/infra/me/pki.yaml`) and checks the modules it calls against the
+  platform CA. The same override mounts `<config>/pki/core/nginx-proxy-manager/` into the
+  proxy. Under `standard` the override is removed.
+
+A module service without a server certificate for the name it is reached under stops the
+render: `papaia-ctl proxy list`, `npm-provision`, `catalog render` and every `setup`,
+`start` and `addon` step name the service and refuse the plain upstream. It is never
+forwarded in plain text. The module must then add the name to `server.dns` of its `pki:`
+request. Other add-ons keep plain HTTP behind the proxy under both profiles.
 
 ## Asking for certificates
 

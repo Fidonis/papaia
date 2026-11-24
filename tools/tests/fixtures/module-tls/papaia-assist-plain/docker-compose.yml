@@ -1,0 +1,7 @@
+services:
+  assist-api:
+    image: example.invalid/papaia-assist:0.1.0
+    networks: [app]
+networks:
+  app:
+    name: "${PAPAIA_PROJECT:-papaia}-papaia-assist-net"

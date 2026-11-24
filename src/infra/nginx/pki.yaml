@@ -1,0 +1,10 @@
+# The certificate the bundled proxy requests from the platform PKI (docs/pki.md, contract
+# papaia.platform-pki/1): a client certificate, presented to the module services it
+# forwards to, and the platform CA it checks them against. Issued while the profile
+# `nginx` is on, into $PAPAIA_CONFIG_DIR/pki/core/nginx-proxy-manager/. Used only under
+# the security profile kritis (tools/lib/module_tls.py). No `uid`: the proxy runs as root.
+profile: nginx
+pki:
+  services:
+    - name: nginx-proxy-manager
+      client: true
