@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import ctypes
+import dataclasses
 import json
 import math
 import os
@@ -67,12 +68,14 @@ from . import (
     gen_override,
     gpu_detect,
     halt,
+    host_size,
     images,
     localai_native,
     model_gateway,
     module_health,
     pki,
     semver,
+    setup_answers,
     smtp,
     sql_uplink,
     status,
@@ -848,6 +851,127 @@ def check_cpu(ctx: Context) -> CheckResult:
         summary += f" - sustained load (warn at {CPU_WARN_LOAD_PER_CORE:g} per core)"
         return CheckResult(name, WARN, summary, details)
     return CheckResult(name, PASS, summary, details)
+
+
+# ─── profile_size ────────────────────────────────────────────────────────
+
+
+def _disk_for_profile(ctx: Context) -> tuple[int | None, str]:
+    """Free bytes where the containers keep their data: Docker's root directory when the
+    host can see it, otherwise the configuration directory (Docker Desktop keeps its
+    root inside a VM)."""
+    root = ctx.run(
+        ["docker", "info", "--format", "{{.DockerRootDir}}"], DOCKER_PROBE_TIMEOUT_SECONDS
+    )
+    root_dir = status.first_line(root.stdout) if root.returncode == 0 else ""
+    path = Path(root_dir) if root_dir and Path(root_dir).is_dir() else ctx.config_dir
+    existing = _nearest_existing(path)
+    if existing is None:
+        return None, str(path)
+    try:
+        return ctx.probes.disk_usage(existing)[1], str(existing)
+    except OSError:
+        return None, str(existing)
+
+
+def _largest_gpu_memory(ctx: Context) -> int | None:
+    result = ctx.run(
+        ["nvidia-smi", f"--query-gpu={_NVIDIA_QUERY}", "--format=csv,noheader,nounits"],
+        GPU_PROBE_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        return None
+    sizes = [g["memory_total_mib"] for g in parse_nvidia_smi(result.stdout)
+             if g["memory_total_mib"]]
+    return max(sizes) * _MIB if sizes else None
+
+
+def measure_host(ctx: Context, *, with_gpu: bool) -> host_size.Measured:
+    """CPU cores and memory as the Docker daemon sees them (on Docker Desktop: its VM,
+    where the containers run), else as this host reports them; free disk where the data
+    goes; the video memory of the largest NVIDIA GPU only when `with_gpu`."""
+    docker_cores, docker_memory = ctx.docker_totals()
+    cores = docker_cores or ctx.probes.cpu_count()
+    memory = docker_memory
+    if memory is None:
+        info = ctx.probes.meminfo()
+        memory = info.total if info is not None else None
+    disk_free, disk_path = _disk_for_profile(ctx)
+    gpu = _largest_gpu_memory(ctx) if with_gpu else None
+    return host_size.Measured(cores, memory, disk_free, disk_path, gpu)
+
+
+def size_result(ctx: Context, profile_name: str, *, before_setup: bool = False) -> CheckResult:
+    """The host against one size profile: `fail` naming every size that is missing,
+    `warn` when a size cannot be read, `pass` otherwise."""
+    name = "profile_size"
+    try:
+        wanted = host_size.profile(profile_name)
+    except ValueError as exc:
+        return CheckResult(name, FAIL, f"{host_size.ENV_KEY}: {exc}")
+    host = measure_host(ctx, with_gpu=False)
+    if (
+        wanted.gpu_alternative is not None
+        and host.memory is not None
+        and host.memory < wanted.memory * (1 - host_size.MEMORY_TOLERANCE)
+    ):
+        # Asked only when it can decide: the GPU alternative of the profile.
+        host = dataclasses.replace(host, gpu_memory=_largest_gpu_memory(ctx))
+    missing, unknown = host_size.shortfall(wanted, host)
+    details: dict[str, Any] = {
+        "profile": wanted.name,
+        "before_setup": before_setup,
+        "cores": host.cores,
+        "memory_bytes": host.memory,
+        "disk_free_bytes": host.disk_free,
+        "disk_path": host.disk_path,
+        "gpu_memory_bytes": host.gpu_memory,
+        "missing": missing,
+        "unknown": unknown,
+    }
+    which = f"size profile '{wanted.name}'"
+    if before_setup:
+        which += " (the smallest; setup measures the profile chosen there)"
+    if missing:
+        return CheckResult(
+            name, FAIL, f"this host is below {which}: " + "; ".join(missing), details
+        )
+    if unknown:
+        return CheckResult(
+            name, WARN, f"{which} cannot be confirmed: " + "; ".join(unknown), details
+        )
+    return CheckResult(name, PASS, f"this host fits {which}", details)
+
+
+def check_profile_size(ctx: Context) -> CheckResult:
+    name = "profile_size"
+    if not ctx.configured:
+        return size_result(ctx, host_size.SMALLEST, before_setup=True)
+    chosen = ctx.env.get(host_size.ENV_KEY, "").strip()
+    if not chosen:
+        return CheckResult(
+            name, SKIP, f"no size profile chosen ({host_size.ENV_KEY} is empty)"
+        )
+    return size_result(ctx, chosen)
+
+
+def check_size(
+    config_dir: Path,
+    repo_root: Path,
+    profile_name: str,
+    *,
+    run: Runner | None = None,
+    probes: Probes | None = None,
+) -> CheckResult:
+    """The size check `setup` runs before it writes anything (PLT-58-A5)."""
+    ctx = Context(
+        config_dir,
+        repo_root,
+        run=run or status.run_command,
+        probes=probes or Probes(),
+        now=datetime.now(timezone.utc),
+    )
+    return size_result(ctx, profile_name)
 
 
 # ─── gpu ─────────────────────────────────────────────────────────────────
@@ -2372,6 +2496,13 @@ def check_contact_point(ctx: Context) -> CheckResult:
             "('papaia-ctl settings set contact.name <name>', then contact.mail or contact.phone)",
             {"contact": None},
         )
+    if contact.get("name") == setup_answers.derived_contact(ctx.config_dir):
+        return CheckResult(
+            name, WARN,
+            f"the contact point is still the one setup derived ({contact['name']}); set the "
+            "people's real contact ('papaia-ctl settings set contact.name <name>')",
+            {"contact": contact, "derived": True},
+        )
     return CheckResult(name, PASS, f"contact point: {contact['name']}", {"contact": contact})
 
 
@@ -3466,6 +3597,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("docker_usage", check_docker_usage),
     ("memory", check_memory),
     ("cpu", check_cpu),
+    ("profile_size", check_profile_size),
     ("gpu", check_gpu),
     ("localai_native", check_localai_native),
     ("ports", check_ports),

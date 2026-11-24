@@ -63,3 +63,32 @@ def test_start_leaves_the_addon_clients_to_its_keycloak_step(tmp_path):
     )
     # The step that creates the clients comes after the core's `up`.
     assert calls[-1] == "py_cli keycloak-role-sync"
+
+
+def _start(tmp_path, args: str) -> list[str]:
+    harness = _HARNESS.replace("@CONFIG@", tmp_path.as_posix())
+    harness = harness.replace("@LIFECYCLE@", LIFECYCLE.as_posix())
+    harness = harness.replace(
+        "cmd_start --addons\n", f"_require_profiles_resolve() {{ :; }}\ncmd_start {args}\n"
+    )
+    assert BASH is not None
+    result = subprocess.run(
+        [BASH, "-c", harness], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()
+
+
+@pytest.mark.skipif(BASH is None, reason="bash is not available")
+def test_start_without_a_switch_starts_the_active_addons_too(tmp_path):
+    # BE-03: `start` without a switch brings up the core and every chosen module.
+    calls = _start(tmp_path, "")
+    assert "compose-up wiki" in calls
+    assert "py_cli addon-start --name=wiki --no-keycloak" in calls
+
+
+@pytest.mark.skipif(BASH is None, reason="bash is not available")
+def test_start_no_addons_and_a_profile_subset_leave_the_addons_alone(tmp_path):
+    assert "compose-up wiki" not in _start(tmp_path, "--no-addons")
+    assert "compose-up wiki" not in _start(tmp_path, "--profiles=keycloak")
+    assert "compose-up wiki" in _start(tmp_path, "--profiles=keycloak --addons")

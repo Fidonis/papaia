@@ -666,4 +666,4 @@ def test_setup_passes_the_approval_flag_on_and_validates_it():
     text = (Path(__file__).resolve().parents[1] / "lib" / "sh" / "setup.sh").read_text("utf-8")
 
     assert "--approve-pairings=*)" in text
-    assert '_setup_pairings "$non_interactive" "$approve_pairings"' in text
+    assert '_setup_pairings "$pairing_interactive" "$approve_pairings"' in text

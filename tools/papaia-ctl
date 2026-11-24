@@ -34,8 +34,14 @@
 #                       [--topology=single|distributed] [--node=NAME=ADDR[,ssh=USER@HOST[:PORT]]]
 #                       [--controller=NAME] [--preset=dmz-split|dmz-edge] [--place=SERVICE=NODE]
 #                       [--link-port=PORT] [--topology-file=PATH]
-#   papaia-ctl start         [--addons] [--profiles=LIST] [--node=NAME] [--unlock] [--force]
-#                            [--insecure-images] [--config-dir=PATH]
+#   papaia-ctl setup    --answers=FILE [-y] — a fresh installation from an answer file
+#                       (papaia.setup-answers/1); on a terminal without switches setup
+#                       asks the same question round (at most 15 inputs, README)
+#   papaia-ctl hostnames     [--config-dir=PATH] — the DNS names to create: patterns
+#                            before setup, the names themselves after it
+#   papaia-ctl start         [--addons|--no-addons] [--profiles=LIST] [--node=NAME] [--unlock]
+#                            [--force] [--insecure-images] [--config-dir=PATH] — without
+#                            --profiles the active add-ons start too
 #   papaia-ctl stop          [--clean-up [--volumes]] [--addons] [--profiles=LIST] [--node=NAME]
 #                            [--config-dir=PATH]
 #   papaia-ctl upgrade       [--version=X.Y.Z] [--dry-run] [--force] [-y] [--insecure-images]
@@ -206,7 +212,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,199p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,205p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -327,6 +333,7 @@ case "$cmd" in
     logs)          cmd_logs "$@" ;;
     support-bundle) cmd_support_bundle "$@" ;;
     metrics)       cmd_metrics "$@" ;;
+    hostnames)     cmd_hostnames "$@" ;;
     topology)      cmd_topology "$@" ;;
     node)          cmd_node "$@" ;;
     node-shell)    cmd_node_shell "$@" ;;

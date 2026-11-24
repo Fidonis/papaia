@@ -26,7 +26,10 @@ The label is the host key; the operator renames it with `INGRESS_HOST_<KEY>` in 
 root `.env` (one DNS label, nothing else). The host key `apps` is the app host: it lives
 on a second domain, a site of its own, so cookies of the platform domain never reach it
 (`INGRESS_APP_DOMAIN`; locally `<env>.papaia-apps.localhost`), and serves its
-subdomains too.
+subdomains too. Without a second domain the operator may choose one site for both
+(`INGRESS_APP_SINGLE_SITE=true`, E-20): the app host is then `apps.<domain>`, an
+interface of the platform domain with a lasting warning in Studio; an
+`INGRESS_APP_DOMAIN` inside the platform domain stays refused.
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ LOCAL_SUFFIX = "papaia.localhost"
 LOCAL_APP_SUFFIX = "papaia-apps.localhost"
 DOMAIN_KEY = "INGRESS_DOMAIN"
 APP_DOMAIN_KEY = "INGRESS_APP_DOMAIN"
+APP_SINGLE_SITE_KEY = "INGRESS_APP_SINGLE_SITE"
+SINGLE_SITE_APP_LABEL = "apps"
 RENAME_PREFIX = "INGRESS_HOST_"
 HTTPS_PORT_KEY = "INGRESS_HTTPS_EXT_PORT"
 HTTP_PORT_KEY = "INGRESS_HTTP_EXT_PORT"
@@ -93,6 +98,8 @@ class HostScheme:
     app_domain: str | None
     port: int | None  # in the URL; None for the scheme's default port
     scheme: str = "https"
+    # True when the app host is `apps.<domain>` on the platform's own site (E-20).
+    single_site: bool = False
 
     def hostname(self, label: str) -> str:
         if self.domain is None:
@@ -190,6 +197,16 @@ def _domain(root: dict[str, str], key: str) -> str | None:
     return raw
 
 
+def single_site(root: dict[str, str]) -> bool:
+    """Whether the operator chose one site for the platform and the apps (E-20)."""
+    raw = (root.get(APP_SINGLE_SITE_KEY) or "").strip().lower()
+    if raw in ("", "false"):
+        return False
+    if raw == "true":
+        return True
+    raise IngressError(f"{APP_SINGLE_SITE_KEY}={raw!r}: must be true or false")
+
+
 def host_scheme(root: dict[str, str]) -> HostScheme:
     """The host scheme of the installation described by the root `.env`."""
     provider = root.get("REVERSE_PROXY_PROVIDER") or "internal_nginx"
@@ -212,6 +229,11 @@ def host_scheme(root: dict[str, str]) -> HostScheme:
         port = None
         if provider == "internal_nginx":
             port = edge_port(root) if url_scheme == "https" else edge_port(root, HTTP_PORT_KEY, 80)
+        if app_domain is None and single_site(root):
+            # E-20: no second domain; the apps live below the platform domain.
+            return HostScheme(
+                provider, domain, f"{SINGLE_SITE_APP_LABEL}.{domain}", port, url_scheme, True
+            )
         scheme = HostScheme(provider, domain, app_domain, port, url_scheme)
     if scheme.app_domain is not None:
         a, d = scheme.app_domain, scheme.domain or ""
@@ -267,7 +289,8 @@ def addon_routes(manifest: dict, root: dict[str, str]) -> list[Route]:
             if scheme.app_domain is None:
                 raise IngressError(
                     f"add-on '{name}': the app host needs a second domain; set"
-                    f" {APP_DOMAIN_KEY} in the root .env"
+                    f" {APP_DOMAIN_KEY} in the root .env (or {APP_SINGLE_SITE_KEY}=true"
+                    " for apps below the platform domain)"
                 )
             hostnames = (scheme.app_domain, f"*.{scheme.app_domain}")
             public_url = scheme.url_of(scheme.app_domain)

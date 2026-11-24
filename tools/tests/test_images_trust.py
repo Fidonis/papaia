@@ -802,8 +802,9 @@ def test_start_checks_with_exactly_the_overrides_it_starts_with(tmp_path):
     done = _shell(tmp_path, "cmd_start")
     assert done.returncode == 0, done.stderr
     checked = _core_calls(tmp_path)[0]
+    # Without a switch the active add-ons come up first; the core's `up` is the one here.
     up = next(c for c in done.stdout.splitlines() if c.startswith("docker compose")
-              and " up " in c)
+              and " up " in c and "/repo/src/docker-compose.yml" in c)
     for line in (checked, up):
         assert "a.override.yml" in line and "b.override.yml" not in line
 

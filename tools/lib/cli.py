@@ -39,6 +39,7 @@ from . import (
     cli_addon,
     cli_node,
     cli_pki,
+    cli_setup_round,
     cluster,
     cluster_data,
     common,
@@ -49,6 +50,7 @@ from . import (
     direct_ports,
     doctor,
     envtree,
+    federation,
     gen_override,
     gpu_detect,
     halt,
@@ -79,6 +81,7 @@ from . import (
     secrets,
     service_accounts,
     settings,
+    setup_answers,
     stack_network,
     status,
     suite,
@@ -290,6 +293,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
         except localai_native.InstallError as exc:
             print(f"ERROR: LOCALAI_RUNTIME=native: {exc}. Nothing was changed.", file=sys.stderr)
             return 3
+    # The record of the question round of a fresh installation (lib/setup_answers.py),
+    # checked again before anything is written.
+    round_record = None
+    if args.answers_record:
+        try:
+            round_record = setup_answers.load_record(Path(args.answers_record))
+            round_values = cli_setup_round.setup_overrides(round_record, args)
+        except setup_answers.AnswerError as exc:
+            print(f"ERROR: {exc}. Nothing was changed.", file=sys.stderr)
+            return 3
     # The mail relay sends every mail under this name (PLT-78); read before anything
     # is written, so a broken brand overlay leaves the configuration as it was.
     try:
@@ -348,6 +361,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         force=args.force,
         fresh_init=fresh_init,
     )
+    if round_record is not None:
+        for name, value in round_values.items():
+            setattr(setup_args, name, value)
 
     effective_auth_provider = args.auth_provider or tree.get("", {}).get(
         "AUTH_PROVIDER", "internal_keycloak"
@@ -381,6 +397,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
         tree = resolve.resolve_core_profiles(tree)
+        if round_record is not None:
+            tree.setdefault("", {}).update(setup_answers.root_env(round_record["answers"]))
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
@@ -426,7 +444,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     tree = envtree.stamp_config_dir(tree, config_dir)
     tree = envtree.stamp_workspace_dir(tree, repo_root)
     # After stamp_workspace_dir: the derived default is <workspace>/backup.
-    tree = envtree.stamp_backup_dir(tree, override=args.backup_dir)
+    backup_override = args.backup_dir
+    if round_record is not None and not backup_override:
+        backup_override = round_record["answers"]["backup_target"]
+    tree = envtree.stamp_backup_dir(tree, override=backup_override)
     tree = envtree.stamp_docker_gid(tree)
     tree = envtree.stamp_host_uid_gid(tree)
     envtree.persist_tree(tree, config_dir, repo_root)
@@ -473,6 +494,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
 
+    if round_record is not None:
+        try:
+            cli_setup_round.finish_setup(config_dir, repo_root, round_record)
+        except (setup_answers.AnswerError, federation.FederationError,
+                settings.SettingsError, catalog.CatalogError, OSError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 3
     envtree.write_run_summary(config_dir, tree, fresh_init=fresh_init, force=args.force)
     if _project_bundles(config_dir, repo_root) != 0:
         return 3
@@ -3235,6 +3263,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--controller", default=None)
     p_setup.add_argument("--link-port", type=int, default=None)
     p_setup.add_argument("--topology-file", default=None)
+    p_setup.add_argument("--answers-record", default=None)
     p_setup.set_defaults(func=cmd_setup)
 
     p_render = sub.add_parser("render")
@@ -3257,6 +3286,7 @@ def build_parser() -> argparse.ArgumentParser:
     pairing_approval.add_parsers(sub)
     module_offer.add_parsers(sub)
     cli_pki.add_parsers(sub)
+    cli_setup_round.add_parsers(sub)
 
     p_cluster_start = sub.add_parser("cluster-start")
     p_cluster_start.add_argument("--node", default=None)

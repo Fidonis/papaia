@@ -287,6 +287,20 @@ def parse(idp: object, group_map: object) -> Federation:
     )
 
 
+def check_answer(idp_path: Path) -> Federation:
+    """An `idp.yaml` named in the question round of `setup` (BE-03 No. 4), with the
+    `idp-group-map.yaml` next to it: both read and checked like the installed files."""
+    idp = _read(idp_path)
+    if idp is None:
+        raise FederationError(f"{idp_path} does not exist")
+    group_map = _read(idp_path.parent / MAP_FILE.name)
+    if group_map is None:
+        raise FederationError(
+            f"{idp_path.parent / MAP_FILE.name} is missing (idp.yaml needs it next to it)"
+        )
+    return parse(idp, group_map)
+
+
 def load(config_dir: Path) -> Federation | None:
     """The federation of this installation; None without `security/idp.yaml`."""
     idp = _read(config_dir / IDP_FILE)

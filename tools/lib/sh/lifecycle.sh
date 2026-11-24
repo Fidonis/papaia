@@ -331,13 +331,14 @@ _require_no_pending_post_restore() {
 }
 
 cmd_start() {
-    local config_dir="$DEFAULT_CONFIG_DIR" addons=0 profiles="" force=0 node="" unlock=0
+    local config_dir="$DEFAULT_CONFIG_DIR" addons="" profiles="" force=0 node="" unlock=0
     local insecure_images=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --config-dir=*) config_dir="${1#*=}" ;;
             --insecure-images) insecure_images=1 ;;
             --addons) addons=1 ;;
+            --no-addons) addons=0 ;;
             --profiles=*) profiles="${1#*=}" ;;
             --node=*) node="${1#*=}" ;;
             --unlock) unlock=1 ;;
@@ -347,6 +348,13 @@ cmd_start() {
         esac
         shift
     done
+    # Without a switch `start` brings up the core and every module chosen with setup or
+    # installed since (BE-03: no switch to count); a partial start of core profiles
+    # (--profiles) leaves the add-ons alone unless --addons asks for them.
+    if [ -z "$addons" ]; then
+        addons=1
+        [ -n "$profiles" ] && addons=0
+    fi
     CONFIG_DIR="$config_dir"
     _require_setup_done
 

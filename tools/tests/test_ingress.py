@@ -139,6 +139,39 @@ def test_the_app_domain_is_a_site_of_its_own():
         )
 
 
+def test_one_site_puts_the_apps_below_the_platform_domain():
+    # E-20: without a second domain, apps.<domain>, chosen explicitly.
+    root = _root(PAPAIA_HOST="https://example.org", INGRESS_APP_SINGLE_SITE="true",
+                 INGRESS_HTTPS_EXT_PORT="443")
+    scheme = ingress.host_scheme(root)
+    assert scheme.app_domain == "apps.example.org"
+    assert scheme.single_site is True
+    _console, apps = ingress.addon_routes(_manifest(APPS), root)
+    assert apps.hostnames == ("apps.example.org", "*.apps.example.org")
+
+
+def test_one_site_does_not_open_a_nested_app_domain_of_the_operator():
+    with pytest.raises(ingress.IngressError, match="INGRESS_APP_DOMAIN"):
+        ingress.host_scheme(
+            _root(PAPAIA_HOST="https://example.org", INGRESS_APP_DOMAIN="x.example.org",
+                  INGRESS_APP_SINGLE_SITE="true")
+        )
+
+
+def test_a_second_domain_wins_over_one_site():
+    scheme = ingress.host_scheme(
+        _root(PAPAIA_HOST="https://example.org", INGRESS_APP_DOMAIN="example-apps.org",
+              INGRESS_APP_SINGLE_SITE="true")
+    )
+    assert scheme.app_domain == "example-apps.org" and not scheme.single_site
+
+
+def test_one_site_takes_true_or_false_only():
+    with pytest.raises(ingress.IngressError, match="INGRESS_APP_SINGLE_SITE"):
+        ingress.host_scheme(_root(PAPAIA_HOST="https://example.org",
+                                  INGRESS_APP_SINGLE_SITE="yes"))
+
+
 # ── routes from the manifest ─────────────────────────────────────────────────
 
 

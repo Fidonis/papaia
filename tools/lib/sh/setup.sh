@@ -12,6 +12,8 @@ SETUP_LOCALAI_ARGS=()
 SETUP_KNOWLEDGE_MAP_ARGS=()
 # The connection registry switch of the setup run in progress, same lifetime.
 SETUP_CONNECTIONS_ARGS=()
+# The record of the question round (lib/setup_answers.py), same lifetime.
+SETUP_ANSWERS_ARGS=()
 
 # Reads a py_cli subcommand's KEY=VALUE output into the current shell's
 # variables.
@@ -51,6 +53,23 @@ load_localai_variants() {
 
 cmd_setup() {
     local orig_argc=$#
+    # The switches of this call, by name: each one counts as an input (BE-03). The
+    # answer file is the question round itself, not one more input.
+    # The switches that set what the round decides (host names, proxy, LocalAI, backup
+    # target, mail) cannot stand beside it: the record and the configuration would part.
+    local round_flags="" round_decided="" arg
+    for arg in "$@"; do
+        case "$arg" in
+            --answers=*) ;;
+            --app-host=*|--auth-host=*|--npm-admin-host=*|--librechat-host=*|--manager-host=*\
+            |--litellm-host=*|--localai-host=*|--qdrant-host=*|--reverse-proxy-provider=*\
+            |--local-ai|--no-local-ai|--backup-dir=*|--smtp|--no-smtp|--smtp-*)
+                round_flags="${round_flags:+$round_flags,}${arg%%=*}"
+                round_decided="${round_decided:+$round_decided, }${arg%%=*}" ;;
+            -*) round_flags="${round_flags:+$round_flags,}${arg%%=*}" ;;
+        esac
+    done
+    local answers_file="" round=0
     local config_dir="$DEFAULT_CONFIG_DIR" env_name="papaia"
     local host_ip="" app_host="" auth_host="" librechat_host="" litellm_host="" localai_host="" manager_host="" npm_admin_host=""
     local qdrant_host=""
@@ -70,6 +89,7 @@ cmd_setup() {
     SETUP_LOCALAI_ARGS=()
     SETUP_KNOWLEDGE_MAP_ARGS=()
     SETUP_CONNECTIONS_ARGS=()
+    SETUP_ANSWERS_ARGS=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -185,6 +205,13 @@ cmd_setup() {
                 fi
                 ;;
             --env-only) env_only=1 ;;
+            --answers=*)
+                answers_file="${1#*=}"
+                if [ -z "$answers_file" ] || [ ! -f "$answers_file" ]; then
+                    error "--answers=FILE: no answer file at '$answers_file'"
+                    exit 2
+                fi
+                ;;
             --topology=*)
                 case "${1#*=}" in
                     single|distributed) SETUP_TOPOLOGY_ARGS+=("$1") ;;
@@ -270,6 +297,48 @@ cmd_setup() {
         fi
         success "setup complete (re-render only)."
         return 0
+    fi
+
+    # The question round of a fresh installation (README, "Question round"): from the
+    # answer file, or asked on the terminal. A distributed installation is described by
+    # its switches instead.
+    if [ -n "$answers_file" ]; then
+        if _installation_exists; then
+            error "--answers is for a fresh installation; $CONFIG_DIR holds one already."
+            error "  Change it with the switches of 'papaia-ctl setup' instead."
+            exit 2
+        fi
+        if [ -n "$round_decided" ]; then
+            error "--answers decides what $round_decided would set (README, \"Question round\")."
+            error "  Leave the switch out and answer in the file. Nothing was changed."
+            exit 2
+        fi
+        round=1
+    elif [ "$non_interactive" -eq 0 ] && is_tty && ! _installation_exists \
+        && [ "${#SETUP_TOPOLOGY_ARGS[@]}" -eq 0 ]; then
+        if [ -n "$round_decided" ]; then
+            info "The switches $round_decided describe this installation; no question round."
+        else
+            round=1
+        fi
+    fi
+    if [ "$round" -eq 1 ]; then
+        local round_interactive=0
+        [ "$non_interactive" -eq 0 ] && is_tty && round_interactive=1
+        local round_rc=0
+        _setup_round "$answers_file" "$round_interactive" "$round_flags" || round_rc=$?
+        [ "$round_rc" -eq 0 ] || return "$round_rc"
+        app_host="${app_host:-$ROUND_APP_HOST}"
+        reverse_proxy_provider="${reverse_proxy_provider:-internal_nginx}"
+        local_ai="${local_ai:-$ROUND_LOCAL_AI}"
+        backup_dir="${backup_dir:-$ROUND_BACKUP_DIR}"
+        approve_pairings="${approve_pairings:-$ROUND_APPROVE_PAIRINGS}"
+        if [ "$ROUND_TLS" != "internal" ]; then
+            info "Certificate bundle $ROUND_TLS checked; it is recorded in setup-answers.yaml."
+            info "  The bundled proxy serves it once it is added as its custom certificate."
+        fi
+        # Answered: nothing below asks again.
+        non_interactive=1
     fi
 
     # Bare re-run: zero args, interactive TTY, already seeded -> offer to
@@ -726,8 +795,13 @@ cmd_setup() {
         voice_variant=""
     fi
     local setup_rc=0
+    [ "$round" -eq 1 ] && SETUP_ANSWERS_ARGS=(--answers-record="$SETUP_ROUND_RECORD")
     _run_setup_py "$env_name" "$app_host" "$auth_host" "$external_reverse_proxy" "$allow_direct_port_access" "$host_ip" "$force" "$auth_provider" "$oidc_issuer" "$librechat_host" "$web_search" "$localai_host" "$local_ai" "$reranker_model" "$reverse_proxy_provider" "$npm_admin_host" "$manager_host" "$manager" "$litellm_host" "$backup_dir" "$localai_variant" "$rag" "$qdrant_host" "$voice" "$voice_variant" || setup_rc=$?
     SETUP_SMTP_PASSWORD=""
+    if [ "$round" -eq 1 ]; then
+        # Python stored the record in the configuration directory.
+        rm -f "$SETUP_ROUND_RECORD"
+    fi
     if [ "$setup_rc" -eq 4 ]; then
         # SETUP_REFUSED: a request that does not fit this installation (a topology for an
         # existing one, a placement that cannot work). The reason is on stderr, nothing
@@ -743,9 +817,17 @@ cmd_setup() {
     fi
     _ensure_platform_pki "$ca_bundle" || return 3
     local pairing_rc=0
-    _setup_pairings "$non_interactive" "$approve_pairings" || pairing_rc=$?
+    # The pairings are confirmed on the terminal even after a question round (row 14):
+    # its answers do not stand for -y.
+    local pairing_interactive="$non_interactive"
+    [ "$round" -eq 1 ] && [ "${round_interactive:-0}" -eq 1 ] && pairing_interactive=0
+    _setup_pairings "$pairing_interactive" "$approve_pairings" || pairing_rc=$?
     if [ "$pairing_rc" -ne 0 ]; then
         return "$pairing_rc"
+    fi
+    if [ "$round" -eq 1 ]; then
+        _setup_round_backup || return 3
+        info "Inputs of this installation: $ROUND_INPUTS of at most 15 (README, \"Question round\")."
     fi
     _setup_module_offer || return 3
     local mode
@@ -757,6 +839,56 @@ cmd_setup() {
     # With an external proxy: the forwards to set up there (also 'papaia-ctl proxy list').
     py_cli proxy-list --if-external || warn "The list of forwards could not be built (see above)."
     success "setup complete. Run 'papaia-ctl start' to bring up the stack."
+}
+
+# The question round (lib/setup_answers.py): answers from the file or the terminal, each
+# checked at once (only a failed question is asked again), then the host measured against
+# the chosen size profile -- all before anything is written. Sets ROUND_* and
+# SETUP_ROUND_RECORD (a private temporary file Python moves into the configuration).
+# $1 answer file or empty, $2 1 with a terminal to ask on, $3 the switches, by name.
+_setup_round() {
+    local answers="$1" interactive="$2" flags="$3" record
+    record="$(mktemp "${TMPDIR:-/tmp}/papaia-answers.XXXXXX")" || return 3
+    local -a extra=(--record-out="$record" --flags="$flags")
+    [ -n "$answers" ] && extra+=(--answers="$answers")
+    [ "$interactive" -eq 1 ] && extra+=(--interactive)
+    if ! py_cli setup-round ${extra[@]+"${extra[@]}"}; then
+        rm -f "$record"
+        return 2
+    fi
+    ROUND_SIZE_PROFILE=""
+    _load_kv setup-round-values --record="$record"
+    if [ -z "$ROUND_SIZE_PROFILE" ]; then
+        rm -f "$record"
+        error "The answers of the question round cannot be read back; nothing was changed."
+        return 3
+    fi
+    if ! py_cli size-check --profile="$ROUND_SIZE_PROFILE"; then
+        rm -f "$record"
+        return 3
+    fi
+    SETUP_ROUND_RECORD="$record"
+}
+
+# Rows 11, 12 and 15 of the question round: the backup target is marked as this
+# installation's, then the keys are generated (shown once, the last eight characters typed
+# back) or the named public keys are added.
+_setup_round_backup() {
+    if ! py_cli backup-target init --backup-dir="$ROUND_BACKUP_DIR"; then
+        error "The backup target $ROUND_BACKUP_DIR cannot be set up (see above)."
+        return 1
+    fi
+    if [ "$ROUND_BACKUP_KEY" = "generate" ]; then
+        py_cli backup-keygen || return 1
+        return 0
+    fi
+    local entry name
+    local -a entries=()
+    IFS=',' read -r -a entries <<< "$ROUND_BACKUP_KEY"
+    for entry in ${entries[@]+"${entries[@]}"}; do
+        name="${entry%%:*}"
+        py_cli backup-recipients add --name="$name" --key="${entry#*:}" || return 1
+    done
 }
 
 # The company CA bundle question (docs/pki.md). The answer is checked at once; a file that
@@ -1310,6 +1442,9 @@ _run_setup_py() {
     fi
     if [ "${#SETUP_CONNECTIONS_ARGS[@]}" -gt 0 ]; then
         extra+=(${SETUP_CONNECTIONS_ARGS[@]+"${SETUP_CONNECTIONS_ARGS[@]}"})
+    fi
+    if [ "${#SETUP_ANSWERS_ARGS[@]}" -gt 0 ]; then
+        extra+=(${SETUP_ANSWERS_ARGS[@]+"${SETUP_ANSWERS_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.

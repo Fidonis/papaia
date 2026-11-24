@@ -201,6 +201,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # docker_usage
         PASS,  # memory
         PASS,  # cpu
+        SKIP,  # profile_size: an installation without a size profile
         SKIP,  # gpu: LocalAI is not enabled
         SKIP,  # localai_native: LocalAI runs in its container
         PASS,  # ports
@@ -243,6 +244,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "docker_usage",
         "memory",
         "cpu",
+        "profile_size",
         "gpu",
         "localai_native",
         "ports",
@@ -2029,9 +2031,9 @@ def test_container_health_reuses_one_status_reading(stack):
 
 def test_doctor_works_before_setup(tmp_path, stack):
     nowhere = tmp_path / "never-set-up"
-    report = doctor.run_checks(
-        nowhere, stack["repo"], run=healthy_docker(), probes=probes(), now=NOW
-    )
+    # A host of the smallest size profile (8 cores, 32 GB): the size check passes.
+    docker = healthy_docker(totals=CommandResult(0, f"8 {32 * GIB}\n", ""))
+    report = doctor.run_checks(nowhere, stack["repo"], run=docker, probes=probes(), now=NOW)
 
     by_name = {c.name: c.status for c in report.checks}
     assert by_name["docker_version"] == PASS
@@ -2040,6 +2042,7 @@ def test_doctor_works_before_setup(tmp_path, stack):
     # the GPU one, which needs to know the configured LocalAI variant.
     assert by_name["memory"] == PASS
     assert by_name["cpu"] == PASS
+    assert by_name["profile_size"] == PASS
     assert by_name["time_sync"] == PASS
     assert by_name["gpu"] == SKIP
     assert by_name["ports"] == SKIP

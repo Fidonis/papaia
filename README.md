@@ -108,7 +108,8 @@ access. See `src/infra/keycloak/README.md` for the full role table.
   (Fedora/RHEL), or `pip install 'PyYAML>=6.0'` in a virtual environment (macOS, see
   below)
 - `openssl`, only when Keycloak TLS is enabled
-- At least 8 GB RAM recommended ([`doctor`](#doctor) checks it)
+- A host of one of the [size profiles](#size-profiles), at least `small-no-model` (8 cores,
+  32 GB, 200 GB free; [`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
 
 #### macOS
@@ -196,6 +197,138 @@ Linux host:
 - **LocalAI.** Docker on macOS has no GPU access, so LocalAI runs on the CPU. `setup`
   detects this and picks the `cpu` variant.
 
+### Fresh installation: seven commands plus one per module
+
+The whole installation of a server; the core takes seven commands, and each module chosen in
+row 6 of the question round takes one `addon install` more:
+
+```bash
+git clone --branch v1.10.0 https://github.com/Fidonis/papaia.git papaia   # 1
+cd papaia && tools/papaia-ctl hostnames                                    # 2  DNS names to create
+tools/papaia-ctl doctor                                                    # 3  host check (size profile)
+tools/papaia-ctl setup                                                     # 4  question round
+tools/papaia-ctl addon install <module> --path=<module directory>          # 5  once per chosen module
+tools/papaia-ctl start                                                     # 6  core and every installed module
+tools/papaia-ctl doctor                                                    # 7  final check, exit code 0
+tools/papaia-ctl backup                                                    # 8  first restore point
+```
+
+Row 6 of the question round checks the module list against this release's offer and records
+it in `setup-answers.yaml`; it installs nothing yet. Each chosen module is installed with
+command 5, from the directory its README names (see [`addon`](#addon)), so a server with
+all five modules takes 7 + 5 = **12 commands**, one with no module 7. `start` without a
+switch then brings up the core and every installed module.
+
+Before command 4: install Docker, create the DNS entries `hostnames` lists, mount the backup
+target and, with internal TLS, plan to distribute the root certificate of the platform CA.
+With a SQL Server source for Data, building the SQL Server driver layer is one command more,
+documented by the Data module; accepting the vendor's licence there is one more input
+(typically 13, at most 15).
+
+### Question round
+
+On a fresh installation `setup` asks the rows of this table, at most fifteen inputs, and
+nothing else. Instead of answering on the terminal, give an answer file:
+`setup --answers=FILE` reads the same answers and counts the same inputs.
+
+| # | Key | Input | Asked | Example |
+|---|---|---|---|---|
+| 1 | `domain` | Base domain | always | `example.org` |
+| 2 | `apps_domain` | Domain for Studio apps | only with Studio; empty: apps under apps.<base domain> | `example-apps.org` |
+| 3 | `tls` | TLS certificate | always | `internal` |
+| 4 | `upstream_idp` | Upstream identity provider | always | `/root/papaia-answers/idp.yaml` |
+| 5 | `admin_mail` | Mail address of the first administrator | always | `it@example.org` |
+| 6 | `modules` | Modules | always | `studio,data,flow,assist,paperless` |
+| 7 | `size_profile` | Size profile | always | `small` |
+| 8 | `model_source` | Model source | only with a size profile without a local model (small-no-model, large) | `https://models.example.org/v1` |
+| 9 | `mail` | Mail answer file | always | `/root/papaia-answers/smtp.env` |
+| 11 | `backup_target` | Backup target | always | `/mnt/papaia-backup` |
+| 12 | `backup_key` | Backup key | always | `generate` |
+| 13 | `registry` | Registry | only from the answer file, for images not pulled publicly | `registry.example.com/papaia/` |
+| 14 | `approve_pairings` | Summary and read pairings | after setup writes the configuration; never by -y | - |
+| 15 | `backup_key_check` | Last eight characters of the backup key | after setup, only with backup key generate | - |
+
+**How inputs are counted.** One question is one input. A compound answer (a URL, a
+certificate bundle, an answer file) counts once: its format is shown here with an example,
+`setup` checks it at once and, when it does not pass, asks only that question again. Every
+switch on the command line of `setup` counts as one input too, so the guide above uses none.
+A typical installation (all modules, internal TLS, no upstream provider, profile `small`,
+public images, generated backup keys) takes rows 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 14 and 15:
+**12 inputs**; without Studio 11; the largest case (`small-no-model`, a private registry, an
+upstream provider) 14. `setup` prints the count at the end.
+
+What is not asked is derived: every public URL from the base domain (`auth.<domain>`,
+`chat.<domain>`, ...) behind the bundled proxy, the sender `papaia@<domain>` when the mail
+answer file names none, the contact point users see (`Verwaltung von <domain>` with the mail
+address of row 5; `doctor contact_point` warns until you set your own with
+[`settings`](#settings)). The size of the host is measured against the chosen profile before
+anything is written (see [Size profiles](#size-profiles)); a host below it stops `setup` with
+the size that is missing.
+
+The answer file (format `papaia.setup-answers/1`; unknown keys are refused):
+
+```yaml
+format: papaia.setup-answers/1
+domain: example.org
+apps_domain: example-apps.org     # only with studio; empty: apps under apps.example.org
+tls: internal                     # see row 3 below: a bundle is checked, not yet served
+upstream_idp: ""                  # or /root/papaia-answers/idp.yaml, see docs/federation.md
+admin_mail: it@example.org
+modules: studio,data,flow,assist,paperless
+size_profile: small
+# model_source: https://models.example.org/v1   (only with small-no-model or large)
+mail: /root/papaia-answers/smtp.env              # or none
+backup_target: /mnt/papaia-backup
+backup_key: betrieb:age1...,notfall:age1...      # or generate (on a terminal only)
+# registry: registry.example.com/papaia/         (only for images not pulled publicly)
+# approve_pairings: sha256:<the digest setup shows>
+```
+
+The mail answer file `smtp.env` (mode `0600`, owned by you) names the mail server and its
+password; the password goes straight to the relay's secret store:
+
+```ini
+SMTP_URL=smtp+starttls://relay-user@mail.example.org:587
+SMTP_PASSWORD=<password of relay-user>
+# SMTP_FROM=papaia@example.org
+```
+
+`smtps://` is TLS from the first byte (port 465), `smtp://` is no encryption and no login.
+Without a terminal (`setup --answers=FILE -y`) every answer that does not pass is named and
+nothing is written; `generate` for the backup key needs a terminal, since the private keys
+are shown once there. The pairings of row 14 are never confirmed by `-y`: on a terminal
+`setup` asks, otherwise give `approve_pairings` (or `--approve-pairings=`) with the digest
+setup printed. Rows 14 and 15 come after the configuration is written, as part of the same
+`setup`.
+
+Row 3 takes `internal` or the absolute path of a PEM bundle with the certificate chain and
+its key (mode `0600`). `setup` checks a bundle at once (names, key, mode) and records it, but
+the bundled proxy does not serve it yet: until it does, answer `internal`, or add the bundle
+as the custom certificate of the proxy hosts in Nginx Proxy Manager yourself.
+
+Without a second domain (row 2 empty) the apps live under `apps.<base domain>` of the
+platform's own site (`INGRESS_APP_SINGLE_SITE=true`), and Studio shows a lasting warning:
+cookies of the platform domain then reach the apps' host. A certificate bundle of row 3 must
+then cover `*.apps.<base domain>` as well.
+
+### Size profiles
+
+| Profile | CPU | Memory | Free disk | Model |
+|---|---|---|---|---|
+| `small-no-model` | 8 cores | 32 GB | 200 GB | your own model server (row 8, recorded only) |
+| `small` | 8 cores | 64 GB, or 32 GB and a GPU with 16 GB video memory | 300 GB | the default model in LocalAI on this host |
+| `large` | 16 cores | 64 GB | 500 GB | your own model server (row 8, recorded only) |
+
+Row 8 is asked for both profiles without a local model. Its URL is checked and recorded in
+`setup-answers.yaml`, but the model gateway (LiteLLM) does not use it as its upstream yet:
+after `setup`, add your model server in the LiteLLM admin UI.
+
+`doctor` measures the host in its check `profile_size`: before `setup` against the smallest
+profile, afterwards against the one in `PAPAIA_SIZE_PROFILE`. CPU and memory are what Docker
+sees (on Docker Desktop the VM), the disk is the free space of Docker's data root (or of the
+configuration directory where the host cannot see it). Memory tolerates five per cent less
+than the profile, the kernel's share of a host sold with that much.
+
 ### Single-host setup
 
 **1. Clone the repository**
@@ -211,7 +344,9 @@ cd papaia
 tools/papaia-ctl setup
 ```
 
-With no flags, `setup` walks through the values it cannot derive on its own — the public URL
+On a fresh installation, `setup` on a terminal asks the [question round](#question-round).
+On an existing installation, with no flags, `setup` walks through the values it cannot derive
+on its own — the public URL
 of the server (`PAPAIA_HOST`), the public Keycloak URL (`AUTH_HOST`), whether to enable web
 search (and an optional reranker model), whether to enable local AI (and its public URL), and
 whether to install the [RAG system](#rag-system) (and the public URL of Qdrant), and whether
@@ -240,7 +375,8 @@ tools/papaia-ctl start
 ```
 
 This copies the generated `.env` files into the checkout, re-renders the configuration, and
-runs `docker compose up -d`. Keycloak imports the `papaia` realm automatically on first start.
+runs `docker compose up -d` for the core and every active add-on. Keycloak imports the
+`papaia` realm automatically on first start.
 
 Start a subset of profiles for this run only:
 
@@ -394,6 +530,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--smtp-from=ADDRESS` | _(prompted)_ | Address the mails are sent from |
 | `--smtp-from-name=NAME` | the installation name | Accepted only when it repeats the name of the installation (`name` in `overlay/platform/branding.yaml`, `papAIa` without it): every mail is sent under that name |
 | `--force` | — | Regenerate all secrets unconditionally |
+| `--answers=FILE` | — | A fresh installation from an answer file instead of the questions (see [Question round](#question-round)); refused for an existing installation |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags. Never confirms pairings |
 | `--approve-pairings=SHA256` | _(prompted)_ | Confirm the pairings of the signed bill of materials whose list has this sha256 (as `setup` and `papaia-ctl pairing list` show it); the one way to confirm them without the question |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |
@@ -466,11 +603,27 @@ tools/papaia-ctl setup -y --app-host=https://papaia.example.org \
   --node=edge=10.0.1.10,ssh=papaia@10.0.1.10 --preset=dmz-split
 ```
 
+### `hostnames`
+
+```bash
+tools/papaia-ctl hostnames [--config-dir=PATH]
+```
+
+The DNS names to create, all pointing at this host. Before `setup` it needs no configuration
+and prints them as patterns (`<base domain>`, `*.<base domain>`, the app domain); afterwards
+it prints the names of this installation: every interface of the core and the active add-ons
+behind the proxy, and the app domain with its subdomains when Studio is chosen. It changes
+nothing.
+
 ### `start`
 
 ```bash
-tools/papaia-ctl start [--addons] [--profiles=LIST] [--insecure-images] [--config-dir=PATH]
+tools/papaia-ctl start [--addons|--no-addons] [--profiles=LIST] [--insecure-images] [--config-dir=PATH]
 ```
+
+Without a switch `start` brings up the core and every active add-on (the modules chosen in
+the question round or installed since). `--no-addons` starts the core only; with
+`--profiles` the add-ons start only when `--addons` is given as well.
 
 Adds any variable the checkout's `.env.example` files ship and the config directory's
 `.env` lacks (existing values are never changed), copies the `.env` files from the config
@@ -485,7 +638,7 @@ To move the installation to a newer
 release, use [`upgrade`](#upgrade) rather than `git pull` — it also runs the migrations
 the release ships with.
 
-`--addons` starts every active add-on **before** bringing up the core, so that the add-on
+The active add-ons start **before** the core, so that the add-on
 networks exist by the time the core's generated override files are applied. An override whose
 network does not exist yet is skipped rather than failing the start.
 
@@ -1571,6 +1724,7 @@ raw values behind its summary in `details`.
 | `docker_usage` | What Docker's data takes, from `docker system df`: images, containers, volumes and build cache, each with its size and the part the daemon calls reclaimable. It asks the daemon, so it also works where `disk_space` cannot see the data root (Docker Desktop, inside a container). | never `warn` or `fail`; `skip` if Docker cannot be asked, the call times out or the output is not recognised |
 | `memory` | Total and available RAM (swap is reported in `details`), from `/proc/meminfo`. Where there is no `/proc` (macOS, Windows) only the total is known, from the Docker daemon. | `warn` below 8 GB total, or when less than 10 % or 1 GiB is available; never `fail` |
 | `cpu` | Cores and the 5-minute load average per core. | `warn` at 1.0 or more per core; never `fail`; `skip` where there is no load average (Windows) |
+| `profile_size` | CPU cores, memory and free disk against the [size profile](#size-profiles): before `setup` the smallest (`small-no-model`), afterwards `PAPAIA_SIZE_PROFILE`. `setup` runs the same check for the profile chosen in the question round before it writes anything. | `fail` naming every size that is missing; `warn` when a size cannot be read; `skip` for an installation without a profile |
 | `gpu` | Only when LocalAI is enabled with a GPU image variant (`LOCALAI_IMAGE_VARIANT`). NVIDIA: `nvidia-smi` works, Docker has the `nvidia` runtime, VRAM use and temperature. AMD (`hipblas`): `/dev/kfd` exists and, if `rocm-smi` is installed, VRAM use and temperature. Intel and Vulkan: a render node under `/dev/dri` exists. | `fail` if the configured variant cannot start (driver, runtime or device missing); `warn` from 90 % VRAM or 85 °C, or for Vulkan without a render node (LocalAI then runs on the CPU); `skip` for the CPU image, for the native runtime, when LocalAI is not enabled, and, inside a container, for everything but NVIDIA (see below) |
 | `localai_native` | Only with `LOCALAI_RUNTIME=native`: the native LocalAI answers on `/readyz` (on the host at `127.0.0.1`, inside a container at `host.docker.internal`), the installed binary is the release the checkout pins and, on the Mac, the state of its launchd job (`launchctl print`). | `warn` when it does not answer, is not installed or is another version, when the job is loaded but LocalAI does not answer, or when the job is not loaded although the stack runs; never `fail`; `skip` for the container runtime and while the stack and the job are both stopped |
 | `ports` | The host ports the active core services publish are not in use. A port held by a container of this installation counts as free. | `fail` if another process holds one |
@@ -1597,7 +1751,7 @@ raw values behind its summary in `details`.
 | `person_export` | Archives of information requests without an account in `state/person-export/` (see [docs/person-requests.md](docs/person-requests.md)). | `warn` while an archive waits for its hand-over; `fail` for one older than 14 days or a folder others can open; `pass` without any |
 | `halt` | The platform's emergency halt (`state/halt.json`, see `papaia-ctl halt`). | `fail` while the halt is set (every write, send and delete is stopped) and for a halt file that cannot be used, which every service treats as set; `skip` before the first start |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
-| `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set, `fail` for a malformed `overlay/platform/branding.yaml` |
+| `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set or while it is still the one `setup` derived (`Verwaltung von <domain>`), `fail` for a malformed `overlay/platform/branding.yaml` |
 
 Before `setup` has run, the checks that need the installation's configuration report `skip`
 instead of failing. `--skip` takes check names (comma-separated or repeated) and reports them as

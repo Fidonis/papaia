@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# papaia-ctl — read-only diagnostics: status / doctor.
+# papaia-ctl — read-only diagnostics: status / doctor / hostnames.
 # Sourced by tools/papaia-ctl; not executable on its own.
 # shellcheck disable=SC2154  # globals (colors, CONFIG_DIR, ...) come from the entrypoint
 #
@@ -115,4 +115,21 @@ cmd_metrics() {
     CONFIG_DIR="$config_dir"
     _require_setup_done
     py_cli metrics ${extra[@]+"${extra[@]}"}
+}
+
+# The DNS names to create before the installation (BE-03, command 2): patterns before
+# setup, the names themselves after it. Changes nothing; no switch to count.
+cmd_hostnames() {
+    local config_dir="$DEFAULT_CONFIG_DIR"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for hostnames: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    # shellcheck disable=SC2034  # read by py_cli
+    CONFIG_DIR="$config_dir"
+    py_cli hostnames
 }

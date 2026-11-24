@@ -205,7 +205,7 @@ def test_setup_shows_the_offer_after_the_pairings():
     text = SETUP_SH.read_text("utf-8")
     body = text[text.index("cmd_setup() {"):]
 
-    pairings = body.index('_setup_pairings "$non_interactive" "$approve_pairings"')
+    pairings = body.index('_setup_pairings "$pairing_interactive" "$approve_pairings"')
     offer = body.index("_setup_module_offer || return 3")
     assert pairings < offer
 
