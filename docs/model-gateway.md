@@ -101,10 +101,13 @@ the add-on's `.env`, and the deletion waits in
 key) until the next `papaia-ctl start`. All audit rows of one command run share one
 correlation id.
 
-Remaining risk: the management calls use LiteLLM's master key inside its container. A
-later replay of journaled revocations after a restore needs a management key as well;
-where the pinned LiteLLM offers no key limited to the key routes, that process holds the
-master key, named as a risk of its own.
+Remaining risk: the management calls use LiteLLM's master key inside its container. The
+replay of journaled revocations after a restored snapshot runs in `papaia-replay`
+([replay.md](replay.md)), which deletes the key again over `/key/delete`. No management
+key of the pinned LiteLLM limited to the deletion routes has been verified, so
+`papaia-replay` holds the master key (a copy in
+`$PAPAIA_CONFIG_DIR/security/replay/gateway-key`, mode 0600), named as a risk of its own;
+it calls three routes and refuses every other path.
 
 ## No stored contents
 

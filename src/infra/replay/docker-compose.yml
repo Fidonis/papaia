@@ -1,0 +1,106 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Deletions for the core start gate · papaia-replay
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Part of the profile `lifecycle` (docs/replay.md). After a restored snapshot,
+# papaia-lifecycle replays the erasure journal; it holds `manage-users` of the identity
+# provider and must not reach chat or model gateway as well. papaia-replay deletes there
+# on its behalf: a person's chat account and objects and gateway usage (`erase_subject`),
+# every stored chat session (`chat_sessions_reset`) and gateway keys (`key_revoke`).
+#
+# Safety:
+#   - One caller: papaia-lifecycle, over mutual TLS (client certificate
+#     CN=papaia-lifecycle of the platform PKI) on papaia-replay-net, which the two share
+#     alone. Answers are counts, never content. No port is published.
+#   - The chat database on papaia-replay-chat-net (internal, the database and this
+#     service alone) as the fixed role papaia-replay-chat: find and remove on the named
+#     collections of the chat, nothing else.
+#   - The model gateway on papaia-replay-gw-net (internal, litellm and this service
+#     alone), management routes of usage per end user and of keys.
+#   - Its logins are files in $PAPAIA_CONFIG_DIR/security/replay (mounted read-only,
+#     written by `render` only while their profile is on). It holds no erasure-hmac and
+#     no right at the identity provider.
+#   - Read-only, without capabilities, as the user that owns the config dir.
+#
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+
+  papaia-replay:
+    logging: *papaia-logging
+    # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
+    # standard-library Python file on a pinned Python base. Built, signed and pinned by
+    # tools/build-images.
+    image: ghcr.io/fidonis/papaia-replay:1.10.0-rc.1@sha256:19553dd6945adc97eb634f5aea9371587a8882a14d9ed17bc7c33f10a8bb0105
+    restart: unless-stopped
+    command:
+      - python3
+      - -I
+      - /opt/papaia-replay/replay.py
+      - serve
+      - --listen=0.0.0.0:8443
+      - --tls-dir=/run/papaia-replay/tls
+      - --secret-dir=/run/papaia-replay/secrets
+      - --chat-db=librechat-mongodb:27017
+      - --gateway-url=http://litellm:4000
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      # Server certificate and CA bundle of the platform PKI (pki.yaml next to this file).
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/pki/core/papaia-replay
+        target: /run/papaia-replay/tls
+        read_only: true
+        bind:
+          create_host_path: false
+      # chat-password and gateway-key; `render` makes the folder.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/security/replay
+        target: /run/papaia-replay/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -I
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 8443), 2).close()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - papaia-replay-net
+      - papaia-replay-chat-net
+      - papaia-replay-gw-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-replay
+      de.fidonis.role:   replay
+    profiles: [lifecycle]
+
+networks:
+  # The start gate's jobs: papaia-lifecycle and papaia-replay, nothing else.
+  papaia-replay-net:
+    driver: bridge
+    internal: true
+  # The chat database and papaia-replay.
+  papaia-replay-chat-net:
+    driver: bridge
+    internal: true
+  # The model gateway and papaia-replay.
+  papaia-replay-gw-net:
+    driver: bridge
+    internal: true

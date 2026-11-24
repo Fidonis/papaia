@@ -47,6 +47,7 @@ def test_the_core_builds_its_own_images_for_the_services_that_run_its_code():
     assert set(declared) == {
         "ghcr.io/fidonis/papaia-egress",
         "ghcr.io/fidonis/papaia-lifecycle",
+        "ghcr.io/fidonis/papaia-replay",
         "ghcr.io/fidonis/papaia-audit",
         "ghcr.io/fidonis/papaia-people",
         "ghcr.io/fidonis/papaia-docker-gate",
@@ -56,6 +57,7 @@ def test_the_core_builds_its_own_images_for_the_services_that_run_its_code():
         "papaia-lifecycle",
         "papaia-startgate-check",
     )
+    assert declared["ghcr.io/fidonis/papaia-replay"].services == ("papaia-replay",)
     assert declared["ghcr.io/fidonis/papaia-audit"].services == (
         "papaia-audit",
         "papaia-audit-schema",

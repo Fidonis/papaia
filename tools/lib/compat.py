@@ -246,6 +246,8 @@ NEVER_ATTACHABLE = frozenset(
         "connections-migrate",
         # The edge's start gate check: only the proxy asks it (sicherheit §4.9 (2a)).
         "papaia-startgate-check",
+        # The start gate's deletions in chat and gateway: papaia-lifecycle alone calls it.
+        "papaia-replay",
     }
 )
 

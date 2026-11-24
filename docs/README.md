@@ -26,6 +26,9 @@ Welcome to the papAIa documentation.
 - [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on
   deactivation, reconciliation independent of events, the signed revocation list, the
   erasure journal `identity`, its service account
+- [Deletions for the core start gate](./replay.md) — papaia-replay: deletes a person in
+  chat and model gateway, chat sessions and gateway keys for the start gate, over mutual
+  TLS, with a fixed chat role, counts only
 - [Federation with the company directory](./federation.md) — sign-in through an upstream
   OpenID Connect provider, groups mapped by immutable id, the status sync of locks
 - [Model gateway](./model-gateway.md) — LiteLLM for the modules: aliases, the default model,

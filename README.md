@@ -1929,8 +1929,8 @@ or time (`2026-09-27`, `2026-09-27T10:15:00Z`); `--follow` keeps reading until C
 Every service writes its log through Docker's `json-file` driver and keeps at most 5 files of 10
 MiB, 50 MiB per container
 ([json-file driver](https://docs.docker.com/engine/logging/drivers/json-file/)). The core fragments
-set this for each of their 48 core services; with every core profile on, the core's logs therefore
-stay below 2400 MiB. Every active add-on gets the same rotation for each of its services through the
+set this for each of their 49 core services; with every core profile on, the core's logs therefore
+stay below 2450 MiB. Every active add-on gets the same rotation for each of its services through the
 generated `overrides/addons/docker-compose.<name>-logging.override.yml`, which `addon start`
 applies; add 50 MiB per add-on container to the bound. A container that is recreated starts a new
 log.

@@ -1747,6 +1747,23 @@ def cmd_model_keys_sync(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_replay_chat_sync(args: argparse.Namespace) -> int:
+    """After `up`: the fixed role papaia-replay-chat and its login in the running chat
+    database (docs/replay.md). Exit 1 when the database refused it; nothing to do while
+    the profile lifecycle or librechat is off or the database runs on another host."""
+    from . import replay_access
+
+    try:
+        state = replay_access.sync_chat_role(Path(args.config_dir))
+    except replay_access.ReplayAccessError as exc:
+        print(f"ERROR: papaia-replay: {exc}", file=sys.stderr)
+        return 1
+    if state == "absent":
+        print("WARN: papaia-replay: the chat database does not run on this host; its role "
+              "was not checked", file=sys.stderr)
+    return 0
+
+
 def cmd_join_stack_network(args: argparse.Namespace) -> int:
     """Attach the container papaia-ctl runs in to the stack's network (a no-op on the
     host). A failure is a warning: the provisioning steps then report what they skip."""
@@ -3658,6 +3675,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_model_keys = sub.add_parser("model-keys-sync")
     p_model_keys.add_argument("--timeout", type=int, default=120)
     p_model_keys.set_defaults(func=cmd_model_keys_sync)
+
+    p_replay_chat = sub.add_parser("replay-chat-sync")
+    p_replay_chat.set_defaults(func=cmd_replay_chat_sync)
 
     p_active_addons = sub.add_parser("active-addons")
     p_active_addons.set_defaults(func=cli_addon.cmd_active_addons)

@@ -1,0 +1,13 @@
+# The certificate papaia-replay requests from the platform PKI (docs/pki.md, contract
+# papaia.platform-pki/1): a server certificate for https://papaia-replay:8443. Its only
+# caller, papaia-lifecycle, presents its client certificate of the same CA (mutual TLS,
+# CN=papaia-lifecycle); any other certificate is refused (docs/replay.md).
+# Issued while the profile `lifecycle` is on, into
+# $PAPAIA_CONFIG_DIR/pki/core/papaia-replay/. No `uid`: the service runs as the user
+# that owns the configuration directory, the same user that runs papaia-ctl.
+profile: lifecycle
+pki:
+  services:
+    - name: papaia-replay
+      server:
+        dns: [papaia-replay]

@@ -144,7 +144,9 @@ def test_start_installs_before_up_and_starts_the_job_after_it(bash, tmp_path):
     assert _up(calls) < _index(calls, "py_cli localai-native-start")
     # The provisioning steps follow; the module keys of the model gateway come last.
     assert _index(calls, "py_cli localai-native-start") < calls.index("py_cli npm-provision")
-    assert calls[-2:] == ["py_cli keycloak-role-sync", "py_cli model-keys-sync"]
+    assert calls[-3:] == [
+        "py_cli keycloak-role-sync", "py_cli replay-chat-sync", "py_cli model-keys-sync"
+    ]
     assert done.stdout.splitlines()[-1] == "OK: start complete."
     # No terminal step is left for the operator.
     assert "terminal" not in done.stdout
@@ -176,7 +178,9 @@ def test_a_job_that_does_not_start_warns_and_start_goes_on(bash, tmp_path):
     done, calls = _run(bash, tmp_path, "cmd_start", install=installed(), start="return 1")
     assert done.returncode == 0, done.stdout + done.stderr
     assert "WARN: The native LocalAI did not start" in done.stdout
-    assert calls[-2:] == ["py_cli keycloak-role-sync", "py_cli model-keys-sync"]
+    assert calls[-3:] == [
+        "py_cli keycloak-role-sync", "py_cli replay-chat-sync", "py_cli model-keys-sync"
+    ]
     assert done.stdout.splitlines()[-1] == "OK: start complete."
 
 

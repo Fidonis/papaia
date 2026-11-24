@@ -238,6 +238,7 @@ can write (README, *Each module reaches its own journal alone*).
 The writer also accepts the core sources `core-chat` (`erase`, `erase_subject`) and
 `model-gateway` (`erase`, `erase_subject`, `key_revoke`) in their own files; the deletion
 of a person in chat and model gateway and the revocation of gateway keys write them.
+After a restored snapshot, papaia-replay deletes there again ([replay.md](replay.md)).
 
 ## Core start gate
 
@@ -322,11 +323,13 @@ administration activates them.
 (`replay_failed`, `CORE-STARTGATE-REPLAY-FAILED`); a failed module keeps only its own
 host closed. papaia-replay and the module endpoints are reached over mTLS with the
 options `--replay-url`, `--modules-file` (`{"modules": {name: "https://host:port"}}`),
-`--pki-ca`, `--client-cert` and `--client-key` of `lifecycle.py run`. This version does
-not set them in Compose: a backlog in chat, gateway or a module keeps that part closed
-until they are configured (papaia-replay follows as its own service). The override does
-not open a failed replay: its backlog is still due, and the next comparison would
-replay it again.
+`--pki-ca`, `--client-cert` and `--client-key` of `lifecycle.py run`. Compose sets
+`--replay-url=https://papaia-replay:8443` and the client certificate of the platform PKI
+(`pki/core/papaia-lifecycle`, mounted read-only); papaia-replay is its own service on
+`papaia-replay-net`, which the two share alone ([replay.md](replay.md)). This version does
+not set `--modules-file`: a backlog in a module keeps that module's host closed until it
+is configured. The override does not open a failed replay: its backlog is still due, and
+the next comparison would replay it again.
 
 **Override.** `papaia-ctl startgate open --unverified --reason=TEXT --requested-by=SUB
 --confirmed-by=SUB` opens a gate held closed by `unverified` (an unreachable backup
@@ -485,10 +488,11 @@ Keycloak 26.7.0. **Residual risk:** it is finer than `manage-users` by reach (me
 `papaia-persons` only; no account creation, no role mapping, no group membership changes,
 nothing outside the group), not by operation. Whoever holds the private key can also
 change the mail address or password of, disable or delete any member of the group and so
-take over the account. Measures: the service has no other function, its only network is
-`papaia-lifecycle-net` (internal, shared with Keycloak alone), no port, a read-only file
-system without capabilities, the key is mounted read-only with mode 0600, and every
-write is an audit line. The group includes person accounts holding `papaia-admin`:
+take over the account. Measures: the service has no other function, its networks are
+`papaia-lifecycle-net` (internal, shared with Keycloak alone) and `papaia-replay-net`
+(internal, shared with papaia-replay alone; it reaches neither the chat database nor the
+model gateway), no port, a read-only file system without capabilities, the key is
+mounted read-only with mode 0600, and every write is an audit line. The group includes person accounts holding `papaia-admin`:
 leaving them out would leave their delegations unrevoked. This residual risk is accepted
 as named here. Two further gaps belong to it: an account outside the group is not revoked
 (`skipped_revocations`, above), and the switches `adminPermissionsEnabled`,

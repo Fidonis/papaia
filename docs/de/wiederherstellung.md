@@ -104,7 +104,13 @@ Proxy geschlossen, bis sein Stand nicht älter ist als das Löschjournal am Sich
 Die Nutzenden sehen bis dahin eine Wartungsseite; die Verwaltung des Proxys bleibt
 erreichbar. Ist der Stand älter (ein zurückgesetzter Schnappschuss), spielt der Dienst
 Kontosperren, Löschungen und entzogene Rechte nach, meldet alle Personen ab und öffnet
-danach. `papaia-ctl doctor startgate` zeigt den Zustand mit einer Kennung:
+danach. Löschungen in Chat und Modell-Gateway (Gespräche und Konto einer gelöschten
+Person, gespeicherte Chat-Sitzungen, widerrufene Modulschlüssel) führt dabei der Dienst
+`papaia-replay` aus; er erhält Aufträge nur von `papaia-lifecycle` und meldet nur
+Anzahlen zurück ([replay.md](../replay.md)). Er braucht die Rolle `papaia-replay-chat` in
+der Chat-Datenbank, die `papaia-ctl start` anlegt. Meldet `start` „The chat role of
+papaia-replay could not be set up“, `papaia-ctl start` wiederholen, sobald die
+Chat-Datenbank läuft; bis dahin bleibt ein Rückstand im Chat geschlossen. `papaia-ctl doctor startgate` zeigt den Zustand mit einer Kennung:
 
 | Kennung | Bedeutung | Was tun |
 |---|---|---|

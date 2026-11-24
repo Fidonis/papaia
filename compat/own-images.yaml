@@ -26,6 +26,15 @@ images:
     services: [papaia-lifecycle, papaia-startgate-check]
     license: MIT
     license_class: P
+  - name: ghcr.io/fidonis/papaia-replay
+    dockerfile: src/infra/replay/Dockerfile
+    inputs:
+      - src/infra/replay/Dockerfile
+      - src/infra/replay/replay.py
+      - src/infra/replay/THIRD_PARTY_LICENSES.md
+    services: [papaia-replay]
+    license: MIT
+    license_class: P
   - name: ghcr.io/fidonis/papaia-audit
     dockerfile: src/infra/audit/Dockerfile
     inputs:

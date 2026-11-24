@@ -257,6 +257,9 @@ ATTACHABLE_SERVICES = {
     # no secret; no add-on may attach it (compat.NEVER_ATTACHABLE). Additive: a new
     # service, no rename, no ADDON_API bump.
     "papaia-startgate-check": ["lifecycle"],
+    # The start gate's deletions in chat and gateway (docs/replay.md): papaia-lifecycle
+    # alone calls it; no add-on may attach it (compat.NEVER_ATTACHABLE). Additive.
+    "papaia-replay": ["lifecycle"],
     # People lookup (optional, additive). Only `assist-gate` may call it (token audience
     # papaia-people); `networks.attach` is checked against the core's services, so an
     # older core refuses an add-on that attaches it.

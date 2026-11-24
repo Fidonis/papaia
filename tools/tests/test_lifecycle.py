@@ -76,7 +76,8 @@ def test_the_root_compose_includes_the_lifecycle_file():
 def test_the_service_is_on_its_own_internal_network_only():
     doc = _compose()
     service = doc["services"]["papaia-lifecycle"]
-    assert service["networks"] == ["papaia-lifecycle-net"]
+    # papaia-replay-net: the start gate's jobs to papaia-replay (test_replay.py).
+    assert service["networks"] == ["papaia-lifecycle-net", "papaia-replay-net"]
     assert doc["networks"]["papaia-lifecycle-net"]["internal"] is True
     assert "ports" not in service
     assert service["profiles"] == ["lifecycle"]

@@ -45,6 +45,7 @@ Eigene Images des Kerns (MIT, Hinweisdateien im Image unter `/usr/share/licenses
 |---|---|---|
 | `ghcr.io/fidonis/papaia-egress` | MIT | einziger Ausgang des Stapels; Basis `python` (PSF-2.0) |
 | `ghcr.io/fidonis/papaia-lifecycle` | MIT | Kontolebenszyklus; Basis `python` (PSF-2.0) |
+| `ghcr.io/fidonis/papaia-replay` | MIT | Löschungen in Chat und Modell-Gateway für die Kern-Startsperre; Basis `python` (PSF-2.0) |
 | `ghcr.io/fidonis/papaia-audit` | MIT | Audit-Speicher; enthält psycopg (LGPL-3.0-only, unverändert) |
 | `ghcr.io/fidonis/papaia-people` | MIT | Personensuche für die Assistenz |
 | `ghcr.io/fidonis/papaia-docker-gate` | MIT | Vermittler zum Docker-Socket für den Manager |

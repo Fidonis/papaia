@@ -513,6 +513,10 @@ cmd_start() {
         warn "Keycloak role sync failed. Once Keycloak is healthy, run 'papaia-ctl keycloak-role-sync' to retry."
     fi
 
+    if ! py_cli replay-chat-sync; then
+        warn "The chat role of papaia-replay could not be set up. Once the chat database is healthy, run 'papaia-ctl start' again."
+    fi
+
     _model_keys_sync "$addons"
 
     success "start complete."

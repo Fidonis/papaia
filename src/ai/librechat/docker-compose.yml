@@ -115,6 +115,8 @@ services:
     command: mongod --noauth
     networks:
       - papaia-net
+      # papaia-replay deletes here as the fixed role papaia-replay-chat (docs/replay.md).
+      - papaia-replay-chat-net
     labels:
       de.fidonis.module: papaia-librechat
       de.fidonis.role:   database

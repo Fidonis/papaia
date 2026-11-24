@@ -55,6 +55,8 @@ services:
     # No host port: served by the edge proxy (or an external one, papaia-ctl proxy list).
     networks:
       - papaia-net
+      # papaia-replay: usage per end user and keys, for the core start gate (docs/replay.md).
+      - papaia-replay-gw-net
     labels:
       de.fidonis.module: papaia-litellm
       de.fidonis.role:   llm-proxy

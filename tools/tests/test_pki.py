@@ -527,5 +527,6 @@ def test_the_shipped_core_requests_are_valid_and_follow_their_profiles():
         "core/papaia-lifecycle": (("papaia-lifecycle",), True),
         "core/me-web": (("me-web",), False),
         "core/nginx-proxy-manager": ((), True),
+        "core/papaia-replay": (("papaia-replay",), False),
     }
     assert off == []

@@ -20,8 +20,9 @@
 # and replays the journal when it is (a restored VM or volume snapshot).
 #
 # Safety:
-#   - No port is published. The only network is papaia-lifecycle-net (internal),
-#     shared with keycloak alone.
+#   - No port is published. Its networks are papaia-lifecycle-net (internal), shared
+#     with keycloak alone, and papaia-replay-net (internal), shared with papaia-replay
+#     alone, which deletes in chat and model gateway on its behalf.
 #   - Signs in with private_key_jwt; the key is mounted read-only from
 #     $PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle.
 #   - The signing key of the list lives in papaia-lifecycle-key, which backups
@@ -103,6 +104,12 @@ services:
       - --journal-dir=/var/lib/papaia-backup/erasure-journal
       - --journal-local-dir=/var/lib/papaia-lifecycle/erasure-journal
       - --erasure-key=/run/papaia-lifecycle/erasure-hmac
+      # The start gate's jobs in chat and model gateway (docs/replay.md), over mutual
+      # TLS with the client certificate of the platform PKI (pki.yaml next to this file).
+      - --replay-url=https://papaia-replay:8443
+      - --pki-ca=/run/papaia-lifecycle/tls/ca.crt
+      - --client-cert=/run/papaia-lifecycle/tls/client.crt
+      - --client-key=/run/papaia-lifecycle/tls/client.key
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -117,6 +124,12 @@ services:
       - type: bind
         source: ${PAPAIA_CONFIG_DIR}/security/service-accounts/svc-papaia-lifecycle
         target: /run/papaia-lifecycle/account
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/pki/core/papaia-lifecycle
+        target: /run/papaia-lifecycle/tls
         read_only: true
         bind:
           create_host_path: false
@@ -163,6 +176,8 @@ services:
       start_period: 30s
     networks:
       - papaia-lifecycle-net
+      # Jobs to papaia-replay; no network of chat or model gateway (docs/replay.md).
+      - papaia-replay-net
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     labels:

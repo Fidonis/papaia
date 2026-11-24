@@ -50,6 +50,7 @@ from . import (
     localai_native,
     model_gateway,
     realm_hardening,
+    replay_access,
     service_account_keys,
     smtp,
     sql_uplink,
@@ -280,6 +281,12 @@ def render(config_dir: Path, repo_root: Path) -> None:
 
     ensure_lifecycle_key(config_dir)
     ensure_lifecycle_journal(config_dir)
+    # The logins of papaia-replay (chat role password, gateway key), in the folder its
+    # container mounts; Compose must not create it (docs/replay.md).
+    try:
+        replay_access.render(config_dir)
+    except (replay_access.ReplayAccessError, OSError) as exc:
+        raise RenderError(f"papaia-replay: {exc}") from exc
     # The folder of the platform halt, mounted read-only by the services that act;
     # Compose must not create it (docs/halt.md).
     try:

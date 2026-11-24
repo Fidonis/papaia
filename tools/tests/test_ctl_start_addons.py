@@ -61,8 +61,9 @@ def test_start_leaves_the_addon_clients_to_its_keycloak_step(tmp_path):
     assert calls.index("py_cli addon-start --name=wiki --no-keycloak") < calls.index(
         "compose-up wiki"
     )
-    # The step that creates the clients comes after the core's `up`.
-    assert calls[-1] == "py_cli keycloak-role-sync"
+    # The step that creates the clients comes after the core's `up`, then the chat role of
+    # papaia-replay.
+    assert calls[-2:] == ["py_cli keycloak-role-sync", "py_cli replay-chat-sync"]
 
 
 def _start(tmp_path, args: str) -> list[str]:
