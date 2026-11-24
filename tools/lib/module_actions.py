@@ -18,10 +18,14 @@ is unknown, and starting a module that may hold deleted records is the failure t
 prevents. For the same reason a scoped restore refuses to replace such a file (only a whole
 restore does), and the stack is not started again.
 
-`addon run` does not run these actions and does not list them: their only caller is the
-restore, with the trigger it names in `PAPAIA_ERASURE_TRIGGER` and the correlation id of
-the restore in `PAPAIA_CORRELATION_ID`. Every run is one `papaia.audit/1` row in the
-host's audit journal, with the exit code and without content.
+`recover-snapshot` marks them the same way after a VM or volume snapshot came back.
+
+`addon run` does not run these actions and does not list them: their only callers are
+`restore` (also through `rollback`) and `recover-snapshot`, with the trigger they name in
+`PAPAIA_ERASURE_TRIGGER` and their correlation id in `PAPAIA_CORRELATION_ID`. An
+`erasure-replay` that prints its kit row `erasure_replayed` as one JSON line on standard
+output has its counts in the audit row and in the operator output. Every run is one
+`papaia.audit/1` row in the host's audit journal, with the exit code and without content.
 """
 
 from __future__ import annotations
@@ -41,7 +45,9 @@ RESERVED = ("erasure-replay", "post-restore")
 # Reserved as well (contract generation 15), run only by `papaia-ctl person export|erase`
 # (lib/person.py), never by a restore and never by `addon run`.
 PERSON_ACTIONS = ("person-export", "person-erase", "transfer-ownership")
-TRIGGERS = ("restore", "rollback")
+# `recover-snapshot` after a state that came back without `restore` (a VM or volume
+# snapshot; sicherheit §4.9 (3), BE-16a Nr. 4).
+TRIGGERS = ("restore", "rollback", "recover-snapshot")
 GENERATION = 14
 
 _ADDON_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
@@ -274,22 +280,76 @@ def _row(operation: str, event: str, effect: str, result: str, error_code: str |
     }
 
 
-def done(config_dir: Path, name: str, action: str, exit_code: int) -> bool:
+MAX_OUTPUT = 1 << 20
+_KINDS = ("erase", "erase_subject", "delivery", "revoke")
+
+
+def replayed_counts(output: str, correlation_id: str) -> dict[str, int] | None:
+    """{kind: count} of the `erasure_replayed` row the action printed for this run, or
+    None without one. Only the counts are read; a line that is no such row is skipped."""
+    found = None
+    for line in output[:MAX_OUTPUT].splitlines():
+        line = line.strip()
+        if not line.startswith("{") or len(line) > 65536:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if (
+            not isinstance(row, dict)
+            or row.get("event") != "erasure_replayed"
+            or row.get("correlation_id") != correlation_id
+            or row.get("result") != "allowed"
+            or not isinstance(row.get("detail"), dict)
+        ):
+            continue
+        by_kind = row["detail"].get("by_kind")
+        if not isinstance(by_kind, dict):
+            continue
+        counts = {}
+        for kind, value in by_kind.items():
+            if kind not in _KINDS or type(value) is not int or not 0 <= value < 2**53:
+                break
+            counts[kind] = value
+        else:
+            found = counts
+    return found
+
+
+def _read_output(path: str | None) -> str:
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            return handle.read(MAX_OUTPUT)
+    except OSError:
+        return ""
+
+
+def done(config_dir: Path, name: str, action: str, exit_code: int,
+         output_file: str | None = None) -> dict[str, int] | None:
     """Record one run of a due action: one audit row, and on exit code 0 the step is no
-    longer due. Returns whether the add-on has further steps due."""
+    longer due. Returns the counts an `erasure-replay` reported (see replayed_counts)."""
     if type(exit_code) is not int or not 0 <= exit_code <= 255:
         raise ModuleActionError("exit code must be 0..255")
     doc = load(config_dir)
     if doc is None or name not in doc["modules"] or action not in doc["modules"][name]:
         raise ModuleActionError(f"{action} of add-on {name} is not due")
     ok = exit_code == 0
+    counts = None
+    if ok and action == "erasure-replay":
+        counts = replayed_counts(_read_output(output_file), doc["correlation_id"])
+    detail = {"addon": name, "action": action, "trigger": doc["trigger"],
+              "restore_point": doc["restore_point"], "exit_code": exit_code}
+    if counts is not None:
+        detail.update({"count": sum(counts.values()), "by_kind": counts})
     images.append_audit(config_dir, _row(
         doc["trigger"], "module_action_run",
         "delete" if action == "erasure-replay" else "write",
         "allowed" if ok else "error",
         None if ok else "module_action_failed",
-        {"addon": name, "action": action, "trigger": doc["trigger"],
-         "restore_point": doc["restore_point"], "exit_code": exit_code},
+        detail,
         doc["correlation_id"],
     ))
     if ok:
@@ -297,7 +357,16 @@ def done(config_dir: Path, name: str, action: str, exit_code: int) -> bool:
         if not doc["modules"][name]:
             del doc["modules"][name]
         _store(config_dir, doc)
-    return bool(doc["modules"].get(name))
+    return counts
+
+
+def summary(counts: dict[str, int] | None) -> str:
+    """The operator line of one replay: deletions and revocations applied again."""
+    if counts is None:
+        return "applied again (the module reported no count)"
+    deletions = counts.get("erase", 0) + counts.get("erase_subject", 0)
+    return (f"{deletions} deletion(s), {counts.get('revoke', 0)} revocation(s) applied again"
+            + (f", {counts['delivery']} delivery mark(s)" if counts.get("delivery") else ""))
 
 
 def record_restore(

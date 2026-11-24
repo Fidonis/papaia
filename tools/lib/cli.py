@@ -50,6 +50,7 @@ from . import (
     direct_ports,
     doctor,
     envtree,
+    erasure_mirror,
     federation,
     gen_override,
     gpu_detect,
@@ -74,6 +75,7 @@ from . import (
     post_restore,
     privacy_pack,
     realm_sync,
+    recover_snapshot,
     render_core,
     reporting,
     resolve,
@@ -1991,7 +1993,8 @@ def cmd_rollback_key(args: argparse.Namespace) -> int:
     create    a new key pair; prints the upgrade id it belongs to
     identity  the private key of a run, to standard output only when that is no terminal
     discard   remove a key made for a run that never began
-    sweep     remove keys whose time is over"""
+    sweep     remove keys whose time is over
+    purge     remove every key (recover-snapshot: they came back with a snapshot)"""
     config_dir = Path(args.config_dir)
     try:
         if args.action == "create":
@@ -2011,6 +2014,10 @@ def cmd_rollback_key(args: argparse.Namespace) -> int:
             )
         elif args.action == "sweep":
             _sweep_rollback_keys(config_dir)
+        elif args.action == "purge":
+            if args.reason != "recover-snapshot":
+                raise rollback_key.RollbackKeyError("purge is for recover-snapshot only")
+            print(rollback_key.purge(config_dir, args.reason))
     except (rollback_key.RollbackKeyError, upgrade_stages.StageError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -2464,11 +2471,104 @@ def cmd_module_actions_pending(args: argparse.Namespace) -> int:
 
 
 def cmd_module_actions_done(args: argparse.Namespace) -> int:
+    """Record one run; after a successful `erasure-replay` print `COUNT\t<summary>`."""
     try:
-        module_actions.done(Path(args.config_dir), args.name, args.action, args.exit_code)
+        counts = module_actions.done(Path(args.config_dir), args.name, args.action,
+                                     args.exit_code, args.output)
     except (module_actions.ModuleActionError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
+    if args.action == "erasure-replay" and args.exit_code == 0:
+        print(f"COUNT\t{module_actions.summary(counts)}")
+    return 0
+
+
+def _journal_target(config_dir: Path, override: str | None) -> Path:
+    return _resolve_backup_dir(config_dir, override) / erasure_mirror.JOURNAL_FOLDER
+
+
+def cmd_erasure_mirror(args: argparse.Namespace) -> int:
+    """The erasure journal mirror (lib/erasure_mirror.py).
+
+    show       `MIRROR\t<path|none>` and `OFFSITE_RETENTION_DAYS\t<n>`
+    configure  set --erasure-mirror (none removes it) and/or --offsite-retention
+    union      before a replay: `NONE` without a mirror, else `ADDED\t<module>\t<n>`
+    sync       after a backup: copy to the mirror, then its retention run;
+               `NONE`, or `COPIED`/`REMOVED\t<module>\t<n>` lines
+    Exit 3 when a place cannot be read or written (the message names it)."""
+    config_dir = Path(args.config_dir)
+    try:
+        if args.action == "configure":
+            if args.erasure_mirror is None and args.offsite_retention is None:
+                raise erasure_mirror.MirrorError(
+                    "give --erasure-mirror=PATH|none and/or --offsite-retention=DAYS"
+                )
+            erasure_mirror.configure(config_dir, mirror=args.erasure_mirror,
+                                     offsite=args.offsite_retention)
+        settings = erasure_mirror.load_settings(config_dir)
+        if args.action in ("show", "configure"):
+            print(f"MIRROR\t{settings.mirror or 'none'}")
+            print(f"OFFSITE_RETENTION_DAYS\t{settings.offsite_days}")
+            return 0
+        if settings.mirror is None:
+            print(f"NONE\t{erasure_mirror.HANDBOOK_SENTENCE}")
+            return 0
+        target = _journal_target(config_dir, args.backup_dir)
+        if args.action == "union":
+            for module, added in erasure_mirror.union_into_target(
+                config_dir, target, settings.mirror
+            ).items():
+                print(f"ADDED\t{module}\t{added}")
+            return 0
+        for module, added in erasure_mirror.sync_to_mirror(
+            config_dir, target, settings.mirror
+        ).items():
+            print(f"COPIED\t{module}\t{added}")
+        points = [
+            backup._parse_ts(str(entry.get("created_at") or ""))
+            for entry in backup.load_index(target.parent).get("backups") or []
+        ]
+        known = [p for p in points if p is not None]
+        for module, removed in erasure_mirror.retain_mirror(
+            config_dir, settings.mirror, oldest_point=min(known) if known else None,
+            offsite_days=settings.offsite_days,
+        ).items():
+            print(f"REMOVED\t{module}\t{removed}")
+    except (erasure_mirror.MirrorError, backup.BackupError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    return 0
+
+
+def cmd_state_epoch_confirm(args: argparse.Namespace) -> int:
+    """Record the generation of `epoch` at the target (lib/erasure_mirror.py); prints it,
+    or nothing when the target has no epoch yet."""
+    config_dir = Path(args.config_dir)
+    try:
+        generation = erasure_mirror.confirm_generation(
+            config_dir, _journal_target(config_dir, args.backup_dir), by=args.by
+        )
+    except (erasure_mirror.MirrorError, backup.BackupError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    if generation is not None:
+        print(generation)
+    return 0
+
+
+def cmd_recover_snapshot_record(args: argparse.Namespace) -> int:
+    """The audit row of one recover-snapshot; prints one line per add-on."""
+    try:
+        lines = recover_snapshot.record(
+            Path(args.config_dir), result=args.result, rollback_keys=args.rollback_keys,
+            mirror_added=args.mirror_added, duration_s=args.duration,
+            correlation_id=module_actions.env_correlation(),
+        )
+    except (recover_snapshot.RecoverError, images.ImageError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    for line in lines:
+        print(line)
     return 0
 
 
@@ -3678,8 +3778,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_backup_plan.set_defaults(func=cmd_backup_plan)
 
     p_rollback_key = sub.add_parser("rollback-key")
-    p_rollback_key.add_argument("action", choices=["create", "identity", "discard", "sweep"])
+    p_rollback_key.add_argument(
+        "action", choices=["create", "identity", "discard", "sweep", "purge"]
+    )
     p_rollback_key.add_argument("--upgrade-id", default=None)
+    p_rollback_key.add_argument("--reason", default=None)
     p_rollback_key.set_defaults(func=cmd_rollback_key)
 
     p_backup_finish = sub.add_parser("backup-finish")
@@ -3820,7 +3923,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_ma_done.add_argument("--name", required=True)
     p_ma_done.add_argument("--action", required=True)
     p_ma_done.add_argument("--exit-code", type=int, required=True)
+    p_ma_done.add_argument("--output", default=None)
     p_ma_done.set_defaults(func=cmd_module_actions_done)
+
+    p_mirror = sub.add_parser("erasure-mirror")
+    p_mirror.add_argument("action", choices=["show", "configure", "union", "sync"])
+    p_mirror.add_argument("--backup-dir", default=None)
+    p_mirror.add_argument("--erasure-mirror", default=None)
+    p_mirror.add_argument("--offsite-retention", default=None)
+    p_mirror.set_defaults(func=cmd_erasure_mirror)
+
+    p_epoch_confirm = sub.add_parser("state-epoch-confirm")
+    p_epoch_confirm.add_argument("--backup-dir", default=None)
+    p_epoch_confirm.add_argument("--by", choices=["recover-snapshot", "restore"], required=True)
+    p_epoch_confirm.set_defaults(func=cmd_state_epoch_confirm)
+
+    p_recover_record = sub.add_parser("recover-snapshot-record")
+    p_recover_record.add_argument("--result", choices=["ok", "failed"], required=True)
+    p_recover_record.add_argument("--rollback-keys", type=int, required=True)
+    p_recover_record.add_argument("--mirror-added", type=int, required=True)
+    p_recover_record.add_argument("--duration", type=int, required=True)
+    p_recover_record.set_defaults(func=cmd_recover_snapshot_record)
 
     p_ma_state = sub.add_parser("module-actions-state")
     p_ma_state.add_argument("--marked", action="store_true")

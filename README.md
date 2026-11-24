@@ -440,6 +440,8 @@ papaia-ctl restore   [--from=PATH] [--restore-point=ID|latest] [--list]
                      [--only=SELECTOR[,SELECTOR]] [--restart-clean] [--no-restart]
                      [--insecure-images] [-y] [--config-dir=PATH]
 papaia-ctl post-restore [--since=EPOCH] [--config-dir=PATH]
+papaia-ctl recover-snapshot [--insecure-images] [--config-dir=PATH]
+papaia-ctl backup mirror [--erasure-mirror=PATH|none] [--offsite-retention=DAYS]
 papaia-ctl halt set  [--reason=TEXT] [--config-dir=PATH]
 papaia-ctl halt clear --reason=TEXT [--config-dir=PATH]
 papaia-ctl halt status [--json] [--config-dir=PATH]
@@ -1351,6 +1353,56 @@ emptied delegation table, halted runs), which belong to each module. With
 the sessions at the identity provider. It is not available in a distributed installation yet;
 `restore` there says so.
 
+
+### `recover-snapshot`
+
+```bash
+tools/papaia-ctl recover-snapshot [--insecure-images] [--config-dir=PATH]
+```
+
+After a VM or volume snapshot of the hypervisor came back (a state returned without
+`restore`). The core start gate has kept the edge closed and replayed the account
+sanctions; `recover-snapshot` does the rest, without the operator key and without a question:
+
+1. Entries only the mirror of the erasure journal holds (see `backup mirror` below) go to the
+   journal at the backup target. A target or mirror that cannot be read stops the command
+   with status 3 before anything changes.
+2. Every rollback key under `$PAPAIA_CONFIG_DIR/state/rollback/` is deleted: it came from the
+   snapshot. A way back after an upgrade then needs `rollback --identity`.
+3. The core `post-restore` (realm-wide "not before", the holders' consents) and every
+   add-on's `erasure-replay` (deletions and revocations) and `post-restore` are marked due
+   with the trigger `recover-snapshot`; the add-ons are stopped and `start --addons` runs
+   the core step before the first add-on and each add-on's steps before it comes up. A
+   failing step keeps that add-on down and the command ends with status 3; running it again
+   repeats what is still due.
+4. One line per add-on with the deletions and revocations applied again (when the add-on's
+   `erasure-replay` prints its `erasure_replayed` row), one `papaia.audit/1` row
+   (`recover_snapshot`, with the counts and the number of deleted rollback keys), a
+   `recover` line in `backup.log`, and the generation of the journal's `epoch` recorded for
+   `doctor state_epoch`.
+5. `doctor` runs last; its status is the command's status.
+
+`erasure-replay` runs only from `restore`, `rollback` and `recover-snapshot`; `addon run`
+does not offer it. The operator procedure is in
+[docs/de/wiederherstellung.md](docs/de/wiederherstellung.md#nach-dem-zurückspielen-recover-snapshot).
+
+### `backup mirror`
+
+```bash
+tools/papaia-ctl backup mirror [--erasure-mirror=PATH|none] [--offsite-retention=DAYS]
+```
+
+A copy of the backup target kept outside the house carries an erasure journal that ends on
+the day of the copy. The mirror keeps the journal in a second place: every `backup` appends
+what the target holds and the mirror lacks (an append-only store works; a mirror that cannot
+be written makes the backup `partial`), and `restore` and `recover-snapshot` bring the
+entries only the mirror holds to the target before any module applies its journal. The mirror
+keeps an entry until it is older than the oldest restore point plus 30 days and older than
+`--offsite-retention` (default 90 days) plus 30 days. `PATH` is an absolute, mounted folder
+outside the backup target, never created by papaia-ctl. Without values the command shows the
+setting (`PAPAIA_ERASURE_MIRROR_DIR`, `PAPAIA_OFFSITE_RETENTION_DAYS` in the root `.env`).
+Without a mirror `restore` prints the handbook sentence: deletions after the day of an
+offsite copy come back, and `person erase` must be run again for the erasures since then.
 ### `halt`
 
 ```bash
@@ -1762,6 +1814,7 @@ raw values behind its summary in `details`.
 | `source_protection` | Only with a SQL Server source (`mssql-mcp-rbac` add-on): the SQL Server version and the encryption in effect per database, as the server's own commissioning check reports them (`docker exec` of `selftest` in its container; it reads, it changes nothing). | `fail` for an unsupported version, weaker encryption than required, a failed login or a server container that does not run; `warn` for what the server reports as a warning (for example no TDS 8.0 on SQL Server 2019); `skip` without a SQL Server source |
 | `lifecycle` | Only while the `lifecycle` profile is on: the health report of `papaia-lifecycle` (see [docs/lifecycle.md](docs/lifecycle.md)), read with `docker exec`: the age of its last reconciliation independent of events, deactivated accounts still holding a consent, the revocation list, gap revokes and accounts it could not revoke. | `fail` when the last reconciliation is older than 2 h or none has run, a deactivated account holds a consent, the list is old, missing or does not verify, or the service does not run; `warn` for a gap revoke in the last 7 days, a parked event or an account outside the group of persons; `skip` while the profile is off or where the service runs on another node |
 | `startgate` | Only while the `lifecycle` profile is on: the core start gate from the health report of `papaia-lifecycle` (see [docs/lifecycle.md](docs/lifecycle.md#core-start-gate)): whether the edge is open, whether the state is behind the erasure journal, a failed replay, an override and accounts the replay deactivated. | `fail` while the gate is closed (checking, behind, target unreachable, replay failed) or a person of an override was locked afterwards (until `papaia-ctl startgate acknowledge`); `warn` while an override is in effect and for accounts deactivated by the replay (`credential_replay`, `role_replay`); `skip` while the profile is off or where the service runs on another node |
+| `state_epoch` | The data state against the erasure journal (`$PAPAIA_BACKUP_DIR/erasure-journal/epoch`), the add-ons' pending `erasure-replay`, the start gate and the mirror. | `fail` while an add-on has not applied its journal, while the start gate is behind or its replay failed, and for a damaged `epoch`; `warn` while the target or the mirror cannot be read and while the start gate raised the generation beyond the one `recover-snapshot` confirmed (a returned snapshot is not finished); `skip` without a backup target or an erasure journal |
 | `siem` | Only while the `audit` profile is on: the SIEM report of `papaia-audit` (see [docs/audit.md](docs/audit.md#siem)), read with `docker exec`: backlog, lag and failing deliveries per target, targets no longer configured that hold events back, the last hourly chain verification, and the fill level of the `papaia-audit-db` volume (`df` in its container). | `fail` when a target has taken no events for more than 10 minutes, a chain does not verify, the volume is 95 % full or more, or the service does not run; `warn` for more than 60 s behind, from 80 %, for a removed target that still holds events back, when no target is set, when the hourly verification is missing or older than 2 h, and when `PAPAIA_OPERATIONS_MAIL` is set without an active mail relay; `skip` while the profile is off or where the service runs on another node |
 | `identity` | Only with a federation (`security/idp.yaml`, see [docs/federation.md](docs/federation.md)): the status sync of `papaia-lifecycle` with the upstream directory, from the same health report. | `fail` when the status sync has failed for longer than 300 s, has not succeeded in the last 300 s or never ran, when `idp.yaml` or the group map is not usable, when the `lifecycle` profile is off or the service does not run; `skip` without a federation or where the service runs on another node |
 | `rollback_window` | The rollback key of the last upgrade (see *Rollback key* under [`upgrade`](#upgrade)): how long `rollback` still works without the operator key, and the window (`PAPAIA_ROLLBACK_WINDOW_HOURS`). | `fail` for a key still there after its window or after its run ended, for a key file or folder others can read, a key without a recorded upgrade older than 168 h and a window outside 24–168 h; `warn` for a younger key without a recorded upgrade; `skip` without a rollback key |

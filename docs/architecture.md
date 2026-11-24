@@ -341,9 +341,12 @@ actions:                           # optional (addon_api 4): maintenance actions
     description: "Restore the initial data"  # service a compose profile (e.g.
                                    # `profiles: [actions]`) so `addon start` skips it.
     destructive: true              # optional: callers (papaia-manager) confirm first
-  erasure-replay:                  # reserved (addon_api 14): run by `restore` before the
-    service: migrate               # add-on starts, with PAPAIA_ERASURE_TRIGGER and
-    args: ["erasure-replay"]       # PAPAIA_CORRELATION_ID; never by `addon run`
+  erasure-replay:                  # reserved (addon_api 14): run by `restore`, `rollback`
+    service: migrate               # and `recover-snapshot` before the add-on starts, with
+    args: ["erasure-replay"]       # PAPAIA_ERASURE_TRIGGER (restore|rollback|
+                                   # recover-snapshot) and PAPAIA_CORRELATION_ID; never by
+                                   # `addon run`. Its kit row `erasure_replayed`, printed as
+                                   # one JSON line on stdout, gives papaia-ctl the counts.
   post-restore:                    # reserved (addon_api 14): the holder's own step after a
     service: migrate               # restore, after erasure-replay
     args: ["post-restore"]

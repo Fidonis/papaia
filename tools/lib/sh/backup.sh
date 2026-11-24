@@ -144,7 +144,7 @@ _resolve_backup_dir() {
 # ─────────────────────────────────────────────────────────────────────────
 cmd_backup() {
     case "${1:-}" in
-        recipients|keys|target|key-check) _backup_admin "$@"; return ;;
+        recipients|keys|target|key-check|mirror) _backup_admin "$@"; return ;;
     esac
     local config_dir="$DEFAULT_CONFIG_DIR" backup_dir="" retention="" keep="" only="" only_given=0
     local rollback_key=""
@@ -267,6 +267,12 @@ cmd_backup() {
         result="partial"
     elif [ "$failed" -gt 0 ]; then
         result="failed"
+    fi
+
+    # The erasure journal to its mirror, so a copy of this target kept outside the house
+    # never outlives a deletion (BE-16, RE-86).
+    if ! _erasure_mirror_sync "$backup_dir" && [ "$result" = "ok" ]; then
+        result="partial"
     fi
 
     local summary
@@ -485,7 +491,7 @@ _backup_artifact() {
 _backup_admin() {
     local area="$1"; shift
     local config_dir="$DEFAULT_CONFIG_DIR" action="" name="" key="" identity="" point=""
-    local backup_dir="" names=""
+    local backup_dir="" names="" mirror="" offsite="" mirror_given=0
     case "$area" in
         recipients|target|keys) action="${1:-}"; [ $# -gt 0 ] && shift ;;
     esac
@@ -506,6 +512,8 @@ _backup_admin() {
             --names=*) names="${1#*=}" ;;
             --identity=*) identity="${1#*=}" ;;
             --restore-point=*) point="${1#*=}" ;;
+            --erasure-mirror=*) mirror="${1#*=}"; mirror_given=1 ;;
+            --offsite-retention=*) offsite="${1#*=}" ;;
             -h|--help) usage; exit 0 ;;
             *) error "Unknown option for backup $area: $1"; exit 2 ;;
         esac
@@ -539,6 +547,19 @@ _backup_admin() {
                 *) error "backup target init|check [--backup-dir=PATH]"; exit 2 ;;
             esac
             py_cli backup-target "$action" ${extra[@]+"${extra[@]}"}
+            ;;
+        mirror)
+            # Without values show them; with values set them (lib/erasure_mirror.py).
+            action=show
+            if [ "$mirror_given" -eq 1 ]; then
+                action=configure
+                extra+=(--erasure-mirror="$mirror")
+            fi
+            if [ -n "$offsite" ]; then
+                action=configure
+                extra+=(--offsite-retention="$offsite")
+            fi
+            py_cli erasure-mirror "$action" ${extra[@]+"${extra[@]}"}
             ;;
         key-check)
             if [ -z "$identity" ]; then
@@ -936,6 +957,15 @@ cmd_restore() {
             exit 3
         fi
         post_restore="pending"
+        # The target may be an older copy (one kept outside the house): what only the
+        # mirror holds goes to it first, so every module applies the union (RE-86).
+        if ! _erasure_mirror_union "$backup_dir" 1; then
+            _backup_log "$backup_dir" "$op" "$restore_id" "$result" "$details" \
+                "post_restore=pending erasure_mirror=failed"
+            error "The erasure journal mirror could not be merged into the backup target; the"
+            error "stack was not started again. Mount the mirror, then run the restore again."
+            exit 3
+        fi
         # The erasure journal of every add-on of this restore, and the holders' own step,
         # before that add-on starts (lib/module_actions.py); _addon_compose_up runs them.
         local -a mark_flags=(--trigger="$RESTORE_TRIGGER" --restore-point="$restore_id")
@@ -954,6 +984,8 @@ cmd_restore() {
             _RESTORE_MARKED=1
             info "  add-on $name: $actions due before it starts"
         done <<< "$marked"
+        py_cli state-epoch-confirm --backup-dir="$backup_dir" --by=restore > /dev/null \
+            || warn "The generation of the erasure journal was not confirmed; doctor state_epoch warns."
         _restore_open "$backup_dir" "$op" "$restore_id" "$result" "$details" "$since" "$started"
     fi
 
@@ -1068,6 +1100,202 @@ cmd_post_restore() {
         fi
     fi
     return "$rc"
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# the erasure journal mirror
+# ─────────────────────────────────────────────────────────────────────────
+# Before a module applies its journal (restore, recover-snapshot): the entries only the
+# mirror holds go to the target first, so the replay reads the union (lib/erasure_mirror.py,
+# RE-86). $1 backup dir, $2 1 to print the handbook sentence when no mirror is set.
+# Sets MIRROR_ADDED; returns non-zero when a place cannot be read or written.
+MIRROR_ADDED=0
+_erasure_mirror_union() {
+    local backup_dir="$1" sentence="${2:-0}" out="" rc=0 kind module count
+    MIRROR_ADDED=0
+    out="$(py_cli erasure-mirror union --backup-dir="$backup_dir" | tr -d '\r')" || rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    while IFS=$'\t' read -r kind module count; do
+        case "$kind" in
+            NONE)
+                # The handbook sentence (BE-16) comes as the second field.
+                if [ "$sentence" -eq 1 ]; then
+                    warn "No mirror of the erasure journal is set ('papaia-ctl backup mirror'):"
+                    warn "$module"
+                fi
+                return 0
+                ;;
+            ADDED)
+                MIRROR_ADDED=$((MIRROR_ADDED + count))
+                info "  erasure journal $module: $count entr(ies) taken from the mirror"
+                ;;
+        esac
+    done <<< "$out"
+    info "mirror: $MIRROR_ADDED entr(ies) the backup target lacked"
+}
+
+# After a backup: what the target holds goes to the mirror, then the mirror's retention run.
+# A mirror that cannot be written is reported and makes the backup partial. $1 backup dir.
+_erasure_mirror_sync() {
+    local backup_dir="$1" out="" rc=0 kind module count
+    out="$(py_cli erasure-mirror sync --backup-dir="$backup_dir" | tr -d '\r')" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        warn "The erasure journal was not copied to its mirror (see above)."
+        _backup_log "$backup_dir" mirror - failed "erasure_mirror=failed"
+        return 1
+    fi
+    while IFS=$'\t' read -r kind module count; do
+        case "$kind" in
+            COPIED) info "  erasure journal $module: $count entr(ies) copied to the mirror" ;;
+            REMOVED) info "  erasure journal $module: $count old entr(ies) removed from the mirror" ;;
+        esac
+    done <<< "$out"
+    case "$out" in
+        NONE*) ;;
+        *) _backup_log "$backup_dir" mirror - ok "erasure_mirror=ok" ;;
+    esac
+    return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# recover-snapshot
+# ─────────────────────────────────────────────────────────────────────────
+# papaia-ctl recover-snapshot [--insecure-images] [--config-dir=PATH]: after a VM or volume
+# snapshot came back without `restore` (lib/recover_snapshot.py, BE-16a Nr. 4): the
+# mirror's entries to the target, the rollback keys of the snapshot deleted, the core
+# post-restore (realm-wide "not before") and every add-on's `erasure-replay` and
+# `post-restore` before it comes up again, then doctor. No operator key.
+_RECOVER_OPEN=0
+_RECOVER_KEYS=0
+_RECOVER_BACKUP_DIR=""
+_RECOVER_ID=""
+_RECOVER_STARTED=0
+
+_recover_record() {
+    local result="$1"
+    py_cli recover-snapshot-record --result="$result" --rollback-keys="$_RECOVER_KEYS" \
+        --mirror-added="$MIRROR_ADDED" --duration="$((SECONDS - _RECOVER_STARTED))" \
+        | tr -d '\r'
+}
+
+# The EXIT trap while the stack restarts: a step that failed or stopped the command is
+# recorded as such, and the way to finish it is named.
+_recover_close_failed() {
+    [ "$_RECOVER_OPEN" -eq 1 ] || return 0
+    _RECOVER_OPEN=0
+    _recover_record failed > /dev/null || true
+    _backup_log "$_RECOVER_BACKUP_DIR" recover "$_RECOVER_ID" failed \
+        "duration=$((SECONDS - _RECOVER_STARTED))s"
+    error "recover-snapshot did not finish: an add-on whose erasure journal is not applied"
+    error "stays down. Fix the reason above, then run 'papaia-ctl recover-snapshot' again."
+}
+
+cmd_recover_snapshot() {
+    local config_dir="$DEFAULT_CONFIG_DIR" insecure_images=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --insecure-images) insecure_images=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option for recover-snapshot: $1"; exit 2 ;;
+        esac
+        shift
+    done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "recover-snapshot is not available in a distributed installation yet."
+        exit 2
+    fi
+    if [ -z "${PAPAIA_CORRELATION_ID:-}" ]; then
+        PAPAIA_CORRELATION_ID="$(py_cli new-correlation-id | tr -d '\r')" || exit 3
+    fi
+    export PAPAIA_CORRELATION_ID
+    _RECOVER_STARTED=$SECONDS
+    local since
+    since="$(date +%s)"
+    _RECOVER_ID="snapshot-$since"
+    local backup_dir
+    backup_dir="$(_resolve_backup_dir "")" || exit 3
+    _RECOVER_BACKUP_DIR="$backup_dir"
+    if [ ! -d "$backup_dir/erasure-journal" ] || [ -L "$backup_dir/erasure-journal" ]; then
+        error "The erasure journal $backup_dir/erasure-journal is not reachable: mount the"
+        error "backup target and run 'papaia-ctl recover-snapshot' again. Nothing was changed."
+        exit 3
+    fi
+    info "recover-snapshot: applying the erasure journal after a returned snapshot"
+    info "(correlation id $PAPAIA_CORRELATION_ID)."
+
+    if ! _erasure_mirror_union "$backup_dir" 0; then
+        error "The erasure journal mirror could not be merged into the backup target; nothing"
+        error "else was changed. Mount the mirror (or remove it with 'papaia-ctl backup mirror"
+        error "--erasure-mirror=none') and run again."
+        exit 3
+    fi
+
+    local keys=""
+    if ! keys="$(py_cli rollback-key purge --reason=recover-snapshot | tr -d '\r')"; then
+        error "The rollback keys from the snapshot could not be deleted (see above)."
+        exit 3
+    fi
+    _RECOVER_KEYS="${keys:-0}"
+    if [ "$_RECOVER_KEYS" -gt 0 ]; then
+        info "  $_RECOVER_KEYS rollback key(s) from the snapshot deleted; a way back now needs"
+        info "  the operator key ('papaia-ctl rollback --identity=FILE|-')."
+    fi
+
+    _RECOVER_OPEN=1
+    trap _recover_close_failed EXIT
+    if ! _post_restore_mark "$since"; then
+        error "Could not record the pending post-restore step in $CONFIG_DIR."
+        exit 3
+    fi
+    local marked="" name actions
+    if ! marked="$(py_cli module-actions-mark --trigger=recover-snapshot \
+            --restore-point="$_RECOVER_ID")"; then
+        error "Could not record the erasure journals due before the add-ons start."
+        exit 3
+    fi
+    while IFS=$'\t' read -r name actions; do
+        [ -n "$name" ] || continue
+        info "  add-on $name: $actions due before it starts"
+    done <<< "$marked"
+
+    # No add-on serves on while its journal is still due: stopped first, started by `start`,
+    # which runs the core step before the first add-on and each add-on's steps before it.
+    info "Stopping the add-ons until their erasure journal is applied again..."
+    _addon_compose_all stop
+    local -a start_flags=(--addons --config-dir="$CONFIG_DIR")
+    [ "$insecure_images" -eq 1 ] && start_flags+=(--insecure-images)
+    cmd_start ${start_flags[@]+"${start_flags[@]}"}
+    if [ -f "$CONFIG_DIR/post-restore.pending" ] \
+        || [ "$(py_cli module-actions-state --marked | tr -d '\r')" != "ok" ]; then
+        error "A step is still due after the start (see above)."
+        exit 3
+    fi
+    _RECOVER_OPEN=0
+    trap - EXIT
+
+    local lines line
+    lines="$(_recover_record ok)" || warn "The audit row of recover-snapshot was not written."
+    while IFS= read -r line; do
+        [ -n "$line" ] && info "  $line"
+    done <<< "$lines"
+    py_cli state-epoch-confirm --by=recover-snapshot > /dev/null \
+        || warn "The generation of the erasure journal was not confirmed; doctor state_epoch warns."
+    _backup_log "$backup_dir" recover "$_RECOVER_ID" ok \
+        "duration=$((SECONDS - _RECOVER_STARTED))s rollback_keys=$_RECOVER_KEYS mirror=$MIRROR_ADDED"
+
+    info "Running doctor..."
+    local doctor_rc=0
+    cmd_doctor --config-dir="$CONFIG_DIR" || doctor_rc=$?
+    if [ "$doctor_rc" -ne 0 ]; then
+        error "recover-snapshot ran, but doctor still reports a failure (see above)."
+        exit "$doctor_rc"
+    fi
+    success "recover-snapshot complete: the erasure journal is applied in every add-on."
 }
 
 # The erasure probe after a restore (lib/host_restore.py). $1 backup dir, $2 restore point,

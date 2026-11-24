@@ -60,6 +60,10 @@
 #   papaia-ctl backup recipients list|add|remove [--name=NAME] [--key=age1...]
 #   papaia-ctl backup keys generate [--names=A,B]
 #   papaia-ctl backup target init|check [--backup-dir=PATH]
+#   papaia-ctl backup mirror [--erasure-mirror=PATH|none] [--offsite-retention=DAYS]
+#                            — the second place of the erasure journal (a share outside
+#                            the house) and the longest offsite retention (default 90 days);
+#                            without values show them
 #   papaia-ctl backup key-check --identity=FILE|- [--restore-point=ID] [--from=PATH]
 #   papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...]
 #                            [--backup-dir=PATH] [-y] [--config-dir=PATH]
@@ -74,6 +78,10 @@
 #                            configuration directory, for in-stack callers
 #   papaia-ctl post-restore  [--since=EPOCH] [--config-dir=PATH] — revoke the sessions
 #                            and delegations a restore brought back (restore runs it)
+#   papaia-ctl recover-snapshot [--insecure-images] [--config-dir=PATH] — after a VM or
+#                            volume snapshot came back: apply the erasure journal (with its
+#                            mirror) in every add-on, realm-wide not-before, delete the
+#                            rollback keys of the snapshot, then doctor; no operator key
 #   papaia-ctl halt set      [--reason=TEXT] [--config-dir=PATH] — stop every write, send
 #                            and delete of the platform, without Keycloak (also: halt on)
 #   papaia-ctl halt clear    --reason=TEXT [--config-dir=PATH] — lift it (also: halt off)
@@ -212,7 +220,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,205p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,213p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -320,6 +328,7 @@ case "$cmd" in
     restore)       cmd_restore "$@" ;;
     restore-scoped) cmd_restore_scoped "$@" ;;
     post-restore)  cmd_post_restore "$@" ;;
+    recover-snapshot) cmd_recover_snapshot "$@" ;;
     halt)          cmd_halt "$@" ;;
     delegations)   cmd_delegations "$@" ;;
     report)        cmd_report "$@" ;;

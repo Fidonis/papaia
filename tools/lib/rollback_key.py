@@ -180,6 +180,22 @@ def delete(config_dir: Path, upgrade_id: str, reason: str) -> bool:
     return True
 
 
+def purge(config_dir: Path, reason: str) -> int:
+    """Remove every file of the key folder, whatever its run (`recover-snapshot`: the keys
+    came back with a VM snapshot, BE-16a Nr. 4). Each removal is audited; a symlink is
+    removed, never followed. Returns how many were removed."""
+    removed = 0
+    for entry in list_keys(config_dir):
+        try:
+            entry.path.unlink()
+        except FileNotFoundError:
+            continue
+        _audit(config_dir, "rollback_key_deleted",
+               {"upgrade_id": entry.upgrade_id, "reason": reason}, effect="delete")
+        removed += 1
+    return removed
+
+
 @dataclass(frozen=True)
 class KeyFile:
     path: Path

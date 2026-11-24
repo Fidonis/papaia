@@ -356,6 +356,15 @@ shows every state with its id (`CORE-STARTGATE-CHECK`, `-BEHIND`, `-UNVERIFIED`,
 `-REPLAY-FAILED`, `-OVERRIDE`, `-CREDENTIAL-REPLAY`, `-ROLE-REPLAY`,
 `-OVERRIDE-REVOKED-ACTOR`).
 
+**After the gate: `recover-snapshot`.** The gate replays the core's own journals; the
+add-ons' data and the realm-wide not-before are left to `papaia-ctl recover-snapshot`
+(README), which an operator runs after a returned VM or volume snapshot. It records the
+generation of `epoch` it found in `$PAPAIA_CONFIG_DIR/state/state-epoch.json`
+(`papaia.state-epoch-confirmed/1`); `restore` does the same. `doctor state_epoch` warns while
+the gate has raised the generation beyond that value, so a replay of the gate after a
+snapshot is visible until `recover-snapshot` ran. The command does not raise the
+generation itself: a raise would make the gate compare and replay again on its next start.
+
 **Deviations.** papaia.audit/1 1.4.0 has no events `startgate_override`,
 `startgate_override_revoked_actor` and `startgate_override_acknowledged`; they are
 written as event `operation` with those operations. The realm-wide not-before is not used: the logout per account and the

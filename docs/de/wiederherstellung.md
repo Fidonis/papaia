@@ -147,6 +147,78 @@ papaia-ctl startgate acknowledge --reason="Übersteuerung mit der Betriebsadress
   --by=<Konto-ID>
 ```
 
+### Nach dem Zurückspielen: `recover-snapshot`
+
+Eine VM- oder Volume-Sicherung des Hypervisors ist zulässig, ersetzt aber `backup` nicht. Sie
+enthält Vollmachts- und Rückwegschlüssel: verschlüsselt ablegen und nicht länger aufbewahren
+als die Sicherungspunkte. Nach jedem Zurückspielen, bevor die Personen wieder arbeiten:
+
+1. VM starten. Die Startsperre hält die Plattform geschlossen und spielt Kontosperren und
+   Löschungen nach (siehe oben).
+2. `papaia-ctl doctor` zeigt `state_epoch` mit `fail` oder `warn` und den Zustand von
+   `startgate`.
+3. `papaia-ctl recover-snapshot`.
+4. `papaia-ctl doctor` endet mit Ausgang 0.
+5. Den Personen den Mustertext zur Neuerteilung ihrer Vollmachten senden.
+
+`recover-snapshot` braucht keinen Betreiberschlüssel und fragt nichts. Es
+
+- übernimmt Einträge, die nur der Spiegel des Löschjournals hat, an das Sicherungsziel
+  (siehe „Kopien außer Haus“),
+- löscht alle Rückwegschlüssel unter `state/rollback/`; sie stammen aus dem Schnappschuss.
+  Ein Rückweg nach einem Upgrade geht danach nur noch mit `--identity`,
+- setzt im Anmeldedienst realmweit „not before“ und entfernt die Einwilligungen der
+  Vollmachtshalter (Schritt `post-restore` des Kerns),
+- hält jedes Add-on an und startet es erst wieder, nachdem es sein Löschjournal eingespielt
+  (`erasure-replay`, auch Widerrufe von Vollmachten) und seinen Schritt `post-restore`
+  ausgeführt hat,
+- gibt je Add-on die Zahl der nachgeholten Löschungen und Widerrufe aus, schreibt einen
+  Audit-Eintrag (`recover_snapshot`) und eine Zeile `recover` in `backup.log`,
+- endet mit `papaia-ctl doctor` und dessen Ausgang.
+
+Scheitert das Einspielen eines Add-ons, bleibt es aus, `recover-snapshot` endet mit Ausgang 3,
+und ein erneuter Aufruf wiederholt die offenen Schritte. Ist das Löschjournal am
+Sicherungsziel oder der Spiegel nicht erreichbar, ändert `recover-snapshot` nichts und endet
+mit Ausgang 3. Einspielen geschieht nur über `restore`, `rollback` und `recover-snapshot`;
+`addon run` bietet die Schritte nicht an.
+
+`doctor state_epoch`:
+
+| Ergebnis | Bedeutung | Was tun |
+|---|---|---|
+| `fail` | Ein Add-on hat sein Löschjournal noch nicht eingespielt, die Startsperre ist im Rückstand oder ihr Nachspielen scheiterte, oder `epoch` am Ziel ist beschädigt. Satz: „Datenstand älter als das Löschjournal (z. B. nach Rückspielen einer VM-Sicherung). Ausführen: papaia-ctl recover-snapshot“. | `papaia-ctl recover-snapshot`; bei beschädigtem `epoch` das Sicherungsziel prüfen. |
+| `warn` | Das Löschjournal am Ziel oder der Spiegel ist nicht erreichbar (die Prüfung ist dann nur vorläufig), oder die Startsperre hat nach einem Schnappschuss nachgespielt und `recover-snapshot` steht noch aus. | Ziel bzw. Spiegel einhängen; `papaia-ctl recover-snapshot`. |
+| `pass` | Kein Add-on und kein Kerndienst steht hinter dem Löschjournal. | – |
+
+## Kopien außer Haus
+
+Eine Kopie des Sicherungsziels außer Haus trägt ein Löschjournal, das mit dem Tag der Kopie
+endet. Deshalb wird das Löschjournal zusätzlich an eine zweite Ablage gespiegelt, die Sie
+angeben, am besten Speicher außer Haus, der nur Anhängen erlaubt:
+
+```sh
+papaia-ctl backup mirror --erasure-mirror=/mnt/offsite/papaia-loeschjournal \
+  --offsite-retention=180
+```
+
+- `--erasure-mirror` ist ein eingehängter Ordner außerhalb des Sicherungsziels; `none`
+  entfernt den Spiegel. Der Ordner wird nie angelegt: ein nicht eingehängter Spiegel gilt als
+  nicht erreichbar, nicht als leer.
+- `--offsite-retention` ist die längste Zeit, die Sie eine Kopie außer Haus aufbewahren, in
+  Tagen (0 bis 3650, Vorgabe 90).
+- Ohne Werte zeigt `papaia-ctl backup mirror` die Einstellung.
+
+Jedes `backup` hängt an den Spiegel an, was das Journal am Ziel hat und der Spiegel nicht. Ist
+der Spiegel nicht erreichbar, endet die Sicherung mit `partial`. `restore` und
+`recover-snapshot` lesen Ziel und Spiegel und spielen die Vereinigung ein (Entdoppelung über
+die Folgenummer je Modul). Der Spiegel behält jeden Eintrag, bis er älter ist als der älteste
+Sicherungspunkt plus 30 Tage und älter als die Aufbewahrung außer Haus plus 30 Tage; das
+Löschjournal am Ziel räumen die Module selbst auf.
+
+Ohne Spiegel gibt `restore` diesen Satz aus, und er gilt: „Wird von einer Kopie außer Haus
+wiederhergestellt, kehren Löschungen nach dem Tag dieser Kopie zurück. Führen Sie danach für
+jede Person aus der Liste der Löschnachweise seit diesem Tag `person erase` erneut aus.“
+
 ## Rückweg nach einem Upgrade
 
 Jedes Upgrade erzeugt in Stufe 0 einen einmaligen Rückwegschlüssel. Der Wiederherstellungspunkt

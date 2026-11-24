@@ -2766,6 +2766,102 @@ def check_startgate(ctx: Context) -> CheckResult:
     return CheckResult(name, result, text, details)
 
 
+def check_state_epoch(ctx: Context) -> CheckResult:
+    """The data state against the erasure journal (`doctor state_epoch`; betrieb BE-16a
+    Nr. 3, sicherheit §4.9 (4)): `fail` while an add-on has not applied its journal after a
+    restore or `recover-snapshot`, while the core start gate is behind the journal or its
+    replay failed, and for a damaged `epoch`; `warn` while the backup target or the mirror
+    cannot be read (the check is then provisional, see `lifecycle`) and while the start gate
+    has raised the generation beyond the one `recover-snapshot` confirmed: after a returned
+    VM or volume snapshot `recover-snapshot` is still due (§S-10)."""
+    from papaia_kit.erasure import (
+        STATE_EPOCH_BEHIND_MESSAGE,
+        JournalError,
+        JournalUnavailableError,
+        read_epoch,
+    )
+
+    from . import erasure_mirror, module_actions
+
+    name = "state_epoch"
+    if not ctx.configured:
+        return _not_set_up(name)
+    backup_dir = common.parse_env_file(ctx.config_dir / ".env").get("PAPAIA_BACKUP_DIR", "")
+    if not backup_dir or common.is_placeholder(backup_dir):
+        return CheckResult(name, SKIP, "no backup target set (PAPAIA_BACKUP_DIR)")
+    target = Path(backup_dir) / erasure_mirror.JOURNAL_FOLDER
+    lifecycle_on = LIFECYCLE_PROFILE in ctx.active_profiles
+    fails: list[str] = []
+    warns: list[str] = []
+    details: dict[str, Any] = {}
+    sentence = f"{STATE_EPOCH_BEHIND_MESSAGE} (Handbuch §S-10)"
+
+    try:
+        pending = module_actions.load(ctx.config_dir)
+    except module_actions.ModuleActionError:
+        fails.append(f"the add-ons' pending restore steps cannot be read. {sentence}")
+    else:
+        due = sorted(n for n, a in (pending or {}).get("modules", {}).items()
+                     if "erasure-replay" in a)
+        if due:
+            details["behind"] = due
+            fails.append(f"{', '.join(due)}: erasure journal not applied yet. {sentence}")
+
+    epoch = None
+    try:
+        epoch = read_epoch(target)
+    except JournalUnavailableError:
+        if not lifecycle_on and not target.parent.is_dir():
+            return CheckResult(name, SKIP, "no erasure journal on this installation")
+        warns.append(f"the erasure journal at the backup target {target} is not reachable; "
+                     "the comparison is provisional (see doctor lifecycle)")
+    except JournalError:
+        fails.append(f"{target}/epoch is damaged; the start gate stays closed")
+    if epoch is None and not warns and not fails and not lifecycle_on:
+        return CheckResult(name, SKIP,
+                           "no erasure journal epoch yet (the lifecycle profile is off)")
+
+    if lifecycle_on:
+        found = _lifecycle_container(ctx)
+        if found is not None and found[0] is not None and found[1] == "running":
+            report = _lifecycle_report(ctx, found[0])
+            gate = report.get("startgate") if report is not None else None
+            gate_status = gate.get("status") if isinstance(gate, dict) else None
+            details["startgate"] = gate_status
+            if gate_status in ("behind", "replay_failed", "checking"):
+                fails.append(f"the core start gate is {gate_status}. {sentence}")
+            elif gate_status == "unverified":
+                warns.append("the start gate cannot read the erasure journal at the backup "
+                              "target (see doctor startgate)")
+
+    try:
+        settings = erasure_mirror.load_settings(ctx.config_dir)
+    except erasure_mirror.MirrorError as exc:
+        fails.append(str(exc))
+    else:
+        details["mirror"] = settings.mirror is not None
+        if settings.mirror is not None and (
+            settings.mirror.is_symlink() or not settings.mirror.is_dir()
+        ):
+            warns.append(f"the erasure journal mirror {settings.mirror} is not reachable")
+
+    if epoch is not None:
+        confirmed = erasure_mirror.confirmed_generation(ctx.config_dir)
+        details.update({"generation": epoch.generation, "confirmed": confirmed})
+        if epoch.generation > (confirmed or 0):
+            warns.append(
+                f"the start gate replayed the erasure journal (generation {epoch.generation}, "
+                f"confirmed {confirmed if confirmed is not None else 'none'}): a returned "
+                "snapshot is not finished; run 'papaia-ctl recover-snapshot' (Handbuch §S-10)"
+            )
+    if fails:
+        return CheckResult(name, FAIL, "; ".join(fails + warns), details)
+    if warns:
+        return CheckResult(name, WARN, "; ".join(warns), details)
+    return CheckResult(name, PASS, "no add-on and no core service is behind the erasure "
+                                   "journal", details)
+
+
 def check_identity(ctx: Context) -> CheckResult:
     """The federation with the upstream provider (`doctor identity`; security 1.13):
     `fail` when papaia-lifecycle's status sync with the upstream directory has failed
@@ -3713,6 +3809,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
     ("startgate", check_startgate),
+    ("state_epoch", check_state_epoch),
     ("siem", check_siem),
     ("approvals", check_approvals),
     ("halt", check_halt),

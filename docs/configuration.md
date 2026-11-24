@@ -64,6 +64,8 @@ next to it, even when it has an inline `:-` default.
 | `PAPAIA_AUDIT_SIEM_TARGET`, `_PEN`, `_IDENTITY`, `_BASIS` | SIEM export of the audit store; empty target: none ([audit.md](audit.md#siem)) |
 | `PAPAIA_RECERTIFICATION_DAYS` | Optional. Days after which a confirmed row of the permission report is due again, 30 to 730, default 180 ([permission-report.md](permission-report.md#recertification)) |
 | `PAPAIA_BACKUP_RECIPIENTS` | Public age keys every backup archive is encrypted to (`NAME:age1...`, comma-separated); empty means `backup` refuses to run. Set with `papaia-ctl backup keys generate` or `backup recipients add` |
+| `PAPAIA_ERASURE_MIRROR_DIR` | Optional. Folder in a second place (a mounted share outside the house) that every backup copies the erasure journal to; `restore` and `recover-snapshot` read the union. An absolute path outside the backup target; empty: no mirror. Set with `papaia-ctl backup mirror --erasure-mirror=PATH\|none` ([wiederherstellung.md](de/wiederherstellung.md#kopien-außer-haus)) |
+| `PAPAIA_OFFSITE_RETENTION_DAYS` | The longest time a copy of the backup target is kept outside the house, 0 to 3650 days, default 90; the mirror keeps journal entries at least this long plus 30 days. Set with `papaia-ctl backup mirror --offsite-retention=DAYS` |
 | `UID` / `GID` | Host ownership for bind-mounted files (Linux only) |
 | `HOST_IP` | Bind address of the edge ports and, with direct port access, of the core ports — the network layer |
 | `INGRESS_HTTP_EXT_PORT` / `INGRESS_HTTPS_EXT_PORT` | Host ports of the edge proxy (`internal_nginx`), default 80/443; bound to `HOST_IP` |

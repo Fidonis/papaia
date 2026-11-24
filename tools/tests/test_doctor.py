@@ -220,6 +220,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # image_signatures: nothing runs in the fake
         SKIP,  # lifecycle: the lifecycle profile is off
         SKIP,  # startgate: the lifecycle profile is off
+        SKIP,  # state_epoch: no backup target in the fixture
         SKIP,  # siem: the audit profile is off
         PASS,  # approvals: four eyes off by default
         SKIP,  # halt: no halt folder before the first start
@@ -264,6 +265,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "image_signatures",
         "lifecycle",
         "startgate",
+        "state_epoch",
         "siem",
         "approvals",
         "halt",

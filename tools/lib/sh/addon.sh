@@ -261,8 +261,8 @@ _module_actions_before_up() {
         return 3
     fi
     [ -n "$plan" ] || return 0
-    local trigger="" cid="" action status
-    local -a parts=()
+    local trigger="" cid="" action status output recorded
+    local -a parts=() piped=()
     while IFS=$'\t' read -r -a parts; do
         case "${parts[0]:-}" in
             TRIGGER) trigger="${parts[1]:-}"; cid="${parts[2]:-}" ;;
@@ -271,15 +271,26 @@ _module_actions_before_up() {
                 info "  addon $addon_name: $action of the $trigger before it starts"
                 status=0
                 # Standard input closed: the step reads nothing from the operator, and the
-                # loop's own input must stay with the loop.
-                _addon_compose run "$addon_name" "$addon_path" --rm -T \
-                    -e "PAPAIA_ERASURE_TRIGGER=$trigger" -e "PAPAIA_CORRELATION_ID=$cid" \
-                    "${parts[@]:2}" < /dev/null || status=$?
-                if ! py_cli module-actions-done --name="$addon_name" --action="$action" \
-                        --exit-code="$status"; then
+                # loop's own input must stay with the loop. The output is kept as well: an
+                # `erasure-replay` that prints its `erasure_replayed` row reports its counts.
+                output="$(mktemp)"
+                if ! _addon_compose run "$addon_name" "$addon_path" --rm -T \
+                        -e "PAPAIA_ERASURE_TRIGGER=$trigger" -e "PAPAIA_CORRELATION_ID=$cid" \
+                        "${parts[@]:2}" < /dev/null | tee "$output"; then
+                    piped=(${PIPESTATUS[@]+"${PIPESTATUS[@]}"})
+                    status="${piped[0]:-1}"
+                fi
+                recorded=""
+                if ! recorded="$(py_cli module-actions-done --name="$addon_name" \
+                        --action="$action" --exit-code="$status" --output="$output")"; then
+                    rm -f "$output"
                     error "Could not record $action of add-on $addon_name; it was not started."
                     return 3
                 fi
+                rm -f "$output"
+                case "$recorded" in
+                    COUNT$'\t'*) info "  addon $addon_name: ${recorded#COUNT$'\t'}" ;;
+                esac
                 if [ "$status" -ne 0 ]; then
                     error "$action of add-on $addon_name failed (exit $status); the add-on was"
                     error "not started. The step stays due: 'papaia-ctl start --addons' or"
