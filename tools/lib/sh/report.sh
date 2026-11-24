@@ -105,3 +105,54 @@ cmd_breakglass() {
     [ -n "$address" ] && args+=(--address "$address")
     py_cli ${args[@]+"${args[@]}"}
 }
+
+# papaia-ctl startgate open --unverified --reason=TEXT --requested-by=SUB --confirmed-by=SUB
+# Opens the core start gate held closed by an unreachable backup target (docs/lifecycle.md).
+# papaia-ctl startgate acknowledge --reason=TEXT --by=SUB
+# Acknowledges the review of an override whose persons were locked afterwards.
+# `papaia-ctl doctor startgate` shows the gate.
+cmd_startgate() {
+    local sub="${1:-}" config_dir="$DEFAULT_CONFIG_DIR" unverified="" reason="" requested="" confirmed="" by=""
+    shift || true
+    case "$sub" in
+        open|acknowledge) ;;
+        -h|--help) usage; exit 0 ;;
+        *) error "Unknown 'startgate' subcommand: '${sub:-<none>}'. Valid: open, acknowledge ('papaia-ctl doctor startgate' shows the gate)."; exit 2 ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$sub:$1" in
+            *:--config-dir=*) config_dir="${1#*=}" ;;
+            *:--reason=*) reason="${1#*=}" ;;
+            open:--unverified) unverified=1 ;;
+            open:--requested-by=*) requested="${1#*=}" ;;
+            open:--confirmed-by=*) confirmed="${1#*=}" ;;
+            acknowledge:--by=*) by="${1#*=}" ;;
+            *:-h|*:--help) usage; exit 0 ;;
+            *) _report_unknown "startgate $sub" "$1" ;;
+        esac
+        shift
+    done
+    if [ "$sub" = "open" ] && { [ -z "$unverified" ] || [ -z "$reason" ] || [ -z "$requested" ] || [ -z "$confirmed" ]; }; then
+        error "startgate open needs --unverified, --reason, --requested-by and --confirmed-by."
+        exit 2
+    fi
+    if [ "$sub" = "acknowledge" ] && { [ -z "$reason" ] || [ -z "$by" ]; }; then
+        error "startgate acknowledge needs --reason and --by."
+        exit 2
+    fi
+    # shellcheck disable=SC2034  # read by py_cli and _require_setup_done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    local mode
+    mode="$(_topology_mode)" || exit 3
+    if [ "$mode" = "distributed" ]; then
+        error "'startgate' is not available in a distributed installation yet."
+        exit 2
+    fi
+    py_cli join-stack-network || true
+    if [ "$sub" = "acknowledge" ]; then
+        py_cli startgate-acknowledge --reason "$reason" --by "$by"
+    else
+        py_cli startgate-open --reason "$reason" --requested-by "$requested" --confirmed-by "$confirmed"
+    fi
+}

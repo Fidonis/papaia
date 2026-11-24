@@ -453,6 +453,17 @@ class Context:
         self._totals: tuple[int | None, int | None] | None = None
         self._modules: _ModuleScan | None = None
         self._members: dict[str, set[str] | None] = {}
+        self._lifecycle_health: dict[str, status.CommandResult] = {}
+
+    def lifecycle_health(self, container: str) -> status.CommandResult:
+        """`lifecycle.py health` in `container`, asked once: `doctor lifecycle` and
+        `doctor startgate` read the same report."""
+        if container not in self._lifecycle_health:
+            self._lifecycle_health[container] = self.run(
+                ["docker", "exec", container, *LIFECYCLE_HEALTH_COMMAND],
+                LIFECYCLE_TIMEOUT_SECONDS,
+            )
+        return self._lifecycle_health[container]
 
     def docker_totals(self) -> tuple[int | None, int | None]:
         """(CPU count, memory in bytes) as the Docker daemon sees them.
@@ -2069,8 +2080,7 @@ def check_lifecycle(ctx: Context) -> CheckResult:
             "('papaia-ctl start' starts it)",
             {"state": state},
         )
-    done = ctx.run(["docker", "exec", container, *LIFECYCLE_HEALTH_COMMAND],
-                   LIFECYCLE_TIMEOUT_SECONDS)
+    done = ctx.lifecycle_health(container)
     try:
         report = json.loads(status.first_line(done.stdout))
         if not isinstance(report, dict):
@@ -2541,13 +2551,53 @@ def check_network(ctx: Context) -> CheckResult:
 
 
 def _lifecycle_report(ctx: Context, container: str) -> dict[str, Any] | None:
-    done = ctx.run(["docker", "exec", container, *LIFECYCLE_HEALTH_COMMAND],
-                   LIFECYCLE_TIMEOUT_SECONDS)
+    done = ctx.lifecycle_health(container)
     try:
         report = json.loads(status.first_line(done.stdout))
     except ValueError:
         return None
     return report if isinstance(report, dict) else None
+
+
+def check_startgate(ctx: Context) -> CheckResult:
+    """The core start gate (`doctor startgate`; sicherheit §4.9 (2a), betrieb BE-16a Nr.
+    2a): `fail` while papaia-lifecycle keeps the edge closed (checking, behind the
+    erasure journal, target unreachable, replay failed) or when a person of an override
+    was locked or changed afterwards; `warn` while an override is in effect and for
+    accounts the replay deactivated (credentials or a role changed after the snapshot)."""
+    from . import startgate
+
+    name = "startgate"
+    if not ctx.configured:
+        return _not_set_up(name)
+    if LIFECYCLE_PROFILE not in ctx.active_profiles:
+        return CheckResult(name, SKIP, "not enabled (the lifecycle profile is off)")
+    found = _lifecycle_container(ctx)
+    if found is None:
+        return CheckResult(name, SKIP, "papaia-lifecycle does not run on this host")
+    container, state = found
+    if container is None or state != "running":
+        return CheckResult(
+            name, FAIL,
+            f"papaia-lifecycle is {state or 'not created'}: the edge stays closed "
+            "('papaia-ctl start' starts it)",
+            {"state": state},
+        )  # fmt: skip
+    report = _lifecycle_report(ctx, container)
+    gate = report.get("startgate") if report is not None else None
+    if gate is None:
+        return CheckResult(name, FAIL, "papaia-lifecycle reports no start gate")
+    try:
+        result, text = startgate.doctor_result(gate)
+    except ValueError:
+        return CheckResult(name, FAIL, "the start gate in the health report cannot be read")
+    details = {
+        "status": gate["status"],
+        "failed": list(gate["failed"]),
+        "credential_replay": len(gate["credential_replay"]),
+        "role_replay": len(gate["role_replay"]),
+    }
+    return CheckResult(name, result, text, details)
 
 
 def check_identity(ctx: Context) -> CheckResult:
@@ -3399,6 +3449,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("revocations_age", check_revocations_age),
     ("image_signatures", check_image_signatures),
     ("lifecycle", check_lifecycle),
+    ("startgate", check_startgate),
     ("siem", check_siem),
     ("approvals", check_approvals),
     ("halt", check_halt),

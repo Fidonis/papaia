@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import common, deployment, ingress, paperless_gate, uninstall_journal
+from . import catalog, common, deployment, ingress, paperless_gate, startgate, uninstall_journal
 from .envtree import EnvTree
 
 # Env-tree node holding the bundled proxy's own configuration. The NPM admin
@@ -499,6 +499,7 @@ def provision_npm_hosts(
         created += 1
 
     ok = True
+    found: list = []
     if config_dir is not None and repo_root is not None:
         try:
             found = ingress.routes(tree, Path(config_dir), Path(repo_root))
@@ -512,7 +513,13 @@ def provision_npm_hosts(
             served |= {h for r in found for h in r.hostnames}
             ok = _uninstalled_hosts(base_url, token, Path(config_dir), served) and ok
     if config_dir is not None:
-        ok = _gate_steps(base_url, token, Path(config_dir), root) and ok
+        try:
+            block = _startgate_block(tree, Path(config_dir), found)
+        except startgate.StartgateError as exc:
+            # Without the block the edge would forward while the gate is closed.
+            print(f"ERROR: the start gate cannot be set up at the edge: {exc}", file=sys.stderr)
+            return False
+        ok = _gate_steps(base_url, token, Path(config_dir), root, block) and ok
 
     if created:
         print(f"NPM provisioning complete: {created} host(s) created.", flush=True)
@@ -525,9 +532,54 @@ def provision_npm_hosts(
     return ok
 
 
-def _gate_steps(base_url: str, token: str, config_dir: Path, root: dict[str, str]) -> bool:
+# The gate key of a core service's public host (sicherheit §4.9 (2a)): the journals of
+# the core, `admin` for the proxy's own administration (never closed), `core` otherwise.
+_GATE_KEYS = {
+    "keycloak": "identity",
+    "librechat": "core-chat",
+    "litellm": "model-gateway",
+    "nginx-proxy-manager-auth": startgate.GATE_ADMIN_KEY,
+}
+
+
+def gate_host_keys(tree: EnvTree | dict, routes: list) -> dict[str, str]:
+    """Every public host name the proxy serves, mapped to its start gate key: the core's
+    hosts by service, an add-on's by its module name. Hosts not named get `core`."""
+    root = tree.get("", {})
+    active = common.cluster_profiles(root)
+    edge = ingress.edge_ports(root)
+    keys: dict[str, str] = {}
+    for profile, node, key, _label, service, *_ in ingress.CORE_PROXY_HOSTS:
+        url = ingress.public_url_of(tree, node, key)
+        if profile not in active or not ingress.is_proxied_url(url, edge):
+            continue
+        host = (urlsplit(url).hostname or "").lower()
+        if host:
+            keys[host] = _GATE_KEYS.get(service, "core")
+    for route in routes:
+        name = route.module if startgate.is_gate_key(route.module) else "core"
+        for host in route.hostnames:
+            keys.setdefault(host.lower(), name)
+    return keys
+
+
+def _startgate_block(tree, config_dir: Path, routes: list) -> str:
+    """The edge's start gate block while papaia-lifecycle runs, else nothing: without
+    the lifecycle profile nobody writes the lease and the edge would stay closed."""
+    if "lifecycle" not in common.cluster_profiles(tree.get("", {})):
+        return ""
+    contact = catalog.current_branding(config_dir).get("contact") or {}
+    text = " ".join(
+        str(contact[k]) for k in ("name", "phone") if isinstance(contact.get(k), str)
+    )
+    return startgate.edge_block(gate_host_keys(tree, routes), contact=text or None)
+
+
+def _gate_steps(
+    base_url: str, token: str, config_dir: Path, root: dict[str, str], gate_block: str = ""
+) -> bool:
     project = root.get("COMPOSE_PROJECT_NAME") or "papaia"
-    changed = paperless_gate.install_strip_file(project)
+    changed = paperless_gate.install_strip_file(project, gate_block)
     if changed is None:
         print(
             "WARNING: could not write server_proxy.conf in the proxy container; proxy"

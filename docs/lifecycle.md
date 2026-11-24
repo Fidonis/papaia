@@ -232,6 +232,128 @@ The writer also accepts the core sources `core-chat` (`erase`, `erase_subject`) 
 `model-gateway` (`erase`, `erase_subject`, `key_revoke`) in their own files; the deletion
 of a person in chat and model gateway and the revocation of gateway keys write them.
 
+## Core start gate
+
+A VM or volume snapshot rolls back the service's own volume (state, local copy of the
+journal), not the backup target. After every start the service therefore keeps the edge
+closed until its own state is not older than the erasure journal (sicherheit §4.9 (2a)).
+
+**The lease.** The service alone writes `startgate.json` (`papaia.startgate/1`) to the
+volume `papaia-security-state`: `{state, generation, hosts, issued_at, expires_at, code,
+correlation_id}`. It writes `closed` first at every start, renews the lease every 30 s
+(valid 90 s) and compares every 60 s. `hosts` names the public hosts held closed while
+the state is `open` (a module whose replay failed). The check service
+`papaia-startgate-check` (same image, `lifecycle.py gate-check`, proxy network only, the
+volume read-only, no secret, no port) answers the edge: `GET /check` 204 or 401 for the
+gate key in `X-Papaia-Gate-Service`, `GET /maintenance` the maintenance page (503,
+`Retry-After: 60`, no caching) with the contact point and the correlation id. A lease
+that is missing, unreadable, `closed` or expired, and a check service that does not
+answer, show the maintenance page.
+
+**The edge.** `papaia-ctl npm-provision` (also run by `start`) adds a managed block to
+the proxy's `server_proxy.conf`, which every proxy host includes, while the `lifecycle`
+profile is on: `auth_request` to the check service for every request, the host name
+mapped to a gate key (`identity` for the sign-in, `core-chat`, `model-gateway`, an
+add-on's module name, `admin` for the proxy's administration host, which the gate never
+closes, `core` for every other host), and the maintenance page for 401 and 5xx. The
+contact point comes from the brand overlay (`contact.name`, `contact.phone`). Lines the
+operator wrote below the managed blocks are kept. Without the profile the block is
+removed.
+
+**The administration path while closed.** The proxy admin host signs in through its
+login sidecar at the identity provider. So that administrators can sign in while the
+gate is closed (for example to confirm an override), the block also hands the original
+request URI (`X-Papaia-Gate-Uri: $request_uri`) to the check service. On the identity
+provider's host (key `identity`) the check service lets exactly these requests pass
+a closed gate:
+
+- `/realms/papaia/protocol/openid-connect/auth` and
+  `/realms/papaia/login-actions/authenticate`, `required-action`, `restart`, each with
+  exactly one `client_id=oauth2-proxy` (the client of the login sidecar),
+- `/resources/...` (the sign-in page's static files, no query).
+
+The path is matched raw: an encoded character, a dot segment or an empty segment is
+refused. Token, account and admin endpoints, other realms and other clients stay
+closed, and so does every other public host. The sidecar redeems the code inside the
+platform network. A sign-in there records the `LOGIN` event the override needs; the
+person then lands on the proxy admin UI (`npm-admin` group) or on the maintenance page.
+
+**The comparison.** `$PAPAIA_BACKUP_DIR/erasure-journal/epoch` (`papaia.erasure-epoch/1`,
+written by this service, read by the modules) holds the installation's generation and
+the last `seq` per journal. The service keeps the generation and the seqs it confirmed
+in `startgate-state.json` in its own volume (0600). The state is behind when the epoch's
+generation is higher, a journal's seq is higher than the confirmed one, or an entry of
+`identity` at the target is missing in the local copy. The comparison runs before the
+journal is flushed. A new installation records `{generation: 0}`; a missing `epoch` with
+an existing state is written again from the state. A target that cannot be read
+(missing folder, unreadable or malformed `epoch` or journal) is `unverified`: closed,
+audited as `state_epoch_unverified`, mailed once, compared again every minute.
+
+**The replay** (audited as `state_epoch_behind`, then `lifecycle.startgate_replay` per
+step with `detail.kind`):
+
+| Journal entry | In Keycloak |
+|---|---|
+| `account_disable` | account disabled, revoked |
+| `account_delete` | account deleted |
+| `role_revoke` `group:<id>` | group membership removed, revoked |
+| `role_revoke` `realm-roles`, `client-roles:<id>` | account disabled (reason `role_replay`): the journal does not name the role |
+| `credential_reset` | account disabled (reason `credential_replay`): the administration sets new credentials and activates it |
+| `session_revoke` | covered by the logout below |
+
+Then every member of `papaia-persons` is logged out and its consents at the holder
+clients (`flow-engine`, `assist-gate`) are removed, and `global_since` is set to now.
+papaia-replay deletes in chat and model gateway (`chat_sessions_reset`, `erase_subject`
+for entries of `core-chat` and `model-gateway`, `key_revoke`); every module whose seq is
+higher gets `POST /internal/lifecycle` `erasure-replay` (its answer must report the
+seq) and then `post-restore`. Each finished step is kept; a failure repeats only what is
+left. The generation rises to max(own, epoch) + 1; the own state is saved before
+`epoch`. Accounts disabled by the replay leave the lists of `doctor startgate` once the
+administration activates them.
+
+**Failures.** A failed step in Keycloak, chat or model gateway keeps the edge closed
+(`replay_failed`, `CORE-STARTGATE-REPLAY-FAILED`); a failed module keeps only its own
+host closed. papaia-replay and the module endpoints are reached over mTLS with the
+options `--replay-url`, `--modules-file` (`{"modules": {name: "https://host:port"}}`),
+`--pki-ca`, `--client-cert` and `--client-key` of `lifecycle.py run`. This version does
+not set them in Compose: a backlog in chat, gateway or a module keeps that part closed
+until they are configured (papaia-replay follows as its own service). The override does
+not open a failed replay: its backlog is still due, and the next comparison would
+replay it again.
+
+**Override.** `papaia-ctl startgate open --unverified --reason=TEXT --requested-by=SUB
+--confirmed-by=SUB` opens a gate held closed by `unverified` (an unreachable backup
+target) only; it is refused for every other state. Both accounts hold `papaia-admin`
+and are enabled; the confirming one signed in within the last 300 s (a `LOGIN` user
+event, for example by signing in at the proxy admin host, see above). One person is enough only with the four-eyes rule off
+and never in the profile `kritis`. papaia-ctl writes `startgate.startgate_override`
+(`allowed` or `denied` with the reason); the service writes
+`lifecycle.startgate_override` with `{requested_by, confirmed_by, reason,
+single_person}` and mails the operations address. The override ends at the next
+comparison that finds the target without backlog, or one that finds a backlog (which is
+then replayed). An identity entry about one of the two persons after the override is
+audited as `lifecycle.startgate_override_revoked_actor` and mailed; `doctor startgate`
+fails until an administrator acknowledges the review:
+`papaia-ctl startgate acknowledge --reason=TEXT --by=SUB`. `by` holds `papaia-admin`,
+is enabled, signed in within the last 300 s and is not one of the locked persons.
+papaia-ctl writes `startgate.startgate_override_acknowledged`, the service
+`lifecycle.startgate_override_acknowledged` with `{by, reason, actors}`. A new override
+watches its own two persons; an earlier alarm stays until it is acknowledged.
+`papaia-ctl` writes its requests into the gate state from another process; the service
+keeps them when it saves a state it loaded before a comparison.
+
+**Mail.** The warnings go to the operations address only where the service has a mail
+relay (`--mail-relay`, `--alert-to`, `--alert-from`; today set with the federation);
+otherwise they are `ALERT` lines in the service's log. `papaia-ctl doctor startgate`
+shows every state with its id (`CORE-STARTGATE-CHECK`, `-BEHIND`, `-UNVERIFIED`,
+`-REPLAY-FAILED`, `-OVERRIDE`, `-CREDENTIAL-REPLAY`, `-ROLE-REPLAY`,
+`-OVERRIDE-REVOKED-ACTOR`).
+
+**Deviations.** papaia.audit/1 1.4.0 has no events `startgate_override`,
+`startgate_override_revoked_actor` and `startgate_override_acknowledged`; they are
+written as event `operation` with those operations. The realm-wide not-before is not used: the logout per account and the
+consent removal reach the same sessions with the service's narrow permission.
+
 ## Name index and tombstones
 
 For `papaia-ctl person find` (see [person-requests.md](person-requests.md#find-a-person))
@@ -316,6 +438,10 @@ start, `last_reconcile_age_seconds` is then `null`) or a deactivated account sti
 holds a consent after a round (`disabled_with_consent`). `gap_revoke_age_seconds` is the
 time since the last gap revoke and does not change the container's health. A restart
 does not reset `last_poll_age_seconds`: a poll that keeps failing stays visible.
+
+The report also holds `startgate` (status, lease, failed parts, accounts disabled by the
+replay, an override in effect, correlation id); a closed gate does not change the
+container's health.
 
 `papaia-ctl doctor lifecycle` runs that command in the container and reports:
 

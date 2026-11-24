@@ -15,7 +15,9 @@
 # behind Keycloak) and after a longer outage ends every delegation (gap revoke). Every
 # deactivation, deletion, removed role or group, ended session and reset credential
 # is one line of the erasure journal `identity` at the backup target, so that a
-# restored snapshot cannot bring it back (docs/lifecycle.md).
+# restored snapshot cannot bring it back (docs/lifecycle.md). After every start it keeps
+# the edge closed (core start gate) until its own state is not older than the journal,
+# and replays the journal when it is (a restored VM or volume snapshot).
 #
 # Safety:
 #   - No port is published. The only network is papaia-lifecycle-net (internal),
@@ -23,7 +25,8 @@
 #   - Signs in with private_key_jwt; the key is mounted read-only from
 #     $PAPAIA_CONFIG_DIR/security/service-accounts/svc-papaia-lifecycle.
 #   - The signing key of the list lives in papaia-lifecycle-key, which backups
-#     leave out. Only this service writes papaia-security-state.
+#     leave out. Only this service writes papaia-security-state; the start gate's
+#     check service on the proxy network mounts it read-only and holds no secret.
 #   - Of the backup target it sees erasure-journal/ alone; the installation key
 #     erasure-hmac is mounted read-only. `render` makes the key, and the folder once
 #     per backup target; it never makes the target itself, and once the folder was
@@ -165,6 +168,50 @@ services:
     labels:
       de.fidonis.module: papaia-lifecycle
       de.fidonis.role:   lifecycle
+    profiles: [lifecycle]
+
+  # The check service of the core start gate (docs/lifecycle.md, "Core start gate"). The
+  # edge asks it for every request of every public host (`auth_request`); it answers
+  # from the lease startgate.json alone, which it mounts read-only, and holds no secret.
+  # Without it, or with a missing, unreadable, closed or expired lease, the edge serves
+  # the maintenance page; the proxy's own administration host stays open.
+  papaia-startgate-check:
+    logging: *papaia-logging
+    image: ghcr.io/fidonis/papaia-lifecycle:1.10.0-rc.1@sha256:3be6fe9daa56bb8f0d5aba9a3acb6a341d8b89544ffbade4ce124c2aeab84082
+    restart: unless-stopped
+    command:
+      - python3
+      - -I
+      - /opt/papaia-lifecycle/lifecycle.py
+      - gate-check
+      - --state-dir=/var/lib/papaia-security-state
+      - --listen=0.0.0.0:8080
+    user: "65534:65534"
+    volumes:
+      - type: volume
+        source: papaia-security-state
+        target: /var/lib/papaia-security-state
+        read_only: true
+    read_only: true
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -I
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 8080), 2).close()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # The proxy network alone: the edge reaches it, nothing else is needed.
+    networks:
+      - papaia-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-lifecycle
+      de.fidonis.role:   startgate-check
     profiles: [lifecycle]
 
 networks:

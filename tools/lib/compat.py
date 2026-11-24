@@ -227,6 +227,8 @@ NEVER_ATTACHABLE = frozenset(
         # The registry's database and the container holding its owner login (ADR 0021).
         "connections-db",
         "connections-migrate",
+        # The edge's start gate check: only the proxy asks it (sicherheit §4.9 (2a)).
+        "papaia-startgate-check",
     }
 )
 

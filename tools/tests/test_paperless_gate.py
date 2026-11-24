@@ -394,7 +394,7 @@ class _FakeNpm:
         monkeypatch.setattr(
             paperless_gate,
             "install_strip_file",
-            lambda project: (
+            lambda project, extra="": (
                 self.strip_changes.pop(0) if len(self.strip_changes) > 1 else self.strip_changes[0]
             ),
         )

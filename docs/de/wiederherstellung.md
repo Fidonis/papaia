@@ -88,6 +88,56 @@ höchstens 60 Minuten.
   (`duration=`) und in das Audit (`restore_applied`, `duration_s`). Das ist die gemessene
   Wiederherstellungszeit; Ziel sind höchstens 60 Minuten.
 
+## Zurückgesetzter Server (VM- oder Volume-Schnappschuss)
+
+Mit dem Profil `lifecycle` hält `papaia-lifecycle` nach jedem Start den Zugang über den
+Proxy geschlossen, bis sein Stand nicht älter ist als das Löschjournal am Sicherungsziel.
+Die Nutzenden sehen bis dahin eine Wartungsseite; die Verwaltung des Proxys bleibt
+erreichbar. Ist der Stand älter (ein zurückgesetzter Schnappschuss), spielt der Dienst
+Kontosperren, Löschungen und entzogene Rechte nach, meldet alle Personen ab und öffnet
+danach. `papaia-ctl doctor startgate` zeigt den Zustand mit einer Kennung:
+
+| Kennung | Bedeutung | Was tun |
+|---|---|---|
+| `CORE-STARTGATE-CHECK` | Die Prüfung nach dem Start läuft. | Einige Minuten warten. |
+| `CORE-STARTGATE-BEHIND` | Der Stand ist älter als das Löschjournal; es wird nachgespielt. | Das Ende abwarten; der Zugang öffnet danach selbst. |
+| `CORE-STARTGATE-UNVERIFIED` | Das Löschjournal am Sicherungsziel ist nicht erreichbar. | Das Sicherungsziel wieder einhängen; die Prüfung läuft jede Minute. |
+| `CORE-STARTGATE-REPLAY-FAILED` | Das Nachspielen ist für einen Teil fehlgeschlagen; dieser Teil bleibt geschlossen. | Den genannten Teil mit `papaia-ctl doctor` prüfen. |
+| `CORE-STARTGATE-CREDENTIAL-REPLAY` | Konten, deren Zugangsdaten nach dem Schnappschuss geändert wurden, sind deaktiviert. | Zugangsdaten neu setzen und die Konten aktivieren. |
+| `CORE-STARTGATE-ROLE-REPLAY` | Konten, denen nach dem Schnappschuss eine Rolle entzogen wurde, sind deaktiviert. | Rollen prüfen und die Konten aktivieren. |
+
+Ist das Sicherungsziel dauerhaft verloren (`CORE-STARTGATE-UNVERIFIED`), öffnen zwei
+Personen mit `papaia-admin` den Zugang ohne Prüfung. Bei einem fehlgeschlagenen
+Nachspielen (`CORE-STARTGATE-REPLAY-FAILED`) gibt es keine Übersteuerung; dort hilft nur,
+den genannten Teil wieder lauffähig zu machen.
+
+1. Die bestätigende Person meldet sich frisch über den Verwaltungsweg an: Sie öffnet die
+   Verwaltung des Proxys (`NPM_ADMIN_HOST`, zum Beispiel `https://npm.example.org`) und
+   meldet sich dort an. Diese Anmeldung beim Anmeldedienst ist auch bei geschlossenem
+   Zugang möglich; alles andere auf dem Anmeldedienst und auf den übrigen Adressen bleibt
+   gesperrt. Ohne Mitgliedschaft in `npm-admin` endet die Anmeldung auf einer Fehler- oder
+   Wartungsseite; die Anmeldung zählt trotzdem.
+2. Innerhalb von 5 Minuten danach:
+
+```sh
+papaia-ctl startgate open --unverified --reason="Sicherungsplatte getauscht" \
+  --requested-by=<Konto-ID> --confirmed-by=<Konto-ID>
+```
+
+Eine Person allein genügt nur, wenn das Vier-Augen-Prinzip ausgeschaltet ist, nie im Profil
+`kritis`. Die Übersteuerung steht im Audit und geht per Mail an die Betriebsadresse; sie
+endet, sobald das Sicherungsziel wieder erreichbar ist.
+
+Wird eine der beiden Personen danach gesperrt oder geändert
+(`CORE-STARTGATE-OVERRIDE-REVOKED-ACTOR`), meldet `papaia-ctl doctor startgate` einen
+Fehler, bis eine andere Person mit `papaia-admin` die Prüfung bestätigt. Sie meldet sich
+dazu ebenfalls frisch über den Verwaltungsweg an:
+
+```sh
+papaia-ctl startgate acknowledge --reason="Übersteuerung mit der Betriebsadresse geprüft" \
+  --by=<Konto-ID>
+```
+
 ## Rückweg nach einem Upgrade
 
 Jedes Upgrade erzeugt in Stufe 0 einen einmaligen Rückwegschlüssel. Der Wiederherstellungspunkt

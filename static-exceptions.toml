@@ -314,6 +314,17 @@ approved_by = "core maintainers (security officer countersignature pending)"
 
 [[exception]]
 rule = "code-exec"
+path = "tools/lib/startgate.py"
+within = "lifecycle_runner.run"
+subject = "subprocess.run"
+count = 2
+input = "operator-config"
+reason = "Literal docker ps with label filters for the installation's Compose project, then docker exec of one of the two fixed lifecycle.py commands startgate-override or startgate-acknowledge in the container found, as an argument list without a shell; the request (reason, account ids) passes as JSON on stdin and is validated on both sides."
+expires = 2027-05-20
+approved_by = "core maintainers (security officer countersignature pending)"
+
+[[exception]]
+rule = "code-exec"
 path = "tools/lib/stack_network.py"
 within = "_docker"
 subject = "subprocess.run"

@@ -1822,6 +1822,25 @@ def cmd_breakglass(args: argparse.Namespace) -> int:
     return breakglass.main(args.action, tree, config_dir, address=args.address)
 
 
+def cmd_startgate_open(args: argparse.Namespace) -> int:
+    from . import startgate
+
+    config_dir = Path(args.config_dir)
+    tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
+    return startgate.main(
+        tree, config_dir, reason=args.reason, requested_by=args.requested_by,
+        confirmed_by=args.confirmed_by,
+    )  # fmt: skip
+
+
+def cmd_startgate_acknowledge(args: argparse.Namespace) -> int:
+    from . import startgate
+
+    config_dir = Path(args.config_dir)
+    tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
+    return startgate.main(tree, config_dir, reason=args.reason, by=args.by, action="acknowledge")
+
+
 def cmd_service_account_rotate(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
     tree = envtree.load_config_dir_tree(config_dir, Path(args.repo_root))
@@ -3579,6 +3598,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_breakglass.add_argument("--action", choices=("create", "rotate", "status"), required=True)
     p_breakglass.add_argument("--address", default=None)
     p_breakglass.set_defaults(func=cmd_breakglass)
+
+    p_startgate = sub.add_parser("startgate-open")
+    p_startgate.add_argument("--reason", required=True)
+    p_startgate.add_argument("--requested-by", required=True)
+    p_startgate.add_argument("--confirmed-by", required=True)
+    p_startgate.set_defaults(func=cmd_startgate_open)
+
+    p_startgate_ack = sub.add_parser("startgate-acknowledge")
+    p_startgate_ack.add_argument("--reason", required=True)
+    p_startgate_ack.add_argument("--by", required=True)
+    p_startgate_ack.set_defaults(func=cmd_startgate_acknowledge)
 
     p_sa_rotate = sub.add_parser("service-account-rotate")
     p_sa_rotate.add_argument("--id", required=True)

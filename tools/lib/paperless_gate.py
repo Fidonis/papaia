@@ -201,14 +201,17 @@ def strip_config() -> str:
     )
 
 
-def merge_strip(current: str) -> str:
-    """The proxy manager's `server_proxy.conf` with the managed block at the top and
-    whatever the operator wrote below it kept as it is."""
+def merge_strip(current: str, extra: str = "") -> str:
+    """The proxy manager's `server_proxy.conf` with the managed block at the top, the
+    managed block `extra` after it (the core start gate, lib/startgate.py; left out when
+    empty) and whatever the operator wrote below kept as it is."""
+    from . import startgate
+
     rest = current
     if current.startswith(_STRIP_BEGIN):
         end = current.find(_STRIP_END + "\n")
         rest = current[end + len(_STRIP_END) + 1 :] if end >= 0 else ""
-    return strip_config() + rest
+    return strip_config() + extra + startgate.strip_block(rest)
 
 
 def _proxy_container(project: str) -> str | None:
@@ -230,12 +233,13 @@ def _proxy_container(project: str) -> str | None:
     return ids[0] if found.returncode == 0 and len(ids) == 1 else None
 
 
-def install_strip_file(project: str) -> bool | None:
+def install_strip_file(project: str, extra: str = "") -> bool | None:
     """Put the managed block into `server_proxy.conf` of the running proxy. Written
     through the proxy container: the proxy manager owns its data directory (as root),
     and it rewrites the files of its custom directory when it starts, so the directory
     can be neither read-only nor written by papaia-ctl on the host. Returns whether the
-    file changed, None when the proxy does not run or the file cannot be written."""
+    file changed, None when the proxy does not run or the file cannot be written.
+    `extra`: the start gate's block (merge_strip)."""
     container = _proxy_container(project)
     if container is None:
         return None
@@ -247,7 +251,7 @@ def install_strip_file(project: str) -> bool | None:
         )  # fmt: skip
         if read.returncode != 0:
             return None
-        wanted = merge_strip(read.stdout)
+        wanted = merge_strip(read.stdout, extra)
         if wanted == read.stdout:
             return False
         write = subprocess.run(

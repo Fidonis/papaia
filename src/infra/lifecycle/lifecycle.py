@@ -68,12 +68,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import calendar
 import contextlib
 import email.message
 import fcntl
 import hashlib
 import hmac
+import html
 import http.client
+import http.server
 import ipaddress
 import json
 import math
@@ -1366,6 +1369,8 @@ class Lifecycle:
         federation: StatusSync | None = None,
     ) -> None:
         self.api, self.store, self.publisher = api, store, publisher
+        # The core start gate (sicherheit §4.9 (2a)); StartGate sets itself here.
+        self.gate: StartGate | None = None
         # The status sync with the upstream directory; None without federation.
         self.federation = federation
         if federation is not None:
@@ -1479,7 +1484,12 @@ class Lifecycle:
 
     # list -------------------------------------------------------------
     def start(self) -> None:
-        """Make the key, set the first read position, publish a list at once."""
+        """Close the gate and compare (before the journal is flushed: the flush copies the
+        target's entries into the local copy), make the key, set the first read position,
+        publish a list at once."""
+        if self.gate is not None:
+            self.gate.begin()
+            self._gate_step(self.gate.check)
         self.publisher.signer.ensure()
         self._flush_journal()
         with self.store.locked():
@@ -2065,6 +2075,8 @@ class Lifecycle:
         entry = state["entries"].get(sub)
         if entry is not None and entry["reason"] == "account_disabled":
             seen = max(seen or 0, entry["since"] * 1000)
+        if self.gate is not None:
+            self.gate.account_enabled(sub)
         if seen is None:
             return
         correlation = _uuid7()
@@ -2199,7 +2211,15 @@ class Lifecycle:
             return
         self._next_reconcile = now + RECONCILE_SECONDS
 
+    def _gate_step(self, action) -> None:
+        try:
+            action()
+        except RETRYABLE as exc:
+            _log(f"start gate: {exc!r}; the lease runs out unless renewed")
+
     def step(self, *, force_poll: bool = False) -> None:
+        if self.gate is not None:
+            self._gate_step(self.gate.step)
         now = self.clock()
         if now >= self._next_reconcile:
             self._reconcile_now(now)
@@ -2675,6 +2695,1376 @@ def _event_time(event: object) -> int | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# core start gate (sicherheit §4.9 (2a))
+# ─────────────────────────────────────────────────────────────────────────
+
+# The lease the edge reads (security state volume, written by this service alone).
+GATE_FILE = "startgate.json"
+GATE_FORMAT = "papaia.startgate/1"
+# The gate's own state next to the service's state (key volume, not backed up).
+GATE_STATE_FILE = "startgate-state.json"
+GATE_STATE_FORMAT = "papaia.startgate-state/1"
+GATE_LOCK_FILE = "startgate.lock"
+GATE_LEASE_SECONDS = 90
+GATE_RENEW_SECONDS = 30
+GATE_CHECK_SECONDS = 60
+# A lease issued this far in the future (clock skew between containers) still counts.
+GATE_SKEW_SECONDS = 5
+MAX_GATE_BYTES = 16384
+EPOCH_FILE = "epoch"
+EPOCH_FORMAT = "papaia.erasure-epoch/1"
+MAX_EPOCH_BYTES = 64 * 1024
+MAX_EPOCH_SOURCES = 256
+MAX_MODULE_JOURNAL_BYTES = 64 << 20
+CORE_SOURCES = ("identity", "core-chat", "model-gateway")
+# The key the edge names a public host by: `identity`, `core-chat`, `model-gateway`, a
+# module's name, `core` for every other public host, and `admin` for the proxy's own
+# administration host, which the gate never closes.
+GATE_ADMIN_KEY = "admin"
+GATE_STATUSES = ("checking", "open", "behind", "unverified", "replay_failed", "override")
+GATE_CODES = ("CHECK", "BLOCKED")
+REPLAY_KINDS = ("erase_subject", "chat_sessions_reset", "key_revoke")
+MODULE_ACTIONS = ("erasure-replay", "post-restore")
+OVERRIDE_WAIT_SECONDS = 20
+CORRELATION_HEADER = "X-Papaia-Correlation-Id"
+GATE_SERVICE_HEADER = "X-Papaia-Gate-Service"
+GATE_CONTACT_HEADER = "X-Papaia-Gate-Contact"
+# The original request URI of a request the edge asks about (`$request_uri`).
+GATE_URI_HEADER = "X-Papaia-Gate-Uri"
+# The administration path (sicherheit §1.7, §4.9 (2a)) signs in at the identity
+# provider: the proxy admin host (key `admin`, never closed) sends the browser to the
+# realm's sign-in with the client of its login sidecar, which redeems the code inside
+# the platform network. Those sign-in requests pass a closed gate on the identity
+# provider's host (key `identity`); nothing else there does: no token, account or admin
+# endpoint, no other realm or client.
+GATE_SIGNIN_KEY = "identity"
+GATE_SIGNIN_REALM = "papaia"
+GATE_SIGNIN_CLIENT = "oauth2-proxy"
+MAX_GATE_URI = 4096
+_GATE_SIGNIN_PATH_RE = re.compile(
+    rf"^/realms/{GATE_SIGNIN_REALM}/(?:protocol/openid-connect/auth"
+    r"|login-actions/(?:authenticate|required-action|restart))$"
+)
+_GATE_RESOURCE_RE = re.compile(r"^/resources(?:/[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}){1,12}$")
+_GATE_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+_MODULE_JOURNAL_RE = re.compile(r"^([a-z][a-z0-9-]{0,39})\.jsonl$")
+_OVERRIDE_REASON_RE = re.compile(r"^[^\x00-\x1f\x7f-\x9f]{1,500}$")
+_KEY_REF_RE = re.compile(r"^key:([A-Za-z0-9][A-Za-z0-9._-]{0,127})$")
+_ROLE_GROUP_RE = re.compile(rf"^group:({_ID})$")
+_CONTACT_RE = re.compile(r"^[^\x00-\x1f\x7f-\x9f]{1,200}$")
+
+# Pattern 8 (betrieb BE-16a Nr. 2a): what happened, one action; the id follows.
+GATE_PAGE_TEXT = {
+    "CHECK": (
+        "Die Plattform prüft nach einem Neustart ihren Datenstand und ist kurz nicht "
+        "erreichbar. Es wurde nichts ausgeführt.",
+        "Versuchen Sie es in einigen Minuten erneut.",
+    ),
+    "BLOCKED": (
+        "Die Plattform ist nach einem Neustart gesperrt, bis ihr Datenstand geprüft ist. "
+        "Es wurde nichts ausgeführt.",
+        "Fragen Sie {contact}.",
+    ),
+}
+GATE_MAIL_TEXT = {
+    "CORE-STARTGATE-UNVERIFIED": (
+        "Das Löschjournal am Sicherungsziel ist nicht erreichbar; die Plattform bleibt "
+        "geschlossen.",
+        "Stellen Sie die Verbindung zum Sicherungsziel wieder her (siehe Handbuch §S-10).",
+    ),
+    "CORE-STARTGATE-REPLAY-FAILED": (
+        "Das Nachspielen ist für {services} fehlgeschlagen; {services} bleibt geschlossen.",
+        "Prüfen Sie {services} mit papaia-ctl doctor (siehe Handbuch §S-10).",
+    ),
+    "CORE-STARTGATE-OVERRIDE": (
+        "Die Plattform ist ohne Prüfung gegen das Löschjournal geöffnet (Übersteuerung "
+        "durch {first} und {second} um {at}).",
+        "Stellen Sie die Verbindung zum Sicherungsziel wieder her; die Prüfung läuft jede "
+        "Minute.",
+    ),
+    "CORE-STARTGATE-OVERRIDE-REVOKED-ACTOR": (
+        "Die Übersteuerung wurde von {person} bestätigt, deren Konto danach gesperrt oder "
+        "geändert wurde.",
+        "Prüfen Sie die Übersteuerung mit der zweiten Person und bestätigen Sie die "
+        "Prüfung mit papaia-ctl startgate acknowledge (siehe Handbuch §S-10).",
+    ),
+}
+
+
+class EpochError(LifecycleError):
+    """The journal at the backup target cannot be compared: `unreachable` or `corrupt`."""
+
+    def __init__(self, state: str, message: str) -> None:
+        super().__init__(message)
+        self.state = state
+
+
+class OverrideDenied(LifecycleError):
+    """`startgate open --unverified` refused: one person where two are needed, or no
+    closed gate to open."""
+
+
+def _plain_count(value: object) -> bool:
+    return type(value) is int and 0 <= value <= MAX_JOURNAL_SEQ
+
+
+def _refuse_constant(name: str) -> object:
+    raise ValueError("not plain JSON")
+
+
+def _strict_json(data: bytes) -> object:
+    return json.loads(
+        data.decode("utf-8"), object_pairs_hook=_unique_keys, parse_constant=_refuse_constant
+    )
+
+
+def read_epoch(target_dir: Path) -> dict | None:
+    """`<backup target>/erasure-journal/epoch` (the kit's erasure-epoch.v1): None while
+    the folder holds none. A missing folder (an unmounted target) is never taken for a
+    fresh one, and a malformed file is never repeated in a message."""
+    target_dir = Path(target_dir)
+    if not target_dir.is_dir():
+        raise EpochError("unreachable", "the journal folder at the backup target is missing")
+    try:
+        fd = os.open(target_dir / EPOCH_FILE, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise EpochError("unreachable", f"epoch: {exc.strerror}") from None
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read(MAX_EPOCH_BYTES + 1)
+    except OSError as exc:
+        raise EpochError("unreachable", f"epoch: {exc.strerror}") from None
+    try:
+        if len(data) > MAX_EPOCH_BYTES:
+            raise ValueError("too large")
+        doc = _strict_json(data)
+        if (
+            not isinstance(doc, dict)
+            or set(doc) != {"format", "generation", "seq"}
+            or doc["format"] != EPOCH_FORMAT
+            or not _plain_count(doc["generation"])
+            or not isinstance(doc["seq"], dict)
+            or len(doc["seq"]) > MAX_EPOCH_SOURCES
+            or not all(_GATE_KEY_RE.match(k) and _plain_count(v) for k, v in doc["seq"].items())
+        ):
+            raise ValueError("not an epoch")
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        raise EpochError("corrupt", "epoch: not a valid papaia.erasure-epoch/1 file") from None
+    return {"generation": doc["generation"], "seq": dict(doc["seq"])}
+
+
+def write_epoch(target_dir: Path, generation: int, seq: dict) -> None:
+    """Replace `epoch` atomically; the core alone writes it, the modules read it."""
+    if not _plain_count(generation) or len(seq) > MAX_EPOCH_SOURCES:
+        raise LifecycleError("epoch: generation or seq out of range")
+    if not all(_GATE_KEY_RE.match(k) and _plain_count(v) for k, v in seq.items()):
+        raise LifecycleError("epoch: malformed source or seq")
+    target_dir = Path(target_dir)
+    if not target_dir.is_dir():
+        raise EpochError("unreachable", "the journal folder at the backup target is missing")
+    doc = {"format": EPOCH_FORMAT, "generation": generation, "seq": dict(sorted(seq.items()))}
+    data = json.dumps(doc, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
+    _write_atomic(target_dir, EPOCH_FILE, data, 0o640)
+
+
+_LEASE_KEYS = {
+    "format", "state", "generation", "hosts", "issued_at", "expires_at", "code", "correlation_id",
+}
+
+
+def _valid_lease(doc: object) -> bool:
+    if not isinstance(doc, dict) or set(doc) != _LEASE_KEYS or doc["format"] != GATE_FORMAT:
+        return False
+    if doc["state"] not in ("open", "closed") or doc["code"] not in (None, *GATE_CODES):
+        return False
+    if not all(_plain_count(doc[k]) for k in ("generation", "issued_at", "expires_at")):
+        return False
+    if not 0 < doc["expires_at"] - doc["issued_at"] <= GATE_LEASE_SECONDS:
+        return False
+    hosts = doc["hosts"]
+    if not isinstance(hosts, list) or len(hosts) > MAX_EPOCH_SOURCES:
+        return False
+    if not all(isinstance(h, str) and _GATE_KEY_RE.match(h) for h in hosts):
+        return False
+    cid = doc["correlation_id"]
+    return isinstance(cid, str) and bool(_EVENT_ID_RE.match(cid))
+
+
+def read_gate(state_dir: Path) -> dict | None:
+    """The lease `startgate.json`, or None when it is missing, not a regular file, too
+    large or not exactly a lease: the edge then stays closed."""
+    try:
+        fd = os.open(Path(state_dir) / GATE_FILE, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return None
+            data = fh.read(MAX_GATE_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > MAX_GATE_BYTES:
+        return None
+    try:
+        doc = _strict_json(data)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None
+    return doc if _valid_lease(doc) else None
+
+
+def gate_allows(doc: dict | None, key: object, now: int) -> bool:
+    """Whether the edge forwards a request to the public host named `key`: the lease
+    says `open`, has not expired, and does not hold this host back."""
+    if key == GATE_ADMIN_KEY:
+        return True
+    if doc is None or not isinstance(key, str) or not _GATE_KEY_RE.match(key):
+        return False
+    if doc["state"] != "open" or key in doc["hosts"]:
+        return False
+    return doc["issued_at"] - GATE_SKEW_SECONDS <= now < doc["expires_at"]
+
+
+def gate_signin_allowed(key: object, uri: object) -> bool:
+    """Whether a request is the administrators' sign-in at the identity provider, which
+    passes a closed gate (the administration path stays open, sicherheit §4.9 (2a)):
+    the realm's authorization endpoint or a sign-in step for the client of the proxy
+    admin host's login sidecar, or a static resource of the sign-in page. The raw URI
+    is matched: no encoded character, dot segment or empty segment in the path."""
+    if key != GATE_SIGNIN_KEY or not isinstance(uri, str) or not 0 < len(uri) <= MAX_GATE_URI:
+        return False
+    path, _, query = uri.partition("?")
+    if "%" in path or "\\" in path:
+        return False
+    if _GATE_RESOURCE_RE.match(path):
+        return not query and not any(seg in (".", "..") for seg in path.split("/"))
+    if not _GATE_SIGNIN_PATH_RE.match(path):
+        return False
+    try:
+        params = urllib.parse.parse_qs(query, strict_parsing=True, max_num_fields=32)
+    except ValueError:
+        return False
+    return params.get("client_id") == [GATE_SIGNIN_CLIENT]
+
+
+def gate_code(doc: dict | None, now: int) -> str:
+    """CHECK (the platform checks after a start, or no valid lease at all) or BLOCKED
+    (closed until the operator acts) for the maintenance page."""
+    if doc is not None and doc["code"] == "BLOCKED" and now < doc["expires_at"]:
+        return "BLOCKED"
+    return "CHECK"
+
+
+_GATE_STATE_KEYS = {
+    "format",
+    "generation",
+    "applied",
+    "status",
+    "failed",
+    "correlation_id",
+    "pending",
+    "pending_core",
+    "chat_built",
+    "chat_jobs",
+    "credential_replay",
+    "role_replay",
+    "override",
+    "request",
+    "acknowledge",
+    "revoked_actors",
+    "announced",
+}
+_REQUEST_KEYS = {"reason", "requested_by", "confirmed_by", "single_person", "correlation_id"}
+_OVERRIDE_KEYS = _REQUEST_KEYS | {"at", "active"}
+_ACKNOWLEDGE_KEYS = {"reason", "by", "correlation_id"}
+_JOB_KEYS = {"kind", "sub", "key_id", "service"}
+# Written by `papaia-ctl` through `docker exec` (another process): the service keeps
+# what is on disk for these when it saves a state it loaded earlier.
+_GATE_EXTERNAL_KEYS = ("request", "acknowledge")
+
+
+def _new_gate_state() -> dict:
+    return {
+        "format": GATE_STATE_FORMAT,
+        # None until the first comparison recorded one: a state that went missing is
+        # then behind every epoch the target holds.
+        "generation": None,
+        "applied": {},
+        "status": "checking",
+        "failed": [],
+        "correlation_id": _uuid7(),
+        # Entries of the journal `identity` still to replay, kept from the comparison
+        # that found them (the next flush copies them into the local copy).
+        "pending": [],
+        "pending_core": False,
+        "chat_built": True,
+        "chat_jobs": [],
+        "credential_replay": [],
+        "role_replay": [],
+        "override": None,
+        "request": None,
+        "acknowledge": None,
+        "revoked_actors": [],
+        "announced": [],
+    }
+
+
+def _subs(value: object, name: str) -> None:
+    if (
+        not isinstance(value, list)
+        or len(value) > MAX_ENTRIES
+        or not all(isinstance(s, str) and _SUB_RE.match(s) for s in value)
+    ):
+        raise LifecycleError(f"startgate state: {name} is malformed")
+
+
+def _check_request(value: object, keys: set[str]) -> None:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise LifecycleError("startgate state: override is malformed")
+    if not isinstance(value["reason"], str) or not _OVERRIDE_REASON_RE.match(value["reason"]):
+        raise LifecycleError("startgate state: override reason is malformed")
+    _subs([value["requested_by"], value["confirmed_by"]], "override")
+    if not isinstance(value["single_person"], bool):
+        raise LifecycleError("startgate state: override is malformed")
+    if not isinstance(value["correlation_id"], str) or not _EVENT_ID_RE.match(
+        value["correlation_id"]
+    ):
+        raise LifecycleError("startgate state: override is malformed")
+    if "at" in keys and (not _plain_count(value["at"]) or not isinstance(value["active"], bool)):
+        raise LifecycleError("startgate state: override is malformed")
+
+
+def _check_job(job: object) -> None:
+    if (
+        not isinstance(job, dict)
+        or set(job) != _JOB_KEYS
+        or job["kind"] not in REPLAY_KINDS
+        or job["service"] not in ("core-chat", "model-gateway")
+        or not (job["sub"] is None or (isinstance(job["sub"], str) and _SUB_RE.match(job["sub"])))
+        or not (
+            job["key_id"] is None
+            or (isinstance(job["key_id"], str) and _KEY_REF_RE.match(f"key:{job['key_id']}"))
+        )
+    ):
+        raise LifecycleError("startgate state: a replay job is malformed")
+
+
+def _check_gate_state(doc: object) -> dict:
+    if not isinstance(doc, dict) or set(doc) != _GATE_STATE_KEYS:
+        raise LifecycleError("startgate state: unknown format or fields")
+    if doc["format"] != GATE_STATE_FORMAT or doc["status"] not in GATE_STATUSES:
+        raise LifecycleError("startgate state: unknown format or status")
+    if doc["generation"] is not None and not _plain_count(doc["generation"]):
+        raise LifecycleError("startgate state: generation is malformed")
+    applied = doc["applied"]
+    if (
+        not isinstance(applied, dict)
+        or len(applied) > MAX_EPOCH_SOURCES
+        or not all(_GATE_KEY_RE.match(k) and _plain_count(v) for k, v in applied.items())
+    ):
+        raise LifecycleError("startgate state: applied is malformed")
+    failed = doc["failed"]
+    if not isinstance(failed, list) or len(failed) > MAX_EPOCH_SOURCES or not all(
+        isinstance(k, str) and _GATE_KEY_RE.match(k) for k in failed
+    ):
+        raise LifecycleError("startgate state: failed is malformed")
+    if not isinstance(doc["correlation_id"], str) or not _EVENT_ID_RE.match(doc["correlation_id"]):
+        raise LifecycleError("startgate state: correlation_id is malformed")
+    pending = doc["pending"]
+    if not isinstance(pending, list) or len(pending) > MAX_ENTRIES:
+        raise LifecycleError("startgate state: pending is malformed")
+    try:
+        for entry in pending:
+            _check_entry(entry, IDENTITY_SOURCE)
+    except ValueError:
+        raise LifecycleError("startgate state: pending is malformed") from None
+    for name in ("pending_core", "chat_built"):
+        if not isinstance(doc[name], bool):
+            raise LifecycleError(f"startgate state: {name} is malformed")
+    jobs = doc["chat_jobs"]
+    if not isinstance(jobs, list) or len(jobs) > MAX_ENTRIES:
+        raise LifecycleError("startgate state: chat_jobs is malformed")
+    for job in jobs:
+        _check_job(job)
+    for name in ("credential_replay", "role_replay", "revoked_actors"):
+        _subs(doc[name], name)
+    if doc["override"] is not None:
+        _check_request(doc["override"], _OVERRIDE_KEYS)
+    if doc["request"] is not None:
+        _check_request(doc["request"], _REQUEST_KEYS)
+    ack = doc["acknowledge"]
+    if ack is not None and (
+        not isinstance(ack, dict)
+        or set(ack) != _ACKNOWLEDGE_KEYS
+        or not isinstance(ack["reason"], str)
+        or not _OVERRIDE_REASON_RE.match(ack["reason"])
+        or not isinstance(ack["by"], str)
+        or not _SUB_RE.match(ack["by"])
+        or not isinstance(ack["correlation_id"], str)
+        or not _EVENT_ID_RE.match(ack["correlation_id"])
+    ):
+        raise LifecycleError("startgate state: acknowledge is malformed")
+    announced = doc["announced"]
+    if not isinstance(announced, list) or not all(a in GATE_MAIL_TEXT for a in announced):
+        raise LifecycleError("startgate state: announced is malformed")
+    return doc
+
+
+class GateStore:
+    """The gate's own state (0600) in the key volume. It is part of what a VM snapshot
+    rolls back, which is the point: the target's `epoch` is not."""
+
+    def __init__(self, key_dir: Path) -> None:
+        self.key_dir = Path(key_dir)
+        self.path = self.key_dir / GATE_STATE_FILE
+
+    def exists(self) -> bool:
+        return os.path.lexists(self.path)
+
+    def load(self) -> dict:
+        if not self.exists():
+            return _new_gate_state()
+        raw = _read_private(self.path, MAX_RESPONSE_BYTES * 16)
+        try:
+            doc = _strict_json(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            raise LifecycleError("startgate state: not JSON") from None
+        return _check_gate_state(doc)
+
+    def save(self, doc: dict) -> None:
+        _write_atomic(self.key_dir, GATE_STATE_FILE, canonical(_check_gate_state(doc)), 0o600)
+
+    def merge_save(self, doc: dict) -> None:
+        """Save `doc`, loaded before the lock was let go, under the lock: the fields
+        `papaia-ctl` writes from another process meanwhile are taken from disk."""
+        with self.locked():
+            if self.exists():
+                current = self.load()
+                for name in _GATE_EXTERNAL_KEYS:
+                    doc[name] = current[name]
+            self.save(doc)
+
+    @contextlib.contextmanager
+    def locked(self):
+        fd = os.open(self.key_dir / GATE_LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+
+def _module_end(path: Path, module: str) -> int:
+    """The highest seq of a module's journal at the target. Lines that do not parse are
+    left out (the module's own start check deals with a damaged journal); a file that
+    cannot be read makes the comparison impossible."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read(MAX_MODULE_JOURNAL_BYTES + 1)
+    except OSError as exc:
+        raise EpochError("unreachable", f"journal {module}: {exc.strerror}") from None
+    if len(data) > MAX_MODULE_JOURNAL_BYTES:
+        raise EpochError("corrupt", f"journal {module}: too large to compare")
+    end = 0
+    for raw in data[: data.rfind(b"\n") + 1].splitlines():
+        try:
+            line = _strict_json(raw) if len(raw) <= MAX_JOURNAL_LINE else None
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            continue
+        if isinstance(line, dict) and line.get("module") == module and _seq(line.get("seq")):
+            end = max(end, line["seq"])
+    return end
+
+
+def _entry_seconds(entry: dict) -> int:
+    return calendar.timegm(time.strptime(entry["at"][:19], "%Y-%m-%dT%H:%M:%S"))
+
+
+class StartGate:
+    """The core start gate: closed after every start, open only while this service's own
+    state is not older than the journal at the backup target (sicherheit §4.9 (2a)).
+
+    The comparison runs at start and every 60 s. `epoch` at the target holds the
+    generation of the installation and the last seq per journal; this service keeps the
+    generation and the seqs it confirmed in its own volume, and its local copy of the
+    journal `identity`. A VM or volume snapshot rolls both back, the target does not: a
+    higher generation or seq at the target, or an entry of `identity` missing in the
+    local copy, is a backlog. The service then keeps the edge closed, replays in
+    Keycloak, logs every account out, publishes `global_since`, has papaia-replay
+    delete in chat and model gateway and every module apply its journal, raises the
+    generation and opens.
+    """
+
+    def __init__(
+        self,
+        service: Lifecycle,
+        *,
+        state_dir: Path,
+        key_dir: Path,
+        target_dir: Path,
+        local_dir: Path,
+        replay=None,
+        modules=None,
+        mailer=None,
+        clock=time.time,
+    ) -> None:
+        self.service = service
+        service.gate = self
+        self.state_dir, self.target_dir = Path(state_dir), Path(target_dir)
+        self.local_dir = Path(local_dir)
+        self.store = GateStore(Path(key_dir))
+        self.replay, self.modules, self.mailer, self.clock = replay, modules, mailer, clock
+        self._next_check = 0.0
+        self._next_renew = 0.0
+
+    # lease ------------------------------------------------------------
+    def _lease(self, st: dict | None, *, closed_code: str | None = None) -> None:
+        if st is None:
+            state, hosts, code, generation, cid = "closed", [], closed_code or "CHECK", 0, _uuid7()
+        else:
+            core_failed = [k for k in st["failed"] if k in CORE_SOURCES]
+            generation, cid = st["generation"] or 0, st["correlation_id"]
+            if st["status"] in ("open", "override") or (
+                st["status"] == "replay_failed" and not core_failed
+            ):
+                state, code = "open", None
+                hosts = sorted(st["failed"]) if st["status"] == "replay_failed" else []
+            else:
+                state, hosts = "closed", []
+                code = "BLOCKED" if st["status"] in ("unverified", "replay_failed") else "CHECK"
+        now = int(self.clock())
+        lease = {
+            "format": GATE_FORMAT,
+            "state": state,
+            "generation": generation,
+            "hosts": hosts,
+            "issued_at": now,
+            "expires_at": now + GATE_LEASE_SECONDS,
+            "code": code,
+            "correlation_id": cid,
+        }
+        _write_atomic(self.state_dir, GATE_FILE, canonical(lease), 0o644)
+        self._next_renew = self.clock() + GATE_RENEW_SECONDS
+
+    def begin(self) -> None:
+        """At every start, before anything else: `closed`."""
+        self._lease(None)
+        try:
+            with self.store.locked():
+                st = self.store.load()
+                st["status"] = "checking"
+                st["correlation_id"] = _uuid7()
+                self.store.save(st)
+        except LifecycleError as exc:
+            _log(f"start gate: own state unreadable ({exc}); the edge stays closed")
+            return
+        self._lease(st)
+
+    def renew(self) -> None:
+        with self.store.locked():
+            st = self.store.load()
+        self._lease(st)
+
+    def step(self) -> None:
+        self._take_request()
+        now = self.clock()
+        if now >= self._next_check:
+            self.check()
+        elif now >= self._next_renew:
+            self.renew()
+
+    def status(self) -> dict:
+        with self.store.locked():
+            st = self.store.load()
+        return gate_report(st, read_gate(self.state_dir), int(self.clock()))
+
+    # audit and mail -----------------------------------------------------
+    def _audit(self, operation, effect, event, cid, ref, result="allowed", code=None, detail=None):
+        self.service._audit(operation, effect, event, cid, ref, result, code, detail)
+
+    def _mail(self, code: str, cid: str, **values) -> None:
+        first, second = GATE_MAIL_TEXT[code]
+        text = f"{first.format(**values)}\n{second.format(**values)}\nKennung: {code} {cid}\n"
+        if self.mailer is None:
+            _log(f"ALERT: {text.strip()} (no mail relay configured)")
+            return
+        try:
+            self.mailer.send(f"papaia: {code}", text)
+        except (OSError, smtplib.SMTPException) as exc:
+            _log(f"the warning mail {code} could not be sent ({exc!r})")
+
+    def _announce(self, st: dict, code: str, **values) -> None:
+        """One mail per code until the gate is open again, not one per check."""
+        if code not in st["announced"]:
+            st["announced"].append(code)
+            self._mail(code, st["correlation_id"], **values)
+
+    # comparison -------------------------------------------------------
+    def check(self) -> None:
+        self._next_check = self.clock() + GATE_CHECK_SECONDS
+        now = int(self.clock())
+        try:
+            with self.store.locked():
+                st = self.store.load()
+        except LifecycleError as exc:
+            _log(f"start gate: own state unreadable ({exc}); the edge stays closed")
+            self._lease(None, closed_code="BLOCKED")
+            return
+        try:
+            epoch = read_epoch(self.target_dir)
+            target = _Place("target", self.target_dir, IDENTITY_SOURCE)
+            if target.state != "ok":
+                raise EpochError(target.state, f"journal identity at the target is {target.state}")
+            self.local_dir.mkdir(mode=0o700, exist_ok=True)
+            local = _Place("local copy", self.local_dir, IDENTITY_SOURCE)
+            if local.state != "ok":
+                raise EpochError(local.state, f"local copy of journal identity is {local.state}")
+            ends = self._journal_ends(target)
+        except EpochError as exc:
+            self._unverified(st, exc)
+            return
+        except OSError as exc:
+            self._unverified(st, EpochError("unreachable", f"backup target: {exc.strerror}"))
+            return
+        missing = [e for e in target.entries.values() if e["id"] not in local.entries]
+        self._check_actors(st, target, missing)
+        if st["generation"] is None and epoch is None:
+            # A new installation, or the first start of a version with the gate: nothing
+            # to compare yet. Record what the journals hold now.
+            st.update(generation=0, applied=dict(ends), status="open", failed=[], announced=[])
+            self._save_and_record(st, {"generation": 0, "seq": {}})
+            _log("start gate: epoch recorded at the backup target")
+            return
+        if epoch is None:
+            # A new or emptied target: the own state is the reference.
+            epoch = {"generation": st["generation"], "seq": dict(st["applied"])}
+        own = -1 if st["generation"] is None else st["generation"]
+        applied = st["applied"]
+        core_behind = (
+            epoch["generation"] > own
+            or bool(missing)
+            or any(epoch["seq"].get(s, 0) > applied.get(s, 0) for s in CORE_SOURCES)
+        )
+        modules = sorted(
+            m for m, v in epoch["seq"].items() if m not in CORE_SOURCES and v > applied.get(m, 0)
+        )
+        due = core_behind or st["pending_core"] or not st["chat_built"] or bool(st["chat_jobs"])
+        if not due and not modules:
+            if st["status"] == "override":
+                _log("start gate: the target is back without backlog; the override ends")
+            if st["override"] is not None:
+                st["override"]["active"] = False
+            st.update(status="open", failed=[], announced=[])
+            for source, end in ends.items():
+                applied[source] = max(applied.get(source, 0), end)
+            generation = max(own, epoch["generation"])
+            st["generation"] = generation
+            self._save_and_record(st, epoch)
+            return
+        cid = _uuid7()
+        if core_behind:
+            known = {e["id"]: e for e in st["pending"]}
+            for entry in target.entries.values():
+                done = applied.get(IDENTITY_SOURCE, 0)
+                if entry["id"] not in local.entries or entry["seq"] > done:
+                    known[entry["id"]] = entry
+            st["pending"] = sorted(known.values(), key=lambda e: e["seq"])
+            st.update(pending_core=True, chat_built=False)
+        if st["override"] is not None and st["override"]["active"]:
+            st["override"]["active"] = False
+            _log("start gate: backlog found; the override ends")
+        st.update(status="behind", correlation_id=cid, failed=[])
+        self.store.merge_save(st)
+        self._lease(st)
+        self._audit(
+            "startgate",
+            "check",
+            "state_epoch_behind",
+            cid,
+            {"type": "erasure_journal", "id": EPOCH_FILE},
+            "denied",
+            None,
+            {
+                "generation": epoch["generation"],
+                "identity_entries": len(st["pending"]),
+                "modules": modules,
+            },
+        )
+        _log(
+            "CORE-STARTGATE-BEHIND: Der Datenstand ist älter als das Löschjournal; "
+            "Kontosperren und Löschungen werden nachgespielt, die Plattform bleibt bis dahin "
+            f"geschlossen. Kennung: CORE-STARTGATE-BEHIND {cid}"
+        )
+        self._replay(st, epoch, ends, modules, own, now)
+
+    def _journal_ends(self, target: _Place) -> dict[str, int]:
+        ends = {IDENTITY_SOURCE: target.end()}
+        for source in CORE_SOURCES[1:]:
+            place = _Place("target", self.target_dir, source)
+            if place.state != "ok":
+                raise EpochError(place.state, f"journal {source} at the target is {place.state}")
+            ends[source] = place.end()
+        for name in sorted(os.listdir(self.target_dir)):
+            match = _MODULE_JOURNAL_RE.match(name)
+            if match and match[1] not in CORE_SOURCES:
+                ends[match[1]] = _module_end(self.target_dir / name, match[1])
+        return {source: end for source, end in ends.items() if end}
+
+    def _save_and_record(self, st: dict, epoch: dict) -> None:
+        """The own state first, then `epoch`: a stop in between leaves the own state ahead,
+        which is never read as a backlog."""
+        self.store.merge_save(st)
+        seq = dict(epoch["seq"])
+        for source, value in st["applied"].items():
+            seq[source] = max(seq.get(source, 0), value)
+        write_epoch(self.target_dir, max(st["generation"], epoch["generation"]), seq)
+        self._lease(st)
+
+    def _unverified(self, st: dict, exc: EpochError) -> None:
+        """Nothing to compare with: closed, retried every 60 s; an override keeps it open."""
+        _log(f"start gate: {exc}; the edge stays closed")
+        if st["override"] is not None and st["override"]["active"]:
+            st["status"] = "override"
+        else:
+            if st["status"] != "unverified":
+                st["correlation_id"] = _uuid7()
+                self._audit(
+                    "startgate",
+                    "check",
+                    "state_epoch_unverified",
+                    st["correlation_id"],
+                    {"type": "erasure_journal", "id": EPOCH_FILE},
+                    "denied",
+                    None,
+                    {"target": exc.state},
+                )
+            st["status"] = "unverified"
+            self._announce(st, "CORE-STARTGATE-UNVERIFIED")
+        self.store.merge_save(st)
+        self._lease(st)
+
+    def _check_actors(self, st: dict, target: _Place, missing: list[dict]) -> None:
+        """RE-107: an identity entry about a person of an override, known only after it."""
+        override = st["override"]
+        journal = self.service.journal
+        if override is None or journal is None:
+            return
+        fresh = {e["id"] for e in missing} | {
+            e["id"] for e in target.entries.values() if _entry_seconds(e) >= override["at"]
+        }
+        actors = {
+            journal.subject_ref(override[k]): override[k] for k in ("requested_by", "confirmed_by")
+        }
+        for entry in target.entries.values():
+            sub = actors.get(entry["subject_ref"])
+            if entry["id"] not in fresh or sub is None or sub in st["revoked_actors"]:
+                continue
+            st["revoked_actors"].append(sub)
+            self._audit(
+                "startgate_override_revoked_actor",
+                "check",
+                "operation",
+                override["correlation_id"],
+                {"type": "user", "id": sub},
+                "allowed",
+                None,
+                {"kind": entry["kind"], "seq": entry["seq"]},
+            )
+            self._mail(
+                "CORE-STARTGATE-OVERRIDE-REVOKED-ACTOR", override["correlation_id"], person=sub
+            )
+        self.store.merge_save(st)
+
+    # replay -----------------------------------------------------------
+    def _replay(
+        self, st: dict, epoch: dict, ends: dict, modules: list[str], own: int, now: int
+    ) -> None:
+        cid = st["correlation_id"]
+        core_due = st["pending_core"] or not st["chat_built"] or bool(st["chat_jobs"])
+        failed = self._replay_core(st, cid, now)
+        if not failed:
+            if core_due:
+                # Every core entry is applied: the generation rises (sicherheit §4.9 (1)).
+                for source in CORE_SOURCES:
+                    st["applied"][source] = max(
+                        st["applied"].get(source, 0), ends.get(source, 0),
+                        epoch["seq"].get(source, 0),
+                    )  # fmt: skip
+                st["generation"] = max(own, epoch["generation"]) + 1
+            for module in modules:
+                if self._replay_module(module, epoch["seq"][module], cid):
+                    st["applied"][module] = epoch["seq"][module]
+                else:
+                    failed.append(module)
+            for source, end in ends.items():
+                if source not in modules:
+                    st["applied"][source] = max(st["applied"].get(source, 0), end)
+        st["failed"] = sorted(set(failed))
+        if failed:
+            st["status"] = "replay_failed"
+            self._announce(st, "CORE-STARTGATE-REPLAY-FAILED", services=", ".join(st["failed"]))
+            _log(f"CORE-STARTGATE-REPLAY-FAILED: replay failed for {', '.join(st['failed'])}")
+        else:
+            st.update(status="open", announced=[])
+        if any(k in CORE_SOURCES for k in failed):
+            self.store.merge_save(st)
+            self._lease(st)
+            return
+        self._save_and_record(st, {"generation": epoch["generation"], "seq": epoch["seq"]})
+        self._audit(
+            "startgate",
+            "write",
+            "operation",
+            cid,
+            {"type": "startgate", "id": GATE_FILE},
+            detail={"generation": st["generation"], "closed": st["failed"]},
+        )
+
+    def _replay_core(self, st: dict, cid: str, now: int) -> list[str]:
+        """Keycloak, then chat and model gateway; each finished step is kept, so a failure
+        repeats only what is left."""
+        service = self.service
+        try:
+            if st["pending_core"] or not st["chat_built"]:
+                members = service.members()
+                refs = {service.journal.subject_ref(uid): uid for uid, _ in members}
+            if not st["chat_built"]:
+                # Before the identity steps: an account deleted by them can no longer be
+                # resolved, its chat data still has to go.
+                st["chat_jobs"] = self._chat_jobs(st, refs)
+                st["chat_built"] = True
+                self.store.merge_save(st)
+            if st["pending_core"]:
+                handled: set[str] = set()  # deleted, or logged out by the revocation
+                for entry in st["pending"]:
+                    sub = refs.get(entry["subject_ref"])
+                    if sub is not None and self._replay_identity(entry, sub, st, cid, now):
+                        handled.add(sub)
+                # Every account (sicherheit §4.9 (2a) (iii)): sessions and the consents at
+                # the holder clients, instead of the realm-wide not-before.
+                for uid, _ in members:
+                    if uid in handled:
+                        continue
+                    service._write(
+                        "POST", f"/users/{uid}/logout", "startgate_replay", "operation", cid, uid,
+                        {"kind": "logout_all"},
+                    )  # fmt: skip
+                    for client, _ in service._consents(uid):
+                        if client in HOLDER_CLIENTS:
+                            service._delete_consent(uid, client, cid)
+                service.set_global_since(now)
+                service.reissue()
+                st.update(pending=[], pending_core=False)
+                self.store.merge_save(st)
+        except RETRYABLE as exc:
+            _log(f"start gate: replay in Keycloak failed ({exc!r}); tried again in 60 s")
+            return ["identity"]
+        failed: set[str] = set()
+        for job in list(st["chat_jobs"]):
+            try:
+                if self.replay is None:
+                    raise LifecycleError("papaia-replay is not configured")
+                counts = self.replay.run(job["kind"], cid, sub=job["sub"], key_id=job["key_id"])
+            except RETRYABLE as exc:
+                failed.add(job["service"])
+                self._audit(
+                    "startgate_replay", "delete", "operation", cid,
+                    {"type": "replay_job", "id": job["kind"]}, "error", "replay_failed",
+                    {"kind": job["kind"]},
+                )  # fmt: skip
+                _log(f"start gate: papaia-replay {job['kind']} failed ({exc})")
+                continue
+            self._audit(
+                "startgate_replay", "delete", "operation", cid,
+                {"type": "replay_job", "id": job["kind"]}, detail={"kind": job["kind"], **counts},
+            )  # fmt: skip
+            st["chat_jobs"].remove(job)
+            self.store.merge_save(st)
+        return sorted(failed)
+
+    def _chat_jobs(self, st: dict, refs: dict[str, str]) -> list[dict]:
+        jobs = list(st["chat_jobs"])
+
+        def add(kind: str, service: str, sub=None, key_id=None) -> None:
+            job = {"kind": kind, "sub": sub, "key_id": key_id, "service": service}
+            if job not in jobs:
+                jobs.append(job)
+
+        for source in CORE_SOURCES[1:]:
+            place = _Place("target", self.target_dir, source)
+            for entry in sorted(place.entries.values(), key=lambda e: e["seq"]):
+                if entry["seq"] <= st["applied"].get(source, 0):
+                    continue
+                if entry["kind"] == "key_revoke":
+                    match = _KEY_REF_RE.match(entry["object_ref"])
+                    if match is None:
+                        _log(f"start gate: {source} seq {entry['seq']} names no key; skipped")
+                        continue
+                    add("key_revoke", "model-gateway", key_id=match[1])
+                    continue
+                sub = refs.get(entry["subject_ref"])
+                if sub is None:
+                    _log(f"start gate: {source} seq {entry['seq']}: the person is not in the realm")
+                    continue
+                add("erase_subject", source, sub=sub)
+        add("chat_sessions_reset", "core-chat")
+        return jobs
+
+    def _replay_identity(self, entry: dict, sub: str, st: dict, cid: str, now: int) -> bool:
+        """One entry of the journal `identity` in Keycloak; True when the account is gone
+        or was revoked (logged out, consents removed) here."""
+        service, kind = self.service, entry["kind"]
+        detail = {"kind": kind, "seq": entry["seq"]}
+
+        def disable(reason: str) -> None:
+            service._write(
+                "PUT", f"/users/{sub}", "startgate_replay", "operation", cid, sub,
+                {**detail, "reason": reason}, body={"enabled": False}, effect="write",
+            )  # fmt: skip
+
+        try:
+            if kind == "account_delete":
+                service._list(sub, now, "account_deleted")
+                service._write(
+                    "DELETE", f"/users/{sub}", "startgate_replay", "operation", cid, sub, detail
+                )
+                return True
+            if kind == "account_disable":
+                disable("account_disabled")
+                reason = "account_disabled"
+            elif kind == "credential_reset":
+                # The credentials of the snapshot are older than the change (RE-103): the
+                # administration sets new ones and activates the account.
+                disable("credential_replay")
+                reason = "credential_replay"
+                if sub not in st["credential_replay"]:
+                    st["credential_replay"].append(sub)
+            elif kind == "role_revoke":
+                group = _ROLE_GROUP_RE.match(entry["object_ref"])
+                if group is not None:
+                    service._write(
+                        "DELETE", f"/users/{sub}/groups/{group[1]}", "startgate_replay",
+                        "operation", cid, sub, detail,
+                    )  # fmt: skip
+                    reason = "role_removed"
+                else:
+                    # The journal names the kind of mapping, not the role (admin events
+                    # carry no representation): the account is deactivated instead.
+                    disable("role_replay")
+                    reason = "role_replay"
+                    if sub not in st["role_replay"]:
+                        st["role_replay"].append(sub)
+            else:  # session_revoke: every account is logged out below
+                return False
+        except HttpError as exc:
+            if exc.status == 404:
+                return True
+            raise
+        service.revoke(sub, now, reason, cid)
+        return True
+
+    def _replay_module(self, module: str, seq: int, cid: str) -> bool:
+        try:
+            if self.modules is None:
+                raise LifecycleError("no module endpoint configured")
+            answer = self.modules.run(module, "erasure-replay", cid)
+            applied = answer.get("applied_seq") if isinstance(answer, dict) else None
+            if not _plain_count(applied) or applied < seq:
+                raise LifecycleError(f"{module} reports seq {applied!r}, the journal holds {seq}")
+            self.modules.run(module, "post-restore", cid)
+        except RETRYABLE as exc:
+            self._audit(
+                "startgate_replay", "write", "operation", cid, {"type": "module", "id": module},
+                "error", "replay_failed", {"kind": "erasure-replay"},
+            )  # fmt: skip
+            _log(f"start gate: module {module} failed ({exc}); its host stays closed")
+            return False
+        self._audit(
+            "startgate_replay", "write", "operation", cid, {"type": "module", "id": module},
+            detail={"kind": "erasure-replay", "seq": seq},
+        )  # fmt: skip
+        return True
+
+    # override ---------------------------------------------------------
+    def request_override(
+        self, reason: str, requested_by: str, confirmed_by: str, *, single_person: bool
+    ) -> str:
+        return request_override(
+            self.store, reason, requested_by, confirmed_by, single_person=single_person
+        )
+
+    def request_acknowledge(self, reason: str, by: str) -> str:
+        return request_acknowledge(self.store, reason, by)
+
+    def _take_request(self) -> None:
+        self._take_acknowledge()
+        with self.store.locked():
+            st = self.store.load()
+            request = st["request"]
+            if request is None:
+                return
+            st["request"] = None
+            if st["status"] != "unverified":
+                # Only an unreachable target (sicherheit §4.9 (2a) (v)): after a failed
+                # replay the backlog is still due and the next comparison would end the
+                # override at once.
+                self.store.save(st)
+                applied = False
+            else:
+                st["override"] = {**request, "at": int(self.clock()), "active": True}
+                st.update(status="override", announced=[])
+                self.store.save(st)
+                applied = True
+        if not applied:
+            self._audit(
+                "startgate_override", "write", "operation", request["correlation_id"],
+                {"type": "startgate", "id": GATE_FILE}, "denied", "not_closed",
+            )  # fmt: skip
+            return
+        keys = ("requested_by", "confirmed_by", "reason", "single_person")
+        detail = {k: request[k] for k in keys}
+        self._audit(
+            "startgate_override", "write", "operation", request["correlation_id"],
+            {"type": "startgate", "id": GATE_FILE}, detail=detail,
+        )  # fmt: skip
+        at = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(self.clock()))
+        self._mail(
+            "CORE-STARTGATE-OVERRIDE",
+            request["correlation_id"],
+            first=request["requested_by"],
+            second=request["confirmed_by"],
+            at=at,
+        )
+        self._lease(st)
+
+    def _take_acknowledge(self) -> None:
+        """`papaia-ctl startgate acknowledge`: an administrator reviewed the override of
+        persons locked afterwards; the alarm (`doctor startgate` fail) ends."""
+        with self.store.locked():
+            st = self.store.load()
+            ack = st["acknowledge"]
+            if ack is None:
+                return
+            st["acknowledge"] = None
+            actors = list(st["revoked_actors"])
+            applied = bool(actors) and ack["by"] not in actors
+            if applied:
+                st["revoked_actors"] = []
+            self.store.save(st)
+        ref = {"type": "startgate", "id": GATE_FILE}
+        if not applied:
+            self._audit(
+                "startgate_override_acknowledged", "write", "operation", ack["correlation_id"],
+                ref, "denied", "nothing_to_acknowledge" if not actors else "revoked_actor",
+                {"by": ack["by"]},
+            )  # fmt: skip
+            return
+        self._audit(
+            "startgate_override_acknowledged", "write", "operation", ack["correlation_id"],
+            ref, detail={"by": ack["by"], "reason": ack["reason"], "actors": actors},
+        )  # fmt: skip
+
+    def account_enabled(self, sub: str) -> None:
+        """The administration activated an account the replay deactivated: it leaves the
+        lists `doctor startgate` shows."""
+        with self.store.locked():
+            if not self.store.exists():
+                return
+            st = self.store.load()
+            changed = False
+            for name in ("credential_replay", "role_replay"):
+                if sub in st[name]:
+                    st[name].remove(sub)
+                    changed = True
+            if changed:
+                self.store.save(st)
+
+
+def request_override(
+    store: GateStore, reason: str, requested_by: str, confirmed_by: str, *, single_person: bool
+) -> str:
+    """Record `papaia-ctl startgate open --unverified` (through `docker exec`); the running
+    service applies it, audits and mails. Two different persons unless the four-eyes rule
+    is off (never in `kritis`): papaia-ctl decides that from the installation's settings
+    and checks role and fresh sign-in of both in Keycloak."""
+    if not isinstance(reason, str) or not _OVERRIDE_REASON_RE.match(reason):
+        raise LifecycleError("the reason must be 1 to 500 characters on one line")
+    for sub in (requested_by, confirmed_by):
+        if not isinstance(sub, str) or not _SUB_RE.match(sub):
+            raise LifecycleError("requested-by and confirmed-by must be account ids")
+    if requested_by == confirmed_by and not single_person:
+        raise OverrideDenied(
+            "Die Übersteuerung wurde nicht ausgeführt; sie braucht eine zweite Person mit "
+            "papaia-admin."
+        )
+    cid = _uuid7()
+    with store.locked():
+        st = store.load()
+        if st["status"] != "unverified":
+            raise OverrideDenied(
+                f"the gate is {st['status']}: an override opens only a gate held closed by "
+                "an unreachable backup target"
+            )
+        st["request"] = {
+            "reason": reason,
+            "requested_by": requested_by,
+            "confirmed_by": confirmed_by,
+            "single_person": bool(single_person),
+            "correlation_id": cid,
+        }
+        store.save(st)
+    return cid
+
+
+def request_acknowledge(store: GateStore, reason: str, by: str) -> str:
+    """Record `papaia-ctl startgate acknowledge` (through `docker exec`): `by` reviewed
+    the override whose persons a later journal entry locked. papaia-ctl checks role and
+    fresh sign-in of `by` in Keycloak; here: something to acknowledge, and `by` is not
+    one of the locked persons."""
+    if not isinstance(reason, str) or not _OVERRIDE_REASON_RE.match(reason):
+        raise LifecycleError("the reason must be 1 to 500 characters on one line")
+    if not isinstance(by, str) or not _SUB_RE.match(by):
+        raise LifecycleError("by must be an account id")
+    cid = _uuid7()
+    with store.locked():
+        st = store.load()
+        if not st["revoked_actors"]:
+            raise OverrideDenied("no override of a person locked afterwards to acknowledge")
+        if by in st["revoked_actors"]:
+            raise OverrideDenied("a person locked after the override cannot acknowledge it")
+        st["acknowledge"] = {"reason": reason, "by": by, "correlation_id": cid}
+        store.save(st)
+    return cid
+
+
+def gate_report(st: dict, lease: dict | None, now: int) -> dict:
+    """The gate in the health report (`doctor startgate`): no content, account ids only."""
+    override = st["override"]
+    return {
+        "status": st["status"],
+        "lease": "open" if gate_allows(lease, "core", now) else "closed",
+        "failed": list(st["failed"]),
+        "credential_replay": list(st["credential_replay"]),
+        "role_replay": list(st["role_replay"]),
+        "override": (
+            {k: override[k] for k in ("requested_by", "confirmed_by", "at")}
+            if override is not None and override["active"]
+            else None
+        ),
+        "revoked_actors": list(st["revoked_actors"]),
+        "correlation_id": st["correlation_id"],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# papaia-replay and the module endpoints (mTLS)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _https_base(url: object) -> str:
+    if not isinstance(url, str):
+        raise LifecycleError("an endpoint must be an https URL")
+    parts = urllib.parse.urlsplit(url)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.query
+        or parts.fragment
+        or parts.username
+        or parts.path not in ("", "/")
+    ):
+        raise LifecycleError("an endpoint must be https://host[:port] without a path")
+    return url.rstrip("/")
+
+
+def mtls_context(ca_file: Path, cert_file: Path, key_file: Path) -> ssl.SSLContext:
+    ctx = ssl.create_default_context(cafile=str(ca_file))
+    ctx.load_cert_chain(str(cert_file), str(key_file))
+    return ctx
+
+
+class ReplayClient:
+    """papaia-replay (core adapters `core-chat` and `model-gateway`): one job per request
+    over mTLS, the answer holds counts only. It gets the account id, never the HMAC key."""
+
+    def __init__(self, url: str, ctx: ssl.SSLContext) -> None:
+        self.url, self.ctx = _https_base(url), ctx
+
+    def run(self, kind: str, correlation: str, *, sub=None, key_id=None) -> dict:
+        if kind not in REPLAY_KINDS:
+            raise LifecycleError(f"unknown replay job {kind!r}")
+        body: dict = {"kind": kind}
+        if sub is not None:
+            if not _SUB_RE.match(sub):
+                raise LifecycleError("malformed account id")
+            body["sub"] = sub
+        if key_id is not None:
+            if not _KEY_REF_RE.match(f"key:{key_id}"):
+                raise LifecycleError("malformed key id")
+            body["key_id"] = key_id
+        answer = _open_json(
+            urllib.request.Request(
+                f"{self.url}/replay",
+                data=json.dumps(body).encode(),
+                method="POST",
+                headers={"Content-Type": "application/json", CORRELATION_HEADER: correlation},
+            ),
+            self.ctx,
+        )
+        counts = answer.get("counts") if isinstance(answer, dict) else None
+        if not isinstance(counts, dict) or len(counts) > 32 or not all(
+            isinstance(k, str) and _REASON_RE.match(k) and _plain_count(v)
+            for k, v in counts.items()
+        ):
+            raise LifecycleError("papaia-replay answered without counts")
+        return counts
+
+
+class ModuleClient:
+    """`POST /internal/lifecycle` of each module over mTLS (the kit's LifecycleHandler)."""
+
+    def __init__(self, targets: dict, ctx: ssl.SSLContext) -> None:
+        if not isinstance(targets, dict) or len(targets) > MAX_EPOCH_SOURCES:
+            raise LifecycleError("the module endpoints must map module names to URLs")
+        self.targets = {}
+        for module, url in targets.items():
+            if not isinstance(module, str) or not _GATE_KEY_RE.match(module):
+                raise LifecycleError("malformed module name in the module endpoints")
+            self.targets[module] = _https_base(url)
+        self.ctx = ctx
+
+    @classmethod
+    def from_file(cls, path: Path, ctx: ssl.SSLContext) -> ModuleClient:
+        try:
+            doc = _strict_json(Path(path).read_bytes()[:65537])
+        except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+            raise LifecycleError(f"{path}: not a JSON file of module endpoints") from None
+        if not isinstance(doc, dict) or set(doc) != {"modules"}:
+            raise LifecycleError(f"{path}: must hold exactly the key modules")
+        return cls(doc["modules"], ctx)
+
+    def run(self, module: str, action: str, correlation: str) -> dict:
+        if action not in MODULE_ACTIONS:
+            raise LifecycleError(f"unknown module action {action!r}")
+        url = self.targets.get(module)
+        if url is None:
+            raise LifecycleError(f"no endpoint known for module {module}")
+        answer = _open_json(
+            urllib.request.Request(
+                f"{url}/internal/lifecycle",
+                data=json.dumps({"action": action}).encode(),
+                method="POST",
+                headers={"Content-Type": "application/json", CORRELATION_HEADER: correlation},
+            ),
+            self.ctx,
+        )
+        if not isinstance(answer, dict) or answer.get("module") != module:
+            raise LifecycleError(f"{module} answered for another module")
+        return answer
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# the check service of the edge (no secret, the lease read-only)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _header(headers, name: str) -> str | None:
+    found = [v for k, v in headers.items() if k.lower() == name.lower()]
+    return found[0] if len(found) == 1 and isinstance(found[0], str) else None
+
+
+def _maintenance_page(doc: dict | None, now: int, contact: str | None) -> bytes:
+    code = gate_code(doc, now)
+    first, second = GATE_PAGE_TEXT[code]
+    who = "Ihre Ansprechstelle"
+    if contact is not None:
+        text = urllib.parse.unquote(contact, errors="strict")[:200]
+        if _CONTACT_RE.match(text):
+            who = text
+    cid = doc["correlation_id"] if doc is not None else f"CORE-STARTGATE-{code}"
+    lines = (
+        html.escape(first),
+        html.escape(second.format(contact=who)),
+        html.escape(f"Kennung: {cid}"),
+    )
+    body = (
+        '<!doctype html><html lang="de"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>Wartung</title><style>body{font-family:system-ui,sans-serif;max-width:40rem;"
+        "margin:4rem auto;padding:0 1rem;line-height:1.5}small{color:#555}</style></head>"
+        f"<body><h1>Wartung</h1><p>{lines[0]}</p><p>{lines[1]}</p><p><small>{lines[2]}"
+        "</small></p></body></html>"
+    )
+    return body.encode("utf-8")
+
+
+def gate_check_response(
+    state_dir: Path, method: str, path: str, headers, now: int
+) -> tuple[int, dict, bytes]:
+    """The answer of the check service: `GET /check` 204 (forward) or 401 (maintenance)
+    for the host key the edge names, `GET /maintenance` the page with status 503."""
+    if path not in ("/check", "/maintenance"):
+        return 404, {}, b""
+    if method != "GET":
+        return 405, {"Allow": "GET"}, b""
+    doc = read_gate(state_dir)
+    if path == "/check":
+        key = _header(headers, GATE_SERVICE_HEADER)
+        if gate_allows(doc, key, now) or gate_signin_allowed(
+            key, _header(headers, GATE_URI_HEADER)
+        ):
+            return 204, {}, b""
+        return 401, {"X-Papaia-Gate-Code": gate_code(doc, now)}, b""
+    try:
+        body = _maintenance_page(doc, now, _header(headers, GATE_CONTACT_HEADER))
+    except UnicodeDecodeError:
+        body = _maintenance_page(doc, now, None)
+    return (
+        503,
+        {
+            "Content-Type": "text/html; charset=utf-8",
+            "Retry-After": str(GATE_CHECK_SECONDS),
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+            "X-Content-Type-Options": "nosniff",
+        },
+        body,
+    )
+
+
+def gate_check_server(state_dir: Path, host: str, port: int, *, clock=time.time):
+    """A small HTTP server for the edge's `auth_request`; it reads the lease on every
+    request and writes nothing."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        server_version = "papaia-startgate-check"
+        sys_version = ""
+        timeout = 10
+
+        def _answer(self) -> None:
+            status, headers, body = gate_check_response(
+                state_dir, self.command, self.path, self.headers, int(clock())
+            )
+            self.send_response(status)
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = _answer
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A002 - base signature
+            return
+
+    return http.server.ThreadingHTTPServer((host, port), Handler)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # health and entry point
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -2692,6 +4082,14 @@ def health(
     yet and `journal_target` (ok, unreachable, corrupt) warn; a damaged local copy fails."""
     now = time.time() if now is None else now
     report: dict = {"status": "fail", "revocations_age_seconds": None}
+    # The start gate is reported, not part of the container's health: a closed gate is
+    # the service doing its job (`doctor startgate` reads it).
+    gate_store = GateStore(key_dir)
+    if gate_store.exists():
+        try:
+            report["startgate"] = gate_report(gate_store.load(), read_gate(state_dir), int(now))
+        except LifecycleError:
+            report["startgate"] = {"status": "unreadable"}
     try:
         data = (state_dir / LIST_FILE).read_bytes()
         sig = (state_dir / SIG_FILE).read_bytes()
@@ -2781,8 +4179,29 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--mail-relay")
             cmd.add_argument("--alert-to")
             cmd.add_argument("--alert-from")
+            # The start gate's mTLS calls: papaia-replay and the modules' endpoints
+            # (`{"modules": {name: "https://host:port"}}`), with the client certificate
+            # of the platform PKI. Without them a backlog in chat, gateway or a module
+            # cannot be replayed and keeps that part closed.
+            cmd.add_argument("--replay-url")
+            cmd.add_argument("--modules-file", type=Path)
+            cmd.add_argument("--pki-ca", type=Path)
+            cmd.add_argument("--client-cert", type=Path)
+            cmd.add_argument("--client-key", type=Path)
         if name == "global-since":
             cmd.add_argument("--at", type=int)
+    # `papaia-ctl startgate open --unverified` through `docker exec` (sicherheit §4.9 (2a) (v)).
+    # The request is one JSON object on stdin: {reason, requested_by, confirmed_by,
+    # single_person}; nothing a person typed becomes part of the command line.
+    cmd = sub.add_parser("startgate-override")
+    cmd.add_argument("--key-dir", type=Path, required=True)
+    # `papaia-ctl startgate acknowledge` the same way: {reason, by} on stdin.
+    cmd = sub.add_parser("startgate-acknowledge")
+    cmd.add_argument("--key-dir", type=Path, required=True)
+    # The check service of the edge: reads the lease, holds no secret.
+    cmd = sub.add_parser("gate-check")
+    cmd.add_argument("--state-dir", type=Path, required=True)
+    cmd.add_argument("--listen", default="0.0.0.0:8080")
     # `papaia-ctl person find` through `docker exec`: the HMACs only, never a name.
     cmd = sub.add_parser("find")
     cmd.add_argument("--key-dir", type=Path, required=True)
@@ -2825,6 +4244,74 @@ def _global_since(service: Lifecycle, args) -> int:
     return 0
 
 
+def _startgate_override(args) -> int:
+    """Record the override read from stdin and wait until the running service applied it."""
+    store = GateStore(args.key_dir)
+    try:
+        try:
+            request = _strict_json(sys.stdin.buffer.read(8193)[:8192])
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            raise LifecycleError("the override request on stdin is not JSON") from None
+        keys = {"reason", "requested_by", "confirmed_by", "single_person"}
+        if not isinstance(request, dict) or set(request) != keys:
+            raise LifecycleError(f"the override request must hold exactly {sorted(keys)}")
+        if not isinstance(request["single_person"], bool):
+            raise LifecycleError("single_person must be true or false")
+        cid = request_override(
+            store, request["reason"], request["requested_by"], request["confirmed_by"],
+            single_person=request["single_person"],
+        )  # fmt: skip
+    except OverrideDenied as exc:
+        _log(f"refused: {exc}")
+        return 3
+    except LifecycleError as exc:
+        _log(f"refused: {exc}")
+        return 2
+    deadline = time.monotonic() + OVERRIDE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        with store.locked():
+            st = store.load()
+        if st["request"] is None:
+            applied = st["status"] == "override" and (st["override"] or {}).get(
+                "correlation_id"
+            ) == cid
+            print(json.dumps({"applied": applied, "correlation_id": cid}, sort_keys=True))
+            return 0 if applied else 3
+        time.sleep(1)
+    print(json.dumps({"applied": False, "correlation_id": cid, "pending": True}, sort_keys=True))
+    return 4
+
+
+def _startgate_acknowledge(args) -> int:
+    """Record the acknowledgement read from stdin and wait until the service applied it."""
+    store = GateStore(args.key_dir)
+    try:
+        try:
+            request = _strict_json(sys.stdin.buffer.read(8193)[:8192])
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            raise LifecycleError("the acknowledgement on stdin is not JSON") from None
+        if not isinstance(request, dict) or set(request) != {"reason", "by"}:
+            raise LifecycleError("the acknowledgement must hold exactly ['by', 'reason']")
+        cid = request_acknowledge(store, request["reason"], request["by"])
+    except OverrideDenied as exc:
+        _log(f"refused: {exc}")
+        return 3
+    except LifecycleError as exc:
+        _log(f"refused: {exc}")
+        return 2
+    deadline = time.monotonic() + OVERRIDE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        with store.locked():
+            st = store.load()
+        if st["acknowledge"] is None:
+            applied = not st["revoked_actors"]
+            print(json.dumps({"applied": applied, "correlation_id": cid}, sort_keys=True))
+            return 0 if applied else 3
+        time.sleep(1)
+    print(json.dumps({"applied": False, "correlation_id": cid, "pending": True}, sort_keys=True))
+    return 4
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "health":
@@ -2838,6 +4325,17 @@ def main(argv: list[str] | None = None) -> int:
         persons = find(Store(args.key_dir), args.name_ref, args.mail_ref)
         print(json.dumps({"persons": persons}, sort_keys=True))
         return 0
+    if args.command == "gate-check":
+        host, _, port = args.listen.rpartition(":")
+        if not host or not port.isdigit() or not 0 < int(port) < 65536:
+            raise LifecycleError("--listen must be host:port")
+        _log(f"start gate check listening on {host}:{port}")
+        gate_check_server(args.state_dir, host, int(port)).serve_forever()
+        return 0
+    if args.command == "startgate-override":
+        return _startgate_override(args)
+    if args.command == "startgate-acknowledge":
+        return _startgate_acknowledge(args)
     store, publisher = Store(args.key_dir), Publisher(args.state_dir, Signer(args.key_dir))
     if args.command == "global-since":
         return _global_since(Lifecycle(None, store, publisher), args)
@@ -2851,10 +4349,10 @@ def main(argv: list[str] | None = None) -> int:
         local_dir=args.journal_local_dir,
     )
     federation = None
+    mailer = None
+    if args.mail_relay and args.alert_to and args.alert_from:
+        mailer = Mailer(args.mail_relay, args.alert_to, args.alert_from)
     if args.federation_dir is not None:
-        mailer = None
-        if args.mail_relay and args.alert_to and args.alert_from:
-            mailer = Mailer(args.mail_relay, args.alert_to, args.alert_from)
         # The upstream directory is outside the stack: the system's trust store.
         federation = StatusSync(
             UpstreamDirectory(args.federation_dir, ssl.create_default_context()), mailer=mailer
@@ -2865,6 +4363,23 @@ def main(argv: list[str] | None = None) -> int:
         publisher,
         journal=journal,
         federation=federation,
+    )
+    replay = modules = None
+    if args.replay_url or args.modules_file:
+        if not (args.pki_ca and args.client_cert and args.client_key):
+            raise LifecycleError("--replay-url and --modules-file need the PKI files")
+        mtls = mtls_context(args.pki_ca, args.client_cert, args.client_key)
+        replay = ReplayClient(args.replay_url, mtls) if args.replay_url else None
+        modules = ModuleClient.from_file(args.modules_file, mtls) if args.modules_file else None
+    StartGate(
+        service,
+        state_dir=args.state_dir,
+        key_dir=args.key_dir,
+        target_dir=args.journal_dir,
+        local_dir=args.journal_local_dir,
+        replay=replay,
+        modules=modules,
+        mailer=mailer,
     )
     service.start()
     if args.once:

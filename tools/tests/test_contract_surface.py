@@ -230,6 +230,10 @@ ATTACHABLE_SERVICES = {
     # papaia-security-state; they do not attach to the service itself.
     "papaia-lifecycle": ["lifecycle"],
     "papaia-lifecycle-init": ["lifecycle"],
+    # The edge's start gate check (sicherheit §4.9 (2a)): asked by the proxy only, holds
+    # no secret; no add-on may attach it (compat.NEVER_ATTACHABLE). Additive: a new
+    # service, no rename, no ADDON_API bump.
+    "papaia-startgate-check": ["lifecycle"],
     # People lookup (optional, additive). Only `assist-gate` may call it (token audience
     # papaia-people); `networks.attach` is checked against the core's services, so an
     # older core refuses an add-on that attaches it.
