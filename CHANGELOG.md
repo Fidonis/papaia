@@ -121,6 +121,10 @@ based on merged pull requests; this file mirrors the published releases.
 - Suite bill of materials: optional per-repo field `kit` (`version`, `renders_ui`) in the
   kit's own shape; `papaia-ctl suite verify` validates it. `compat/suite-kit.yaml` holds
   the kit versions of the candidate suite, and CI runs the kit's `pk-check bom` over it.
+- License document (`docs/de/betrieb/lizenz-und-bezug.md`): Studio and the kit are listed
+  under MIT without a NOTICE remark; the Studio row names the license files in its images.
+  A test checks that the kit row, the kit entry of `THIRD_PARTY_LICENSES.md` and the
+  vendored wheel agree on license and version.
 
 ### Permission report built by papaia-audit
 

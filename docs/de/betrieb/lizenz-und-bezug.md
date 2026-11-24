@@ -24,7 +24,7 @@ Nutzung nötig ist, Hinweis zum Bezug.
 |---|---|---|---|---|
 | Kern | MIT | ja | nein | öffentliches Repo `Fidonis/papaia`, Images unter `ghcr.io/fidonis/` |
 | Manager | MIT | ja | nein | öffentliches Repo `Fidonis/papaia-manager`, Image `ghcr.io/fidonis/papaia-manager` |
-| Studio | Apache-2.0 | ja | nein | Images über die Zugangsdaten der Lieferung (Abschnitt 3); `NOTICE` liegt im Image |
+| Studio | MIT | ja | nein | Images über die Zugangsdaten der Lieferung (Abschnitt 3); `LICENSE` und `THIRD_PARTY_LICENSES.md` liegen im Image unter `/usr/share/doc/papaia-studio/` |
 | Data | MIT | ja | nein | Images über die Zugangsdaten der Lieferung (Abschnitt 3) |
 | Flow | MIT | ja | nein | als Modul der Suite; Images über die Zugangsdaten der Lieferung (Abschnitt 3) |
 | Flow als eigenständige Edition | Alle Rechte vorbehalten (Fidonis GmbH), keine offene Lizenz erteilt | nein | ja | Nutzung der Edition außerhalb der Suite nur mit Vertrag; die Edition enthält nur Fremdbestandteile der Klassen „freizügig“ und „schwaches Copyleft“ |

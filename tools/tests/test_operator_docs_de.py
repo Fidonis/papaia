@@ -333,9 +333,8 @@ def test_the_kit_row_names_where_its_license_files_lie():
     assert versions and all(any(v.glob("*.whl")) for v in versions)
 
 
-def test_the_kit_row_states_the_license_and_version_of_the_vendored_wheel():
-    """Kit 0.1.0 is MIT without a NOTICE duty: the row names the license the vendored
-    wheel declares, the vendored version, and no NOTICE."""
+def _vendored_kit() -> tuple[str, str, bool]:
+    """Version, declared license and NOTICE presence of the wheel `tools/kit.lock` pins."""
     import zipfile
 
     import tomllib
@@ -345,12 +344,52 @@ def test_the_kit_row_states_the_license_and_version_of_the_vendored_wheel():
     with zipfile.ZipFile(REPO / "tools" / wheel["path"]) as archive:
         (meta,) = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
         metadata = archive.read(meta).decode("utf-8")
-        assert not [n for n in archive.namelist() if n.rsplit("/", 1)[-1] == "NOTICE"]
+        notice = any(n.rsplit("/", 1)[-1] == "NOTICE" for n in archive.namelist())
     declared = re.search(r"^License-Expression: (.+)$", metadata, re.M)
+    assert declared, "the vendored kit wheel declares no License-Expression"
+    return lock["version"], declared.group(1).strip(), notice
+
+
+def test_the_kit_row_states_the_license_and_version_of_the_vendored_wheel():
+    """Kit 0.1.0 is MIT without a NOTICE duty: the row names the license the vendored
+    wheel declares, the vendored version, and no NOTICE."""
+    version, declared, notice = _vendored_kit()
     row = _license_rows()["Kit"]
-    assert declared and row[1] == declared.group(1).strip() == "MIT"
-    assert f"Version {lock['version']}" in row[4]
+    assert not notice
+    assert row[1] == declared == "MIT"
+    assert f"Version {version}" in row[4]
     assert "NOTICE" not in row[4]
+
+
+def test_the_third_party_kit_entry_agrees_with_the_vendored_wheel():
+    """The core's third-party list names the kit with the vendored version, the license
+    the wheel declares and the directory the wheel lies in; table, list and package agree."""
+    version, declared, _ = _vendored_kit()
+    rows = _table_rows(_text(REPO / "THIRD_PARTY_LICENSES.md"), "Package")
+    (kit,) = [row for row in rows if row[0] == "papaia-kit"]
+    assert kit[1] == version
+    assert kit[2] == declared == _license_rows()["Kit"][1]
+    assert kit[3] == f"`tools/vendor/papaia-kit/{version}/`"
+    assert (REPO / "tools" / "vendor" / "papaia-kit" / version).is_dir()
+
+
+def test_the_studio_row_states_mit_and_where_its_license_files_lie():
+    """Studio moved to MIT: no NOTICE remark, the row names the license files its images
+    carry."""
+    row = _license_rows()["Studio"]
+    assert row[1] == "MIT"
+    assert row[2:4] == ["ja", "nein"]
+    assert "NOTICE" not in row[4]
+    assert "`LICENSE` und `THIRD_PARTY_LICENSES.md` liegen im Image" in row[4]
+    assert "`/usr/share/doc/papaia-studio/`" in row[4]
+
+
+def test_the_flow_standalone_row_keeps_its_reserved_license():
+    """The license of the standalone Flow edition is not decided; the row stays reserved
+    and contract-bound until it is."""
+    row = _license_rows()["Flow als eigenständige Edition"]
+    assert row[1] == "Alle Rechte vorbehalten (Fidonis GmbH), keine offene Lizenz erteilt"
+    assert row[2:4] == ["nein", "ja"]
 
 
 def test_the_offline_archive_names_a_reference_image_for_n8n():
