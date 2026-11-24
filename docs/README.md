@@ -58,6 +58,10 @@ Welcome to the papAIa documentation.
 
 ### Delivery documents in German
 
+- [Betriebshandbuch](./de/betrieb/handbuch.md) — the operator handbook: installation, size
+  profiles and the share of each module, communication matrix and egress list, module
+  dependencies, restart and long-run behaviour, the troubleshooting guide S-1 to S-10,
+  hypervisor snapshots and copies outside the house
 - [Datenschutzunterlagen](./de/datenschutz/index.md) — records of processing, logging, why no
   performance or behaviour control is offered, input for a data protection impact assessment,
   technical and organisational measures, points for a works agreement

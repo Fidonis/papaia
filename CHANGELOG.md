@@ -12,6 +12,22 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### German operator handbook
+
+- `docs/de/betrieb/handbuch.md` is the entry of the German operator handbook. New chapters:
+  size profiles with the default model and the share of each core profile and module
+  (`groesse.md`), the communication matrix and the egress list (`netz.md`), the module
+  dependency matrix with adding and removing modules (`module.md`), restart and long-run
+  behaviour (`neustart-und-dauerlauf.md`), the troubleshooting guide S-1 to S-10 that
+  `doctor` and the start gate cite (`stoerungen.md`), hypervisor snapshots and copies outside
+  the house (`sicherung.md`). The data subject request names the identity check, the deadline
+  and the list of erasure proofs.
+- `tools/tests/test_operator_handbook_de.py` holds the handbook to the repository: profile
+  values, counts per core profile, the rows of `security/comm-matrix.yaml`, the cited guide
+  sections and every `papaia-ctl` command and `doctor` check it names (read from
+  `papaia-ctl help`). With `PAPAIA_HANDBOOK_ADDONS` it also compares the module rows with the
+  add-on manifests and Compose files.
+
 ### Sign-in addresses of add-on clients (add-on contract generation 18)
 
 - New optional manifest key `client_addresses`: for a confidential client it owns in the

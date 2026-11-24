@@ -6,7 +6,9 @@ technischen Einzelheiten stehen in [Information and erasure without an account](
 
 ## Voraussetzungen
 
-- Die Identität der anfragenden Person ist geprüft (Sache des Betriebs).
+- Die Identität der anfragenden Person ist geprüft (Sache des Betriebs), zum Beispiel durch
+  Vorlage des Ausweises bei der Personalabteilung, einen Rückruf unter der bekannten
+  Telefonnummer oder eine Antwort an die bisher bekannte Mail-Adresse.
 - Zwei Personen sind beteiligt: eine stellt den Antrag (`--requested-by`), eine zweite
   bestätigt ihn im Manager (`--confirmed-by`, Rolle `papaia-confirm` oder `papaia-admin`).
   Dieselbe Person kann ihren eigenen Antrag nicht bestätigen.
@@ -69,7 +71,17 @@ technischen Einzelheiten stehen in [Information and erasure without an account](
    Daten mit Aufbewahrungspflicht bzw. Löschsperre das Datum, bis zu dem sie bleiben. Ohne
    `--transfer-to` bleiben eigene Objekte mit dem Kennzeichen „Eigentümer nicht mehr aktiv“
    stehen; scheitert eine Übergabe, wird nichts gelöscht. Den Nachweis in der Betriebsablage
-   aufbewahren.
+   aufbewahren und mit Datum und Kennung in die Liste der Löschnachweise eintragen; sie wird
+   gebraucht, wenn von einer älteren Kopie wiederhergestellt wird (siehe
+   [Kopien außer Haus](sicherung.md#kopien-außer-haus)).
+
+Die Antwort an die Person ist ohne Verzögerung, spätestens innerhalb eines Monats nach Eingang
+der Anfrage fällig (Art. 12 Abs. 3 DSGVO,
+<https://eur-lex.europa.eu/eli/reg/2016/679/oj>); der Eingang ist deshalb mit Datum
+festzuhalten.
+
+Wer `person export` ausführt und die Passphrase erhält, kann das Archiv lesen. Antrag und
+Bestätigung durch zwei Personen machen das sichtbar, verhindern es aber nicht.
 
 Antrag, Bestätigung, jeder Schritt des Laufs und jeder Aufruf eines Moduls stehen im
 Audit-Log (ohne Inhalte), mit der Antragskennung als Korrelationskennung.
