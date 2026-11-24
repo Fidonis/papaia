@@ -86,6 +86,12 @@ What it manages:
   for each client the module owns and declares, `client-jwt` and exactly the public JWK
   set of the file the module wrote to its add-on configuration folder; a changed file is
   applied on the next run or by `papaia-ctl realm keys apply <module>`;
+- the sign-in addresses of module clients (`client_addresses[]` of a manifest, addon_api
+  18, lib/client_addresses.py): for each confidential client the module owns and declares,
+  exactly the declared redirect URIs, web origin, post-logout redirects and back-channel
+  logout URL, as exact paths on the host of one of the module's own interfaces. They are
+  the client's configured hosts for the hardening step; when the declaration goes, so do
+  the addresses (ADR 0028);
 - one client per declared service account (`svc-<module>-<purpose>`): client_credentials
   with `private_key_jwt` only, the key pair in the configuration directory, only the
   declared audiences (`aud-*` optional scopes) and roles, owner, deputy and rotation
@@ -152,6 +158,7 @@ from pathlib import Path
 
 import yaml
 
+from . import client_addresses as ca
 from . import client_keys as ck
 from . import common, delegation_lifetime, deployment, kit_names, uninstall_journal
 from . import keycloak_role_sync as kcs
@@ -445,6 +452,11 @@ CORE_PROFILE_MODULES: dict[str, tuple[str, str]] = {
 }
 
 
+# Owners in the register that are the core: the core itself and the modules of its
+# profiles. Their clients' addresses come from the core's own settings (realm_hardening).
+CORE_OWNERS = frozenset({"papaia", *(name for name, _ in CORE_PROFILE_MODULES.values())})
+
+
 def load_register(path: Path = REGISTER_PATH) -> Register:
     data = json.loads(path.read_text(encoding="utf-8"))
     known = {(e["name"], e["kind"]) for e in data["entries"]}
@@ -649,12 +661,22 @@ class Module:
     # configuration folder its `jwks_file` paths are relative to.
     client_keys: object = None
     folder: Path | None = None
+    # `client_addresses:` of the manifest as declared (None: not declared), the host keys of
+    # its `integration.nginx` list and the public URL the installation gives each of them
+    # (lib/ingress.py; no entry without a host name, as with `no_proxy`).
+    client_addresses: object = None
+    host_keys: frozenset[str] = frozenset()
+    hosts: dict[str, str] = field(default_factory=dict)
 
 
-def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
-    """The active add-ons that declare `exposes:`, with their install input (the
-    add-on's `.env` in the configuration directory), and the core profiles of
-    CORE_PROFILE_MODULES that are on.
+def load_modules(
+    config_dir: Path, repo_root: Path, root: dict[str, str] | None = None
+) -> list[Module]:
+    """The active add-ons that declare `exposes:`, `client_keys:` or `client_addresses:`,
+    with their install input (the add-on's `.env` in the configuration directory), and the
+    core profiles of CORE_PROFILE_MODULES that are on. `root` is the root `.env` (read from
+    the configuration directory when not given): it names the host of each interface of
+    an add-on that declares `client_addresses`.
 
     The module identity decides which clients a module owns, whether it may hold a
     delegation and which roles join papaia-admin. It is the deployment entry's name, and
@@ -670,12 +692,13 @@ def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
         )
         if manifest is None:
             raise RealmSyncError(f"add-on {name}: {reason}")
-        if "exposes" not in manifest and "client_keys" not in manifest:
+        if not {"exposes", "client_keys", ca.KEY} & set(manifest):
             continue
         declared = manifest.get("name")
         if not isinstance(declared, str) or not declared:
             raise RealmSyncError(
-                f"add-on {name}: the manifest declares exposes or client_keys but no name"
+                f"add-on {name}: the manifest declares exposes, client_keys or "
+                "client_addresses but no name"
             )
         if len(declared) > 64 or not _NAME_RE.match(declared):
             raise RealmSyncError(
@@ -688,6 +711,17 @@ def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
             )
         env = common.parse_env_file(config_dir / "addons" / str(name) / ".env")
         install_input = {k: kcs._compose_value(v) for k, v in env.items()}
+        hosts: dict[str, str] = {}
+        if manifest.get(ca.KEY) is not None:
+            from . import ingress  # it imports federation, which imports this module
+
+            if root is None:
+                root = common.parse_env_file(config_dir / ".env")
+            try:
+                routes = ingress.addon_routes(manifest, root)
+            except ingress.IngressError as exc:
+                raise RealmSyncError(f"add-on {name}: client_addresses: {exc}") from None
+            hosts = {route.host_key: route.public_url for route in routes}
         modules.append(
             Module(
                 declared,
@@ -695,6 +729,9 @@ def load_modules(config_dir: Path, repo_root: Path) -> list[Module]:
                 install_input,
                 client_keys=manifest.get("client_keys"),
                 folder=config_dir / "addons" / str(name),
+                client_addresses=manifest.get(ca.KEY),
+                host_keys=ca.host_keys_of(manifest),
+                hosts=hosts,
             )
         )
     return modules + core_profile_modules(config_dir, repo_root)
@@ -806,6 +843,9 @@ class Plan:
     # Platform pairings whose client is still a client of the realm template (the
     # manager): the `aud-*` scopes it keeps as optional scopes, with token exchange on.
     template_scopes: dict[str, set[str]] = field(default_factory=dict)
+    # The sign-in addresses add-ons declare for their clients (`client_addresses`),
+    # applied as the clients' configured hosts by the hardening step.
+    client_addresses: dict[str, rh.ClientUris] = field(default_factory=dict)
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -1234,18 +1274,7 @@ def build_plan(
                 )
             return
         entry = product_clients[client_id]
-        if client_id in _PUBLIC:
-            kind = "public"
-        elif client_id in _NO_SIGN_IN:
-            kind = "exchange-only"
-        elif (
-            client_id in register.audiences
-            and not entry.token_exchange
-            and client_id not in _SIGN_IN_AUDIENCES
-        ):
-            kind = "bearer"
-        else:
-            kind = "confidential"
+        kind = client_kind(register, client_id)
         clients[client_id] = ClientSpec(client_id, owner, kind, entry.token_exchange)
 
     chain_owner = register.clients[CHAIN_HOLDER].owner
@@ -1380,6 +1409,7 @@ def build_plan(
         clients[holder].optional_scopes.add(OFFLINE)
 
     _plan_client_keys(register, modules, clients, notes)
+    client_addresses = _plan_client_addresses(register, modules, clients, notes)
 
     # Service accounts: one client each, with the scopes of its installed audiences only.
     # It obtains an audience with client_credentials and scope=aud-<a>; no exchange.
@@ -1462,7 +1492,64 @@ def build_plan(
         legacy_accounts=legacy,
         person_scope=any(PERSON_SCOPE in s.default_scopes for s in clients.values()),
         template_scopes=template_scopes,
+        client_addresses=client_addresses,
     )
+
+
+def client_kind(register: Register, client_id: str) -> str:
+    """How a registered client signs in (security 1.2): `public`, `exchange-only` (the
+    chain holder), `bearer` (a resource server that signs nobody in) or `confidential`."""
+    entry = register.clients[client_id]
+    if client_id in _PUBLIC:
+        return "public"
+    if client_id in _NO_SIGN_IN:
+        return "exchange-only"
+    if (
+        client_id in register.audiences
+        and not entry.token_exchange
+        and client_id not in _SIGN_IN_AUDIENCES
+    ):
+        return "bearer"
+    return "confidential"
+
+
+def _plan_client_addresses(
+    register: Register, modules: list[Module], clients: dict[str, ClientSpec], notes: list[str]
+) -> dict[str, rh.ClientUris]:
+    """`client_addresses[]`: the sign-in addresses of confidential clients the module owns
+    and the sync manages, as exact paths on the host of one of the module's interfaces.
+    Checked here, before any write; a client without a host name (`no_proxy`) gets none."""
+    planned: dict[str, rh.ClientUris] = {}
+    for module in modules:
+        if module.client_addresses is None:
+            continue
+        label = f"module {module.name}"
+        try:
+            declarations = ca.parse(module.client_addresses, module.host_keys)
+            ca.check_owner(declarations, module.name, register)
+        except ca.ClientAddressError as exc:
+            raise RealmSyncError(f"{label}: {exc}") from None
+        for decl in declarations:
+            spec = clients.get(decl.client)
+            if spec is None or spec.kind != "confidential":
+                raise RealmSyncError(
+                    f"{label}: {decl.label}: {decl.client} is not a sign-in client the sync "
+                    "manages"
+                )
+            base = module.hosts.get(decl.host_key)
+            if base is None:
+                notes.append(
+                    f"{label}: {decl.label}: no host name for host key {decl.host_key} (no "
+                    "proxy); the client gets no sign-in address"
+                )
+                planned[decl.client] = rh.ClientUris((), (), post_logout=(), declared=True)
+                continue
+            redirects, origins, post_logout, backchannel = ca.addresses(decl, base)
+            planned[decl.client] = rh.ClientUris(
+                redirects, origins, post_logout=post_logout, backchannel=backchannel,
+                declared=True,
+            )
+    return planned
 
 
 def _plan_client_keys(
@@ -2278,6 +2365,8 @@ class _Reconciler(_Actions):
         self.master = _Actions(master, apply, audit, master=True) if master else None
         self.role_info: dict[str, dict] = {}
         self.client_names: dict[str, str] = {}
+        # The configured hosts of the hardening step, with the addresses add-ons declare.
+        self.hardening = rh.with_declared(plan.hardening, plan.client_addresses)
         self._expanded: dict[str, tuple[set[str], set[str]]] = {}
         self._noted: set[str] = set()
         self._accounts = [s for s in plan.clients.values() if s.service_account]
@@ -2386,7 +2475,7 @@ class _Reconciler(_Actions):
             if client_id == SYNC_CLIENT:
                 continue
             body, drift = rh.harden_client(
-                client, self.plan.hardening, uris_only=client_id in self.plan.clients
+                client, self.hardening, uris_only=client_id in self.plan.clients
             )
             if body:
                 self.do(
@@ -3756,17 +3845,20 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
         pairings = load_pairings(pairings_path(config_dir), register)
         plan = build_plan(
             register,
-            load_modules(config_dir, repo_root),
+            load_modules(config_dir, repo_root, root),
             pairings,
             core_audiences=people_account.core_audiences(tree)
             | audit_report_account.core_audiences(tree),
             platform_pairings=audit_report_account.platform_pairings(tree)
             + me_area.platform_pairings(tree),
         )
-        plan.hardening = rh.load(
-            {**root, **keycloak},
-            tree.get("ai/librechat", {}),
-            lifetime=delegation_lifetime.stored(config_dir),
+        plan.hardening = rh.with_declared(
+            rh.load(
+                {**root, **keycloak},
+                tree.get("ai/librechat", {}),
+                lifetime=delegation_lifetime.stored(config_dir),
+            ),
+            plan.client_addresses,
         )
         from . import sign_in  # through ingress and gen_override it imports this module
 

@@ -39,5 +39,7 @@
 #   16  `networks.isolated`: internal add-on networks only `litellm` joins (ADR 0026)
 #   17  `networks.join_addons[].network`: join the internal network a required add-on offers
 #      through an `exposes` entry instead of its `app_network` (ADR 0027)
-current=17
+#   18  `client_addresses`: the realm sync sets the sign-in addresses of a client the add-on
+#      owns as exact paths on its own interface (ADR 0028)
+current=18
 min=1

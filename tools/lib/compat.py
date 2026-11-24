@@ -42,7 +42,7 @@ from pathlib import Path
 
 import yaml
 
-from . import exposes, semver
+from . import client_addresses, exposes, semver
 
 STATUS_OK = "OK"
 STATUS_INCOMPATIBLE = "INCOMPATIBLE"
@@ -97,6 +97,10 @@ ADDON_API_GENERATIONS: dict[int, str] = {
         "`networks.join_addons[].network`: join the internal network a required add-on offers"
         " through an `exposes` entry instead of its `app_network` (ADR 0027)"
     ),
+    18: (
+        "`client_addresses`: the realm sync sets the sign-in addresses of a client the add-on"
+        " owns as exact paths on its own interface (ADR 0028)"
+    ),
 }
 
 # Manifest keys that need a core of at least this generation. A core below it
@@ -126,6 +130,9 @@ GENERATION_FEATURES: dict[str, int] = {
     # A core below 17 would read the entry without `network` and join the target's
     # app_network, where every route of its API is reachable.
     "networks.join_addons.network": 17,
+    # A core below 18 would install the add-on and set none of its clients' sign-in
+    # addresses, so nobody could sign in there without an entry by hand.
+    "client_addresses": 18,
 }
 
 INGRESS_AXIS = "integration.nginx"
@@ -133,6 +140,7 @@ ISOLATED_AXIS = "networks.isolated"
 JOIN_AXIS = "networks.join_addons"
 EXPOSES_AXIS = "exposes"
 KNOWLEDGE_AXIS = "knowledge"
+CLIENT_ADDRESSES_AXIS = client_addresses.KEY
 
 MODE_ENFORCE = "enforce"
 MODE_WARN = "warn"
@@ -757,6 +765,8 @@ def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
                 f"networks.join_addons[{index}].network",
                 GENERATION_FEATURES["networks.join_addons.network"],
             ))
+    if manifest.get(client_addresses.KEY) is not None:
+        used.append((client_addresses.KEY, GENERATION_FEATURES[client_addresses.KEY]))
     return used
 
 
@@ -889,6 +899,14 @@ def evaluate_addon(
         join_entries(manifest, core.networks)
     except ValueError as exc:
         return CompatResult(name, STATUS_ERROR, axis=JOIN_AXIS, reason=str(exc))
+
+    # Sign-in addresses (generation 18): a client the add-on does not own, a core client, a
+    # client that signs nobody in through the browser, an unknown host key or a path that
+    # is not exact is a malformed manifest, whatever the core serves.
+    try:
+        client_addresses.check_manifest(manifest, name)
+    except client_addresses.ClientAddressError as exc:
+        return CompatResult(name, STATUS_ERROR, axis=CLIENT_ADDRESSES_AXIS, reason=str(exc))
 
     warnings: list[str] = []
     if isolated and addon_path is None:

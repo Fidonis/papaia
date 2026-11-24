@@ -2471,7 +2471,7 @@ The manifest declares every seam in machine-readable form, so integrating an add
 | Seam | Mechanism |
 |---|---|
 | Network | The add-on declares its bridge network and which core containers must attach; `papaia-ctl` writes the Compose override. Since contract generation 16 it may also declare internal networks that only LiteLLM joins (`networks.isolated`, see [docs/isolated-networks.md](docs/isolated-networks.md)); since generation 17 a service may join the network another add-on offers through an `exposes` entry instead of that add-on's app network (`networks.join_addons[].network`, see [docs/offered-networks.md](docs/offered-networks.md)) |
-| OIDC | Keycloak clients and protocol mappers registered additively |
+| OIDC | Keycloak clients and protocol mappers registered additively; since contract generation 18 the realm sync sets the sign-in addresses of the add-on's own clients from `client_addresses` (exact paths on its own interface, see [docs/client-addresses.md](docs/client-addresses.md)) |
 | LibreChat / MCP | `mcpServers` and `allowedDomains` fragments merged at render time |
 | Ingress | `integration.nginx`: since contract generation 12 a list of interfaces the core gives host names and proxy hosts (see [Host names and add-on interfaces](#host-names-and-add-on-interfaces)); before, a Nginx Proxy Manager fragment merged at render time (optional) |
 | TLS trust | The add-on lists env vars that point at the bundled CA cert (`local_ca_env`); `papaia-ctl` clears them via a generated override when an external OIDC issuer is used |

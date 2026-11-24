@@ -12,6 +12,25 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Sign-in addresses of add-on clients (add-on contract generation 18)
+
+- New optional manifest key `client_addresses`: for a confidential client it owns in the
+  names register, an add-on names the redirect paths, post-logout paths, back-channel logout
+  path and web origin on one of its own interfaces (`integration.nginx`). The realm sync sets
+  exactly these addresses on the host the installation gives that interface (scheme and port
+  of the edge) and removes the ones the manifest no longer declares; the hardening step keeps
+  them. An add-on such as Flow no longer needs an administrator to enter its addresses by
+  hand (ADR 0028, `docs/client-addresses.md`).
+- A client without the key keeps what it has; the realm sync output for manifests without it
+  is unchanged. When the declaration goes, or the add-on is removed or disabled, the
+  client's addresses go; `addon uninstall` deletes the client with them.
+- `compat` refuses, naming the entry: a client of another add-on, a core client, a public,
+  bearer-only or exchange-only client, an unknown host key, a path with a wildcard, query,
+  fragment, `..`, `//` or percent-encoding, more than 8 redirects. `ADDON_API` `current=18`
+  (`min` stays 1); a core below 18 reports the add-on `INCOMPATIBLE` (`client_addresses`).
+- Realm hardening now removes a post-logout redirect list by sending it empty, as Keycloak
+  keeps an attribute an update leaves out.
+
 ### Signing in to Mein Bereich (profile `me`)
 
 - `src/infra/me/exposes.yaml` declares the profile for the realm sync: while `me` is on, it

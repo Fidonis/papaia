@@ -1,7 +1,7 @@
 {
   "format": "papaia.platform-services/1",
   "generated_at": "2026-11-21T09:30:00Z",
-  "addon_api": 17,
+  "addon_api": 18,
   "security_profile": "standard",
   "identity": {
     "issuer": "https://auth.papaia.example/realms/papaia",

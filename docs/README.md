@@ -19,6 +19,8 @@ Welcome to the papAIa documentation.
   refuses
 - [Offered add-on networks](./offered-networks.md) — `networks.join_addons[].network`: join
   the network another add-on offers through an `exposes` entry instead of its app network
+- [Sign-in addresses of add-on clients](./client-addresses.md) — `client_addresses`: the
+  redirect URIs, logout addresses and web origin of an add-on's clients, set by the realm sync
 - [Network routes](./network.md) — the communication matrix, the direct route of the SQL
   source (`papaia-sql-uplink`, host rules, `doctor network`) and `topology firewall`
 - [Account lifecycle and revocation](./lifecycle.md) — papaia-lifecycle: revocation on

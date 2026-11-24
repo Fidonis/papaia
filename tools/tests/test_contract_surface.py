@@ -116,7 +116,13 @@ _SURFACE_CHANGED = (
 # key renders as before. A manifest that uses it must name no generation below 17 in
 # `requires.addon_api`, so an older core refuses it instead of joining the app network.
 # ADR 0027.
-ADDON_API_WINDOW = (1, 17)
+#
+# Gen 18 (additive): `client_addresses` -- the realm sync sets the redirect URIs, web origin,
+# post-logout redirects and back-channel logout URL of a confidential client the add-on owns
+# in the names register, as exact paths on one of the add-on's own interfaces
+# (`integration.nginx`), and removes those the manifest no longer declares. A client
+# without the key keeps what it has. ADR 0028.
+ADDON_API_WINDOW = (1, 18)
 
 # The binding meaning of every generation the core serves. Changing a line here is a
 # contract change, not a wording fix.
@@ -165,6 +171,10 @@ ADDON_API_GENERATIONS = {
         "`networks.join_addons[].network`: join the internal network a required add-on offers"
         " through an `exposes` entry instead of its `app_network` (ADR 0027)"
     ),
+    18: (
+        "`client_addresses`: the realm sync sets the sign-in addresses of a client the add-on"
+        " owns as exact paths on its own interface (ADR 0028)"
+    ),
 }
 
 # Manifest keys whose use requires a core of at least this generation.
@@ -183,6 +193,7 @@ GENERATION_FEATURES = {
     "actions.transfer-ownership": 15,
     "networks.isolated": 16,
     "networks.join_addons.network": 17,
+    "client_addresses": 18,
 }
 
 # The core services an add-on may put on one of its isolated networks (addon_api 16).
@@ -324,6 +335,8 @@ MANIFEST_KEYS = [
     "networks.isolated",
     # Since addon_api 17: the network a required add-on offers (ADR 0027).
     "networks.join_addons[].network",
+    # Since addon_api 18: sign-in addresses of the add-on's own clients (ADR 0028).
+    "client_addresses",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -432,4 +445,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 26, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 27, _SURFACE_CHANGED

@@ -27,6 +27,14 @@ client keeps only entries that name a full host, with a wildcard at most as the 
 character of the path; a relative entry stays when the client has an absolute root URL.
 Keycloak's own clients keep their relative URIs.
 
+An add-on's client with declared sign-in addresses (`client_addresses`, addon_api 18,
+lib/client_addresses.py) has them as its configured hosts (`with_declared`): exactly the
+declared redirect URIs, web origin, post-logout redirects and back-channel logout URL on the
+add-on's host, nothing else, so a later hardening run keeps them. Such a client carries
+`papaia.sign-in-addresses=declared`; once its module no longer declares addresses for it
+(entry or key removed, module removed or disabled), every address of it goes and the
+marker with them. A client without a declaration is treated as before.
+
 A public client never carries `standard.token.exchange.enabled` (only confidential
 clients exchange tokens).
 
@@ -54,6 +62,7 @@ the known password away.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import urllib.parse
 from dataclasses import dataclass, field
@@ -70,6 +79,11 @@ PKCE = "pkce.code.challenge.method"
 MANAGED = "papaia.managed"
 SWITCHES = ("directAccessGrantsEnabled", "implicitFlowEnabled")
 POST_LOGOUT = "post.logout.redirect.uris"
+BACKCHANNEL = "backchannel.logout.url"
+# Marks a client whose addresses an add-on declares (client_addresses): when the
+# declaration goes, its addresses go too.
+DECLARED = "papaia.sign-in-addresses"
+DECLARED_VALUE = "declared"
 TOKEN_EXCHANGE = "standard.token.exchange.enabled"
 BACKCHANNEL_URL = "backchannel.logout.url"
 BACKCHANNEL_SESSION = "backchannel.logout.session.required"
@@ -111,6 +125,10 @@ _CLIENT_HOSTS = {
 }
 
 
+# Every client whose addresses the core sets from its own settings (load below).
+CORE_CLIENTS = frozenset({*_CLIENT_HOSTS, "papaia-me", "oauth2-proxy"})
+
+
 class HardeningError(ValueError):
     """A security profile, an offline-session setting or a host that cannot be used."""
 
@@ -147,6 +165,12 @@ class Settings:
 class ClientUris:
     redirects: tuple[str, ...]
     origins: tuple[str, ...]
+    # The post-logout redirects; None: the same as `redirects` (the realm template's
+    # clients). A declared client (client_addresses) names them, and its back-channel
+    # logout URL, itself.
+    post_logout: tuple[str, ...] | None = None
+    backchannel: str | None = None
+    declared: bool = False
 
 
 @dataclass
@@ -288,6 +312,38 @@ def load(
     return hardening
 
 
+def with_declared(hardening: Hardening, declared: dict[str, ClientUris]) -> Hardening:
+    """`hardening` with the sign-in addresses add-ons declare as the configured hosts of
+    their clients. HardeningError for an address that is not an exact URL with a fully
+    named host, a plain-http one under `kritis`, or a client whose hosts the core sets."""
+    if not declared:
+        return hardening
+    clients = dict(hardening.clients)
+    notes = list(hardening.notes)
+    for client_id, uris in sorted(declared.items()):
+        current = clients.get(client_id)
+        if current is not None and not current.declared:
+            raise HardeningError(f"client {client_id}: its addresses are set by the core")
+        if not uris.declared:
+            raise HardeningError(f"client {client_id}: not a declared client")
+        wanted = [*uris.redirects, *(uris.post_logout or ())]
+        wanted += [uris.backchannel] if uris.backchannel else []
+        for uri in wanted:
+            problem = redirect_problem(uri, https_only=hardening.https_only)
+            if problem or "*" in uri:
+                raise HardeningError(
+                    f"client {client_id}: {uri!r}: {problem or 'a wildcard'}"
+                    + (" (the kritis security profile)" if problem == "not https" else "")
+                )
+        for origin in uris.origins:
+            if _origin_problem(origin, hardening.https_only):
+                raise HardeningError(f"client {client_id}: {origin!r} is no origin")
+        if any(u.startswith("http://") for u in (*wanted, *uris.origins)):
+            notes.append(f"client {client_id}: its sign-in addresses are plain http, not https")
+        clients[client_id] = uris
+    return dataclasses.replace(hardening, clients=clients, notes=notes)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # clients
 # ─────────────────────────────────────────────────────────────────────────
@@ -405,6 +461,9 @@ def harden_client(
     wanted_attributes.update(sign_out_attributes)
     if not builtin:
         configured = hardening.clients.get(client_id)
+        if configured is None and attributes.get(DECLARED):
+            # Its module no longer declares addresses for it: none stay.
+            configured = ClientUris((), (), post_logout=())
         redirects = list(client.get("redirectUris") or [])
         origins = list(client.get("webOrigins") or [])
         logout = [u for u in (attributes.get(POST_LOGOUT) or "").split("##") if u]
@@ -418,22 +477,25 @@ def harden_client(
             body["redirectUris"] = new_redirects
         if sorted(new_origins) != sorted(origins):
             body["webOrigins"] = new_origins
-        if configured is not None or any(u in ("+", "*") for u in logout):
+        if configured is not None and configured.post_logout is not None:
+            new_logout = list(configured.post_logout)
+        elif configured is not None or any(u in ("+", "*") for u in logout):
             new_logout = new_redirects
         else:
             new_logout = _kept(logout, client, hardening.https_only)
         if sorted(new_logout) != sorted(logout):
-            if new_logout:
-                wanted_attributes[POST_LOGOUT] = "##".join(new_logout)
-            else:
-                wanted_attributes.pop(POST_LOGOUT, None)
+            # Keycloak keeps an attribute an update leaves out; an empty string removes it.
+            wanted_attributes[POST_LOGOUT] = "##".join(new_logout)
+        if configured is not None and (configured.declared or attributes.get(DECLARED)):
+            wanted_attributes[BACKCHANNEL] = configured.backchannel or ""
+            wanted_attributes[DECLARED] = DECLARED_VALUE if configured.declared else ""
     drift = [k for k in body]
     drift += sorted(
         k
         for k in set(wanted_attributes) | set(attributes)
-        if wanted_attributes.get(k) != attributes.get(k)
+        if (wanted_attributes.get(k) or "") != (attributes.get(k) or "")
     )
-    if body or wanted_attributes != attributes:
+    if body or drift:
         # The client policy checks the switches and the PKCE method on every update of a
         # managed client and refuses one that leaves them out (Keycloak 26.7.0: 400, or
         # 500 for a missing switch), so every update names them.
@@ -511,6 +573,9 @@ def apply_to_realm(realm: dict, hardening: Hardening) -> None:
     for client in realm.get("clients") or []:
         body, _ = harden_client(client, hardening)
         client.update(body)
+        if "attributes" in body:
+            # An empty value removes an attribute on update; an import has none to remove.
+            client["attributes"] = {k: v for k, v in body["attributes"].items() if v != ""}
     for user in realm.get("users") or []:
         if user.get("username") == REALM_ADMIN and hardening.realm_admin_password:
             user["credentials"] = [
