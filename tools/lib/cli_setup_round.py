@@ -104,6 +104,22 @@ def cmd_size_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mail_file_notice(args: argparse.Namespace) -> int:
+    """At the end of setup: the request to delete the mail answer file of row 9 while it
+    still exists. A request, not a question: it adds no input to the count."""
+    try:
+        path = setup_answers.recorded_mail_file(Path(args.config_dir))
+    except AnswerError as exc:
+        print(f"WARNING: {exc}", file=sys.stderr)
+        return 0
+    if path is None:
+        return 0
+    notice = setup_answers.mail_file_notice(path, setup_answers.mail_file_exists(path))
+    if notice:
+        print(f"WARNING: {notice}", file=sys.stderr)
+    return 0
+
+
 # ── setup with a record ──────────────────────────────────────────────────────
 
 
@@ -238,6 +254,9 @@ def add_parsers(sub) -> None:
     p = sub.add_parser("setup-round-values")
     p.add_argument("--record", required=True)
     p.set_defaults(func=cmd_setup_round_values)
+
+    p = sub.add_parser("setup-mail-file-notice")
+    p.set_defaults(func=cmd_mail_file_notice)
 
     p = sub.add_parser("size-check")
     p.add_argument("--profile", required=True)

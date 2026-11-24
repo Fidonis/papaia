@@ -2511,6 +2511,29 @@ def check_contact_point(ctx: Context) -> CheckResult:
     return CheckResult(name, PASS, f"contact point: {contact['name']}", {"contact": contact})
 
 
+def check_mail_answer_file(ctx: Context) -> CheckResult:
+    """The mail answer file `smtp.env` of the question round (row 9, BE-03): `warn` while
+    it still exists, since it holds the mail password the relay already keeps in its own
+    secret store. Only the path and whether it exists are read, never the file."""
+    name = "mail_answer_file"
+    if not ctx.configured:
+        return _not_set_up(name)
+    if ctx.probes.in_container():
+        return CheckResult(name, SKIP, "only checked on the host (a container does not see "
+                                       "the host's files)")
+    try:
+        path = setup_answers.recorded_mail_file(ctx.config_dir)
+    except setup_answers.AnswerError as exc:
+        return CheckResult(name, WARN, f"the record of the question round cannot be read: {exc}")
+    if path is None:
+        return CheckResult(name, SKIP, "no mail answer file named in the question round")
+    exists = setup_answers.mail_file_exists(path)
+    details = {"path": str(path), "exists": exists}
+    if exists is False:
+        return CheckResult(name, PASS, f"the mail answer file {path} is deleted", details)
+    return CheckResult(name, WARN, setup_answers.mail_file_notice(path, exists) or "", details)
+
+
 def _uplink_members(ctx: Context, network: str) -> list[tuple[str, str, str]] | None:
     """(container, compose service, compose project) of every running container on
     `network`, or None when Docker does not answer."""
@@ -3918,6 +3941,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("time_sync", check_time_sync),
     ("certs", check_certs),
     ("smtp", check_smtp),
+    ("mail_answer_file", check_mail_answer_file),
     ("addon_compat", check_addon_compat),
     ("container_health", check_container_health),
     ("model_gateway", check_model_gateway),

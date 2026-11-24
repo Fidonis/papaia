@@ -116,6 +116,10 @@ def test_the_round_hands_its_record_to_setup_and_sets_up_the_backup(tmp_path):
     assert f"py_cli backup-recipients add --name=betrieb --key={RECIPIENT}" in lines
     assert lines.index(setup) < lines.index("py_cli backup-target init --backup-dir=/mnt/backup")
     assert "Inputs of this installation: 12 of at most 15" in done.stdout + done.stderr
+    # The request to delete the mail answer file comes after the backup, at the end.
+    assert "py_cli setup-mail-file-notice" in lines
+    assert lines.index("py_cli setup-mail-file-notice") > lines.index(
+        f"py_cli backup-recipients add --name=betrieb --key={RECIPIENT}")
 
 
 def test_answers_are_refused_for_an_existing_installation(tmp_path):

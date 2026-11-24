@@ -828,6 +828,8 @@ cmd_setup() {
     if [ "$round" -eq 1 ]; then
         _setup_round_backup || return 3
         info "Inputs of this installation: $ROUND_INPUTS of at most 15 (README, \"Question round\")."
+        # Row 9: the mail answer file holds the password the relay now keeps; ask to delete it.
+        py_cli setup-mail-file-notice || true
     fi
     _setup_module_offer || return 3
     local mode

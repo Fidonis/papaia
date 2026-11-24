@@ -72,6 +72,8 @@ Welcome to the papAIa documentation.
 - [Studio-Apps und der Rand des Stapels](./de/betrieb/app-hosts-am-rand.md) — what the
   edge does for Studio app hosts, how `doctor edge_app_origin` checks it, and what to do
   about a finding (German operator text)
+- [Mail-Antwortdatei bei der Neuinstallation](./de/betrieb/mail-antwortdatei.md) — the format
+  of `smtp.env`, how `setup` checks it at once and why it is deleted afterwards
 
 ## Conventions
 

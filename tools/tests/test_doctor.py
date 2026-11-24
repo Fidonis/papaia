@@ -213,6 +213,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # time_sync
         PASS,  # certs
         SKIP,  # smtp: the mail relay is not enabled
+        SKIP,  # mail_answer_file: no question round record
         PASS,  # addon_compat
         PASS,  # container_health
         SKIP,  # model_gateway: the fixture has no litellm profile
@@ -259,6 +260,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "time_sync",
         "certs",
         "smtp",
+        "mail_answer_file",
         "addon_compat",
         "container_health",
         "model_gateway",

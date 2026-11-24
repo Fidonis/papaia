@@ -294,6 +294,14 @@ SMTP_PASSWORD=<password of relay-user>
 ```
 
 `smtps://` is TLS from the first byte (port 465), `smtp://` is no encryption and no login.
+`setup` checks the file at once: its mode (a file others can read is refused, `chmod 600`),
+its form, and then the mail server it names (greeting, STARTTLS or TLS and the login; no
+mail is sent). A file or a server that does not pass asks only this question again; a mail
+server not reachable yet is answered `none` and switched on later with `setup --smtp`. The
+password is never shown or logged and the file is never copied: `setup` keeps only its path
+in `setup-answers.yaml`. At the end `setup` asks you to delete the file (`rm
+/root/papaia-answers/smtp.env`); `doctor mail_answer_file` warns while it still exists. To
+change the password later, use `setup --smtp` (see [Outbound mail](#outbound-mail)).
 Without a terminal (`setup --answers=FILE -y`) every answer that does not pass is named and
 nothing is written; `generate` for the backup key needs a terminal, since the private keys
 are shown once there. The pairings of row 14 are never confirmed by `-y`: on a terminal
@@ -1802,6 +1810,7 @@ raw values behind its summary in `details`.
 | `time_sync` | The system clock is synchronized by NTP (`timedatectl`; inside a container the kernel's own state, see below). OIDC tokens and TLS certificates are only valid within a time window, so a drifting clock breaks logins in confusing ways. | `warn` if not synchronized; `skip` where neither is usable |
 | `certs` | Days until expiry of `certs/*.crt` and of the Let's Encrypt certificates under `infra/nginx/nginx-letsencrypt/live/`. Needs `openssl`. | `warn` below 30 days, `fail` below 7 days or expired |
 | `smtp` | Only while the `smtp` profile is on: the [mail relay](#outbound-mail) container runs, the mail server behind it answers (greeting, EHLO, STARTTLS or TLS and the login; no mail is sent), and how many messages wait in the relay's queue. Reports `not configured` while the profile is off. | `fail` for a mail server that does not answer (notices and warning mails stop); `warn` for a stopped relay or a non-empty queue; inside a container the mail server is not contacted (see below) |
+| `mail_answer_file` | The mail answer file `smtp.env` the [question round](#question-round) named (row 9): only its path and whether it still exists are read, never its content. | `warn` while it exists (it holds the mail password the relay keeps on its own) or cannot be looked at; `pass` once it is deleted; `skip` without a mail answer file and inside a container |
 | `addon_compat` | The verdict [`addon check`](#addon) computes for every active add-on. | `fail` where `start` would refuse the add-on, `warn` for `UNKNOWN` |
 | `container_health` | The module status from [`status`](#status), including add-ons. | `fail` for `stopped` or `unhealthy`, `warn` for `missing`, `starting`, `unknown` or an unreachable daemon |
 | `model_gateway` | LiteLLM's container runs and LiteLLM answers `GET /health/readiness`, asked inside its container (the master key stays there). | `fail` for a stopped container, no answer or not ready; `skip` without the `litellm` profile |

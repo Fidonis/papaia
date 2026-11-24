@@ -75,6 +75,9 @@ class Context:
     # True when the answers are read back from the record of a round that already ran:
     # `generate` was accepted on that round's terminal.
     recorded: bool = False
+    # The handshake with the mail server of row 9 (host, port, security, user, password,
+    # check_login) -> smtp.ProbeResult; the one `doctor smtp` uses. No mail is sent.
+    mail_probe: Callable[..., smtp.ProbeResult] = smtp.probe_upstream
 
 
 @dataclass(frozen=True)
@@ -381,14 +384,61 @@ def read_mail_file(path: Path, base_domain: str) -> MailFile:
 
 
 def check_mail(value: str, answers: dict, ctx: Context) -> str:
+    """Row 9: `none`, or the mail answer file, checked at once: its mode and form, then the
+    mail server it names (greeting, encryption and the login; no mail is sent). The
+    password stays in memory; a message names the server and the stage, never the
+    password."""
     text = _clean(value)
     if text.lower() == NO_MAIL:
         return NO_MAIL
     path = Path(text).expanduser()
     if not text or not path.is_absolute():
         raise AnswerError("Name the absolute path of the mail answer file smtp.env, or none")
-    read_mail_file(path, answers.get("domain", "example.org"))
+    mail = read_mail_file(path, answers.get("domain", "example.org"))
+    probe = ctx.mail_probe(mail.host, mail.port, mail.security, mail.user, mail.password,
+                           bool(mail.user))
+    if not probe.ok:
+        reason = probe.reason.replace(mail.password, "***") if mail.password else probe.reason
+        raise AnswerError(
+            f"The mail server {mail.host}:{mail.port} of {path} cannot be used"
+            f" ({probe.stage}: {reason}); correct the file, or answer none"
+        )
     return str(path)
+
+
+def recorded_mail_file(config_dir: Path) -> Path | None:
+    """The mail answer file the record of the question round names; None without a
+    record or when row 9 was answered `none`. Only the path is recorded, never the
+    content of the file."""
+    path = config_dir / RECORD_FILE
+    if not path.is_file():
+        return None
+    mail = load_record(path)["answers"]["mail"]
+    return None if mail == NO_MAIL else Path(mail)
+
+
+def mail_file_exists(path: Path) -> bool | None:
+    """Whether the mail answer file is still there (a link counts); None when this user
+    cannot tell (no access to its folder)."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return None
+    return True
+
+
+def mail_file_notice(path: Path, exists: bool | None) -> str | None:
+    """The request to delete the mail answer file after setup, or None once it is gone."""
+    if exists is False:
+        return None
+    still = "still holds" if exists else "may still hold"
+    return (
+        f"The mail answer file {path} {still} the mail password; the mail relay keeps its own"
+        f" copy. Delete it now: rm {path}  ('papaia-ctl doctor mail_answer_file' warns while"
+        " it exists.)"
+    )
 
 
 def check_backup_target(value: str, answers: dict, ctx: Context) -> str:
