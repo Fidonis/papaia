@@ -235,7 +235,9 @@ def test_own_images_round_trip_through_a_registry(
         (name, build["digest"]) for name, build in built.items()
     }
     assert {EGRESS, LIFECYCLE, AUDIT, PEOPLE} <= set(built)
-    version = images.core_version(root)
+    # The bill of materials is the one of the suite the core belongs to: for a release
+    # candidate (VERSION 1.10.0-rc.1) the suite it is a candidate of.
+    version = images.suite_version(images.core_version(root))
     doc = _bom(pem, listed, version=version)
     (root / suite.RELEASE_KEY_PATH).write_text(pem, encoding="ascii")
     bom_file = images.bom_path(root, version)

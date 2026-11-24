@@ -33,7 +33,18 @@ import yaml
 from install_helpers import Installation, run_cli
 from stack_helpers import FakeDocker, ps_line
 
-from lib import backup, common, defaults, deployment, doctor, envtree, module_health, smtp, status
+from lib import (
+    backup,
+    common,
+    defaults,
+    deployment,
+    doctor,
+    envtree,
+    module_health,
+    realm_sync,
+    smtp,
+    status,
+)
 from lib.doctor import MemInfo, Probes
 from lib.status import CommandResult
 
@@ -109,6 +120,7 @@ _PRIVATE_KEY = re.compile(
 def _tree_digests(inst: Installation) -> dict[str, str]:
     """sha256 of every file under the config directory, normalised."""
     digests: dict[str, str] = {}
+    host_account = realm_sync._host_account()
     for path in sorted(p for p in inst.config.rglob("*") if p.is_file()):
         rel = path.relative_to(inst.config).as_posix()
         raw = path.read_bytes()
@@ -129,6 +141,10 @@ def _tree_digests(inst: Installation) -> dict[str, str]:
             rows = [json.loads(line) for line in text.splitlines() if line]
             for row in rows:
                 row["time"], row["correlation_id"] = "<TIME>", "<ID>"
+                # The subject names the host account that ran the setup: a developer's
+                # login locally, the runner's in CI. Any other subject stays as it is.
+                if row.get("sub") == host_account:
+                    row["sub"] = "host:<ACCOUNT>"
             text = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
         # A generated key pair (service accounts) differs on every run; its place and
         # its PEM type are compared, not the key.

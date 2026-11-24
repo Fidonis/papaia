@@ -510,6 +510,8 @@ def test_sign_signs_each_digest_into_the_signature_repository(tmp_path: Path):
     assert "--allow-http-registry" in cmd and "--tlog-upload=false" in cmd
     mount = cmd[cmd.index("-v") + 1]
     assert mount.endswith(":ro")
+    # The key stays private to the signing account: cosign runs as that account.
+    assert cmd[cmd.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
 
 
 def test_sign_with_a_cosign_binary_keeps_the_transparency_log_for_a_real_registry(

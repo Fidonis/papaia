@@ -717,6 +717,13 @@ class ClosingTarget:
         threading.Event().wait(0.1)  # let the FIN reach the sender
 
     def stop(self) -> None:
+        # On Linux, close() alone leaves a listener that a thread waits on in accept() open
+        # in the kernel, and it still accepts; shutdown() ends the wait first. macOS refuses
+        # shutdown() on a listener and ends the wait on close().
+        try:
+            self.listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.listener.close()
         self.drop()
 
@@ -799,9 +806,11 @@ def test_a_connection_idle_longer_than_the_egress_allows_is_opened_again(tmp_pat
     moment[0] += siem.IDLE_SECONDS + 1
     _, canonical = CHECK.check(json.dumps(_event(2, NOW)).encode(), "papaia-flow")
     store.append("papaia-flow", canonical.decode())
+    # Counted before the send: the receiver may read the new frame before run_once returns.
+    before = sum(len(c) for c in receiver.connections)
     exporter.run_once()
 
-    receiver.wait_for(sum(len(c) for c in receiver.connections) + 1)
+    receiver.wait_for(before + 1)
     assert receiver.seqs() == [[1], [2]]
     exporter.sender.close()
     receiver.stop()

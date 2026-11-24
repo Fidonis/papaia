@@ -532,8 +532,11 @@ def sign(repo_root: Path, prefix: str, entries: list[dict], *, key: Path,
             cmd = [cosign, *args, "--key", str(key), ref]
             run_env = {**env, "COSIGN_REPOSITORY": repository}
         else:
+            # The key file is private to the account that signs (mode 0600); the image's own
+            # user could not read it through the mount, so cosign runs as that account.
             cmd = [
                 "docker", "run", "--rm", "--network", "host", "--read-only",
+                "--user", f"{os.getuid()}:{os.getgid()}",
                 "--tmpfs", "/tmp", "-e", "HOME=/tmp", "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges:true",
                 "-e", "COSIGN_PASSWORD", "-e", f"COSIGN_REPOSITORY={repository}",
