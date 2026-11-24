@@ -12,6 +12,15 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Decision: tool servers outside the suite in the chat
+
+- ADR 0029 decides how a tool server outside the suite (`trust: addon`) reaches the chat:
+  only through a core relay, `papaia-chat-relay`, that exchanges the chat token for a token
+  with exactly the add-on's audience, after a per-add-on opt-in of the operator (off by
+  default, a second host account for writes and under the four-eyes setting). The add-on
+  never receives the shared chat token; opt-in, revoke and every relayed call are audited.
+  The relay and the opt-in commands are not implemented yet.
+
 ### Information and erasure in chat, model gateway and identity provider
 
 - `papaia-ctl person run` now covers the core services: the chat by the person's `sub`

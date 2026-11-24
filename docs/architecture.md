@@ -985,6 +985,13 @@ audience and title are the catalog's:
   profile), identity `person`, an address and an audience qualify. LibreChat
   sends one token that carries the audience of every such server; a server
   outside the suite never receives it.
+- A tool server outside the suite (`trust: addon`) reaches the chat only
+  through the core chat relay `papaia-chat-relay`, after the operator allowed
+  that add-on: the relay exchanges the chat token for a token with exactly the
+  add-on's audience, and the add-on never receives the shared token. Path, token
+  scope, opt-in, audit and the rejected alternatives:
+  [ADR 0029](adr/0029-reach-a-tool-server-outside-the-suite-through-a-core-chat-relay.md).
+  Until the relay is implemented, such a server has no way into the chat.
 - The `mcpServers` entry is named after the audience (`mcp-<system>`) and
   calls the catalog address with the person's token (`startup: false`); its
   origin joins `mcpSettings.allowedDomains`. It is generated only for a module

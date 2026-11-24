@@ -47,6 +47,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0026](./0026-isolated-add-on-networks-that-reach-only-the-model-gateway.md) | Let an add-on declare isolated networks that the core joins with the model gateway only | Proposed | 2026-11-23 |
 | [0027](./0027-join-the-network-an-add-on-offers-instead-of-its-app-network.md) | Join the network an add-on offers through an exposes entry instead of its app network | Proposed | 2026-11-23 |
 | [0028](./0028-set-the-sign-in-addresses-of-add-on-clients-from-the-manifest.md) | Set the sign-in addresses of add-on clients from the manifest | Proposed | 2026-11-24 |
+| [0029](./0029-reach-a-tool-server-outside-the-suite-through-a-core-chat-relay.md) | Reach a tool server outside the suite through a core chat relay | Accepted | 2026-11-24 |
 
 ## Reserved numbers
 
