@@ -1,0 +1,15 @@
+services:
+  job:
+    networks:
+    - own
+    - papaia-wiki-net
+    - papaia-flow-net
+  web:
+    networks:
+    - default
+    - papaia-wiki-net
+networks:
+  papaia-wiki-net:
+    external: true
+  papaia-flow-net:
+    external: true

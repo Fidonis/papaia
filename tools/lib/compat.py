@@ -93,6 +93,10 @@ ADDON_API_GENERATIONS: dict[int, str] = {
         " `papaia-ctl person export|erase`"
     ),
     16: "`networks.isolated`: internal add-on networks only `litellm` joins (ADR 0026)",
+    17: (
+        "`networks.join_addons[].network`: join the internal network a required add-on offers"
+        " through an `exposes` entry instead of its `app_network` (ADR 0027)"
+    ),
 }
 
 # Manifest keys that need a core of at least this generation. A core below it
@@ -119,10 +123,14 @@ GENERATION_FEATURES: dict[str, int] = {
     # A core below 16 would start the add-on without putting LiteLLM on its isolated
     # network, and the service there would reach nothing at all.
     "networks.isolated": 16,
+    # A core below 17 would read the entry without `network` and join the target's
+    # app_network, where every route of its API is reachable.
+    "networks.join_addons.network": 17,
 }
 
 INGRESS_AXIS = "integration.nginx"
 ISOLATED_AXIS = "networks.isolated"
+JOIN_AXIS = "networks.join_addons"
 EXPOSES_AXIS = "exposes"
 KNOWLEDGE_AXIS = "knowledge"
 
@@ -391,6 +399,193 @@ def check_isolated_internal(
             )
 
 
+@dataclass(frozen=True)
+class AddonJoin:
+    """One `networks.join_addons` entry: the services of this add-on that join a network of
+    the required add-on `addon`. `network` (addon_api 17) is the network the target offers
+    through an `exposes` entry; None joins the target's `app_network` (addon_api 4)."""
+
+    addon: str
+    services: list[str]
+    network: str | None
+    index: int
+
+
+_JOIN_FIELDS = frozenset({"addon", "services", "network"})
+_JOIN_GENERATION = 17
+_MAX_JOINS = 64
+
+
+def _scoped_network_re(name: str) -> re.Pattern[str]:
+    """The template rule of `app_network` for a network of add-on `name`:
+    `${PAPAIA_PROJECT:-papaia}-<name>-...` or its literal default."""
+    return re.compile(
+        r"^(?:\$\{PAPAIA_PROJECT:-papaia\}|papaia)-" + re.escape(name)
+        + r"-[a-z0-9][a-z0-9_.-]{0,62}$"
+    )
+
+
+def join_entries(
+    manifest: dict, core_networks: frozenset[str] | None = None
+) -> list[AddonJoin]:
+    """The `networks.join_addons` entries, in manifest order; [] when the key is absent.
+
+    Each entry is `{addon, services, network?}` and nothing else: `addon` names an add-on
+    from `requires.addons`, `services` at least one service of this add-on. `network`
+    (addon_api 17) follows the template rule of `app_network` for the target
+    (`${PAPAIA_PROJECT:-papaia}-<target>-...`), is not a core network, and needs a manifest
+    whose `requires.addon_api` names only generations from 17 on, so that an older core
+    refuses the add-on instead of joining the target's `app_network`. Whether the target
+    offers the network is checked by `check_join_offer`, which needs the target. Raises
+    ValueError naming the entry."""
+    networks = manifest.get("networks") or {}
+    if not isinstance(networks, dict):
+        raise ValueError("networks: must be a mapping")
+    entries = networks.get("join_addons")
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("networks.join_addons must be a list")
+    if len(entries) > _MAX_JOINS:
+        raise ValueError(f"networks.join_addons must have at most {_MAX_JOINS} entries")
+    required = {name for name, _ in required_addons(manifest)}
+    core = (core_networks or frozenset()) | _DOCKER_NETWORKS | {"papaia-net"}
+    result: list[AddonJoin] = []
+    for index, entry in enumerate(entries):
+        where = f"networks.join_addons[{index}]"
+        if not isinstance(entry, dict) or not isinstance(entry.get("addon"), str):
+            raise ValueError("networks.join_addons entries must be mappings with 'addon'")
+        unknown = sorted(str(key) for key in set(entry) - _JOIN_FIELDS)
+        if unknown:
+            raise ValueError(f"{where} has unknown field(s): {', '.join(unknown)}")
+        target = entry["addon"]
+        services = entry.get("services")
+        if (
+            not isinstance(services, list)
+            or not services
+            or not all(isinstance(s, str) and s for s in services)
+        ):
+            raise ValueError(
+                f"networks.join_addons '{target}': services must be a non-empty list"
+            )
+        if target not in required:
+            raise ValueError(
+                f"networks.join_addons '{target}' is not listed in requires.addons"
+            )
+        network = entry.get("network")
+        if "network" in entry:
+            if not isinstance(network, str) or not network:
+                raise ValueError(f"{where}.network must be a network name")
+            if not _scoped_network_re(target).match(network):
+                raise ValueError(
+                    f"{where}.network {network!r} must be scoped to the add-on '{target}':"
+                    f" ${{PAPAIA_PROJECT:-papaia}}-{target}-..."
+                )
+            if _with_defaults(network) in core:
+                raise ValueError(f"{where}.network {network!r} is a core network")
+            _require_join_generation(manifest, where)
+        result.append(AddonJoin(target, list(services), network, index))
+    offered = {join.addon for join in result if join.network is not None}
+    for join in result:
+        if join.network is None and join.addon in offered:
+            # The app network carries every route of the target: joining it next to the
+            # offered network would widen the join the other entry narrows.
+            raise ValueError(
+                f"networks.join_addons[{join.index}] joins the app_network of"
+                f" '{join.addon}', which another entry joins through the network it offers"
+            )
+    return result
+
+
+def _require_join_generation(manifest: dict, where: str) -> None:
+    """An older core does not know `network` and would join the target's `app_network`.
+    Only a manifest that names no generation below 17 is refused there by the gate."""
+    requires = manifest.get("requires") or {}
+    declared = requires.get("addon_api") if isinstance(requires, dict) else None
+    try:
+        generations = _normalize_generations(declared) if declared is not None else []
+    except ValueError:
+        generations = []
+    if not generations or min(generations) < _JOIN_GENERATION:
+        raise ValueError(
+            f"{where}.network needs requires.addon_api to name only generations from"
+            f" {_JOIN_GENERATION} on (for example [{_JOIN_GENERATION}]): an older core would"
+            " otherwise join the app_network"
+        )
+
+
+def check_join_offer(
+    join: AddonJoin, target_manifest: dict, target_path: Path
+) -> None:
+    """The target offers `join.network`: its compose file creates the network under that
+    `name` with `internal: true` (not `external`), the `address.service` of one of its
+    `exposes` entries joins it, and it is not the target's `app_network`, egress network
+    or an isolated network. Raises ValueError naming the entry."""
+    if join.network is None:
+        return
+    where = f"networks.join_addons[{join.index}]"
+    wanted = _with_defaults(join.network)
+    networks = target_manifest.get("networks") if isinstance(target_manifest, dict) else None
+    networks = networks if isinstance(networks, dict) else {}
+    if isinstance(networks.get("app_network"), str) and (
+        _with_defaults(networks["app_network"]) == wanted
+    ):
+        raise ValueError(
+            f"{where}.network {join.network!r} is the app_network of '{join.addon}';"
+            " only a network it offers through an exposes entry may be joined"
+        )
+    egress = networks.get("egress")
+    if isinstance(egress, dict) and isinstance(egress.get("network"), str) and (
+        _with_defaults(egress["network"]) == wanted
+    ):
+        raise ValueError(f"{where}.network {join.network!r} is the egress network of"
+                         f" '{join.addon}'")
+    isolated = networks.get("isolated")
+    for entry in isolated if isinstance(isolated, list) else ():
+        if isinstance(entry, dict) and isinstance(entry.get("network"), str) and (
+            _with_defaults(entry["network"]) == wanted
+        ):
+            raise ValueError(f"{where}.network {join.network!r} is an isolated network of"
+                             f" '{join.addon}'")
+    compose = target_path / "docker-compose.yml"
+    doc: object = None
+    if compose.is_file():
+        try:
+            doc = yaml.safe_load(compose.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            doc = None
+    declared = doc.get("networks") if isinstance(doc, dict) else None
+    key, config = None, None
+    for candidate, body in declared.items() if isinstance(declared, dict) else ():
+        name = body.get("name") if isinstance(body, dict) else None
+        if isinstance(name, str) and _with_defaults(name) == wanted:
+            key, config = candidate, body
+            break
+    if config is None:
+        raise ValueError(
+            f"{where}: the docker-compose.yml of '{join.addon}' does not create the network"
+            f" {join.network!r} (as its `name:`)"
+        )
+    if config.get("internal") is not True or config.get("external"):
+        raise ValueError(
+            f"{where}: '{join.addon}' does not create the network {join.network!r} with"
+            " internal: true"
+        )
+    services = doc.get("services") if isinstance(doc, dict) else None
+    services = services if isinstance(services, dict) else {}
+    for exposed in target_manifest.get("exposes") or ():
+        address = exposed.get("address") if isinstance(exposed, dict) else None
+        service = address.get("service") if isinstance(address, dict) else None
+        body = services.get(service) if isinstance(service, str) else None
+        joined = body.get("networks") if isinstance(body, dict) else None
+        if isinstance(joined, (list, dict)) and key in joined:
+            return
+    raise ValueError(
+        f"{where}: no exposes entry of '{join.addon}' has its address on the network"
+        f" {join.network!r}; '{join.addon}' does not offer it"
+    )
+
+
 def resolve_core_services(repo_root: Path) -> dict[str, list[str]] | None:
     """Map every core compose service to its `profiles` list, walking the
     root compose's `include:` entries.
@@ -447,6 +642,20 @@ def _normalize_generations(value: object) -> list[int]:
             raise ValueError(f"requires.addon_api entries must be integers, got {item!r}")
         generations.append(item)
     return sorted(set(generations))
+
+
+def _join_features_beyond(manifest: dict, window_current: int) -> str:
+    """The offered-network entries (generation 17) a core whose window ends at
+    `window_current` cannot serve, named per entry; "" when there are none."""
+    try:
+        used = manifest_generation_features(manifest)
+    except ValueError:
+        return ""
+    return ", ".join(
+        f"`{key}` (addon_api {generation})"
+        for key, generation in used
+        if key.startswith("networks.join_addons[") and generation > window_current
+    )
 
 
 def _fmt_generations(generations: list[int]) -> str:
@@ -540,6 +749,14 @@ def manifest_generation_features(manifest: dict) -> list[tuple[str, int]]:
                 used.append((f"actions.{name}", GENERATION_FEATURES[f"actions.{name}"]))
     if isinstance(networks, dict) and networks.get("isolated") is not None:
         used.append(("networks.isolated", GENERATION_FEATURES["networks.isolated"]))
+    joins = networks.get("join_addons") if isinstance(networks, dict) else None
+    for index, entry in enumerate(joins if isinstance(joins, list) else ()):
+        # Named per entry, so the generation gate names the entry it refuses.
+        if isinstance(entry, dict) and "network" in entry:
+            used.append((
+                f"networks.join_addons[{index}].network",
+                GENERATION_FEATURES["networks.join_addons.network"],
+            ))
     return used
 
 
@@ -602,6 +819,9 @@ def evaluate_addon(
                     f" against {_fmt_generations(generations)}; "
                     + _missing_generations(window_current, generations)
                 )
+                beyond = _join_features_beyond(manifest, window_current)
+                if beyond:
+                    reason += "; addon uses " + beyond
     elif compat_range is not None and core.platform_version is not None:
         axis = "papaia_compat"
         requirement = compat_range
@@ -660,6 +880,15 @@ def evaluate_addon(
             check_isolated_internal(isolated, addon_path)
     except ValueError as exc:
         return CompatResult(name, STATUS_ERROR, axis=ISOLATED_AXIS, reason=str(exc))
+
+    # Offered networks (generation 17): an entry that names a core network, a network not
+    # scoped to its target, or a manifest an older core would read as a join of the
+    # target's app_network is malformed. Whether the target offers the network is checked
+    # against the target (cli_addon.join_offer_result).
+    try:
+        join_entries(manifest, core.networks)
+    except ValueError as exc:
+        return CompatResult(name, STATUS_ERROR, axis=JOIN_AXIS, reason=str(exc))
 
     warnings: list[str] = []
     if isolated and addon_path is None:
@@ -839,39 +1068,13 @@ def required_addons(manifest: dict) -> list[tuple[str, str | None]]:
 
 
 def joined_addons(manifest: dict) -> list[tuple[str, list[str]]]:
-    """The `networks.join_addons` entries as (addon, [service, ...]).
+    """The `networks.join_addons` entries as (addon, [service, ...]), whichever network
+    each joins (`join_entries` tells them apart).
 
     Each entry names an addon from `requires.addons` and the services of this
-    addon that join that addon's network. Raises ValueError for a malformed
+    addon that join a network of that addon. Raises ValueError for a malformed
     entry or an addon that is not required."""
-    networks = manifest.get("networks") or {}
-    if not isinstance(networks, dict):
-        raise ValueError("networks: must be a mapping")
-    entries = networks.get("join_addons")
-    if entries is None:
-        return []
-    if not isinstance(entries, list):
-        raise ValueError("networks.join_addons must be a list")
-    required = {name for name, _ in required_addons(manifest)}
-    result: list[tuple[str, list[str]]] = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("addon"), str):
-            raise ValueError("networks.join_addons entries must be mappings with 'addon'")
-        services = entry.get("services")
-        if (
-            not isinstance(services, list)
-            or not services
-            or not all(isinstance(s, str) and s for s in services)
-        ):
-            raise ValueError(
-                f"networks.join_addons '{entry['addon']}': services must be a non-empty list"
-            )
-        if entry["addon"] not in required:
-            raise ValueError(
-                f"networks.join_addons '{entry['addon']}' is not listed in requires.addons"
-            )
-        result.append((entry["addon"], list(services)))
-    return result
+    return [(join.addon, list(join.services)) for join in join_entries(manifest)]
 
 
 def evaluate_required_addons(

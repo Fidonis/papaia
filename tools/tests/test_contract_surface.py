@@ -109,7 +109,14 @@ _SURFACE_CHANGED = (
 # Gen 16 (additive): `networks.isolated` -- internal networks of an add-on that the core
 # joins with `litellm` and nothing else (ISOLATED_ATTACHABLE), so a service that reads
 # foreign content shares a network with the model gateway alone. ADR 0026.
-ADDON_API_WINDOW = (1, 16)
+#
+# Gen 17 (additive): `networks.join_addons[].network` -- the listed services join the
+# internal network the required add-on offers through an `exposes` entry (its
+# `address.service` is on it) and never that add-on's `app_network`. An entry without the
+# key renders as before. A manifest that uses it must name no generation below 17 in
+# `requires.addon_api`, so an older core refuses it instead of joining the app network.
+# ADR 0027.
+ADDON_API_WINDOW = (1, 17)
 
 # The binding meaning of every generation the core serves. Changing a line here is a
 # contract change, not a wording fix.
@@ -154,6 +161,10 @@ ADDON_API_GENERATIONS = {
         " `papaia-ctl person export|erase`"
     ),
     16: "`networks.isolated`: internal add-on networks only `litellm` joins (ADR 0026)",
+    17: (
+        "`networks.join_addons[].network`: join the internal network a required add-on offers"
+        " through an `exposes` entry instead of its `app_network` (ADR 0027)"
+    ),
 }
 
 # Manifest keys whose use requires a core of at least this generation.
@@ -171,6 +182,7 @@ GENERATION_FEATURES = {
     "actions.person-erase": 15,
     "actions.transfer-ownership": 15,
     "networks.isolated": 16,
+    "networks.join_addons.network": 17,
 }
 
 # The core services an add-on may put on one of its isolated networks (addon_api 16).
@@ -310,6 +322,8 @@ MANIFEST_KEYS = [
     "integration.nginx (ingress entries)",
     # Since addon_api 16: internal networks the core joins with litellm only (ADR 0026).
     "networks.isolated",
+    # Since addon_api 17: the network a required add-on offers (ADR 0027).
+    "networks.join_addons[].network",
 ]
 
 # Cross-service secret alias map -- the env-naming contract addon .env
@@ -418,4 +432,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 25, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 26, _SURFACE_CHANGED

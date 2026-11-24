@@ -3625,6 +3625,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_addon_override_files = sub.add_parser("addon-override-files")
     p_addon_override_files.add_argument("--name", required=True)
+    # For a verb that starts containers: leave out the join of a network an add-on offers
+    # while that network does not exist (addon_api 17), with a warning.
+    p_addon_override_files.add_argument("--usable", action="store_true")
     p_addon_override_files.set_defaults(func=cli_addon.cmd_addon_override_files)
 
     p_backup_dir = sub.add_parser("backup-dir")

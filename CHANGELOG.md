@@ -44,6 +44,25 @@ based on merged pull requests; this file mirrors the published releases.
   restore exits with code 3. One audit row `erasure_probe` and `erasure_probe=` in
   `backup.log`.
 
+### Offered add-on networks (add-on contract generation 17)
+
+- New optional key `network` in a `networks.join_addons` entry: the listed services join the
+  internal network the required add-on offers through an `exposes` entry (its
+  `address.service` is on it) and never that add-on's `app_network` (ADR 0027,
+  `docs/offered-networks.md`). Written to
+  `overrides/addons/docker-compose.<name>-offer-<target>.override.yml`.
+- `ADDON_API` `current=17` (`min` stays 1); the generation table, `GENERATION_FEATURES`
+  (`networks.join_addons.network`), the contract snapshot and the suite matrix carry it.
+- The compatibility check refuses, naming the entry, an unknown field, a network not scoped
+  to the target, a core network, a network the target does not create with
+  `internal: true` or has no `exposes` address on, the target's app, egress or isolated
+  network, and a manifest whose `requires.addon_api` names a generation below 17 (an older
+  core would otherwise join the app network). `--force` does not let these through.
+- An optional target that is not installed or not active is skipped with a warning naming
+  target and network; the consumer starts. A missing offered network at `addon start` is
+  left out with a warning instead of a failed start; `doctor addon_compat` reports it.
+- Entries without the key render byte-identical to before.
+
 ### Isolated add-on networks (add-on contract generation 16)
 
 - New manifest key `networks.isolated: [{network, attach: [litellm]}]`: internal networks of

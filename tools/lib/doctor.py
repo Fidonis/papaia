@@ -64,6 +64,7 @@ from . import (
     egress,
     envtree,
     federation,
+    gen_override,
     gpu_detect,
     halt,
     images,
@@ -1860,16 +1861,49 @@ def check_addon_compat(ctx: Context) -> CheckResult:
             }
         )
 
-    overall = _worst(i["status"] for i in items)
+    joins = _missing_offered_networks(ctx, deployed)
+    overall = _worst([*(i["status"] for i in items), *(WARN for _ in joins)])
     problems = [i for i in items if i["status"] != PASS]
-    if problems:
+    if problems or joins:
         summary = "; ".join(
-            f"{i['name']}: {i['compat_status']}" + (f" ({i['reason']})" if i["reason"] else "")
-            for i in problems
+            [
+                f"{i['name']}: {i['compat_status']}"
+                + (f" ({i['reason']})" if i["reason"] else "")
+                for i in problems
+            ]
+            + [
+                f"{j['addon']}: the network {j['network']} that '{j['target']}' offers does"
+                " not exist; the add-on runs without it"
+                for j in joins
+            ]
         )
     else:
         summary = f"{len(items)} add-on(s) compatible with core {core.platform_version or '?'}"
-    return CheckResult(name, overall, summary, {"mode": mode, "addons": items})
+    return CheckResult(
+        name, overall, summary, {"mode": mode, "addons": items, "missing_joins": joins}
+    )
+
+
+def _missing_offered_networks(ctx: Context, deployed: dict) -> list[dict[str, str]]:
+    """The joins of offered networks (addon_api 17) that `addon start` leaves out because
+    the network does not exist: one {addon, target, network} per network named in an
+    active add-on's offer override (gen_override.usable_addon_override_files)."""
+    missing: list[dict[str, str]] = []
+    for addon in deployment.active_addons(deployed):
+        consumer = addon.get("name")
+        if not consumer:
+            continue
+        for path in deployment.addon_override_files(ctx.config_dir, consumer, deployed):
+            target = gen_override.offer_target(path, consumer)
+            if target is None:
+                continue
+            for network in gen_override.external_networks(path):
+                found = ctx.run(
+                    ["docker", "network", "inspect", network], DOCKER_PROBE_TIMEOUT_SECONDS
+                )
+                if found.returncode != 0:
+                    missing.append({"addon": consumer, "target": target, "network": network})
+    return missing
 
 
 _HEALTH_VERDICT = {

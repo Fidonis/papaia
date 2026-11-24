@@ -222,6 +222,14 @@ networks:
                                    # Written to overrides/addons/docker-compose.
                                    # <name>-join.override.yml. Single host only: a
                                    # network cannot span two nodes.
+      network: ${PAPAIA_PROJECT:-papaia}-<add-on>-modules
+                                   # optional (addon_api 17): join this network the
+                                   # add-on offers through an exposes entry (internal,
+                                   # named, its address.service on it) instead of its
+                                   # app network; requires.addon_api names only
+                                   # generations from 17 on. Written to overrides/
+                                   # addons/docker-compose.<name>-offer-<add-on>.
+                                   # override.yml (docs/offered-networks.md)
   egress:                          # optional (addon_api 7): the add-on's way out
                                    # through papaia-egress (docs/egress.md)
     network: ${PAPAIA_PROJECT:-papaia}-<name>-egress
@@ -401,7 +409,11 @@ Only values that differ from the `.env.example` literal are written to the confi
 > and its manifest `version` must satisfy the entry's range; a missing, inactive
 > or too old add-on is `INCOMPATIBLE`, a malformed entry an error. Each
 > `networks.join_addons` entry must name an add-on from `requires.addons` and
-> list at least one service; anything else is a malformed manifest. Policy:
+> list at least one service, and has no fields but `addon`, `services` and
+> `network`; anything else is a malformed manifest. An entry with `network`
+> (generation 17) must name a network the target offers through an `exposes`
+> entry, or it is a malformed manifest too (see
+> [offered-networks.md](offered-networks.md)). Policy:
 > hard-fail in production, warning in dev mode
 > (`PAPAIA_COMPAT_MODE` → `deployment.yaml → mode:` → default `enforce`);
 > `--force` demotes `INCOMPATIBLE`, never a malformed manifest.
@@ -410,8 +422,8 @@ Only values that differ from the `.env.example` literal are written to the confi
 > newer core is never silently ignored: a manifest using `exposes` (7),
 > `personal_settings` (8), `pki` (11), the ingress-entry list of
 > `integration.nginx` (12), `volumes` (13, the backup declaration: a core
-> below it would archive a volume the add-on leaves out) or `networks.isolated`
-> (16) is `INCOMPATIBLE` on
+> below it would archive a volume the add-on leaves out), `networks.isolated`
+> (16) or `network` in a `networks.join_addons` entry (17) is `INCOMPATIBLE` on
 > a core whose window ends below
 > that generation, even when `requires.addon_api` lists an older generation
 > the core serves. The reason names every missing generation and its meaning,
@@ -437,7 +449,8 @@ README, generation 14 (the reserved actions `erasure-replay` and
 `post-restore`) with `restore`, generation 15 (the reserved actions
 `person-export`, `person-erase` and `transfer-ownership`) in
 [`person-requests.md`](person-requests.md), generation 16 (`networks.isolated`) in
-[`isolated-networks.md`](isolated-networks.md).
+[`isolated-networks.md`](isolated-networks.md), generation 17
+(`networks.join_addons[].network`) in [`offered-networks.md`](offered-networks.md).
 
 | Gen. | Meaning | ADR |
 |---|---|---|
@@ -457,6 +470,7 @@ README, generation 14 (the reserved actions `erasure-replay` and
 | 14 | Reserved `actions` `erasure-replay` and `post-restore`, run by `restore` before the add-on starts | — |
 | 15 | Reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by `papaia-ctl person export\|erase` | — |
 | 16 | `networks.isolated`: internal add-on networks only `litellm` joins | 0026 |
+| 17 | `networks.join_addons[].network`: join the internal network a required add-on offers through an `exposes` entry instead of its `app_network` | 0027 |
 
 This table fixes what each generation means. The rendering and runtime
 behaviour behind generations 7 to 12 arrive with their own changes; until a

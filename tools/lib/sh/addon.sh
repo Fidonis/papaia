@@ -137,9 +137,16 @@ _addon_compose_with_env() {
     local -a compose_files=(-f "$addon_path/docker-compose.yml")
     if [ -d "$CONFIG_DIR/overrides/addons" ]; then
         local f
+        # A verb that starts containers leaves out the join of a network another add-on
+        # offers while that network does not exist (addon_api 17); the warning names the
+        # add-on and the network, and the add-on starts without the join.
+        local -a selection=(--name="$addon_name")
+        case "$verb" in
+            up|run|create|start|restart) selection+=(--usable) ;;
+        esac
         while IFS= read -r f; do
             [ -n "$f" ] && [ -f "$f" ] && compose_files+=(-f "$f")
-        done < <(py_cli addon-override-files --name="$addon_name" 2>/dev/null)
+        done < <(py_cli addon-override-files ${selection[@]+"${selection[@]}"} 2> >(grep '^WARNING: ' >&2 || true))
     fi
     local -a env_files=()
     local root_env="$REPO_ROOT/src/.env"

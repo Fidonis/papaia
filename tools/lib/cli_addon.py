@@ -175,7 +175,49 @@ def _with_required_addons(
     required = compat.evaluate_required_addons(
         name, manifest, active_addon_versions(deployed, repo_root, exclude=name)
     )
-    return _fold(result, required)
+    return _fold(_fold(result, required), join_offer_result(name, manifest, deployed, repo_root))
+
+
+def join_offer_result(
+    name: str, manifest: dict, deployed: dict, repo_root: Path
+) -> compat.CompatResult | None:
+    """Whether every `networks.join_addons` entry with `network` (addon_api 17) names a
+    network its target offers through an `exposes` entry (compat.check_join_offer).
+
+    Checked against every registered target, active or not; a target that is not
+    registered is the `requires.addons` check's business (an optional one is skipped with
+    a warning there and at render). None when nothing is to check; an ERROR on the
+    `networks.join_addons` axis naming the entry otherwise, so neither --force nor warn
+    mode lets a widened join through."""
+    try:
+        joins = [join for join in compat.join_entries(manifest) if join.network is not None]
+    except ValueError as exc:
+        return compat.CompatResult(name, compat.STATUS_ERROR, axis=compat.JOIN_AXIS,
+                                   reason=str(exc))
+    if not joins:
+        return None
+    registered = {
+        addon.get("name"): addon
+        for addon in deployed.get("addons") or []
+        if addon.get("name") and addon.get("path")
+    }
+    for join in joins:
+        entry = registered.get(join.addon)
+        if entry is None:
+            continue
+        target_path = deployment.resolve_addon_path(entry, repo_root)
+        target_manifest, error = deployment.load_addon_manifest(target_path)
+        if target_manifest is None:
+            return compat.CompatResult(
+                name, compat.STATUS_ERROR, axis=compat.JOIN_AXIS,
+                reason=f"networks.join_addons[{join.index}]: {error}",
+            )
+        try:
+            compat.check_join_offer(join, target_manifest, target_path)
+        except ValueError as exc:
+            return compat.CompatResult(name, compat.STATUS_ERROR, axis=compat.JOIN_AXIS,
+                                       reason=str(exc))
+    return None
 
 
 def _fold(
@@ -1486,7 +1528,12 @@ def cmd_addon_override_files(args: argparse.Namespace) -> int:
     one absolute path per line (deployment.addon_override_files): starting
     "qdrant" must not sweep in the overrides of "qdrant-ingest" and hand
     docker compose a service with no image."""
-    for path in deployment.addon_override_files(Path(args.config_dir), args.name):
+    config_dir = Path(args.config_dir)
+    if getattr(args, "usable", False):
+        paths = gen_override.usable_addon_override_files(config_dir, args.name)
+    else:
+        paths = deployment.addon_override_files(config_dir, args.name)
+    for path in paths:
         print(path)
     return 0
 

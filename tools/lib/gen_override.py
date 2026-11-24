@@ -359,7 +359,7 @@ def _service_networks(addon_path: Path, service: str) -> list[str]:
 
 
 def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
-    """Write or remove each addon's `networks.join_addons` override.
+    """Write or remove each addon's `networks.join_addons` overrides.
 
     For an active addon that declares
 
@@ -367,11 +367,17 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
           join_addons:
             - addon: <required addon>
               services: [<service>, ...]
+              network: <offered network>     # optional, addon_api 17
 
-    the listed services join the required addon's resolved `app_network`
-    (declared external); every other service of the addon stays off it. The
-    file lives in overrides/addons/ and is applied to the addon's own compose
-    project by `papaia-ctl addon start`, like the ssl-cert overrides.
+    an entry without `network` puts the listed services on the required addon's
+    resolved `app_network` (declared external), in
+    docker-compose.<name>-join.override.yml. An entry with `network` puts them on that
+    network and never on the `app_network`, in
+    docker-compose.<name>-offer-<target>.override.yml, and only while the target is
+    active and still offers the network (compat.check_join_offer); otherwise the entry
+    is skipped with a warning naming the target and the network. Every other service of
+    the addon stays off both. The files live in overrides/addons/ and are applied to the
+    addon's own compose project by `papaia-ctl addon start`, like the ssl-cert overrides.
     """
     deployed = deployment.load(config_dir)
     entries = deployed.get("addons") or [] if deployed else []
@@ -383,6 +389,7 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
         manifest, _ = deployment.load_addon_manifest(path)
         if manifest is not None:
             manifests[addon["name"]] = (manifest, path)
+    active = {addon.get("name") for addon in entries if addon.get("active")}
 
     for addon in entries:
         name = addon.get("name")
@@ -393,37 +400,40 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
             _write_front_override(name, bool(addon.get("active")), path, config_dir)
         out_path = config_dir / "overrides" / "addons" / f"docker-compose.{name}-join.override.yml"
         try:
-            joins = compat.joined_addons(manifest) if addon.get("active") else []
+            joins = compat.join_entries(manifest) if addon.get("active") else []
         except ValueError:
             joins = []  # the compatibility gate reports the malformed manifest
         services: dict[str, list[str]] = {}
         external: dict[str, dict] = {}
-        for target, joining in joins:
-            target_manifest = manifests.get(target, ({}, Path()))[0]
+        for join in joins:
+            if join.network is not None:
+                continue
+            target_manifest = manifests.get(join.addon, ({}, Path()))[0]
             raw = (target_manifest.get("networks") or {}).get("app_network")
             if not raw:
                 print(
-                    f"WARNING: addon '{name}': '{target}' declares no networks.app_network;"
+                    f"WARNING: addon '{name}': '{join.addon}' declares no networks.app_network;"
                     " join_addons entry skipped",
                     file=sys.stderr,
                 )
                 continue
             network = resolve_app_network(raw, config_dir)
             external[network] = {"external": True}
-            for service in joining:
+            for service in join.services:
                 current = services.setdefault(service, _service_networks(path, service))
                 if network not in current:
                     current.append(network)
         if not services:
             out_path.unlink(missing_ok=True)
-            continue
-        override = {
-            "services": {service: {"networks": nets} for service, nets in services.items()},
-            "networks": external,
-        }
-        common.atomic_write(
-            out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
-        )
+        else:
+            override = {
+                "services": {service: {"networks": nets} for service, nets in services.items()},
+                "networks": external,
+            }
+            common.atomic_write(
+                out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
+            )
+        _write_offer_overrides(name, path, joins, manifests, active, config_dir, deployed)
     # The direct route of `mcp-mssql` to the SQL source (lib/sql_uplink.py), also an
     # override of the add-on's own project.
     sql_uplink.generate_override(config_dir, repo_root)
@@ -467,6 +477,120 @@ def generate_addon_logging_overrides(config_dir: Path, repo_root: Path) -> None:
         common.atomic_write(
             out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
         )
+
+
+_OFFER_TAG = "-offer-"
+
+
+def offer_override_path(config_dir: Path, name: str, target: str) -> Path:
+    """The override that puts services of add-on `name` on the network `target` offers."""
+    return (
+        config_dir / deployment.ADDON_OVERRIDES
+        / f"docker-compose.{name}{_OFFER_TAG}{target}.override.yml"
+    )
+
+
+def offer_target(path: Path, name: str) -> str | None:
+    """The target of an offer override of add-on `name`, or None for any other file."""
+    prefix = f"docker-compose.{name}{_OFFER_TAG}"
+    suffix = ".override.yml"
+    if path.name.startswith(prefix) and path.name.endswith(suffix):
+        return path.name[len(prefix):-len(suffix)] or None
+    return None
+
+
+def _write_offer_overrides(
+    name: str,
+    path: Path,
+    joins: list[compat.AddonJoin],
+    manifests: dict[str, tuple[dict, Path]],
+    active: set,
+    config_dir: Path,
+    deployed: dict,
+) -> None:
+    """One offer override per target for the entries of `name` with `network` (addon_api
+    17); every other offer override of `name` is removed. An entry is skipped, with a
+    warning, while its target is not active, and refused, with a warning, when the
+    target no longer offers the network or the name resolves to a core network or the
+    target's app_network: the services then join nothing, never more."""
+    env = common.parse_env_file(config_dir / ".env")
+    core = egress.core_networks(env)
+    bodies: dict[str, dict] = {}
+    for join in joins:
+        if join.network is None:
+            continue
+        if join.addon not in active or join.addon not in manifests:
+            print(
+                f"WARNING: addon '{name}': '{join.addon}' is not installed and active; the"
+                f" network {resolve_app_network(join.network, config_dir)!r} it offers is not"
+                " joined",
+                file=sys.stderr,
+            )
+            continue
+        target_manifest, target_path = manifests[join.addon]
+        network = resolve_app_network(join.network, config_dir)
+        try:
+            compat.check_join_offer(join, target_manifest, target_path)
+            if network in core:
+                raise ValueError(
+                    f"networks.join_addons[{join.index}].network {network!r} is {core[network]}"
+                )
+            app_raw = (target_manifest.get("networks") or {}).get("app_network")
+            if isinstance(app_raw, str) and resolve_app_network(app_raw, config_dir) == network:
+                raise ValueError(
+                    f"networks.join_addons[{join.index}].network {network!r} is the"
+                    f" app_network of '{join.addon}'"
+                )
+        except ValueError as exc:
+            print(f"WARNING: addon '{name}': {exc}; not joined", file=sys.stderr)
+            continue
+        body = bodies.setdefault(join.addon, {"services": {}, "networks": {}})
+        for service in join.services:
+            current = body["services"].setdefault(
+                service, {"networks": _service_networks(path, service)}
+            )["networks"]
+            if network not in current:
+                current.append(network)
+        body["networks"][network] = {"external": True}
+    for existing in deployment.addon_override_files(config_dir, name, deployed):
+        target = offer_target(existing, name)
+        if target is not None and target not in bodies:
+            existing.unlink(missing_ok=True)
+    for target, body in bodies.items():
+        common.atomic_write(
+            offer_override_path(config_dir, name, target),
+            yaml.safe_dump(body, sort_keys=False, default_flow_style=False),
+        )
+
+
+def network_exists(name: str) -> bool:
+    """Whether Docker knows the network `name` on this host."""
+    from . import status  # status reads deployment state; imported where it is needed
+
+    return status.run_command(["docker", "network", "inspect", name], 15).returncode == 0
+
+
+def usable_addon_override_files(config_dir: Path, name: str) -> list[Path]:
+    """The overrides/addons/ files of add-on `name` for a verb that starts containers:
+    every one of deployment.addon_override_files, except an offer override (addon_api 17)
+    whose network does not exist, for example while its target is stopped. That one is
+    left out with a warning naming the target and the network, so the add-on starts
+    without the join instead of failing; the next start after the target picks it up."""
+    usable: list[Path] = []
+    for path in deployment.addon_override_files(config_dir, name):
+        target = offer_target(path, name)
+        if target is not None:
+            missing = [net for net in external_networks(path) if not network_exists(net)]
+            if missing:
+                print(
+                    f"WARNING: addon '{name}': the network {', '.join(missing)} that '{target}'"
+                    f" offers does not exist; '{name}' starts without it. Start '{target}',"
+                    f" then 'papaia-ctl addon start {name}'.",
+                    file=sys.stderr,
+                )
+                continue
+        usable.append(path)
+    return usable
 
 
 # Services that mount the local Keycloak CA cert via SSL_CERT_FILE.  For

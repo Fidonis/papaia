@@ -45,6 +45,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0022](./0022-one-security-profile-for-the-whole-installation.md) | Define one security profile for the whole installation in one place | Proposed | 2026-11-21 |
 | [0025](./0025-build-the-permission-report-in-papaia-audit.md) | Build the permission report in papaia-audit with an account that holds view-users only | Proposed | 2026-11-23 |
 | [0026](./0026-isolated-add-on-networks-that-reach-only-the-model-gateway.md) | Let an add-on declare isolated networks that the core joins with the model gateway only | Proposed | 2026-11-23 |
+| [0027](./0027-join-the-network-an-add-on-offers-instead-of-its-app-network.md) | Join the network an add-on offers through an exposes entry instead of its app network | Proposed | 2026-11-23 |
 
 ## Reserved numbers
 

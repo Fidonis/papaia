@@ -37,5 +37,7 @@
 #   15  reserved `actions` `person-export`, `person-erase` and `transfer-ownership`, run by
 #      `papaia-ctl person export|erase`
 #   16  `networks.isolated`: internal add-on networks only `litellm` joins (ADR 0026)
-current=16
+#   17  `networks.join_addons[].network`: join the internal network a required add-on offers
+#      through an `exposes` entry instead of its `app_network` (ADR 0027)
+current=17
 min=1
