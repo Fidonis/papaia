@@ -122,8 +122,10 @@ checked the case enables the account again; the service does not disable it a se
 `personal_data: true`): `included`, or `not included` with the reason. A row is never left
 out. Chat, model gateway and identity provider are included through the core paths
 ([below](#the-core-services)); `papaia-lifecycle` (its tombstone stays as long as the
-erasure journal), `papaia-audit` (the audit trail is kept on erasure as evidence) and the
-contents of uploaded chat files are listed as not included, with the reason.
+erasure journal), `papaia-audit` (the audit trail is kept on erasure as evidence), the
+contents of uploaded chat files, the gateway's usage rows and the container logs of chat
+and gateway are listed as not included, with the reason
+([what the core paths do not reach](#the-core-services)).
 
 ## The core services
 
@@ -134,7 +136,7 @@ a database. Each path runs where its service runs, through `docker exec`:
 | Service | Export | Erasure | Path |
 |---|---|---|---|
 | Chat (`core-chat`) | the chat accounts whose OIDC id is the `sub` (name, user name, mail, provider, times), conversations, messages, file records, presets, prompts, shared links, tags, tool calls, memories, balances and transactions | all of these, plus stored keys, plugin settings, tokens and sessions, then the accounts | a `mongosh` script in the chat database container. It creates a role and a login for this one call (read only for an export, find and remove for an erasure, on the chat's collections only), signs in with it and drops both before it ends. The password is made for the call and lives only in memory and on the script's standard input |
-| Model gateway (`model-gateway`) | the usage sum (`spend`) of every end user that is the `sub`, a chat account id of the person or her mail address | those end users | the gateway's management API inside its container: `GET /customer/info`, `POST /customer/delete` (the gateway's per-request spend-log rows are not touched; they keep counts, never content, see [model-gateway.md](model-gateway.md)) |
+| Model gateway (`model-gateway`) | the usage sum (`spend`) of every end user that is the `sub`, a chat account id of the person or her mail address | the end-user records of those end users | the gateway's management API inside its container: `GET /customer/info`, `POST /customer/delete`. The per-request spend-log rows and the daily sums are not reached; see "What the core paths do not reach" below |
 | Identity provider (`identity`) | the account (user name, name, mail, attributes, state, creation), groups, realm roles, linked upstream identities, consents (no tokens), stored sign-in events (time, type, client, address) | the account, last | `papaia-lifecycle`'s command `person` as `svc-papaia-lifecycle`, the one account that may end sessions and delete persons; no other account gets these rights |
 
 Stored keys, plugin settings, tokens and sessions of the chat are sign-in material, not data
@@ -149,15 +151,30 @@ deleted last (`person.identity_delete`). The running `papaia-lifecycle` journals
 deactivation and the deletion in `identity` from their admin events and keeps the
 tombstone. When any step before fails, the account is not deleted: it stays disabled, the
 request ends `partial`, and the `sub` stays assigned for a new request. A failed transfer
-stops every erasure, in the core as in the modules.
+stops every erasure, in the core as in the modules. A failed deactivation stops it too:
+the account may still be enabled, so nothing is erased, the account is not deleted
+(`failed identity/account`), and the output says so. Without the `lifecycle` profile the
+core cannot reach the identity provider: the account is not disabled before the erasure,
+the person could still sign in and add data while it runs, and the output says so in a
+`note` line; disable the account in the identity provider and file a new request.
 
 **Reconciliation (governance GV-30 for the core services).** After an erasure the core
 asks chat, gateway and identity provider once more for anything that still names the
 person: chat documents filed under her accounts, chat accounts with her `sub` or mail
 address, gateway end users with her `sub`, account id or mail, her account. The output
 names the place and the number, never content (`left core-chat/chat_messages: 2`). Every
-find, and every service that cannot be asked, makes the request `partial`. One audit row
-`person.reconcile` with the number of finds.
+find, and every service that cannot be asked, makes the request `partial`. Every core row
+without a path is named `not checked`; the reconciliation never says that nothing is left
+in a place it did not ask. One audit row `person.reconcile` with the number of finds.
+
+**What the core paths do not reach.** These rows are listed as `not included`, with the
+reason and the retention, in the output and in `not_connected[]` of an archive:
+
+| Row | What names the person | Retention | Why not reached |
+|---|---|---|---|
+| `core:model-gateway` (`litellm-usage`) | per-request usage rows (`LiteLLM_SpendLogs.end_user`) and daily usage sums (`LiteLLM_DailyEndUserSpend`) under her chat account id; counts and cost, never content | as long as the gateway database; no retention period is set | the gateway's erase removes only the end-user record (proof MN-17); no narrower erase path for these tables is countersigned. The erasure proof says `not erased model-gateway/usage_rows` |
+| `core:chat` (`librechat-logs`) | the chat logs `sub`, user name and mail at sign-in, in its container log and in its log files on the volume `librechat-logs` | container log: rotated by size, 5 x 10 MiB per container, no period, removed with the container; log files: the chat's own rotation | no path for one person; retention of logs is governance GV-24 |
+| `core:model-gateway` (`litellm-logs`) | the chat account id of a request, in the gateway's container log | rotated by size, 5 x 10 MiB per container, no period, removed with the container | as above |
 
 **Audit.** Every call of a core path is one row with the request id as the correlation id:
 `person.export` (`detail.bytes`), `person.identity_revoke` and `person.identity_delete`
@@ -272,6 +289,11 @@ the entries the modules wrote here are applied again (see
   are listed as not included.
 - The contents of uploaded chat files on the chat's file volume and the chat's search
   index (the file records are erased); listed as not included.
+- The gateway's per-request usage rows and daily usage sums under the chat account id; listed
+  as not included and in the erasure proof as `not erased`, until an erase path for them is
+  countersigned (proof MN-17).
+- The container logs of chat and gateway and the chat's log files; listed as not included
+  with their rotation (governance GV-24).
 - The reconciliation over every volume, log and backup (governance GV-30 in full); the
   reconciliation after an erasure covers the core services.
 - A central deletion lock in the core; modules report their own (`legal_hold`).

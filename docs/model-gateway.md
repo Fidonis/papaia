@@ -135,16 +135,23 @@ disk or semantic cache keeps prompts and answers beyond the process (the proxy's
 type is Redis); and `general_settings.alerting`, which sends request details to a third
 place.
 
-What the gateway keeps: per request one spend-log row with the key id, the alias, token
-counts and the cost, without the `user` field (modules never send it). Usage is therefore
-counted per module key and never per person.
+What the gateway keeps: per request one spend-log row (`LiteLLM_SpendLogs`) with the key
+id, the alias, token counts and the cost. Modules never send the `user` field, so their
+rows name no person and their usage is counted per module key.
 
-Callers that do send `user` (the chat sends its account id) make the gateway keep a usage
-record per end user. `papaia-ctl person export|erase` reads the usage sum of the person's
-end users (`GET /customer/info` for her `sub`, chat account ids and mail address) and
-deletes them (`POST /customer/delete`), through the management connection inside the
+The chat does send `user`: its account id. For its requests the gateway keeps the account
+id in the spend-log row (`end_user`), a daily sum per end user
+(`LiteLLM_DailyEndUserSpend`) and an end-user record with the usage sum.
+`papaia-ctl person export|erase` reads the usage sum of the person's end users
+(`GET /customer/info` for her `sub`, chat account ids and mail address) and deletes the
+end-user records (`POST /customer/delete`), through the management connection inside the
 gateway's container; no other route is added (see
-[person-requests.md](person-requests.md#the-core-services)). `doctor model_gateway_content`
+[person-requests.md](person-requests.md#the-core-services)). That erase does not reach the
+spend-log rows and the daily sums: they keep the chat account id (counts and cost, no
+content) for as long as the gateway database, since no retention period is set. The
+erasure names them `not erased` and as not checked, until an erase path for them is
+countersigned (proof MN-17). The gateway's container log also holds the chat account id;
+it rotates at 5 x 10 MiB. `doctor model_gateway_content`
 fails when the rendered configuration or `ai/litellm/.env` breaks one of the settings
 above, so a usage record never holds content.
 

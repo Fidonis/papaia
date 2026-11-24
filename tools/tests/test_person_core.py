@@ -174,7 +174,9 @@ def test_export_of_a_person_without_account_contains_chat_and_gateway_usage(inst
     assert set(asked["ids"]) == {ANNA, CHAT_ID, MAIL}
 
 
-def test_erase_removes_chat_and_usage_and_the_reconciliation_finds_nothing(install, desk):
+def test_erase_removes_chat_and_usage_and_the_reconciliation_finds_nothing_it_checks(
+    install, desk
+):
     core = FakeCore()
     report, request = _run(install, desk, "erase", core)
 
@@ -183,7 +185,10 @@ def test_erase_removes_chat_and_usage_and_the_reconciliation_finds_nothing(insta
     assert all(not docs for docs in core.chat.values())
     assert set(core.usage) == {"someone-else"}
     assert report.findings == []
-    assert "reconciliation: nothing of the person left" in person.render(report)
+    text = person.render(report)
+    # Nothing is left in the places it asked; it does not claim more than that.
+    assert "reconciliation: nothing of the person left in the places checked" in text
+    assert "nothing of the person left in the core services" not in text
     proof = {(p["module"], p["category"]): p for p in report.proof}
     assert proof[("core-chat", "chat_conversations")]["deleted"] == 3
     assert proof[("core-chat", "chat_messages")]["deleted"] == 5
@@ -215,6 +220,59 @@ def test_a_failing_gateway_leaves_the_request_partial(install, desk):
     errors = [r for r in tp._rows(install["config"]) if r["catalog_id"] == "core.model-gateway"]
     assert [(r["operation"], r["result"], r["error_code"]) for r in errors][0] == (
         "person.erase", "error", "backend_failed")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# what the core paths do not reach: the gateway's usage rows (MN-17 found that the
+# gateway's erase removes only the end-user record) and the container logs
+# ─────────────────────────────────────────────────────────────────────────
+
+USAGE = ("core:model-gateway", "litellm-usage")
+LOGS = (("core:chat", "librechat-logs"), ("core:model-gateway", "litellm-logs"))
+
+
+@pytest.mark.parametrize("operation", ["export", "erase"])
+def test_the_gateway_usage_rows_and_the_logs_are_named_not_included_with_retention(
+    install, desk, operation
+):
+    report, _ = _run(install, desk, operation, FakeCore())
+    rows = {(r.module, r.entry): r for r in report.rows}
+    usage = rows[USAGE]
+    assert not usage.included
+    for word in ("LiteLLM_SpendLogs", "LiteLLM_DailyEndUserSpend", "chat account id",
+                 "MN-17", "retention"):
+        assert word in usage.reason, word
+    if operation == "erase":
+        assert usage.reason.startswith("not erased")
+    for row in LOGS:
+        assert not rows[row].included, row
+        for word in ("10 MiB", "retention", "GV-24"):
+            assert word in rows[row].reason, (row, word)
+    text = person.render(report)
+    assert "not included  core:model-gateway (litellm-usage): " in text
+
+
+def test_the_export_archive_names_the_usage_rows_as_not_connected(install, desk):
+    report, request = _run(install, desk, "export", FakeCore())
+    archive = _open_archive(report.archive, desk.passphrases[request])
+    index = json.loads(archive.read("index.json"))
+    named = {(r["module"], r["entry"]) for r in index["not_connected"]}
+    assert USAGE in named and set(LOGS) <= named
+
+
+def test_the_erasure_proof_and_the_reconciliation_do_not_claim_the_usage_rows(install, desk):
+    report, _ = _run(install, desk, "erase", FakeCore())
+    proof = {(p["module"], p["category"]): p for p in report.proof}
+    usage = proof[("model-gateway", "usage_rows")]
+    assert usage["state"] == "not_erased"
+    assert "LiteLLM_SpendLogs" in usage["reason"]
+    text = person.render(report)
+    assert "not erased    model-gateway/usage_rows: " in text
+    # The reconciliation names every place it did not ask.
+    assert "not checked   core:model-gateway (litellm-usage)" in text
+    for module, entry in LOGS:
+        assert f"not checked   {module} ({entry})" in text
+    assert "nothing of the person left in the core services" not in text
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -250,6 +308,42 @@ def test_a_failing_step_keeps_the_account_disabled_not_deleted(install, desk):
     assert "disabled, not deleted" in person.render(report)
     # The gateway still ran: a failure of one service does not stop the others.
     assert (person_core.GATEWAY, "erase") in [(s, o) for s, o, _ in core.calls]
+
+
+def test_a_failed_revoke_erases_nothing(install, desk):
+    core = FakeCore(account=True)
+    core.fail.add((person_core.IDENTITY, "revoke"))
+    modules = Modules(install)
+    request = tp._confirmed(install, desk, "erase")
+    report = person.run(install["config"], REPO, request=request, gate=_gate(desk),
+                        runner=modules, core=core)
+    assert report.state == "partial"
+    # The account may still be enabled: nothing is erased that she could fill again.
+    assert [(s, o) for s, o, _ in core.calls] == [(person_core.IDENTITY, "revoke")]
+    assert [s.action for s in modules.steps] == []
+    assert len(core.chat["conversations"]) == 3
+    # Not "held": the account may still be enabled, and it is not deleted either.
+    proof = {(p["module"], p["category"]): p["state"] for p in report.proof}
+    assert proof[("identity", "account")] == "failed"
+    assert report.modules["identity"] == "failed"
+    assert "disabled, not deleted" not in person.render(report)
+    assert "the account could not be disabled: nothing was erased" in person.render(report)
+
+
+def test_without_the_lifecycle_profile_the_erasure_says_the_account_was_not_disabled(
+    install, desk
+):
+    env = install["config"] / ".env"
+    env.write_text(env.read_text().replace(PROFILES, "librechat,litellm,keycloak,audit"))
+    report, _ = _run(install, desk, "erase", FakeCore(account=True))
+    assert "the account was not disabled before the erasure" in person.render(report)
+
+
+def test_without_an_identity_provider_nothing_is_said_about_disabling(install, desk):
+    env = install["config"] / ".env"
+    env.write_text(env.read_text().replace(PROFILES, "librechat,litellm,audit"))
+    report, _ = _run(install, desk, "erase", FakeCore())
+    assert "not disabled" not in person.render(report)
 
 
 def test_a_failed_transfer_erases_nothing_in_the_core_either(install, desk):

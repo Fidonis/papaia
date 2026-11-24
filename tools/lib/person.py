@@ -46,7 +46,10 @@ last, only when every step before succeeded; otherwise it stays disabled and the
 is `partial`, so the `sub` stays assigned. Last, the reconciliation (governance GV-30 for
 the core services) asks chat, gateway and identity provider again for anything that
 still names the person by `sub`, chat account or mail; every find makes the run
-`partial`.
+`partial`, and every core row without a path is named as not checked. A failed
+deactivation erases nothing. The gateway's usage rows under the chat account id are not
+reached (MN-17: the gateway's erase removes only the end-user record) and are named, with
+their retention, as not included and in the proof as `not_erased`.
 
 Every row of the records of processing (an `exposes` entry with `personal_data: true`)
 is named in the result: included, or not included with the reason (a module without the
@@ -109,7 +112,10 @@ _NO_PATH = "core service: no path for one person in this version"
 CORE_SERVICES = (
     ("librechat", "core:chat", "librechat", pc.CHAT),
     ("librechat", "core:chat", "librechat-files", None),
+    ("librechat", "core:chat", "librechat-logs", None),
     ("litellm", "core:model-gateway", "litellm", pc.GATEWAY),
+    ("litellm", "core:model-gateway", "litellm-usage", None),
+    ("litellm", "core:model-gateway", "litellm-logs", None),
     ("keycloak", "core:identity", "keycloak", pc.IDENTITY),
     ("lifecycle", "core:lifecycle", "papaia-lifecycle", None),
     ("audit", "core:audit", "papaia-audit", None),
@@ -120,6 +126,30 @@ _CORE_REASONS = {
         "the contents of uploaded files on the chat's file volume and its search index are "
         "not part of this version (the file records are)",
     ) * 2,
+    # MN-17 (the proof of the core paths) measured that the gateway's erase removes only
+    # the end-user record; no narrower erase path for these tables is countersigned yet.
+    "litellm-usage": (
+        "the per-request usage rows (LiteLLM_SpendLogs) and the daily usage sums "
+        "(LiteLLM_DailyEndUserSpend) filed under the person's chat account id are not part of "
+        "this version: no path for them is countersigned (MN-17); retention: as long as the "
+        "gateway database, no retention period is set (counts and cost, never content)",
+        "not erased: the gateway's erase removes only the end-user record; the per-request "
+        "usage rows (LiteLLM_SpendLogs) and the daily usage sums (LiteLLM_DailyEndUserSpend) "
+        "keep the person's chat account id until an erase path for them is countersigned "
+        "(MN-17); retention: as long as the gateway database, no retention period is set "
+        "(counts and cost, never content)",
+    ),
+    "librechat-logs": (
+        "the chat logs the sub, user name and mail at sign-in: in the container log and in "
+        "its log files on the volume librechat-logs; no path for one person; retention: the "
+        "container log rotates by size (5 x 10 MiB per container, no period) and goes with "
+        "the container, the log files rotate by the chat's own settings (GV-24)",
+    ) * 2,
+    "litellm-logs": (
+        "the gateway logs the chat account id of a request in its container log; no path "
+        "for one person; retention: the log rotates by size (5 x 10 MiB per container, no "
+        "period) and goes with the container (GV-24)",
+    ) * 2,
     "papaia-lifecycle": (
         _NO_PATH,
         "kept: the tombstone stays as long as the erasure journal (security 1.14 no. 2b)",
@@ -129,6 +159,22 @@ _CORE_REASONS = {
 _NO_LIFECYCLE = (
     "needs the lifecycle profile: the identity provider is reached as svc-papaia-lifecycle"
 )
+_NOT_DISABLED = (
+    "the account was not disabled before the erasure (no lifecycle profile): the person "
+    "could still sign in and add data while it ran, and data added after a module's step "
+    "is not checked; disable the account in the identity provider and file a new request"
+)
+_REVOKE_FAILED = (
+    "the account could not be disabled: nothing was erased and the account is not deleted; "
+    "file a new request once the identity provider answers"
+)
+# The proof of the gateway's erase names what its erase does not reach (MN-17).
+_USAGE_NOT_ERASED = {
+    "module": pc.GATEWAY, "category": "usage_rows", "state": "not_erased",
+    "reason": "the per-request usage rows (LiteLLM_SpendLogs) and the daily usage sums "
+              "(LiteLLM_DailyEndUserSpend) keep the chat account id; no erase path for them "
+              "is countersigned (MN-17)",
+}
 # Steps of the core paths in the queue of a run: [service, "core:<operation>"].
 CORE_STEP = "core:"
 RECONCILE = "core"
@@ -229,6 +275,8 @@ class Report:
     # The reconciliation after an erasure: what still names the person, by place.
     findings: list[dict] = field(default_factory=list)
     reconciled: bool = False
+    # What the operator must know about the order of the erasure (security 1.14 no. 2).
+    notes: list[str] = field(default_factory=list)
 
     @property
     def state(self) -> str:
@@ -730,14 +778,23 @@ def render(report: Report) -> str:
         elif item["state"] == "held":
             lines.append(f"  kept          {where}: disabled, not deleted (a step failed; the "
                          "sub stays assigned until a new request succeeds)")
+        elif item["state"] == "not_erased":
+            lines.append(f"  not erased    {where}: {item['reason']}")
         else:
             lines.append(f"  failed        {where}")
     if report.reconciled:
         for item in report.findings:
             count = "could not be checked" if item["count"] is None else item["count"]
             lines.append(f"  left          {item['place']}: {count}")
+        # The core rows without a path were not asked: named, never counted as clean.
+        for row in report.rows:
+            if not row.included and row.module.startswith("core:"):
+                lines.append(f"  not checked   {row.module} ({row.entry})")
         if not report.findings:
-            lines.append("  reconciliation: nothing of the person left in the core services")
+            lines.append("  reconciliation: nothing of the person left in the places checked; "
+                         "the places not checked are named above")
+    for note in report.notes:
+        lines.append(f"  note          {note}")
     return "\n".join(lines) + "\n"
 
 
@@ -878,6 +935,9 @@ def begin(config_dir: Path, repo_root: Path, work: Path | str, *, request: str,
             queue.append([pc.IDENTITY, CORE_STEP + "delete"])
         if paths:
             queue.append([RECONCILE, CORE_STEP + "check"])
+    notes = []
+    if operation == "erase" and any(row[1] == "keycloak" and row[4] is None for row in core):
+        notes.append(_NOT_DISABLED)
     _gate_call(pr.start, gate, request)
     _save(work, {
         "format": STATE_FORMAT,
@@ -896,7 +956,7 @@ def begin(config_dir: Path, repo_root: Path, work: Path | str, *, request: str,
         # What the core paths learned about the person (chat account ids, mail
         # addresses) for the gateway and the reconciliation; only in the run folder.
         "core": {"paths": paths, "accounts": [], "mails": [], "findings": [],
-                 "reconciled": False},
+                 "reconciled": False, "notes": notes},
     })
 
 
@@ -1038,6 +1098,15 @@ def _core_step(config_dir: Path, repo_root: Path, work: Path, state: dict, servi
             if error is not None:
                 state["ok"] = False
                 state["modules"][service] = "failed"
+                if operation == "revoke":
+                    # The account may still be enabled: nothing is erased that the person
+                    # could fill again, and the account is neither held nor deleted.
+                    state["queue"] = [step for step in state["queue"] if step[1] not in (
+                        TRANSFER, ERASE, CORE_STEP + "erase", CORE_STEP + "delete",
+                        CORE_STEP + "check")]
+                    state["proof"].append({"module": service, "category": "account",
+                                           "state": "failed"})
+                    state["core"]["notes"].append(_REVOKE_FAILED)
             elif operation == "revoke":
                 state["modules"][service] = "disabled" if answer["found"] else "no account"
             else:
@@ -1069,6 +1138,8 @@ def _core_step(config_dir: Path, repo_root: Path, work: Path, state: dict, servi
                             "seq": seq})
             state["proof"].append({"module": service, "category": name, "state": "done",
                                    "deleted": count, "journal": journal})
+        if service == pc.GATEWAY:
+            state["proof"].append(dict(_USAGE_NOT_ERASED))
         state["modules"][service] = "done"
 
 
@@ -1165,7 +1236,7 @@ def _result(config_dir: Path, repo_root: Path, work: Path, state: dict, gate: pr
         operation, state["sub"], _rows(modules, core, EXPORT if operation == "export" else ERASE),
         ok=state["ok"], modules=dict(state["modules"]), proof=list(state["proof"]),
         transfers=list(state["transfers"]), findings=list(state["core"]["findings"]),
-        reconciled=state["core"]["reconciled"],
+        reconciled=state["core"]["reconciled"], notes=list(state["core"]["notes"]),
     )
     if operation == "export":
         modules += [_core_module(repo_root, p) for p in state["core"]["paths"]]

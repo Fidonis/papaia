@@ -17,7 +17,9 @@ of an erasure and checks, audits and journals every answer.
   (lib/model_gateway.py, two more routes: `GET /customer/info`, `POST /customer/delete`).
   Usage is kept per end user; an end user is whatever id a caller sent, here the `sub`,
   the chat account id or the mail. The export keeps the usage sum (`spend`) and nothing
-  else of the answer.
+  else of the answer. The erase removes the end-user records only: the per-request usage
+  rows and the daily sums under the chat account id stay (MN-17), and lib/person.py names
+  them as not included.
 * `identity` (Keycloak): papaia-lifecycle's `person` command through `docker exec`, so
   the request runs as `svc-papaia-lifecycle`, the one account that holds the rights to
   end sessions and delete persons (no further account gets them). `revoke` disables the

@@ -23,7 +23,13 @@ based on merged pull requests; this file mirrors the published releases.
   step fails the account stays disabled and the request ends `partial`. The core writes the
   journal entries `core-chat` and `model-gateway`, and reconciles afterwards: every place
   that still names the person by `sub`, chat account or mail is listed with its count and
-  makes the request `partial`.
+  makes the request `partial`; every core row without a path is named `not checked`. A
+  failed deactivation erases nothing; without the `lifecycle` profile the output notes
+  that the account was not disabled first.
+- The gateway's erase removes the end-user records only. Its per-request usage rows and
+  daily sums under the chat account id, and the container logs of chat and gateway, are
+  listed as not included with their retention; the proof says `not erased
+  model-gateway/usage_rows`.
 - New `doctor model_gateway_content`: `fail` when the model gateway would keep request or
   response content.
 
