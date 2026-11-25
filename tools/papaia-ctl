@@ -27,7 +27,7 @@
 #                       [--smtp|--no-smtp] [--smtp-host=HOST] [--smtp-port=PORT]
 #                       [--smtp-security=starttls|tls|none] [--smtp-user=NAME|--smtp-no-auth]
 #                       [--smtp-from=ADDRESS] [--smtp-from-name=NAME]
-#                       [--backup-dir=PATH] [--env-only]
+#                       [--backup-dir=PATH] [--env-only] [--pki|--no-pki]
 #                       [--allow-direct-port-access] [--force] [-y]
 #                       [--topology=single|distributed] [--node=NAME=ADDR[,ssh=USER@HOST[:PORT]]]
 #                       [--controller=NAME] [--preset=dmz-split|dmz-edge] [--place=SERVICE=NODE]
@@ -41,21 +41,21 @@
 #   papaia-ctl uninstall     [--clean-up] [--addons] [-y] [--config-dir=PATH]
 #   papaia-ctl backup        [--backup-dir=PATH] [--retention-period-days=N]
 #                            [--only=SELECTOR[,SELECTOR]] [--config-dir=PATH]
-#   papaia-ctl backup-delete --restore-point=ID [--restore-point=ID ...]
+#   papaia-ctl backup-delete --restore-point=ID[,ID] [--restore-point=ID ...] (repeatable)
 #                            [--backup-dir=PATH] [-y] [--config-dir=PATH]
-#                            --restore-point is repeatable or comma-separated
 #   papaia-ctl restore       [--backup-dir=PATH] [--restore-point=ID] [--list]
 #                            [--only=SELECTOR[,SELECTOR]] [--restart-clean]
 #                            [--no-restart] [-y] [--config-dir=PATH]
 #                            SELECTOR is module:NAME, addon:NAME or volume:NAME
 #                            (and node:NAME in a distributed installation)
-#   papaia-ctl restore-scoped --only=SELECTOR[,SELECTOR] [as restore, minus
-#                            --restart-clean] — restore that cannot replace the
-#                            configuration directory, for in-stack callers
+#   papaia-ctl restore-scoped --only=SELECTOR[,SELECTOR] [as restore, minus --restart-clean]
+#                            — restore that cannot replace the config directory, for in-stack callers
 #   papaia-ctl npm-provision [--config-dir=PATH]
 #   papaia-ctl keycloak-role-sync [--config-dir=PATH]
 #   papaia-ctl status        [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
 #   papaia-ctl doctor        [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+#   papaia-ctl pki           status [--json] | renew [--force] | purge [--ca] [-y]
+#                            | rotate-ca [--cert=FILE --key=FILE [--chain=FILE]] [--config-dir=PATH]
 #   papaia-ctl topology show [--json] [--config-dir=PATH]
 #   papaia-ctl topology validate [--config-dir=PATH]
 #   papaia-ctl topology firewall [--format=table|json|csv] [--config-dir=PATH]
@@ -119,6 +119,8 @@ source "$SH_LIB/python.sh"
 source "$SH_LIB/prompt.sh"
 # shellcheck source=lib/sh/certs.sh
 source "$SH_LIB/certs.sh"
+# shellcheck source=lib/sh/pki.sh
+source "$SH_LIB/pki.sh"
 # shellcheck source=lib/sh/setup.sh
 source "$SH_LIB/setup.sh"
 # shellcheck source=lib/sh/lifecycle.sh
@@ -198,6 +200,7 @@ case "$cmd" in
     keycloak-role-sync) cmd_keycloak_role_sync "$@" ;;
     status)        cmd_status "$@" ;;
     doctor)        cmd_doctor "$@" ;;
+    pki)           cmd_pki "$@" ;;
     topology)      cmd_topology "$@" ;;
     node)          cmd_node "$@" ;;
     node-shell)    cmd_node_shell "$@" ;;

@@ -1,0 +1,60 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Internal certificate authority · pki-issuer
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OPTIONAL — switched on with `papaia-ctl setup --pki` (profile `pki`).
+#
+# Not part of src/docker-compose.yml, like the link gateway: nothing here runs
+# with `docker compose up`. The issuer is a one-shot job. papaia-ctl runs it with
+#   docker compose -p <COMPOSE_PROJECT_NAME> -f src/infra/pki/docker-compose.yml \
+#     run --rm -T -v <PAPAIA_PKI_DIR>:/pki [-e PKI_...] pki-issuer <command>
+# on `setup`, `start`, `addon install|start|remove|uninstall` and
+# `papaia-ctl pki renew|rotate-ca`, and reads what changed from its output.
+#
+# What it does is in issue.sh next to this file; the layout it writes is the
+# one in docs/pki.md (and docs/adr/0019-internal-tls-from-a-core-pki.md):
+#   <PAPAIA_PKI_DIR>/ca-bundle.crt, inventory.json,
+#   <PAPAIA_PKI_DIR>/<module>/<service>/{ca.crt,tls.crt,tls.key,client.crt,client.key,generation}
+#
+# Safety:
+#   - The CA private key lives only in the named volume `pki-ca`. That volume is
+#     mounted here and nowhere else: no runtime service of the core or of an
+#     add-on ever sees it, and it is not inside PAPAIA_CONFIG_DIR (which
+#     papaia-manager mounts as a whole).
+#   - No network at all (`network_mode: none`); the job reads two mounts and
+#     writes files.
+#   - It runs as root because it hands every service directory and key to the
+#     numeric user of the service that reads it (contract: owner uid, keys 0400).
+#
+# There is no ${VAR} in this file: everything that differs per installation is
+# passed by papaia-ctl on the command line of `docker compose run`.
+services:
+
+  pki-issuer:
+    # OpenSSL 3.5 on Alpine (its BusyBox provides the shell). Used as a
+    # command-line tool, never as a network service.
+    image: alpine/openssl:3.5.8
+    entrypoint: ["/bin/sh", "/issuer/issue.sh"]
+    command: ["sync"]
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    # chown and chmod of files owned by other users, and writing into service
+    # directories that are 0500 and belong to another user.
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - pki-ca:/ca
+      - ./issue.sh:/issuer/issue.sh:ro
+    labels:
+      de.fidonis.module: papaia-pki
+      de.fidonis.role:   certificate-issuer
+
+volumes:
+  # The CA key, the staged and retired CAs and the issuer's bookkeeping. Created
+  # with this project's label, so `papaia-ctl backup` archives it with the
+  # other volumes of the installation.
+  pki-ca:

@@ -143,6 +143,9 @@ cmd_start() {
             py_cli cluster-lock --clear
             UPGRADE_IN_PROGRESS=1
         fi
+        # The internal certificates are issued on the controller (profile pki); what has
+        # to be restarted on a node is named, not restarted from here.
+        if declare -F _pki_sync >/dev/null; then _pki_sync || exit 3; fi
         _start_distributed "$node" "$profiles" "$addons" "$force"
         return
     fi
@@ -187,6 +190,9 @@ cmd_start() {
     if [ -n "$profiles" ]; then
         _require_profiles_resolve "$profiles" "$env_file" -f "$COMPOSE_FILE"
     fi
+
+    # The internal certificates before anything that mounts them starts (profile pki).
+    if declare -F _pki_sync >/dev/null; then _pki_sync || exit 3; fi
 
     if [ "$addons" -eq 1 ]; then
         info "Starting active addons..."
@@ -583,6 +589,7 @@ cmd_uninstall() {
             docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down
         fi
     fi
+    if declare -F _pki_uninstall >/dev/null; then _pki_uninstall "$clean_up"; fi
 
     if [ -d "$CONFIG_DIR" ]; then
         info "Deleting $CONFIG_DIR..."
