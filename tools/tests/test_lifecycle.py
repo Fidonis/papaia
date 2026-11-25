@@ -29,7 +29,7 @@ import live_names
 import pytest
 import yaml
 
-from lib import backup, render_core, topology
+from lib import backup, own_images, render_core, topology
 from lib import lifecycle_account as la
 from lib import realm_sync as rs
 from tests.realm_fake import FakeRealm
@@ -109,6 +109,45 @@ def test_the_service_is_hardened_and_pinned():
     )
 
 
+# The command of the init service: unchanged since it ran on the stock Python base.
+INIT_COMMAND = [
+    "sh",
+    "-c",
+    'for spec in /var/lib/papaia-lifecycle:0700 /var/lib/papaia-security-state:0755; do '
+    'dir=$${spec%:*}; mode=$${spec#*:}; '
+    'if [ "$$(stat -c %u "$$dir")" = 0 ]; then chmod "$$mode" "$$dir" || exit 1; fi; '
+    'done && '
+    'chown ${UID:-1000}:${GID:-1000} /var/lib/papaia-lifecycle /var/lib/papaia-security-state',
+]
+
+
+def test_the_init_runs_from_the_own_lifecycle_image():
+    """The init service runs from the core's own image papaia-lifecycle (the digest the
+    service pins, which carries the Debian fixes of its build), not from a stock base
+    image: one pin less, and no third-party base with open fixable findings. Its
+    command, user and capabilities are the ones it had on the stock base."""
+    doc = _compose()
+    init = doc["services"]["papaia-lifecycle-init"]
+    assert init["image"] == doc["services"]["papaia-lifecycle"]["image"]
+    assert init["image"].startswith("ghcr.io/fidonis/papaia-lifecycle:")
+    assert "entrypoint" not in init
+    assert init["command"] == INIT_COMMAND
+    assert init["user"] == "0:0"
+    assert init["restart"] == "no"
+    (own,) = [
+        image
+        for image in yaml.safe_load(
+            (REPO / "compat" / "own-images.yaml").read_text(encoding="utf-8")
+        )["images"]
+        if image["name"] == "ghcr.io/fidonis/papaia-lifecycle"
+    ]
+    assert "papaia-lifecycle-init" in own["services"]
+    # The compose command reaches the shell as written: the image sets no entrypoint.
+    dockerfile = (MODULE_DIR / "Dockerfile").read_text(encoding="utf-8")
+    assert not any(line.lstrip().upper().startswith("ENTRYPOINT")
+                   for line in dockerfile.splitlines())
+
+
 def _docker_daemon() -> bool:
     if shutil.which("docker") is None:
         return False
@@ -123,10 +162,40 @@ def _docker_daemon() -> bool:
 def test_init_completes_again_on_volumes_it_already_handed_over(tmp_path):
     """The init service runs before every start of papaia-lifecycle. After its first run
     the folders belong to the unprivileged user, so a second run must not need a
-    capability the first one used (CAP_FOWNER for chmod), or every later `up` fails."""
+    capability the first one used (CAP_FOWNER for chmod), or every later `up` fails.
+
+    The init runs from the core's own image papaia-lifecycle; it is built here from its
+    Dockerfile and the inputs compat/own-images.yaml declares (the pinned image is not
+    pulled: the test is about the init step, the image path is
+    test_own_images_registry.py)."""
     doc = _compose()
     init = copy.deepcopy(doc["services"]["papaia-lifecycle-init"])
     init.pop("profiles")
+    name = live_names.project("test-lifecycle", "PAPAIA_TEST_COMPOSE_PROJECT")
+    (own,) = [i for i in own_images.load(REPO) if "papaia-lifecycle-init" in i.services]
+    assert init["image"].startswith(f"{own.name}:")
+    image = f"{name}-lifecycle:test"
+    context = own_images.stage_context(REPO, own, tmp_path / "build")
+    built = subprocess.run(
+        ["docker", "buildx", "build", "--load", "--provenance=false", "-t", image,
+         "-f", str(context / own.dockerfile), str(context)],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+    # The compose command reaches the shell as written: no entrypoint in front of it.
+    entrypoint = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{json .Config.Entrypoint}}", image],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert entrypoint.returncode == 0, entrypoint.stderr
+    assert entrypoint.stdout.strip() in ("null", "[]")
+    init["image"] = image
     after = {
         "image": init["image"],
         "user": "${UID:-1000}:${GID:-1000}",
@@ -149,7 +218,6 @@ def test_init_completes_again_on_volumes_it_already_handed_over(tmp_path):
     }
     path = tmp_path / "docker-compose.yml"
     path.write_text(yaml.safe_dump(project), encoding="utf-8")
-    name = live_names.project("test-lifecycle", "PAPAIA_TEST_COMPOSE_PROJECT")
     env = dict(os.environ, UID="1000", GID="1000")
     base = ["docker", "compose", "-p", name, "-f", str(path)]
     try:
@@ -174,6 +242,7 @@ def test_init_completes_again_on_volumes_it_already_handed_over(tmp_path):
             assert logs[-4:] == ["1000", "700", "1000", "755"], f"run {attempt}: {logs}"
     finally:
         subprocess.run([*base, "down", "-v"], env=env, capture_output=True, timeout=120)
+        subprocess.run(["docker", "image", "rm", image], capture_output=True, timeout=120)
 
 
 def test_the_volumes_are_the_signing_key_and_the_security_state():

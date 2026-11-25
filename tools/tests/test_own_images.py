@@ -57,6 +57,7 @@ def test_the_core_builds_its_own_images_for_the_services_that_run_its_code():
     assert declared["ghcr.io/fidonis/papaia-egress"].services == ("papaia-egress",)
     assert declared["ghcr.io/fidonis/papaia-lifecycle"].services == (
         "papaia-lifecycle",
+        "papaia-lifecycle-init",
         "papaia-startgate-check",
     )
     assert declared["ghcr.io/fidonis/papaia-replay"].services == ("papaia-replay",)

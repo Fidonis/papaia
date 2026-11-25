@@ -12,6 +12,30 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Module images published on the release day
+
+- `compat/release-day-images.yaml` lists the module images that are published only
+  on the release day (papaia-me, papaia-connections, papaia-manager) with the
+  candidate digest the pins name, the module and the source commit of the module
+  milestone. The list accepts module images under `ghcr.io/fidonis/` only; own
+  images of the core and third-party images cannot be listed.
+- `tools/check-image-pins check --mode=candidate` reports a listed image that the
+  candidate registry does not serve as a notice (`published only on release day`)
+  instead of asking the published registry, and fails when a pin differs from its
+  entry or an entry is used by no pin. `--candidate-digests` compares the entries
+  with the builds of the module milestones.
+- Release mode is unchanged for resolving and fails while the list has an entry,
+  so a release is tagged only after every module image is published and re-pinned
+  (release gate item 8 in `docs/compatibility.md`).
+- The manager candidate is rebuilt from the head of its milestone and re-pinned;
+  it is listed until the manager release publishes its image.
+- `papaia-lifecycle-init` runs from the core's own image `papaia-lifecycle` (same
+  command, user and capabilities) instead of the stock `python:3.12.16-slim-trixie`
+  image, whose tag had moved to a build with an open fixable finding in libzstd1; the
+  own image carries the fixed package. The profile `lifecycle` needs one image less.
+- `postgres:16.16` (`litellm-db`) and `postgres:17.12-alpine3.24` (`papaia-audit-db`)
+  are re-pinned to the digests their tags name today (linux/amd64 and linux/arm64).
+
 ### Core test suite in parallel shards
 
 - The CI job "Ruff and pytest" ran the whole core suite in one job and hit its 20-minute

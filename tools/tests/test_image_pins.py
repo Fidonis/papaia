@@ -22,7 +22,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lib import compat, image_pins, images, module_offer, own_images, pairing_approval, semver
+from lib import (
+    compat,
+    image_pins,
+    images,
+    module_offer,
+    own_images,
+    pairing_approval,
+    release_day,
+    semver,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO / ".github" / "workflows"
@@ -640,3 +649,496 @@ def test_the_repin_procedure_is_documented():
     for needle in ("check-image-pins repin --ref=", "--mode=candidate", "--mode=release",
                    "lib.me_profile generate"):
         assert needle in text, needle
+
+
+# ── module images published only on the release day ──────────────────────────
+#
+# A module image (papaia-me, papaia-connections, the manager) is published by its own
+# release on the release day; until then the core pins the candidate built from the
+# module milestone and lists it in compat/release-day-images.yaml. Candidate mode
+# reports such a pin as a notice instead of asking the published registry; release
+# mode ignores the list and refuses to pass while it still has an entry.
+
+MOD = "ghcr.io/fidonis/papaia-mod"
+MOD_SOURCE = "c" * 40
+REFUSED = "token request https://ghcr.io/token?scope=repository%3Afidonis%2Fpapaia-mod" \
+          "%3Apull&service=ghcr.io answered HTTP 403"
+
+
+class Refusing(Upstream):
+    """ghcr.io as it answers an anonymous pull of a package it does not publish; every
+    other registry as `Upstream`."""
+
+    def resolve(self, host: str, repository: str, reference: str) -> str:
+        if (host, repository) == ("ghcr.io", "fidonis/papaia-mod"):
+            self.asked.append((host, repository, reference))
+            raise images.ImageError(f"ghcr.io: {REFUSED}")
+        return super().resolve(host, repository, reference)
+
+
+def _entry(image: str = MOD, tag: str = "0.1.0", digest: str = D_KNOWN, **extra) -> dict:
+    entry = {"image": image, "tag": tag, "digest": digest, "module": "papaia-mod",
+             "source": MOD_SOURCE, "built": "2026-11-25"}
+    entry.update(extra)
+    return entry
+
+
+def _release_day(root: Path, entries: list[dict]) -> Path:
+    path = root / "compat" / "release-day-images.yaml"
+    path.write_text(
+        "# fixture\n" + yaml.safe_dump({"schema": "papaia.release-day-images/1",
+                                        "images": entries}, sort_keys=False),
+        encoding="utf-8")
+    return path
+
+
+def _module_checkout(tmp_path: Path, mod: str = f"{MOD}:0.1.0@{D_KNOWN}",
+                     db: str = f"{DB}:18.3@{D_OTHER}") -> Path:
+    return _checkout(tmp_path, mod, db)
+
+
+def _db_served_locally(fixture_registry) -> str:
+    return f"{DB}:18.3@" + fixture_registry.push("unpublished/postgres", "18.3", b"db index")
+
+
+def test_candidate_a_listed_unpublished_module_image_is_a_notice(tmp_path, fixture_registry):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [_entry()])
+    upstream = Refusing()
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, upstream),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert result.findings == []
+    assert [str(n) for n in result.notices] == [
+        f"published only on release day: {MOD}:0.1.0@{D_KNOWN} "
+        f"(candidate of papaia-mod @ {MOD_SOURCE})"]
+    assert [p.location for p in result.notices[0].pins] == [
+        "src/app/docker-compose.yml:4", "src/app/service-env.json:3"]
+    assert not any(host == "ghcr.io" for host, _, _ in upstream.asked), (
+        "candidate mode never asks ghcr.io for a listed image")
+
+
+def test_the_command_reports_release_day_notices_and_exits_0(tmp_path, fixture_registry,
+                                                             capsys, monkeypatch):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [_entry()])
+    base = ["--repo-root", str(root), "check", "--mode=candidate",
+            f"--registry={fixture_registry.prefix}"]
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for name in ("GITHUB_REF", "GITHUB_REF_TYPE", "GITHUB_REF_NAME"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert image_pins.main(base, registry=Routed(fixture_registry.host, Refusing())) == 0
+    out = capsys.readouterr().out
+    assert f"published only on release day: {MOD}:0.1.0@{D_KNOWN}" in out
+    assert "1 pin(s) resolve" in out
+    assert "2 pin(s) of 1 image(s) published only on release day" in out
+    assert "::notice::" not in out
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert image_pins.main(base, registry=Routed(fixture_registry.host, Refusing())) == 0
+    out = capsys.readouterr().out
+    assert out.count("::notice::published only on release day: ") == 1
+
+
+def test_candidate_a_listed_image_served_by_the_candidate_registry_passes(
+        tmp_path, fixture_registry):
+    digest = fixture_registry.push(f"unpublished/{MOD}", "0.1.0", b"module candidate")
+    root = _module_checkout(tmp_path, f"{MOD}:0.1.0@{digest}",
+                            _db_served_locally(fixture_registry))
+    _release_day(root, [_entry(digest=digest)])
+    upstream = Refusing()
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, upstream),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert result.findings == [] and result.notices == []
+    assert upstream.asked == []
+
+
+def test_candidate_a_listed_image_with_another_digest_at_the_candidate_registry_fails(
+        tmp_path, fixture_registry):
+    other = fixture_registry.push(f"unpublished/{MOD}", "0.1.0", b"another build")
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [_entry()])
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, Refusing()),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert [f.pin.location for f in result.findings] == [
+        "src/app/docker-compose.yml:4", "src/app/service-env.json:3"]
+    assert all(other in f.reason and "candidate registry" in f.reason
+               for f in result.findings)
+    assert result.notices == []
+
+
+def test_candidate_a_listed_image_with_a_moved_tag_at_the_candidate_registry_fails(
+        tmp_path, fixture_registry):
+    pinned = fixture_registry.push(f"unpublished/{MOD}", "0.1.0", b"first build")
+    moved = fixture_registry.push(f"unpublished/{MOD}", "0.1.0", b"second build")
+    root = _module_checkout(tmp_path, f"{MOD}:0.1.0@{pinned}",
+                            _db_served_locally(fixture_registry))
+    _release_day(root, [_entry(digest=pinned)])
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, Refusing()),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert [f.pin.location for f in result.findings] == [
+        "src/app/docker-compose.yml:4", "src/app/service-env.json:3"]
+    assert f"tag 0.1.0 points to {moved}" in result.findings[0].reason
+
+
+@pytest.mark.parametrize("entry", [
+    _entry(digest=D_OTHER),
+    _entry(tag="0.1.1"),
+], ids=["digest", "tag"])
+def test_candidate_a_pin_that_differs_from_its_entry_fails(tmp_path, fixture_registry, entry):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [entry])
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, Refusing()),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert [f.pin.location for f in result.findings] == [
+        "src/app/docker-compose.yml:4", "src/app/service-env.json:3"]
+    assert all("release-day entry" in f.reason and entry["digest"] in f.reason
+               for f in result.findings)
+    assert result.notices == []
+
+
+def test_candidate_an_entry_no_pin_uses_fails(tmp_path, fixture_registry):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [_entry(), _entry(image="ghcr.io/fidonis/papaia-gone",
+                                         module="papaia-gone")])
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, Refusing()),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert len(result.findings) == 1
+    finding = result.findings[0]
+    assert finding.pin.path == "compat/release-day-images.yaml"
+    lines = (root / finding.pin.path).read_text(encoding="utf-8").splitlines()
+    assert "ghcr.io/fidonis/papaia-gone" in lines[finding.pin.line - 1]
+    assert "used by no pin" in finding.reason
+
+
+def test_candidate_an_unlisted_unpublished_image_still_fails_with_its_url(
+        tmp_path, fixture_registry):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    upstream = Refusing()
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, upstream),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert [f.pin.location for f in result.findings] == [
+        "src/app/docker-compose.yml:4", "src/app/service-env.json:3"]
+    assert all(REFUSED in f.reason for f in result.findings)
+    assert result.notices == []
+
+
+def test_candidate_a_moved_third_party_tag_is_still_a_finding(tmp_path, fixture_registry):
+    # As python:3.12.16-slim-trixie: the tag now names another build than the pin.
+    pinned, moved = D_KNOWN, D_OTHER
+    base = f"python:3.12.16-slim-trixie@{pinned}"
+    root = _checkout(tmp_path, f"{MOD}:0.1.0@{D_KNOWN}", base)
+    _release_day(root, [_entry()])
+    upstream = Refusing({("docker.io", "library/python", pinned): pinned,
+                         ("docker.io", "library/python", "3.12.16-slim-trixie"): moved})
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, upstream),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 env=NO_CI)
+
+    assert [f.pin.location for f in result.findings] == ["src/app/docker-compose.yml:6"]
+    assert f"tag 3.12.16-slim-trixie points to {moved}" in result.findings[0].reason
+
+
+# ── release mode with the release-day list ───────────────────────────────────
+
+
+def test_release_fails_while_the_release_day_list_has_an_entry(tmp_path):
+    second = "ghcr.io/fidonis/papaia-two"
+    root = _module_checkout(tmp_path)
+    (root / "src" / "two").mkdir()
+    (root / "src" / "two" / "docker-compose.yml").write_text(
+        f"services:\n  two:\n    image: {second}:1.8.0@{D_OTHER}\n", encoding="utf-8")
+    _release_day(root, [_entry(), _entry(image=second, tag="1.8.0", digest=D_OTHER,
+                                         module="papaia-two")])
+    served = (_served(f"{MOD}:0.1.0@{D_KNOWN}") | _served(f"{second}:1.8.0@{D_OTHER}")
+              | _served(f"{DB}:18.3@{D_OTHER}"))
+
+    result = image_pins.evaluate(root, registry=Upstream(served), mode="release", env=NO_CI)
+
+    assert len(result.findings) == 1 and result.notices == []
+    reason = result.findings[0].reason
+    assert reason.startswith("release-day list not empty: ")
+    assert f"{MOD}:0.1.0" in reason and f"{second}:1.8.0" in reason
+    assert "re-pin after the module release" in reason
+    assert result.findings[0].pin.path == "compat/release-day-images.yaml"
+
+
+def test_release_passes_with_an_empty_list_and_every_module_image_served(tmp_path):
+    root = _module_checkout(tmp_path)
+    _release_day(root, [])
+    served = _served(f"{MOD}:0.1.0@{D_KNOWN}") | _served(f"{DB}:18.3@{D_OTHER}")
+
+    result = image_pins.evaluate(root, registry=Upstream(served), mode="release", env=NO_CI)
+
+    assert result.findings == [] and result.notices == []
+
+
+def test_release_a_listed_image_the_registry_refuses_is_a_finding_never_a_notice(tmp_path):
+    root = _module_checkout(tmp_path)
+    _release_day(root, [_entry()])
+    upstream = Refusing(_served(f"{DB}:18.3@{D_OTHER}"))
+
+    result = image_pins.evaluate(root, registry=upstream, mode="release", env=NO_CI)
+
+    assert result.notices == []
+    refused = [f for f in result.findings if REFUSED in f.reason]
+    assert [f.pin.location for f in refused] == [
+        "src/app/docker-compose.yml:4", "src/app/service-env.json:3"]
+    assert ("ghcr.io", "fidonis/papaia-mod", D_KNOWN) in upstream.asked
+    assert any(f.reason.startswith("release-day list not empty") for f in result.findings)
+
+
+def test_release_with_own_builds_still_blocks_on_the_release_day_list(tmp_path,
+                                                                     fixture_registry):
+    own = "ghcr.io/fidonis/papaia-own"
+    digest = fixture_registry.push(f"unpublished/{own}", "1.10.0-rc.1", b"own")
+    root = _module_checkout(tmp_path)
+    (root / "src" / "own").mkdir()
+    (root / "src" / "own" / "docker-compose.yml").write_text(
+        f"services:\n  own:\n    image: {own}:1.10.0-rc.1@{digest}\n", encoding="utf-8")
+    (root / "compat" / "own-images.yaml").write_text(
+        f"schema: papaia.own-images/1\nimages:\n  - name: {own}\n    dockerfile: Dockerfile\n"
+        "    inputs: [Dockerfile]\n    services: [own]\n    license: MIT\n"
+        "    license_class: P\n", encoding="utf-8")
+    (root / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    builds = tmp_path / "builds.json"
+    own_images.write_builds(builds, fixture_registry.prefix, [
+        {"name": own, "tag": "1.10.0-rc.1", "digest": digest, "revision": "b" * 40}])
+    served = _served(f"{MOD}:0.1.0@{D_KNOWN}") | _served(f"{DB}:18.3@{D_OTHER}")
+    registry = Routed(fixture_registry.host, Upstream(served))
+
+    _release_day(root, [])
+    assert image_pins.evaluate(root, registry=registry, mode="release", own_builds=builds,
+                               env=NO_CI).findings == []
+    _release_day(root, [_entry()])
+    findings = image_pins.evaluate(root, registry=registry, mode="release",
+                                   own_builds=builds, env=NO_CI).findings
+    assert [f.reason.split(":")[0] for f in findings] == ["release-day list not empty"]
+
+
+def test_the_release_command_names_every_listed_image_and_exits_1(tmp_path, capsys):
+    root = _module_checkout(tmp_path)
+    _release_day(root, [_entry()])
+    served = _served(f"{MOD}:0.1.0@{D_KNOWN}") | _served(f"{DB}:18.3@{D_OTHER}")
+
+    status = image_pins.main(["--repo-root", str(root), "check", "--mode=release"],
+                             registry=Upstream(served))
+
+    err = capsys.readouterr().err
+    assert status == 1
+    assert f"release-day list not empty: {MOD}:0.1.0" in err
+
+
+# ── the release-day list ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("entries, match", [
+    ([_entry(extra="x")], "unknown"),
+    ([_entry(digest="sha256:abc")], "digest"),
+    ([_entry(digest="sha512:" + "a" * 128)], "digest"),
+    ([_entry(source="c" * 12)], "source"),
+    ([_entry(), _entry(tag="0.2.0")], "twice"),
+    ([_entry(image="127.0.0.1:5000/fidonis/papaia-mod")], "loopback"),
+    ([_entry(image="localhost:5000/unpublished/ghcr.io/fidonis/papaia-mod")], "loopback"),
+    ([_entry(image="ghcr.io/example/app")], "ghcr.io/fidonis/"),
+    ([_entry(image="docker.io/library/python")], "ghcr.io/fidonis/"),
+    ([_entry(image="python")], "ghcr.io/fidonis/"),
+    ([_entry(image="ghcr.io/fidonis/papaia-own")], "own image"),
+    ([_entry(image=f"{MOD}:0.1.0")], "repository"),
+    ([_entry(tag="latest")], "tag"),
+    ([_entry(module="Papaia Mod")], "module"),
+    ([_entry(built="yesterday")], "built"),
+    ([{k: v for k, v in _entry().items() if k != "source"}], "source"),
+], ids=["unknown-key", "short-digest", "sha512", "short-commit", "duplicate", "loopback",
+        "localhost", "other-owner", "docker-hub", "short-name", "own-image", "with-tag",
+        "latest", "module-name", "built-date", "missing-key"])
+def test_the_release_day_list_refuses(tmp_path, entries, match):
+    root = _module_checkout(tmp_path)
+    (root / "compat" / "own-images.yaml").write_text(
+        "schema: papaia.own-images/1\nimages:\n  - name: ghcr.io/fidonis/papaia-own\n"
+        "    dockerfile: Dockerfile\n    inputs: [Dockerfile]\n    services: [own]\n"
+        "    license: MIT\n    license_class: P\n", encoding="utf-8")
+    (root / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    _release_day(root, entries)
+
+    with pytest.raises(release_day.ReleaseDayError, match=match):
+        release_day.load(root)
+    status = image_pins.main(["--repo-root", str(root), "check", "--mode=release"],
+                             registry=Upstream())
+    assert status == 2
+
+
+@pytest.mark.parametrize("text, match", [
+    ("schema: papaia.release-day-images/2\nimages: []\n", "schema"),
+    ("schema: papaia.release-day-images/1\nimages: []\nextra: 1\n", "schema"),
+    ("schema: papaia.release-day-images/1\nimages: {}\n", "list"),
+    ("- not a mapping\n", "schema"),
+    ("schema: papaia.release-day-images/1\nimages: []\n" + "#" * (64 * 1024), "large"),
+], ids=["schema-version", "unknown-top-key", "not-a-list", "not-a-mapping", "oversized"])
+def test_the_release_day_file_refuses(tmp_path, capsys, text, match):
+    root = _module_checkout(tmp_path)
+    (root / "compat" / "release-day-images.yaml").write_text(text, encoding="utf-8")
+
+    with pytest.raises(release_day.ReleaseDayError, match=match):
+        release_day.load(root)
+    assert image_pins.main(["--repo-root", str(root), "check", "--mode=release"],
+                           registry=Upstream()) == 2
+    assert "ERROR: compat/release-day-images.yaml" in capsys.readouterr().err
+
+
+def test_the_release_day_list_reads_its_entries_with_their_lines(tmp_path):
+    root = _module_checkout(tmp_path)
+    _release_day(root, [_entry(), _entry(image="ghcr.io/fidonis/papaia-two",
+                                         module="papaia-two")])
+
+    entries = release_day.load(root)
+
+    assert [(e.image, e.tag, e.digest, e.module, e.source, e.built) for e in entries] == [
+        (MOD, "0.1.0", D_KNOWN, "papaia-mod", MOD_SOURCE, "2026-11-25"),
+        ("ghcr.io/fidonis/papaia-two", "0.1.0", D_KNOWN, "papaia-two", MOD_SOURCE,
+         "2026-11-25")]
+    lines = (root / "compat" / "release-day-images.yaml").read_text(
+        encoding="utf-8").splitlines()
+    assert [lines[e.line - 1] for e in entries] == [
+        f"- image: {MOD}", "- image: ghcr.io/fidonis/papaia-two"]
+    assert entries[0].ref == f"{MOD}:0.1.0@{D_KNOWN}"
+    assert release_day.load(tmp_path / "nothing") == []
+
+
+# ── --candidate-digests ──────────────────────────────────────────────────────
+
+
+def _candidate_digests(tmp_path: Path, entries: list[dict], as_json: bool = True) -> Path:
+    path = tmp_path / ("digests.json" if as_json else "digests.yaml")
+    path.write_text(json.dumps(entries) if as_json else yaml.safe_dump(entries),
+                    encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("as_json", [True, False], ids=["json", "yaml"])
+def test_candidate_digests_equal_to_the_entry_pass(tmp_path, fixture_registry, as_json):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [_entry()])
+    digests = _candidate_digests(tmp_path, [{"image": MOD, "tag": "0.1.0",
+                                             "digest": D_KNOWN}], as_json)
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, Refusing()),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 candidate_digests=digests, env=NO_CI)
+
+    assert result.findings == [] and len(result.notices) == 1
+
+
+def test_a_differing_candidate_digest_is_a_finding_naming_both(tmp_path, fixture_registry):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [_entry()])
+    digests = _candidate_digests(tmp_path, [{"image": MOD, "tag": "0.1.0",
+                                             "digest": D_OTHER}])
+
+    result = image_pins.evaluate(root, registry=Routed(fixture_registry.host, Refusing()),
+                                 mode="candidate", candidate_registry=fixture_registry.prefix,
+                                 candidate_digests=digests, env=NO_CI)
+
+    assert len(result.findings) == 1
+    finding = result.findings[0]
+    assert finding.pin.path == "compat/release-day-images.yaml"
+    assert D_KNOWN in finding.reason and D_OTHER in finding.reason
+
+
+@pytest.mark.parametrize("entries, match", [
+    ([{"image": MOD, "tag": "0.1.0", "digest": D_KNOWN, "extra": 1}], "unknown"),
+    ([{"image": MOD, "tag": "0.1.0", "digest": "sha256:x"}], "digest"),
+    ([{"image": "ghcr.io/fidonis/papaia-else", "tag": "0.1.0", "digest": D_KNOWN}],
+     "not on the release-day list"),
+    ({"image": MOD}, "list"),
+], ids=["unknown-key", "digest", "unlisted", "not-a-list"])
+def test_candidate_digests_refuse(tmp_path, fixture_registry, entries, match):
+    root = _module_checkout(tmp_path, db=_db_served_locally(fixture_registry))
+    _release_day(root, [_entry()])
+    digests = _candidate_digests(tmp_path, entries)
+
+    with pytest.raises(image_pins.PinError, match=match):
+        image_pins.evaluate(root, registry=Routed(fixture_registry.host, Refusing()),
+                            mode="candidate", candidate_registry=fixture_registry.prefix,
+                            candidate_digests=digests, env=NO_CI)
+    with pytest.raises(image_pins.PinError, match="candidate mode only"):
+        image_pins.evaluate(root, registry=Upstream(), mode="release",
+                            candidate_digests=digests, env=NO_CI)
+
+
+# ── the shipped tree ─────────────────────────────────────────────────────────
+
+
+RELEASE_DAY_MODULES = {"ghcr.io/fidonis/papaia-me", "ghcr.io/fidonis/papaia-connections",
+                       "ghcr.io/fidonis/papaia-manager"}
+
+
+def test_every_module_pin_of_the_shipped_tree_matches_its_release_day_entry():
+    entries = {entry.image: entry for entry in release_day.load(REPO)}
+    assert set(entries) == RELEASE_DAY_MODULES
+    seen: set[str] = set()
+    for pin in image_pins.collect(REPO):
+        ref = images.parse_ref(pin.ref)
+        name = f"{ref.registry}/{ref.repository}"
+        if name in RELEASE_DAY_MODULES and pin.path.startswith("src/"):
+            seen.add(name)
+            assert pin.ref == entries[name].ref, pin.location
+    assert seen == RELEASE_DAY_MODULES
+    me = json.loads((REPO / "src/infra/me/service-env.json").read_text(encoding="utf-8"))
+    assert me["source"]["commit"] == entries["ghcr.io/fidonis/papaia-me"].source
+
+
+def test_ci_runs_release_mode_strictly_and_names_the_release_day_list():
+    text = (WORKFLOWS / "images.yml").read_text(encoding="utf-8")
+    jobs = _workflow()["jobs"]
+    pin_steps = [step for job in jobs.values() for step in job.get("steps", [])
+                 if "lib.image_pins" in step.get("run", "")]
+
+    assert len(pin_steps) == 3
+    assert not any("continue-on-error" in step for step in pin_steps)
+    assert not any("continue-on-error" in job for job in jobs.values())
+    steps = {step.get("name"): step for step in jobs["build-scan"]["steps"]}
+    assert "--mode=release" in steps["Every pin resolves (release mode, before the tag)"]["run"]
+    assert any("--mode=release" in step.get("run", "") and "--own-builds" not in step["run"]
+               for step in jobs["release-pins"]["steps"])
+    lines = text.splitlines()
+    at = next(i for i, line in enumerate(lines)
+              if line.strip() == "- name: Every pin resolves (candidate mode)")
+    comment = []
+    while lines[at - 1 - len(comment)].strip().startswith("#"):
+        comment.append(lines[at - 1 - len(comment)])
+    assert "compat/release-day-images.yaml" in " ".join(comment)
+
+
+def test_the_release_day_procedure_is_documented():
+    text = (REPO / "docs" / "compatibility.md").read_text(encoding="utf-8")
+
+    assert "compat/release-day-images.yaml" in text
+    assert "published only on release day" in text
+    assert "release-day list not empty" in text
+    assert "the candidate run on the milestone branch fails and names it" not in text
+    gate = text[text.index("### Release gate"):text.index("### Pinned images resolve")]
+    assert "release-day-images.yaml" in gate and "--mode=release" in gate
+    assert "papaia-manager" in text[text.index("**Re-pin after a module release.**"):]

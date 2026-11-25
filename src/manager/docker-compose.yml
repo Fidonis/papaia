@@ -27,7 +27,7 @@ x-papaia-logging: &papaia-logging
 services:
   papaia-manager:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-manager:1.8.0@sha256:52142c4a321f23a496a2c6dd2e3294db647cfe47588edff025a606c37800645f
+    image: ghcr.io/fidonis/papaia-manager:1.8.0@sha256:952463319cc9e41d758d052a6164ada843e85203fd9a0bd726b5576fce7300b6
     restart: unless-stopped
     env_file:
       - ./.env

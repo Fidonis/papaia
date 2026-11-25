@@ -265,6 +265,13 @@ release (and a hotfix) is not cut until all of the following hold:
    every `v*` tag with `python -m lib.release_version check --tag <ref>` (in
    `tools/`), before anything is built, signed or published; every later job of
    the tag run needs it.
+8. No module image waits for the release day any more: each image of
+   [`compat/release-day-images.yaml`](../compat/release-day-images.yaml) is
+   published from its module's release tag, re-pinned with
+   `tools/check-image-pins repin` (papaia-me also with
+   `python -m lib.me_profile generate`), and removed from the list; then
+   `tools/check-image-pins check --mode=release` passes with the list empty.
+   Release mode fails while the list has an entry.
 
 Without 1 to 3 every operator would need `--insecure-images`.
 
@@ -293,28 +300,76 @@ tools/check-image-pins list                                      # every pin, fi
 tools/check-image-pins check --mode=release                      # the release registry
 tools/check-image-pins check --mode=release --own-builds=builds.json   # before the tag
 tools/check-image-pins check --mode=candidate --registry=127.0.0.1:5000/unpublished/
+tools/check-image-pins check --mode=candidate --registry=127.0.0.1:5000/unpublished/ \
+    --candidate-digests=module-builds.json                         # module milestone builds
 ```
 
 - **Release mode** resolves every pin at the registry it names. A pin that names a
   loopback registry fails, so no test registry name can stay in a release. Before
   the tag the own images of the core are not published yet: `--own-builds` takes
   them from the reproducible build of `tools/build-images build` (its builds file),
-  whose digests must be the pinned ones.
+  whose digests must be the pinned ones. Release mode ignores the release-day list
+  (below) for resolving: a listed image is resolved at its registry like every other
+  pin, and a refusal there is a finding. In addition it fails while the list still
+  has an entry (`release-day list not empty: <images>; re-pin after the module
+  release`).
 - **Candidate mode** resolves each pin first behind `--registry`, the prefix of a
   local test registry on the loopback interface (as `PAPAIA_IMAGE_MIRROR` names it),
   then at its own registry. It refuses to run on a release tag (a `v*` tag in CI or
   on the checked-out commit).
 
+**Module images published on the release day.** A module (papaia-me,
+papaia-connections, papaia-manager) publishes its image from its own release tag on
+the release day; no module image is pushed to a remote registry before. Until then
+the core pins the candidate built from the module milestone and lists it in
+[`compat/release-day-images.yaml`](../compat/release-day-images.yaml):
+
+```yaml
+schema: papaia.release-day-images/1
+images:
+  - image: ghcr.io/fidonis/papaia-me   # registry/repository
+    tag: 0.1.0
+    digest: sha256:<64 hex>             # the candidate digest the pins name
+    module: papaia-me                   # the module repository
+    source: <40-hex commit>             # of the module milestone the candidate was built from
+    built: 2026-11-25
+```
+
+The list holds module images under `ghcr.io/fidonis/` only, with full digests and
+full source commits; an own image of the core (`compat/own-images.yaml`), a
+third-party image, a loopback registry, a duplicate or an unknown key is refused
+(exit 2). In candidate mode a pin of a listed image:
+
+1. passes when the candidate registry behind `--registry` serves it: the digest there
+   is the pinned one and the tag points to it;
+2. otherwise must equal its entry (tag and digest) and is reported as a notice
+   `published only on release day: <image>:<tag>@<digest> (candidate of <module> @
+   <source>)`, neither a pass nor a finding; the published registry is not asked;
+3. is a finding when it differs from its entry, or when the candidate registry serves
+   the tag with another digest. An entry that no pin uses is a finding too.
+
+Every other pin is resolved as before. The summary line counts the release-day pins
+separately; in GitHub Actions each image gets a `::notice::` line. For a local run,
+`--candidate-digests=<file>` (a JSON or YAML list of `image`, `tag`, `digest`
+written by the module's own image build of its milestone) checks that each listed
+entry equals that build; a differing digest is a finding naming both.
+
 CI (`.github/workflows/images.yml`) runs candidate mode on every push to a
 `releases/*` branch against the own images built in the job, release mode on demand
 (`workflow_dispatch`, `pin-check: release`) before a tag, and release mode in the
-job `release-pins` once a tag has published the own images. While a module image is
-not published, the candidate run on the milestone branch fails and names it.
+job `release-pins` once a tag has published the own images. Before the release day
+the candidate run passes with one notice per listed module image, and still fails
+on every other pin problem (an unpublished image that is not listed, a moved
+third-party tag, a digest no registry has). The release-mode runs need the published
+module images and the empty list, so they pass only on the release day.
 
 **Re-pin after a module release.** A module (papaia-me, papaia-connections, the
 manager, ...) publishes its image on its version tag; the release record of that
 tag (the release notes and the output of its release workflow) names
-`<name>:<version>@sha256:<digest>`. Then:
+`<name>:<version>@sha256:<digest>`. Each such image is an item of the release
+day: the manager pin `ghcr.io/fidonis/papaia-manager` is one, since the manager's
+runtime base is not pinned by digest and its published digest differs from the
+candidate. Then:
 
 ```sh
 # 1. Move every pin of the image in compose and service-env.json at once.
@@ -323,7 +378,7 @@ tools/check-image-pins repin --ref=ghcr.io/fidonis/papaia-me:0.1.0@sha256:<diges
 #    a checkout of papaia-me at the released tag.
 cd tools && python -m lib.me_profile generate --source <papaia-me at the tag> \
     --image ghcr.io/fidonis/papaia-me:0.1.0@sha256:<digest>
-# 3. Check again.
+# 3. Remove the image from compat/release-day-images.yaml and check again.
 tools/check-image-pins check --mode=release
 ```
 

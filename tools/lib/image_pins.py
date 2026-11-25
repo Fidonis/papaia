@@ -26,6 +26,15 @@ Two modes:
   `<host:port>/<path>/` on the loopback interface, as `PAPAIA_IMAGE_MIRROR` names it),
   then at the registry it names. It refuses to run on a release tag.
 
+Module images are published by their own release on the release day
+(compat/release-day-images.yaml, lib/release_day.py). In candidate mode a pin of a listed
+image must equal its entry; when the candidate registry does not serve it, it is reported
+as a release-day notice (neither a pass nor a finding) and the published registry is not
+asked. An entry no pin uses is a finding. `--candidate-digests` compares the entries with
+the build of the module milestones. Release mode ignores the list for resolving and fails
+while it still has an entry, so no tag is cut before every module image is published and
+re-pinned.
+
 The check only reads registries (pull access, with the host's Docker credentials when
 there are any); it needs no push credential and writes nothing.
 
@@ -47,7 +56,7 @@ from pathlib import Path
 
 import yaml
 
-from . import images, own_images
+from . import images, own_images, release_day
 
 MODES = ("release", "candidate")
 SERVICE_ENV_NAME = "service-env.json"
@@ -79,7 +88,28 @@ class Finding:
     reason: str
 
     def __str__(self) -> str:
-        return f"{self.pin.location}: {self.pin.where}: {self.pin.ref}: {self.reason}"
+        ref = f"{self.pin.ref}: " if self.pin.ref else ""
+        return f"{self.pin.location}: {self.pin.where}: {ref}{self.reason}"
+
+
+@dataclass(frozen=True)
+class Notice:
+    """A listed module image the candidate registry does not serve: published only on
+    the release day, checked against its entry only."""
+
+    entry: release_day.Entry
+    pins: tuple[Pin, ...]
+
+    def __str__(self) -> str:
+        return (f"published only on release day: {self.entry.ref} (candidate of "
+                f"{self.entry.module} @ {self.entry.source})")
+
+
+@dataclass(frozen=True)
+class Result:
+    pins: list[Pin]
+    findings: list[Finding]
+    notices: list[Notice]
 
 
 # ── collecting the pins ──────────────────────────────────────────────────────
@@ -297,6 +327,22 @@ def check(
     env: dict[str, str] | None = None,
 ) -> tuple[list[Pin], list[Finding]]:
     """(pins, findings) of the checkout; no findings means every pin resolves."""
+    result = evaluate(repo_root, mode=mode, registry=registry,
+                      candidate_registry=candidate_registry, own_builds=own_builds, env=env)
+    return result.pins, result.findings
+
+
+def evaluate(
+    repo_root: Path,
+    *,
+    mode: str,
+    registry,
+    candidate_registry: str = "",
+    own_builds: Path | None = None,
+    candidate_digests: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> Result:
+    """Pins, findings and release-day notices of the checkout."""
     root = Path(repo_root)
     if mode not in MODES:
         raise PinError(f"mode must be one of {', '.join(MODES)}")
@@ -311,12 +357,19 @@ def check(
         raise PinError("--registry is for candidate mode only")
     if own_builds is not None and mode != "release":
         raise PinError("--own-builds is for release mode only")
+    if candidate_digests is not None and mode != "candidate":
+        raise PinError("--candidate-digests is for candidate mode only")
     own_prefix, built = _own_builds(root, own_builds) if own_builds is not None else ("", {})
+    entries = release_day.load(root)
+    listed = {entry.image: entry for entry in entries} if mode == "candidate" else {}
+    builds = _candidate_builds(candidate_digests, listed) if candidate_digests else {}
 
     pins = collect(root)
     exceptions = images.load_exceptions(root)
     findings: list[Finding] = []
     answers: dict[str, str | None] = {}
+    noticed: dict[str, list[Pin]] = {}
+    used: set[str] = set()
     for pin in pins:
         why = images.pin_problem(pin.ref, exceptions)
         if why is not None:
@@ -327,12 +380,87 @@ def check(
             findings.append(Finding(pin, "names a loopback test registry; a release pins "
                                          "the published image"))
             continue
+        entry = listed.get(f"{ref.registry}/{ref.repository}")
+        if entry is not None:
+            used.add(entry.image)
+            problem, notice = _release_day_candidate(pin.ref, ref, entry, registry, prefix)
+            if problem is not None:
+                findings.append(Finding(pin, problem))
+            elif notice:
+                noticed.setdefault(entry.image, []).append(pin)
+            continue
         if pin.ref not in answers:
             answers[pin.ref] = _resolve(pin.ref, ref, registry, mode, prefix, own_prefix,
                                         built)
         if answers[pin.ref] is not None:
             findings.append(Finding(pin, answers[pin.ref]))
-    return pins, findings
+    findings += _list_findings(mode, entries, used, builds)
+    notices = [Notice(listed[image], tuple(found)) for image, found in noticed.items()]
+    return Result(pins, findings, notices)
+
+
+def _list_pin(entry: release_day.Entry, index: int) -> Pin:
+    return Pin(release_day.LIST_PATH.as_posix(), entry.line, f"images[{index}]", entry.ref)
+
+
+def _list_findings(mode: str, entries: list[release_day.Entry], used: set[str],
+                   builds: dict[str, tuple[str, str]]) -> list[Finding]:
+    if mode == "release":
+        if not entries:
+            return []
+        names = ", ".join(entry.named for entry in entries)
+        where = Pin(release_day.LIST_PATH.as_posix(), entries[0].line, "images", "")
+        return [Finding(where, f"release-day list not empty: {names}; re-pin after the "
+                               "module release")]
+    found: list[Finding] = []
+    for index, entry in enumerate(entries):
+        if entry.image not in used:
+            found.append(Finding(_list_pin(entry, index), "release-day entry used by no pin"))
+        if entry.image in builds and builds[entry.image] != (entry.tag, entry.digest):
+            tag, digest = builds[entry.image]
+            found.append(Finding(_list_pin(entry, index),
+                                 f"the build of the module milestone is {tag}@{digest}, the "
+                                 f"release-day entry names {entry.tag}@{entry.digest}"))
+    return found
+
+
+def _candidate_builds(path: Path, listed: dict[str, release_day.Entry]
+                      ) -> dict[str, tuple[str, str]]:
+    try:
+        builds = release_day.load_candidate_digests(path)
+    except release_day.ReleaseDayError as exc:
+        raise PinError(str(exc)) from exc
+    for image in builds:
+        if image not in listed:
+            raise PinError(f"--candidate-digests names {image}, which is not on the "
+                           f"release-day list ({release_day.LIST_PATH.as_posix()})")
+    return builds
+
+
+def _release_day_candidate(text: str, ref: images.Ref, entry: release_day.Entry, registry,
+                           prefix: str) -> tuple[str | None, bool]:
+    """(problem, notice) of a pin of a listed module image in candidate mode. The
+    published registry is never asked: the image is not published before the release
+    day."""
+    if (ref.tag, ref.digest) != (entry.tag, entry.digest):
+        return (f"differs from its release-day entry {entry.tag}@{entry.digest} "
+                f"({release_day.LIST_PATH.as_posix()}:{entry.line})"), False
+    local = _behind(prefix, text)
+    digest, tag, transport = _ask(registry, local)
+    if transport is not None:
+        return f"{transport} at the candidate registry {prefix}", False
+    if digest is None:
+        return (None if tag is None else f"{tag} (candidate registry {prefix})"), False
+    try:
+        served = registry.resolve(local.registry, local.repository, local.tag)
+    except images.NotFound:
+        return None, True
+    except images.Unreachable as exc:
+        return f"registry not reachable ({exc}) at the candidate registry {prefix}", False
+    except images.ImageError as exc:
+        return f"registry refused ({exc}) at the candidate registry {prefix}", False
+    return (f"the candidate registry {prefix} serves tag {entry.tag} as {served}, not the "
+            "pinned digest"), False
 
 
 def _resolve(text: str, ref: images.Ref, registry, mode: str, prefix: str,
@@ -434,6 +562,9 @@ def main(argv: list[str] | None = None, *, registry=None) -> int:
     p_check.add_argument("--own-builds", default=None,
                          help="release mode: builds file of tools/build-images for the "
                               "own images")
+    p_check.add_argument("--candidate-digests", default=None,
+                         help="candidate mode: JSON or YAML list of image, tag, digest of "
+                              "the module milestone builds")
     sub.add_parser("list", help="print every pin with file and line")
     p_repin = sub.add_parser("repin", help="move every pin of one image")
     p_repin.add_argument("--ref", action="append", required=True,
@@ -456,23 +587,33 @@ def main(argv: list[str] | None = None, *, registry=None) -> int:
             print("The signed bill of materials is regenerated by the release; run "
                   "check-image-pins check again.")
             return 0
-        pins, findings = check(
+        result = evaluate(
             root, mode=args.mode, registry=registry or images.Registry(),
             candidate_registry=args.registry,
             own_builds=Path(args.own_builds) if args.own_builds else None,
+            candidate_digests=(Path(args.candidate_digests) if args.candidate_digests
+                               else None),
         )
-    except (PinError, images.ImageError, own_images.OwnImageError, OSError) as exc:
+    except (PinError, release_day.ReleaseDayError, images.ImageError,
+            own_images.OwnImageError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    pins, findings, notices = result.pins, result.findings, result.notices
+    marker = "::notice::" if os.environ.get("GITHUB_ACTIONS") == "true" else "NOTICE: "
+    for notice in notices:
+        print(f"{marker}{notice}")
     for finding in findings:
         print(f"ERROR: {finding}", file=sys.stderr)
     where = f", candidate registry {args.registry}" if args.mode == "candidate" else ""
+    waiting = sum(len(notice.pins) for notice in notices)
+    later = (f"; {waiting} pin(s) of {len(notices)} image(s) published only on release day"
+             if notices else "")
     if findings:
-        print(f"{len(findings)} of {len(pins)} pin(s) do not resolve ({args.mode} mode{where}).",
-              file=sys.stderr)
+        print(f"{len(findings)} of {len(pins)} pin(s) do not resolve ({args.mode} mode{where})"
+              f"{later}.", file=sys.stderr)
         return 1
-    print(f"{len(pins)} pin(s) resolve: every digest exists and every tag points to it "
-          f"({args.mode} mode{where}).")
+    print(f"{len(pins) - waiting} pin(s) resolve: every digest exists and every tag points "
+          f"to it{later} ({args.mode} mode{where}).")
     return 0
 
 

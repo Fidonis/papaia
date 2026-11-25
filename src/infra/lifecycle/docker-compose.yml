@@ -47,9 +47,12 @@ services:
 
   # Hands the two named volumes to the unprivileged user of the service; runs before
   # every start of papaia-lifecycle and must succeed again on volumes it handed over.
+  # It runs from the service's own image (compat/own-images.yaml), which brings sh and
+  # coreutils with the Debian fixes of its build; it sets no entrypoint, so the command
+  # below runs as written.
   papaia-lifecycle-init:
     logging: *papaia-logging
-    image: python:3.12.16-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    image: ghcr.io/fidonis/papaia-lifecycle:1.10.0-rc.1@sha256:a609a3d2b03e432834c09f3e7480bb3cc30af586a6d67ea0a20cbb3378ab7e2f
     restart: "no"
     user: "0:0"
     # The mode is set only while root still owns a folder (a fresh volume): after the

@@ -166,7 +166,9 @@ jobs:
           retention-days: 90
       # A pin that no registry serves stops every installation at its start. On a
       # milestone branch the own images are the ones built above (the job's registry);
-      # every other pin must already be served by its registry.
+      # a module image of compat/release-day-images.yaml, published only on the release
+      # day, must equal its entry and is reported as a notice; every other pin must
+      # already be served by its registry.
       - name: Every pin resolves (candidate mode)
         if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/releases/') }}
         working-directory: tools
@@ -245,7 +247,8 @@ jobs:
     name: Every pin resolves (tag)
     needs: publish
     # The tag is complete only when every pin, the own images just pushed included,
-    # resolves in the release registry. Read access only: no login, no token.
+    # resolves in the release registry and compat/release-day-images.yaml is empty.
+    # Read access only: no login, no token.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
