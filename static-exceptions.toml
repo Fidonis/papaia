@@ -35,7 +35,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Runs openssl from an argument list without a shell; every caller passes a literal subcommand with options fixed in this file, the path of the service's own key file and scratch files in a temporary folder it creates."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -45,7 +45,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Runs openssl from an argument list without a shell; only the subcommands pkey and dgst are accepted, every caller passes options fixed in this file, the path of the relay's own key file (checked: regular, not a link, owner-only) and a scratch file in a temporary folder it creates. No value from a person, a token or an add-on reaches the argument list."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -55,7 +55,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Runs openssl from an argument list without a shell; every caller passes a literal subcommand with options fixed in this file, the path of the service's own key file and scratch files in a temporary folder it creates."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -65,7 +65,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Creates the audit certificates with openssl from an argument list without a shell; subcommands and options are literals of this file, the paths lie in the installation's configuration folder."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -75,7 +75,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Creates the link certificates with openssl from an argument list without a shell; subcommands and options are literals of this file, names and paths come from the topology the operator configured."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -85,7 +85,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Reads the end date of a link certificate with a literal openssl x509 command; the only value is the certificate path inside the installation's configuration folder."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -95,7 +95,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Creates and reads the platform PKI with openssl from an argument list without a shell; subcommands and options are literals of this file, subjects and host names come from the installation's configuration and checked module requests, certificates pass on stdin."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -105,7 +105,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Generates and converts service account keys with openssl from an argument list without a shell; subcommands and options are literals of this file, key material passes on stdin only."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -115,7 +115,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Verifies the suite signature with a literal openssl dgst command; its only values are three files in a temporary folder this function creates."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 # --- code-exec: the interpreter's own OpenSSL --------------------------------------
 
@@ -127,7 +127,7 @@ subject = "__import__"
 input = "fixed"
 reason = "Imports one of the two literal standard library modules _hashlib and _ssl only to read the file name of the libcrypto they link; the module name comes from a fixed tuple in the loop."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 # --- code-exec: docker, git and probe commands of papaia-ctl -----------------------
 
@@ -139,7 +139,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "docker exec of the fixed papaia_audit module in the audit container, without a shell; the container is the one Compose names for this installation, the arguments are the audit subcommand the operator gave papaia-ctl."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -149,7 +149,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker exec of the papaia_audit access route in the audit container that audit.find_container found for this installation, without a shell; the token and the request body pass on stdin, never in the argument list."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -159,7 +159,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker exec of the papaia_audit person route in the audit container that audit.find_container found for this installation, without a shell; the request path and body pass on stdin, never in the argument list."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -169,7 +169,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "docker run of the pinned backup image with a literal tar command; the only values are the installation's configuration folder as mount source and fixed exclude paths."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -179,7 +179,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "docker run of the pinned backup image with a literal sh -c script; the archive name reaches the script only as the environment variable ARCHIVE, the mounts are the configuration folder and the restore point the operator chose."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -189,7 +189,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Runs a migration script that ships in tools/migrations of this release with bash or the running interpreter; the script path comes from the release's migration list, never from a request."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -199,7 +199,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Runs one node verb locally or through ssh without a shell; _check restricts every word to the node command character set before the call, and the node's forced command parses it again."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -209,7 +209,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Best-effort hardware probe without a shell; every caller passes a literal command (nvidia-smi, docker info) with fixed options."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -219,7 +219,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Calls the docker-credential helper the operator configured in the Docker client configuration, found on PATH after its name matched _HELPER_RE; the registry name passes on stdin."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -229,7 +229,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "status.run_command with text on stdin, without a shell; the callers pass docker exec commands with literal programs and container names of this installation, the data passes on stdin."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -239,7 +239,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "docker commands of the model gateway checks without a shell; programs and options are literals of this file, container and project names come from the installation's configuration."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -249,7 +249,7 @@ subject = "subprocess.Popen"
 input = "operator-config"
 reason = "papaia-ctl logs --follow streams docker logs of each container without a shell; program and options are literals of this file, the container names come from docker ps of the installation and --since is checked against a fixed pattern first."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -259,7 +259,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "docker commands of the module checks without a shell; every caller starts the list with literal docker subcommands, the values are image and container names of the installation's configuration."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -269,7 +269,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "ssh-keygen and ssh-keyscan of the node enrolment without a shell; programs and options are literals, the values are the node names, addresses and ports the operator configured, a public key passes on stdin."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -279,7 +279,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "git -C of the installation's own checkout without a shell; the subcommands are literals of this file, the only values are the checkout path and the release tag papaia-ctl derives from VERSION."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -289,7 +289,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "git and docker build of the core's own images without a shell; programs, options and Dockerfiles are fixed in this repository's image list, the values are paths of the checkout and a build folder."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -299,7 +299,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker ps with label filters; the only values are the installation's Compose project name and the fixed proxy service name."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -310,7 +310,7 @@ count = 2
 input = "fixed"
 reason = "docker exec into the running proxy with a literal sh -c script that reads and replaces one file; the file path is derived from the constant STRIP_FILE, the new content passes on stdin."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -320,7 +320,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker exec nginx -s reload in the proxy container that _proxy_container found for the installation's Compose project."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -331,7 +331,7 @@ count = 2
 input = "operator-config"
 reason = "Literal docker ps with label filters for the installation's Compose project, then docker exec of one of the two fixed lifecycle.py commands startgate-override or startgate-acknowledge in the container found, as an argument list without a shell; the request (reason, account ids) passes as JSON on stdin and is validated on both sides."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -341,7 +341,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker inspect and docker network connect without a shell; the values are this container's own host name and the network name of the installation's configuration (default papaia-net)."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -351,7 +351,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "The probe runner of status and doctor without a shell; callers pass docker and compose commands with literal subcommands and the installation's project, service and container names."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -361,7 +361,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "docker commands of a shipped migration without a shell; the subcommands are literals of the migration, the values are the installation's container names, the index script passes on stdin."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 # --- code-exec: the image scanner of CI ------------------------------------------
 
@@ -373,7 +373,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "docker run of the digest-pinned TRIVY_IMAGE from an argument list without a shell, with --cap-drop ALL and no-new-privileges; the subcommands are literals of scan(), the values are image refs and digests from the build list and paths under the out and cache folders."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -383,7 +383,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "git -C <source> rev-parse HEAD without a shell, for the maintainer command that writes the Mein Bereich profile list; program and subcommand are literals, the only value is the papaia-me checkout path passed with --source."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -393,7 +393,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "git -C <checkout> tag --points-at HEAD without a shell, so the candidate pin check refuses a release tag; program and arguments are literals, the only value is the core checkout path."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 # --- code-exec: the forced command of a node ---------------------------------------
 
@@ -405,7 +405,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Runs a command a node verb assembled without a shell; the verbs build it from literals and names checked against the node's bundle (services, volumes, hooks), the caller never passes a program or a path."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -415,7 +415,7 @@ subject = "subprocess.run"
 input = "fixed"
 reason = "Version probe of the node; every caller passes a literal docker command with fixed options."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -425,7 +425,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker network inspect; the only value is a network name of the node's bundle."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -435,7 +435,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "docker compose ps of the link gateway; compose_argv builds the command from the node's own Compose files and env file, the service is the constant GATEWAY_SERVICE."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -445,7 +445,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker ps and docker inspect queries; the values are volume names, project and service names that _source checked against the node's bundle, and container ids docker returned."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -455,7 +455,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker pause; the only value is a container id that docker ps returned for a checked volume or service of the node."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -465,7 +465,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker unpause; the only value is a container id that _pause paused before."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -475,7 +475,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker volume inspect; the only value is a volume name that _source checked against the volumes of the node's bundle."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -485,7 +485,7 @@ subject = "subprocess.run"
 input = "operator-config"
 reason = "Literal docker volume create; the only value is a volume name that _source checked against the volumes of the node's bundle."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "code-exec"
@@ -495,7 +495,7 @@ subject = "subprocess.Popen"
 input = "operator-config"
 reason = "docker run of the pinned backup image with a literal sh -c script that unpacks stdin; the only value is the mount source that _source checked against the node's bundle, the archive is size-limited."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 # --- model-name: shipped defaults behind the platform aliases ----------------------
 
@@ -507,7 +507,7 @@ subject = "qwen2.5-7b-instruct-q4"
 input = "fixed"
 reason = "The shipped default model for CPU hosts that the model gateway serves behind the platform aliases (papaia-chat, papaia-structured); modules never name it, the operator can replace it."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "model-name"
@@ -517,7 +517,7 @@ subject = "qwen2.5-7b-instruct-q8"
 input = "fixed"
 reason = "The shipped default model for GPU hosts that the model gateway serves behind the platform aliases (papaia-chat, papaia-structured); modules never name it, the operator can replace it."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "model-name"
@@ -527,7 +527,7 @@ subject = "qwen2.5-1.5b-instruct"
 input = "fixed"
 reason = "The shipped small default model for hosts with little memory, served by the model gateway behind the platform aliases; modules never name it, the operator can replace it."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "model-name"
@@ -537,7 +537,7 @@ subject = "nomic-embed-text"
 input = "fixed"
 reason = "Default embedding model of the governance policy, used where the installation's governance.yaml names none; the knowledge map's Compose default and the RAG_EMBEDDINGS_MODEL example name the same model."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 [[exception]]
 rule = "model-name"
@@ -547,7 +547,7 @@ subject = "nomic-embed-text"
 input = "operator-config"
 reason = "Fallback name in an operator hint printed after setup when RAG_EMBEDDINGS_MODEL is not set; it reads the installation's configuration and only prints text, no request is sent."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
 # --- query-build: column list joined from a module constant ------------------------
 
@@ -559,4 +559,4 @@ subject = "query"
 input = "fixed"
 reason = "The column list is joined from the module constant _QUERY_COLUMNS of the same file; the source, the person and the limit are %s parameters, no request value reaches the query text."
 expires = 2027-05-20
-approved_by = "core maintainers (security officer countersignature pending)"
+approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
