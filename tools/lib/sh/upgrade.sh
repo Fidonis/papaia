@@ -1006,8 +1006,20 @@ cmd_rollback() {
         exit 2
     fi
     # Phase 2 runs the papaia-ctl of $from; a release without the command cannot finish it.
-    if ! git -C "$REPO_ROOT" show "$commit:tools/lib/sh/upgrade.sh" 2>/dev/null \
-            | grep -q '^cmd_rollback()'; then
+    # Captured first: under pipefail an early `grep -q` lets `git show` die of SIGPIPE on a
+    # busy host, and a valid rollback would be refused.
+    local from_script="" show_rc=0
+    from_script="$(git -C "$REPO_ROOT" show "$commit:tools/lib/sh/upgrade.sh" 2>&1)" ||
+        show_rc=$?
+    if [ "$show_rc" -ne 0 ]; then
+        error "Cannot read tools/lib/sh/upgrade.sh of release $from ($commit):"
+        printf '%s\n' "$from_script" | sed 's/^/    git: /' >&2
+        error "Go back step by step (nothing was changed):"
+        error "    git -C $REPO_ROOT checkout v$from"
+        error "    papaia-ctl restore --restore-point=$point --restart-clean --config-dir=$CONFIG_DIR"
+        exit 2
+    fi
+    if ! grep -q '^cmd_rollback()' <<< "$from_script"; then
         error "Release $from has no 'rollback' command. Go back step by step (nothing was changed):"
         error "    git -C $REPO_ROOT checkout v$from"
         error "    papaia-ctl restore --restore-point=$point --restart-clean --config-dir=$CONFIG_DIR"

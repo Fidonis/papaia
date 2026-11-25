@@ -192,3 +192,70 @@ def test_a_failing_openssl_step_is_named_with_its_error(tmp_path):
     assert done.returncode == 2
     assert "Certificate generation failed: local CA key." in done.stderr
     assert "openssl: req: Unknown option -addext" in done.stderr
+
+
+# ── a reader that stops early under pipefail ────────────────────────────────
+
+# An openssl that prints the extension first and then keeps writing far more than a pipe
+# holds: a reader that stops at the first match leaves it writing into a closed pipe.
+_LATE_WRITER = """#!/usr/bin/env bash
+case " $* " in
+    *" -checkend "*) exit 0 ;;
+    *" -text "*)
+        [ "${STUB_TEXT:-}" = "unreadable" ] && { echo "unable to load certificate" >&2; exit 1; }
+        echo "        X509v3 extensions:"
+        [ "${STUB_TEXT:-}" = "no-server-auth" ] || echo "            TLS Web Server Authentication"
+        yes "                padding after the extensions" | head -c 4194304
+        ;;
+    *) exit 1 ;;
+esac
+"""
+
+
+def _outdated(tmp_path: Path, text: str = "") -> subprocess.CompletedProcess:
+    assert BASH is not None
+    fake = tmp_path / "bin"
+    fake.mkdir(exist_ok=True)
+    stub = fake / "openssl"
+    stub.write_text(_LATE_WRITER, encoding="utf-8")
+    stub.chmod(0o755)
+    crt = tmp_path / "keycloak.crt"
+    crt.write_text("stub\n", encoding="utf-8")
+    script = (
+        f'set -euo pipefail; source "{SH_LIB / "log.sh"}"; source "{SH_LIB / "certs.sh"}"; '
+        f'if _keycloak_cert_outdated "{crt}"; then echo outdated; else echo current; fi'
+    )
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "STUB_TEXT": text}
+    return subprocess.run(
+        [BASH, "-c", script], env=env, capture_output=True, text=True, check=False, timeout=60
+    )
+
+
+def test_the_late_writer_is_killed_by_sigpipe_behind_an_early_reader(tmp_path):
+    # The construction the tests below rely on: under pipefail the pipeline fails.
+    _outdated(tmp_path)
+    assert BASH is not None
+    piped = subprocess.run(
+        [BASH, "-c", f'set -o pipefail; "{tmp_path / "bin" / "openssl"}" x509 -text '
+                     '| grep -q "TLS Web Server Authentication"'],
+        capture_output=True, check=False, timeout=60,
+    )
+    assert piped.returncode == 141
+
+
+def test_a_current_certificate_is_kept_when_the_reader_stops_early(tmp_path):
+    done = _outdated(tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "current"
+
+
+def test_a_certificate_without_server_auth_is_still_outdated(tmp_path):
+    done = _outdated(tmp_path, "no-server-auth")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "outdated"
+
+
+def test_an_unreadable_certificate_is_still_outdated(tmp_path):
+    done = _outdated(tmp_path, "unreadable")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "outdated"

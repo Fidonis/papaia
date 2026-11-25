@@ -386,6 +386,17 @@ Descriptions replaced by `exposes:` in this release (no parallel operation):
   pinned a build from before the last change to `src/infra/chat-relay/`, so an
   installation ran an image that did not match its source and the own-images check
   failed. No other pin changes.
+- `papaia-ctl rollback` is no longer refused on a busy host with "has no 'rollback'
+  command" for a release that has the command: the check read the release's
+  `tools/lib/sh/upgrade.sh` through a pipe into `grep -q`, and under `pipefail` the early
+  end of `grep` could fail the check. The output is now read first, then matched. A
+  release whose upgrade script cannot be read gets its own error with git's message; a
+  release without the command is refused as before.
+- The Keycloak certificate check reads the output of `openssl x509 -text` before it
+  matches, so a current certificate is no longer issued again on a busy host. An
+  unreadable certificate is still issued again.
+- A static test fails when a pipeline in `tools/papaia-ctl` or `tools/lib` ends in a
+  reader that stops early (`grep -q`, `grep -m`, `grep -l`, `head`, `sed -n '…q'`).
 
 ## [1.10.0-rc.1] - 2026-11-23
 

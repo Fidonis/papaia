@@ -189,7 +189,9 @@ def clone(tmp_path: Path) -> dict:
             "harness": tmp_path / "harness.sh"}
 
 
-def _run(clone: dict, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
+def _run(
+    clone: dict, *args: str, stdin: str | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     script = (
         _HARNESS.replace("@CONFIG@", str(clone["config"]))
         .replace("@ROOT@", str(clone["repo"]))
@@ -203,7 +205,7 @@ def _run(clone: dict, *args: str, stdin: str | None = None) -> subprocess.Comple
     clone["log"].touch()
     return subprocess.run(
         [BASH, str(clone["harness"]), *args], capture_output=True, text=True, input=stdin,
-        timeout=180,
+        timeout=180, env=env,
     )
 
 
@@ -492,3 +494,96 @@ def test_the_second_phase_alone_keeps_the_data_loss_guard(clone: dict):
     assert not any(c.startswith("restore") for c in _calls(clone))
     assert len(_keys(clone)) == 1
 
+
+
+# ── a reader that stops early under pipefail ────────────────────────────────
+
+# A git that, for the upgrade script of a release, keeps writing long after the line that
+# `rollback` looks for: a reader that stops at the first match leaves it writing into a
+# closed pipe, and it dies of SIGPIPE.
+_LATE_GIT = """#!/usr/bin/env bash
+"$STUB_REAL_GIT" "$@" || exit
+for arg in "$@"; do
+    case "$arg" in
+        *:tools/lib/sh/upgrade.sh) yes "# still writing" | head -c 4194304; exit ;;
+    esac
+done
+"""
+
+
+def _late_git(clone: dict) -> dict[str, str]:
+    fake = clone["harness"].parent / "late-git"
+    fake.mkdir(exist_ok=True)
+    stub = fake / "git"
+    stub.write_text(_LATE_GIT, encoding="utf-8")
+    stub.chmod(0o755)
+    assert GIT is not None
+    return {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "STUB_REAL_GIT": GIT}
+
+
+def _retag(clone: dict, version: str, content: str | None) -> None:
+    """Moves the tag v<version> to a commit whose upgrade script is `content` (None: gone)."""
+    repo = clone["repo"]
+    head = _head(clone)
+    _git(repo, "checkout", "-q", "--detach", f"v{version}")
+    if content is None:
+        _git(repo, "rm", "-q", "tools/lib/sh/upgrade.sh")
+    else:
+        (repo / "tools/lib/sh/upgrade.sh").write_text(content, encoding="utf-8")
+        _git(repo, "add", "tools/lib/sh/upgrade.sh")
+    _git(repo, "commit", "-q", "-m", f"release {version}, changed")
+    _git(repo, "tag", "-f", f"v{version}")
+    _git(repo, "checkout", "-q", "--detach", head)
+
+
+def test_the_late_git_is_killed_by_sigpipe_behind_an_early_reader(clone: dict):
+    # The construction the next test relies on: under pipefail the old check fails.
+    env = _late_git(clone)
+    assert BASH is not None
+    piped = subprocess.run(
+        [BASH, "-c", f'set -o pipefail; git -C "{clone["repo"]}" show '
+                     f'"{_tag(clone, "1.10.0")}:tools/lib/sh/upgrade.sh" '
+                     "| grep -q '^cmd_rollback()'"],
+        capture_output=True, env=env, check=False, timeout=60,
+    )
+    assert piped.returncode == 141
+
+
+def test_a_rollback_is_not_refused_when_the_reader_stops_early(clone: dict):
+    _upgrade_and_fail(clone)
+    clone["log"].write_text("")
+    back = _run(clone, "rollback", "-y", env=_late_git(clone))
+    out = back.stdout + back.stderr
+    assert "has no 'rollback' command" not in out
+    assert back.returncode == 0, out
+    assert _head(clone) == _tag(clone, "1.10.0")
+    assert _calls(clone)[-1] == "doctor"
+
+
+def test_a_release_without_the_command_is_refused_as_before(clone: dict):
+    _upgrade_and_fail(clone)
+    _retag(clone, "1.10.0", "# an upgrade script without the rollback command\n")
+    head = _head(clone)
+    clone["log"].write_text("")
+    refused = _run(clone, "rollback", "-y", env=_late_git(clone))
+    assert refused.returncode == 2
+    assert "Release 1.10.0 has no 'rollback' command. Go back step by step" in refused.stderr
+    assert "papaia-ctl restore --restore-point=" in refused.stderr
+    assert _head(clone) == head
+    assert not any(c.startswith("restore") for c in _calls(clone))
+    assert us.read_lock(clone["config"]).active
+
+
+def test_an_unreadable_upgrade_script_of_the_release_has_its_own_error(clone: dict):
+    _upgrade_and_fail(clone)
+    _retag(clone, "1.10.0", None)
+    head = _head(clone)
+    clone["log"].write_text("")
+    refused = _run(clone, "rollback", "-y")
+    assert refused.returncode == 2
+    assert "has no 'rollback' command" not in refused.stderr
+    assert "Cannot read tools/lib/sh/upgrade.sh of release 1.10.0" in refused.stderr
+    assert "papaia-ctl restore --restore-point=" in refused.stderr
+    assert _head(clone) == head
+    assert not any(c.startswith("restore") for c in _calls(clone))
+    assert us.read_lock(clone["config"]).active

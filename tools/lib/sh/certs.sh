@@ -50,9 +50,11 @@ _openssl_step() {
 # Returns 0 when the Keycloak certificate in $1 has to be issued again: it predates
 # serverAuth, or it ends within _KEYCLOAK_CERT_RENEW_BEFORE.
 _keycloak_cert_outdated() {
-    local crt="$1"
-    openssl x509 -in "$crt" -noout -text 2>/dev/null \
-        | grep -q "TLS Web Server Authentication" || return 0
+    local crt="$1" text=""
+    # Captured first: under pipefail an early `grep -q` lets openssl die of SIGPIPE, and a
+    # current certificate would be issued again. An unreadable one is still outdated.
+    text="$(openssl x509 -in "$crt" -noout -text 2>/dev/null)" || return 0
+    grep -q "TLS Web Server Authentication" <<< "$text" || return 0
     openssl x509 -in "$crt" -noout -checkend "$_KEYCLOAK_CERT_RENEW_BEFORE" >/dev/null 2>&1 \
         || return 0
     return 1
