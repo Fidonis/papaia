@@ -76,16 +76,26 @@ cmd_pairing() {
     # shellcheck disable=SC2034  # read by py_cli and _require_setup_done
     CONFIG_DIR="$config_dir"
     _require_setup_done
+    # --test-trust-anchor of this one command (lib/sh/trust.sh): list and confirm only.
+    local -a anchored=()
+    if [ -n "${TEST_TRUST_ANCHOR:-}" ]; then
+        anchored+=(--test-trust-anchor="$TEST_TRUST_ANCHOR")
+        [ -n "${IMAGES_CORRELATION_ID:-}" ] && anchored+=(--correlation-id="$IMAGES_CORRELATION_ID")
+    fi
     case "$action" in
         list)
-            if [ "$json" -eq 1 ]; then py_cli pairing-list --json; else py_cli pairing-list; fi
+            if [ "$json" -eq 1 ]; then
+                py_cli pairing-list --json ${anchored[@]+"${anchored[@]}"}
+            else
+                py_cli pairing-list ${anchored[@]+"${anchored[@]}"}
+            fi
             ;;
         confirm)
             if [ -z "$approved" ]; then
                 error "pairing confirm needs --approve-pairings=<sha256> as 'papaia-ctl pairing list' shows it."
                 exit 2
             fi
-            py_cli pairing-confirm --approve-pairings="$approved"
+            py_cli pairing-confirm --approve-pairings="$approved" ${anchored[@]+"${anchored[@]}"}
             ;;
         approve|revoke)
             if [ -z "$client" ] || [ -z "$audience" ]; then

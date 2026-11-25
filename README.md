@@ -3506,6 +3506,35 @@ the next command checks again. `upgrade --insecure-images` writes two such rows,
 skips the check of the target and one when its second phase starts the stack; both carry the
 same correlation id.
 
+**`--test-trust-anchor=FILE`: release candidates.** A pre-release core (`VERSION` with a
+pre-release part, for example `1.10.0-rc.1`) can be tested end to end against a bill of
+materials of candidate images signed with a local test key. `start`, `upgrade`, `pairing
+list`, `pairing confirm` and `suite verify` take `--test-trust-anchor=FILE`, a P-256 public
+key file as `cosign generate-key-pair` writes it. For that one command the bill of materials
+of the core's suite must have the scope `test`, be signed with exactly that key and name it;
+the images must be signed with it. The rules
+([ADR 0030](docs/adr/0030-accept-a-test-trust-anchor-for-pre-release-cores.md)):
+
+- A release `VERSION` refuses the option before anything else is read; so does any doubt
+  about the version. In an `upgrade`, the installed core and the target must both be
+  pre-releases.
+- A `delivery` bill of materials keeps requiring the pinned `compat/release-key.pub`; with
+  the option it is refused. A `test` bill of materials without the option is refused, as is
+  one signed with another key. The pinned key is neither read nor changed.
+- Only the command line sets it: no environment variable, `.env` entry or stored state, and
+  it does not combine with `--insecure-images`. Every other command refuses it.
+- A banner on standard error opens and closes the command (key fingerprint, scope `test`,
+  `NOT FOR PRODUCTION`). Each check of a bill of materials with the anchor writes one
+  `papaia.audit/1` row (event `test_trust_anchor_used`: command, key fingerprint, digest of
+  the bill of materials, core version, operator, correlation id; `allowed` or `denied`) to
+  `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`.
+
+```bash
+tools/papaia-ctl start --test-trust-anchor=/path/to/test-key.pub
+tools/papaia-ctl pairing list --test-trust-anchor=/path/to/test-key.pub
+tools/papaia-ctl pairing confirm --approve-pairings=SHA256 --test-trust-anchor=/path/to/test-key.pub
+```
+
 **Mirror registry.** `PAPAIA_IMAGE_MIRROR` in the root `.env` (for example
 `registry.example.com/papaia/`, ending in `/`) pulls every core image through a mirror. The
 render writes `overrides/docker-compose.image-mirror.override.yml`, which puts the prefix in

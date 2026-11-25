@@ -73,6 +73,7 @@ from . import (
     person,
     person_request,
     post_restore,
+    prerelease_anchor,
     privacy_pack,
     realm_sync,
     recover_snapshot,
@@ -1238,7 +1239,16 @@ def cmd_suite_verify(args: argparse.Namespace) -> int:
     Without --key or --fingerprint the release key pinned in this checkout
     (compat/release-key.pub) is the anchor; the key inside the file is never
     trusted on its own. Without --suite an older file signed with the same key
-    also passes; the command warns and reports `suite_bound: false`."""
+    also passes; the command warns and reports `suite_bound: false`.
+
+    With --test-trust-anchor=FILE (pre-release cores only, lib/prerelease_anchor.py) the
+    key in FILE is the anchor for a bill of materials of scope `test`, bound to the suite
+    of the core unless --suite names another; the use is audited."""
+    # Callers that build the arguments themselves may leave out the anchor's two.
+    if getattr(args, "test_trust_anchor", None) is not None:
+        return _suite_verify_test_anchor(args)
+    if args.scope is None:
+        args.scope = "delivery"
     if not args.bom:
         print("ERROR: --bom=FILE is required.", file=sys.stderr)
         return 2
@@ -1279,6 +1289,53 @@ def cmd_suite_verify(args: argparse.Namespace) -> int:
         ],
         "totals": doc["totals"],
     }
+    return _print_suite(args, doc, summary)
+
+
+def _suite_verify_test_anchor(args: argparse.Namespace) -> int:
+    try:
+        anchor = prerelease_anchor.open_anchor(Path(args.repo_root), args.test_trust_anchor)
+    except prerelease_anchor.AnchorError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if args.key is not None or args.fingerprint is not None:
+        print("ERROR: --test-trust-anchor is the anchor; it takes no --key or --fingerprint",
+              file=sys.stderr)
+        return 2
+    if args.scope not in (None, prerelease_anchor.SCOPE):
+        print("ERROR: --test-trust-anchor checks scope 'test' only", file=sys.stderr)
+        return 2
+    if not args.bom:
+        print("ERROR: --bom=FILE is required.", file=sys.stderr)
+        return 2
+    try:
+        doc = prerelease_anchor.verified_bom(
+            Path(args.repo_root), Path(args.config_dir), anchor, "suite-verify",
+            args.correlation_id, bom_path=Path(args.bom),
+            signature_path=Path(args.signature) if args.signature else None,
+            expected_suite=args.suite,
+        )
+    except (prerelease_anchor.AnchorError, suite.SuiteError) as exc:
+        print(f"ERROR: {args.bom}: {exc}", file=sys.stderr)
+        return 2
+    args.suite = doc["suite"]
+    summary = {
+        "verified": True,
+        "suite": doc["suite"],
+        "suite_bound": True,
+        "scope": doc["scope"],
+        "fingerprint": doc["signing_key"]["fingerprint"],
+        "contract_generation": doc["contract_generation"],
+        "repos": [
+            {"name": r["name"], "role": r["role"], "version": r["version"], "commit": r["commit"]}
+            for r in doc["repos"]
+        ],
+        "totals": doc["totals"],
+    }
+    return _print_suite(args, doc, summary)
+
+
+def _print_suite(args: argparse.Namespace, doc: dict, summary: dict) -> int:
     if args.suite is None:
         print(
             f"WARNING: suite not bound: an older bill of materials signed with the same key "
@@ -1403,8 +1460,24 @@ def cmd_image_verify(args: argparse.Namespace) -> int:
     the target of an upgrade (images.load_trusted_bom). At `addon install`, images from
     repositories the bill of materials does not list at all are shown with what the
     add-on brings and refused, unless `--accept-unlisted-images` hands exactly those
-    digests to `--pending-file` for `image-accept`."""
+    digests to `--pending-file` for `image-accept`.
+
+    `--test-trust-anchor=FILE` (pre-release cores only, lib/prerelease_anchor.py) checks
+    against a bill of materials of scope `test` signed with the key in FILE instead; it is
+    refused on a release core before anything else is read, takes neither
+    `--insecure-images` nor `--anchor-fingerprint`, and every use is audited."""
     config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    test_anchor = None
+    if args.test_trust_anchor is not None:
+        try:
+            test_anchor = prerelease_anchor.open_anchor(repo_root, args.test_trust_anchor)
+        except prerelease_anchor.AnchorError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        if args.insecure_images or args.anchor_fingerprint is not None:
+            print("ERROR: --test-trust-anchor takes neither --insecure-images nor "
+                  "--anchor-fingerprint", file=sys.stderr)
+            return 2
     if args.images_file is None and not args.from_checkout and not args.addon_images:
         print("ERROR: pass --images-file, --from-checkout or --addon-images", file=sys.stderr)
         return 2
@@ -1447,7 +1520,11 @@ def cmd_image_verify(args: argparse.Namespace) -> int:
     try:
         mirror, signatures = images.settings(common.parse_env_file(config_dir / ".env"),
                                              repo_root)
-        bom = images.load_trusted_bom(repo_root, anchor=args.anchor_fingerprint)
+        if test_anchor is not None:
+            bom = prerelease_anchor.verified_bom(
+                repo_root, config_dir, test_anchor, args.command, correlation)
+        else:
+            bom = images.load_trusted_bom(repo_root, anchor=args.anchor_fingerprint)
         cache = images.SignatureCache(config_dir / images.CACHE_PATH)
         registry = images.Registry()
         for owner, refs in groups:
@@ -1460,10 +1537,13 @@ def cmd_image_verify(args: argparse.Namespace) -> int:
             problems += found
             owners += [owner] * len(found)
         cache.save()
-    except images.ImageError as exc:
+    except (images.ImageError, prerelease_anchor.AnchorError) as exc:
         print(f"ERROR: image check: {exc}", file=sys.stderr)
-        print(f"Nothing was started. To start anyway for this one command, re-run "
-              f"'{_retry_hint(args.command)}' with --insecure-images.", file=sys.stderr)
+        if test_anchor is None:
+            print(f"Nothing was started. To start anyway for this one command, re-run "
+                  f"'{_retry_hint(args.command)}' with --insecure-images.", file=sys.stderr)
+        else:
+            print("Nothing was started.", file=sys.stderr)
         return 2
     except OSError as exc:
         print(f"ERROR: image check: {exc}", file=sys.stderr)
@@ -3401,6 +3481,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cli_node.add_parsers(sub)
     pairing_approval.add_parsers(sub)
+    prerelease_anchor.add_parsers(sub)
     module_offer.add_parsers(sub)
     cli_pki.add_parsers(sub)
     cli_setup_round.add_parsers(sub)
@@ -3507,8 +3588,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_suite_verify.add_argument("--key", default=None)
     p_suite_verify.add_argument("--fingerprint", default=None)
     p_suite_verify.add_argument("--suite", default=None)
-    p_suite_verify.add_argument("--scope", choices=suite.SCOPES, default="delivery")
+    p_suite_verify.add_argument("--scope", choices=suite.SCOPES, default=None)
     p_suite_verify.add_argument("--json", action="store_true")
+    p_suite_verify.add_argument("--test-trust-anchor", default=None)
+    p_suite_verify.add_argument("--correlation-id", default=None)
     p_suite_verify.set_defaults(func=cmd_suite_verify)
 
     p_image_verify = sub.add_parser("image-verify")
@@ -3523,6 +3606,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_image_verify.add_argument("--accept-unlisted-images", action="store_true")
     p_image_verify.add_argument("--pending-file", default=None)
     p_image_verify.add_argument("--addon-images", action="append", default=None)
+    p_image_verify.add_argument("--test-trust-anchor", default=None)
     p_image_verify.set_defaults(func=cmd_image_verify)
 
     p_image_accept = sub.add_parser("image-accept")

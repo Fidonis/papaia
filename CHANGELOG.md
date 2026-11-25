@@ -36,6 +36,16 @@ based on merged pull requests; this file mirrors the published releases.
 - The pairing `papaia-me` -> `papaia-connections` may hold the effects `r` and `d` only;
   the realm sync refuses any other effect for it. It is approved by a second host account.
 
+### Test trust anchor for pre-release cores
+
+- `start`, `upgrade`, `pairing list`, `pairing confirm` and `suite verify` take
+  `--test-trust-anchor=FILE` on a pre-release core: for that one command a bill of materials
+  of scope `test` signed with the key in FILE is accepted, and images are checked against
+  that key. A release core refuses the option before reading anything else; the `delivery`
+  path and the pinned `compat/release-key.pub` are unchanged. A banner opens and closes the
+  command, and every use writes one `papaia.audit/1` row (event `test_trust_anchor_used`).
+  No environment variable or configuration entry enables it (ADR 0030).
+
 ### Information and erasure in chat, model gateway and identity provider
 
 - `papaia-ctl person run` now covers the core services: the chat by the person's `sub`

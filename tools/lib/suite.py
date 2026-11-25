@@ -429,6 +429,22 @@ def verify_bom(
     require_scope: str = "delivery",
     expected_suite: str | None = None,
 ) -> dict:
+    """The content of a verified bill of materials (see verify_bom_with_digest)."""
+    return verify_bom_with_digest(
+        bom_path, signature_path, key_path=key_path, fingerprint=fingerprint,
+        require_scope=require_scope, expected_suite=expected_suite,
+    )[0]
+
+
+def verify_bom_with_digest(
+    bom_path: Path,
+    signature_path: Path,
+    *,
+    key_path: Path | None = None,
+    fingerprint: str | None = None,
+    require_scope: str = "delivery",
+    expected_suite: str | None = None,
+) -> tuple[dict, str]:
     """Check signature, structure, signing key, scope and suite of a bill of
     materials and return its content.
 
@@ -439,7 +455,9 @@ def verify_bom(
     is the file parsed as YAML. The embedded key must be the trusted one,
     because image checks later rely on it. The file must have scope
     `require_scope` and, when given, suite `expected_suite`; otherwise an older
-    or a test-scope file signed with the same key would pass."""
+    or a test-scope file signed with the same key would pass.
+
+    Returns the content and `sha256:<hex>` of exactly the bytes that were verified."""
     if (key_path is None) == (fingerprint is None):
         raise SuiteError("pass exactly one of a public key file or a key fingerprint")
     if require_scope not in SCOPES:
@@ -479,7 +497,7 @@ def verify_bom(
         raise SuiteError(f"scope: '{doc['scope']}' where '{require_scope}' is required")
     if expected_suite is not None and doc["suite"] != expected_suite:
         raise SuiteError(f"suite: the file is suite {doc['suite']}, expected {expected_suite}")
-    return doc
+    return doc, "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 # ── compatibility matrix ─────────────────────────────────────────────────────

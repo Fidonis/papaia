@@ -37,7 +37,7 @@ from pathlib import Path
 
 import yaml
 
-from . import images
+from . import images, prerelease_anchor
 from . import realm_sync as rs
 
 WRITER = "papaia-ctl/pairing"
@@ -392,6 +392,21 @@ def _trusted_bom(repo_root: Path) -> dict | None:
         raise PairingError(str(exc)) from None
 
 
+def _anchored_bom(args: argparse.Namespace, command: str) -> dict | None:
+    """With --test-trust-anchor (pre-release cores only, lib/prerelease_anchor.py): the
+    bill of materials of scope `test` signed with that key, audited; refused on a release
+    core before anything else is read, and a missing file is an error. Without it: the
+    delivery bill of materials as before."""
+    if args.test_trust_anchor is None:
+        return _trusted_bom(Path(args.repo_root))
+    try:
+        anchor = prerelease_anchor.open_anchor(Path(args.repo_root), args.test_trust_anchor)
+        return prerelease_anchor.verified_bom(
+            Path(args.repo_root), Path(args.config_dir), anchor, command, args.correlation_id)
+    except prerelease_anchor.AnchorError as exc:
+        raise PairingError(str(exc)) from None
+
+
 def _state(pairing: rs.Pairing, recorded: dict[tuple[str, str], rs.Pairing]) -> str:
     found = recorded.get((pairing.client, pairing.audience))
     if found is None:
@@ -400,9 +415,13 @@ def _state(pairing: rs.Pairing, recorded: dict[tuple[str, str], rs.Pairing]) -> 
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    try:
+        doc = _anchored_bom(args, "pairing-list")
+    except PairingError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     register = rs.load_register()
     try:
-        doc = _trusted_bom(Path(args.repo_root))
         entries = bom_pairings(doc, register) if doc else []
         recorded = {(p.client, p.audience): p for p in _load(Path(args.config_dir), register)}
     except PairingError as exc:
@@ -440,10 +459,14 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_confirm(args: argparse.Namespace) -> int:
+    try:
+        doc = _anchored_bom(args, "pairing-confirm")
+    except PairingError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     register = rs.load_register()
     config_dir = Path(args.config_dir)
     try:
-        doc = _trusted_bom(Path(args.repo_root))
         if doc is None:
             raise PairingError("no signed bill of materials in this checkout")
         entries = bom_pairings(doc, register)
@@ -504,10 +527,14 @@ def add_parsers(sub) -> None:
     p = sub.add_parser("pairing-list")
     p.add_argument("--json", action="store_true")
     p.add_argument("--digest", action="store_true")
+    p.add_argument("--test-trust-anchor", default=None)
+    p.add_argument("--correlation-id", default=None)
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("pairing-confirm")
     p.add_argument("--approve-pairings", required=True)
+    p.add_argument("--test-trust-anchor", default=None)
+    p.add_argument("--correlation-id", default=None)
     p.set_defaults(func=cmd_confirm)
 
     for name, func in (("pairing-approve", cmd_approve), ("pairing-revoke", cmd_revoke)):

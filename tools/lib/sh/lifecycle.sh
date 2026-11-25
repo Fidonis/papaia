@@ -119,6 +119,9 @@ _core_overrides() {
 # of an upgrade write their audit rows under. Set by upgrade.sh.
 IMAGES_ANCHOR="${IMAGES_ANCHOR:-}"
 IMAGES_CORRELATION_ID="${IMAGES_CORRELATION_ID:-}"
+# --test-trust-anchor=FILE of this one command (lib/sh/trust.sh sets it from the command
+# line); never taken from the environment.
+TEST_TRUST_ANCHOR=""
 
 # Refuse to go on unless every image to start is listed with its digest in the signed
 # bill of materials of the core tree $2 and signed with its key (lib/images.py).
@@ -136,6 +139,7 @@ _verify_images() {
     [ -n "$list" ] && flags+=(--images-file="$list")
     [ "$whole_tree" -eq 1 ] && flags+=(--from-checkout)
     [ -n "$IMAGES_ANCHOR" ] && flags+=(--anchor-fingerprint="$IMAGES_ANCHOR")
+    [ -n "${TEST_TRUST_ANCHOR:-}" ] && flags+=(--test-trust-anchor="${TEST_TRUST_ANCHOR:-}")
     [ -n "$IMAGES_CORRELATION_ID" ] && flags+=(--correlation-id="$IMAGES_CORRELATION_ID")
     local rc=0
     info "Checking image digests and signatures against the bill of materials..."

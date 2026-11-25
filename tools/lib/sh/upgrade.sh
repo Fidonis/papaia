@@ -232,7 +232,8 @@ cmd_upgrade() {
         IMAGES_CORRELATION_ID="$resume_correlation"
         [ -n "$resume_correlation" ] && PAPAIA_CORRELATION_ID="$resume_correlation"
         _upgrade_correlation
-        if [ -z "$resume_anchor" ] && [ "$insecure_images" -eq 0 ]; then
+        if [ -z "$resume_anchor" ] && [ "$insecure_images" -eq 0 ] \
+                && [ -z "${TEST_TRUST_ANCHOR:-}" ]; then
             _upgrade_bootstrap_notice "$resume_target"
         fi
         if ! [[ "$resume_started" =~ ^[0-9]{1,12}$ ]]; then
@@ -313,7 +314,11 @@ cmd_upgrade() {
     # --- trust anchor -------------------------------------------------------
     # The release key of the installed core vouches for the target; the target's own
     # key only counts when the installed one signed its rotation (lib/images.py).
-    if IMAGES_ANCHOR="$(py_cli image-trust-anchor)"; then
+    # With --test-trust-anchor (a pre-release core, this command only) the target's bill of
+    # materials of scope test is checked against that key instead (lib/prerelease_anchor.py).
+    if [ -n "${TEST_TRUST_ANCHOR:-}" ]; then
+        IMAGES_ANCHOR=""
+    elif IMAGES_ANCHOR="$(py_cli image-trust-anchor)"; then
         :
     elif [ "$insecure_images" -eq 1 ]; then
         IMAGES_ANCHOR=""
@@ -564,6 +569,8 @@ cmd_upgrade() {
     # never written anywhere.
     [ "$insecure_images" -eq 1 ] && resume_flags+=(--insecure-images)
     [ -n "$IMAGES_ANCHOR" ] && resume_flags+=(--resume-anchor="$IMAGES_ANCHOR")
+    # The target's papaia-ctl takes it out again and refuses it unless it is a pre-release.
+    [ -n "${TEST_TRUST_ANCHOR:-}" ] && resume_flags+=(--test-trust-anchor="${TEST_TRUST_ANCHOR:-}")
     resume_flags+=(--resume-correlation-id="$IMAGES_CORRELATION_ID")
     # Hand off through the interpreter, not by executing the path: the git
     # checkout just above rewrote tools/papaia-ctl from the target tree, and it
@@ -1181,5 +1188,9 @@ cmd_suite_verify() {
         shift
     done
     CONFIG_DIR="$DEFAULT_CONFIG_DIR"
+    if [ -n "${TEST_TRUST_ANCHOR:-}" ]; then
+        extra+=(--test-trust-anchor="${TEST_TRUST_ANCHOR:-}")
+        [ -n "$IMAGES_CORRELATION_ID" ] && extra+=(--correlation-id="$IMAGES_CORRELATION_ID")
+    fi
     py_cli suite-verify ${extra[@]+"${extra[@]}"}
 }

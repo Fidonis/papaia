@@ -54,6 +54,29 @@ Wiederherstellungspunkt und einen einmaligen Rückwegschlüssel an. Der Rückweg
 `papaia-ctl rollback` (siehe [Wiederherstellung](../wiederherstellung.md#rückweg-nach-einem-upgrade)).
 Ein Modul hebt `papaia-ctl addon upgrade <modul> --path=<verzeichnis>`.
 
+## Vorabversionen testen (Test-Vertrauensanker)
+
+Nur für Testinstallationen einer Vorabversion, nie im Produktivbetrieb. Ein Kern, dessen
+`VERSION` eine Vorabversion ist (zum Beispiel `1.10.0-rc.1`), lässt sich gegen eine Stückliste
+mit Geltungsbereich `test` prüfen, die mit einem lokalen Testschlüssel signiert ist. Dafür nehmen
+`papaia-ctl start`, `upgrade`, `pairing list`, `pairing confirm` und `suite verify` die Option
+`--test-trust-anchor=<öffentlicher Schlüssel>` an:
+
+- Sie gilt nur für diesen einen Befehl. Keine Umgebungsvariable, kein Eintrag in der `.env` und
+  kein gespeicherter Zustand schaltet sie ein.
+- Ein Kern mit Release-Version lehnt sie ab, bevor er irgendetwas anderes liest. Bei einem
+  Upgrade müssen installierter Kern und Ziel Vorabversionen sein.
+- Angenommen wird nur eine Stückliste mit Geltungsbereich `test`, signiert mit genau diesem
+  Schlüssel. Eine Lieferstückliste (`delivery`) braucht weiter den festgeschriebenen
+  Release-Schlüssel `compat/release-key.pub`; mit der Option wird sie abgelehnt.
+- Am Anfang und am Ende des Befehls steht ein Warnhinweis mit dem Fingerabdruck des Schlüssels
+  und „NOT FOR PRODUCTION“. Jede Prüfung mit dem Testschlüssel schreibt eine Zeile in das
+  Audit-Log `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl` (Befehl, Fingerabdruck, Prüfsumme der
+  Stückliste, ausführende Person, Korrelationskennung).
+
+Beispiel: `papaia-ctl start --test-trust-anchor=/pfad/zum/testschluessel.pub`. Der nächste
+Befehl ohne Option prüft wieder streng gegen den Release-Schlüssel.
+
 ## Begriffe
 
 Das Handbuch schreibt die Begriffe wie die Oberflächen: „Upgrade“, „Löschjournal“,
