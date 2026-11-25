@@ -26,14 +26,15 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 from test_doctor import NOW, probes, result
 
 from lib import deployment, doctor, egress, sql_uplink, status
 
-PROJECT = os.environ.get("PAPAIA_SQL_UPLINK_TEST_PROJECT", "papaia-sql-uplink-test")
-SUBNET = ipaddress.ip_network(os.environ.get("PAPAIA_SQL_UPLINK_TEST_SUBNET", "10.250.81.0/24"))
+PROJECT = live_names.project("sql-uplink-test", "PAPAIA_SQL_UPLINK_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_SQL_UPLINK_TEST_SUBNET")
 PORT = int(os.environ.get("PAPAIA_SQL_UPLINK_TEST_PORT", "14330"))
 # The pinned base of the core's own images (src/infra/egress/Dockerfile); Debian, so it
 # carries nsenter for the helper that reaches the host's network namespace.

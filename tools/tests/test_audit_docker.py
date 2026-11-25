@@ -15,7 +15,6 @@ collide with other stacks on the same host.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import shutil
@@ -24,6 +23,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import live_names
 import pytest
 import yaml
 
@@ -31,8 +31,8 @@ from lib import audit, own_images, service_account_keys
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "src" / "infra" / "audit" / "docker-compose.yml"
-PROJECT = os.environ.get("PAPAIA_AUDIT_TEST_PROJECT", f"papaia-audit-test-{os.getpid()}")
-SUBNET = ipaddress.ip_network(os.environ.get("PAPAIA_AUDIT_TEST_SUBNET", "10.250.78.0/24"))
+PROJECT = live_names.project("audit-test", "PAPAIA_AUDIT_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_AUDIT_TEST_SUBNET")
 IMAGE = f"{PROJECT}-audit:test"
 
 

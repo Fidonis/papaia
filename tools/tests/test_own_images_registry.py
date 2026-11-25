@@ -40,6 +40,7 @@ import urllib.request
 from pathlib import Path
 
 import hang_guard
+import live_names
 import pytest
 import yaml
 from test_images import _bom, _new_keypair, _sign_bytes
@@ -48,7 +49,7 @@ from test_own_images import ALPINE_FIXES, ALPINE_IMAGES, DEBIAN_FIXES, DEBIAN_IM
 from lib import cli, images, own_images, suite
 
 REPO = Path(__file__).resolve().parents[2]
-PROJECT = os.environ.get("PAPAIA_OWN_IMAGES_TEST_PROJECT", "papaia-own-images-test")
+PROJECT = live_names.project("own-images-test", "PAPAIA_OWN_IMAGES_TEST_PROJECT")
 REGISTRY_IMAGE = (
     "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
 )

@@ -20,7 +20,6 @@ PAPAIA_PAPERLESS_GATE_TEST_PORT so the test does not collide with other stacks.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import secrets
@@ -32,6 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 
@@ -39,10 +39,8 @@ from lib import npm_provision, paperless_gate
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "src" / "infra" / "nginx" / "docker-compose.yml"
-PROJECT = os.environ.get("PAPAIA_PAPERLESS_GATE_TEST_PROJECT", "papaia-paperless-gate-test")
-SUBNET = ipaddress.ip_network(
-    os.environ.get("PAPAIA_PAPERLESS_GATE_TEST_SUBNET", "10.250.78.0/24")
-)
+PROJECT = live_names.project("paperless-gate-test", "PAPAIA_PAPERLESS_GATE_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_PAPERLESS_GATE_TEST_SUBNET")
 # The stand-in for Paperless and its gate; any small image with nginx and busybox wget.
 STUB_IMAGE = (
     "nginx:1.31.2-alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"

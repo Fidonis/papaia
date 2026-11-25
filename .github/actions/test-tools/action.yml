@@ -1,0 +1,58 @@
+name: Test tools
+description: >-
+  Install the pinned tools a shard of the core test suite needs: the Compose release of
+  the golden snapshot, the HAProxy the link gateway ships and the pinned gitleaks. Every
+  download is checked before it is used. GITLEAKS_VERSION and GITLEAKS_SHA256 come from
+  the workflow environment.
+
+inputs:
+  compose:
+    description: Install the Compose release the golden snapshot records ("true" or "false").
+    required: true
+  haproxy:
+    description: Provide the HAProxy of the link gateway image ("true" or "false").
+    required: true
+  gitleaks:
+    description: Install the pinned gitleaks ("true" or "false").
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The runner image ships another Compose release than the one the golden snapshot
+    # records; install that one, verified against its published checksum.
+    - name: Provide the Compose release of the golden snapshot
+      if: inputs.compose == 'true'
+      shell: bash
+      run: |
+        version=$(python3 -c 'import json; print(json.load(open("tools/tests/golden/single-node.json"))["default"]["compose"]["version"])')
+        asset="docker-compose-linux-x86_64"
+        base="https://github.com/docker/compose/releases/download/v$version"
+        mkdir -p "$HOME/.docker/cli-plugins"
+        cd "$HOME/.docker/cli-plugins"
+        curl -fsSL -o "$asset" "$base/$asset"
+        curl -fsSL -o "$asset.sha256" "$base/$asset.sha256"
+        sha256sum -c "$asset.sha256"
+        mv "$asset" docker-compose
+        rm "$asset.sha256"
+        chmod +x docker-compose
+        docker compose version
+    # The live link tests need the HAProxy the gateway ships: the distribution's is too old
+    # for `timeout client-hs`. Its Alpine binary runs here only inside the image.
+    - name: Provide the pinned HAProxy
+      if: inputs.haproxy == 'true'
+      shell: bash
+      run: |
+        image=$(sed -n 's/^ *image: \(haproxy:.*\)$/\1/p' src/infra/link-gateway/docker-compose.yml)
+        docker pull "$image"
+        mkdir -p "$HOME/.local/bin"
+        cat > "$HOME/.local/bin/haproxy" <<EOF
+        #!/bin/sh
+        exec docker run --rm --init --network host --user $(id -u):$(id -g) -v /tmp:/tmp $image haproxy "\$@"
+        EOF
+        chmod +x "$HOME/.local/bin/haproxy"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - name: Provide the pinned gitleaks
+      if: inputs.gitleaks == 'true'
+      shell: bash
+      run: .github/scripts/install-gitleaks.sh

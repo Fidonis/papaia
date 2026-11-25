@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 import os
 import re
 import secrets
 import shutil
+import string
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +38,33 @@ _GITLEAKS = shutil.which("gitleaks")
 if _GITLEAKS is None and os.environ.get("PAPAIA_REQUIRE_GITLEAKS"):
     raise RuntimeError("PAPAIA_REQUIRE_GITLEAKS is set but gitleaks is not installed")
 needs_gitleaks = pytest.mark.skipif(_GITLEAKS is None, reason="gitleaks not installed")
+
+# A planted value must be found on every run. The generic rule of gitleaks drops a value
+# whose Shannon entropy is below 3.5 bits or that contains one of its stop words (short
+# words such as "fast", "kata", "vpn" or "md5", also inside random text): about 1 in 60
+# `token_urlsafe(30)` values and 1 in 600 random SHA-256 hex digests were not reported.
+# The values below stay random, but every symbol occurs equally often (entropy of at least
+# 3.9 bits), the key uses only digits and the letters j, q, x and z, and the hex value
+# alternates digits and letters, so neither forms a stop word: none of 200,000 values of
+# either kind was dropped by gitleaks 8.30.1.
+_SYMBOLS = string.digits + "jqxzJQXZ"
+
+
+def _random_key() -> str:
+    """36 random characters, each of `_SYMBOLS` twice: a key no filter drops."""
+    chars = list(_SYMBOLS * 2)
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def _random_hex_digest() -> str:
+    """A random 64-digit lower-case hex value in which digits and letters alternate."""
+    rng = secrets.SystemRandom()
+    digits = list("0123456789" * 3) + [rng.choice("0123456789") for _ in range(2)]
+    letters = list("abcdef" * 5) + [rng.choice("abcdef") for _ in range(2)]
+    rng.shuffle(digits)
+    rng.shuffle(letters)
+    return "".join(digit + letter for digit, letter in zip(digits, letters, strict=True))
 
 
 def _toml(path: Path) -> dict:
@@ -310,9 +339,25 @@ def _scan_repository(tmp_path: Path, files: dict[str, str]) -> subprocess.Comple
     )
 
 
+def _entropy(value: str) -> float:
+    counts = [value.count(char) for char in set(value)]
+    return -sum(n / len(value) * math.log2(n / len(value)) for n in counts)
+
+
+def test_planted_values_are_random_and_above_the_entropy_floor_of_the_scan():
+    keys = {_random_key() for _ in range(500)}
+    digests = {_random_hex_digest() for _ in range(500)}
+
+    assert len(keys) == 500 and len(digests) == 500
+    for key in keys:
+        assert len(key) == 36 and set(key) == set(_SYMBOLS) and _entropy(key) > 4.1
+    for digest in digests:
+        assert re.fullmatch(r"(?:[0-9][a-f]){32}", digest) and _entropy(digest) > 3.8, digest
+
+
 @needs_gitleaks
 def test_a_planted_secret_fails_the_secret_scan(tmp_path: Path):
-    planted = f'service_api_key = "{secrets.token_urlsafe(30)}"\n'
+    planted = f'service_api_key = "{_random_key()}"\n'
     result = _scan_repository(tmp_path, {"src/planted.py": planted})
     assert result.returncode == 1, result.stdout + result.stderr
     assert "src/planted.py" in result.stdout + result.stderr
@@ -344,7 +389,7 @@ def test_a_token_with_claims_is_still_found(tmp_path: Path):
 
 @needs_gitleaks
 def test_the_same_value_outside_the_golden_snapshots_is_still_found(tmp_path: Path):
-    digest = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+    digest = _random_hex_digest()
     result = _scan_repository(tmp_path, {"src/config.json": f'{{"api_secret": "{digest}"}}\n'})
     assert result.returncode == 1, result.stdout + result.stderr
 
@@ -359,7 +404,7 @@ def test_canary_labels_in_the_tests_are_no_finding(tmp_path: Path):
 
 @needs_gitleaks
 def test_a_random_key_in_the_tests_is_still_found(tmp_path: Path):
-    test = f'volumes = {{\n    "papaia_papaia-lifecycle-key": "{secrets.token_urlsafe(30)}",\n}}\n'
+    test = f'volumes = {{\n    "papaia_papaia-lifecycle-key": "{_random_key()}",\n}}\n'
     result = _scan_repository(tmp_path, {"tools/tests/test_backup.py": test})
     assert result.returncode == 1, result.stdout + result.stderr
 

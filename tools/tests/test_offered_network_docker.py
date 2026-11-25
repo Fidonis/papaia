@@ -19,20 +19,20 @@ does not collide with other stacks on the same host.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 
 from lib import compat, deployment, envtree, gen_override
 
-PROJECT = os.environ.get("PAPAIA_OFFERED_TEST_PROJECT", "papaia-offered-test")
-SUBNET = ipaddress.ip_network(os.environ.get("PAPAIA_OFFERED_TEST_SUBNET", "10.250.81.0/24"))
+PROJECT = live_names.project("offered-test", "PAPAIA_OFFERED_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_OFFERED_TEST_SUBNET")
 # The pinned base image of the core's own images (src/infra/egress/Dockerfile).
 IMAGE = (
     "python:3.12.16-slim-trixie@sha256:"

@@ -19,13 +19,13 @@ not collide with other stacks on the same host.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 
@@ -33,8 +33,8 @@ from lib import deployment, egress, gen_override, own_images
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "src" / "infra" / "egress" / "docker-compose.yml"
-PROJECT = os.environ.get("PAPAIA_EGRESS_TEST_PROJECT", "papaia-egress-test")
-SUBNET = ipaddress.ip_network(os.environ.get("PAPAIA_EGRESS_TEST_SUBNET", "10.250.77.0/24"))
+PROJECT = live_names.project("egress-test", "PAPAIA_EGRESS_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_EGRESS_TEST_SUBNET")
 ADDON = "probe"
 
 

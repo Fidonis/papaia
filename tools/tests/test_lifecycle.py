@@ -25,6 +25,7 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 
@@ -148,7 +149,7 @@ def test_init_completes_again_on_volumes_it_already_handed_over(tmp_path):
     }
     path = tmp_path / "docker-compose.yml"
     path.write_text(yaml.safe_dump(project), encoding="utf-8")
-    name = os.environ.get("PAPAIA_TEST_COMPOSE_PROJECT") or f"papaia-test-lifecycle-{os.getpid()}"
+    name = live_names.project("test-lifecycle", "PAPAIA_TEST_COMPOSE_PROJECT")
     env = dict(os.environ, UID="1000", GID="1000")
     base = ["docker", "compose", "-p", name, "-f", str(path)]
     try:

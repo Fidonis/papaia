@@ -34,15 +34,14 @@ does not collide with other stacks on the same host. Nothing is published on the
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
-import os
 import secrets
 import shutil
 import subprocess
 import time
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 
@@ -51,10 +50,8 @@ from lib import secrets as core_secrets
 
 REPO = Path(__file__).resolve().parents[2]
 LITELLM_COMPOSE = REPO / "src" / "ai" / "litellm" / "docker-compose.yml"
-PROJECT = os.environ.get("PAPAIA_MODEL_GATEWAY_TEST_PROJECT", "papaia-model-gateway-test")
-SUBNET = ipaddress.ip_network(
-    os.environ.get("PAPAIA_MODEL_GATEWAY_TEST_SUBNET", "10.250.79.0/24")
-)
+PROJECT = live_names.project("model-gateway-test", "PAPAIA_MODEL_GATEWAY_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_MODEL_GATEWAY_TEST_SUBNET")
 MODULE = "probe"
 # Where papaia_hooks looks for the halt file, the route file and its outbox.
 HALT_MOUNT = "/run/papaia-halt"

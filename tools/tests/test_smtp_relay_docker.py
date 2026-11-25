@@ -16,14 +16,13 @@ collide with other stacks on the same host.
 
 from __future__ import annotations
 
-import ipaddress
 import json
-import os
 import shutil
 import subprocess
 from email import message_from_bytes, policy
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 
@@ -31,8 +30,8 @@ from lib import smtp
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "src" / "infra" / "smtp-relay" / "docker-compose.yml"
-PROJECT = os.environ.get("PAPAIA_SMTP_TEST_PROJECT", "papaia-smtp-test")
-SUBNET = ipaddress.ip_network(os.environ.get("PAPAIA_SMTP_TEST_SUBNET", "10.250.83.0/24"))
+PROJECT = live_names.project("smtp-test", "PAPAIA_SMTP_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_SMTP_TEST_SUBNET")
 # The pinned base of the core's own images (src/infra/egress/Dockerfile).
 IMAGE = (
     "python:3.12.16-slim-trixie"

@@ -17,7 +17,6 @@ collide with other stacks.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import secrets
@@ -29,6 +28,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 from jsonschema import Draft202012Validator
@@ -42,8 +42,8 @@ SCHEMA = json.loads(
         encoding="utf-8"
     )
 )
-PROJECT = os.environ.get("PAPAIA_EDGE_GUARD_TEST_PROJECT", "papaia-edge-guard-test")
-SUBNET = ipaddress.ip_network(os.environ.get("PAPAIA_EDGE_GUARD_TEST_SUBNET", "10.250.79.0/24"))
+PROJECT = live_names.project("edge-guard-test", "PAPAIA_EDGE_GUARD_TEST_PROJECT")
+SUBNET = live_names.subnet("PAPAIA_EDGE_GUARD_TEST_SUBNET")
 STUB_IMAGE = (
     "nginx:1.31.2-alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"
 )

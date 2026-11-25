@@ -1,0 +1,101 @@
+# Shards of the core test suite in CI (workflow "CI", job "pytest"). Every shard lists test
+# file names or globs of tools/tests; the catch-all shard also takes every file no other
+# shard names, so a new test file needs no entry here. A file may be in one shard only.
+#
+# The matrix of the job "pytest" in .github/workflows/ci.yml has one entry per shard with
+# its timeout, address pool and tools. `python3 tests/shard_check.py check` (from tools/)
+# proves that the shards together collect exactly the whole suite. To add a shard, add a
+# table here and a matrix entry; see CONTRIBUTING.md ("Test shards in CI").
+#
+# Grouping: the slow files by subject, the Docker live files in three shards, the fast
+# unit files in the catch-all shard. The seconds after each group are the measured sum of
+# its files (full local run with --durations=0, 25 November 2026).
+
+catch_all = "unit"
+
+# 298 s
+[shards.cluster]
+files = ["test_cluster_data.py", "test_cluster.py"]
+
+# 296 s
+[shards.nodes]
+files = [
+  "test_nodes.py",
+  "test_node_shell.py",
+  "test_topology.py",
+  "test_host_loss_restore.py",
+  "test_legacy_migration.py",
+]
+
+# 279 s
+[shards.chat-modules]
+files = [
+  "test_chat_optin.py",
+  "test_modules.py",
+  "test_chat_relay.py",
+  "test_catalog.py",
+  "test_doctor_modules.py",
+]
+
+# 297 s
+[shards.lifecycle]
+files = [
+  "test_rollback_cli.py",
+  "test_upgrade_staged_cli.py",
+  "test_lifecycle.py",
+  "test_restore_journal_cli.py",
+  "test_recover_snapshot_cli.py",
+  "test_halt.py",
+]
+
+# 168 s locally without HAProxy; test_link.py alone took about 150 s in CI with it.
+[shards.link-runtime]
+files = [
+  "test_link.py",
+  "test_ctl_runtime.py",
+  "test_person.py",
+  "test_settings.py",
+  "test_direct_ports_setup.py",
+  "test_person_core.py",
+]
+
+# 314 s: the registry and image builds, the golden snapshot and the other files that
+# need the Compose release of the snapshot or gitleaks.
+[shards.live-images]
+files = [
+  "test_own_images_registry.py",
+  "test_golden_single_node.py",
+  "test_published_ports_rendered.py",
+  "test_own_images.py",
+  "test_me_connections.py",
+  "test_me_profile.py",
+  "test_ci_checks.py",
+  "test_access_report.py",
+  "test_pki.py",
+  "test_ctl_certs.py",
+]
+
+# 264 s
+[shards.live-gateway]
+files = [
+  "test_model_gateway_docker.py",
+  "test_paperless_gate_docker.py",
+  "test_smtp_relay_docker.py",
+  "test_sql_uplink_docker.py",
+  "test_replay.py",
+]
+
+# 212 s
+[shards.live-network]
+files = [
+  "test_offered_network_docker.py",
+  "test_edge_guard_docker.py",
+  "test_isolated_network_docker.py",
+  "test_audit_docker.py",
+  "test_egress_docker.py",
+  "test_knowledge_map_setup.py",
+]
+
+# The catch-all shard: every other file.
+[shards.unit]
+files = []

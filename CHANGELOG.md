@@ -12,6 +12,26 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Core test suite in parallel shards
+
+- The CI job "Ruff and pytest" ran the whole core suite in one job and hit its 20-minute
+  limit on every run since 24 November 2026. The suite now runs as parallel shards
+  (`tools/tests/shards.toml`, one job `pytest (<shard>)` each, with a timeout of about
+  twice its measured duration and at most 30 minutes); ruff runs once in the job "Ruff".
+  "Ruff and pytest" is now the aggregate check and passes only when ruff, the shard check
+  and every shard passed, so the branch protection keeps its required check.
+- New job "Test shards cover the suite": collects the whole suite and fails when a test is
+  in no shard or in two or a shard names a missing file (`tools/tests/shard_check.py`).
+- The install steps for Compose, HAProxy and gitleaks moved into the shared action
+  `.github/actions/test-tools`, with their checksum checks; each shard installs only what
+  its files need.
+- Docker live tests take their Compose project names and subnets per session
+  (`tools/tests/live_names.py`) instead of fixed defaults, so two runs on one Docker host
+  no longer collide; the per-test overrides still apply.
+- The secret scan tests planted random values that gitleaks drops about once in 60 runs
+  (stop words inside the value, low entropy); the values stay random but are now always
+  found.
+
 ### Fixed krb5 in the audit image
 
 - `papaia-audit` carries `krb5-libs` `1.22.3-r0` on linux/amd64 and linux/arm64

@@ -30,6 +30,7 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 
+import live_names
 import pytest
 import yaml
 
@@ -646,8 +647,8 @@ def test_sync_chat_role_skips_without_its_profiles_and_without_the_database(tmp_
 MONGO_IMAGE = _yaml("src/ai/librechat/docker-compose.yml")["services"]["librechat-mongodb"][
     "image"
 ]
-LIVE_NAME = os.environ.get("PAPAIA_REPLAY_TEST_PROJECT", "papaia-replay-test")
-LIVE_PORT = int(os.environ.get("PAPAIA_REPLAY_TEST_PORT", "64360"))
+LIVE_NAME = live_names.project("replay-test", "PAPAIA_REPLAY_TEST_PROJECT")
+LIVE_PORT = live_names.port("PAPAIA_REPLAY_TEST_PORT")
 
 
 def _docker_available() -> bool:
