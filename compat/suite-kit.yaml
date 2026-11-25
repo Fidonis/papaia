@@ -9,66 +9,116 @@
 #
 #   cd tools && uv run --locked --extra dev pk-check bom ../compat/suite-kit.yaml
 #
+# `kit_build` names the build the repo vendors: version, commit and the sha256 of the kit
+# wheel. One kit version can have been built from more than one commit, so the version
+# alone does not tell builds apart. Every entry on the release names its release build
+# record. qdrant-mcp-rbac still vendors the internal cut 0.1.1, which is not a release of
+# the kit's matrix: its entry names that build and carries no `kit` field, so the suite
+# check does not claim a release for it until it binds the release.
+#
 # The entry of the core must name the release in tools/kit.lock, and the kit entry the
-# same release (tools/tests/test_kit_vendor.py). docs/compatibility.md explains the file.
+# same release and its commit (tools/tests/test_kit_vendor.py). docs/compatibility.md
+# explains the file.
 schema: papaia.suite-bom/1
 suite: 1.10.0
 repos:
   - name: papaia
     role: core
     kit:
-      version: 0.1.2
+      version: 0.1.0
       renders_ui: false
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-manager
     role: manager
     kit:
       version: 0.1.0
       renders_ui: true
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-me
     role: module
     kit:
       version: 0.1.0
       renders_ui: true
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-studio
     role: module
     kit:
       version: 0.1.0
       renders_ui: true
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-data
     role: module
     kit:
       version: 0.1.0
       renders_ui: true
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-flow
     role: module
     kit:
       version: 0.1.0
       renders_ui: true
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-assist
     role: module
     kit:
       version: 0.1.0
       renders_ui: true
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-connections
     role: registry
     kit:
       version: 0.1.0
       renders_ui: false
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-addons
     role: addon
     kit:
       version: 0.1.0
       renders_ui: false
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: qdrant-mcp-rbac
     role: mcp
-    kit:
-      version: 0.1.0
-      renders_ui: false
+    kit_build:
+      version: 0.1.1
+      commit: fb8225c710df4bf104d04116dcec4a9259e525e4
+      wheel_sha256: ebdcf13924f6dde300cfc36d5116fc695c5343b724ee5d7d71fae106195605ab
   - name: paperless-mcp-rbac
     role: mcp
     kit:
       version: 0.1.0
       renders_ui: false
+    kit_build:
+      version: 0.1.0
+      commit: 849e344064472d94a5c934170f58162ef296c94c
+      wheel_sha256: 7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e
   - name: papaia-kit
     role: kit
-    version: 0.1.2
+    version: 0.1.0
+    commit: 849e344064472d94a5c934170f58162ef296c94c

@@ -46,6 +46,70 @@ def _suite_kit() -> dict:
     return yaml.safe_load(SUITE_KIT.read_text(encoding="utf-8"))
 
 
+# --- the vendored release ---------------------------------------------------------------
+
+# Release build record of the kit release the core vendors: version, commit, commit time
+# and sha256 of every file of the release build. Version 0.1.0 was built twice from two
+# commits; only commit and checksums tell the final build from the superseded one, so the
+# record is pinned here in full and `kit.lock` and the vendored files must equal it.
+KIT_RELEASE = {
+    "version": "0.1.0",
+    "commit": "849e344064472d94a5c934170f58162ef296c94c",
+    "source_date_epoch": 1795592298,
+}
+KIT_RELEASE_SHA256 = {
+    "papaia-kit-0.1.0.tgz": "775af0d2b0d3332a67dbd91595a508401ba475177502f03d54403758735e23e6",
+    "papaia-kit-refimg-0.1.0.tar.gz": (
+        "61f47db5e447a3cf7db0657c188f8dcffe100994c11074c9487d5d2bc7f75723"
+    ),
+    "papaia_kit-0.1.0-py3-none-any.whl": (
+        "7ecccf90d47cce795a5b07712f9f4806839dcd0211aba71bf2f16eb6e7b1211e"
+    ),
+    "papaia_kit-0.1.0.tar.gz": "ddd261e914170208cf901e0332f2da384698c2b13232d8c176d8f8215c0f8844",
+}
+# The files of the release the core vendors: the wheel it installs and its source tarball.
+VENDORED = ("papaia_kit-0.1.0-py3-none-any.whl", "papaia_kit-0.1.0.tar.gz")
+VENDOR = TOOLS / "vendor" / "papaia-kit"
+
+
+def test_kit_lock_is_the_release_build_record_of_the_vendored_kit():
+    lock = _lock()
+    assert {key: lock[key] for key in KIT_RELEASE} == KIT_RELEASE
+    version = KIT_RELEASE["version"]
+    assert [(f["name"], f["path"], f["sha256"]) for f in lock["files"]] == [
+        (name, f"vendor/papaia-kit/{version}/{name}", KIT_RELEASE_SHA256[name])
+        for name in VENDORED
+    ]
+
+
+def test_the_vendored_files_are_exactly_the_release_build_files():
+    import hashlib
+
+    version = KIT_RELEASE["version"]
+    found = {
+        path.relative_to(VENDOR).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in VENDOR.rglob("*")
+        if path.is_file()
+    }
+    assert found == {f"{version}/{name}": KIT_RELEASE_SHA256[name] for name in VENDORED}
+
+
+def test_the_dependency_pins_bind_the_release_build_wheel():
+    import tomllib
+
+    version = KIT_RELEASE["version"]
+    wheel = f"vendor/papaia-kit/{version}/{VENDORED[0]}"
+    pyproject = tomllib.loads((TOOLS / "pyproject.toml").read_text(encoding="utf-8"))
+    assert f"papaia-kit=={version} ; python_version >= '3.12'" in (
+        pyproject["project"]["optional-dependencies"]["dev"]
+    )
+    assert pyproject["tool"]["uv"]["sources"]["papaia-kit"] == {"path": wheel}
+    uv_lock = tomllib.loads((TOOLS / "uv.lock").read_text(encoding="utf-8"))
+    (kit,) = [package for package in uv_lock["package"] if package["name"] == "papaia-kit"]
+    assert (kit["version"], kit["source"]) == (version, {"path": wheel})
+    assert [w["hash"] for w in kit["wheels"]] == [f"sha256:{KIT_RELEASE_SHA256[VENDORED[0]]}"]
+
+
 # --- snapshots of the vendored release -------------------------------------------------
 
 
@@ -182,7 +246,7 @@ def test_the_candidate_suite_names_every_component_of_the_candidate_row():
 
 def test_every_kit_field_of_the_candidate_suite_passes_the_core_validator():
     for index, repo in enumerate(_suite_kit()["repos"]):
-        if repo["role"] == "kit":
+        if repo["role"] == "kit" or repo["name"] in KIT_NOT_ON_A_RELEASE:
             continue
         suite.validate_module_kit(repo["kit"], f"repos[{index}].kit")
         assert isinstance(repo["kit"]["renders_ui"], bool), repo["name"]
@@ -197,3 +261,40 @@ def test_the_core_schema_takes_the_kit_field_from_the_vendored_kit_unchanged():
     core_schema = _json("schemas/suite-bom.schema.json")
     assert core_schema["$defs"]["module_kit"] == kit_schema["$defs"]["module_kit"]
     assert core_schema["$defs"]["repo"]["properties"]["kit"] == {"$ref": "#/$defs/module_kit"}
+
+
+# Repos of the candidate suite that still vendor an internal kit cut, which is no release
+# of the kit's matrix (re-vendoring deferred by the owner). Their entry names that cut in
+# `kit_build` and carries no `kit` field, so `pk-check bom` does not claim a release for
+# them. Once such a repo binds the release, its entry moves back and it leaves this set.
+KIT_NOT_ON_A_RELEASE = {"qdrant-mcp-rbac"}
+
+
+def test_every_entry_names_the_commit_and_wheel_checksum_of_its_kit_build():
+    """Two builds of one kit version differ only in commit and checksums, so every entry
+    names both; an entry on the release names exactly the release build record."""
+    release = KIT_RELEASE["version"]
+    on_release = {
+        "version": release,
+        "commit": KIT_RELEASE["commit"],
+        "wheel_sha256": KIT_RELEASE_SHA256[f"papaia_kit-{release}-py3-none-any.whl"],
+    }
+    seen = set()
+    for repo in _suite_kit()["repos"]:
+        if repo["role"] == "kit":
+            assert repo["commit"] == KIT_RELEASE["commit"]
+            assert "kit_build" not in repo
+            continue
+        build = repo["kit_build"]
+        assert set(build) == {"version", "commit", "wheel_sha256"}, repo["name"]
+        assert re.fullmatch(r"[0-9a-f]{40}", build["commit"]), repo["name"]
+        assert re.fullmatch(r"[0-9a-f]{64}", build["wheel_sha256"]), repo["name"]
+        if repo["name"] in KIT_NOT_ON_A_RELEASE:
+            seen.add(repo["name"])
+            assert "kit" not in repo, repo["name"]
+            assert build["commit"] != on_release["commit"], repo["name"]
+            assert build["wheel_sha256"] != on_release["wheel_sha256"], repo["name"]
+        else:
+            assert build == on_release, repo["name"]
+            assert repo["kit"]["version"] == release, repo["name"]
+    assert seen == KIT_NOT_ON_A_RELEASE

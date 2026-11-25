@@ -103,15 +103,15 @@ def test_the_audience_of_a_name_without_the_exchange_form_is_none():
     "table, message",
     [
         ({}, "exchange_scopes"),
-        ({"kit": "0.1.1", "prefix": "aud-", "scopes": [], "extra": 1}, "unknown"),
-        ({"kit": "0.1.1", "prefix": "", "scopes": []}, "prefix"),
+        ({"kit": "0.1.0", "prefix": "aud-", "scopes": [], "extra": 1}, "unknown"),
+        ({"kit": "0.1.0", "prefix": "", "scopes": []}, "prefix"),
         (
-            {"kit": "0.1.1", "prefix": "aud-", "scopes": [{"audience": "flow", "scope": "x"}]},
+            {"kit": "0.1.0", "prefix": "aud-", "scopes": [{"audience": "flow", "scope": "x"}]},
             "does not have the exchange form",
         ),
         (
             {
-                "kit": "0.1.1",
+                "kit": "0.1.0",
                 "prefix": "aud-",
                 "scopes": [{"audience": "flow", "scope": "aud-flow", "owner": "x"}],
             },
@@ -119,7 +119,7 @@ def test_the_audience_of_a_name_without_the_exchange_form_is_none():
         ),
         (
             {
-                "kit": "0.1.1",
+                "kit": "0.1.0",
                 "prefix": "aud-",
                 "scopes": [
                     {"audience": "flow", "scope": "aud-flow"},

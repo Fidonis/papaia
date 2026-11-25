@@ -1,6 +1,6 @@
 {
   "format": "papaia.names-register-snapshot/1",
-  "source": {"package": "papaia-kit", "version": "0.1.2", "commit": "fd69b66cf9ce259c0b5ac5ce4398d82a8d610df2"},
+  "source": {"package": "papaia-kit", "version": "0.1.0", "commit": "849e344064472d94a5c934170f58162ef296c94c"},
   "entries": [
     {"name": "flow", "kind": "audience", "owner": "papaia-flow"},
     {"name": "assist-api", "kind": "audience", "owner": "papaia-assist"},
@@ -143,7 +143,7 @@
     {"name": "flow", "successor": "aud-flow", "kinds": ["scope"]}
   ],
   "exchange_scopes": {
-    "kit": "0.1.2",
+    "kit": "0.1.0",
     "prefix": "aud-",
     "scopes": [
       {"audience": "flow", "scope": "aud-flow"},

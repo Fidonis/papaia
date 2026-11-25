@@ -30,7 +30,7 @@ Nutzung nötig ist, Hinweis zum Bezug.
 | Flow als eigenständige Edition | Alle Rechte vorbehalten (Fidonis GmbH), keine offene Lizenz erteilt | nein | ja | Nutzung der Edition außerhalb der Suite nur mit Vertrag; die Edition enthält nur Fremdbestandteile der Klassen „freizügig“ und „schwaches Copyleft“ |
 | Assistant | MIT | ja | nein | Images über die Zugangsdaten der Lieferung (Abschnitt 3) |
 | Mein Bereich | MIT | ja | nein | Image `ghcr.io/fidonis/papaia-me` (persönlicher Bereich `me-web` und Einstellungsspeicher `prefs`, Profil `me`) über die Zugangsdaten der Lieferung (Abschnitt 3) |
-| Kit | MIT | ja | nein | Bibliothek der Module; Version 0.1.2 liegt im Kern als Paket unter `tools/vendor/papaia-kit/<version>/` (nur Entwicklungswerkzeug, nicht Teil von `papaia-ctl` oder eines Images); `LICENSE` liegt im Paket |
+| Kit | MIT | ja | nein | Bibliothek der Module; Version 0.1.0 (Commit `849e344`) liegt im Kern als Paket unter `tools/vendor/papaia-kit/<version>/` (nur Entwicklungswerkzeug, nicht Teil von `papaia-ctl` oder eines Images); `LICENSE` liegt im Paket |
 | Verbindungsregister | MIT | ja | nein | Images über die Zugangsdaten der Lieferung (Abschnitt 3) |
 | KI-Landkarte | MIT | ja | nein | Image `ghcr.io/fidonis/papaia-knowledge-map` |
 | Add-on-Sammlung | MIT | ja | nein | öffentliches Repo `Fidonis/papaia-addons`; die Fremdprodukte der Add-ons stehen in Abschnitt 1.2, n8n in Abschnitt 2 |

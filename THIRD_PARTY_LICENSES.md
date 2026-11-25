@@ -76,7 +76,7 @@ not part of `papaia-ctl` and not part of any image.
 
 | Package | Version | License | Location | Notes |
 |---|---|---|---|---|
-| papaia-kit | 0.1.2 | MIT | `tools/vendor/papaia-kit/0.1.2/` | shared contract package of the platform (Fidonis GmbH); wheel and source tarball pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; `LICENSE` and `THIRD_PARTY_LICENSES.md` are inside both; the kit itself carries no NOTICE duty (the notices of the fonts and icons it bundles travel with them) |
+| papaia-kit | 0.1.0 | MIT | `tools/vendor/papaia-kit/0.1.0/` | shared contract package of the platform (Fidonis GmbH); wheel and source tarball pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; `LICENSE` and `THIRD_PARTY_LICENSES.md` are inside both; the kit itself carries no NOTICE duty (the notices of the fonts and icons it bundles travel with them) |
 
 ---
 

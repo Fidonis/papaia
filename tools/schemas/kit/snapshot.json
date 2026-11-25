@@ -2,8 +2,8 @@
   "format": "papaia.kit-schema-snapshot/1",
   "source": {
     "package": "papaia-kit",
-    "version": "0.1.2",
-    "commit": "fd69b66cf9ce259c0b5ac5ce4398d82a8d610df2"
+    "version": "0.1.0",
+    "commit": "849e344064472d94a5c934170f58162ef296c94c"
   },
   "files": {
     "exposes.v1.schema.json": "521b2ff266877f50600cea6d8cac6ddf0a2fc08548a5b5b8b63e5f2e464f7291",

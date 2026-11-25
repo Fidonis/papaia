@@ -12,6 +12,17 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Final kit 0.1.0
+
+- The core vendors the final kit 0.1.0, the release build of kit commit `849e344`
+  (`tools/vendor/papaia-kit/0.1.0/`, `tools/kit.lock`, `tools/pyproject.toml`,
+  `tools/uv.lock`); the kit folded its earlier local cuts into this release. The register
+  and schema snapshots name the final commit; the login theme resources are unchanged.
+- `compat/suite-kit.yaml` names the kit build of every repo (`kit_build`: version, commit,
+  wheel sha256) and the kit's commit, since the version alone does not tell two builds of
+  0.1.0 apart. `qdrant-mcp-rbac` still vendors an internal kit cut and has no `kit` field
+  until it binds the release.
+
 ### Data class of every model route
 
 - Every alias of the model gateway carries the highest data class its route may receive
