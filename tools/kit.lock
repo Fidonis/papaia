@@ -5,16 +5,16 @@
 # refimg archive the reference images for --kit-dir. Rebuild and compare with:
 # make release-verify TAG=v<version>
 
-version = "0.1.0"
-commit = "0ce412759e840ce6f8dfce0c6ad14e7180ac8a55"
-source_date_epoch = 1795451882
+version = "0.1.2"
+commit = "fd69b66cf9ce259c0b5ac5ce4398d82a8d610df2"
+source_date_epoch = 1795562749
 
 [[files]]
-name = "papaia_kit-0.1.0-py3-none-any.whl"
-path = "vendor/papaia-kit/0.1.0/papaia_kit-0.1.0-py3-none-any.whl"
-sha256 = "6ce3870703605ec0a710256abe74d94c29e2f8bbac681294477471ef36419299"
+name = "papaia_kit-0.1.2-py3-none-any.whl"
+path = "vendor/papaia-kit/0.1.2/papaia_kit-0.1.2-py3-none-any.whl"
+sha256 = "299e5dc3293d3683fc6dcbb272507db2224a6f8959a62ea1dbab8dda71f35668"
 
 [[files]]
-name = "papaia_kit-0.1.0.tar.gz"
-path = "vendor/papaia-kit/0.1.0/papaia_kit-0.1.0.tar.gz"
-sha256 = "3110c463f6e870ee179c420bbbba416df1c13a79a5dd8111150d0def6f5ffca3"
+name = "papaia_kit-0.1.2.tar.gz"
+path = "vendor/papaia-kit/0.1.2/papaia_kit-0.1.2.tar.gz"
+sha256 = "a52b8f9f732341df131d9ca19299de20370747d51b367f81209c0cf81b8bdcff"

@@ -91,6 +91,8 @@ services:
     # No host port: served by the edge proxy (or an external one, papaia-ctl proxy list).
     networks:
       - papaia-net
+      # Tool servers outside the suite, only through the chat relay (docs/chat-relay.md).
+      - papaia-chat-relay-net
     labels:
       de.fidonis.module: papaia-librechat
       de.fidonis.role:   chat-interface

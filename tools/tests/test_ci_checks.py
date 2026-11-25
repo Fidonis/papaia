@@ -22,9 +22,9 @@ import pytest
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parent
 FIXTURES = Path(__file__).parent / "fixtures" / "licenses"
-# Kit 0.1.0, the first public release, built from this commit of the kit.
-KIT_VERSION = "0.1.0"
-KIT_COMMIT = "0ce412759e840ce6f8dfce0c6ad14e7180ac8a55"
+# Kit 0.1.2 (the register names the core chat relay), built from this commit of the kit.
+KIT_VERSION = "0.1.2"
+KIT_COMMIT = "fd69b66cf9ce259c0b5ac5ce4398d82a8d610df2"
 KIT_WHEEL = f"vendor/papaia-kit/{KIT_VERSION}/papaia_kit-{KIT_VERSION}-py3-none-any.whl"
 
 # The kit needs Python 3.12 (CI runs 3.12); papaia-ctl itself keeps running on 3.10.

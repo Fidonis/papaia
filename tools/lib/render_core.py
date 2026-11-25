@@ -37,6 +37,7 @@ import yaml
 
 from . import (
     catalog,
+    chat_relay,
     chat_servers,
     common,
     delegation_lifetime,
@@ -287,6 +288,12 @@ def render(config_dir: Path, repo_root: Path) -> None:
         replay_access.render(config_dir)
     except (replay_access.ReplayAccessError, OSError) as exc:
         raise RenderError(f"papaia-replay: {exc}") from exc
+    # The key of the chat relay and the folder of its list of allowed servers, both
+    # mounted by its container; Compose must not create them (docs/chat-relay.md).
+    try:
+        chat_relay.render(config_dir)
+    except (chat_relay.ChatRelayError, OSError) as exc:
+        raise RenderError(f"papaia-chat-relay: {exc}") from exc
     # The folder of the platform halt, mounted read-only by the services that act;
     # Compose must not create it (docs/halt.md).
     try:

@@ -31,7 +31,29 @@ based on merged pull requests; this file mirrors the published releases.
   with exactly the add-on's audience, after a per-add-on opt-in of the operator (off by
   default, a second host account for writes and under the four-eyes setting). The add-on
   never receives the shared chat token; opt-in, revoke and every relayed call are audited.
-  The relay and the opt-in commands are not implemented yet.
+  The opt-in commands are not implemented yet.
+
+### Chat relay for tool servers outside the suite
+
+- New core service `papaia-chat-relay` (profile `librechat`, own image
+  `ghcr.io/fidonis/papaia-chat-relay`): the chat calls a tool server outside the suite at
+  `/servers/<audience>/mcp`; the relay checks the person's chat token, checks the tool and
+  its arguments against its list of allowed servers, exchanges the token at the identity
+  provider for a token with exactly the add-on's audience (RFC 8693, `private_key_jwt`) and
+  forwards the call with it. The add-on never receives the chat token. `tools/list` is
+  answered from the list; every method other than the tool methods is refused. Limits:
+  1 MiB request, 8 MiB answer, 60 s for the whole call however slowly the add-on sends,
+  60 calls per minute per person and add-on, 128 requests at a time (503 `busy`); no retry,
+  no fallback. One `papaia.audit/1` row per request on the container's stdout.
+- `papaia-ctl realm sync` manages the client `papaia-chat-relay` while at least one opt-in
+  pairing is confirmed: token exchange only, no refresh token, `fullScopeAllowed: false`,
+  the client policy `chat-relay` (subject token from `librechat` only), the audience mapper
+  on `librechat`; the client is deleted when the last opt-in goes. A pairing of the relay
+  with a suite server, a core audience or an add-on that attaches the chat stops the sync.
+- `papaia-ctl start` makes the relay's key under `security/chat-relay/` and the folder of
+  its list `chat-relay/`. The list itself and the opt-in commands follow separately.
+- The core vendors papaia-kit 0.1.2, which registers the relay's audience, client and
+  scope.
 
 ### Mein Bereich at the connection registry
 

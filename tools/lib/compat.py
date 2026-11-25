@@ -248,6 +248,9 @@ NEVER_ATTACHABLE = frozenset(
         "papaia-startgate-check",
         # The start gate's deletions in chat and gateway: papaia-lifecycle alone calls it.
         "papaia-replay",
+        # The chat relay holds the chat token for one call: the chat alone calls it, and
+        # the core alone decides which add-on networks it joins (ADR 0029).
+        "papaia-chat-relay",
     }
 )
 

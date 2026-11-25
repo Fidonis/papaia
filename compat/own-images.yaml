@@ -71,6 +71,15 @@ images:
     services: [papaia-people]
     license: MIT
     license_class: P
+  - name: ghcr.io/fidonis/papaia-chat-relay
+    dockerfile: src/infra/chat-relay/Dockerfile
+    inputs:
+      - src/infra/chat-relay/Dockerfile
+      - src/infra/chat-relay/relay.py
+      - src/infra/chat-relay/THIRD_PARTY_LICENSES.md
+    services: [papaia-chat-relay]
+    license: MIT
+    license_class: P
   - name: ghcr.io/fidonis/papaia-docker-gate
     dockerfile: src/infra/docker-gate/Dockerfile
     inputs:

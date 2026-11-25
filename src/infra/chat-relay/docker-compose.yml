@@ -1,0 +1,105 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# papAIa — Chat relay · papaia-chat-relay
+# by Fidonis GmbH · https://fidonis.de
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Part of the profile `librechat` (docs/chat-relay.md, ADR 0029). A tool server outside
+# the suite (`trust: addon`) reaches the chat only through this service, and only after
+# the operator allowed that add-on: the relay exchanges the person's chat token for a
+# token with exactly the add-on's audience and forwards the call with it. The add-on
+# never receives the shared chat token.
+#
+# Safety:
+#   - No port is published. The chat reaches it as
+#     http://papaia-chat-relay:8080/servers/<audience>/mcp on papaia-chat-relay-net
+#     (internal, librechat and the relay alone); papaia-net carries its way to the
+#     identity provider (https://keycloak:8443) and to the add-ons.
+#   - Accepts only a person's token issued to librechat with the audience
+#     papaia-chat-relay; forwards only to the servers of its list
+#     ($PAPAIA_CONFIG_DIR/chat-relay/servers.json, mounted read-only; without it every
+#     call is refused), with an exchanged token of exactly that server's audience.
+#   - Signs in with private_key_jwt; the key is mounted read-only from
+#     $PAPAIA_CONFIG_DIR/security/chat-relay (papaia-ctl start makes it). It holds the
+#     chat token in memory for one call only and never logs it.
+#   - One papaia.audit/1 row per request on stdout, never a token, arguments or results.
+#   - Keeps no state and no volume. Runs as the user that owns the config dir,
+#     read-only, without capabilities.
+#
+# Variable paths (docs/configuration.md): ${VAR} below resolves from src/.env.
+# Log rotation for every service (json-file, at most 5 x 10 MiB per container; README
+# "Logs and log rotation").
+x-papaia-logging: &papaia-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+
+  papaia-chat-relay:
+    logging: *papaia-logging
+    # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
+    # standard-library Python file on a pinned Python base, which brings the openssl
+    # command line (ES256). Built, signed and pinned by tools/build-images.
+    image: ghcr.io/fidonis/papaia-chat-relay:1.10.0-rc.1@sha256:6a1858b4d86af084147257426af858cb65d27b02dcd30743fe49e045465e42bd
+    restart: unless-stopped
+    command:
+      - python3
+      - -I
+      - /opt/papaia-chat-relay/relay.py
+      - run
+      - --keycloak-url=https://keycloak:8443
+      - --issuer=${OIDC_ISSUER}
+      - --ca-file=/etc/papaia-chat-relay/local-ca.crt
+      - --key-dir=/run/papaia-chat-relay/key
+      - --servers-file=/run/papaia-chat-relay/list/servers.json
+      - --listen=0.0.0.0:8080
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/certs/local-ca.crt
+        target: /etc/papaia-chat-relay/local-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      # The folder, not the file: papaia-ctl replaces the key file atomically.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/security/chat-relay
+        target: /run/papaia-chat-relay/key
+        read_only: true
+        bind:
+          create_host_path: false
+      # The folder, not the file: the opt-in replaces servers.json atomically.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/chat-relay
+        target: /run/papaia-chat-relay/list
+        read_only: true
+        bind:
+          create_host_path: false
+    # openssl reads the message it signs from a file.
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    read_only: true
+    healthcheck:
+      test: [CMD, python3, -I, /opt/papaia-chat-relay/relay.py, health, --port=8080]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - papaia-chat-relay-net
+      - papaia-net
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    labels:
+      de.fidonis.module: papaia-chat-relay
+      de.fidonis.role:   chat-relay
+    profiles: [librechat]
+
+networks:
+  # The chat and the relay, nothing else.
+  papaia-chat-relay-net:
+    driver: bridge
+    internal: true

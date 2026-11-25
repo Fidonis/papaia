@@ -116,11 +116,11 @@ these fields unchanged. CI (job "Kit release and suite kit versions") runs the c
 
 ```sh
 cd tools && uv run --locked --extra dev pk-check bom ../compat/suite-kit.yaml
-# bom: 11 modules (6 render kit UI), kit 0.1.0 may be combined
+# bom: 11 modules (6 render kit UI), kit 0.1.0, 0.1.2 may be combined
 ```
 
 The core's entry names the release in `tools/kit.lock` (the tests check it). The core
-itself vendors kit 0.1.0; the files it copies from it (contract schemas under
+itself vendors kit 0.1.2; the files it copies from it (contract schemas under
 `tools/schemas/kit/`, the naming register `tools/lib/names_register.json`) are written by
 `tools/kit_snapshot.py` from the vendored release and checked in the same CI job.
 

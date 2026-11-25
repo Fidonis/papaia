@@ -436,7 +436,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.18" },
-    { name = "papaia-kit", marker = "python_full_version >= '3.12' and extra == 'dev'", path = "vendor/papaia-kit/0.1.0/papaia_kit-0.1.0-py3-none-any.whl" },
+    { name = "papaia-kit", marker = "python_full_version >= '3.12' and extra == 'dev'", path = "vendor/papaia-kit/0.1.2/papaia_kit-0.1.2-py3-none-any.whl" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
@@ -445,8 +445,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "papaia-kit"
-version = "0.1.0"
-source = { path = "vendor/papaia-kit/0.1.0/papaia_kit-0.1.0-py3-none-any.whl" }
+version = "0.1.2"
+source = { path = "vendor/papaia-kit/0.1.2/papaia_kit-0.1.2-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "jinja2" },
@@ -456,7 +456,7 @@ dependencies = [
     { name = "referencing" },
 ]
 wheels = [
-    { filename = "papaia_kit-0.1.0-py3-none-any.whl", hash = "sha256:6ce3870703605ec0a710256abe74d94c29e2f8bbac681294477471ef36419299" },
+    { filename = "papaia_kit-0.1.2-py3-none-any.whl", hash = "sha256:299e5dc3293d3683fc6dcbb272507db2224a6f8959a62ea1dbab8dda71f35668" },
 ]
 
 [package.metadata]

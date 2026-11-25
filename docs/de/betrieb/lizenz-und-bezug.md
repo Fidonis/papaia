@@ -30,7 +30,7 @@ Nutzung nötig ist, Hinweis zum Bezug.
 | Flow als eigenständige Edition | Alle Rechte vorbehalten (Fidonis GmbH), keine offene Lizenz erteilt | nein | ja | Nutzung der Edition außerhalb der Suite nur mit Vertrag; die Edition enthält nur Fremdbestandteile der Klassen „freizügig“ und „schwaches Copyleft“ |
 | Assistant | MIT | ja | nein | Images über die Zugangsdaten der Lieferung (Abschnitt 3) |
 | Mein Bereich | MIT | ja | nein | Image `ghcr.io/fidonis/papaia-me` (persönlicher Bereich `me-web` und Einstellungsspeicher `prefs`, Profil `me`) über die Zugangsdaten der Lieferung (Abschnitt 3) |
-| Kit | MIT | ja | nein | Bibliothek der Module; Version 0.1.0 liegt im Kern als Paket unter `tools/vendor/papaia-kit/<version>/` (nur Entwicklungswerkzeug, nicht Teil von `papaia-ctl` oder eines Images); `LICENSE` liegt im Paket |
+| Kit | MIT | ja | nein | Bibliothek der Module; Version 0.1.2 liegt im Kern als Paket unter `tools/vendor/papaia-kit/<version>/` (nur Entwicklungswerkzeug, nicht Teil von `papaia-ctl` oder eines Images); `LICENSE` liegt im Paket |
 | Verbindungsregister | MIT | ja | nein | Images über die Zugangsdaten der Lieferung (Abschnitt 3) |
 | KI-Landkarte | MIT | ja | nein | Image `ghcr.io/fidonis/papaia-knowledge-map` |
 | Add-on-Sammlung | MIT | ja | nein | öffentliches Repo `Fidonis/papaia-addons`; die Fremdprodukte der Add-ons stehen in Abschnitt 1.2, n8n in Abschnitt 2 |
@@ -48,6 +48,7 @@ Eigene Images des Kerns (MIT, Hinweisdateien im Image unter `/usr/share/licenses
 | `ghcr.io/fidonis/papaia-replay` | MIT | Löschungen in Chat und Modell-Gateway für die Kern-Startsperre; Basis `python` (PSF-2.0) |
 | `ghcr.io/fidonis/papaia-audit` | MIT | Audit-Speicher; enthält psycopg (LGPL-3.0-only, unverändert) |
 | `ghcr.io/fidonis/papaia-people` | MIT | Personensuche für die Assistenz |
+| `ghcr.io/fidonis/papaia-chat-relay` | MIT | Chat-Relais zu Werkzeug-Servern außerhalb der Suite; Basis `python` (PSF-2.0) |
 | `ghcr.io/fidonis/papaia-docker-gate` | MIT | Vermittler zum Docker-Socket für den Manager |
 | `ghcr.io/fidonis/jina-reranker-api` | Apache-2.0 | Umsortierung der Suchtreffer; Modell nach Abschnitt 1.3 |
 | `ghcr.io/fidonis/qdrant-ingest` | MIT | geplante Übernahme von Dokumenten in Qdrant |

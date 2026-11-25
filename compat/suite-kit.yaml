@@ -17,7 +17,7 @@ repos:
   - name: papaia
     role: core
     kit:
-      version: 0.1.0
+      version: 0.1.2
       renders_ui: false
   - name: papaia-manager
     role: manager
@@ -71,4 +71,4 @@ repos:
       renders_ui: false
   - name: papaia-kit
     role: kit
-    version: 0.1.0
+    version: 0.1.2

@@ -160,9 +160,17 @@ from pathlib import Path
 
 import yaml
 
+from . import (
+    chat_relay,
+    chat_servers,
+    common,
+    delegation_lifetime,
+    deployment,
+    kit_names,
+    uninstall_journal,
+)
 from . import client_addresses as ca
 from . import client_keys as ck
-from . import common, delegation_lifetime, deployment, kit_names, uninstall_journal
 from . import keycloak_role_sync as kcs
 from . import realm_hardening as rh
 from . import service_account_keys as sak
@@ -247,7 +255,7 @@ PERSON_POLICY_PREFIX = "papaia-person-"
 CHAIN_POLICIES = ("data-chain", "data-self", "data-handover")
 REJECT_PROFILE = "papaia-reject"
 PERSON_PROFILE = "papaia-person-subject"
-MANAGED_PROFILES = frozenset({REJECT_PROFILE, PERSON_PROFILE, *CHAIN_POLICIES})
+MANAGED_PROFILES = frozenset({REJECT_PROFILE, PERSON_PROFILE, *CHAIN_POLICIES, chat_relay.POLICY})
 
 # The Paperless gate passes the identity header only for names on this list (security
 # 4.5 (f)); the realm sync writes it, the gate mounts its directory read-only.
@@ -303,7 +311,8 @@ MAX_IDLE_DAYS, MAX_AGE_DAYS = 365, 365
 # right. A registered audience is a bearer-only resource server unless it signs persons
 # in itself; the chain holder signs nobody in; the Flow CLI is the only public client.
 _SIGN_IN_AUDIENCES = frozenset({"assist-api", "papaia-studio-builder-mcp"})
-_NO_SIGN_IN = frozenset({CHAIN_HOLDER})
+# The core chat relay (ADR 0029) exchanges the chat token and signs nobody in either.
+_NO_SIGN_IN = frozenset({CHAIN_HOLDER, chat_relay.RELAY})
 _PUBLIC = frozenset({"flow-cli"})
 
 _FLAGS = {
@@ -812,6 +821,9 @@ class ClientSpec:
             attributes.update(_ACCOUNT_ATTRIBUTES, **self.record)
         if self.client_id == CHAIN_HOLDER:
             attributes[CHAIN_HOLDER_MARK] = "true"
+        if self.client_id == chat_relay.RELAY:
+            attributes[chat_relay.MARK] = "true"
+            attributes.update(chat_relay.NO_REFRESH)
         if self.key_file is not None:
             attributes.update({"use.jwks.string": "true", "use.jwks.url": "false"})
         rep = {
@@ -863,6 +875,9 @@ class Plan:
     # The sign-in addresses add-ons declare for their clients (`client_addresses`),
     # applied as the clients' configured hosts by the hardening step.
     client_addresses: dict[str, rh.ClientUris] = field(default_factory=dict)
+    # Clients of the core that exist only while something needs them and are deleted
+    # otherwise: the chat relay without a confirmed opt-in (ADR 0029).
+    retired: frozenset[str] = frozenset()
 
 
 def _resolve_person(value: object, module: Module, label: str) -> str:
@@ -1230,6 +1245,17 @@ def _client_policies(
             )
             profiles["data-handover"] = [_claim("azp", f"^{DATA_UI}$")]
 
+    if chat_relay.RELAY in clients:
+        # The relay exchanges only the chat's tokens (ADR 0029): the subject token's `azp`
+        # is `librechat`. Named by its own attribute, which no other client carries.
+        policies[chat_relay.POLICY] = _policy(
+            chat_relay.POLICY,
+            "the chat relay exchanges only subject tokens issued to the chat",
+            [_grant(TOKEN_EXCHANGE_GRANT), _attribute_condition(chat_relay.MARK, "true")],
+            chat_relay.POLICY,
+        )
+        profiles[chat_relay.POLICY] = [_claim("azp", f"^{chat_relay.CHAT_CLIENT}$")]
+
     executors = {
         REJECT_PROFILE: [{"executor": "reject-request", "configuration": {}}],
         PERSON_PROFILE: [_claim("sid", "")],
@@ -1247,7 +1273,11 @@ def _client_policies(
 
 
 def _managed_policy(name: str) -> bool:
-    return name.startswith((PAIR_POLICY_PREFIX, PERSON_POLICY_PREFIX)) or name in CHAIN_POLICIES
+    return (
+        name.startswith((PAIR_POLICY_PREFIX, PERSON_POLICY_PREFIX))
+        or name in CHAIN_POLICIES
+        or name == chat_relay.POLICY
+    )
 
 
 def _list(mapping: dict, key: str, label: str) -> list:
@@ -1266,11 +1296,16 @@ def build_plan(
     *,
     core_audiences: frozenset[str] = frozenset(),
     platform_pairings: list[Pairing] | tuple[Pairing, ...] = (),
+    relay_eligible: dict[str, str] | None = None,
+    relay_jwks: list[dict] | None = None,
 ) -> Plan:
     """The target state of the managed objects; RealmSyncError for anything not
     acceptable. Nothing is read from or written to Keycloak here. `core_audiences` are
     the audiences the core serves itself under its active profiles (persons only);
-    `platform_pairings` the exchange rights the sync sets itself for them."""
+    `platform_pairings` the exchange rights the sync sets itself for them.
+    `relay_eligible` are the audiences an opt-in of the chat relay may name ({audience:
+    add-on}, lib/chat_relay.eligible) and `relay_jwks` the public keys of the relay's key
+    file (None: no file)."""
     clients: dict[str, ClientSpec] = {}
     own_roles: dict[str, set[str]] = {}
     visible: set[str] = set()
@@ -1382,6 +1417,10 @@ def build_plan(
         identities.setdefault(audience, set()).add("person")
         person_audiences.add(audience)
         manage(audience, "papaia")
+
+    _plan_chat_relay(
+        register, clients, pairings, audiences, relay_eligible or {}, relay_jwks, notes
+    )
 
     exchange_scopes: dict[str, str] = {}
     for pairing in pairings:
@@ -1510,7 +1549,49 @@ def build_plan(
         person_scope=any(PERSON_SCOPE in s.default_scopes for s in clients.values()),
         template_scopes=template_scopes,
         client_addresses=client_addresses,
+        retired=frozenset() if chat_relay.RELAY in clients else frozenset({chat_relay.RELAY}),
     )
+
+
+def _plan_chat_relay(
+    register: Register,
+    clients: dict[str, ClientSpec],
+    pairings: list[Pairing],
+    audiences: set[str],
+    eligible: dict[str, str],
+    jwks: list[dict] | None,
+    notes: list[str],
+) -> None:
+    """The relay's client while at least one opt-in is confirmed (ADR 0029). An opt-in
+    is a pairing of the relay with an add-on's audience; one whose audience is served
+    here but not by an add-on outside the suite (a suite server, a core audience) is
+    refused, also while it waits. Its scopes are added with the other pairings."""
+    relay = chat_relay.RELAY
+    active = False
+    for pairing in pairings:
+        if pairing.client != relay:
+            continue
+        if pairing.audience in audiences and pairing.audience not in eligible:
+            raise RealmSyncError(
+                f"pairing {relay} -> {pairing.audience}: the audience is not eligible for "
+                "the chat relay (only a tool server of an add-on outside the suite that "
+                "serves persons and does not attach librechat); revoke the opt-in"
+            )
+        active = active or (pairing.confirmed and pairing.audience in audiences)
+    if not active:
+        return
+    entry = register.clients[relay]
+    spec = ClientSpec(relay, entry.owner, client_kind(register, relay), entry.token_exchange)
+    spec.authenticator = "client-jwt"
+    spec.key_file = chat_relay.KEY_REF
+    spec.jwks = list(jwks or [])
+    spec.key_missing = jwks is None
+    if jwks is None:
+        notes.append(
+            f"chat relay: no key file {chat_relay.KEY_REF}; the relay cannot exchange until "
+            "papaia-ctl start writes it"
+        )
+    clients[relay] = spec
 
 
 def client_kind(register: Register, client_id: str) -> str:
@@ -2422,7 +2503,9 @@ class _Reconciler(_Actions):
         self.template_exchange(clients, scopes)
         self.undeclared_accounts(clients)
         self.never_audience()
+        self.chat_relay_mapper(clients)
         self.chain_holder_mark()
+        self.chat_relay_mark()
         # Policies before stale scopes: a policy may only name a scope that exists.
         self.client_policies()
         self.stale_exchange_scopes()
@@ -2440,6 +2523,20 @@ class _Reconciler(_Actions):
                 and client_id != SYNC_CLIENT
                 and attributes.get(KIND) != SERVICE_ACCOUNT
             ):
+                if client_id in self.plan.retired:
+                    self.do(
+                        Change(
+                            "client",
+                            client_id,
+                            "removed, nothing needs it any more",
+                            "delete_client",
+                            "exchange_right_changed",
+                            effect="delete",
+                        ),
+                        "DELETE",
+                        f"/clients/{client['id']}",
+                    )
+                    continue
                 if attributes.get(OWNER) in self.plan.uninstalled:
                     self.do(
                         Change(
@@ -3472,6 +3569,8 @@ class _Reconciler(_Actions):
             audience = _mapper_audience(mapper)
             if audience not in self.plan.never_audiences:
                 continue
+            if kind == "client" and self._relay_mapper(name, mapper):
+                continue
             self.do(
                 Change(
                     kind,
@@ -3483,6 +3582,80 @@ class _Reconciler(_Actions):
                 ),
                 "DELETE",
                 f"{base}/{mapper['id']}",
+            )
+
+    # chat relay (ADR 0029) ------------------------------------------------
+    def _relay_mapper(self, client_id: str, mapper: dict) -> bool:
+        """The one mapper that may name the relay: on the chat's client, while the relay
+        is planned, and exactly as the sync writes it."""
+        return (
+            chat_relay.RELAY in self.plan.clients
+            and client_id == chat_relay.CHAT_CLIENT
+            and _same_mapper(mapper, chat_servers.audience_mapper(chat_relay.RELAY))
+        )
+
+    def chat_relay_mapper(self, clients: dict[str, dict]) -> None:
+        """While the relay is planned, the chat's client carries the relay's audience
+        mapper, so the chat token reaches the relay; the never-audience step removes it
+        (and every other mapper naming the relay) once the last opt-in goes."""
+        chat = clients.get(chat_relay.CHAT_CLIENT)
+        if chat_relay.RELAY not in self.plan.clients or chat is None:
+            return
+        wanted = chat_servers.audience_mapper(chat_relay.RELAY)
+        base = f"/clients/{chat['id']}/protocol-mappers/models"
+        # Fresh when applying: the never-audience step may just have removed a mapper.
+        if self.apply:
+            chat = self._clients().get(chat_relay.CHAT_CLIENT) or chat
+        for mapper in chat.get("protocolMappers") or []:
+            if mapper.get("name") != wanted["name"]:
+                continue
+            if _same_mapper(mapper, wanted):
+                return
+            self.do(
+                Change(
+                    "client",
+                    chat_relay.CHAT_CLIENT,
+                    f"mapper {wanted['name']} replaced (it differed)",
+                    "remove_mapper",
+                    "exchange_right_changed",
+                    "delete",
+                ),
+                "DELETE",
+                f"{base}/{mapper['id']}",
+            )
+        self.do(
+            Change(
+                "client",
+                chat_relay.CHAT_CLIENT,
+                f"mapper {wanted['name']} added (chat token for the chat relay)",
+                "add_mapper",
+                "exchange_right_changed",
+            ),
+            "POST",
+            base,
+            wanted,
+        )
+
+    def chat_relay_mark(self) -> None:
+        """`papaia.chat-relay` names the client the policy `chat-relay` applies to; no
+        other client carries it (an empty value removes it)."""
+        for client_id, client in sorted(self._clients().items() if self.apply else []):
+            if client_id == chat_relay.RELAY and client_id in self.plan.clients:
+                continue
+            if not (client.get("attributes") or {}).get(chat_relay.MARK):
+                continue
+            self.do(
+                Change(
+                    "client",
+                    client_id,
+                    f"attribute {chat_relay.MARK} removed (only {chat_relay.RELAY} holds it)",
+                    "remove_client_attribute",
+                    "exchange_right_changed",
+                    "delete",
+                ),
+                "PUT",
+                f"/clients/{client['id']}",
+                {"attributes": {chat_relay.MARK: ""}},
             )
 
     # client policies -------------------------------------------------------
@@ -3860,6 +4033,7 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
         from . import audit_report_account, me_area, people_account  # they import this module
 
         pairings = load_pairings(pairings_path(config_dir), register)
+        relay_eligible, relay_jwks = _chat_relay_inputs(config_dir, repo_root, pairings)
         plan = build_plan(
             register,
             load_modules(config_dir, repo_root, root),
@@ -3868,6 +4042,8 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             | audit_report_account.core_audiences(tree),
             platform_pairings=audit_report_account.platform_pairings(tree)
             + me_area.platform_pairings(tree),
+            relay_eligible=relay_eligible,
+            relay_jwks=relay_jwks,
         )
         plan.hardening = rh.with_declared(
             rh.load(
@@ -4029,6 +4205,21 @@ def sync(tree: dict, config_dir: Path, repo_root: Path, *, check: bool = False) 
             print(f"WARNING: {exc}", file=sys.stderr, flush=True)
     print(f"Realm sync complete: {len(changes)} change(s).", flush=True)
     return 0
+
+
+def _chat_relay_inputs(
+    config_dir: Path, repo_root: Path, pairings: list[Pairing]
+) -> tuple[dict[str, str], list[dict] | None]:
+    """The audiences an opt-in of the chat relay may name and the relay's public keys;
+    the catalog is read only when a pairing names the relay."""
+    if not any(p.client == chat_relay.RELAY for p in pairings):
+        return {}, None
+    from . import catalog  # it reaches this module
+
+    try:
+        return chat_relay.eligible(config_dir, repo_root), chat_relay.public_jwks(config_dir)
+    except (catalog.CatalogError, chat_relay.ChatRelayError) as exc:
+        raise RealmSyncError(f"chat relay: {exc}") from None
 
 
 def write_report_inputs(call, tree: dict, config_dir: Path) -> Path:

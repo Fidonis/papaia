@@ -54,7 +54,7 @@ Image und Volume einmal gezählt.
 | `egress` | 1 | 1 | 0 | 0 | einziger Ausgang `papaia-egress` |
 | `keycloak` | 2 | 2 | 1 | 0 | Anmeldedienst mit Datenbank |
 | `knowledge-map` | 1 | 1 | 1 | 0 | KI-Landkarte |
-| `librechat` | 5 | 5 | 6 | 0 | Chat mit Datenbanken |
+| `librechat` | 6 | 6 | 6 | 0 | Chat mit Datenbanken und Weiterleitung zu Werkzeugservern außerhalb der Suite (`papaia-chat-relay`) |
 | `librechat-websearch` | 8 | 8 | 2 | 0 | Websuche für den Chat |
 | `lifecycle` | 4 | 3 | 2 | 0 | Entzug, Löschjournal des Anmeldedienstes, Startsperre, Nachspielen von Löschungen in Chat und Modell-Gateway (`papaia-replay`) |
 | `litellm` | 3 | 3 | 2 | 0 | Modell-Gateway mit Datenbank und Messwerten |
@@ -67,7 +67,7 @@ Image und Volume einmal gezählt.
 | `rag` | 4 | 4 | 3 | 0 | Wissenssuche mit Qdrant |
 | `smtp` | 1 | 1 | 1 | 0 | Mail-Relais |
 | `voice` | 3 | 3 | 2 | 0 | Sprache (Erkennung und Ausgabe) |
-| `gesamt` | 49 | 41 | 26 | 3 | alle Kern-Profile |
+| `gesamt` | 50 | 42 | 26 | 3 | alle Kern-Profile |
 
 ## Anteil je Modul
 

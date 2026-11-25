@@ -55,7 +55,7 @@ papaia-ctl start
 
 | Was wächst | Grenze | Prüfung |
 |---|---|---|
-| Protokolle der Container | je Container höchstens 5 Dateien zu 10 MiB (50 MiB), für alle Kern-Profile zusammen höchstens 2450 MiB (49 Container zu je 50 MiB); je Modul-Container 50 MiB dazu | `papaia-ctl logs <dienst>` |
+| Protokolle der Container | je Container höchstens 5 Dateien zu 10 MiB (50 MiB), für alle Kern-Profile zusammen höchstens 2500 MiB (50 Container zu je 50 MiB); je Modul-Container 50 MiB dazu | `papaia-ctl logs <dienst>` |
 | Audit-Log | Aufbewahrung nach `PAPAIA_AUDIT_RETENTION_MONTHS` (siehe [Protokollierung](../datenschutz/protokollierung.md)) | `papaia-ctl audit retention` |
 | Sicherungen am Ziel | Aufbewahrung nach `backup --keep` bzw. `--retention-period-days` | `papaia-ctl backup target check`, `backup.log` am Ziel |
 | Docker-Speicher (Images, Volumes, Build-Reste) | freie Platte laut Größenprofil | `papaia-ctl doctor docker_usage`, `papaia-ctl doctor disk_space` |

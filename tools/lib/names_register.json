@@ -1,6 +1,6 @@
 {
   "format": "papaia.names-register-snapshot/1",
-  "source": {"package": "papaia-kit", "version": "0.1.0", "commit": "0ce412759e840ce6f8dfce0c6ad14e7180ac8a55"},
+  "source": {"package": "papaia-kit", "version": "0.1.2", "commit": "fd69b66cf9ce259c0b5ac5ce4398d82a8d610df2"},
   "entries": [
     {"name": "flow", "kind": "audience", "owner": "papaia-flow"},
     {"name": "assist-api", "kind": "audience", "owner": "papaia-assist"},
@@ -13,6 +13,7 @@
     {"name": "papaia-prefs", "kind": "audience", "owner": "papaia-me"},
     {"name": "papaia-audit", "kind": "audience", "owner": "papaia"},
     {"name": "papaia-people", "kind": "audience", "owner": "papaia"},
+    {"name": "papaia-chat-relay", "kind": "audience", "owner": "papaia"},
     {"name": "mcp-paperless", "kind": "audience", "owner": "paperless-mcp-rbac"},
     {"name": "mcp-qdrant", "kind": "audience", "owner": "qdrant-mcp-rbac"},
     {"name": "mcp-qdrant-ingest", "kind": "audience", "owner": "qdrant-mcp-rbac"},
@@ -46,6 +47,7 @@
     {"name": "assist-gate", "kind": "client", "owner": "papaia-assist", "token_exchange": true},
     {"name": "papaia-manager", "kind": "client", "owner": "papaia-manager", "token_exchange": true},
     {"name": "librechat", "kind": "client", "owner": "papaia"},
+    {"name": "papaia-chat-relay", "kind": "client", "owner": "papaia", "token_exchange": true},
     {"name": "papaia-kit-testclient", "kind": "client", "owner": "papaia-kit", "token_exchange": true, "test_profile_only": true},
     {"name": "openid", "kind": "scope", "owner": "papaia"},
     {"name": "offline_access", "kind": "scope", "owner": "papaia"},
@@ -98,6 +100,7 @@
     {"name": "aud-papaia-prefs", "kind": "scope", "owner": "papaia-me"},
     {"name": "aud-papaia-audit", "kind": "scope", "owner": "papaia"},
     {"name": "aud-papaia-people", "kind": "scope", "owner": "papaia"},
+    {"name": "aud-papaia-chat-relay", "kind": "scope", "owner": "papaia"},
     {"name": "aud-mcp-paperless", "kind": "scope", "owner": "paperless-mcp-rbac"},
     {"name": "aud-mcp-qdrant", "kind": "scope", "owner": "qdrant-mcp-rbac"},
     {"name": "aud-mcp-qdrant-ingest", "kind": "scope", "owner": "qdrant-mcp-rbac"},
@@ -140,7 +143,7 @@
     {"name": "flow", "successor": "aud-flow", "kinds": ["scope"]}
   ],
   "exchange_scopes": {
-    "kit": "0.1.0",
+    "kit": "0.1.2",
     "prefix": "aud-",
     "scopes": [
       {"audience": "flow", "scope": "aud-flow"},
@@ -154,6 +157,7 @@
       {"audience": "papaia-prefs", "scope": "aud-papaia-prefs"},
       {"audience": "papaia-audit", "scope": "aud-papaia-audit"},
       {"audience": "papaia-people", "scope": "aud-papaia-people"},
+      {"audience": "papaia-chat-relay", "scope": "aud-papaia-chat-relay"},
       {"audience": "mcp-paperless", "scope": "aud-mcp-paperless"},
       {"audience": "mcp-qdrant", "scope": "aud-mcp-qdrant"},
       {"audience": "mcp-qdrant-ingest", "scope": "aud-mcp-qdrant-ingest"},

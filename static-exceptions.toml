@@ -39,6 +39,16 @@ approved_by = "core maintainers (security officer countersignature pending)"
 
 [[exception]]
 rule = "code-exec"
+path = "src/infra/chat-relay/relay.py"
+within = "_openssl"
+subject = "subprocess.run"
+input = "fixed"
+reason = "Runs openssl from an argument list without a shell; only the subcommands pkey and dgst are accepted, every caller passes options fixed in this file, the path of the relay's own key file (checked: regular, not a link, owner-only) and a scratch file in a temporary folder it creates. No value from a person, a token or an add-on reaches the argument list."
+expires = 2027-05-20
+approved_by = "core maintainers (security officer countersignature pending)"
+
+[[exception]]
+rule = "code-exec"
 path = "src/infra/people/people.py"
 within = "_openssl"
 subject = "subprocess.run"

@@ -260,6 +260,9 @@ ATTACHABLE_SERVICES = {
     # The start gate's deletions in chat and gateway (docs/replay.md): papaia-lifecycle
     # alone calls it; no add-on may attach it (compat.NEVER_ATTACHABLE). Additive.
     "papaia-replay": ["lifecycle"],
+    # The chat relay (ADR 0029, docs/chat-relay.md): the chat alone calls it; no add-on may
+    # attach it (compat.NEVER_ATTACHABLE). Additive.
+    "papaia-chat-relay": ["librechat"],
     # People lookup (optional, additive). Only `assist-gate` may call it (token audience
     # papaia-people); `networks.attach` is checked against the core's services, so an
     # older core refuses an add-on that attaches it.

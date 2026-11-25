@@ -82,6 +82,30 @@ papaia-ctl doctor
   `papaia-ctl pairing confirm --approve-pairings=<sha256>` gibt sie frei; den Prüfwert nennt
   `pairing list`.
 
+## Werkzeug-Server außerhalb der Suite im Chat
+
+Ein Werkzeug-Server, der nicht zur Suite gehört (`trust: addon` im Katalog), erreicht den
+Chat nur über das Chat-Relais `papaia-chat-relay` (Profil `librechat`). Der Server bekommt
+nie das Token des Chats, sondern ein Token, das nur für ihn gilt. Einzelheiten:
+[docs/chat-relay.md](../../chat-relay.md).
+
+- Ohne freigegebenen Server lehnt das Relais jeden Aufruf ab. Freigegeben ist ein Server,
+  wenn er in `$PAPAIA_CONFIG_DIR/chat-relay/servers.json` steht und die Kopplung
+  `papaia-chat-relay` → `<audience>` in `security/pairings.yaml` bestätigt ist.
+- `papaia-ctl realm sync` legt dann den Client `papaia-chat-relay` im Realm an, gibt ihm
+  genau die bestätigten Scopes `aud-<audience>` und löscht ihn wieder, wenn keine Freigabe
+  mehr besteht. Den Schlüssel des Clients erzeugt `papaia-ctl start` unter
+  `security/chat-relay/` (nur für den Eigentümer lesbar).
+- Eine Kopplung des Relais mit einem Server der Suite, einem Kerndienst oder einem Add-on,
+  das den Chat an eines seiner Netze hängt, bricht den Realm-Abgleich vor jeder Änderung ab.
+- Jeder Aufruf mit geprüfter Identität steht als Zeile `papaia.audit/1` im Log des
+  Containers (`docker compose logs papaia-chat-relay`): Person, Add-on, Werkzeug, Ergebnis,
+  Fehlercode und Korrelations-ID, nie ein Token, die Argumente oder das Ergebnis.
+- Grenzen: 1 MiB je Anfrage, 8 MiB je Antwort, 60 s je Aufruf (auch wenn das Add-on langsam
+  sendet), 60 Aufrufe je Minute je Person und Add-on, höchstens 128 Anfragen gleichzeitig
+  (sonst 503 `busy`). Fehlercodes und ihre Ursachen stehen in der Tabelle „Operation“ von
+  docs/chat-relay.md.
+
 ## Module entfernen
 
 ```sh

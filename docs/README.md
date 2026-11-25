@@ -43,6 +43,9 @@ Welcome to the papAIa documentation.
 - [People lookup](./people.md) — papaia-people: exact-match lookup of persons with an
   assistant role for `assist-gate`, the bounded group member lookup for Studio's share
   notices, its service account and audience
+- [Chat relay](./chat-relay.md) — papaia-chat-relay: the only way from the chat to a tool
+  server outside the suite, with a token whose only audience is that server's; its client,
+  the realm policy, limits and audit
 - [Platform PKI and trust bundle](./pki.md) — certificates for TLS between services, their
   renewal, company CA certificates, the security profile `kritis`
 - [Information and erasure without an account](./person-requests.md) — `papaia-ctl person

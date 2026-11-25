@@ -37,6 +37,7 @@ their images there; the table below covers the Core only.
 | `ghcr.io/fidonis/papaia-audit` | 1.9.0 | MIT | `infra/audit` | own image of the core (`compat/own-images.yaml`): the audit store service and its schema step (profile `audit`) on `python:3.12.16-alpine3.24`; carries psycopg and psycopg-binary (LGPL-3.0-only, unmodified libraries; the wheel bundles libpq, OpenSSL and further libraries), cryptography (Apache-2.0 OR BSD-3-Clause), cffi (MIT-0), pycparser (BSD-3-Clause), jsonschema, jsonschema-specifications, referencing, attrs and rpds-py (MIT), typing-extensions (PSF-2.0); notice files under `/usr/share/licenses/papaia-audit/` |
 | `ghcr.io/fidonis/papaia-replay` | 1.10.0-rc.1 | MIT | `infra/replay` | own image of the core (`compat/own-images.yaml`): the deletions for the core start gate on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, OpenSSL Apache-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-replay/` |
 | `ghcr.io/fidonis/papaia-people` | 1.9.0 | MIT | `infra/people` | own image of the core (`compat/own-images.yaml`): the people lookup on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, OpenSSL Apache-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-people/` |
+| `ghcr.io/fidonis/papaia-chat-relay` | 1.10.0-rc.1 | MIT | `infra/chat-relay` | own image of the core (`compat/own-images.yaml`): the chat relay to tool servers outside the suite on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, OpenSSL Apache-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-chat-relay/` |
 | `ghcr.io/fidonis/papaia-docker-gate` | 1.9.0 | MIT | `infra/docker-gate` | own image of the core (`compat/own-images.yaml`): the Docker socket broker of the manager (profile `manager`) on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-docker-gate/` |
 | `python` | 3.12.16-slim-trixie | PSF-2.0 | `infra/lifecycle` | `papaia-lifecycle-init` (hands the volumes to the service user); also the base of the own images above |
 | `python` | 3.12.16-alpine3.24 (digest-pinned) | PSF-2.0 | `infra/audit` | base of the own image `ghcr.io/fidonis/papaia-audit` |
@@ -75,7 +76,7 @@ not part of `papaia-ctl` and not part of any image.
 
 | Package | Version | License | Location | Notes |
 |---|---|---|---|---|
-| papaia-kit | 0.1.0 | MIT | `tools/vendor/papaia-kit/0.1.0/` | shared contract package of the platform (Fidonis GmbH); wheel and source tarball pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; `LICENSE` and `THIRD_PARTY_LICENSES.md` are inside both; the kit itself carries no NOTICE duty (the notices of the fonts and icons it bundles travel with them) |
+| papaia-kit | 0.1.2 | MIT | `tools/vendor/papaia-kit/0.1.2/` | shared contract package of the platform (Fidonis GmbH); wheel and source tarball pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; `LICENSE` and `THIRD_PARTY_LICENSES.md` are inside both; the kit itself carries no NOTICE duty (the notices of the fonts and icons it bundles travel with them) |
 
 ---
 

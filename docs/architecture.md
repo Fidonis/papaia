@@ -999,8 +999,9 @@ audience and title are the catalog's:
   that add-on: the relay exchanges the chat token for a token with exactly the
   add-on's audience, and the add-on never receives the shared token. Path, token
   scope, opt-in, audit and the rejected alternatives:
-  [ADR 0029](adr/0029-reach-a-tool-server-outside-the-suite-through-a-core-chat-relay.md).
-  Until the relay is implemented, such a server has no way into the chat.
+  [ADR 0029](adr/0029-reach-a-tool-server-outside-the-suite-through-a-core-chat-relay.md);
+  the relay, its client in the realm, its limits and its audit rows:
+  [docs/chat-relay.md](chat-relay.md).
 - The `mcpServers` entry is named after the audience (`mcp-<system>`) and
   calls the catalog address with the person's token (`startup: false`); its
   origin joins `mcpSettings.allowedDomains`. It is generated only for a module
