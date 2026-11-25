@@ -46,6 +46,19 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # The gateway's audit outbox: one papaia.audit/1 row per request the class guard
+      # refuses, and its source_seq counter (docs/model-gateway.md). The only files the
+      # gateway writes outside its database; `render` makes them.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/audit/outbox/litellm.jsonl
+        target: /run/papaia-audit/litellm.jsonl
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/audit/outbox/litellm.seq
+        target: /run/papaia-audit/litellm.seq
+        bind:
+          create_host_path: false
       # The platform halt (docs/halt.md): the folder, never the file, which is replaced
       # by a rename. `render` makes it; Compose must not.
       - type: bind

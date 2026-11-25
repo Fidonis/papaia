@@ -62,6 +62,11 @@ its name, and so is the add-on's start.
 - key alias `module-<name>`, budget tag `metadata.tags: [module:<name>]`;
 - models: exactly the aliases the module declares, so it can reach no model by name and
   no alias it did not declare (`403`);
+- routes (`allowed_routes`): `/v1/chat/completions`, `/v1/embeddings`, their unversioned
+  twins and the listing `/v1/models` (`/models`), the routes the class guard judges (see
+  below); every other route of the gateway (text completion, responses, files, batches,
+  assistants, audio, images, rerank, pass-through, key and model management) answers
+  `403` to a module key before any handler runs;
 - stored in `$PAPAIA_CONFIG_DIR/addons/<name>/.env` (mode `0600`) as `PAPAIA_MODEL_KEY`,
   which the add-on's containers receive with its `.env`.
 
@@ -70,8 +75,10 @@ its name, and so is the add-on's start.
 again every add-on whose key changed. An add-on whose manifest is malformed is reported
 and skipped; the others still get their keys. Should LiteLLM stop answering after an old
 key was deleted and before the new one exists, the old key leaves the add-on's `.env`,
-and the next `start` makes the new one. A key is kept while LiteLLM knows it and its models
-match the declaration; otherwise the old key is revoked and a new one made. When a module
+and the next `start` makes the new one. A key is kept while LiteLLM knows it and its models,
+declared classes and route list match the declaration; otherwise the old key is revoked
+and a new one made (so the first start after an update replaces every key made without the
+route list). When a module
 no longer declares needs, its key is revoked.
 
 The calls run inside the LiteLLM container (`docker exec`) with the master key of that
@@ -153,13 +160,79 @@ each need without a declared class; the key is made all the same. `papaia-ctl do
 model_gateway_classes` reports the same as `warn` and fails when the route file is missing,
 malformed or differs from the rendered configuration.
 
-The refusal at the gateway itself (`403 class_exceeded` for a request above the route,
-`503 route_class_unknown` when the route data is missing, the header
-`x-papaia-data-class`, the route allowlist of module keys and the audit row of a refusal)
-is decided in
-[ADR 0031](adr/0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md)
-and not implemented yet: until then the gateway judges no class, and the module's own
-refusal, which reads the class from the catalog, is the only line.
+## Refusal above the route class
+
+The module's own refusal, which reads the class from the catalog, is the first line. The
+second is the class guard of the gateway (`papaia_hooks.papaia_class_guard`, registered
+right after the halt hook), decided in
+[ADR 0031](adr/0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md).
+It judges every model call made with a key other than the master key, before LiteLLM
+routes it, so a refused request reaches no model and leaves no content in the gateway.
+
+- **Request class.** A module names the class of a request in the header
+  `x-papaia-data-class`: exactly one class of the scale, lower case, ASCII, at most 32
+  characters. Without the header, the class the module declared for that alias
+  (`papaia_need_classes` of its key) applies; a key without a declared class for the alias,
+  or with a stored value off the scale, counts as `professional_secret`. The class is never
+  taken from the request body.
+- **Route class.** The class of the alias in the route file, mounted read-only at
+  `/app/model-routes.json`. The file is checked with one `stat` per request and parsed
+  again only when its identity changes; a file that is missing, unreadable, a symlink,
+  larger than 256 KiB or not of the format `papaia.model-routes/1` counts as missing.
+  Like `config.yaml`, the file is a single-file mount: a running gateway reads a changed
+  route file after it is restarted, together with the configuration it describes.
+- **Refusals**, before any backend call:
+
+  | Case | Status | Code |
+  |---|---|---|
+  | request class above the route class | 403 | `class_exceeded` |
+  | header above the module's declared class for the alias | 403 | `class_exceeded` |
+  | header empty, a list, too long, not ASCII, with control characters or off the scale | 400 | `invalid_data_class` |
+  | route file missing, unreadable or malformed; alias not in it | 503 | `route_class_unknown` |
+
+  While the platform halt is active, `503 platform_halt` comes first and the class is not
+  judged. A request at or below both classes passes unchanged.
+- **Answer.** The response carries the headers `x-papaia-error-code` (the code above) and
+  `x-papaia-correlation-id`. In the body, the pinned LiteLLM sets `error.code` to the HTTP
+  status and keeps the code of the hook in
+  `error.provider_specific_fields.error.code`, with the German / English text in
+  `error.message`. Modules recognise a refusal by `x-papaia-error-code` (or that body
+  field), never by the status alone or words of the message: `class_exceeded` is the
+  error class `class_exceeded`, `invalid_data_class` is `invalid_input`,
+  `route_class_unknown` is `upstream_unavailable`.
+- **Audit.** Every refusal is one `papaia.audit/1` row (writer `litellm/class-guard`,
+  operation `model.request`, effect `check`, `object_ref` `model_alias`/`<alias>`,
+  `data_class` the request class, `null` for `invalid_data_class`, `result` `denied`,
+  `error_code` the code, actor `module-<name>` as `sub`, `azp` and `service_account`) in
+  the gateway's own outbox `$PAPAIA_CONFIG_DIR/audit/outbox/litellm.jsonl`, with the gapless
+  `source_seq` counted in `litellm.seq` next to it. Both files (mode 0600) are made by the
+  render and are the only files the gateway writes outside its database. The correlation id
+  is the request's `x-papaia-correlation-id` when it is 1 to 64 characters of
+  `[A-Za-z0-9-]` and not shaped like a key, otherwise a new UUIDv7. The row carries no
+  message content, no header value off the scale, no key and no key hash. A row that cannot
+  be written leaves the request refused and logs `audit_unavailable` with the code only.
+
+Behaviour of the pinned LiteLLM (`v1.108.3`), checked with the image and covered by
+`tools/tests/test_model_gateway_docker.py`:
+
+- The hook receives the request headers as `data["proxy_server_request"]["headers"]`, a
+  dict with lower-case names that LiteLLM builds from the HTTP request; a
+  `proxy_server_request` or `metadata.headers` in the request body is replaced by it.
+- A header sent twice reaches the hook as one entry with the last value, so a repeat
+  cannot be told apart; a comma list in one header is refused as `invalid_data_class`.
+  Either way the value is judged against the declared class and the route class.
+- The master key reaches the hook with the role `proxy_admin`, no key alias and no key
+  hash; only such a call is spared. A virtual key, of an admin user too, is judged.
+- The text completion route (`/v1/completions`) would answer a refusal without the
+  headers above, its code only in the message; no feature of the kit needs it, so it is
+  not on the route list of module keys.
+
+Remaining risk: the header is the module's own statement (it can lower the class of a
+request within its declared class, never raise it above). Requests of the chat with the
+master key are not judged. A route class is the operator's statement about a model. The
+gateway's outbox is not yet delivered to `papaia-audit`: the rows are written in the
+submission form of source `litellm` and wait in the outbox, like the outbox of
+`papaia-ctl`.
 
 ## Revocation and the erasure journal
 
@@ -202,6 +275,7 @@ litellm_settings:
     - "prometheus"                       # counts for /metrics
     - "papaia_hooks.papaia_listing_filter"
     - "papaia_hooks.papaia_platform_halt"  # see halt.md
+    - "papaia_hooks.papaia_class_guard"    # see "Refusal above the route class"
 ```
 
 The render refuses any layer (fragment or overlay) that changes one of these settings or

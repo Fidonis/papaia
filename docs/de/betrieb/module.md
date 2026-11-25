@@ -190,3 +190,32 @@ oberhalb der Klasse ab.
 angibt, als die Route zulässt; das Modul startet trotzdem. `papaia-ctl doctor
 model_gateway_classes` meldet dieselben Fälle als Warnung und schlägt fehl, wenn die
 Routendatei fehlt oder nicht zur Konfiguration passt; dann hilft `papaia-ctl start`.
+
+### Ablehnung am Modell-Gateway
+
+Das Gateway prüft jede Modellanfrage eines Moduls ein zweites Mal, bevor sie ein Modell
+erreicht. Ein Modul nennt die Klasse einer Anfrage im Kopf `x-papaia-data-class`; ohne den
+Kopf gilt die Klasse, die das Modul für den Alias angegeben hat, und ohne solche Angabe die
+höchste Klasse (`professional_secret`). Das Gateway lehnt ab:
+
+| Fall | Antwort |
+|---|---|
+| Klasse der Anfrage über der Klasse der Route oder über der angegebenen Klasse des Moduls | `403`, `class_exceeded` |
+| Kopf ungültig (leer, Liste, zu lang, nicht ASCII, Steuerzeichen, nicht auf der Skala) | `400`, `invalid_data_class` |
+| Routendatei fehlt, ist unlesbar oder nennt den Alias nicht | `503`, `route_class_unknown` |
+
+Bei aktivem Not-Halt kommt zuerst `platform_halt`. Die Antwort trägt den Fehlercode im Kopf
+`x-papaia-error-code` und die Korrelationskennung in `x-papaia-correlation-id`. Anfragen
+mit dem Hauptschlüssel (Chat) werden nicht geprüft.
+
+Jede Ablehnung ist eine Zeile `papaia.audit/1` in
+`$PAPAIA_CONFIG_DIR/audit/outbox/litellm.jsonl` (Zähler in `litellm.seq` daneben): Modul,
+Alias, Klasse der Anfrage, Fehlercode und Korrelationskennung, nie Inhalt oder Schlüssel.
+`papaia-ctl start` legt beide Dateien an; Docker darf sie nicht anlegen.
+
+Modulschlüssel erreichen nur noch die Chat- und Embedding-Routen und die Modellliste; jede
+andere Route des Gateways antwortet `403`. Der erste `papaia-ctl start` nach dem Update
+ersetzt deshalb jeden Modulschlüssel einmal.
+
+Eine geänderte Klasse (oder Konfiguration) gilt am laufenden Gateway erst nach dessen
+Neustart, zum Beispiel mit `docker compose restart litellm` im Projekt der Installation.

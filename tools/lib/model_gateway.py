@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -80,12 +81,34 @@ NO_CONTENT_SETTINGS: tuple[tuple[str, str, bool], ...] = (
     ("litellm_settings", "redact_user_api_key_info", True),
 )
 # prometheus counts, the listing filter hides routes, the halt hook refuses requests while
-# the platform halt is active (docs/halt.md); none of them passes on a request body.
+# the platform halt is active (docs/halt.md), the class guard refuses a module request
+# above the class of its route (ADR 0031); none of them passes on a request body.
 ALLOWED_CALLBACKS = frozenset({
     "prometheus",
     "papaia_hooks.papaia_listing_filter",
     "papaia_hooks.papaia_platform_halt",
+    "papaia_hooks.papaia_class_guard",
 })
+# The routes a module key may call (LiteLLM's `allowed_routes` of the key, ADR 0031): the
+# model calls the class guard judges, with their unversioned twins, and the listing, which
+# sends nothing to a model. Every other route is refused for a module key. The text
+# completion (`/v1/completions`) is not on the list: no feature of the kit needs it, and
+# the pinned LiteLLM answers a refusal there without the error code header and the
+# correlation id (docs/model-gateway.md).
+MODULE_ROUTES = (
+    "/v1/chat/completions",
+    "/chat/completions",
+    "/v1/embeddings",
+    "/embeddings",
+    "/v1/models",
+    "/models",
+)
+# The gateway's own audit outbox and its counter (papaia_hooks, docs/model-gateway.md),
+# mounted read-write into the gateway alone; `render` makes them, Compose must not.
+OUTBOX_FILES = (
+    Path("audit") / "outbox" / "litellm.jsonl",
+    Path("audit") / "outbox" / "litellm.seq",
+)
 _CALLBACK_KEYS = (
     "callbacks",
     "success_callback",
@@ -294,6 +317,30 @@ def apply(config: dict, env: dict[str, str]) -> tuple[dict, list[str]]:
     added, warnings = _alias_entries(model_list, env)
     config["model_list"] = model_list + added
     return config, warnings
+
+
+def ensure_outbox(config_dir: Path) -> bool:
+    """The gateway's audit outbox and its counter, empty files of mode 0600, while the
+    gateway profile is on; what is in them is kept. Returns whether the gateway is on."""
+    if not model_routes.gateway_on(config_dir):
+        return False
+    folder = Path(config_dir) / "audit" / "outbox"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for name in OUTBOX_FILES:
+        path = Path(config_dir) / name
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        except OSError as exc:
+            raise ModelGatewayError(
+                f"$PAPAIA_CONFIG_DIR/{name} cannot be made: {exc.strerror}"
+            ) from None
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ModelGatewayError(f"$PAPAIA_CONFIG_DIR/{name} is not a file")
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+    return True
 
 
 def default_model_for(variant: str | None) -> str:
@@ -656,13 +703,15 @@ def _check_need_classes(need_classes: dict[str, str] | None, aliases: list[str]
 
 
 def _key_matches(row: dict, wanted: list[str], classes: dict[str, str]) -> bool:
-    """A key stays while its aliases and its stored need classes are the declaration; a
-    key without stored classes was made before the class rule and is replaced."""
+    """A key stays while its aliases and its stored need classes are the declaration and
+    it reaches the judged routes only; a key without stored classes or without the route
+    list was made before the class guard and is replaced."""
     metadata = row.get("metadata")
     return (
         sorted(row.get("models") or []) == wanted
         and isinstance(metadata, dict)
         and metadata.get(NEED_CLASSES_KEY) == classes
+        and row.get("allowed_routes") == list(MODULE_ROUTES)
     )
 
 
@@ -703,6 +752,7 @@ def ensure_module_key(config_dir: Path, repo_root: Path, module: str, aliases: l
             "key_alias": key_alias(module),
             "models": wanted,
             "metadata": {"tags": [f"module:{module}"], NEED_CLASSES_KEY: classes},
+            "allowed_routes": list(MODULE_ROUTES),
         })
     except Unavailable:
         if stale and current is not None:

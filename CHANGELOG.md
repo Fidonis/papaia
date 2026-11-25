@@ -28,7 +28,23 @@ based on merged pull requests; this file mirrors the published releases.
   declared classes (`metadata.papaia_need_classes`) and are replaced when they change.
 - `papaia-ctl addon start` and the new check `doctor model_gateway_classes` report a need
   above the class of its route; `doctor` fails when the route file is missing or differs.
-  The refusal at the gateway follows separately.
+
+### Refusal above the route class at the model gateway
+
+- New pre-call hook `papaia_class_guard`, registered right after the halt hook: every model
+  call made with a module key is judged before any backend call. The request class is the
+  header `x-papaia-data-class`, else the module's declared class for the alias, else the
+  highest class; a request above the route class or above the declared class is refused
+  with `403 class_exceeded`, a malformed header with `400 invalid_data_class`, and every
+  module call with `503 route_class_unknown` while the route file is missing, unreadable or
+  lacks the alias. The platform halt still refuses first; the master key is not judged.
+- Refusals carry `x-papaia-error-code` and `x-papaia-correlation-id`, and each is one
+  `papaia.audit/1` row (writer `litellm/class-guard`, no content, no key) in the gateway's
+  own outbox `audit/outbox/litellm.jsonl` (counter `litellm.seq`), made by the render and
+  mounted read-write into the gateway alone.
+- Module keys are made with a route list (`allowed_routes`): chat completions, embeddings
+  and the model listing; every other gateway route answers `403`. Keys made without it are
+  replaced at the next start.
 
 ### Decision: data class of a model route
 

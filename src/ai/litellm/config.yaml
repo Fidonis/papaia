@@ -30,10 +30,13 @@ litellm_settings:
   # (the voice profile's audio routes) would otherwise show up as selectable
   # chat models. Hidden routes stay fully callable. papaia_platform_halt refuses
   # every request of every key while the platform halt is active (docs/halt.md).
+  # papaia_class_guard refuses a module request whose data class is above the
+  # class of its route, before any backend call (docs/model-gateway.md).
   callbacks:
     - "prometheus"
     - "papaia_hooks.papaia_listing_filter"
     - "papaia_hooks.papaia_platform_halt"
+    - "papaia_hooks.papaia_class_guard"
 
 router_settings:
   routing_strategy: least-busy  # prefer least-loaded model replica

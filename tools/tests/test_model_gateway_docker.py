@@ -15,6 +15,14 @@ Then:
 * the gateway mounts the folder of the platform halt as the shipped Compose file does;
   with the halt set, the module key is refused with `platform_halt`, and served again
   once it is lifted;
+* the gateway mounts the route file and its audit outbox as the shipped Compose file
+  does; the class guard reads the header `x-papaia-data-class` where the pinned LiteLLM
+  hands it over: a module request above the class of its route is refused with
+  `class_exceeded`, the recording of the stand-in model stays empty, the marker of the
+  refused request is found nowhere in the gateway's database and log, and the refusal is
+  one audit row with the correlation id; a request at the route class is answered; the
+  master key is not judged; a module key reaches no route outside its list (the text
+  completion among them);
 * revoking the key writes `key_revoke` into the erasure journal `model-gateway`, and
   the key stops working.
 
@@ -48,8 +56,10 @@ SUBNET = ipaddress.ip_network(
     os.environ.get("PAPAIA_MODEL_GATEWAY_TEST_SUBNET", "10.250.79.0/24")
 )
 MODULE = "probe"
-# Where papaia_hooks looks for the halt file.
+# Where papaia_hooks looks for the halt file, the route file and its outbox.
 HALT_MOUNT = "/run/papaia-halt"
+ROUTES_MOUNT = "/app/model-routes.json"
+OUTBOX_MOUNTS = ("/run/papaia-audit/litellm.jsonl", "/run/papaia-audit/litellm.seq")
 MARKER = "MARK-" + secrets.token_hex(8)
 
 
@@ -71,12 +81,16 @@ def _docker_available() -> bool:
 pytestmark = pytest.mark.skipif(not _docker_available(), reason="Docker is not available")
 
 # Stands in for LocalAI: answers every chat request with a fixed text, and only with
-# the key LiteLLM is configured to send (LOCALAI_API_KEY).
+# the key LiteLLM is configured to send (LOCALAI_API_KEY). Every request it receives is
+# recorded, body included, in /tmp/recording.jsonl inside its container.
 _LOCALAI = (
     "import http.server,json,os,time\n"
     "class H(http.server.BaseHTTPRequestHandler):\n"
     "    def do_POST(self):\n"
-    "        self.rfile.read(int(self.headers.get('Content-Length','0')))\n"
+    "        raw=self.rfile.read(int(self.headers.get('Content-Length','0')))\n"
+    "        with open('/tmp/recording.jsonl','a') as f:\n"
+    "            f.write(json.dumps({'path':self.path,\n"
+    "                'body':raw.decode('utf-8','replace')})+'\\n')\n"
     "        if self.headers.get('Authorization')!='Bearer '+os.environ['LOCALAI_API_KEY']:\n"
     "            self.send_response(401);self.end_headers();return\n"
     "        body=json.dumps({'id':'c','object':'chat.completion','created':int(time.time()),\n"
@@ -96,13 +110,16 @@ _MODULE_CALL = (
     "import json,sys,urllib.request,urllib.error\n"
     "r=json.load(sys.stdin)\n"
     "data=None if r['body'] is None else json.dumps(r['body']).encode()\n"
+    "h={'Authorization':'Bearer '+r['key'],'Content-Type':'application/json'}\n"
+    "h.update(r.get('headers') or {})\n"
     "q=urllib.request.Request('http://127.0.0.1:4000'+r['path'],data=data,method=r['method'],\n"
-    "  headers={'Authorization':'Bearer '+r['key'],'Content-Type':'application/json'})\n"
+    "  headers=h)\n"
     "o=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
     "try:\n"
-    "  with o.open(q,timeout=60) as s: st,b=s.status,s.read()\n"
-    "except urllib.error.HTTPError as e: st,b=e.code,e.read()\n"
-    "print(json.dumps({'status':st,'body':b.decode('utf-8','replace')}))\n"
+    "  with o.open(q,timeout=60) as s: st,b,hd=s.status,s.read(),s.headers\n"
+    "except urllib.error.HTTPError as e: st,b,hd=e.code,e.read(),e.headers\n"
+    "print(json.dumps({'status':st,'body':b.decode('utf-8','replace'),\n"
+    "  'headers':{k.lower():v for k,v in hd.items()}}))\n"
 )
 
 
@@ -144,6 +161,8 @@ def _set_up_with_local_ai(repo_root: Path, config_dir: Path, backup: Path) -> No
     tree = resolve.resolve_default_model(tree, args)
     root = tree[""]
     root["COMPOSE_PROJECT_NAME"] = PROJECT
+    # papaia-embed onto the same stand-in, so the class guard is seen on /v1/embeddings.
+    root["PAPAIA_DEFAULT_EMBED_MODEL"] = model_gateway.CPU_DEFAULT
     root["COMPOSE_PROFILES"] = root["COMPOSE_PROFILES"] + ",lifecycle"
     root["PAPAIA_BACKUP_DIR"] = str(backup)
     envtree.persist_tree(tree, config_dir, repo_root)
@@ -160,6 +179,20 @@ def _halt_mount(real: dict, config_dir: Path) -> dict:
     prefix = "${PAPAIA_CONFIG_DIR}/"
     assert mount["source"].startswith(prefix), mount
     return {**mount, "source": str(config_dir / mount["source"][len(prefix):])}
+
+
+def _mounts(real: dict, config_dir: Path, *targets: str) -> list[dict]:
+    """The shipped binds with these targets, pointed at the test's configuration."""
+    prefix = "${PAPAIA_CONFIG_DIR}/"
+    found = []
+    for target in targets:
+        (mount,) = [
+            m for m in real["litellm"]["volumes"]
+            if isinstance(m, dict) and m.get("target") == target
+        ]  # fmt: skip
+        assert mount["source"].startswith(prefix), mount
+        found.append({**mount, "source": str(config_dir / mount["source"][len(prefix):])})
+    return found
 
 
 def _compose_file(tmp_path: Path, config_dir: Path, master_key: str, local_key: str) -> Path:
@@ -185,6 +218,7 @@ def _compose_file(tmp_path: Path, config_dir: Path, master_key: str, local_key: 
                     f"{config_dir / 'ai/litellm/config.yaml'}:/app/config.yaml:ro",
                     f"{REPO / 'src/ai/litellm/papaia_hooks.py'}:/app/papaia_hooks.py:ro",
                     _halt_mount(real, config_dir),
+                    *_mounts(real, config_dir, ROUTES_MOUNT, *OUTBOX_MOUNTS),
                 ],
                 "depends_on": {"litellm-db": {"condition": "service_healthy"}},
             },
@@ -228,14 +262,14 @@ def gateway(tmp_path, repo_root, config_dir):
     _set_up_with_local_ai(repo_root, config_dir, backup)
     (config_dir / "addons" / MODULE).mkdir(parents=True)
     (config_dir / "addons" / MODULE / ".env").write_text("PROBE=1\n", encoding="utf-8")
-    compose = _compose_file(tmp_path, config_dir, "sk-" + secrets.token_hex(16),
-                            secrets.token_hex(16))
+    master = "sk-" + secrets.token_hex(16)
+    compose = _compose_file(tmp_path, config_dir, master, secrets.token_hex(16))
     base = ["docker", "compose", "-p", PROJECT, "-f", str(compose)]
     try:
         _run(*base, "up", "-d", "--wait", "litellm-db", "localai")
         _run(*base, "up", "-d", "litellm")
         yield {"config_dir": config_dir, "repo_root": repo_root, "backup": backup,
-               "compose": base}
+               "compose": base, "master": master}
     finally:
         _run(*base, "down", "-v", "--remove-orphans", check=False)
 
@@ -250,12 +284,24 @@ def _container(service: str) -> str:
     return out[0]
 
 
-def _as_module(key: str, method: str, path: str, body: object = None) -> tuple[int, str]:
-    request = json.dumps({"key": key, "method": method, "path": path, "body": body})
+def _call(key: str, method: str, path: str, body: object = None,
+          headers: dict | None = None) -> dict:
+    request = json.dumps({"key": key, "method": method, "path": path, "body": body,
+                          "headers": headers or {}})
     result = _run("docker", "exec", "-i", _container("litellm"), "python", "-I", "-c",
                   _MODULE_CALL, stdin=request)
-    doc = json.loads(result.stdout.strip().splitlines()[-1])
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def _as_module(key: str, method: str, path: str, body: object = None) -> tuple[int, str]:
+    doc = _call(key, method, path, body)
     return doc["status"], doc["body"]
+
+
+def _recording() -> list[dict]:
+    result = _run("docker", "exec", _container("localai"), "cat", "/tmp/recording.jsonl",
+                  check=False)
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
 
 
 def _chat_until(key: str, chat: dict, wanted: int, within: float = 60) -> tuple[int, str]:
@@ -282,7 +328,8 @@ def test_local_ai_serves_the_alias_to_a_module_key_and_keeps_no_contents(gateway
     admin = model_gateway.connect(config_dir)
     model_gateway.wait_ready(admin, timeout=240)
     outcome = model_gateway.ensure_module_key(
-        config_dir, repo_root, MODULE, ["papaia-chat", "papaia-structured"], admin
+        config_dir, repo_root, MODULE, ["papaia-chat", "papaia-structured"], admin,
+        need_classes={"papaia-chat": "internal", "papaia-structured": "internal"},
     )
     assert outcome == "created"
     key = common.parse_env_file(config_dir / "addons" / MODULE / ".env")["PAPAIA_MODEL_KEY"]
@@ -348,3 +395,111 @@ def test_local_ai_serves_the_alias_to_a_module_key_and_keeps_no_contents(gateway
     (entry,) = [json.loads(line) for line in journal.read_text("utf-8").splitlines()]
     assert (entry["kind"], entry["object_ref"]) == ("key_revoke", token)
     assert key not in journal.read_text("utf-8")
+
+
+def test_the_class_guard_refuses_above_the_route_before_the_backend(gateway):
+    """T61 at the gateway, with the pinned image: the route class is `internal` (no
+    operator decision); flow declares `confidential` for papaia-structured."""
+    config_dir, repo_root = gateway["config_dir"], gateway["repo_root"]
+    routes = json.loads((config_dir / "ai/litellm/model-routes.json").read_text("utf-8"))
+    assert routes["routes"]["papaia-structured"] == "internal"
+    admin = model_gateway.connect(config_dir)
+    model_gateway.wait_ready(admin, timeout=240)
+    need = {"papaia-chat": "internal", "papaia-structured": "confidential",
+            "papaia-embed": "internal"}
+    aliases = sorted(need)
+    assert model_gateway.ensure_module_key(
+        config_dir, repo_root, MODULE, aliases, admin, need_classes=need) == "created"
+    # LiteLLM lists the route list back: the key is kept at the next start.
+    assert model_gateway.ensure_module_key(
+        config_dir, repo_root, MODULE, aliases, admin, need_classes=need) == "unchanged"
+    key = common.parse_env_file(config_dir / "addons" / MODULE / ".env")["PAPAIA_MODEL_KEY"]
+    token = hashlib.sha256(key.encode()).hexdigest()
+    refused_marker = "REFUSED-" + secrets.token_hex(8)
+    correlation = "c0ffee00-1111-4222-8333-444455556666"
+
+    # Above the route (below the declared class): refused, nothing reaches the model.
+    before = _recording()
+    doc = _call(key, "POST", "/v1/chat/completions", {
+        "model": "papaia-structured",
+        "messages": [{"role": "user", "content": f"payroll {refused_marker}"}],
+    }, {"x-papaia-data-class": "personal", "x-papaia-correlation-id": correlation})
+    assert doc["status"] == 403, doc
+    body = json.loads(doc["body"])
+    assert body["error"]["provider_specific_fields"]["error"]["code"] == "class_exceeded"
+    assert doc["headers"]["x-papaia-error-code"] == "class_exceeded"
+    assert doc["headers"]["x-papaia-correlation-id"] == correlation
+    # Without the header the declared class (confidential) is judged: refused as well.
+    doc = _call(key, "POST", "/v1/chat/completions", {
+        "model": "papaia-structured",
+        "messages": [{"role": "user", "content": f"payroll {refused_marker}"}],
+    })
+    assert doc["status"] == 403 and doc["headers"]["x-papaia-error-code"] == "class_exceeded"
+    # The other judged routes: the unversioned twin and the embeddings.
+    for path, payload in (
+        ("/chat/completions", {"model": "papaia-structured",
+                               "messages": [{"role": "user", "content": refused_marker}]}),
+        ("/v1/embeddings", {"model": "papaia-embed", "input": refused_marker}),
+        ("/embeddings", {"model": "papaia-embed", "input": refused_marker}),
+    ):
+        doc = _call(key, "POST", path, payload, {"x-papaia-data-class": "personal"})
+        assert doc["status"] == 403, (path, doc)
+        assert doc["headers"].get("x-papaia-error-code") == "class_exceeded", (path, doc)
+    # A malformed header.
+    doc = _call(key, "POST", "/v1/chat/completions", {
+        "model": "papaia-chat", "messages": [{"role": "user", "content": refused_marker}],
+    }, {"x-papaia-data-class": "internal, personal"})
+    assert doc["status"] == 400 and doc["headers"]["x-papaia-error-code"] == "invalid_data_class"
+    assert _recording() == before, "a refused request reached the model"
+
+    # At the route class: answered.
+    doc = _call(key, "POST", "/v1/chat/completions", {
+        "model": "papaia-structured", "messages": [{"role": "user", "content": "say pong"}],
+    }, {"x-papaia-data-class": "internal"})
+    assert doc["status"] == 200, doc
+    assert len(_recording()) == len(before) + 1
+
+    # The master key is not judged.
+    doc = _call(gateway["master"], "POST", "/v1/chat/completions", {
+        "model": "papaia-chat", "messages": [{"role": "user", "content": "say pong"}],
+    }, {"x-papaia-data-class": "professional_secret"})
+    assert doc["status"] == 200, doc
+
+    # A module key reaches no route outside its list.
+    for method, path, payload in (
+        ("POST", "/v1/completions", {"model": "papaia-chat", "prompt": refused_marker}),
+        ("POST", "/completions", {"model": "papaia-chat", "prompt": refused_marker}),
+        ("POST", "/v1/responses", {"model": "papaia-chat", "input": refused_marker}),
+        ("GET", "/v1/files", None),
+        ("GET", "/key/info", None),
+        ("POST", "/utils/token_counter", {"model": "papaia-chat", "messages": []}),
+    ):
+        assert _call(key, method, path, payload)["status"] == 403, path
+    assert _call(key, "GET", "/v1/models")["status"] == 200
+
+    # One audit row per refusal, without content, key or key hash.
+    outbox = config_dir / "audit" / "outbox" / "litellm.jsonl"
+    rows = [json.loads(line) for line in outbox.read_text("utf-8").splitlines()]
+    assert [r["error_code"] for r in rows] == ["class_exceeded"] * 5 + ["invalid_data_class"]
+    assert [r["source_seq"] for r in rows] == [1, 2, 3, 4, 5, 6]
+    assert rows[0]["correlation_id"] == correlation
+    assert rows[0]["sub"] == rows[0]["azp"] == f"module-{MODULE}"
+    assert [r["data_class"] for r in rows] == [
+        "confidential" if i == 1 else "personal" for i in range(5)
+    ] + [None]
+    assert [r["object_ref"]["id"] for r in rows] == [
+        "papaia-structured", "papaia-structured", "papaia-structured", "papaia-embed",
+        "papaia-embed", "papaia-chat",
+    ]
+    text = outbox.read_text("utf-8")
+    assert refused_marker not in text and key not in text and token not in text
+
+    # The marker of the refused requests is nowhere in the gateway's database or log.
+    dump = _run("docker", "exec", _container("litellm-db"), "pg_dump", "-U", "llmproxy",
+                "-d", "litellm", "--data-only").stdout
+    assert refused_marker not in dump
+    files = _run("docker", "exec", _container("litellm-db"), "grep", "-rl", refused_marker,
+                 "/var/lib/postgresql/data", check=False)
+    assert files.returncode == 1 and files.stdout == "", files.stdout
+    logs = _run("docker", "logs", _container("litellm"))
+    assert refused_marker not in logs.stdout + logs.stderr

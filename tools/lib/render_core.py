@@ -276,6 +276,11 @@ def render(config_dir: Path, repo_root: Path) -> None:
         raise RenderError(f"model gateway: {exc}") from exc
     except OSError as exc:
         raise RenderError(f"model gateway: the route file cannot be written: {exc}") from exc
+    # The gateway's audit outbox (refusals of the class guard), before `up` mounts it.
+    try:
+        model_gateway.ensure_outbox(config_dir)
+    except model_gateway.ModelGatewayError as exc:
+        raise RenderError(f"model gateway: {exc}") from exc
 
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
