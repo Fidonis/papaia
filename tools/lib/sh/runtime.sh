@@ -4,10 +4,12 @@
 #
 # `setup`, `upgrade` and `rollback` (the way back of an upgrade) build the environment of
 # tools/runtime.lock with the base interpreter, or reuse it, and point
-# tools/.runtime/current at it. Every other command only checks it and stops with one line
-# when it is missing, stale or unsafe. lib.cli always runs as
-# tools/.runtime/current/bin/python, by absolute path: PATH and sudo's secure_path only
-# matter while setup or upgrade builds.
+# tools/.runtime/current at it. `hostnames`, `doctor` and `restore`, which run before setup
+# on a fresh checkout or after the loss of the host, build it the same way when the
+# checkout has none yet. Every other command only checks it and stops with one line when it
+# is missing, stale or unsafe. lib.cli always runs as tools/.runtime/current/bin/python, by
+# absolute path and with -P (the caller's working directory is not on its path): PATH and
+# sudo's secure_path only matter while an environment is built.
 
 CTL_RUNTIME_DIR="$REPO_ROOT/tools/.runtime"
 
@@ -22,20 +24,49 @@ _ctl_runtime_uid() {
 
 # Prints why the directory tree $1 cannot be trusted to run as root: an entry writable by
 # the group or by everyone, or owned by neither root nor the owner of tools/. $2 1 for the
-# directory itself only. Checked before the environment's interpreter ever runs.
+# directory itself only, 2 for the tree without its site-packages and dist-packages (the
+# standard library of the base). Checked before the environment's interpreter ever runs.
 _ctl_runtime_unsafe() {
-    local path="$1" shallow="${2:-0}" owner found
-    local -a depth=()
-    [ "$shallow" = "1" ] && depth=(-maxdepth 0)
+    local path="$1" mode="${2:-0}" owner found
+    local -a depth=() skip=()
+    [ "$mode" = "1" ] && depth=(-maxdepth 0)
+    [ "$mode" = "2" ] && skip=(\( -name site-packages -o -name dist-packages \) -prune -o)
     owner="$(_ctl_runtime_uid "$REPO_ROOT/tools")" || { echo "$REPO_ROOT/tools cannot be read"; return 0; }
-    found="$(find "$path" ${depth[@]+"${depth[@]}"} ! -uid 0 ! -uid "$owner" -print -quit 2>/dev/null)"
+    found="$(find "$path" ${depth[@]+"${depth[@]}"} ${skip[@]+"${skip[@]}"} \
+        \( ! -uid 0 ! -uid "$owner" \) -print -quit 2>/dev/null)"
     if [ -n "$found" ]; then
         echo "$found is owned by neither root nor the owner of $REPO_ROOT/tools"
         return 0
     fi
-    found="$(find "$path" ${depth[@]+"${depth[@]}"} ! -type l \( -perm -0020 -o -perm -0002 \) \
-        -print -quit 2>/dev/null)"
+    found="$(find "$path" ${depth[@]+"${depth[@]}"} ${skip[@]+"${skip[@]}"} \
+        \( ! -type l \( -perm -0020 -o -perm -0002 \) \) -print -quit 2>/dev/null)"
     [ -n "$found" ] && echo "$found is group- or world-writable"
+    return 0
+}
+
+# Prints why the base of the environment $1 cannot be trusted: the interpreter its
+# bin/python resolves to and the base's standard library, as the build recorded them in
+# papaia-ctl-base (inside the environment, so checked with it), under the same rule.
+_ctl_runtime_unsafe_base() {
+    local record="$1/papaia-ctl-base" path problem count=0
+    if [ ! -f "$record" ]; then
+        echo "$record is missing"
+        return 0
+    fi
+    while IFS= read -r path || [ -n "$path" ]; do
+        case "$path" in /*) ;; *) continue ;; esac
+        count=$((count + 1))
+        if [ ! -e "$path" ]; then
+            echo "$path (the base) is missing"
+            return 0
+        fi
+        problem="$(_ctl_runtime_unsafe "$path" 2)"
+        if [ -n "$problem" ]; then
+            echo "$problem"
+            return 0
+        fi
+    done < "$record"
+    [ "$count" -gt 0 ] || echo "$record names no base"
     return 0
 }
 
@@ -56,6 +87,7 @@ _ctl_runtime_problem() {
     problem="$(_ctl_runtime_unsafe "$CTL_RUNTIME_DIR" 1)"
     [ -z "$problem" ] && problem="$(_ctl_runtime_unsafe "$link" 1)"
     [ -z "$problem" ] && problem="$(_ctl_runtime_unsafe "$env")"
+    [ -z "$problem" ] && problem="$(_ctl_runtime_unsafe_base "$env")"
     if [ -n "$problem" ]; then
         echo "refused: $problem"
         return 0
@@ -70,7 +102,8 @@ _ctl_runtime_problem() {
     return 0
 }
 
-# Every command but setup, upgrade and rollback: use the environment, never change it.
+# Every command but setup, upgrade, rollback and (on a checkout without one) hostnames,
+# doctor and restore: use the environment, never change it.
 ctl_runtime_require() {
     local problem
     problem="$(_ctl_runtime_problem "$CTL_RUNTIME_DIR/current" "$REPO_ROOT/tools")"
@@ -109,6 +142,17 @@ ctl_runtime_ensure() {
     ctl_runtime_require
 }
 
+# hostnames, doctor, restore: the commands the README runs before setup (the fresh
+# installation) or without one (after the loss of the host). On a checkout that has no
+# environment yet they build it exactly as setup does; once there is one they only use it.
+ctl_runtime_bootstrap() {
+    if [ ! -L "$CTL_RUNTIME_DIR/current" ]; then
+        ctl_runtime_ensure
+    else
+        ctl_runtime_require
+    fi
+}
+
 # The interpreter for lib.cli against another core tree (_py_cli_at), in
 # CTL_RUNTIME_AT_PYTHON: that tree's own environment, built (hash-checked) before it is
 # first used and kept for this run. A tree without runtime.lock predates the environment
@@ -129,6 +173,7 @@ ctl_runtime_at() {
         return 2
     fi
     problem="$(_ctl_runtime_unsafe "${python%/bin/python}")"
+    [ -z "$problem" ] && problem="$(_ctl_runtime_unsafe_base "${python%/bin/python}")"
     if [ -n "$problem" ]; then
         error "The runtime environment of the core tree $root is refused: $problem."
         return 2
@@ -145,6 +190,7 @@ ctl_runtime_preflight() {
     case "${1:-}" in
         ""|help|-h|--help) ;;
         setup|upgrade|rollback) ctl_runtime_ensure ;;
+        hostnames|doctor|restore) ctl_runtime_bootstrap ;;
         node-shell)
             find_python || exit 2
             if ! "$PYTHON_BIN" -c 'import yaml' >/dev/null 2>&1; then

@@ -107,20 +107,28 @@ access. See `src/infra/keycloak/README.md` for the full role table.
   `tools/.runtime/` from `tools/runtime.lock` (PyYAML, the platform kit and the kit's
   dependencies, every package pinned by hash) and runs every command from it. `setup`
   picks the first `python3` of 3.12 or newer on `PATH`; `PAPAIA_PYTHON=/absolute/path`
-  names another one.
-- Access to the Python package index while `setup` (and `upgrade`) runs, or a mirror
+  names another one. That interpreter and its standard library must be owned by root or
+  by the owner of `tools/` and writable by neither the group nor everyone (a system or
+  package-manager Python is); the environment runs on them.
+- Access to the Python package index while the environment is built, or a mirror
   (`PIP_INDEX_URL`) or a directory of the wheels (`PIP_FIND_LINKS`); `pip` reads either
-  from the environment or from `/etc/pip.conf`. Hashes are checked in every case, so a
-  mirror cannot hand over other packages.
+  from the environment, from `PIP_CONFIG_FILE` or from `/etc/pip.conf`. Only the index,
+  mirror, proxy and certificate settings are supported there; an option that moves the
+  install elsewhere fails the build. Hashes are checked in every case, so a mirror cannot
+  hand over other packages.
 - `openssl`, only when Keycloak TLS is enabled
 - A host of one of the [size profiles](#size-profiles), at least `small-no-model` (8 cores,
   32 GB, 200 GB free; [`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
 
-Every command but `setup`, `upgrade` and `rollback` only uses the runtime environment:
-it runs `tools/.runtime/current/bin/python` by its absolute path and stops with one line
-naming `papaia-ctl setup` when the environment is missing, built for another
-`runtime.lock`, or writable by the group or by everyone. So after `setup`,
+`setup`, `upgrade` and `rollback` build the runtime environment, or reuse it. On a
+checkout that has none yet, `hostnames`, `doctor` and `restore` build it the same way: they
+are the commands run before `setup` on a fresh installation and without one after the loss
+of the host. Every other command only uses the environment: it runs
+`tools/.runtime/current/bin/python` by its absolute path, with the caller's working
+directory off its module path, and stops with one line naming `papaia-ctl setup` when the
+environment is missing, built for another `runtime.lock`, or writable by the group or by
+everyone. So after `setup`,
 `sudo tools/papaia-ctl ...` needs nothing on root's `PATH` (sudo's `secure_path` does not
 matter), and a second account, for example the one that approves pairings, needs only read
 access to the checkout. `doctor ctl_runtime` reports the environment.
@@ -223,7 +231,9 @@ command 5, from the directory its README names (see [`addon`](#addon)), so a ser
 all five modules takes 7 + 5 = **12 commands**, one with no module 7. `start` without a
 switch then brings up the core and every installed module.
 
-Before command 4: install Docker, create the DNS entries `hostnames` lists, mount the backup
+Command 2 builds the runtime environment of `papaia-ctl` (see
+[Prerequisites](#prerequisites)), so it needs the package index or the mirror; commands 3
+and 4 reuse it. Before command 4: install Docker, create the DNS entries `hostnames` lists, mount the backup
 target and, with internal TLS, plan to distribute the root certificate of the platform CA.
 With a SQL Server source for Data, building the SQL Server driver layer is one command more,
 documented by the Data module; accepting the vendor's licence there is one more input
@@ -1275,7 +1285,9 @@ command, for example `git checkout v1.10.0`. A scoped restore only warns. A poin
 2. `git clone --branch <tag> https://github.com/Fidonis/papaia.git` (and the add-on checkouts
    at the paths the installation used, see `addons` in the point's `manifest.yaml`).
 3. `tools/papaia-ctl restore --from=<target> --restore-point=latest --identity=- -y`, paste the
-   key, then Ctrl-D.
+   key, then Ctrl-D. On the new checkout `restore` first builds the runtime environment of
+   `papaia-ctl` (it needs the package index or the mirror, see
+   [Prerequisites](#prerequisites)).
 4. `tools/papaia-ctl doctor`.
 
 Without a setup, `restore` needs `--from` and restores the whole point only (no `--only`); the
@@ -1871,7 +1883,7 @@ raw values behind its summary in `details`.
 | `erasure_journal` | Only while the `lifecycle` profile is on: every file of `$PAPAIA_BACKUP_DIR/erasure-journal` and the bind mounts of every container of the core and the add-ons (see *Each module reaches its own journal alone* under [`restore`](#restore)). | `fail` for a missing folder (target not mounted), a container other than `papaia-lifecycle` that can write the folder, the backup target, `epoch` or a journal not its own (a shared read-write mount), a journal or `epoch` that is a link, has a second name, belongs to another account or can be written by others, and a journal holding a line of another module; `warn` for an add-on that can read journals not its own and when Docker does not answer; `skip` while the profile is off |
 | `halt` | The platform's emergency halt (`state/halt.json`, see `papaia-ctl halt`). | `fail` while the halt is set (every write, send and delete is stopped) and for a halt file that cannot be used, which every service treats as set; `skip` before the first start |
 | `edge_app_origin` | Studio app hosts at the edge (see [Studio app hosts at the edge](#studio-app-hosts-at-the-edge)): the bundled proxy holds the current refusal of writes from the app hosts in `http_top.conf` and `server_proxy.conf` (counting the refusals in its audit log), and no cookie an anonymous browser gets from a platform host, the sign-in included, carries a `Domain` that covers an app host. | `fail` for a missing or outdated refusal (run `npm-provision`), a covering cookie (named with its host, never its value) or an unusable app domain; `warn` for a host that could not be read, a proxy that does not run or an external proxy (it must refuse the writes itself); `skip` without a proxy, without host names or while the bundled proxy is not enabled |
-| `ctl_runtime` | The runtime environment `papaia-ctl` runs every command from (`tools/.runtime/current`): present, built for this checkout's `tools/runtime.lock`, writable by neither the group nor everyone and owned by root or the owner of `tools/`, its interpreter runs and imports the kit and PyYAML. | `fail` for a missing, stale or unsafe environment, with `papaia-ctl setup` as the fix; `skip` for a checkout without `runtime.lock` |
+| `ctl_runtime` | The runtime environment `papaia-ctl` runs every command from (`tools/.runtime/current`): present, built for this checkout's `tools/runtime.lock`, writable by neither the group nor everyone and owned by root or the owner of `tools/` (the same for the base interpreter and standard library it runs on), its interpreter runs and imports the kit and PyYAML. `papaia-ctl doctor` builds a missing one first. | `fail` for a missing, stale or unsafe environment, with `papaia-ctl setup` as the fix; `skip` for a checkout without `runtime.lock` |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
 | `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set or while it is still the one `setup` derived (`Verwaltung von <domain>`), `fail` for a malformed `overlay/platform/branding.yaml` |
 

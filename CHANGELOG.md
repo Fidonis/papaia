@@ -41,13 +41,19 @@ based on merged pull requests; this file mirrors the published releases.
   --require-hashes --no-deps --only-binary=:all:`), after checking the kit wheel against
   `kit.lock`, and switch the link `tools/.runtime/current` only once it imports. Every
   other command runs `tools/.runtime/current/bin/python` by absolute path and stops with
-  one line naming `papaia-ctl setup` when the environment is missing, stale, group- or
-  world-writable, or owned by another account than root or the owner of `tools/`. PATH
+  one line naming `papaia-ctl setup` when the environment, or the base interpreter and
+  standard library it runs on, is missing, stale, group- or world-writable, or owned by
+  another account than root or the owner of `tools/`. On a checkout without an
+  environment, `hostnames`, `doctor` and `restore` build it as `setup` does, so the
+  documented fresh installation and the restore after the loss of the host need no
+  `setup` first. Every Python step runs isolated (`-I`, `-P`), so a module in the caller's
+  working directory never runs instead of the hash-checked code. PATH
   and sudo's `secure_path` no longer decide which Python runs, so `sudo tools/papaia-ctl
   pairing approve` from a second account works without a change to its sudoers rule.
 - The upgrade builds the target's environment before the plan runs on it; environments
   are kept by lock, so `rollback` returns to the previous one, and `upgrade --finalize`
-  removes those no restore point needs. New `doctor` check `ctl_runtime`.
+  removes those no restore point needs; when the release tag of a restore point is not in
+  the checkout, it removes none and warns. New `doctor` check `ctl_runtime`.
 - The documented floor is Python 3.12 with the `venv` module (README, `find_python`,
   `pyproject.toml`, nodes); PyYAML is no longer installed by hand. `PAPAIA_PYTHON=/absolute/path`
   names the base interpreter; a name or a relative path is refused. pip reads a mirror

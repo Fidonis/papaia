@@ -8,7 +8,7 @@
 # script runs after it, so a checkout replaced by `checkout-put` cannot be misread.
 cmd_node_shell() {
     PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
-        exec "$PYTHON_BIN" -m lib.node_shell --repo-root "$REPO_ROOT" "$@"
+        exec "$PYTHON_BIN" -P -m lib.node_shell --repo-root "$REPO_ROOT" "$@"
 }
 
 cmd_node() {

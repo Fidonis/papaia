@@ -267,7 +267,7 @@ path = "tools/lib/ctl_runtime.py"
 within = "_run"
 subject = "subprocess.run"
 input = "operator-config"
-reason = "the runtime environment of papaia-ctl without a shell: the base interpreter (PAPAIA_PYTHON or the one found on PATH) runs -m venv, the environment's interpreter runs -I -m pip install --require-hashes --no-deps --only-binary=:all: -r runtime.lock and a literal import check; options are literals, the values are paths inside the checkout, the package source comes from the operator's allowlisted PIP_* variables and cannot lift the hash pin."
+reason = "the runtime environment of papaia-ctl without a shell: the base interpreter (PAPAIA_PYTHON or the one found on PATH) runs -I -m venv, the environment's interpreter runs -I -m pip install --require-hashes --no-deps --only-binary=:all: -r runtime.lock and a literal import check; options are literals, the values are paths inside the checkout, every call runs isolated (-I) with a working directory inside the checkout (cwd is required), so nothing in the caller's working directory is imported, and the package source comes from the operator's allowlisted PIP_* variables and cannot lift the hash pin."
 expires = 2027-05-20
 approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 
@@ -277,7 +277,7 @@ path = "tools/lib/cli.py"
 within = "git_show"
 subject = "subprocess.run"
 input = "operator-config"
-reason = "git -C <checkout> show v<version>:tools/runtime.lock without a shell for upgrade --finalize; the version is a release version of the backup index, checked against a version pattern, the path is a literal."
+reason = "git -C <checkout> show v<version>:tools/runtime.lock (and v<version>: to tell a missing tag from a release without the file) without a shell for upgrade --finalize; the version is a release version of the backup index, checked against a version pattern, the path is a literal."
 expires = 2027-05-20
 approved_by = "core maintainers; countersigned by the security officer (ISB, Fidonis GmbH), 2026-11-25"
 

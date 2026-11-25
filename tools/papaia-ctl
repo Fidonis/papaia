@@ -302,7 +302,7 @@ py_cli() {
         printf '[debug] lib.cli %s runs on %s\n' "${1:-}" "$PYTHON_BIN" >&2
     fi
     PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
-        "$PYTHON_BIN" -m lib.cli --repo-root "$REPO_ROOT" --config-dir "$CONFIG_DIR" "$@"
+        "$PYTHON_BIN" -P -m lib.cli --repo-root "$REPO_ROOT" --config-dir "$CONFIG_DIR" "$@"
 }
 
 # ─────────────────────────────────────────────────────────────────────────

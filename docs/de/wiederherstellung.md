@@ -49,7 +49,9 @@ bei gleicher Adresse).
    ```
 
    Schlüssel einfügen, dann Strg-D. Ein vorheriges `setup` ist nicht nötig: die Konfiguration
-   kommt aus dem Punkt.
+   kommt aus dem Punkt. Im neuen Checkout baut `restore` zuerst die Laufzeitumgebung von
+   `papaia-ctl` (`tools/.runtime/`); dafür braucht es den Paketindex oder einen Spiegel
+   (`PIP_INDEX_URL`, `PIP_FIND_LINKS`).
 4. `tools/papaia-ctl doctor`.
 
 Ohne Einrichtung verlangt `restore` den Schalter `--from` und stellt nur den ganzen Punkt

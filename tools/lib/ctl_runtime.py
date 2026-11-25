@@ -26,6 +26,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 
 MIN_PYTHON = (3, 12)
 FORMAT = "papaia.ctl-runtime/1"
@@ -34,13 +35,20 @@ KIT_LOCK_NAME = "kit.lock"
 RUNTIME_NAME = ".runtime"
 CURRENT = "current"
 MARKER = "papaia-ctl-runtime.json"
+# The base the environment runs on, one absolute path per line: the interpreter bin/python
+# resolves to and the base's standard library (pyvenv.cfg `home` takes it from there). The
+# environment's own tree, and these, must be owned by root or the owner of tools/.
+BASE_PATHS = "papaia-ctl-base"
+# Third-party packages of the base are not on the environment's path.
+_BASE_SKIPPED = ("site-packages", "dist-packages")
 # What the environment must import for `lib.cli` to run at all.
 REQUIRED_IMPORTS = ("yaml", "papaia_kit.erasure")
 # pip reads these from the operator's environment (a mirror, a wheel directory, a proxy
 # certificate); every other PIP_* variable is dropped so it cannot loosen the install.
-# PIP_CONFIG_FILE names a pip configuration file that may set further options; the hash
-# pin (--require-hashes and the --hash of every runtime.lock line) is on the command line
-# and stays in force whatever that file sets.
+# PIP_CONFIG_FILE names a pip configuration file for exactly these settings (index, mirror,
+# proxy, certificates); the hash pin (--require-hashes, --no-deps, --only-binary and the
+# --hash of every runtime.lock line) is on the command line and stays in force whatever the
+# file sets, and an option that moves the install elsewhere fails the import check.
 PIP_PASSED = (
     "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_FIND_LINKS", "PIP_NO_INDEX",
     "PIP_TRUSTED_HOST", "PIP_CERT", "PIP_CLIENT_CERT", "PIP_PROXY", "PIP_TIMEOUT",
@@ -212,6 +220,40 @@ def _unsafe_one(path: str, owners: set[int]) -> str | None:
     return None
 
 
+def base_paths(env: str) -> list[str]:
+    """The base interpreter and standard library the environment `env` runs on."""
+    try:
+        with open(os.path.join(env, BASE_PATHS), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return []
+    return [line for line in lines if line.startswith("/")]
+
+
+def unsafe_base(env: str, owners: set[int]) -> str | None:
+    """`unsafe` for the base of `env` (its site-packages are not on the path). A missing
+    record is a problem too: then the base cannot be checked."""
+    paths = base_paths(env)
+    if not paths:
+        return f"{os.path.join(env, BASE_PATHS)} is missing"
+    for path in paths:
+        try:
+            found = _unsafe_one(path, owners)
+            if found or not os.path.isdir(path):
+                if found:
+                    return found
+                continue
+            for top, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in _BASE_SKIPPED]
+                for name in [*dirs, *files]:
+                    found = _unsafe_one(os.path.join(top, name), owners)
+                    if found:
+                        return found
+        except OSError as exc:
+            return f"{path} cannot be checked: {exc.strerror}"
+    return None
+
+
 def _clear_group_write(path: str) -> None:
     """A umask of 002 must not leave the environment writable by the group."""
     for top, dirs, files in os.walk(path):
@@ -246,7 +288,7 @@ def env_problem(env: str, digest: str) -> str | None:
         return f"was built for another {LOCK_NAME}"
     code = "import " + ", ".join(REQUIRED_IMPORTS)
     try:
-        done = _run([env_python(env), "-I", "-c", code], timeout=60)
+        done = _run([env_python(env), "-I", "-c", code], cwd=env, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return "has an interpreter that does not run"
     if done.returncode != 0:
@@ -254,11 +296,13 @@ def env_problem(env: str, digest: str) -> str | None:
     return None
 
 
-def _run(argv: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None,
+def _run(argv: list[str], *, cwd: str, env: dict[str, str] | None = None,
          timeout: float | None = None) -> subprocess.CompletedProcess:
     """The three programs of this module, without a shell: the base interpreter
-    (`-m venv`) and the environment's interpreter (`-m pip install` of runtime.lock, the
-    import check). The options are literals; the values are paths of the checkout."""
+    (`-I -m venv`) and the environment's interpreter (`-I -m pip install` of runtime.lock,
+    the import check). The options are literals; the values are paths of the checkout;
+    every call runs isolated (-I) in a directory of the checkout (`cwd`), so nothing in the
+    caller's working directory is imported."""
     return subprocess.run(argv, cwd=cwd, env=env, timeout=timeout, capture_output=True,
                           text=True, check=False)
 
@@ -338,13 +382,17 @@ def build(tools: str, runtime: str, *, switch_current: bool = True,
         raise RuntimeEnvError(problem)
     _sweep(runtime)
     env = os.path.join(runtime, digest)
-    if os.path.isdir(env) and not unsafe(env, owners) and env_problem(env, digest) is None:
+    if (os.path.isdir(env) and not unsafe(env, owners) and not unsafe_base(env, owners)
+            and env_problem(env, digest) is None):
         if switch_current:
             switch(runtime, digest)
         return env
     building = os.path.join(runtime, f".build-{digest[:12]}-{os.getpid()}")
     try:
         _create(building, tools, digest, log)
+        problem = unsafe_base(building, owners)
+        if problem:
+            raise RuntimeEnvError(f"the base interpreter is refused: {problem}")
         if os.path.lexists(env):
             stale = os.path.join(runtime, f".stale-{digest[:12]}-{os.getpid()}")
             os.rename(env, stale)
@@ -360,7 +408,7 @@ def build(tools: str, runtime: str, *, switch_current: bool = True,
 
 def _create(path: str, tools: str, digest: str, log) -> None:
     log(f"Building the runtime environment of papaia-ctl ({digest[:12]}) with {sys.executable}...")
-    done = _run([sys.executable, "-m", "venv", path], env=_pip_env())
+    done = _run([sys.executable, "-I", "-m", "venv", path], cwd=tools, env=_pip_env())
     if done.returncode != 0:
         raise RuntimeEnvError(
             f"{sys.executable} -m venv failed ({_pip_failure(done.stderr + done.stdout)}); "
@@ -378,6 +426,9 @@ def _create(path: str, tools: str, digest: str, log) -> None:
             "without the public package index set PIP_INDEX_URL (a mirror) or "
             "PIP_FIND_LINKS (a wheel directory)"
         )
+    base = [os.path.realpath(env_python(path)), os.path.realpath(sysconfig.get_path("stdlib"))]
+    with open(os.path.join(path, BASE_PATHS), "w", encoding="utf-8") as handle:
+        handle.write("".join(f"{line}\n" for line in base))
     marker = {
         "format": FORMAT,
         "lock_sha256": digest,

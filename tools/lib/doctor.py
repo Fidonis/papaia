@@ -4009,8 +4009,10 @@ def check_halt(ctx: Context) -> CheckResult:
 def check_ctl_runtime(ctx: Context) -> CheckResult:
     """The runtime environment of papaia-ctl (`doctor ctl_runtime`, lib/ctl_runtime.py):
     present, built for this checkout's runtime.lock, safe to run as root, its interpreter
-    runs and imports the kit and PyYAML. Works before setup: the environment is the first
-    thing setup builds."""
+    runs and imports the kit and PyYAML, and its base interpreter and standard library are
+    as safe as the environment. On a checkout without the environment, `papaia-ctl doctor`
+    builds it first (as hostnames, setup and restore do); called directly, a missing one
+    is a failure."""
     name = "ctl_runtime"
     tools = ctx.repo_root / "tools"
     if not (tools / ctl_runtime.LOCK_NAME).is_file():
@@ -4025,7 +4027,8 @@ def check_ctl_runtime(ctx: Context) -> CheckResult:
     try:
         owners = ctl_runtime.allowed_owners(str(tools))
         problem = (ctl_runtime.unsafe(str(runtime), owners, recursive=False)
-                   or ctl_runtime.unsafe(str(env), owners))
+                   or ctl_runtime.unsafe(str(env), owners)
+                   or ctl_runtime.unsafe_base(str(env), owners))
         digest = ctl_runtime.lock_digest(str(tools))
     except (OSError, ctl_runtime.RuntimeEnvError) as exc:
         return CheckResult(name, FAIL, f"the environment cannot be checked: {exc}")

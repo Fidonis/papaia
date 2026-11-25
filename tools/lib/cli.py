@@ -2032,6 +2032,13 @@ def cmd_ctl_runtime_prune(args: argparse.Namespace) -> int:
         lock = git_show(repo_root, f"v{version}:tools/{ctl_runtime.LOCK_NAME}")
         if lock is not None:
             keep.add(hashlib.sha256(lock).hexdigest())
+        elif git_show(repo_root, f"v{version}:") is None:
+            # The tag is not in this checkout (a shallow clone, tags not fetched): which
+            # environment that restore point needs is unknown, so none is removed.
+            print(f"WARNING: the release tag v{version} of a restore point is not in "
+                  f"{repo_root} (git fetch --tags); no runtime environment of papaia-ctl "
+                  "was removed.", file=sys.stderr)
+            return 0
     removed = ctl_runtime.prune(str(repo_root / "tools" / ctl_runtime.RUNTIME_NAME), keep)
     for name in removed:
         print(f"Runtime environment {name[:12]} removed; no restore point needs it.")
@@ -2039,7 +2046,8 @@ def cmd_ctl_runtime_prune(args: argparse.Namespace) -> int:
 
 
 def git_show(repo_root: Path, spec: str) -> bytes | None:
-    """`git show <rev>:<path>` of the checkout, or None when the release has no such file."""
+    """`git show <rev>:<path>` of the checkout, or None when the release has no such file.
+    `<rev>:` (the root tree) tells a missing tag from a release without the file."""
     done = subprocess.run(
         ["git", "-C", str(repo_root), "show", spec], capture_output=True, check=False,
         timeout=60,

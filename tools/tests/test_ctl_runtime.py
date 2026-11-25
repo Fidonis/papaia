@@ -9,6 +9,8 @@ used. Each checkout here is a copy of this working tree without its tests.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -143,6 +145,134 @@ def test_a_command_other_than_setup_never_builds(host, tmp_path):
         assert host.ctl(*SETUP_FLAGS).returncode == 0
 
 
+# --- before setup: the documented fresh installation and the loss of the host ---------
+
+
+@pytest.fixture(scope="module")
+def fresh(tmp_path_factory, ctl_wheelhouse) -> Host:
+    """A clean checkout: no tools/.runtime, no setup."""
+    return Host(tmp_path_factory.mktemp("fresh"), ctl_wheelhouse)
+
+
+def test_the_documented_installation_runs_hostnames_and_doctor_before_setup(fresh):
+    shutil.rmtree(fresh.runtime, ignore_errors=True)
+    # README "Fresh installation", commands 2 and 3, before `setup` (command 4).
+    done = fresh.ctl("hostnames")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "Building the runtime environment of papaia-ctl" in done.stderr
+    assert fresh.current() == ctl_runtime.lock_digest(str(fresh.tools))
+    done = fresh.ctl("doctor", "--json")
+    assert "runtime environment of papaia-ctl is" not in done.stderr
+    assert "Building" not in done.stderr, "hostnames built it already"
+    checks = {c["name"]: c for c in json.loads(done.stdout)["checks"]}
+    assert checks["ctl_runtime"]["status"] == doctor.PASS, checks["ctl_runtime"]
+    done = fresh.ctl(*SETUP_FLAGS)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "setup complete" in done.stdout + done.stderr
+
+
+def test_doctor_alone_on_a_clean_checkout_builds_and_reports_the_environment(fresh):
+    shutil.rmtree(fresh.runtime, ignore_errors=True)
+    done = fresh.ctl("doctor", "ctl_runtime")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "Building the runtime environment of papaia-ctl" in done.stderr
+    assert "ctl_runtime" in done.stdout
+
+
+def test_restore_after_the_loss_of_the_host_needs_no_setup_for_the_environment(fresh,
+                                                                                tmp_path):
+    # README "After the loss of the host", step 3, on a checkout without tools/.runtime.
+    shutil.rmtree(fresh.runtime, ignore_errors=True)
+    target = tmp_path / "target"
+    target.mkdir()
+    done = fresh.ctl("restore", f"--from={target}", "--restore-point=latest", "-y",
+                     f"--config-dir={tmp_path / 'papaia-config'}")
+    assert "runtime environment of papaia-ctl is" not in done.stderr
+    assert "Building the runtime environment of papaia-ctl" in done.stderr
+    assert fresh.current() == ctl_runtime.lock_digest(str(fresh.tools))
+    # restore itself ran: the empty directory holds no restore point.
+    assert done.returncode != 0
+    assert "Could not resolve a restore point" in done.stderr
+
+
+# --- the caller's working directory decides nothing ---------------------------------------
+
+
+def _plant(folder: Path, module: str, witness: Path) -> None:
+    """A module that records it ran, in `folder` (the caller's working directory)."""
+    code = (f"import pathlib\npathlib.Path({str(witness)!r}).write_text('ran')\n"
+            "raise SystemExit(3)\n")
+    path = folder / (module.replace(".", "/") + ".py")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for parent in path.relative_to(folder).parents:
+        if str(parent) != ".":
+            (folder / parent / "__init__.py").write_text("")
+    path.write_text(code)
+
+
+def test_a_build_ignores_venv_and_ensurepip_in_the_working_directory(host, tmp_path):
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    witness = tmp_path / "planted-ran"
+    for module in ("venv", "ensurepip", "pip"):
+        _plant(cwd, module, witness)
+    runtime = tmp_path / "rt"
+    done = subprocess.run(
+        [str(host.bare / "python3"), "-I", str(host.tools / "lib" / "ctl_runtime.py"),
+         "build", f"--tools={host.tools}", f"--runtime={runtime}"],
+        cwd=cwd, env=host.env(), capture_output=True, text=True, timeout=600, check=False,
+    )
+    assert not witness.exists(), "a module from the working directory ran"
+    assert done.returncode == 0, done.stderr
+    assert os.readlink(runtime / "current") == ctl_runtime.lock_digest(str(host.tools))
+
+
+def test_lib_cli_ignores_a_lib_package_in_the_working_directory(host, tmp_path):
+    witness = tmp_path / "planted-ran"
+    _plant(host.root, "lib.cli", witness)
+    try:
+        done = host.ctl("pairing", "list", f"--config-dir={host.config}")
+        assert not witness.exists(), "lib/cli.py of the working directory ran"
+        assert done.returncode == 0, done.stderr
+        done = _harness(host, f'ctl_runtime_require; _py_cli_at "{host.repo}" '
+                              "pairing-list >/dev/null\n")
+        assert not witness.exists(), "lib/cli.py of the working directory ran (_py_cli_at)"
+        assert done.returncode == 0, done.stderr
+    finally:
+        shutil.rmtree(host.root / "lib")
+
+
+# --- the base interpreter -------------------------------------------------------------------
+
+
+def test_the_environment_records_its_base_interpreter_and_standard_library(host):
+    env = host.runtime / host.current()
+    paths = ctl_runtime.base_paths(str(env))
+    assert os.path.realpath(env / "bin" / "python") in paths
+    assert any(os.path.isfile(os.path.join(p, "os.py")) for p in paths)
+
+
+def test_a_group_writable_standard_library_of_the_base_is_refused(host, tmp_path):
+    env = host.runtime / host.current()
+    record = env / ctl_runtime.BASE_PATHS
+    text = record.read_text()
+    stdlib = tmp_path / "stdlib"
+    stdlib.mkdir()
+    (stdlib / "os.py").write_text("")
+    (stdlib / "os.py").chmod(0o664)
+    try:
+        record.write_text(text + f"{stdlib}\n")
+        done = host.ctl("pairing", "list", f"--config-dir={host.config}")
+        assert done.returncode == 2
+        assert f"{stdlib}/os.py is group- or world-writable" in done.stderr
+        result = _doctor(host.repo, host.config)
+        assert result.status == doctor.FAIL
+        assert "group- or world-writable" in result.summary
+    finally:
+        record.write_text(text)
+    assert host.ctl("pairing", "list", f"--config-dir={host.config}").returncode == 0
+
+
 # --- hashes ------------------------------------------------------------------------------
 
 
@@ -235,6 +365,14 @@ def test_a_group_writable_environment_is_refused(host, target):
     assert host.ctl("pairing", "list", f"--config-dir={host.config}").returncode == 0
 
 
+def _running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def test_an_interrupted_build_leaves_the_previous_environment_usable(host):
     lock = host.tools / "runtime.lock"
     text = lock.read_text()
@@ -252,16 +390,24 @@ def test_an_interrupted_build_leaves_the_previous_environment_usable(host):
             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            builds = list(host.runtime.glob(".build-*/bin/pip"))
-            if builds:
-                break
-            time.sleep(0.2)
-        assert builds, "the build did not start"
-        time.sleep(1)  # pip is waiting for the index now
+        # pip connects to the index that never answers: the build is under way, and
+        # the connection is the signal (no fixed sleep that load can outrun).
+        silent.settimeout(300)
+        try:
+            waiting, _ = silent.accept()
+        except TimeoutError:
+            pytest.fail("pip never asked the index")
+        builds = list(host.runtime.glob(".build-*"))
+        assert builds, "pip ran outside a build directory"
+        builder = int(builds[0].name.rsplit("-", 1)[-1])
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait(timeout=30)
+        waiting.close()
+        # The builder is gone (not only signalled) before the next setup sweeps.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and _running(builder):
+            time.sleep(0.1)
+        assert not _running(builder)
     finally:
         silent.close()
         lock.write_text(text)
@@ -358,3 +504,56 @@ def test_doctor_reports_the_environment(host, tmp_path):
     result = _doctor(missing, host.config)
     assert result.status == doctor.FAIL
     assert "missing" in result.summary
+
+
+# --- upgrade --finalize: prune -------------------------------------------------------------
+
+
+def _release_repo(root: Path, lock: bytes, *, tag: bool) -> Path:
+    repo = root / "papaia"
+    (repo / "tools").mkdir(parents=True)
+    (repo / "tools" / "runtime.lock").write_bytes(lock)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.org"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "release"], check=True)
+    if tag:
+        subprocess.run([*git, "tag", "v1.9.0"], check=True)
+    return repo
+
+
+def _prune(tmp_path: Path, *, tag: bool,
+           capsys) -> tuple[Path, list[str], str, tuple[str, str, str]]:
+    from lib import cli
+
+    old_lock = b"pyyaml==6.0.3 --hash=sha256:" + b"0" * 64 + b"\n"
+    repo = _release_repo(tmp_path, old_lock, tag=tag)
+    runtime = repo / "tools" / ".runtime"
+    old, new, other = hashlib.sha256(old_lock).hexdigest(), "b" * 64, "c" * 64
+    for name in (old, new, other):
+        (runtime / name).mkdir(parents=True)
+    (runtime / "current").symlink_to(new)
+    config, backups = tmp_path / "papaia-config", tmp_path / "backups"
+    config.mkdir()
+    backups.mkdir()
+    (config / ".env").write_text(f"PAPAIA_BACKUP_DIR={backups}\n")
+    (backups / "backup.yaml").write_text(
+        "version: 1\nbackups:\n  - id: r0\n    papaia_version: 1.9.0\n")
+    capsys.readouterr()
+    rc = cli.cmd_ctl_runtime_prune(argparse.Namespace(repo_root=str(repo),
+                                                      config_dir=str(config)))
+    assert rc == 0
+    left = sorted(p.name for p in runtime.iterdir() if p.name != "current")
+    return runtime, left, capsys.readouterr().err, (old, new, other)
+
+
+def test_prune_keeps_the_environment_a_restore_point_needs(tmp_path, capsys):
+    _, left, _, (old, new, other) = _prune(tmp_path, tag=True, capsys=capsys)
+    assert left == sorted([old, new])
+
+
+def test_prune_removes_nothing_when_a_release_tag_is_missing(tmp_path, capsys):
+    _, left, err, (old, new, other) = _prune(tmp_path, tag=False, capsys=capsys)
+    assert left == sorted([old, new, other])
+    assert "v1.9.0" in err
+    assert "git fetch --tags" in err

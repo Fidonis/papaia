@@ -65,7 +65,7 @@ _py_cli_at() {
     local root="$1"; shift
     ctl_runtime_at "$root" || return 2
     PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
-        "$CTL_RUNTIME_AT_PYTHON" -m lib.cli --repo-root "$root" --config-dir "$CONFIG_DIR" "$@"
+        "$CTL_RUNTIME_AT_PYTHON" -P -m lib.cli --repo-root "$root" --config-dir "$CONFIG_DIR" "$@"
 }
 
 # Print the pending migrations of a core tree as indented lines. Returns 1 when
