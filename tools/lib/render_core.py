@@ -267,6 +267,22 @@ def render(config_dir: Path, repo_root: Path) -> None:
             logger.warning("%s", warning)
 
 
+class _QuotedStrings(yaml.SafeDumper):
+    """Writes every string double-quoted and leaves booleans and numbers alone. safe_dump
+    leaves some number-like hashes plain, and Compose reads those as floats (`0e17...`
+    becomes "0"), which would let two different labels compare equal."""
+
+
+_QuotedStrings.add_representer(
+    str, lambda dumper, value: dumper.represent_scalar("tag:yaml.org,2002:str", value, style='"')
+)
+
+
+def _dump_override(override: dict) -> str:
+    """A generated Compose override whose labels carry a hash or a random value."""
+    return yaml.dump(override, Dumper=_QuotedStrings, sort_keys=False, default_flow_style=False)
+
+
 # LiteLLM reads its configuration, a bind mount, only when it starts, and a changed file
 # leaves the service's Compose hash as it was. The override labels the service with a hash
 # of the rendered file, so `start` recreates LiteLLM when the configuration changes (a
@@ -291,12 +307,7 @@ def render_litellm_config_label(config_dir: Path) -> None:
             }
         }
     }
-    # Quoted throughout: safe_dump leaves some number-like hashes plain, and Compose reads
-    # those as floats (`0e12...` becomes "0").
-    common.atomic_write(
-        override_path,
-        yaml.safe_dump(override, sort_keys=False, default_flow_style=False, default_style='"'),
-    )
+    common.atomic_write(override_path, _dump_override(override))
 
 
 # Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under
@@ -406,9 +417,7 @@ def render_librechat_addon_content(config_dir: Path, repo_root: Path) -> list[st
             }
         }
     }
-    common.atomic_write(
-        override_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
-    )
+    common.atomic_write(override_path, _dump_override(override))
     return warnings
 
 
@@ -642,10 +651,7 @@ def _remove_stale_model_files(repo_root: Path, config_dir: Path) -> None:
     override = {
         "services": {"localai": {"labels": {"org.papaia.models-removed": uuid.uuid4().hex[:16]}}}
     }
-    common.atomic_write(
-        config_dir / LOCALAI_MODELS_OVERRIDE,
-        yaml.safe_dump(override, sort_keys=False, default_flow_style=False),
-    )
+    common.atomic_write(config_dir / LOCALAI_MODELS_OVERRIDE, _dump_override(override))
     for path in stale:
         path.unlink()
         logger.info("removed %s/%s: no longer in the overlay", LOCALAI_MODELS_DIR, path.name)
