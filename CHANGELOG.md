@@ -379,6 +379,14 @@ Descriptions replaced by `exposes:` in this release (no parallel operation):
 - Free tool names in `knowledge.sources[].access[].key_tools` of a module that declares
   `exposes`: they must be operation names of its `exposes`; `addon check` refuses others.
 
+### Fixed
+
+- `papaia-chat-relay` is pinned again to the digest its source builds to
+  (`sha256:28cc8410…`, two clean builds give the same digest); the compose file still
+  pinned a build from before the last change to `src/infra/chat-relay/`, so an
+  installation ran an image that did not match its source and the own-images check
+  failed. No other pin changes.
+
 ## [1.10.0-rc.1] - 2026-11-23
 
 Release candidate of 1.10.0 (suite 1.10.0). It is not published: its images are served
