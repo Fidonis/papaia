@@ -1437,6 +1437,10 @@ posture:
   On an Apple Silicon Mac, LocalAI can run as a host process on the Apple GPU instead of a
   container ([ADR 0012](adr/0012-serve-local-inference-on-apple-silicon-through-a-native-localai.md));
   it is still reached only through LiteLLM.
+  Every model route carries the highest data class it may receive (default `internal`,
+  a hosted test model never above it); the catalog publishes it, modules refuse content
+  above it, and LiteLLM refuses a module request above it before any backend call
+  ([ADR 0031](adr/0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md)).
   The optional voice engines (profile `voice`) process audio locally and sit behind
   the same point; their one outbound exception is the first-start model download
   from huggingface.co (telemetry disabled), documented in the README.

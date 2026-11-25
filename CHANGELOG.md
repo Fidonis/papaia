@@ -12,6 +12,18 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Decision: data class of a model route
+
+- ADR 0031 decides that every model route carries the highest data class it may receive
+  (from the overlay, else `PAPAIA_MODEL_MAX_CLASS`, else `internal`; a hosted test model
+  never above `internal`), that the platform catalog publishes it in its `models` block, and
+  that the model gateway refuses a module request above the route or above the module's
+  declared class before any backend call (`403 class_exceeded`, `400 invalid_data_class`,
+  `503 route_class_unknown` when route data is missing), with one audit row per refusal.
+  Module keys reach only the model call routes the gateway judges; keys made before the
+  check are replaced at the next start. Route classes and the gateway check are not
+  implemented yet.
+
 ### Decision: tool servers outside the suite in the chat
 
 - ADR 0029 decides how a tool server outside the suite (`trust: addon`) reaches the chat:

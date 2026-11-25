@@ -82,6 +82,21 @@ reports that the keys could not be checked.
 
 LibreChat still calls with the master key; a key of its own is planned.
 
+## Data class of a route
+
+Each alias carries the highest data class its route may receive, on the kit scale:
+`internal` unless the operator sets `model_info.papaia_max_class` in the overlay or
+`PAPAIA_MODEL_MAX_CLASS` in the root `.env`, and never above `internal` for a hosted test
+model. The catalog lists the class in its `models` block; the gateway refuses a module
+request above it with `403 class_exceeded` before any backend call, and refuses every
+module request when the route data is missing (`503 route_class_unknown`). A module key
+reaches only the model call routes the gateway judges and the model listing; every other
+route is refused for it. The decision, with the header `x-papaia-data-class`, the audit
+row, the replacement of older keys and the remaining risks, is
+[ADR 0031](adr/0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md).
+It is not implemented yet: the `models` block is still empty and the gateway judges no
+class.
+
 ## Revocation and the erasure journal
 
 `papaia-ctl addon uninstall <name>` revokes the module key, and so does every replacement.
