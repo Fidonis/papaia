@@ -53,8 +53,8 @@ based on merged pull requests; this file mirrors the published releases.
   --require-hashes --no-deps --only-binary=:all:`), after checking the kit wheel against
   `kit.lock`, and switch the link `tools/.runtime/current` only once it imports. Every
   other command runs `tools/.runtime/current/bin/python` by absolute path and stops with
-  one line naming `papaia-ctl setup` when the environment, or the base interpreter and
-  standard library it runs on, is missing, stale, group- or world-writable, or owned by
+  one line naming `papaia-ctl setup` when the environment, or the base interpreter,
+  standard library and shared Python library it runs on, is missing, stale, group- or world-writable, or owned by
   another account than root or the owner of `tools/`. On a checkout without an
   environment, `hostnames`, `doctor` and `restore` build it as `setup` does, so the
   documented fresh installation and the restore after the loss of the host need no

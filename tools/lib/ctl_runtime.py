@@ -36,8 +36,11 @@ RUNTIME_NAME = ".runtime"
 CURRENT = "current"
 MARKER = "papaia-ctl-runtime.json"
 # The base the environment runs on, one absolute path per line: the interpreter bin/python
-# resolves to and the base's standard library (pyvenv.cfg `home` takes it from there). The
-# environment's own tree, and these, must be owned by root or the owner of tools/.
+# resolves to, the base's standard library (pyvenv.cfg `home` takes it from there) and, for a
+# shared or framework build, the library that interpreter loads. The environment's own tree,
+# and these, must be owned by root or the owner of tools/. Their parent directories and the
+# dynamic loader's other libraries are not checked (a system or package-manager Python keeps
+# them root-owned).
 BASE_PATHS = "papaia-ctl-base"
 # Third-party packages of the base are not on the environment's path.
 _BASE_SKIPPED = ("site-packages", "dist-packages")
@@ -220,8 +223,29 @@ def _unsafe_one(path: str, owners: set[int]) -> str | None:
     return None
 
 
+def base_shared_library() -> str | None:
+    """The shared library the base interpreter loads, if it is a shared build: the
+    framework binary of a macOS framework build (bin/python3 only execs it) or
+    LIBDIR/libpython of a --enable-shared build. None for a static build."""
+    get = sysconfig.get_config_var
+    candidates = []
+    if get("PYTHONFRAMEWORK"):
+        candidates.append(os.path.join(get("PYTHONFRAMEWORKPREFIX") or "",
+                                       get("PYTHONFRAMEWORKDIR") or "", "Versions",
+                                       get("VERSION") or "", get("PYTHONFRAMEWORK")))
+    if get("Py_ENABLE_SHARED"):
+        for name in (get("INSTSONAME"), get("LDLIBRARY")):
+            if name:
+                candidates.append(os.path.join(get("LIBDIR") or "", name))
+    for candidate in candidates:
+        if os.path.isabs(candidate) and os.path.isfile(candidate):
+            return os.path.realpath(candidate)
+    return None
+
+
 def base_paths(env: str) -> list[str]:
-    """The base interpreter and standard library the environment `env` runs on."""
+    """The base interpreter, standard library and (shared builds) library the environment
+    `env` runs on."""
     try:
         with open(os.path.join(env, BASE_PATHS), encoding="utf-8") as handle:
             lines = handle.read().splitlines()
@@ -427,6 +451,9 @@ def _create(path: str, tools: str, digest: str, log) -> None:
             "PIP_FIND_LINKS (a wheel directory)"
         )
     base = [os.path.realpath(env_python(path)), os.path.realpath(sysconfig.get_path("stdlib"))]
+    shared = base_shared_library()
+    if shared:
+        base.append(shared)
     with open(os.path.join(path, BASE_PATHS), "w", encoding="utf-8") as handle:
         handle.write("".join(f"{line}\n" for line in base))
     marker = {

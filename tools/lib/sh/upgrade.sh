@@ -915,7 +915,7 @@ _upgrade_failed() {
             error "  node $node: gets $from again with the restore, or on its own with"
             error "    papaia-ctl node sync $node --checkout --config-dir=$CONFIG_DIR"
         done < <(py_cli node-list --json 2>/dev/null \
-            | "$PYTHON_BIN" -c 'import json,sys; [print(r["name"]) for r in json.load(sys.stdin) if not r["controller"]]' 2>/dev/null || true)
+            | "$PYTHON_BIN" -I -c 'import json,sys; [print(r["name"]) for r in json.load(sys.stdin) if not r["controller"]]' 2>/dev/null || true)
         error "  The upgrade lock stays until 'upgrade' finishes or the restore puts the"
         error "  configuration back."
     fi

@@ -235,7 +235,7 @@ _node_check() {
     CONFIG_DIR="$config_dir"
     _node_require_distributed
     local controller
-    controller="$(py_cli topology-show --json | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["controller"])')"
+    controller="$(py_cli topology-show --json | "$PYTHON_BIN" -I -c 'import json,sys; print(json.load(sys.stdin)["controller"])')"
     if [ "$name" != "${controller%$'\r'}" ]; then
         _node_pin_host_key "$name" "$fingerprint" "$assume_yes"
     fi

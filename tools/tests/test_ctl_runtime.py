@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -242,6 +243,51 @@ def test_lib_cli_ignores_a_lib_package_in_the_working_directory(host, tmp_path):
         shutil.rmtree(host.root / "lib")
 
 
+def test_the_shell_steps_ignore_a_json_and_yaml_module_in_the_working_directory(host,
+                                                                                  tmp_path):
+    # `node check` reads the controller and the node-shell preflight probes PyYAML with the
+    # interpreter that runs as root; the caller's working directory is host.root.
+    witness = tmp_path / "planted-ran"
+    _plant(host.root, "json", witness)
+    _plant(host.root, "yaml", witness)
+    try:
+        done = _harness(host, 'source "$REPO_ROOT/tools/lib/sh/node.sh"\n'
+                              "DEFAULT_CONFIG_DIR=\"$CONFIG_DIR\"\n"
+                              "ctl_runtime_require\n"
+                              "_node_require_distributed() { :; }\n"
+                              "_node_pin_host_key() { echo pinned \"$1\"; }\n"
+                              "py_cli() { [ \"$1\" = topology-show ] && "
+                              "echo '{\"controller\": \"ctrl\"}' || echo \"cli $*\"; }\n"
+                              "_node_check worker\n")
+        assert not witness.exists(), "json.py of the working directory ran (node check)"
+        assert done.returncode == 0, done.stderr
+        assert "pinned worker" in done.stdout
+        done = _harness(host, "ctl_runtime_preflight node-shell\n")
+        assert not witness.exists(), "yaml.py of the working directory ran (node-shell)"
+    finally:
+        (host.root / "json.py").unlink()
+        (host.root / "yaml.py").unlink()
+
+
+# Every inline or module run of an interpreter in papaia-ctl and its shell library keeps the
+# caller's working directory off sys.path: -I (isolated) or -P before -c / -m.
+_INTERPRETER_RUN = re.compile(r'"\$\{?(\w*PYTHON\w*|python|link/bin/python)\}?"((?:\s+-\w+)*)'
+                              r"\s+-[cm]\b")
+
+
+def test_no_shell_step_runs_python_inline_without_isolation():
+    tools = Path(__file__).resolve().parent.parent
+    scripts = [tools / "papaia-ctl", *sorted((tools / "lib" / "sh").glob("*.sh"))]
+    loose = []
+    for script in scripts:
+        for number, line in enumerate(script.read_text().splitlines(), start=1):
+            for match in _INTERPRETER_RUN.finditer(line):
+                flags = match.group(2).split()
+                if "-I" not in flags and "-P" not in flags:
+                    loose.append(f"{script.relative_to(tools)}:{number}: {line.strip()}")
+    assert not loose, "\n".join(loose)
+
+
 # --- the base interpreter -------------------------------------------------------------------
 
 
@@ -250,6 +296,45 @@ def test_the_environment_records_its_base_interpreter_and_standard_library(host)
     paths = ctl_runtime.base_paths(str(env))
     assert os.path.realpath(env / "bin" / "python") in paths
     assert any(os.path.isfile(os.path.join(p, "os.py")) for p in paths)
+    # A shared build also records the library its interpreter loads (the same base runs
+    # this test: host.bare is a venv of sys.executable).
+    shared = ctl_runtime.base_shared_library()
+    if shared:
+        assert shared in paths
+
+
+@pytest.mark.parametrize(("config", "expected"), [
+    ({"PYTHONFRAMEWORK": "Python", "PYTHONFRAMEWORKPREFIX": "@ROOT@/Library/Frameworks",
+      "PYTHONFRAMEWORKDIR": "Python.framework", "VERSION": "3.13", "Py_ENABLE_SHARED": 0},
+     "Library/Frameworks/Python.framework/Versions/3.13/Python"),
+    ({"PYTHONFRAMEWORK": "", "Py_ENABLE_SHARED": 1, "LIBDIR": "@ROOT@/lib",
+      "INSTSONAME": "libpython3.13.so.1.0", "LDLIBRARY": "libpython3.13.so"},
+     "lib/libpython3.13.so.1.0"),
+    ({"PYTHONFRAMEWORK": "", "Py_ENABLE_SHARED": 0, "LIBDIR": "@ROOT@/lib",
+      "LDLIBRARY": "libpython3.13.a"}, None),
+])
+def test_the_shared_library_of_the_base_is_found_for_framework_and_shared_builds(
+        monkeypatch, tmp_path, config, expected):
+    for rel in ("Library/Frameworks/Python.framework/Versions/3.13/Python",
+                "lib/libpython3.13.so.1.0", "lib/libpython3.13.a"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("")
+    values = {k: (v.replace("@ROOT@", str(tmp_path)) if isinstance(v, str) else v)
+              for k, v in config.items()}
+    monkeypatch.setattr(ctl_runtime.sysconfig, "get_config_var", values.get)
+    found = ctl_runtime.base_shared_library()
+    assert found == (os.path.realpath(tmp_path / expected) if expected else None)
+
+
+def test_a_group_writable_shared_library_of_the_base_is_refused(tmp_path):
+    env = tmp_path / "env"
+    env.mkdir()
+    library = tmp_path / "libpython3.13.so.1.0"
+    library.write_text("")
+    library.chmod(0o664)
+    (env / ctl_runtime.BASE_PATHS).write_text(f"{library}\n")
+    problem = ctl_runtime.unsafe_base(str(env), {os.getuid()})
+    assert problem == f"{library} is group- or world-writable"
 
 
 def test_a_group_writable_standard_library_of_the_base_is_refused(host, tmp_path):

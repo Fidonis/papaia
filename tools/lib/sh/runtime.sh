@@ -193,7 +193,9 @@ ctl_runtime_preflight() {
         hostnames|doctor|restore) ctl_runtime_bootstrap ;;
         node-shell)
             find_python || exit 2
-            if ! "$PYTHON_BIN" -c 'import yaml' >/dev/null 2>&1; then
+            # -P as in the node-shell run itself: a yaml.py in the caller's working
+            # directory is not what is probed.
+            if ! "$PYTHON_BIN" -P -c 'import yaml' >/dev/null 2>&1; then
                 error "Python module 'yaml' (PyYAML) not found for '$PYTHON_BIN' on this node:"
                 error "  Debian/Ubuntu: sudo apt-get install -y python3-yaml"
                 exit 2
