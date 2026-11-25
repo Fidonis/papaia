@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import hang_guard
 import pytest
 import yaml
 
@@ -205,7 +206,7 @@ def _run(
     clone["log"].touch()
     return subprocess.run(
         [BASH, str(clone["harness"]), *args], capture_output=True, text=True, input=stdin,
-        timeout=180, env=env,
+        timeout=hang_guard.seconds(), env=env,
     )
 
 
@@ -338,6 +339,7 @@ def _doctor(clone: dict) -> dict:
         [sys.executable, "-m", "lib.cli", "--repo-root", str(clone["repo"]), "--config-dir",
          str(clone["config"]), "doctor", "rollback_window", "--json"],
         capture_output=True, text=True, cwd=TOOLS, env={**os.environ, "PYTHONPATH": str(TOOLS)},
+        timeout=hang_guard.seconds(),
     )
     (check,) = json.loads(out.stdout)["checks"]
     return check
@@ -544,7 +546,7 @@ def test_the_late_git_is_killed_by_sigpipe_behind_an_early_reader(clone: dict):
         [BASH, "-c", f'set -o pipefail; git -C "{clone["repo"]}" show '
                      f'"{_tag(clone, "1.10.0")}:tools/lib/sh/upgrade.sh" '
                      "| grep -q '^cmd_rollback()'"],
-        capture_output=True, env=env, check=False, timeout=60,
+        capture_output=True, env=env, check=False, timeout=hang_guard.seconds(),
     )
     assert piped.returncode == 141
 

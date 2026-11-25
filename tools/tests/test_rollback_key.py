@@ -163,9 +163,11 @@ def test_a_shorter_window_ends_earlier(config: Path):
 
 def test_a_key_of_a_run_that_never_began_goes_but_not_while_it_is_being_made(config: Path):
     upgrade_id, _ = rollback_key.create(config)
-    later = time.time() + rollback_key.ORPHAN_SECONDS + 1
+    # The clock is the key's own age, not the host's: a slow run cannot cross the window.
+    made = rollback_key.key_path(config, upgrade_id).stat().st_mtime
+    later = made + rollback_key.ORPHAN_SECONDS + 1
     assert rollback_key.sweep(config, None, keep=upgrade_id, now=later) == []
-    assert rollback_key.sweep(config, None, now=time.time()) == []
+    assert rollback_key.sweep(config, None, now=made + rollback_key.ORPHAN_SECONDS - 1) == []
     assert rollback_key.discard_unbegun(config, upgrade_id, None) is True
     other, _ = rollback_key.create(config)
     _begin(config, other)

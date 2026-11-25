@@ -91,6 +91,19 @@ The golden snapshot (`tools/tests/test_golden_single_node.py`) compares `docker 
 
 The core's own images (`compat/own-images.yaml`) are pinned by the digest their inputs build to. A change to one of their declared inputs (Dockerfile, program, notice file), to `LICENSE` or to `VERSION` therefore needs a rebuild and a new pin in the same pull request: commit the change, then `tools/build-images build --registry=<prefix of a test registry> --out=builds.json` and `tools/build-images pin --builds=builds.json`, and commit the pins (see [`docs/compatibility.md`](docs/compatibility.md#own-images-of-the-core)). `tools/build-images check` runs without Docker.
 
+### Load runs
+
+A test that starts real processes must not pass or fail because the host is slow. Its subprocesses and waits share one deadline, `tools/tests/hang_guard.py` (900 s by default), which only stops a hang and never decides a pass; raise it on a slow host with `PAPAIA_TEST_HANG_GUARD_SECONDS` (above 0, at most 14400). With `PAPAIA_REQUIRE_OWN_IMAGE_BUILD=1`, a Docker probe of `tests/test_own_images_registry.py` that runs out of this deadline fails with its measured duration instead of skipping.
+
+To check a test under load, run it next to the CPU-burn helper (from `tools/`):
+
+    nice -n 19 python3 tests/helpers/cpu_burn.py --seconds=1500 &
+    PAPAIA_REQUIRE_OWN_IMAGE_BUILD=1 uv run --locked --extra dev --with pytest-xdist==3.6.1 \
+        python -m pytest -n auto -q -rfEs tests/test_rollback_cli.py tests/test_rollback_key.py \
+        tests/test_own_images_registry.py
+
+The helper keeps at most half of the cores busy (`os.cpu_count() // 2`, at least 1; that is also its default), runs every process at niceness 19, stops after `--seconds` (at most 1800, 30 minutes) and stops its processes on exit, SIGINT and SIGTERM. Repeat the test run (for example 20 times) while the helper runs; start a new helper for a longer series.
+
 ### Repository checks
 
 Six more CI jobs guard every pull request. They use the platform's shared contract package `papaia-kit`, vendored as its release wheel under `tools/vendor/papaia-kit/<version>/` and pinned by sha256 in `tools/kit.lock` and `tools/uv.lock`; it is a development dependency only (Python 3.12) and never part of `papaia-ctl` or an image.

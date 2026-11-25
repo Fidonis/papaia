@@ -16,7 +16,10 @@ file pins: a change to an input without a new pin fails here.
 
 Needs Docker with a buildx builder that builds both platforms at once (the docker
 driver with the containerd image store, or a docker-container builder) and network
-access for the base images; skipped otherwise, unless PAPAIA_REQUIRE_OWN_IMAGE_BUILD=1.
+access for the base images; skipped otherwise, unless PAPAIA_REQUIRE_OWN_IMAGE_BUILD=1,
+which turns every such skip into a failure. The docker probes, the commands and the wait
+for the registry share one deadline (`hang_guard`, PAPAIA_TEST_HANG_GUARD_SECONDS); a
+probe that runs out of it is reported with its measured duration.
 PAPAIA_OWN_IMAGES_TEST_PROJECT names the containers (default papaia-own-images-test),
 PAPAIA_OWN_IMAGES_TEST_PORT the registry port (default: a free port).
 """
@@ -27,12 +30,14 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
 
+import hang_guard
 import pytest
 import yaml
 from test_images import _bom, _new_keypair, _sign_bytes
@@ -54,39 +59,64 @@ INDEX_TYPES = (
 )
 
 
-def _docker_available() -> bool:
-    if shutil.which("docker") is None:
-        return False
+def _required() -> bool:
+    return os.environ.get("PAPAIA_REQUIRE_OWN_IMAGE_BUILD") == "1"
+
+
+def _unavailable(reason: str) -> None:
+    """Skip without the build, fail loudly when the build is required."""
+    if _required():
+        pytest.fail(f"{reason} (PAPAIA_REQUIRE_OWN_IMAGE_BUILD=1)", pytrace=False)
+    pytest.skip(reason)
+
+
+def _probe(*args: str) -> subprocess.CompletedProcess:
+    """Run a docker probe under the hang guard. A probe that runs out of time is reported
+    with its measured duration: a slow host is no reason to skip quietly."""
+    limit = hang_guard.seconds()
+    started = time.monotonic()
+    proc = subprocess.Popen(list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
     try:
-        done = subprocess.run(["docker", "buildx", "version"], capture_output=True,
-                              timeout=20, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return done.returncode == 0
+        out, err = proc.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        _unavailable(f"'{' '.join(args)}' did not answer within {limit:g} s (measured "
+                     f"{time.monotonic() - started:.1f} s); on a slow host raise "
+                     f"{hang_guard.ENV}")
+    return subprocess.CompletedProcess(list(args), proc.returncode, out, err)
+
+
+def _docker_available() -> None:
+    if shutil.which("docker") is None:
+        _unavailable("Docker is not installed")
+    if _probe("docker", "buildx", "version").returncode != 0:
+        _unavailable("Docker buildx is not available")
 
 
 def _multi_platform() -> bool:
     """Whether the current builder can build and push an index of two platforms: the
     docker driver only with the containerd image store, other drivers always."""
-    inspect = subprocess.run(["docker", "buildx", "inspect"], capture_output=True, text=True,
-                             timeout=30, check=False)
+    inspect = _probe("docker", "buildx", "inspect")
     if inspect.returncode != 0:
         return False
     driver = next((line.split(":", 1)[1].strip() for line in inspect.stdout.splitlines()
                    if line.startswith("Driver:")), "")
     if driver != "docker":
         return True
-    info = subprocess.run(["docker", "info", "--format", "{{json .DriverStatus}}"],
-                          capture_output=True, text=True, timeout=30, check=False)
+    info = _probe("docker", "info", "--format", "{{json .DriverStatus}}")
     return "io.containerd.snapshotter" in info.stdout
 
 
-pytestmark = pytest.mark.skipif(not _docker_available(), reason="Docker buildx is not available")
+@pytest.fixture(scope="module")
+def docker_buildx() -> None:
+    _docker_available()
 
 
 def _run(*args: str, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(list(args), capture_output=True, text=True, env=env, timeout=900,
-                          check=check)
+    return subprocess.run(list(args), capture_output=True, text=True, env=env,
+                          timeout=hang_guard.seconds(), check=check)
 
 
 def _free_port() -> int:
@@ -95,23 +125,38 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _wait_for_registry(name: str, port: int) -> None:
+    """Wait until the registry answers /v2/, under one overall deadline (the hang guard);
+    a container that stopped fails at once, with its log."""
+    limit = hang_guard.seconds()
+    started = time.monotonic()
+    while True:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/v2/", timeout=5).close()
+            return
+        except OSError:
+            pass
+        state = _run("docker", "inspect", "--format", "{{.State.Status}}", name, check=False)
+        if state.returncode != 0 or state.stdout.strip() in ("exited", "dead"):
+            logs = _run("docker", "logs", "--tail", "20", name, check=False)
+            pytest.fail(f"the test registry stopped ({state.stdout.strip() or 'gone'}):\n"
+                        f"{logs.stdout}{logs.stderr}")
+        if time.monotonic() - started >= limit:
+            pytest.fail(f"the test registry did not answer /v2/ within {limit:g} s; on a "
+                        f"slow host raise {hang_guard.ENV}")
+        time.sleep(0.5)
+
+
 @pytest.fixture
-def registry():
+def registry(docker_buildx):
     port = int(os.environ.get("PAPAIA_OWN_IMAGES_TEST_PORT") or _free_port())
     name = f"{PROJECT}-registry"
     _run("docker", "rm", "-f", "-v", name, check=False)
-    _run("docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:5000",
-         "--read-only", "--tmpfs", "/var/lib/registry", "--cap-drop", "ALL",
-         "--security-opt", "no-new-privileges:true", REGISTRY_IMAGE)
     try:
-        for _ in range(60):
-            try:
-                urllib.request.urlopen(f"http://127.0.0.1:{port}/v2/", timeout=2).close()
-                break
-            except OSError:
-                time.sleep(0.5)
-        else:
-            pytest.fail("the test registry did not start")
+        _run("docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:5000",
+             "--read-only", "--tmpfs", "/var/lib/registry", "--cap-drop", "ALL",
+             "--security-opt", "no-new-privileges:true", REGISTRY_IMAGE)
+        _wait_for_registry(name, port)
         yield f"127.0.0.1:{port}/unpublished/"
     finally:
         _run("docker", "rm", "-f", "-v", name, check=False)
@@ -174,12 +219,10 @@ def _verify(root: Path, config: Path, refs: list[str]) -> int:
 
 
 @pytest.fixture
-def builder():
+def builder(docker_buildx):
     if not _multi_platform():
-        if os.environ.get("PAPAIA_REQUIRE_OWN_IMAGE_BUILD") == "1":
-            pytest.fail("the buildx builder cannot build linux/amd64 and linux/arm64 together")
-        pytest.skip("the buildx builder cannot build linux/amd64 and linux/arm64 together "
-                    "(docker driver without the containerd image store)")
+        _unavailable("the buildx builder cannot build linux/amd64 and linux/arm64 together "
+                     "(docker driver without the containerd image store)")
 
 
 def test_own_images_round_trip_through_a_registry(
@@ -277,3 +320,54 @@ def test_own_images_round_trip_through_a_registry(
         _run("docker", "image", "rm", served, check=False)
     assert shown[0] != "0"
     assert {"LICENSE", "THIRD_PARTY_LICENSES.md", "Python-2.0.txt"} <= set(shown)
+
+
+# ── the docker probes on a slow host ─────────────────────────────────────────
+
+
+def _slow_docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `docker` on PATH that answers nothing for a minute."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "docker"
+    fake.write_text("#!/bin/sh\nexec sleep 60\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_a_probe_out_of_time_fails_loudly_when_the_build_is_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _slow_docker(tmp_path, monkeypatch)
+    monkeypatch.setenv(hang_guard.ENV, "0.5")
+    monkeypatch.setenv("PAPAIA_REQUIRE_OWN_IMAGE_BUILD", "1")
+    started = time.monotonic()
+    with pytest.raises(pytest.fail.Exception) as failed:
+        _docker_available()
+    assert time.monotonic() - started < 30
+    message = str(failed.value)
+    assert "'docker buildx version' did not answer within 0.5 s" in message
+    assert "measured " in message and hang_guard.ENV in message
+    with pytest.raises(pytest.fail.Exception, match="'docker buildx inspect' did not answer"):
+        _multi_platform()
+
+
+def test_a_probe_out_of_time_skips_with_its_duration_when_the_build_is_optional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _slow_docker(tmp_path, monkeypatch)
+    monkeypatch.setenv(hang_guard.ENV, "0.5")
+    monkeypatch.delenv("PAPAIA_REQUIRE_OWN_IMAGE_BUILD", raising=False)
+    with pytest.raises(pytest.skip.Exception, match=r"did not answer within 0\.5 s \(measured"):
+        _docker_available()
+
+
+def test_the_probes_wait_as_long_as_the_hang_guard(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv(hang_guard.ENV, raising=False)
+    assert hang_guard.seconds() == hang_guard.DEFAULT_SECONDS >= 300
+    monkeypatch.setenv(hang_guard.ENV, "1200")
+    assert hang_guard.seconds() == 1200
+    for bad in ("0", "-5", "nan", "inf", "soon", str(hang_guard.MAX_SECONDS + 1)):
+        monkeypatch.setenv(hang_guard.ENV, bad)
+        with pytest.raises(ValueError, match=hang_guard.ENV):
+            hang_guard.seconds()
