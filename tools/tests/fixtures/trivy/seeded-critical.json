@@ -15,6 +15,14 @@
           "FixedVersion": "1.0.0-2",
           "Severity": "CRITICAL",
           "Title": "Seeded finding: the scan job must fail on it"
+        },
+        {
+          "VulnerabilityID": "CVE-2099-0002",
+          "PkgName": "seeded-high-package",
+          "InstalledVersion": "2.0.0-1",
+          "FixedVersion": "2.0.0-2",
+          "Severity": "HIGH",
+          "Title": "Seeded finding with a fix: the scan job must fail on it"
         }
       ]
     }

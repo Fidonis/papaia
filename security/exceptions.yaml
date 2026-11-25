@@ -1,19 +1,35 @@
-# Accepted vulnerability findings of the core's own images (tools/scan-images,
-# lib/image_scan.py; CI workflow images.yml).
+# Accepted vulnerability findings of the core's images (tools/scan-images,
+# lib/image_scan.py; CI workflow images.yml). The rule, the report and the monthly
+# review: docs/compatibility.md, section "Image scan rule".
 #
-# A CRITICAL finding always fails the scan: no entry can except it. A HIGH finding
-# passes only with an unexpired entry here; an expired entry fails the scan on its
-# own. Unknown fields, duplicates and dates more than 90 days ahead are refused.
+# A CRITICAL or HIGH finding with a fix fails the scan unless an entry below covers
+# it. A finding without a fix passes and is reported (no-fix.txt); it gets no entry,
+# and an entry that only covers such findings fails the scan. An expired entry fails
+# on its own. Unknown fields and duplicates are refused; an entry whose approved_by
+# still says pending waives nothing.
 #
-# Entry format:
+# Own image (HIGH only; a CRITICAL finding with a fix is never excepted):
 #
 #   - id: CVE-2026-12345           # CVE or GHSA id as Trivy reports it
 #     package: libexample          # package or source package as Trivy reports it
-#     severity: HIGH               # the only severity an entry may name
-#     reason: >-                   # 20 to 1000 characters: why the finding cannot
-#       ...                        # be reached here or why no fix exists yet
+#     severity: HIGH               # the only severity an own entry may name
+#     reason: >-                   # 20 to 1000 characters: why the fix cannot be
+#       ...                        # taken into the image yet
 #     expires: 2027-02-28          # review date (YYYY-MM-DD), at most 90 days ahead
 #     approved_by: security officer  # countersignature of the security officer
+#
+# Third-party image whose distribution ships the fix but whose upstream image is not
+# rebuilt yet (scoped to a pinned digest, at most 14 days):
+#
+#   - image: docker.io/library/example@sha256:<digest>  # pinned digest, no tag
+#     id: CVE-2026-12345
+#     package: libexample
+#     severity: HIGH               # HIGH or CRITICAL, as the report names it
+#     reason: >-
+#       Distribution fix available, upstream image not rebuilt yet.
+#     added: 2026-11-25            # YYYY-MM-DD, not in the future
+#     expires: 2026-12-09          # at most 14 days after added
+#     approved_by: security officer
 #
 # Every entry is added in a pull request the security officer reviews.
 version: 1

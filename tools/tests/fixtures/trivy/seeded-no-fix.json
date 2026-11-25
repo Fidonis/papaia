@@ -1,0 +1,29 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "localhost:5000/unpublished/ghcr.io/fidonis/papaia-egress@sha256:5eeded0000000000000000000000000000000000000000000000000000000002",
+  "ArtifactType": "container_image",
+  "Results": [
+    {
+      "Target": "localhost:5000/unpublished/ghcr.io/fidonis/papaia-egress (debian 13.2)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2099-0003",
+          "PkgName": "seeded-no-fix-critical-package",
+          "InstalledVersion": "1.0.0-1",
+          "Severity": "CRITICAL",
+          "Title": "Seeded finding without a fix: the gate must pass and list it"
+        },
+        {
+          "VulnerabilityID": "CVE-2099-0004",
+          "PkgName": "seeded-no-fix-high-package",
+          "InstalledVersion": "2.0.0-1",
+          "FixedVersion": "",
+          "Severity": "HIGH",
+          "Title": "Seeded finding without a fix: the gate must pass and list it"
+        }
+      ]
+    }
+  ]
+}

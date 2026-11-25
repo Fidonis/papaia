@@ -12,6 +12,22 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Image scan: findings with a fix block, findings without a fix are reported
+
+- The gate of the core's own images (`tools/scan-images`, workflow "Core images") now
+  decides from the fix state of each finding: a CRITICAL or HIGH finding with a fix
+  fails, one without a fix passes and is listed in `no-fix.txt` of the `images-report`
+  artefact (90 days) and counted per image in the step summary. Before, every CRITICAL
+  finding and every HIGH finding without an entry failed, also when no fix existed.
+- `security/exceptions.yaml` keeps the rules for the own images (HIGH only, at most 90
+  days, countersigned). A third-party image may carry an entry for a finding with a
+  fix only when it names the pinned digest and ends at most 14 days after `added`. An
+  entry that only covers findings without a fix, an expired entry and a pending
+  countersignature fail or waive nothing.
+- New self test "Seeded finding without a fix passes"; the seeded fixable fixture now
+  holds a critical and a high finding. `docs/compatibility.md` documents the rule, the
+  report and the monthly review ("Image scan rule").
+
 ### Fixed zstd and zlib in the Debian-based core images
 
 - `papaia-egress`, `papaia-lifecycle`, `papaia-replay`, `papaia-people`,

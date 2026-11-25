@@ -3,8 +3,12 @@
 The CI job `images` builds every own image, scans each platform of the built digest
 with Trivy and runs this gate over the report:
 
-- a critical finding always fails; there is no exception for it;
-- a high finding passes only with an unexpired, dated entry in security/exceptions.yaml;
+- a critical or high finding with a fix fails; a finding without a fix passes and is
+  listed in no-fix.txt and the step summary;
+- for an own image a critical finding with a fix always fails, a high one passes only
+  with an unexpired, dated entry in security/exceptions.yaml;
+- for a third-party image only a digest-scoped entry of at most 14 days waives a
+  finding with a fix;
 - an expired entry fails, and so does an exception file with an unknown field.
 
 Trivy is replaced by a recording runner here; the CI job runs the pinned image.
@@ -32,9 +36,14 @@ PREFIX = "localhost:5000/unpublished/"
 ARTIFACT = f"{PREFIX}ghcr.io/fidonis/papaia-egress@{DIGEST}"
 
 
-def _vuln(vid: str, package: str, severity: str, **extra) -> dict:
-    return {"VulnerabilityID": vid, "PkgName": package, "Severity": severity,
+def _vuln(vid: str, package: str, severity: str, fixed: str | None = "1.1",
+          **extra) -> dict:
+    """A finding; `fixed=None` is a finding without a fix."""
+    vuln = {"VulnerabilityID": vid, "PkgName": package, "Severity": severity,
             "InstalledVersion": "1.0", **extra}
+    if fixed is not None:
+        vuln["FixedVersion"] = fixed
+    return vuln
 
 
 def _report(path: Path, vulns: list[dict], artifact: str = ARTIFACT) -> Path:
@@ -227,11 +236,43 @@ def test_a_report_without_the_trivy_schema_is_refused(tmp_path: Path):
         image_scan.read_report(path)
 
 
-def test_the_seeded_fixture_is_a_critical_finding():
+def test_the_seeded_fixture_is_a_critical_and_a_high_finding_with_a_fix():
     artifact, findings = image_scan.read_report(FIXTURES / "seeded-critical.json")
 
     assert artifact.startswith(PREFIX + "ghcr.io/fidonis/papaia-egress@sha256:")
-    assert [f.severity for f in findings] == ["CRITICAL"]
+    assert [f.severity for f in findings] == ["CRITICAL", "HIGH"]
+    assert all(f.fixed for f in findings)
+
+
+def test_the_seeded_no_fix_fixture_is_a_critical_and_a_high_finding_without_a_fix():
+    artifact, findings = image_scan.read_report(FIXTURES / "seeded-no-fix.json")
+
+    assert artifact.startswith(PREFIX + "ghcr.io/fidonis/papaia-egress@sha256:")
+    assert [f.severity for f in findings] == ["CRITICAL", "HIGH"]
+    assert not any(f.fixed for f in findings)
+
+
+def test_the_report_keeps_the_installed_and_the_fixed_version(tmp_path: Path):
+    path = _report(tmp_path / "r.json", [
+        _vuln("CVE-2026-1", "a", "HIGH", fixed="1.2"),
+        _vuln("CVE-2026-2", "b", "HIGH", fixed=None),
+        _vuln("CVE-2026-3", "c", "HIGH", fixed=""),
+    ])
+
+    _, findings = image_scan.read_report(path)
+
+    assert [(f.installed, f.fixed) for f in findings] == [("1.0", "1.2"), ("1.0", ""),
+                                                          ("1.0", "")]
+
+
+@pytest.mark.parametrize("field", ["PkgName", "InstalledVersion", "VulnerabilityID"])
+def test_a_report_field_with_a_line_break_is_refused(tmp_path: Path, field: str):
+    vuln = _vuln("CVE-2026-1", "a", "HIGH")
+    vuln[field] = vuln[field] + "\nFAIL: forged"
+    path = _report(tmp_path / "r.json", [vuln])
+
+    with pytest.raises(image_scan.ScanError, match=field):
+        image_scan.read_report(path)
 
 
 # ── command line (the CI steps) ──────────────────────────────────────────────
@@ -396,3 +437,315 @@ def test_the_trivy_image_is_pinned_by_tag_and_digest():
     assert name.startswith("aquasec/trivy:0.") and digest.startswith("sha256:")
     assert len(digest) == len("sha256:") + 64
 
+
+
+# ── rule E: findings with a fix block, findings without a fix are reported ───
+
+
+def test_only_unfixed_high_and_critical_findings_and_no_entry_give_no_problem(tmp_path: Path):
+    vulns = [_vuln("CVE-2026-1", "ncurses-base", "CRITICAL", fixed=None),
+             _vuln("CVE-2026-2", "libssl3", "HIGH", fixed=None),
+             _vuln("CVE-2026-3", "libsqlite3-0", "HIGH", fixed="")]
+
+    assert _gate(tmp_path, vulns, []) == []
+
+
+def test_a_high_finding_with_a_fix_and_no_entry_fails(tmp_path: Path):
+    problems = _gate(tmp_path, [_vuln("CVE-2026-1001", "libexample", "HIGH", fixed="1.1")], [])
+
+    assert len(problems) == 1 and "HIGH CVE-2026-1001 in libexample" in problems[0]
+    assert "fixed in 1.1" in problems[0]
+
+
+def test_a_critical_finding_with_a_fix_fails_even_with_an_own_entry(tmp_path: Path):
+    problems = _gate(tmp_path, [_vuln("CVE-2026-1001", "libexample", "CRITICAL", fixed="1.1")],
+                     [_entry()])
+
+    assert len(problems) == 1 and "CRITICAL CVE-2026-1001 in libexample" in problems[0]
+
+
+def test_an_entry_that_covers_only_a_finding_without_a_fix_fails(tmp_path: Path):
+    # Such entries are removed; the report lists the finding instead.
+    problems = _gate(tmp_path, [_vuln("CVE-2026-1001", "libexample", "HIGH", fixed=None)],
+                     [_entry()])
+
+    assert len(problems) == 1
+    assert "covers only findings without a fix" in problems[0]
+
+
+def test_an_entry_awaiting_the_countersignature_waives_nothing(tmp_path: Path):
+    problems = _gate(tmp_path, [_vuln("CVE-2026-1001", "libexample", "HIGH")],
+                     [_entry(approved_by="pending (security officer)")])
+
+    assert len(problems) == 1 and "not countersigned" in problems[0]
+
+
+def test_evaluate_counts_failing_excepted_without_fix_and_other(tmp_path: Path):
+    accepted = image_scan.load_exceptions(_exceptions(tmp_path / "e.yaml", [_entry()]), TODAY)
+    _, findings = image_scan.read_report(_report(tmp_path / "r.json", [
+        _vuln("CVE-2026-1001", "libexample", "HIGH"),          # excepted
+        _vuln("CVE-2026-1002", "zlib1g", "CRITICAL"),          # failing
+        _vuln("CVE-2026-1003", "ncurses-base", "HIGH", fixed=None),  # without fix
+        _vuln("CVE-2026-1004", "libc6", "MEDIUM"),             # other
+    ]))
+
+    verdict = image_scan.evaluate(ARTIFACT, findings, accepted, TODAY, own=True)
+
+    assert (len(verdict.problems), verdict.excepted, len(verdict.no_fix), verdict.other) == (
+        1, 1, 1, 1)
+    assert verdict.no_fix[0].id == "CVE-2026-1003"
+
+
+def test_a_no_fix_line_names_image_platform_id_package_version_and_severity(tmp_path: Path):
+    _, findings = image_scan.read_report(_report(tmp_path / "r.json", [
+        _vuln("CVE-2026-1003", "ncurses-base", "HIGH", fixed=None)]))
+
+    line = image_scan.no_fix_line(ARTIFACT, "linux/arm64", findings[0])
+
+    assert line.split("\t") == [ARTIFACT, "linux/arm64", "CVE-2026-1003", "ncurses-base",
+                                "1.0", "HIGH"]
+
+
+# ── third-party images: digest-scoped entries of at most 14 days ─────────────
+
+PG = "docker.io/library/postgres"
+PG_DIGEST = "sha256:" + "a" * 64
+PG_ARTIFACT = f"postgres:16.16@{PG_DIGEST}"
+
+
+def _pinned() -> frozenset[str]:
+    return frozenset({image_scan.pin_key(f"{PG}:16.16@{PG_DIGEST}")})
+
+
+def _third(**overrides) -> dict:
+    entry = {
+        "image": f"{PG}@{PG_DIGEST}",
+        "id": "CVE-2026-124851",
+        "package": "libzstd1",
+        "severity": "HIGH",
+        "reason": "Debian ships the fix; the upstream image is not rebuilt yet.",
+        "added": TODAY - timedelta(days=2),
+        "expires": TODAY - timedelta(days=2) + timedelta(days=14),
+        "approved_by": "security officer",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def _gate_third(tmp_path: Path, vulns: list[dict], entries: list[dict],
+                artifact: str = PG_ARTIFACT, pinned=None) -> list[str]:
+    pinned = _pinned() if pinned is None else pinned
+    accepted = image_scan.load_exceptions(_exceptions(tmp_path / "exc.yaml", entries), TODAY,
+                                          pinned=pinned)
+    name, findings = image_scan.read_report(_report(tmp_path / "r.json", vulns, artifact))
+    return image_scan.gate(findings, accepted, TODAY, artifact=name, own=False)
+
+
+def test_a_14_day_entry_with_the_scanned_digest_waives_exactly_that_finding(tmp_path: Path):
+    vulns = [_vuln("CVE-2026-124851", "libzstd1", "HIGH"),
+             _vuln("CVE-2026-85091", "zlib1g", "HIGH")]
+
+    problems = _gate_third(tmp_path, vulns, [_third()])
+
+    assert len(problems) == 1 and "CVE-2026-85091 in zlib1g" in problems[0]
+
+
+def test_a_third_party_entry_may_cover_a_critical_finding_with_a_fix(tmp_path: Path):
+    vulns = [_vuln("CVE-2026-124851", "libzstd1", "CRITICAL")]
+
+    assert _gate_third(tmp_path, vulns, [_third(severity="CRITICAL")]) == []
+
+
+def test_a_third_party_entry_of_another_severity_waives_nothing(tmp_path: Path):
+    vulns = [_vuln("CVE-2026-124851", "libzstd1", "CRITICAL")]
+
+    assert len(_gate_third(tmp_path, vulns, [_third()])) == 1
+
+
+def test_a_third_party_entry_of_15_days_is_refused(tmp_path: Path):
+    entry = _third(expires=TODAY - timedelta(days=2) + timedelta(days=15))
+
+    with pytest.raises(image_scan.ScanError, match="14 days"):
+        _gate_third(tmp_path, [], [entry])
+
+
+def test_a_dated_entry_without_a_digest_is_refused(tmp_path: Path):
+    entry = _third()
+    del entry["image"]
+    with pytest.raises(image_scan.ScanError, match="added"):
+        _gate_third(tmp_path, [], [entry])
+
+    with pytest.raises(image_scan.ScanError, match="digest"):
+        _gate_third(tmp_path, [], [_third(image=f"{PG}:16.16")])
+
+
+def test_a_third_party_entry_without_added_is_refused(tmp_path: Path):
+    entry = _third()
+    del entry["added"]
+
+    with pytest.raises(image_scan.ScanError, match="added"):
+        _gate_third(tmp_path, [], [entry])
+
+
+def test_a_third_party_entry_added_in_the_future_is_refused(tmp_path: Path):
+    entry = _third(added=TODAY + timedelta(days=1), expires=TODAY + timedelta(days=5))
+
+    with pytest.raises(image_scan.ScanError, match="added"):
+        _gate_third(tmp_path, [], [entry])
+
+
+def test_a_third_party_entry_for_a_digest_no_longer_pinned_is_refused(tmp_path: Path):
+    with pytest.raises(image_scan.ScanError, match="no longer pinned"):
+        _gate_third(tmp_path, [], [_third()], pinned=frozenset())
+
+
+def test_a_third_party_entry_for_an_own_image_is_refused(tmp_path: Path):
+    own = f"ghcr.io/fidonis/papaia-egress@{DIGEST}"
+    pinned = frozenset({image_scan.pin_key(f"ghcr.io/fidonis/papaia-egress:1.10.0@{DIGEST}")})
+
+    with pytest.raises(image_scan.ScanError, match="own image"):
+        image_scan.load_exceptions(_exceptions(tmp_path / "e.yaml", [_third(image=own)]),
+                                   TODAY, pinned=pinned,
+                                   own_names=("ghcr.io/fidonis/papaia-egress",))
+
+
+def test_a_third_party_entry_for_another_digest_waives_nothing(tmp_path: Path):
+    other = f"postgres:16.16@sha256:{'b' * 64}"
+    vulns = [_vuln("CVE-2026-124851", "libzstd1", "HIGH")]
+
+    problems = _gate_third(tmp_path, vulns, [_third()], artifact=other)
+
+    assert len(problems) == 1 and "CVE-2026-124851 in libzstd1" in problems[0]
+
+
+def test_an_own_entry_does_not_waive_a_finding_of_a_third_party_image(tmp_path: Path):
+    vulns = [_vuln("CVE-2026-1001", "libexample", "HIGH")]
+
+    problems = _gate_third(tmp_path, vulns, [_entry()])
+
+    assert any("CVE-2026-1001 in libexample" in p for p in problems)
+
+
+def test_a_third_party_entry_does_not_waive_a_finding_of_an_own_image(tmp_path: Path):
+    accepted = image_scan.load_exceptions(_exceptions(tmp_path / "e.yaml", [_third()]), TODAY,
+                                          pinned=_pinned())
+    _, findings = image_scan.read_report(_report(tmp_path / "r.json", [
+        _vuln("CVE-2026-124851", "libzstd1", "HIGH")]))
+
+    assert len(image_scan.gate(findings, accepted, TODAY, artifact=ARTIFACT, own=True)) == 1
+
+
+def test_an_expired_third_party_entry_fails_the_run(tmp_path: Path):
+    entry = _third(added=TODAY - timedelta(days=15), expires=TODAY - timedelta(days=1))
+    vulns = [_vuln("CVE-2026-124851", "libzstd1", "HIGH")]
+
+    problems = _gate_third(tmp_path, vulns, [entry])
+
+    assert any("expired on" in p for p in problems)
+    assert any("CVE-2026-124851 in libzstd1" in p for p in problems)
+
+
+def test_a_third_party_entry_covering_only_a_finding_without_a_fix_fails(tmp_path: Path):
+    vulns = [_vuln("CVE-2026-124851", "libzstd1", "HIGH", fixed=None)]
+
+    problems = _gate_third(tmp_path, vulns, [_third()])
+
+    assert len(problems) == 1 and "covers only findings without a fix" in problems[0]
+
+
+def test_the_same_finding_may_be_listed_for_two_digests(tmp_path: Path):
+    second = f"{PG}@sha256:{'b' * 64}"
+    pinned = _pinned() | {image_scan.pin_key(f"{PG}:16.17@sha256:{'b' * 64}")}
+
+    accepted = image_scan.load_exceptions(
+        _exceptions(tmp_path / "e.yaml", [_third(), _third(image=second)]), TODAY,
+        pinned=pinned)
+
+    assert len(accepted) == 2
+
+
+def test_the_pins_of_the_checkout_are_the_pin_keys():
+    pinned = image_scan.pinned_keys(REPO)
+
+    assert pinned and all("@sha256:" in key for key in pinned)
+
+
+# ── command line: report files and step summary ──────────────────────────────
+
+
+def test_the_cli_gate_names_both_seeded_fixable_findings():
+    artifact, _ = image_scan.read_report(FIXTURES / "seeded-critical.json")
+
+    done = _cli("gate", "--report", str(FIXTURES / "seeded-critical.json"),
+                "--artifact", artifact)
+
+    assert done.returncode == 1, done.stderr
+    for text in ("CVE-2099-0001", "seeded-critical-package", "CVE-2099-0002",
+                 "seeded-high-package"):
+        assert text in done.stderr
+
+
+def test_the_cli_gate_passes_the_seeded_no_fix_report_and_lists_it(tmp_path: Path):
+    artifact, _ = image_scan.read_report(FIXTURES / "seeded-no-fix.json")
+    no_fix = tmp_path / "no-fix.txt"
+    summary = tmp_path / "summary.md"
+
+    done = _cli("gate", "--report", str(FIXTURES / "seeded-no-fix.json"), "--artifact", artifact,
+                "--platform", "linux/amd64", "--no-fix", str(no_fix), "--summary", str(summary))
+
+    assert done.returncode == 0, done.stderr
+    lines = no_fix.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    for vid in ("CVE-2099-0003", "CVE-2099-0004"):
+        assert sum(vid in line for line in lines) == 1
+        assert vid in done.stdout
+    assert "| failing | excepted | without fix |" in summary.read_text(encoding="utf-8")
+    assert "Seeded" not in summary.read_text(encoding="utf-8"), "titles are not printed"
+
+
+def test_the_cli_gate_refuses_an_invalid_platform(tmp_path: Path):
+    artifact, _ = image_scan.read_report(FIXTURES / "seeded-no-fix.json")
+
+    done = _cli("gate", "--report", str(FIXTURES / "seeded-no-fix.json"), "--artifact", artifact,
+                "--platform", "linux/amd64\nFAIL")
+
+    assert done.returncode == 2
+
+
+def test_scan_writes_the_no_fix_list_and_the_counts_of_every_image(tmp_path: Path):
+    run = FakeTrivy({"linux/arm64": [_vuln("CVE-2026-7", "ncurses-base", "CRITICAL",
+                                           fixed=None),
+                                     _vuln("CVE-2026-8", "libc6", "LOW")]})
+    out = tmp_path / "out"
+    summary = tmp_path / "summary.md"
+
+    problems = image_scan.scan(_builds(tmp_path), _exceptions(tmp_path / "exc.yaml", []), out,
+                               tmp_path / "cache", TODAY, run=run, summary=summary)
+
+    assert problems == []
+    lines = (out / "no-fix.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2  # both images on arm64
+    assert all("\tlinux/arm64\tCVE-2026-7\tncurses-base\t1.0\tCRITICAL" in line
+               for line in lines)
+    text = summary.read_text(encoding="utf-8")
+    assert text.count("| linux/") == 4
+    assert f"| {ARTIFACT} | linux/arm64 | 0 | 0 | 1 | 1 |" in text
+
+
+def test_scan_writes_an_empty_no_fix_list_when_every_finding_has_a_fix(tmp_path: Path):
+    out = tmp_path / "out"
+
+    image_scan.scan(_builds(tmp_path), _exceptions(tmp_path / "exc.yaml", []), out,
+                    tmp_path / "cache", TODAY, run=FakeTrivy())
+
+    assert (out / "no-fix.txt").read_text(encoding="utf-8") == ""
+
+
+def test_scan_fails_an_entry_that_covers_only_findings_without_a_fix(tmp_path: Path):
+    run = FakeTrivy({"linux/arm64": [_vuln("CVE-2026-1001", "libexample", "HIGH",
+                                           fixed=None)]})
+
+    problems = image_scan.scan(_builds(tmp_path), _exceptions(tmp_path / "exc.yaml", [_entry()]),
+                               tmp_path / "out", tmp_path / "cache", TODAY, run=run)
+
+    assert len(problems) == 1 and "covers only findings without a fix" in problems[0]

@@ -1,7 +1,9 @@
 name: Core images
 
 # Builds every own image of compat/own-images.yaml for linux/amd64 and linux/arm64,
-# scans each platform of the built digest and keeps the CycloneDX SBOMs. A version tag
+# scans each platform of the built digest and keeps the CycloneDX SBOMs. A finding
+# with a fix fails; one without a fix is listed in no-fix.txt of the images-report
+# artefact and counted in the step summary (docs/compatibility.md, "Image scan rule"). A version tag
 # also signs: the publish job rebuilds, checks that the digests are the pinned (and
 # so the scanned) ones, signs them with this workflow's identity and attaches the
 # SBOMs as cosign attestations (docs/compatibility.md, "Own images of the core").
@@ -68,8 +70,8 @@ jobs:
       - name: Check the exception file
         working-directory: tools
         run: uv run --locked --extra dev python -m lib.image_scan check
-      # Self test: the gate must fail a report with a critical finding and name it, so a
-      # gate that stopped gating fails here.
+      # Self test: the gate must fail a report with a critical and a high finding that
+      # have a fix and name both, so a gate that stopped gating fails here.
       - name: Seeded critical finding fails the gate
         working-directory: tools
         run: |
@@ -79,11 +81,34 @@ jobs:
           uv run --locked --extra dev python -m lib.image_scan gate \
             --report "$report" --artifact "$artifact" > ../seeded-gate.txt 2>&1 || status=$?
           cat ../seeded-gate.txt
-          if [[ "${status}" -ne 1 ]] || ! grep -q "CVE-2099-0001" ../seeded-gate.txt; then
-            echo "the seeded critical finding was not rejected (exit ${status})" >&2
+          if [[ "${status}" -ne 1 ]] || ! grep -q "CVE-2099-0001" ../seeded-gate.txt \
+            || ! grep -q "CVE-2099-0002" ../seeded-gate.txt; then
+            echo "the seeded findings with a fix were not rejected (exit ${status})" >&2
             exit 1
           fi
-          echo "seeded critical finding rejected as expected"
+          echo "seeded findings with a fix rejected as expected"
+      # Self test: findings without a fix pass and each is listed once.
+      - name: Seeded finding without a fix passes
+        working-directory: tools
+        run: |
+          report=tests/fixtures/trivy/seeded-no-fix.json
+          artifact=$(jq -r .ArtifactName "$report")
+          status=0
+          uv run --locked --extra dev python -m lib.image_scan gate \
+            --report "$report" --artifact "$artifact" --platform linux/amd64 \
+            --no-fix ../seeded-no-fix.txt > ../seeded-no-fix-gate.txt 2>&1 || status=$?
+          cat ../seeded-no-fix-gate.txt
+          if [[ "${status}" -ne 0 ]]; then
+            echo "the seeded findings without a fix failed the gate (exit ${status})" >&2
+            exit 1
+          fi
+          for id in CVE-2099-0003 CVE-2099-0004; do
+            if [[ "$(grep -c "${id}" ../seeded-no-fix.txt)" -ne 1 ]]; then
+              echo "${id} is not listed once in no-fix.txt" >&2
+              exit 1
+            fi
+          done
+          echo "seeded findings without a fix passed and listed as expected"
       - name: Build both platforms into the job's registry
         working-directory: tools
         run: >-
@@ -107,13 +132,14 @@ jobs:
         run: >-
           uv run --locked --extra dev python -m lib.image_scan scan
           --builds "${RUNNER_TEMP}/builds.json" --out "${RUNNER_TEMP}/scan"
-          --cache "${RUNNER_TEMP}/trivy-cache"
+          --cache "${RUNNER_TEMP}/trivy-cache" --summary "${GITHUB_STEP_SUMMARY}"
       - name: Collect the builds file, reports and SBOMs
         if: ${{ !cancelled() }}
         run: |
           mkdir -p images-report
           cp "${RUNNER_TEMP}/builds.json" images-report/ 2>/dev/null || true
           cp "${RUNNER_TEMP}"/scan/*.json images-report/ 2>/dev/null || true
+          cp "${RUNNER_TEMP}/scan/no-fix.txt" images-report/ 2>/dev/null || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:

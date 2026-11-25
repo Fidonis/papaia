@@ -408,11 +408,10 @@ tools/build-images bom-entries --sbom=ghcr.io/fidonis/papaia-egress=<sbom> ...
 - CI (`.github/workflows/images.yml`) builds every own image on each pull
   request, push and night into a registry inside the job and scans both
   platforms of the built digest (`tools/scan-images scan`, Trivy pinned by
-  digest). The gate: a critical finding always fails; a high finding passes
-  only with an unexpired entry in
-  [`security/exceptions.yaml`](../security/exceptions.yaml) (at most 90 days,
-  approved by the security officer); an expired entry fails. Reports and the
-  CycloneDX SBOM of each platform are kept as the `images-report` artefact.
+  digest) and applies the [image scan rule](#image-scan-rule): a critical or
+  high finding with a fix fails, one without a fix is reported. Reports, the
+  list of findings without a fix and the CycloneDX SBOM of each platform are
+  kept as the `images-report` artefact.
 - On a version tag the `publish` job, the only one that may request an OIDC
   token, rebuilds into `ghcr.io/fidonis/`, refuses digests other than the
   compose pins (`tools/build-images verify`; the scan job checked its build
@@ -437,3 +436,74 @@ tools/build-images bom-entries --sbom=ghcr.io/fidonis/papaia-egress=<sbom> ...
   the local registry, its test key, and a test bill of materials signed with
   that key.
 
+### Image scan rule
+
+Every image scan of the core decides from the complete Trivy report: the
+scanner lists every finding of every severity, with and without a fix; no
+`--ignore-unfixed` and no severity filter drop a finding before the decision
+(`tools/scan-images`, `tools/lib/image_scan.py`).
+
+- A CRITICAL or HIGH finding with a fix (the report names a `FixedVersion`)
+  fails the scan, unless an entry allowed below covers it. Take the fix into
+  the image instead: rebuild on a fixed base, or install the fixed package
+  version (see the `debian-fixes` stage above), and pin the new digest.
+- A CRITICAL or HIGH finding without a fix passes and is reported. It is never
+  written into `security/exceptions.yaml`; an entry that only covers findings
+  without a fix fails the scan and is removed.
+- MEDIUM, LOW and UNKNOWN findings are counted and do not fail.
+- An expired entry fails the scan on its own. An entry whose `approved_by`
+  still says pending waives nothing.
+
+**Where the report is.** Every run of "Core images"
+(`.github/workflows/images.yml`) keeps the artefact `images-report` for 90
+days: the Trivy JSON report and the CycloneDX SBOM of each image and platform,
+and `no-fix.txt`, one tab-separated line per CRITICAL or HIGH finding without
+a fix (image digest, platform, id, package, installed version, severity). The
+step summary of the run has a table with the counts per image and platform:
+failing, excepted, without fix and other. Titles and descriptions of the
+findings are not printed. Locally:
+
+```sh
+tools/scan-images scan --builds=builds.json --out=scan/ --summary=summary.md
+cut -f1,6 scan/no-fix.txt | sort | uniq -c   # counts per image and severity
+tools/scan-images gate --report=r.json --artifact=<ref> --no-fix=no-fix.txt
+```
+
+**Exceptions for the own images** stay as they are: HIGH only, `expires` at
+most 90 days ahead, countersigned by the security officer. A CRITICAL finding
+with a fix of an own image is never excepted.
+
+**Exceptions for a third-party image** are allowed only for a finding with a
+fix whose distribution already ships the fixed package while the upstream
+image is not rebuilt yet. The entry is scoped to the scanned digest, which the
+checkout must pin, and ends at most 14 days after it was added:
+
+```yaml
+  - image: docker.io/library/postgres@sha256:<digest>  # the pinned digest, no tag
+    id: CVE-2026-12345
+    package: libexample1
+    severity: HIGH                 # HIGH or CRITICAL, as the report names it
+    reason: >-
+      Debian ships the fixed package; the upstream image is not rebuilt yet.
+    added: 2026-11-25
+    expires: 2026-12-09            # at most 14 days after added
+    approved_by: security officer  # countersignature; pending waives nothing
+```
+
+The gate refuses such an entry without a digest, with a tag, with a longer
+term, with an `added` date in the future, for an own image or for a digest the
+checkout no longer pins; it waives nothing for another digest. Re-pin the
+rebuilt upstream image before the entry expires; an expired entry fails the
+scan. The third-party pins of the core are reported by
+`.github/workflows/image-scan.yml`, which is report-only and not a gate.
+
+**Monthly review.** On the first working day of each month a maintainer reads
+`no-fix.txt` of the latest "Core images" run on the milestone branch (or the
+default branch when no milestone is open), rebuilds or re-pins every image for
+which a fix has appeared since, and adds a row to the table below: the date,
+the run, the counts per image and the actions taken.
+
+#### Monthly review
+
+| Date | Run | Findings without a fix per image | Actions |
+|---|---|---|---|
