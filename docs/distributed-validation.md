@@ -13,7 +13,7 @@ throwaway config directory. Record the result with the report template at the en
 | **A** (edge, DMZ) | `edge` | Nginx Proxy Manager, Keycloak (+ Postgres), LiteLLM (+ database), SMTP relay |
 | **B** (internal) | `internal`, controller | everything else, papaia-manager among it |
 
-1. On both VMs: Docker with the compose plugin, Python 3.10+ with PyYAML, an SSH server.
+1. On both VMs: Docker with the compose plugin, Python 3.12+ with PyYAML, an SSH server.
    Between them a firewall that drops everything not opened below.
 2. On B, in a fresh checkout and with a throwaway config directory:
 

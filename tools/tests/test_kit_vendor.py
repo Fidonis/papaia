@@ -100,9 +100,7 @@ def test_the_dependency_pins_bind_the_release_build_wheel():
     version = KIT_RELEASE["version"]
     wheel = f"vendor/papaia-kit/{version}/{VENDORED[0]}"
     pyproject = tomllib.loads((TOOLS / "pyproject.toml").read_text(encoding="utf-8"))
-    assert f"papaia-kit=={version} ; python_version >= '3.12'" in (
-        pyproject["project"]["optional-dependencies"]["dev"]
-    )
+    assert f"papaia-kit=={version}" in pyproject["project"]["dependencies"]
     assert pyproject["tool"]["uv"]["sources"]["papaia-kit"] == {"path": wheel}
     uv_lock = tomllib.loads((TOOLS / "uv.lock").read_text(encoding="utf-8"))
     (kit,) = [package for package in uv_lock["package"] if package["name"] == "papaia-kit"]

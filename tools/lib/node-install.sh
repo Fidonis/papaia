@@ -19,7 +19,9 @@ info() { printf '[papaia-node] %s\n' "$*"; }
 [ "$(id -u)" -eq 0 ] || fail "run this script as root (sudo ./install.sh)"
 command -v docker >/dev/null 2>&1 || fail "docker is not installed"
 docker compose version >/dev/null 2>&1 || fail "the docker compose plugin is not installed"
-command -v python3 >/dev/null 2>&1 || fail "python3 is not installed (3.10 or newer)"
+command -v python3 >/dev/null 2>&1 || fail "python3 is not installed (3.12 or newer)"
+python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)' >/dev/null 2>&1 \
+    || fail "python3 is older than 3.12"
 python3 -c 'import yaml' >/dev/null 2>&1 \
     || fail "PyYAML is not installed for python3 (python3-yaml)"
 getent group docker >/dev/null 2>&1 || fail "there is no 'docker' group on this host"

@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import runtime_helpers
 from stack_helpers import build_stack
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -41,3 +42,18 @@ def _no_real_launchd(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         localai_native, "launchd_host", lambda: (False, "launchd is not used in tests")
     )
+
+
+@pytest.fixture(scope="session")
+def ctl_wheelhouse(request: pytest.FixtureRequest, tmp_path_factory) -> Path:
+    """The wheels of tools/runtime.lock for this platform, downloaded once by hash."""
+    cache = getattr(request.config, "cache", None)
+    folder = Path(cache.mkdir("ctl-runtime")) if cache else tmp_path_factory.mktemp("ctl")
+    return runtime_helpers.wheelhouse(folder)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ctl_runtime(ctl_wheelhouse: Path) -> None:
+    """tools/papaia-ctl runs lib.cli from tools/.runtime/current only; give this checkout the
+    environment `papaia-ctl setup` would build (reused when it is already there)."""
+    runtime_helpers.ensure_checkout_runtime(ctl_wheelhouse)

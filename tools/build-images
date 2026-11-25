@@ -16,7 +16,7 @@
 #   build-images bom-entries --sbom=NAME=FILE...
 #
 # Needs Docker with buildx for linux/amd64 and linux/arm64 (build), cosign or Docker
-# (sign) and Python 3.10+ with PyYAML. The passphrase of the signing key is read from
+# (sign) and Python 3.12+ with PyYAML. The passphrase of the signing key is read from
 # COSIGN_PASSWORD only.
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail

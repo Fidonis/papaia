@@ -101,16 +101,29 @@ access. See `src/infra/keycloak/README.md` for the full role table.
 
 - Docker and Docker Compose 2.20.0 or newer (the Compose files use `include:` and
   `depends_on.required`; [`doctor`](#doctor) checks it)
-- Python 3.10+ — `papaia-ctl` generates secrets and renders configs itself
-- PyYAML — `papaia-ctl` reads and renders YAML with it; not part of the standard
-  library. On a minimal host install it with `sudo apt-get install -y
-  python3-yaml` (Debian/Ubuntu), `sudo dnf install -y python3-pyyaml`
-  (Fedora/RHEL), or `pip install 'PyYAML>=6.0'` in a virtual environment (macOS, see
-  below)
+- Python 3.12+ with the `venv` module (Debian/Ubuntu: `sudo apt-get install -y python3
+  python3-venv`; Debian 13, Ubuntu 24.04 and newer ship 3.12 or later). Nothing else is
+  installed into it by hand: `papaia-ctl setup` builds its own runtime environment in
+  `tools/.runtime/` from `tools/runtime.lock` (PyYAML, the platform kit and the kit's
+  dependencies, every package pinned by hash) and runs every command from it. `setup`
+  picks the first `python3` of 3.12 or newer on `PATH`; `PAPAIA_PYTHON=/absolute/path`
+  names another one.
+- Access to the Python package index while `setup` (and `upgrade`) runs, or a mirror
+  (`PIP_INDEX_URL`) or a directory of the wheels (`PIP_FIND_LINKS`); `pip` reads either
+  from the environment or from `/etc/pip.conf`. Hashes are checked in every case, so a
+  mirror cannot hand over other packages.
 - `openssl`, only when Keycloak TLS is enabled
 - A host of one of the [size profiles](#size-profiles), at least `small-no-model` (8 cores,
   32 GB, 200 GB free; [`doctor`](#doctor) checks it)
 - Linux, macOS, or WSL2
+
+Every command but `setup`, `upgrade` and `rollback` only uses the runtime environment:
+it runs `tools/.runtime/current/bin/python` by its absolute path and stops with one line
+naming `papaia-ctl setup` when the environment is missing, built for another
+`runtime.lock`, or writable by the group or by everyone. So after `setup`,
+`sudo tools/papaia-ctl ...` needs nothing on root's `PATH` (sudo's `secure_path` does not
+matter), and a second account, for example the one that approves pairings, needs only read
+access to the checkout. `doctor ctl_runtime` reports the environment.
 
 #### macOS
 
@@ -121,18 +134,9 @@ Linux host:
   recommendation applies to the memory assigned to it (Settings > Resources). `doctor`
   measures what Docker reports.
 - **Python.** The `python3` of the Xcode Command Line Tools is 3.9, too old for
-  `papaia-ctl`. Homebrew no longer ships PyYAML as a formula, and its Python refuses a
-  plain `pip install`, so install both into a virtual environment:
-
-  ```bash
-  brew install python
-  "$(brew --prefix)/bin/python3" -m venv ~/.venvs/papaia
-  ~/.venvs/papaia/bin/pip install 'PyYAML>=6.0'
-  source ~/.venvs/papaia/bin/activate   # before running tools/papaia-ctl
-  ```
-
-  `papaia-ctl` then uses the environment's `python3`, and names the version it found
-  when none is new enough.
+  `papaia-ctl`. Install a current one with `brew install python`; `setup` finds Homebrew's
+  `python3.X` even when the older `python3` comes first on `PATH`, and builds its runtime
+  environment with it. No package is installed by hand.
 - **Bash and OpenSSL.** The system Bash 3.2 and the system LibreSSL work; Homebrew's
   versions are not needed.
 - **Paths.** Docker Desktop bind-mounts only the host paths it shares with its VM
@@ -1867,6 +1871,7 @@ raw values behind its summary in `details`.
 | `erasure_journal` | Only while the `lifecycle` profile is on: every file of `$PAPAIA_BACKUP_DIR/erasure-journal` and the bind mounts of every container of the core and the add-ons (see *Each module reaches its own journal alone* under [`restore`](#restore)). | `fail` for a missing folder (target not mounted), a container other than `papaia-lifecycle` that can write the folder, the backup target, `epoch` or a journal not its own (a shared read-write mount), a journal or `epoch` that is a link, has a second name, belongs to another account or can be written by others, and a journal holding a line of another module; `warn` for an add-on that can read journals not its own and when Docker does not answer; `skip` while the profile is off |
 | `halt` | The platform's emergency halt (`state/halt.json`, see `papaia-ctl halt`). | `fail` while the halt is set (every write, send and delete is stopped) and for a halt file that cannot be used, which every service treats as set; `skip` before the first start |
 | `edge_app_origin` | Studio app hosts at the edge (see [Studio app hosts at the edge](#studio-app-hosts-at-the-edge)): the bundled proxy holds the current refusal of writes from the app hosts in `http_top.conf` and `server_proxy.conf` (counting the refusals in its audit log), and no cookie an anonymous browser gets from a platform host, the sign-in included, carries a `Domain` that covers an app host. | `fail` for a missing or outdated refusal (run `npm-provision`), a covering cookie (named with its host, never its value) or an unusable app domain; `warn` for a host that could not be read, a proxy that does not run or an external proxy (it must refuse the writes itself); `skip` without a proxy, without host names or while the bundled proxy is not enabled |
+| `ctl_runtime` | The runtime environment `papaia-ctl` runs every command from (`tools/.runtime/current`): present, built for this checkout's `tools/runtime.lock`, writable by neither the group nor everyone and owned by root or the owner of `tools/`, its interpreter runs and imports the kit and PyYAML. | `fail` for a missing, stale or unsafe environment, with `papaia-ctl setup` as the fix; `skip` for a checkout without `runtime.lock` |
 | `approvals` | The four-eyes rule `approvals.four_eyes` as the platform catalog publishes it (see [`settings`](#settings)): `on` or `off`, and whether it is the default, set, or fixed by security profile `kritis`. | `fail` for a malformed `overlay/platform/approvals.yaml` and for a stored `off` in profile `kritis` (the catalog states `on` all the same) |
 | `contact_point` | A contact point for users is set (`contact.name`, see [`settings`](#settings)); without one every module shows "Ansprechstelle nicht hinterlegt". | `warn` while none is set or while it is still the one `setup` derived (`Verwaltung von <domain>`), `fail` for a malformed `overlay/platform/branding.yaml` |
 
@@ -1917,9 +1922,9 @@ AMD utilization is read from the JSON of `rocm-smi`, whose key names differ betw
 if they are not recognised the check passes and says that utilization was not measured.
 Utilization is never measured for Intel and Vulkan GPUs.
 
-Not covered: Python and PyYAML (`papaia-ctl` verifies both before any command runs), the ports
-of add-ons, and certificates that were uploaded to Nginx Proxy Manager instead of requested
-through it.
+Not covered: the base Python (`papaia-ctl setup` checks it before it builds the runtime
+environment), the ports of add-ons, and certificates that were uploaded to Nginx Proxy
+Manager instead of requested through it.
 
 In a distributed installation the checks above describe the controller's own node, and three
 checks are added (on one host they never appear):
@@ -2232,7 +2237,7 @@ refuses everything else, and writes one audit line per call to `<root>/audit.log
 - `--bootstrap=admin --admin=USER@HOST` does the same over your own admin login on the node.
   `sudo` asks for your password if it needs one. Nothing of that login is stored.
 
-The node needs Docker with the compose plugin, Python 3.10 or newer with PyYAML, and an SSH
+The node needs Docker with the compose plugin, Python 3.12 or newer with PyYAML, and an SSH
 server. Its host key is pinned when the controller first connects: the fingerprint is shown
 and has to be confirmed, or given with `--host-key-fingerprint` in scripts. `node sync` hands
 a node its release and its bundle. `node renew-link` issues a new link certificate for the

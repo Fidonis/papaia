@@ -242,6 +242,8 @@ SH_LIB="$REPO_ROOT/tools/lib/sh"
 source "$SH_LIB/log.sh"
 # shellcheck source=lib/sh/python.sh
 source "$SH_LIB/python.sh"
+# shellcheck source=lib/sh/runtime.sh
+source "$SH_LIB/runtime.sh"
 # shellcheck source=lib/sh/prompt.sh
 source "$SH_LIB/prompt.sh"
 # shellcheck source=lib/sh/certs.sh
@@ -288,28 +290,17 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 2
 fi
 
-find_python || exit 2
-
-# Every `lib.cli` subcommand pulls in PyYAML transitively (lib/backup.py imports
-# it at module load), so without it each command aborts with a bare
-# "No module named 'yaml'" that names the import, not the package to install.
-# Check once here and point at the fix instead.
-if ! "$PYTHON_BIN" -c 'import yaml' >/dev/null 2>&1; then
-    error "Python module 'yaml' (PyYAML) not found for '$PYTHON_BIN'. Install it and re-run:"
-    error "  Debian/Ubuntu: sudo apt-get install -y python3-yaml"
-    error "  Fedora/RHEL:   sudo dnf install -y python3-pyyaml"
-    error "  macOS:         $PYTHON_BIN -m venv ~/.venvs/papaia"
-    error "                 ~/.venvs/papaia/bin/pip install 'PyYAML>=6.0'"
-    error "                 source ~/.venvs/papaia/bin/activate"
-    error "  other:         $PYTHON_BIN -m pip install 'PyYAML>=6.0', in a virtual environment"
-    error "                 if pip refuses with 'externally-managed-environment'"
-    exit 2
-fi
+# lib.cli runs from the runtime environment only (lib/sh/runtime.sh): setup, upgrade and
+# rollback build or reuse it, every other command checks it and stops with one line.
+ctl_runtime_preflight "${1:-}"
 
 # shellcheck disable=SC2034  # consumed by the sourced command libraries
 DEFAULT_CONFIG_DIR="$(dirname "$REPO_ROOT")/papaia-config"
 
 py_cli() {
+    if [ "${PAPAIA_CTL_DEBUG:-}" = "1" ]; then
+        printf '[debug] lib.cli %s runs on %s\n' "${1:-}" "$PYTHON_BIN" >&2
+    fi
     PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
         "$PYTHON_BIN" -m lib.cli --repo-root "$REPO_ROOT" --config-dir "$CONFIG_DIR" "$@"
 }

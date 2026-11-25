@@ -59,11 +59,13 @@ _upgrade_log() {
 }
 
 # Same invocation as py_cli, but against a different core tree: the running
-# code evaluates a candidate checkout (mirrors `addon check --target-core`).
+# code evaluates a candidate checkout (mirrors `addon check --target-core`), on that
+# tree's runtime environment (lib/sh/runtime.sh, built before its first use).
 _py_cli_at() {
     local root="$1"; shift
+    ctl_runtime_at "$root" || return 2
     PYTHONPATH="$REPO_ROOT/tools${PYTHONPATH:+:$PYTHONPATH}" \
-        "$PYTHON_BIN" -m lib.cli --repo-root "$root" --config-dir "$CONFIG_DIR" "$@"
+        "$CTL_RUNTIME_AT_PYTHON" -m lib.cli --repo-root "$root" --config-dir "$CONFIG_DIR" "$@"
 }
 
 # Print the pending migrations of a core tree as indented lines. Returns 1 when
@@ -196,6 +198,7 @@ cmd_upgrade() {
         fi
         _upgrade_correlation
         py_cli upgrade-stage finalize || exit 2
+        py_cli ctl-runtime-prune || warn "Old runtime environments of papaia-ctl were not removed (see above)."
         return 0
     fi
 
@@ -365,6 +368,13 @@ cmd_upgrade() {
         exit 3
     fi
     _UPGRADE_WORKTREE="$worktree"
+    # The target's runtime environment, hash-checked and built before the plan runs on it;
+    # the second phase switches to it (environments are kept by lock, so rollback finds
+    # this release's again).
+    if ! ctl_runtime_at "$worktree"; then
+        error "Nothing has been changed."
+        exit 2
+    fi
 
     # Stage 0: the stage plan. Each module either gets the checkout named with
     # --addon-path, stays (the target still accepts it), or stops the upgrade here;

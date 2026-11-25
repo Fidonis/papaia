@@ -111,6 +111,8 @@ cmd_start() { echo "start lock=$(_lock)" >> "@LOG@"; }
 cmd_doctor() { echo "doctor" >> "@LOG@"; }
 cmd_addon_upgrade() { echo "addon-upgrade $*" >> "@LOG@"; }
 _cli_at() {
+    # The target's runtime environment (lib/sh/runtime.sh) is not built here.
+    ctl_runtime_at() { :; }
     _py_cli_at() {
         local root="$1"; shift
         PYTHONPATH="@TOOLS@" "@PYTHON@" -m lib.cli --repo-root "$root" \

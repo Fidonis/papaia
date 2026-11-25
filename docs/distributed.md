@@ -45,7 +45,7 @@ their own (`--manager-host`, `--qdrant-host`, `--localai-host`), the proxy has n
 and they stay reachable from the internal network only. See the security notes before you
 publish the manager through a proxy at the edge.
 
-**Prerequisites on every node:** Docker with the compose plugin (2.20 or newer), Python 3.10
+**Prerequisites on every node:** Docker with the compose plugin (2.20 or newer), Python 3.12
 or newer with PyYAML, an SSH server. The nodes' clocks have to be synchronized: tokens carry
 `exp` and `nbf`, and a node minutes off refuses every sign-in.
 

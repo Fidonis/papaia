@@ -376,6 +376,8 @@ py_cli() {
             printf 'CURRENT\\t1.9.0\\nTARGET\\t1.10.0\\nTAG\\tv1.10.0\\nSTATUS\\tupgrade\\n' ;;
     esac
 }
+# The target's runtime environment (lib/sh/runtime.sh) is not built here.
+ctl_runtime_at() { :; }
 _py_cli_at() {
     echo "py_cli_at $*"
     case "$2" in

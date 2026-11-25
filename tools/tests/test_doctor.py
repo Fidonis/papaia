@@ -239,6 +239,7 @@ def test_healthy_installation_passes_and_validates(stack):
         PASS,  # person_export: no archive of an information request
         SKIP,  # erasure_journal: the lifecycle profile is off
         SKIP,  # edge_app_origin: the bundled proxy is not enabled
+        SKIP,  # ctl_runtime: the fixture checkout has no tools/runtime.lock
     ]
     assert report.ok
     assert report.exit_code == 0
@@ -288,6 +289,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "person_export",
         "erasure_journal",
         "edge_app_origin",
+        "ctl_runtime",
     )
 
 

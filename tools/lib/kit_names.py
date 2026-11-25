@@ -1,9 +1,8 @@
 """Exchange scopes as the platform kit builds them.
 
 The kit's `papaia_kit.names.exchange_scope()` is the only builder of exchange scopes
-(`aud-<audience>`, PLT-12). papaia-ctl runs on Python 3.10 and cannot import the kit,
-which needs Python 3.12. The naming register snapshot (`names_register.json`, section
-`exchange_scopes`) therefore carries the scope of every registered audience exactly as
+(`aud-<audience>`, PLT-12). The naming register snapshot (`names_register.json`,
+section `exchange_scopes`) carries the scope of every registered audience exactly as
 the vendored kit builds it, and the form the kit's `has_exchange_prefix()` recognises.
 The CI checks the section against the vendored kit (tests/test_kit_names.py).
 

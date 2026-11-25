@@ -18,4 +18,6 @@ src/**/__pycache__/
 tools/.pytest_cache/
 tools/.ruff_cache/
 tools/*.egg-info/
+# The runtime environment papaia-ctl setup builds (tools/lib/ctl_runtime.py)
+tools/.runtime/
 

@@ -1,8 +1,10 @@
 # shellcheck shell=bash
-# papaia-ctl — finding a Python interpreter that can run tools/lib.
+# papaia-ctl — finding the base Python interpreter: the one setup and upgrade build the
+# runtime environment with (lib/sh/runtime.sh), and the one the image tools and the
+# node shell run on. lib.cli itself never runs on it.
 # Sourced by tools/papaia-ctl; not executable on its own.
 
-PYTHON_MIN_VERSION="3.10"
+PYTHON_MIN_VERSION="3.12"
 
 # Prints major.minor.micro of interpreter $1, or nothing when it does not run. Also
 # understood by Python 2, which `python` can still be.
@@ -34,13 +36,29 @@ _versioned_pythons() {
     done
 }
 
-# Sets PYTHON_BIN to the first interpreter on PATH at PYTHON_MIN_VERSION or newer. macOS
-# puts the Command Line Tools' Python 3.9 at `python3` and Homebrew's at `python3.X`,
-# so the versioned names are tried as well. Otherwise prints why and returns 1.
+# Sets PYTHON_BIN to the base interpreter: PAPAIA_PYTHON when set (an absolute path only),
+# else the first interpreter on PATH at PYTHON_MIN_VERSION or newer. macOS puts the Command
+# Line Tools' Python 3.9 at `python3` and Homebrew's at `python3.X`, so the versioned names
+# are tried as well. Otherwise prints why and returns 1.
 find_python() {
     local candidate candidates version too_old=""
     PYTHON_BIN=""
-    candidates="python3 python $(_versioned_pythons)"
+    if [ -n "${PAPAIA_PYTHON:-}" ]; then
+        case "$PAPAIA_PYTHON" in
+            /*) ;;
+            *)
+                error "PAPAIA_PYTHON must be an absolute path to an interpreter, not '$PAPAIA_PYTHON'."
+                return 1
+                ;;
+        esac
+        if [ ! -x "$PAPAIA_PYTHON" ] || [ -d "$PAPAIA_PYTHON" ]; then
+            error "PAPAIA_PYTHON=$PAPAIA_PYTHON is not an executable file."
+            return 1
+        fi
+        candidates="$PAPAIA_PYTHON"
+    else
+        candidates="python3 python $(_versioned_pythons)"
+    fi
     for candidate in $candidates; do
         # command -v alone isn't enough: on Windows, `python3`/`python` may
         # resolve to the Microsoft Store's inert app-execution-alias stub even
@@ -49,7 +67,7 @@ find_python() {
         command -v "$candidate" >/dev/null 2>&1 || continue
         version="$(_python_version "$candidate")" || continue
         [ -n "$version" ] || continue
-        if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' \
+        if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)' \
             >/dev/null 2>&1; then
             # shellcheck disable=SC2034  # consumed by tools/papaia-ctl and the libraries
             PYTHON_BIN="$candidate"
@@ -58,13 +76,15 @@ find_python() {
         [ -n "$too_old" ] || too_old="$candidate $version ($(command -v "$candidate"))"
     done
     if [ -n "$too_old" ]; then
-        error "papaia-ctl requires Python $PYTHON_MIN_VERSION or newer; found $too_old."
-        error "  macOS:         brew install python, then PyYAML in a virtual environment"
-        error "                 (README, Prerequisites > macOS)"
-        error "  Debian/Ubuntu: sudo apt-get install -y python3 python3-yaml"
-        error "Put the newer python3 first on PATH and re-run."
+        error "papaia-ctl requires Python $PYTHON_MIN_VERSION or newer with the venv module; found $too_old."
+        error "  macOS:         brew install python (README, Prerequisites > macOS)"
+        error "  Debian/Ubuntu: sudo apt-get install -y python3 python3-venv (Debian 13, Ubuntu 24.04"
+        error "                 or newer ship 3.12+)"
+        error "Put the newer python3 first on PATH, or name it with PAPAIA_PYTHON=/absolute/path, and re-run."
+    elif [ -n "${PAPAIA_PYTHON:-}" ]; then
+        error "PAPAIA_PYTHON=$PAPAIA_PYTHON does not run."
     else
-        error "python3 not found on PATH. papaia-ctl requires Python $PYTHON_MIN_VERSION or newer."
+        error "python3 not found on PATH. papaia-ctl requires Python $PYTHON_MIN_VERSION or newer with the venv module."
     fi
     return 1
 }

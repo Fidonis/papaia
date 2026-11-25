@@ -28,6 +28,32 @@ based on merged pull requests; this file mirrors the published releases.
   holds a critical and a high finding. `docs/compatibility.md` documents the rule, the
   report and the monthly review ("Image scan rule").
 
+### papaia-ctl runs from its own runtime environment
+
+- `papaia-ctl` failed on a host with exactly the documented prerequisites: every `lib.cli`
+  command imports the kit (`papaia_kit.erasure`, the erasure journal mirror), which was a
+  development dependency only and needs Python 3.12. The kit is now a runtime dependency
+  (`tools/pyproject.toml`: `requires-python = ">=3.12"`), and `tools/runtime.lock` pins the
+  runtime set (PyYAML, the kit and the kit's dependencies) by hash, exported from
+  `tools/uv.lock`; a test keeps it in step with `uv.lock` and `kit.lock`.
+- `setup`, `upgrade` and `rollback` build the environment `tools/.runtime/<sha256 of
+  runtime.lock>/` with the base interpreter (`python -m venv`, then `pip install
+  --require-hashes --no-deps --only-binary=:all:`), after checking the kit wheel against
+  `kit.lock`, and switch the link `tools/.runtime/current` only once it imports. Every
+  other command runs `tools/.runtime/current/bin/python` by absolute path and stops with
+  one line naming `papaia-ctl setup` when the environment is missing, stale, group- or
+  world-writable, or owned by another account than root or the owner of `tools/`. PATH
+  and sudo's `secure_path` no longer decide which Python runs, so `sudo tools/papaia-ctl
+  pairing approve` from a second account works without a change to its sudoers rule.
+- The upgrade builds the target's environment before the plan runs on it; environments
+  are kept by lock, so `rollback` returns to the previous one, and `upgrade --finalize`
+  removes those no restore point needs. New `doctor` check `ctl_runtime`.
+- The documented floor is Python 3.12 with the `venv` module (README, `find_python`,
+  `pyproject.toml`, nodes); PyYAML is no longer installed by hand. `PAPAIA_PYTHON=/absolute/path`
+  names the base interpreter; a name or a relative path is refused. pip reads a mirror
+  (`PIP_INDEX_URL`) or a wheel directory (`PIP_FIND_LINKS`) from the environment; hashes
+  are required in every case.
+
 ### Fixed zstd and zlib in the Debian-based core images
 
 - `papaia-egress`, `papaia-lifecycle`, `papaia-replay`, `papaia-people`,

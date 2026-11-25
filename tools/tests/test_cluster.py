@@ -285,11 +285,13 @@ def test_the_bash_entrypoint_passes_the_refusal_through_as_exit_2(tmp_path: Path
     inst = Installation(tmp_path, FULL)
     inst.setup(*FULL)
     tools = Path(__file__).resolve().parents[1]
+    # With the checkout's runtime environment: `current` stays a link.
     shutil.copytree(
         tools,
         inst.repo / "tools",
         dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns("tests", "__pycache__"),
+        symlinks=True,
+        ignore=shutil.ignore_patterns("tests", "__pycache__", ".venv"),
     )
     done = subprocess.run(
         [

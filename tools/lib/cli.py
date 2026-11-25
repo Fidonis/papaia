@@ -20,9 +20,11 @@ setup/render commands.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -45,6 +47,7 @@ from . import (
     cluster_data,
     common,
     compat,
+    ctl_runtime,
     defaults,
     delegation_lifetime,
     deployment,
@@ -2008,6 +2011,42 @@ def _resolve_backup_dir(config_dir: Path, override: str | None) -> Path:
     return Path(value).expanduser()
 
 
+_RELEASE_VERSION = re.compile(r"^[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9A-Za-z.-]{1,64})?$")
+
+
+def cmd_ctl_runtime_prune(args: argparse.Namespace) -> int:
+    """`upgrade --finalize`: remove the runtime environments of papaia-ctl that neither
+    `current` nor a restore point needs. A restore point needs the environment of the
+    runtime.lock of its release (tag v<papaia_version>), which `rollback` goes back to."""
+    repo_root = Path(args.repo_root)
+    keep: set[str] = set()
+    try:
+        backup_dir = _resolve_backup_dir(Path(args.config_dir), None)
+        versions = {str(entry.get("papaia_version") or "")
+                    for entry in backup.load_index(backup_dir)["backups"]}
+    except backup.BackupError as exc:
+        print(f"WARNING: {exc}; only the current runtime environment is kept.",
+              file=sys.stderr)
+        versions = set()
+    for version in sorted(v for v in versions if _RELEASE_VERSION.match(v)):
+        lock = git_show(repo_root, f"v{version}:tools/{ctl_runtime.LOCK_NAME}")
+        if lock is not None:
+            keep.add(hashlib.sha256(lock).hexdigest())
+    removed = ctl_runtime.prune(str(repo_root / "tools" / ctl_runtime.RUNTIME_NAME), keep)
+    for name in removed:
+        print(f"Runtime environment {name[:12]} removed; no restore point needs it.")
+    return 0
+
+
+def git_show(repo_root: Path, spec: str) -> bytes | None:
+    """`git show <rev>:<path>` of the checkout, or None when the release has no such file."""
+    done = subprocess.run(
+        ["git", "-C", str(repo_root), "show", spec], capture_output=True, check=False,
+        timeout=60,
+    )
+    return done.stdout if done.returncode == 0 else None
+
+
 def cmd_backup_dir(args: argparse.Namespace) -> int:
     try:
         print(_resolve_backup_dir(Path(args.config_dir), args.backup_dir))
@@ -3871,6 +3910,9 @@ def build_parser() -> argparse.ArgumentParser:
     # while that network does not exist (addon_api 17), with a warning.
     p_addon_override_files.add_argument("--usable", action="store_true")
     p_addon_override_files.set_defaults(func=cli_addon.cmd_addon_override_files)
+
+    p_ctl_runtime_prune = sub.add_parser("ctl-runtime-prune")
+    p_ctl_runtime_prune.set_defaults(func=cmd_ctl_runtime_prune)
 
     p_backup_dir = sub.add_parser("backup-dir")
     p_backup_dir.add_argument("--backup-dir", default=None)

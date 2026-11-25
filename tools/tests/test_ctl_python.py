@@ -1,4 +1,7 @@
-"""The preflight's choice of Python interpreter (`find_python` in tools/lib/sh/python.sh, #286)."""
+"""The choice of the base Python interpreter (`find_python` in tools/lib/sh/python.sh, #286).
+
+The base interpreter builds the runtime environment of papaia-ctl (lib/sh/runtime.sh); the
+floor is Python 3.12, and PAPAIA_PYTHON names it by absolute path instead of PATH."""
 
 from __future__ import annotations
 
@@ -14,18 +17,18 @@ BASH = shutil.which("bash")
 
 needs_bash = pytest.mark.skipif(BASH is None, reason="bash is not available")
 
-# Answers both probes of find_python like a Python 3.9 would.
+# Answers both probes of find_python like an older Python would.
 _OLD_PYTHON = """#!/bin/sh
 case "$2" in
   *exit*) exit 1 ;;
-  *) echo 3.9.6 ;;
+  *) echo @VERSION@ ;;
 esac
 """
 
 
-def _old(bin_dir: Path, name: str) -> None:
+def _old(bin_dir: Path, name: str, version: str = "3.9.6") -> None:
     path = bin_dir / name
-    path.write_text(_OLD_PYTHON, encoding="utf-8")
+    path.write_text(_OLD_PYTHON.replace("@VERSION@", version), encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -33,7 +36,7 @@ def _new(bin_dir: Path, name: str) -> None:
     (bin_dir / name).symlink_to(sys.executable)
 
 
-def _find_python(bin_dir: Path) -> subprocess.CompletedProcess:
+def _find_python(bin_dir: Path, **extra: str) -> subprocess.CompletedProcess:
     assert BASH is not None
     script = (
         f'source "{SH_LIB / "log.sh"}"; source "{SH_LIB / "python.sh"}"; '
@@ -41,7 +44,7 @@ def _find_python(bin_dir: Path) -> subprocess.CompletedProcess:
     )
     return subprocess.run(
         [BASH, "-c", script],
-        env={"PATH": str(bin_dir)},
+        env={"PATH": str(bin_dir), **extra},
         capture_output=True,
         text=True,
         check=False,
@@ -62,9 +65,50 @@ def test_a_too_old_python3_is_rejected_with_its_version(tmp_path):
     done = _find_python(tmp_path)
     assert done.returncode == 1
     assert "BIN=\n" in done.stdout
-    assert "requires Python 3.10 or newer; found python3 3.9.6" in done.stderr
-    assert "brew install python, then PyYAML in a virtual environment" in done.stderr
-    assert "pyyaml" not in done.stderr
+    assert "requires Python 3.12 or newer with the venv module; found python3 3.9.6" in done.stderr
+    assert "brew install python" in done.stderr
+    assert "python3-venv" in done.stderr
+    assert "PAPAIA_PYTHON=/absolute/path" in done.stderr
+    assert "yaml" not in done.stderr.lower()
+
+
+@needs_bash
+@pytest.mark.parametrize("version", ["3.10.12", "3.11.9"])
+def test_python_below_3_12_is_rejected(tmp_path, version):
+    # The kit, which every lib.cli command imports, needs 3.12 (datetime.UTC, StrEnum).
+    _old(tmp_path, "python3", version)
+    done = _find_python(tmp_path)
+    assert done.returncode == 1
+    assert f"found python3 {version}" in done.stderr
+
+
+@needs_bash
+def test_papaia_python_names_the_interpreter_by_absolute_path(tmp_path):
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    _new(other, "python3")
+    _old(tmp_path, "python3")
+    done = _find_python(tmp_path, PAPAIA_PYTHON=str(other / "python3"))
+    assert done.returncode == 0, done.stderr
+    assert f"BIN={other / 'python3'}" in done.stdout
+
+
+@needs_bash
+@pytest.mark.parametrize("value", ["python3", "bin/python3", "./python3"])
+def test_papaia_python_refuses_a_name_or_relative_path(tmp_path, value):
+    _new(tmp_path, "python3")
+    done = _find_python(tmp_path, PAPAIA_PYTHON=value)
+    assert done.returncode == 1
+    assert "BIN=\n" in done.stdout
+    assert "PAPAIA_PYTHON must be an absolute path" in done.stderr
+
+
+@needs_bash
+def test_papaia_python_below_the_floor_is_rejected(tmp_path):
+    _old(tmp_path, "old-python", "3.11.2")
+    done = _find_python(tmp_path, PAPAIA_PYTHON=str(tmp_path / "old-python"))
+    assert done.returncode == 1
+    assert "requires Python 3.12 or newer" in done.stderr
 
 
 @needs_bash

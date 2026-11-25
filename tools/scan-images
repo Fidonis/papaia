@@ -13,7 +13,7 @@
 #   scan-images scan  --builds=FILE --out=DIR [--cache=DIR] [--exceptions=FILE]
 #
 # Exit codes: 0 passed, 1 a finding or an expired exception fails, 2 invalid input.
-# Needs Docker (scan) and Python 3.10+ with PyYAML.
+# Needs Docker (scan) and Python 3.12+ with PyYAML.
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 

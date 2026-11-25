@@ -1,7 +1,6 @@
 """Snapshots of the vendored papaia-kit release: write them or check them.
 
-papaia-ctl runs on Python 3.10 and cannot import the kit (Python 3.12, a development
-dependency only). It therefore reads copies of what it needs from the vendored release:
+papaia-ctl reads copies of these parts of the vendored release, checked here against it:
 
 - `schemas/kit/*.schema.json`, the contract schemas the catalog and the add-on checks
   validate against, with `schemas/kit/snapshot.json` (release and sha256 of each file);

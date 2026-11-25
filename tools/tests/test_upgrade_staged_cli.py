@@ -67,6 +67,8 @@ cmd_start() { echo "start lock=$(_lock) $*" >> "@LOG@"; }
 cmd_addon_upgrade() { echo "addon-upgrade lock=$(_lock) $*" >> "@LOG@"; }
 cmd_addon_stop() { echo "addon-stop $*" >> "@LOG@"; }
 _cli_at() {
+    # The target's runtime environment (lib/sh/runtime.sh) is not built here.
+    ctl_runtime_at() { :; }
     _py_cli_at() {
         local root="$1"; shift
         # A crashing add-on check, when the test asks for one.

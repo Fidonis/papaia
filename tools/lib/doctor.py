@@ -59,6 +59,7 @@ from . import (
     cli_addon,
     common,
     compat,
+    ctl_runtime,
     deployment,
     diagnosis,
     direct_ports,
@@ -4002,6 +4003,45 @@ def check_halt(ctx: Context) -> CheckResult:
     )
 
 
+# ─── ctl_runtime ─────────────────────────────────────────────────────────
+
+
+def check_ctl_runtime(ctx: Context) -> CheckResult:
+    """The runtime environment of papaia-ctl (`doctor ctl_runtime`, lib/ctl_runtime.py):
+    present, built for this checkout's runtime.lock, safe to run as root, its interpreter
+    runs and imports the kit and PyYAML. Works before setup: the environment is the first
+    thing setup builds."""
+    name = "ctl_runtime"
+    tools = ctx.repo_root / "tools"
+    if not (tools / ctl_runtime.LOCK_NAME).is_file():
+        return CheckResult(name, SKIP, f"this checkout has no tools/{ctl_runtime.LOCK_NAME}")
+    fix = "; run 'papaia-ctl setup' to build it"
+    runtime = tools / ctl_runtime.RUNTIME_NAME
+    link = runtime / ctl_runtime.CURRENT
+    target = os.readlink(link) if link.is_symlink() else ""
+    if not re.fullmatch(r"[0-9a-f]{64}", target) or not (runtime / target).is_dir():
+        return CheckResult(name, FAIL, f"the environment is missing ({link}){fix}")
+    env = runtime / target
+    try:
+        owners = ctl_runtime.allowed_owners(str(tools))
+        problem = (ctl_runtime.unsafe(str(runtime), owners, recursive=False)
+                   or ctl_runtime.unsafe(str(env), owners))
+        digest = ctl_runtime.lock_digest(str(tools))
+    except (OSError, ctl_runtime.RuntimeEnvError) as exc:
+        return CheckResult(name, FAIL, f"the environment cannot be checked: {exc}")
+    if problem:
+        return CheckResult(name, FAIL, f"the environment is refused: {problem}{fix}")
+    problem = ctl_runtime.env_problem(str(env), digest)
+    if problem:
+        return CheckResult(name, FAIL, f"the environment {problem}{fix}")
+    marker = ctl_runtime.read_marker(str(env))
+    return CheckResult(
+        name, PASS,
+        f"environment {digest[:12]} on Python {marker.get('python', '?')}, kit and PyYAML import",
+        {"lock_sha256": digest, "python": marker.get("python"), "base": marker.get("base")},
+    )
+
+
 # ─── realm ───────────────────────────────────────────────────────────────
 
 # Lines `realm sync --check` prints for a deviation; more are cut off in the details.
@@ -4106,6 +4146,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("person_export", check_person_export),
     ("erasure_journal", check_erasure_journal),
     ("edge_app_origin", check_edge_app_origin),
+    ("ctl_runtime", check_ctl_runtime),
 ]
 
 CHECK_NAMES = tuple(name for name, _ in CHECKS)

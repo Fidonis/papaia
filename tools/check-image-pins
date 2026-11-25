@@ -15,7 +15,7 @@
 #   check-image-pins repin --ref=<name>:<tag>@sha256:<digest> [--ref=...]
 #
 # Exit codes: 0 every pin resolves, 1 a pin does not resolve, 2 invalid input or a
-# refused mode. Reads registries only; needs Python 3.10+ with PyYAML.
+# refused mode. Reads registries only; needs Python 3.12+ with PyYAML.
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 

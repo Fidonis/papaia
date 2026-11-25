@@ -27,7 +27,7 @@ KIT_VERSION = "0.1.0"
 KIT_COMMIT = "849e344064472d94a5c934170f58162ef296c94c"
 KIT_WHEEL = f"vendor/papaia-kit/{KIT_VERSION}/papaia_kit-{KIT_VERSION}-py3-none-any.whl"
 
-# The kit needs Python 3.12 (CI runs 3.12); papaia-ctl itself keeps running on 3.10.
+# The kit needs Python 3.12, the floor of papaia-ctl as well (CI runs 3.12).
 needs_kit = pytest.mark.skipif(sys.version_info < (3, 12), reason="papaia-kit needs Python 3.12")
 
 # The secret scan tests need the gitleaks binary. CI installs the pinned release and sets
@@ -89,13 +89,61 @@ def test_uv_lock_and_pyproject_bind_the_same_kit_wheel():
     assert pyproject["tool"]["uv"]["sources"]["papaia-kit"] == {"path": KIT_WHEEL}
 
 
-@needs_kit
-def test_the_kit_is_a_development_dependency_only():
+def test_the_kit_is_a_runtime_dependency_on_python_3_12():
     pyproject = _toml(TOOLS / "pyproject.toml")
+    assert pyproject["project"]["requires-python"] == ">=3.12"
     runtime = pyproject["project"]["dependencies"]
-    assert not any(dep.startswith("papaia-kit") for dep in runtime)
+    assert f"papaia-kit=={KIT_VERSION}" in runtime
+    assert any(dep.startswith("PyYAML") for dep in runtime)
     dev = pyproject["project"]["optional-dependencies"]["dev"]
-    assert any(dep.startswith("papaia-kit==") for dep in dev)
+    assert not any(dep.startswith("papaia-kit") for dep in dev)
+
+
+def _runtime_lock() -> dict[str, list[str]]:
+    """{requirement without marker: hashes} of runtime.lock."""
+    sys.path.insert(0, str(TOOLS))
+    from lib import ctl_runtime
+
+    text = (TOOLS / "runtime.lock").read_text(encoding="utf-8")
+    return {req.split(";")[0].strip(): hashes for req, hashes in ctl_runtime.parse_lock(text)}
+
+
+def _runtime_closure(uv_lock: dict) -> set[str]:
+    """The packages of uv.lock that papaia-ctl needs at runtime: its dependencies and theirs."""
+    packages = {package["name"]: package for package in uv_lock["package"]}
+    todo = [dep["name"] for dep in packages["papaia-ctl"].get("dependencies", [])]
+    seen: set[str] = set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        todo.extend(dep["name"] for dep in packages[name].get("dependencies", []))
+    return seen
+
+
+def test_runtime_lock_uv_lock_and_kit_lock_are_in_step():
+    uv_lock = _toml(TOOLS / "uv.lock")
+    packages = {package["name"]: package for package in uv_lock["package"]}
+    lock = _runtime_lock()
+    kit = next(entry for entry in _toml(TOOLS / "kit.lock")["files"]
+               if entry["path"] == KIT_WHEEL)
+    assert lock.pop(f"./{KIT_WHEEL}") == [kit["sha256"]]
+    pinned = {}
+    for requirement, hashes in lock.items():
+        name, _, version = requirement.partition("==")
+        pinned[name.lower()] = (version, set(hashes))
+    closure = _runtime_closure(uv_lock) - {"papaia-kit"}
+    assert set(pinned) == closure
+    for name in closure:
+        package = packages[name]
+        locked = {w["hash"].removeprefix("sha256:") for w in package.get("wheels", [])}
+        if "sdist" in package:
+            locked.add(package["sdist"]["hash"].removeprefix("sha256:"))
+        version, hashes = pinned[name]
+        assert version == package["version"], name
+        # Every wheel of every platform uv.lock lists, nothing else.
+        assert hashes == locked, name
 
 
 # --- licenses -----------------------------------------------------------------------

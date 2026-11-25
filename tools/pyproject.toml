@@ -2,21 +2,20 @@
 name = "papaia-ctl"
 version = "0.0.0"
 description = "papaia-ctl orchestrator -- local dev tooling, not published"
-requires-python = ">=3.10"
-dependencies = ["PyYAML>=6.0"]
+requires-python = ">=3.12"
+# The runtime set: papaia-ctl runs lib.cli from an environment of exactly these packages,
+# built by `setup` and `upgrade` from runtime.lock (hash-pinned, exported from uv.lock).
+dependencies = ["PyYAML>=6.0", "papaia-kit==0.1.0"]
 
 [project.optional-dependencies]
-# papaia-kit runs the repository checks of the CI (licenses, words); it needs Python 3.12
-# and is never part of papaia-ctl itself, which keeps running on Python 3.10.
 dev = [
     "pytest>=8",
     "ruff>=0.6",
     "jsonschema>=4.18",
-    "papaia-kit==0.1.0 ; python_version >= '3.12'",
 ]
 
 # The kit has no package index: its release wheel is vendored and pinned by sha256 in
-# kit.lock and uv.lock (tests/test_ci_checks.py keeps the three in step).
+# kit.lock, uv.lock and runtime.lock (tests/test_ci_checks.py keeps them in step).
 [tool.uv.sources]
 papaia-kit = { path = "vendor/papaia-kit/0.1.0/papaia_kit-0.1.0-py3-none-any.whl" }
 

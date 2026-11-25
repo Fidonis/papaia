@@ -1,10 +1,9 @@
 """Exchange scopes come from the platform kit.
 
-papaia-ctl runs on Python 3.10 and cannot import the kit (Python 3.12). The naming
-register snapshot `lib/names_register.json` therefore carries the exchange scope of
+The naming register snapshot `lib/names_register.json` carries the exchange scope of
 every registered audience as the vendored kit's `exchange_scope()` builds it, and
-`lib/kit_names.py` reads them from there. The tests that need the kit (CI runs 3.12)
-check the snapshot against the vendored kit, so the two cannot drift apart.
+`lib/kit_names.py` reads them from there. The tests check the snapshot against the
+vendored kit, so the two cannot drift apart.
 """
 
 from __future__ import annotations

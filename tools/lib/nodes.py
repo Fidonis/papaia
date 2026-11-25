@@ -361,7 +361,7 @@ On the node, as root:
     cd papaia-join-{node}
     sudo ./install.sh
 
-Prerequisites on the node: Docker with the compose plugin, python3 (3.10 or newer) with
+Prerequisites on the node: Docker with the compose plugin, python3 (3.12 or newer) with
 PyYAML, an SSH server. The script creates the user '{user}', the directory {root} and the
 authorized_keys entry for the controller. Then, on the controller:
 
