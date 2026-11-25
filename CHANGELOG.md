@@ -12,6 +12,15 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Fixed zstd and zlib in the Debian-based core images
+
+- `papaia-egress`, `papaia-lifecycle`, `papaia-replay`, `papaia-people`,
+  `papaia-chat-relay` and `papaia-docker-gate` carry `libzstd1` `1.5.7+dfsg-1+deb13u1`
+  (CVE-2026-124851) and `zlib1g` `1:1.3.dfsg+really1.3.1-1+deb13u1` (CVE-2026-85091) on
+  linux/amd64 and linux/arm64. A stage on the build platform fetches exactly these
+  versions from the Debian archive of the base and the final stage only copies the
+  result; the base digest is unchanged. The six images are rebuilt and re-pinned.
+
 ### Final kit 0.1.0
 
 - The core vendors the final kit 0.1.0, the release build of kit commit `849e344`

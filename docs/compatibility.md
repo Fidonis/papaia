@@ -355,6 +355,21 @@ A stage that only fetches files for the target may run on the build platform
 the target platform there, without compiling or running them, and the final
 stage copies the result. Both variants are thus built without emulation.
 
+The same rule carries a Debian security fix the pinned base digest does not
+hold yet. The Debian-based images (`papaia-egress`, `papaia-lifecycle`,
+`papaia-replay`, `papaia-people`, `papaia-chat-relay`, `papaia-docker-gate`)
+have a `debian-fixes` stage on the build platform: it downloads the fixed
+packages of the target platform in exact versions from the Debian sources of
+the base (apt checks the archive signature and each package's hash), installs
+them with `dpkg --root` into a copy of the target base without running any of
+its programs, and the final stage copies only the changed files and the dpkg
+records. Today these are `libzstd1` `1.5.7+dfsg-1+deb13u1` (CVE-2026-124851)
+and `zlib1g` `1:1.3.dfsg+really1.3.1-1+deb13u1` (CVE-2026-85091). No other
+package is upgraded, and no exception is written for a finding that has a fix.
+Once a digest of the base tag carries these versions, the pin moves to it and
+the stage goes. A fixed version that the Debian archive no longer serves fails
+the build loudly rather than silently taking another one.
+
 `tools/build-images` takes an image from the checkout to the bill of
 materials:
 

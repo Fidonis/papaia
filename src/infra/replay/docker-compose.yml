@@ -38,7 +38,7 @@ services:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): one
     # standard-library Python file on a pinned Python base. Built, signed and pinned by
     # tools/build-images.
-    image: ghcr.io/fidonis/papaia-replay:1.10.0-rc.1@sha256:19553dd6945adc97eb634f5aea9371587a8882a14d9ed17bc7c33f10a8bb0105
+    image: ghcr.io/fidonis/papaia-replay:1.10.0-rc.1@sha256:acd55f8c96849250d26d41109e98d2d8225fda9e7f57877aac223adc791ae2da
     restart: unless-stopped
     command:
       - python3

@@ -105,6 +105,62 @@ def test_the_image_notice_lists_the_runtime_components():
         assert "Python" in notice and "PSF-2.0" in notice
 
 
+# Debian security fixes the pinned trixie base does not carry yet (CVE-2026-124851 in
+# libzstd1, CVE-2026-85091 in zlib1g): every Debian-based own image takes them in these
+# exact versions. The live test (test_own_images_registry.py) reads them back from the
+# built image on both platforms.
+DEBIAN_FIXES = {
+    "libzstd1": "1.5.7+dfsg-1+deb13u1",
+    "zlib1g": "1:1.3.dfsg+really1.3.1-1+deb13u1",
+}
+DEBIAN_IMAGES = {
+    "ghcr.io/fidonis/papaia-egress",
+    "ghcr.io/fidonis/papaia-lifecycle",
+    "ghcr.io/fidonis/papaia-replay",
+    "ghcr.io/fidonis/papaia-people",
+    "ghcr.io/fidonis/papaia-chat-relay",
+    "ghcr.io/fidonis/papaia-docker-gate",
+}
+
+
+def _stages(text: str) -> list[list[str]]:
+    """The instructions of each stage of a Dockerfile, continuation lines joined."""
+    stages: list[list[str]] = []
+    for line in text.replace("\\\n", " ").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.upper().startswith("FROM "):
+            stages.append([])
+        if stages:
+            stages[-1].append(" ".join(line.split()))
+    return stages
+
+
+def test_every_debian_own_image_takes_the_fixed_zstd_and_zlib():
+    debian = set()
+    for image in own_images.load(REPO):
+        stages = _stages((REPO / image.dockerfile).read_text(encoding="utf-8"))
+        final = stages[-1]
+        if "-trixie@" not in final[0]:
+            continue
+        debian.add(image.name)
+        fixes = [s for s in stages if s[0].endswith(" AS debian-fixes")]
+        assert len(fixes) == 1, f"{image.dockerfile}: no debian-fixes stage"
+        # Built natively for the target, never under emulation.
+        assert fixes[0][0].startswith("FROM --platform=$BUILDPLATFORM ")
+        run = " ".join(i for i in fixes[0] if i.startswith("RUN "))
+        for package, version in DEBIAN_FIXES.items():
+            assert f'"{package}:$TARGETARCH={version}"' in run, (
+                f"{image.dockerfile}: {package} is not fetched in version {version}"
+            )
+        # Only these packages are upgraded, and the final stage only copies the result.
+        assert run.count(":$TARGETARCH=") == len(DEBIAN_FIXES)
+        assert "COPY --from=debian-fixes /out/target/ /" in final
+        assert not any(i.startswith("RUN ") for i in final)
+    assert debian == DEBIAN_IMAGES
+
+
 def test_the_inventory_documents_the_own_images():
     inventory = (REPO / "THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
     for image in own_images.load(REPO):

@@ -26,6 +26,7 @@ PAPAIA_OWN_IMAGES_TEST_PORT the registry port (default: a free port).
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import secrets
@@ -33,6 +34,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tarfile
 import time
 import urllib.request
 from pathlib import Path
@@ -41,6 +43,7 @@ import hang_guard
 import pytest
 import yaml
 from test_images import _bom, _new_keypair, _sign_bytes
+from test_own_images import DEBIAN_FIXES, DEBIAN_IMAGES
 
 from lib import cli, images, own_images, suite
 
@@ -218,6 +221,38 @@ def _verify(root: Path, config: Path, refs: list[str]) -> int:
                      f"--images-file={listing}", "--command=start"])
 
 
+def _dpkg_status(ref: str, platform: str) -> dict[str, dict[str, str]]:
+    """The dpkg status of one platform of `ref` by package name, read from the image's
+    file system without running it, so the foreign platform needs no emulation."""
+    name = f"{PROJECT}-dpkg-{platform.rsplit('/', 1)[1]}"
+    _run("docker", "rm", "-f", name, check=False)
+    try:
+        _run("docker", "create", "--platform", platform, "--name", name, ref)
+        copied = subprocess.run(["docker", "cp", f"{name}:/var/lib/dpkg/status", "-"],
+                                capture_output=True, timeout=hang_guard.seconds(), check=True)
+    finally:
+        _run("docker", "rm", "-f", name, check=False)
+    with tarfile.open(fileobj=io.BytesIO(copied.stdout)) as archive:
+        member = archive.extractfile("status")
+        assert member is not None
+        text = member.read().decode("utf-8")
+    packages: dict[str, dict[str, str]] = {}
+    for stanza in text.split("\n\n"):
+        fields = dict(line.split(": ", 1) for line in stanza.splitlines()
+                      if ": " in line and not line.startswith(" "))
+        if "Package" in fields:
+            packages[fields["Package"]] = fields
+    return packages
+
+
+def _at_least(ref: str, installed: str, fixed: str) -> bool:
+    """dpkg's own version order, from the image on the host's platform."""
+    done = _run("docker", "run", "--rm", "--name", f"{PROJECT}-dpkg-compare",
+                "--network", "none", "--entrypoint", "dpkg", ref,
+                "--compare-versions", installed, "ge", fixed, check=False)
+    return done.returncode == 0
+
+
 @pytest.fixture
 def builder(docker_buildx):
     if not _multi_platform():
@@ -254,6 +289,24 @@ def test_own_images_round_trip_through_a_registry(
         platforms = {(m["platform"]["os"], m["platform"]["architecture"])
                      for m in index["manifests"]}
         assert platforms == {("linux", "amd64"), ("linux", "arm64")}
+
+    # The Debian-based images carry the fixed zstd and zlib on both platforms.
+    for name in sorted(DEBIAN_IMAGES):
+        served = f"{prefix}{name}@{built[name]['digest']}"
+        try:
+            for arch in ("amd64", "arm64"):
+                status = _dpkg_status(served, f"linux/{arch}")
+                for package, fixed in DEBIAN_FIXES.items():
+                    entry = status[package]
+                    assert entry["Architecture"] == arch
+                    assert entry["Status"] == "install ok installed"
+                    assert _at_least(served, entry["Version"], fixed), (
+                        f"{name} ({arch}): {package} {entry['Version']} is older than {fixed}"
+                    )
+                # The copy of the upgrade left no package half installed.
+                assert all(e.get("Status") == "install ok installed" for e in status.values())
+        finally:
+            _run("docker", "image", "rm", served, check=False)
 
     # Sign the egress image only, with a throwaway key that also signs the bill of
     # materials; the signature goes to the release's signature repository behind the

@@ -42,7 +42,7 @@ services:
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml): the
     # proxy, one standard-library Python file, on a pinned Python base. Built, signed
     # and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-egress:1.10.0-rc.1@sha256:af3782163f47d2fdc080c081f529e73b431c22b9d6b7c9e10ef59bb2eb1b85f4
+    image: ghcr.io/fidonis/papaia-egress:1.10.0-rc.1@sha256:01f10a5714f1192fb5b5038e19aaecba0b5b0c57062b4ccc6418a566158ccf7f
     restart: unless-stopped
     command: ["python3", "-I", "/opt/papaia-egress/egress.py", "--config", "/etc/papaia-egress/egress.json"]
     user: "${UID:-1000}:${GID:-1000}"
