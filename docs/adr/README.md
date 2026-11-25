@@ -48,7 +48,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0027](./0027-join-the-network-an-add-on-offers-instead-of-its-app-network.md) | Join the network an add-on offers through an exposes entry instead of its app network | Proposed | 2026-11-23 |
 | [0028](./0028-set-the-sign-in-addresses-of-add-on-clients-from-the-manifest.md) | Set the sign-in addresses of add-on clients from the manifest | Proposed | 2026-11-24 |
 | [0029](./0029-reach-a-tool-server-outside-the-suite-through-a-core-chat-relay.md) | Reach a tool server outside the suite through a core chat relay | Accepted | 2026-11-24 |
-| [0030](./0030-accept-a-test-trust-anchor-for-pre-release-cores.md) | Accept a test trust anchor for pre-release cores | Proposed | 2026-11-24 |
+| [0030](./0030-accept-a-test-trust-anchor-for-pre-release-cores.md) | Accept a test trust anchor for pre-release cores | Accepted | 2026-11-25 |
 | [0031](./0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md) | Give every model route a data class and refuse requests above it at the gateway | Accepted | 2026-11-25 |
 
 ## Reserved numbers

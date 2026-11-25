@@ -257,6 +257,14 @@ release (and a hotfix) is not cut until all of the following hold:
    from `tools/build-images bom-entries`.
 6. Every pin resolves: `tools/check-image-pins check --mode=release` passes
    (next section), before the tag with `--own-builds` and on the tag without.
+7. `VERSION` is exactly `X.Y.Z` without a pre-release part or build metadata
+   before `vX.Y.Z` is tagged, and the tag is `v` + `VERSION`. A core whose
+   `VERSION` carries a pre-release part accepts the test trust anchor
+   ([ADR 0030](adr/0030-accept-a-test-trust-anchor-for-pre-release-cores.md)).
+   The `release-version` job of `.github/workflows/images.yml` enforces it on
+   every `v*` tag with `python -m lib.release_version check --tag <ref>` (in
+   `tools/`), before anything is built, signed or published; every later job of
+   the tag run needs it.
 
 Without 1 to 3 every operator would need `--insecure-images`.
 

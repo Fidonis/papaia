@@ -61,7 +61,7 @@ def test_only_the_publish_job_may_request_an_oidc_token_or_write_packages():
 def test_the_publish_job_runs_only_for_a_version_tag_after_the_scan():
     job = _workflow()["jobs"]["publish"]
 
-    assert job["needs"] == "build-scan"
+    assert job["needs"] == ["release-version", "build-scan"]
     assert "startsWith(github.ref, 'refs/tags/v')" in job["if"]
 
 

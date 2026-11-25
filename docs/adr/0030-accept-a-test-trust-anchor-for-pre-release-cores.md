@@ -1,8 +1,8 @@
 ---
 adr: 0030
 title: Accept a test trust anchor for pre-release cores
-status: Proposed
-date: 2026-11-24
+status: Accepted
+date: 2026-11-25
 deciders:
   - WilhelmSebastian
 tags:

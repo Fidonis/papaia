@@ -53,6 +53,15 @@ based on merged pull requests; this file mirrors the published releases.
   names the base interpreter; a name or a relative path is refused. pip reads a mirror
   (`PIP_INDEX_URL`) or a wheel directory (`PIP_FIND_LINKS`) from the environment; hashes
   are required in every case.
+### Release version check of a version tag
+
+- A tag `vX.Y.Z` fails before anything is built, signed or published unless `VERSION` is
+  exactly `X.Y.Z` (no pre-release part, no build metadata) and the tag is `v` + `VERSION`:
+  new job `release-version` of the "Core images" workflow
+  (`python -m lib.release_version check --tag <ref>`); every later job needs it. A core
+  with a pre-release `VERSION` accepts the test trust anchor, so a tagged release must
+  never carry one. The check is item 7 of the release gate in `docs/compatibility.md`.
+- ADR 0030 (test trust anchor for pre-release cores) is accepted.
 
 ### Fixed zstd and zlib in the Debian-based core images
 
