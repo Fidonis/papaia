@@ -84,18 +84,82 @@ LibreChat still calls with the master key; a key of its own is planned.
 
 ## Data class of a route
 
-Each alias carries the highest data class its route may receive, on the kit scale:
-`internal` unless the operator sets `model_info.papaia_max_class` in the overlay or
-`PAPAIA_MODEL_MAX_CLASS` in the root `.env`, and never above `internal` for a hosted test
-model. The catalog lists the class in its `models` block; the gateway refuses a module
-request above it with `403 class_exceeded` before any backend call, and refuses every
-module request when the route data is missing (`503 route_class_unknown`). A module key
-reaches only the model call routes the gateway judges and the model listing; every other
-route is refused for it. The decision, with the header `x-papaia-data-class`, the audit
-row, the replacement of older keys and the remaining risks, is
-[ADR 0031](adr/0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md).
-It is not implemented yet: the `models` block is still empty and the gateway judges no
-class.
+Each alias carries the highest data class its route may receive, one class of the kit scale
+`public` < `internal` < `partner_contact` < `personal` < `employee` < `confidential` <
+`special` < `professional_secret`. The render takes it, per alias,
+
+1. from `model_info.papaia_max_class` of the alias's entry in the overlay
+   `$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`;
+2. otherwise from `PAPAIA_MODEL_MAX_CLASS` in the root `.env`, which applies to every alias;
+3. otherwise `internal`.
+
+```yaml
+# $PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml
+model_list:
+  - model_name: papaia-chat
+    litellm_params:
+      model: hosted_vllm/my-model
+      api_base: http://localai:8080/v1
+      api_key: os.environ/LOCALAI_API_KEY
+    model_info:
+      papaia_max_class: confidential
+      papaia_features: [chat, tools, stream]   # optional, see below
+      papaia_context: 32768                    # optional, see below
+```
+
+Rules of the render:
+
+- A value outside the scale (an unknown name, another spelling or case, an empty value,
+  surrounding text) stops the render with the model and the value; it never falls back
+  to the default. The same holds for `PAPAIA_MODEL_MAX_CLASS`.
+- Only the overlay sets the class. A `papaia_max_class` from the repository, a profile or
+  an add-on fragment is dropped and reported, so an add-on cannot raise the class of a
+  route.
+- A hosted test model ([hosted-test-model.md](hosted-test-model.md)) receives at most
+  `internal`, whatever the overlay or the root setting say; the render reports the cap.
+- An alias that reaches more than one model (several entries with its name, `fallbacks`,
+  `context_window_fallbacks`, `content_policy_fallbacks`, `default_fallbacks` or
+  `model_group_alias` in `router_settings` or `litellm_settings`) gets the lowest class of
+  every model it can reach.
+
+The render writes the result into the route file
+`$PAPAIA_CONFIG_DIR/ai/litellm/model-routes.json` (mode 0644; format
+`papaia.model-routes/1`, the generation time and alias to class, no endpoint and no key),
+which the gateway container mounts read-only. The file is rewritten only when a class
+changes, and each alias whose class changed leaves one `config_changed` row
+(`model_route.class`, the new class as `data_class`) in the audit outbox of `papaia-ctl`.
+
+**Catalog.** The `models` block of the platform catalog lists every alias as a kit
+`ModelAlias`: `alias`, `features`, `context`, `max_class` (the route class) and
+`test_backend`. `features` follow the purpose of the alias (`papaia-chat`: `chat`,
+`tools`, `stream`; `papaia-structured`: `chat`, `json_schema`, `json_object`, `stream`;
+`papaia-embed`: `embeddings`) unless the overlay names them in
+`model_info.papaia_features`; `context` comes from `model_info.papaia_context`, otherwise
+from the `context_size` of the shipped LocalAI model the entry names, otherwise 4096.
+Without the profile `litellm` the block stays empty. Modules take the class of a route
+from this block only.
+
+**Module needs.** The `max_class` of a need must be one class of the scale; any other
+value refuses the start of the add-on with the value. The module key stores the declared
+classes in its metadata `papaia_need_classes` (alias to class; the highest of several needs
+of one alias; an alias with a need that names no class is left out and counts as the
+highest class). A key whose stored classes differ from the declaration, or a key made
+before this rule, is replaced like a key whose aliases changed (revocation journaled as
+`key_revoke`).
+
+**Start rule.** `papaia-ctl addon start` warns about each need whose `max_class` is above
+the class of its route (module, alias, both classes), each needed alias without a route and
+each need without a declared class; the key is made all the same. `papaia-ctl doctor
+model_gateway_classes` reports the same as `warn` and fails when the route file is missing,
+malformed or differs from the rendered configuration.
+
+The refusal at the gateway itself (`403 class_exceeded` for a request above the route,
+`503 route_class_unknown` when the route data is missing, the header
+`x-papaia-data-class`, the route allowlist of module keys and the audit row of a refusal)
+is decided in
+[ADR 0031](adr/0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md)
+and not implemented yet: until then the gateway judges no class, and the module's own
+refusal, which reads the class from the catalog, is the only line.
 
 ## Revocation and the erasure journal
 

@@ -12,6 +12,24 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Data class of every model route
+
+- Every alias of the model gateway carries the highest data class its route may receive
+  (`model_info.papaia_max_class` from the overlay, else `PAPAIA_MODEL_MAX_CLASS` in the root
+  `.env`, else `internal`). A value outside the kit scale stops the render; a value from a
+  repository, profile or add-on layer is dropped and reported; a hosted test model is capped
+  at `internal`; an alias with several deployments or fallbacks gets the lowest class it can
+  reach.
+- The render writes `ai/litellm/model-routes.json` (alias to class, no key), mounted
+  read-only into the gateway; each changed class is one `config_changed` audit row.
+- The platform catalog fills its `models` block with every alias (`alias`, `features`,
+  `context`, `max_class`, `test_backend`).
+- A module need's `max_class` must be a class of the kit scale; module keys store the
+  declared classes (`metadata.papaia_need_classes`) and are replaced when they change.
+- `papaia-ctl addon start` and the new check `doctor model_gateway_classes` report a need
+  above the class of its route; `doctor` fails when the route file is missing or differs.
+  The refusal at the gateway follows separately.
+
 ### Decision: data class of a model route
 
 - ADR 0031 decides that every model route carries the highest data class it may receive

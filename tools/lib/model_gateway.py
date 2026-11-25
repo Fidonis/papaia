@@ -13,10 +13,13 @@ Modules reach models through LiteLLM alone and name aliases, never a model or a 
   the metrics and the listing filter. A layer that changes any of that is refused.
 * Module keys. A module that declares `models.needs` in its `exposes:` gets a virtual key
   of its own: alias `module-<name>`, its aliases as the only models, budget tag
-  `module:<name>`. The key goes into the add-on's `.env` as `PAPAIA_MODEL_KEY`; the master
-  key stays inside the LiteLLM container, where the management calls run
-  (`docker exec`). Before a key is revoked or replaced, `key_revoke` with the key id (the
-  SHA-256 LiteLLM stores, never the key) goes into the erasure journal `model-gateway`,
+  `module:<name>`, and the data classes it declared per alias (`max_class`, one class of
+  the kit scale) as `metadata.papaia_need_classes`, which the gateway compares with the
+  class of the route (lib/model_routes.py, ADR 0031). The key goes into the add-on's
+  `.env` as `PAPAIA_MODEL_KEY`; the master key stays inside the LiteLLM container, where
+  the management calls run (`docker exec`). Before a key is revoked or replaced,
+  `key_revoke` with the key id (the SHA-256 LiteLLM stores, never the key) goes into the
+  erasure journal `model-gateway`,
   so a restored database cannot bring the key back unnoticed. A revocation LiteLLM
   cannot take at that moment is kept and done at the next `start`.
 
@@ -40,7 +43,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
-from . import common, images
+from . import common, images, model_routes
 
 logger = logging.getLogger(__name__)
 
@@ -103,15 +106,16 @@ _MODELS_FIELDS = frozenset({"needs"})
 _NEED_FIELDS = frozenset({"alias", "features", "min_context", "max_class"})
 _FEATURES = frozenset({"chat", "tools", "json_schema", "json_object", "stream", "embeddings"})
 _MIN_CONTEXT = 1024
-_CLASS_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
-_ALIAS_RE = re.compile(r"papaia-[a-z0-9-]{1,40}")
+_ALIAS_RE = model_routes.ALIAS_RE
 _MODULE_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _TOKEN_RE = re.compile(r"[0-9a-f]{64}")
 _PENDING_FIELDS = frozenset({"key_id", "module"})
 _PLACEHOLDERS = frozenset({"", "CHANGE_ME", "__GENERATED__"})
 
 SERVICE = "litellm"
+# Key metadata: alias -> the data class the module declared (ADR 0031).
+NEED_CLASSES_KEY = "papaia_need_classes"
 JOURNAL_SOURCE = "model-gateway"
 JOURNAL_LOCAL_DIR = Path("state") / "erasure-journal"
 PENDING_FILE = Path("state") / "model-gateway" / "pending-revocations.json"
@@ -333,21 +337,23 @@ def _check_need(need: object) -> str:
                 f"models.needs[{alias}].min_context must be an integer of at least {_MIN_CONTEXT}"
             )
     if "max_class" in need:
-        data_class = need["max_class"]
-        if not isinstance(data_class, str) or not _CLASS_RE.fullmatch(data_class):
-            raise ModelGatewayError(f"models.needs[{alias}].max_class is not a data class")
+        # One class of the kit scale (ADR 0031); the start of the add-on is refused with it.
+        try:
+            model_routes.check_class(need["max_class"], f"models.needs[{alias}].max_class")
+        except model_routes.ModelRoutesError as exc:
+            raise ModelGatewayError(str(exc)) from None
     return alias
 
 
-def module_aliases(manifest: dict) -> list[str]:
-    """The aliases a module's manifest declares under `exposes[].models.needs`, sorted.
-    Every need is checked; a field the contract does not name is refused."""
+def _needs(manifest: dict) -> list[dict]:
+    """Every entry of `exposes[].models.needs`, checked; a field the contract does not
+    name is refused."""
     exposes = manifest.get("exposes") if isinstance(manifest, dict) else None
     if exposes is None:
         return []
     if not isinstance(exposes, list):
         raise ModelGatewayError("exposes must be a list")
-    aliases: set[str] = set()
+    found: list[dict] = []
     for entry in exposes:
         models = entry.get("models") if isinstance(entry, dict) else None
         if models is None:
@@ -358,8 +364,30 @@ def module_aliases(manifest: dict) -> list[str]:
         needs = models.get("needs")
         if not isinstance(needs, list):
             raise ModelGatewayError("models.needs must be a list")
-        aliases.update(_check_need(need) for need in needs)
-    return sorted(aliases)
+        for need in needs:
+            _check_need(need)
+            found.append(need)
+    return found
+
+
+def module_aliases(manifest: dict) -> list[str]:
+    """The aliases a module's manifest declares under `exposes[].models.needs`, sorted.
+    Every need is checked; a field the contract does not name is refused."""
+    return sorted({need["alias"] for need in _needs(manifest)})
+
+
+def module_need_classes(manifest: dict) -> dict[str, str]:
+    """Alias -> the data class the module declared for it (`max_class`; the highest of
+    several needs of one alias), sorted. An alias with a need that declares no class is
+    left out: the gateway then judges its requests as the highest class (ADR 0031)."""
+    declared: dict[str, list[str | None]] = {}
+    for need in _needs(manifest):
+        declared.setdefault(need["alias"], []).append(need.get("max_class"))
+    return {
+        alias: model_routes.highest(classes)  # type: ignore[arg-type]
+        for alias, classes in sorted(declared.items())
+        if None not in classes
+    }
 
 
 def key_alias(module: str) -> str:
@@ -614,9 +642,36 @@ def _revoke_tokens(config_dir, repo_root, admin, module, tokens, reason, correla
                 "reason": reason, "journal": place}, correlation)
 
 
+def _check_need_classes(need_classes: dict[str, str] | None, aliases: list[str]
+                        ) -> dict[str, str]:
+    classes = dict(need_classes or {})
+    for alias, data_class in classes.items():
+        if alias not in aliases:
+            raise ModelGatewayError(f"{alias!r} has a declared class but is not a need")
+        try:
+            model_routes.check_class(data_class, f"declared class of {alias}")
+        except model_routes.ModelRoutesError as exc:
+            raise ModelGatewayError(str(exc)) from None
+    return dict(sorted(classes.items()))
+
+
+def _key_matches(row: dict, wanted: list[str], classes: dict[str, str]) -> bool:
+    """A key stays while its aliases and its stored need classes are the declaration; a
+    key without stored classes was made before the class rule and is replaced."""
+    metadata = row.get("metadata")
+    return (
+        sorted(row.get("models") or []) == wanted
+        and isinstance(metadata, dict)
+        and metadata.get(NEED_CLASSES_KEY) == classes
+    )
+
+
 def ensure_module_key(config_dir: Path, repo_root: Path, module: str, aliases: list[str],
-                      admin, *, correlation: str | None = None) -> str:
-    """Give `module` a key for exactly `aliases`. Returns `none` (no need, no key),
+                      admin, *, correlation: str | None = None,
+                      need_classes: dict[str, str] | None = None) -> str:
+    """Give `module` a key for exactly `aliases`, with the data classes it declared
+    (`need_classes`, alias -> class) in the key's metadata `papaia_need_classes`, where the
+    gateway reads them (ADR 0031). Returns `none` (no need, no key),
     `unchanged`, `created`, `replaced`, `revoked` (the need is gone) or `unavailable`
     (LiteLLM does not answer). With `unavailable` the `.env` keeps its key, unless LiteLLM
     stopped after old keys were deleted: then the key leaves the `.env`, so no add-on
@@ -628,6 +683,7 @@ def ensure_module_key(config_dir: Path, repo_root: Path, module: str, aliases: l
         if not isinstance(alias, str) or not _ALIAS_RE.fullmatch(alias):
             raise ModelGatewayError(f"{alias!r} is not an alias")
     wanted = sorted(set(aliases))
+    classes = _check_need_classes(need_classes, wanted)
     current = _current_key(config_dir, module)
     if not wanted:
         if current is None:
@@ -639,14 +695,14 @@ def ensure_module_key(config_dir: Path, repo_root: Path, module: str, aliases: l
         rows = _listed(admin, module)
         current_id = key_id(current) if current else None
         matching = [r for r in rows if r["token"] == current_id]
-        if matching and len(rows) == 1 and sorted(matching[0].get("models") or []) == wanted:
+        if matching and len(rows) == 1 and _key_matches(matching[0], wanted, classes):
             return "unchanged"
         stale = [r["token"] for r in rows]
         _revoke_tokens(config_dir, repo_root, admin, module, stale, "key_replaced", correlation)
         status, body = admin.call("POST", "/key/generate", {
             "key_alias": key_alias(module),
             "models": wanted,
-            "metadata": {"tags": [f"module:{module}"]},
+            "metadata": {"tags": [f"module:{module}"], NEED_CLASSES_KEY: classes},
         })
     except Unavailable:
         if stale and current is not None:
@@ -766,7 +822,8 @@ def sync(config_dir: Path, repo_root: Path, admin, *, correlation: str | None = 
             if not aliases and _current_key(config_dir, name) is None:
                 continue
             outcome = ensure_module_key(config_dir, repo_root, name, aliases, admin,
-                                        correlation=correlation)
+                                        correlation=correlation,
+                                        need_classes=module_need_classes(manifest))
         except Unavailable:
             raise
         except ModelGatewayError as exc:

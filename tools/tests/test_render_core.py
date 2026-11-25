@@ -68,7 +68,10 @@ def test_render_overlay_wins_over_base(repo_root, config_dir):
     render_core.render(config_dir, repo_root)
 
     rendered = yaml.safe_load((config_dir / "ai/litellm/config.yaml").read_text(encoding="utf-8"))
-    assert rendered["model_list"] == [{"model_name": "custom"}]
+    # Every route carries its data class (ADR 0031); without a decision `internal`.
+    assert rendered["model_list"] == [
+        {"model_name": "custom", "model_info": {"papaia_max_class": "internal"}}
+    ]
 
 
 def test_render_merges_active_addon_fragment(repo_root, config_dir):
@@ -498,7 +501,7 @@ def test_the_localai_models_are_registered_while_the_profile_is_active(repo_root
                 "api_base": "http://localai:8080/v1",
                 "api_key": "os.environ/LOCALAI_API_KEY",
             },
-            "model_info": {"mode": "embedding"},
+            "model_info": {"mode": "embedding", "papaia_max_class": "internal"},
         },
         {
             "model_name": "qwen2.5-1.5b-instruct",
@@ -507,6 +510,7 @@ def test_the_localai_models_are_registered_while_the_profile_is_active(repo_root
                 "api_base": "http://localai:8080/v1",
                 "api_key": "os.environ/LOCALAI_API_KEY",
             },
+            "model_info": {"papaia_max_class": "internal"},
         },
     ]
 

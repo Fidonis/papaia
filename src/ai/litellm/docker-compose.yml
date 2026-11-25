@@ -38,6 +38,14 @@ services:
         source: ${PAPAIA_CONFIG_DIR}/certs
         target: /certs
         read_only: true
+      # The data class of every route (docs/model-gateway.md), alias -> class, written by
+      # the render with the configuration above; no key, no endpoint. `render` makes it.
+      - type: bind
+        source: ${PAPAIA_CONFIG_DIR}/ai/litellm/model-routes.json
+        target: /app/model-routes.json
+        read_only: true
+        bind:
+          create_host_path: false
       # The platform halt (docs/halt.md): the folder, never the file, which is replaced
       # by a rename. `render` makes it; Compose must not.
       - type: bind

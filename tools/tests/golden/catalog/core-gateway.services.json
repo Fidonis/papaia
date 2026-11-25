@@ -1,0 +1,67 @@
+{
+  "format": "papaia.platform-services/1",
+  "generated_at": "2026-11-25T10:00:00Z",
+  "addon_api": 18,
+  "security_profile": "standard",
+  "identity": {
+    "issuer": "https://auth.papaia.example/realms/papaia",
+    "token_endpoint_internal": "https://keycloak:8443/realms/papaia/protocol/openid-connect/token",
+    "jwks_uri_internal": "https://keycloak:8443/realms/papaia/protocol/openid-connect/certs"
+  },
+  "services": [],
+  "models": [
+    {
+      "alias": "papaia-chat",
+      "features": [
+        "chat",
+        "tools",
+        "stream"
+      ],
+      "context": 8192,
+      "max_class": "confidential",
+      "test_backend": false
+    },
+    {
+      "alias": "papaia-embed",
+      "features": [
+        "embeddings"
+      ],
+      "context": 4096,
+      "max_class": "internal",
+      "test_backend": false
+    },
+    {
+      "alias": "papaia-structured",
+      "features": [
+        "chat",
+        "json_schema",
+        "json_object",
+        "stream"
+      ],
+      "context": 4096,
+      "max_class": "personal",
+      "test_backend": false
+    },
+    {
+      "alias": "papaia-vision",
+      "features": [
+        "chat",
+        "stream"
+      ],
+      "context": 32768,
+      "max_class": "internal",
+      "test_backend": true
+    }
+  ],
+  "branding": {
+    "name": "papAIa"
+  },
+  "approvals": {
+    "four_eyes": "off"
+  },
+  "platform_notices": [],
+  "delegations": {
+    "idle_days": 90,
+    "max_days": 180
+  }
+}

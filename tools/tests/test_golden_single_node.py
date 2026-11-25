@@ -133,7 +133,8 @@ def _tree_digests(inst: Installation) -> dict[str, str]:
             summary = json.loads(text)
             summary["deployed_at"] = "<TIME>"
             text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
-        if rel in ("platform/services.json", "platform/groups.json"):
+        if rel in ("platform/services.json", "platform/groups.json",
+                   "ai/litellm/model-routes.json"):
             doc = json.loads(text)
             doc["generated_at"] = "<TIME>"
             text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"

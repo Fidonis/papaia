@@ -31,6 +31,7 @@ from . import (
     keycloak_admin_path,
     keycloak_role_sync,
     model_gateway,
+    model_routes,
     module_actions,
     module_offer,
     npm_provision,
@@ -633,6 +634,13 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     if manifest is None:
         print(f"ERROR: {manifest_error}", file=sys.stderr)
         return 2
+    # The model needs first: a data class outside the kit scale is refused with its value
+    # before anything is written (ADR 0031).
+    try:
+        model_gateway.module_need_classes(manifest)
+    except model_gateway.ModelGatewayError as exc:
+        print(f"ERROR: addon '{name}': model needs: {exc}", file=sys.stderr)
+        return 2
     if _compat_gate_addon(
         name, manifest, deployed, repo_root, force=args.force, addon_path=addon_path
     ):
@@ -670,7 +678,53 @@ def cmd_addon_start(args: argparse.Namespace) -> int:
     gen_override.generate_overrides(config_dir, repo_root)
     # Brings the front network of a header-identity add-on along after an upgrade.
     gen_override.generate_addon_join_overrides(config_dir, repo_root)
+    report_route_classes(config_dir, name, manifest)
     return 0
+
+
+def route_class_findings(config_dir: Path, name: str, manifest: dict
+                         ) -> tuple[list[dict], list[str], list[str]]:
+    """The model needs of add-on `name` set against the classes of the routes in the route
+    file (ADR 0031): needs above their route, aliases without a route, aliases without a
+    declared class. Raises ModelGatewayError for a malformed need and ModelRoutesError
+    for route data that cannot be read."""
+    aliases = model_gateway.module_aliases(manifest)
+    if not aliases:
+        return [], [], []
+    classes = model_gateway.module_need_classes(manifest)
+    routes = model_routes.read_route_file(config_dir)
+    return model_routes.above_route(classes, aliases, routes)
+
+
+def report_route_classes(config_dir: Path, name: str, manifest: dict) -> None:
+    """Warn about the model needs of a started add-on that the gateway will judge above
+    their route. The key is made all the same: the module may filter its content itself,
+    and the gateway refuses each request above the route."""
+    if not model_routes.gateway_on(config_dir):
+        return
+    try:
+        above, missing, undeclared = route_class_findings(config_dir, name, manifest)
+    except (model_gateway.ModelGatewayError, model_routes.ModelRoutesError) as exc:
+        print(f"WARNING: addon '{name}': the data classes of its model routes are unknown: "
+              f"{exc}", file=sys.stderr)
+        return
+    for item in above:
+        print(
+            f"WARNING: addon '{name}': its model need {item['alias']} declares max_class "
+            f"{item['need_class']}, above the class of the route ({item['route_class']}); "
+            f"the gateway refuses its requests above {item['route_class']} "
+            "(docs/model-gateway.md)",
+            file=sys.stderr,
+        )
+    for alias in missing:
+        print(f"WARNING: addon '{name}': its model need {alias} has no route in the gateway",
+              file=sys.stderr)
+    for alias in undeclared:
+        print(
+            f"WARNING: addon '{name}': its model need {alias} declares no max_class; the "
+            "gateway judges its requests without a class header as the highest class",
+            file=sys.stderr,
+        )
 
 
 def _ensure_model_key(config_dir: Path, repo_root: Path, name: str, manifest: dict) -> int:
@@ -682,9 +736,10 @@ def _ensure_model_key(config_dir: Path, repo_root: Path, name: str, manifest: di
         aliases = model_gateway.module_aliases(manifest)
         if not aliases and model_gateway._current_key(config_dir, name) is None:
             return 0
+        need_classes = model_gateway.module_need_classes(manifest)
         outcome = model_gateway.ensure_module_key(
             config_dir, repo_root, name, aliases, model_gateway.admin_for(config_dir),
-            correlation=model_gateway.new_correlation(),
+            correlation=model_gateway.new_correlation(), need_classes=need_classes,
         )
     except model_gateway.ModelGatewayError as exc:
         print(f"ERROR: addon '{name}': model key: {exc}", file=sys.stderr)

@@ -193,11 +193,15 @@ def test_with_local_ai_the_default_model_is_downloaded_and_carries_the_aliases(
         "api_base": "http://localai:8080/v1",
         "api_key": "os.environ/LOCALAI_API_KEY",
     }
+    # Every route carries its data class; without a decision of the operator `internal`.
+    info = {"papaia_max_class": "internal"}
     assert _entries(config_dir, model_gateway.CPU_DEFAULT) == [
-        {"model_name": model_gateway.CPU_DEFAULT, "litellm_params": params}
+        {"model_name": model_gateway.CPU_DEFAULT, "litellm_params": params, "model_info": info}
     ]
     for alias in ("papaia-chat", "papaia-structured"):
-        assert _entries(config_dir, alias) == [{"model_name": alias, "litellm_params": params}]
+        assert _entries(config_dir, alias) == [
+            {"model_name": alias, "litellm_params": params, "model_info": info}
+        ]
     assert _entries(config_dir, "papaia-embed") == []
 
 
@@ -220,7 +224,7 @@ def test_the_embedding_alias_follows_its_own_default(repo_root, config_dir):
     render_core.render(config_dir, repo_root)
     (embed,) = _entries(config_dir, "papaia-embed")
     assert embed["litellm_params"]["model"] == "openai/nomic-embed-text"
-    assert embed["model_info"] == {"mode": "embedding"}
+    assert embed["model_info"] == {"mode": "embedding", "papaia_max_class": "internal"}
 
 
 def test_an_overlay_model_can_be_the_default(repo_root, config_dir):
@@ -233,8 +237,9 @@ def test_an_overlay_model_can_be_the_default(repo_root, config_dir):
     }
     _overlay(config_dir, {"model_list": [entry]})
     render_core.render(config_dir, repo_root)
+    info = {"papaia_max_class": "internal"}
     for alias in ("papaia-chat", "papaia-structured"):
-        assert _entries(config_dir, alias) == [{**entry, "model_name": alias}]
+        assert _entries(config_dir, alias) == [{**entry, "model_name": alias, "model_info": info}]
 
 
 def test_an_alias_the_overlay_defines_itself_is_kept(repo_root, config_dir):
@@ -251,7 +256,9 @@ def test_an_alias_the_overlay_defines_itself_is_kept(repo_root, config_dir):
     }
     _overlay(config_dir, {"model_list": [own]})
     render_core.render(config_dir, repo_root)
-    assert _entries(config_dir, "papaia-chat") == [own]
+    assert _entries(config_dir, "papaia-chat") == [
+        {**own, "model_info": {"papaia_max_class": "internal"}}
+    ]
     (structured,) = _entries(config_dir, "papaia-structured")
     assert structured["litellm_params"]["model"] == f"openai/{model_gateway.CPU_DEFAULT}"
 
@@ -504,7 +511,7 @@ def test_a_module_gets_its_own_key_for_its_aliases_only(config_dir, tmp_path):
     (row,) = gateway.keys.values()
     assert row["key_alias"] == "module-flow"
     assert row["models"] == ["papaia-structured"]
-    assert row["metadata"] == {"tags": ["module:flow"]}
+    assert row["metadata"] == {"tags": ["module:flow"], "papaia_need_classes": {}}
     env = _env(config_dir)
     assert env["FLOW_SETTING"] == "1"
     assert hashlib.sha256(env["PAPAIA_MODEL_KEY"].encode()).hexdigest() == row["token"]

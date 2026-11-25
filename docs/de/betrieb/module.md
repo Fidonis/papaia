@@ -126,3 +126,30 @@ Module, die ein Betreiber oder Dritte mit einer solchen Abhängigkeit hinzufüge
 
 Bei „erweitert um …“ läuft das Entfernen; ein Hinweis nennt das Modul, das danach ohne die
 Zusatzfunktion weiterläuft.
+
+## Datenklasse der Modell-Routen
+
+Jeder Alias des Modell-Gateways (`papaia-chat`, `papaia-structured`, `papaia-embed` und
+eigene Aliasse im Overlay) trägt die höchste Datenklasse, die über ihn an das Modell gehen
+darf. Ohne Entscheidung des Betreibers ist das `intern` (`internal`). Die Klasse wird so
+festgelegt:
+
+- für alle Aliasse in der Root-`.env` mit `PAPAIA_MODEL_MAX_CLASS=<klasse>`;
+- für einen einzelnen Alias im Overlay `$PAPAIA_CONFIG_DIR/overlay/ai/litellm/config.yaml`
+  mit `model_info.papaia_max_class: <klasse>` (dieser Wert hat Vorrang).
+
+Zulässig sind nur die Kennungen der Skala: `public`, `internal`, `partner_contact`,
+`personal`, `employee`, `confidential`, `special`, `professional_secret`. Ein anderer Wert,
+auch in anderer Schreibweise oder leer, lässt `papaia-ctl start` mit dem Alias und dem Wert
+abbrechen. Ein extern gehostetes Testmodell erhält nie mehr als `internal`. Ein Wert aus
+einem Add-on wird nicht übernommen und gemeldet.
+
+Nach `papaia-ctl start` steht die Klasse im Katalog der Plattform (Block `models`) und in
+der Routendatei `$PAPAIA_CONFIG_DIR/ai/litellm/model-routes.json`; jede geänderte Klasse ist
+eine Zeile im Audit-Log. Die Module lesen die Klasse aus dem Katalog und lehnen Inhalte
+oberhalb der Klasse ab.
+
+`papaia-ctl addon start <modul>` warnt, wenn ein Modul für einen Alias eine höhere Klasse
+angibt, als die Route zulässt; das Modul startet trotzdem. `papaia-ctl doctor
+model_gateway_classes` meldet dieselben Fälle als Warnung und schlägt fehl, wenn die
+Routendatei fehlt oder nicht zur Konfiguration passt; dann hilft `papaia-ctl start`.

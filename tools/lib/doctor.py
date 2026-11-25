@@ -3884,6 +3884,91 @@ def check_model_gateway_content(ctx: Context) -> CheckResult:
     return check_model_gateway_content_file(ctx.config_dir)
 
 
+def check_model_gateway_classes_file(config_dir: Path, repo_root: Path) -> CheckResult:
+    """The data class of every model route (`doctor model_gateway_classes`, ADR 0031):
+    `fail` when the route file the gateway reads is missing, malformed or differs from the
+    rendered configuration, or a module declares a class outside the scale; `warn` for a
+    module need above the class of its route, an alias a module needs without a route and
+    a need without a declared class (module, alias, both classes)."""
+    from . import model_routes
+
+    name = "model_gateway_classes"
+    if not model_routes.gateway_on(config_dir):
+        return CheckResult(name, SKIP, "the model gateway is not part of this installation")
+    try:
+        routes = model_routes.routes_of(model_routes.load_rendered(config_dir))
+    except model_routes.ModelRoutesError as exc:
+        return CheckResult(name, FAIL, f"{exc}; run 'papaia-ctl start' to render it")
+    details: dict[str, Any] = {"routes": routes}
+    try:
+        stored = model_routes.read_route_file(config_dir)
+    except model_routes.ModelRoutesError as exc:
+        return CheckResult(
+            name, FAIL,
+            f"{exc}; the gateway refuses every module request until "
+            "'papaia-ctl start' writes it",
+            details,
+        )
+    if stored != routes:
+        differing = sorted(a for a in set(stored) | set(routes) if stored.get(a) != routes.get(a))
+        details["differing"] = differing
+        return CheckResult(
+            name, FAIL,
+            f"the route file and the rendered configuration differ for {', '.join(differing)}; "
+            "run 'papaia-ctl start'",
+            details,
+        )
+    above: list[dict[str, str]] = []
+    missing: list[dict[str, str]] = []
+    undeclared: list[dict[str, str]] = []
+    invalid: list[str] = []
+    for addon in deployment.active_addons(deployment.load(config_dir) or {}):
+        module = str(addon.get("name"))
+        manifest, _ = deployment.load_addon_manifest(
+            deployment.resolve_addon_path(addon, repo_root)
+        )
+        if manifest is None:
+            continue  # addon_compat reports a manifest that cannot be read
+        try:
+            aliases = model_gateway.module_aliases(manifest)
+            classes = model_gateway.module_need_classes(manifest)
+        except model_gateway.ModelGatewayError as exc:
+            invalid.append(f"{module}: {exc}")
+            continue
+        found_above, found_missing, found_undeclared = model_routes.above_route(
+            classes, aliases, routes
+        )
+        above += [{"module": module, **item} for item in found_above]
+        missing += [{"module": module, "alias": alias} for alias in found_missing]
+        undeclared += [{"module": module, "alias": alias} for alias in found_undeclared]
+    details.update(above_route=above, without_route=missing, undeclared=undeclared)
+    if invalid:
+        details["invalid"] = invalid
+        return CheckResult(name, FAIL, "; ".join(invalid), details)
+    notes = [
+        f"{i['module']} needs {i['alias']} up to {i['need_class']}, its route takes "
+        f"{i['route_class']}"
+        for i in above
+    ]
+    notes += [f"{i['module']} needs {i['alias']}, which has no route" for i in missing]
+    notes += [
+        f"{i['module']} declares no class for {i['alias']} (judged as the highest)"
+        for i in undeclared
+    ]
+    if notes:
+        return CheckResult(name, WARN, "; ".join(notes), details)
+    return CheckResult(
+        name, PASS,
+        f"{len(routes)} model route(s) with a data class; the route file matches", details,
+    )
+
+
+def check_model_gateway_classes(ctx: Context) -> CheckResult:
+    if not ctx.configured:
+        return _not_set_up("model_gateway_classes")
+    return check_model_gateway_classes_file(ctx.config_dir, ctx.repo_root)
+
+
 # ─── halt ────────────────────────────────────────────────────────────────
 
 
@@ -4001,6 +4086,7 @@ CHECKS: list[tuple[str, Callable[[Context], CheckResult]]] = [
     ("model_gateway", check_model_gateway),
     ("model_ready", check_model_ready),
     ("model_gateway_content", check_model_gateway_content),
+    ("model_gateway_classes", check_model_gateway_classes),
     ("modules", check_modules),
     ("revocations_age", check_revocations_age),
     ("image_signatures", check_image_signatures),

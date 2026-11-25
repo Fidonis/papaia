@@ -13,7 +13,8 @@ tools/schemas/kit:
   the catalog while stopped; add-ons that are not installed are absent. Fields that
   serve the core alone (`service_accounts`, `storage`, `requires`, ...) stay out: the
   catalog is mounted into every consuming module. On top: `identity`, `branding`,
-  `approvals` (the four-eyes rule), `platform_notices`, the model aliases and
+  `approvals` (the four-eyes rule), `platform_notices`, the model aliases with the data
+  class of their route (lib/model_routes.py) and
   `delegations`, the delegation lifetime in effect (delegation_lifetime; holders compute
   expiry dates from it).
 - `groups.json` (`papaia.platform-groups/1`): the realm's groups with `id`, `path`,
@@ -51,6 +52,7 @@ from . import (
     deployment,
     exposes,
     hosted_model,
+    model_routes,
     module_tls,
     schema_check,
     security_profile,
@@ -659,6 +661,10 @@ def build(
         delegations = delegation_lifetime.catalog_block(config_dir, env)
     except delegation_lifetime.LifetimeError as exc:
         raise CatalogError(f"delegation lifetime: {exc}") from None
+    try:
+        models = model_routes.catalog_models(config_dir, repo_root)
+    except model_routes.ModelRoutesError as exc:
+        raise CatalogError(f"model routes: {exc}") from None
     return {
         "format": SERVICES_FORMAT,
         "generated_at": _stamp(now),
@@ -670,7 +676,7 @@ def build(
             "jwks_uri_internal": env["OIDC_JWKS_URL"],
         },
         "services": [entries[key] for key in sorted(entries)],
-        "models": [],
+        "models": models,
         "branding": branding,
         "approvals": {"four_eyes": four_eyes},
         "platform_notices": [TEST_MODE_NOTICE] if hosted_model.enabled(env) else [],

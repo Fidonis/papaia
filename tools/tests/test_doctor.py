@@ -219,6 +219,7 @@ def test_healthy_installation_passes_and_validates(stack):
         SKIP,  # model_gateway: the fixture has no litellm profile
         SKIP,  # model_ready: idem
         SKIP,  # model_gateway_content: idem
+        SKIP,  # model_gateway_classes: idem
         PASS,  # modules: the add-on attaches nothing, no catalog to probe
         SKIP,  # revocations_age: no platform catalog
         PASS,  # image_signatures: nothing runs in the fake
@@ -267,6 +268,7 @@ def test_registry_names_are_unique_and_in_the_documented_order():
         "model_gateway",
         "model_ready",
         "model_gateway_content",
+        "model_gateway_classes",
         "modules",
         "revocations_age",
         "image_signatures",

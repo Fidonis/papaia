@@ -50,6 +50,7 @@ from . import (
     knowledge_map,
     localai_native,
     model_gateway,
+    model_routes,
     realm_hardening,
     replay_access,
     service_account_keys,
@@ -262,6 +263,13 @@ def render(config_dir: Path, repo_root: Path) -> None:
         )
     except model_gateway.ModelGatewayError as exc:
         raise RenderError(str(exc)) from exc
+    # The route file the gateway reads (alias -> data class), before `up` mounts it.
+    try:
+        model_routes.render(config_dir)
+    except model_routes.ModelRoutesError as exc:
+        raise RenderError(f"model gateway: {exc}") from exc
+    except OSError as exc:
+        raise RenderError(f"model gateway: the route file cannot be written: {exc}") from exc
 
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
@@ -699,6 +707,11 @@ def _effective_text(
                 merged = _merge_layer(
                     merged, {"model_list": generated}, f"{LOCALAI_MODELS_FILE} (generated)"
                 )
+        if rel_path == LITELLM_CONFIG:
+            # Only the overlay sets the data class of a route: an add-on or a profile
+            # cannot raise it (ADR 0031).
+            for report in model_routes.drop_layer_classes(merged):
+                logger.warning("%s", report)
         if layer is not None:
             merged = _merge_layer(merged, layer, overlay_label)
         if rel_path == LITELLM_CONFIG:
@@ -719,6 +732,15 @@ def _effective_text(
                 merged = hosted_model.guard(merged, config_dir, names)
             except hosted_model.HostedModelError as exc:
                 raise RenderError(str(exc)) from exc
+            # The data class of every route, after the aliases and the hosted marks.
+            try:
+                merged, reports = model_routes.apply(
+                    merged, common.parse_env_file(config_dir / ".env")
+                )
+            except model_routes.ModelRoutesError as exc:
+                raise RenderError(f"model gateway: {exc}") from exc
+            for report in reports:
+                logger.warning("%s", report)
         return _dump_structured(base_path.suffix, merged)
 
     # Non-structured file: the highest layer present replaces the base
