@@ -40,6 +40,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0015](./0015-knowledge-map-inventory-kinds-and-access-paths.md) | Inventory every reachable server and agent, and give sources several access paths | Proposed | 2026-11-14 |
 | [0016](./0016-knowledge-map-governance-metadata.md) | Keep governance metadata in a separate operator file and report model policy findings | Proposed | 2026-11-14 |
 | [0017](./0017-platform-services-catalogue.md) | Render a platform services catalogue from `exposes` declarations | Proposed | 2026-11-22 |
+| [0019](./0019-internal-tls-from-a-core-pki.md) | Issue internal TLS certificates from one core CA in an optional pki profile | Proposed | 2026-11-20 |
 
 ## References
 

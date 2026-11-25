@@ -324,6 +324,13 @@ exposes:                           # optional (addon_api 7): what this add-on of
     audience: mcp-<name>
     max_class: internal            # highest data class the service may receive
     consumable: true               # false needs `reason`; own_oauth is never consumable
+
+pki:                               # optional, additive (no addon_api bump): server and
+  services:                        # client certificates from the internal CA of the
+    - name: <name>-gateway         # `pki` profile (ADR 0019, docs/pki.md); a DNS label,
+      uid: 10001                   # also the client CN. Files are owned by `uid`. Served
+      server: {dns: [<name>-gateway]}  # only while the profile is on; older cores
+      client: true                 # ignore the key.
 ```
 
 #### `.env.example` value markers
@@ -841,6 +848,30 @@ the service it names (`# papaia-migration: runs-with=<service>`), recorded with 
 ledger. An **add-on** runs on one node: `addon install --node`, and the compatibility gate
 refuses an add-on that attaches to core services on two nodes. The operator guide is
 [distributed.md](distributed.md).
+
+### Internal TLS between services (`pki` profile)
+
+The optional `pki` profile is the one certificate authority of an installation for TLS
+between its services (ADR 0019). Its key lives in the volume `<project>_pki-ca`, which only a
+one-shot issuer container mounts; no runtime service and not the config directory. Modules
+ask for certificates in a `pki:` block, an add-on in `papaia-app.yaml`, a core module in a
+`pki.yaml` next to its compose file:
+
+```yaml
+pki:                               # optional; ignored by a core without the profile
+  services:
+    - name: <service>              # DNS label; the client certificate's CN
+      uid: <uid>                   # numeric user that reads the files
+      server: {dns: [<name>, ...]} # optional: a server certificate for these names
+      client: true                 # optional: a client certificate
+```
+
+The files land in `<PAPAIA_PKI_DIR>/<module>/<service>/` (`ca.crt`, `tls.crt`, `tls.key`,
+`client.crt`, `client.key`, `generation`), owned by that uid, and are renewed at two thirds of
+their lifetime with a restart of what changed, whenever papaia-ctl runs the issuer (`setup`,
+`start`, the add-on commands, `pki renew` from a daily timer). In a distributed installation
+the issuer runs on the controller and names what has to be restarted instead. The edge
+certificates of the reverse proxy are not affected. The operator guide is [pki.md](pki.md).
 
 ---
 

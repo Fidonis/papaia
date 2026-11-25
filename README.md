@@ -66,6 +66,13 @@ The `rag` profile is switched on by adding it to `COMPOSE_PROFILES`.
 > Everything else — document management, workflow automation — ships as an
 > [add-on](#add-ons), not as a profile in this repository.
 
+> **Internal TLS between services:** the optional `pki` profile (`setup --pki`, off by default)
+> adds no long-running container, only a one-shot issuer. It is one certificate authority per
+> installation that issues server and client certificates to the add-ons and core services
+> that ask for them. It renews them on `start`, `setup`, the add-on commands and
+> `papaia-ctl pki renew` (run that daily from a timer) and restarts what changed. It is
+> separate from the edge certificates of the reverse proxy — see [docs/pki.md](docs/pki.md).
+
 > **Tip:** all `*_EXT_PORT` variables are listed in `src/.env.example`, grouped per service.
 > Change a single number to relocate a port.
 
@@ -294,6 +301,8 @@ papaia-ctl npm-provision [--config-dir=PATH]
 papaia-ctl keycloak-role-sync [--config-dir=PATH]
 papaia-ctl status    [--json] [--profiles=LIST] [--addons] [--config-dir=PATH]
 papaia-ctl doctor    [--json] [--skip=CHECK[,CHECK]] [--config-dir=PATH]
+papaia-ctl pki       status [--json] | renew [--force] | purge [--ca] [-y]
+                     | rotate-ca [--cert=FILE --key=FILE [--chain=FILE]] [--config-dir=PATH]
 papaia-ctl addon     <install|start|stop|remove|uninstall> <name> [OPTIONS]
 papaia-ctl addon     check [--target-core=PATH] [--json] [--force] [--config-dir=PATH]
 papaia-ctl addon     upgrade <name> --path=DIR [--dry-run [--json]] [--no-backup] [--no-restart]
@@ -360,6 +369,7 @@ tools/papaia-ctl setup [OPTIONS]
 | `--smtp-user=NAME` / `--smtp-no-auth` | _(prompted)_ | Login of the mail server, or none. The password is read from the environment variable `PAPAIA_SMTP_PASSWORD`, never from an argument |
 | `--smtp-from=ADDRESS` | _(prompted)_ | Address the mails are sent from |
 | `--smtp-from-name=NAME` | `papAIa` | Sender name shown next to the address |
+| `--pki` / `--no-pki` | _(prompted, default off)_ | Toggle the `pki` profile, the [internal CA](docs/pki.md) for TLS between services. The choice is kept on later runs; `--no-pki` keeps the issued files until `papaia-ctl pki purge` |
 | `--force` | — | Regenerate all secrets unconditionally |
 | `-y` / `--non-interactive` | — | Skip all prompts; supply required values as flags |
 | `--env-only` | — | Re-write the `.env` files only; skip reconfiguration |

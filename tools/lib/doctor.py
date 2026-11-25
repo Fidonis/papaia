@@ -1579,7 +1579,12 @@ def _certificate_files(config_dir: Path) -> list[Path]:
 def check_certs(ctx: Context) -> CheckResult:
     name = "certs"
     files = _certificate_files(ctx.config_dir)
-    if not files:
+    # The internal CA's certificates (profile pki) come from its inventory: the service
+    # directories belong to the services' users. Nothing while the profile is off.
+    from . import pki
+
+    internal = pki.doctor_items(ctx.config_dir, ctx.now)
+    if not files and not internal:
         return CheckResult(name, SKIP, "no certificates found in the configuration directory")
 
     items: list[dict[str, Any]] = []
@@ -1606,8 +1611,33 @@ def check_certs(ctx: Context) -> CheckResult:
             }
         )
 
+    for entry in internal:
+        not_after = entry["not_after"]
+        if not_after is None:
+            reason = "no end date in the inventory"
+            items.append({"path": entry["path"], "status": WARN, "reason": reason})
+            continue
+        days = (not_after - ctx.now).days
+        # A leaf is renewed with a third of its lifetime left; under 14 days the renewal
+        # has not run (papaia-ctl pki renew). The active CA is reported a leaf lifetime
+        # ahead, when a rotation is due.
+        if days < CERT_FAIL_DAYS:
+            verdict = FAIL
+        elif days < entry.get("warn_days", pki.EXPIRY_WARN_DAYS):
+            verdict = WARN
+        else:
+            verdict = PASS
+        items.append(
+            {
+                "path": entry["path"],
+                "not_after": not_after.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "days_left": days,
+                "status": verdict,
+            }
+        )
+
     overall = _worst(i["status"] for i in items)
-    read = [i for i in items if i["status"] != SKIP]
+    read = [i for i in items if "days_left" in i]
     if not read:
         return CheckResult(
             name, SKIP, f"cannot read certificates: {items[0]['reason']}", {"certificates": items}
