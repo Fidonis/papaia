@@ -481,7 +481,18 @@ class Registry:
         basic = self._basic(host)
         if basic:
             headers["Authorization"] = basic
-        body = self._fetch(url, headers, 64 * 1024)
+        # The answer to a refused token request names neither the URL nor the image,
+        # so the error does: an anonymous pull of a package the registry does not
+        # publish ends here (ghcr.io answers 403).
+        try:
+            body = self._fetch(url, headers, 64 * 1024)
+        except urllib.error.HTTPError as exc:
+            raise ImageError(f"{host}: token request {url} answered HTTP {exc.code}") from None
+        except _RedirectRefused as exc:
+            raise ImageError(f"{host}: token request {url}: {exc.reason}") from None
+        except (urllib.error.URLError, OSError) as exc:
+            reason = getattr(exc, "reason", exc)
+            raise Unreachable(f"{host}: token request {url} not reachable ({reason})") from None
         try:
             doc = json.loads(body)
         except ValueError as exc:
@@ -537,7 +548,7 @@ class Registry:
                             self._tokens[(host, repository)] = token
                             headers["Authorization"] = f"Bearer {token}"
                             continue
-                raise ImageError(f"{host}: HTTP {exc.code}") from None
+                raise ImageError(f"{host}: {url} answered HTTP {exc.code}") from None
             except _RedirectRefused as exc:
                 raise ImageError(f"{host}: {exc.reason}") from None
             except (urllib.error.URLError, OSError) as exc:

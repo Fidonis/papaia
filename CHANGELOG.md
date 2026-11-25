@@ -12,6 +12,18 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Fixed krb5 in the audit image
+
+- `papaia-audit` carries `krb5-libs` `1.22.3-r0` on linux/amd64 and linux/arm64
+  (CVE-2026-107364, CVE-2026-112315 to CVE-2026-112323, CVE-2026-118380,
+  CVE-2026-119079, CVE-2026-40355, CVE-2026-40356, CVE-2026-71199, CVE-2026-71200).
+  A stage on the build platform fetches exactly this version from the Alpine
+  repositories of the base and the final stage only copies the result; the base
+  digest is unchanged. The image is rebuilt and re-pinned.
+- A registry that refuses a request, including the token request of an anonymous
+  pull, is reported with the refused URL at the pin's file and line by
+  `tools/check-image-pins` instead of stopping the check with a bare HTTP error.
+
 ### Image scan: findings with a fix block, findings without a fix are reported
 
 - The gate of the core's own images (`tools/scan-images`, workflow "Core images") now

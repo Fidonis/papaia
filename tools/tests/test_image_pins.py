@@ -10,11 +10,13 @@ spoken to by the real client (images.Registry); registries elsewhere are a fake.
 
 from __future__ import annotations
 
+import email.message
 import hashlib
 import http.server
 import json
 import subprocess
 import threading
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -382,6 +384,94 @@ def test_an_unreachable_registry_is_a_finding_not_a_pass(tmp_path):
     _, findings = _check(root, Down(), mode="release")
 
     assert findings and all("not reachable" in f.reason for f in findings)
+
+
+class _AnonymousRefused:
+    """The opener of a registry that is not the fixture, as ghcr.io answers an anonymous
+    pull of a package it does not publish: every manifest request is answered 401 with a
+    bearer challenge, the token request of the challenge 403."""
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def open(self, request, timeout):
+        url = request.full_url
+        self.urls.append(url)
+        if url.startswith("https://ghcr.io/token?"):
+            raise urllib.error.HTTPError(url, 403, "Forbidden", email.message.Message(), None)
+        challenge = email.message.Message()
+        challenge["WWW-Authenticate"] = (
+            'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
+            'scope="repository:example/app:pull"')
+        raise urllib.error.HTTPError(url, 401, "Unauthorized", challenge, None)
+
+
+def _refusing_registry() -> tuple[images.Registry, _AnonymousRefused]:
+    client = images.Registry(credentials=_NoCredentials())
+    opener = _AnonymousRefused()
+    client._opener = opener
+    return client, opener
+
+
+TOKEN_URL = ("https://ghcr.io/token?scope=repository%3Aexample%2Fapp%3Apull"
+             "&service=ghcr.io")
+
+
+def test_a_refused_token_request_is_a_finding_that_names_its_url(tmp_path,
+                                                                  fixture_registry):
+    # The candidate registry does not have the pin, the published registry refuses the
+    # anonymous token: a finding at the pin's file and line naming the refused URL, and
+    # the other pins are still checked.
+    db = fixture_registry.push("unpublished/postgres", "18.3", b"db index")
+    root = _checkout(tmp_path, f"{APP}:1.0.0@{D_OTHER}", f"{DB}:18.3@{db}")
+    upstream, opener = _refusing_registry()
+
+    class Split:
+        def __init__(self) -> None:
+            self.local = images.Registry(credentials=_NoCredentials())
+
+        def resolve(self, host, repository, reference):
+            client = self.local if host == fixture_registry.host else upstream
+            return client.resolve(host, repository, reference)
+
+    _, findings = _check(root, Split(), mode="candidate",
+                         candidate_registry=fixture_registry.prefix)
+
+    assert [f.pin.location for f in findings] == [
+        "src/app/docker-compose.yml:4", "src/app/service-env.json:3"]
+    for finding in findings:
+        assert "registry refused" in finding.reason
+        assert f"token request {TOKEN_URL} answered HTTP 403" in finding.reason
+    assert TOKEN_URL in opener.urls
+
+
+def test_the_command_names_the_refused_url_and_exits_1(tmp_path, capsys):
+    root = _checkout(tmp_path, f"{APP}:1.0.0@{D_KNOWN}", f"{DB}:18.3@{D_OTHER}")
+    upstream, _ = _refusing_registry()
+
+    status = image_pins.main(["--repo-root", str(root), "check", "--mode=release"],
+                             registry=upstream)
+
+    err = capsys.readouterr().err
+    assert status == 1, err
+    assert f"ERROR: src/app/docker-compose.yml:4: services.app.image: {APP}" in err
+    assert f"token request {TOKEN_URL} answered HTTP 403" in err
+    assert "HTTP Error 403: Forbidden" not in err
+
+
+def test_a_refused_manifest_request_names_its_url():
+    client = images.Registry(credentials=_NoCredentials())
+
+    class Refuses:
+        def open(self, request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden",
+                                         email.message.Message(), None)
+
+    client._opener = Refuses()
+    with pytest.raises(images.ImageError) as raised:
+        client.resolve("ghcr.io", "example/app", "1.0.0")
+    assert str(raised.value) == (
+        "ghcr.io: https://ghcr.io/v2/example/app/manifests/1.0.0 answered HTTP 403")
 
 
 def test_release_before_the_tag_takes_the_own_images_from_their_build(tmp_path,

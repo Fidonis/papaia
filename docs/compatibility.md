@@ -378,6 +378,20 @@ Once a digest of the base tag carries these versions, the pin moves to it and
 the stage goes. A fixed version that the Debian archive no longer serves fails
 the build loudly rather than silently taking another one.
 
+The Alpine-based image `papaia-audit` takes an Alpine security fix the same
+way: its `alpine-fixes` stage on the build platform has apk fetch the fixed
+package for the target architecture (`--arch`) in its exact version from the
+Alpine repositories of the base, check it with the base's signing keys and
+install it into a copy of the target base (`--root`, `--no-scripts`) without
+running any of its programs; the final stage copies only the package's files
+and the apk database. Today this is `krb5-libs` `1.22.3-r0` (CVE-2026-107364,
+CVE-2026-112315 to CVE-2026-112323, CVE-2026-118380, CVE-2026-119079,
+CVE-2026-40355, CVE-2026-40356, CVE-2026-71199, CVE-2026-71200), which the
+pinned `python:3.12.16-alpine3.24` digest still carries in `1.22.2-r1`. The
+same rules hold: no other package is upgraded, no exception is written, the
+stage goes once a digest of the base tag carries the fix, and a version the
+repositories no longer serve fails the build.
+
 `tools/build-images` takes an image from the checkout to the bill of
 materials:
 

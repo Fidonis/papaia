@@ -79,7 +79,7 @@ services:
   # password besides the database.
   papaia-audit-schema:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:178e0d6f240f2441c36da4ba129cf1dfc23283acc21387f708110fbf4c73dff1
+    image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:ad0f961c412e792c6a33c59c2d92db8edbf616b73a1b7a75aad999ddccd098b1
     restart: "no"
     user: "${UID:-1000}:${GID:-1000}"
     command: ["schema"]
@@ -106,7 +106,7 @@ services:
     logging: *papaia-logging
     # The core's own image (Dockerfile next to this file, compat/own-images.yaml).
     # Built, signed and pinned by tools/build-images.
-    image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:178e0d6f240f2441c36da4ba129cf1dfc23283acc21387f708110fbf4c73dff1
+    image: ghcr.io/fidonis/papaia-audit:1.10.0-rc.1@sha256:ad0f961c412e792c6a33c59c2d92db8edbf616b73a1b7a75aad999ddccd098b1
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
     command: ["serve"]

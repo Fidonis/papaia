@@ -9,6 +9,40 @@
 # on the build platform and only unpacks the wheels of the target platform, without
 # compiling or running them, so the amd64 and the arm64 variant are built the same way
 # on any host and without emulation. The final stage only copies files.
+#
+# Alpine security fixes the pinned base does not carry yet: krb5-libs 1.22.3-r0
+# (CVE-2026-107364, CVE-2026-112315 to CVE-2026-112323, CVE-2026-118380, CVE-2026-119079,
+# CVE-2026-40355, CVE-2026-40356, CVE-2026-71199, CVE-2026-71200). The alpine-fixes stage
+# runs on the build platform: apk fetches exactly this version for the target
+# architecture from the Alpine repositories of the base, checks it with the base's
+# signing keys and installs it into a copy of the target base without running any of
+# its programs; only the files of the package and the apk database reach the final
+# stage. A version the repositories no longer serve fails the build. Remove the two
+# stages and the COPY from alpine-fixes once the base digest carries this version.
+FROM python:3.12.16-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89 AS alpine-base
+
+FROM --platform=$BUILDPLATFORM python:3.12.16-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89 AS alpine-fixes
+ARG TARGETARCH
+COPY --from=alpine-base / /target/
+RUN set -eu; \
+    case "$TARGETARCH" in \
+        amd64) arch=x86_64 ;; \
+        arm64) arch=aarch64 ;; \
+        *) echo "unsupported platform $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    test "$(cat /target/etc/apk/arch)" = "$arch"; \
+    apk add --root=/target --arch="$arch" --no-scripts --no-cache --no-interactive \
+        "krb5-libs=1.22.3-r0"; \
+    mkdir /out; \
+    apk info --root=/target -L krb5-libs > /tmp/krb5-libs.files; \
+    { \
+        read -r _header; \
+        while read -r path; do \
+            if [ -n "$path" ]; then cp -a --parents "/target/$path" /out/; fi; \
+        done; \
+    } < /tmp/krb5-libs.files; \
+    cp -a --parents /target/lib/apk/db/installed /out/
+
 FROM --platform=$BUILDPLATFORM python:3.12.16-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89 AS wheels
 
 ARG TARGETARCH
@@ -36,6 +70,9 @@ LABEL org.opencontainers.image.title="papaia-audit" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.base.name="docker.io/library/python:3.12.16-alpine3.24" \
       org.opencontainers.image.base.digest="sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89"
+
+# The fixed Alpine packages (the alpine-fixes stage).
+COPY --from=alpine-fixes /out/target/ /
 
 # Notice files (LICENSE, the runtime components and their full license texts).
 COPY LICENSE /usr/share/licenses/papaia-audit/LICENSE

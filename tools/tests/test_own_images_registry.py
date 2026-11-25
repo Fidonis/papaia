@@ -43,7 +43,7 @@ import hang_guard
 import pytest
 import yaml
 from test_images import _bom, _new_keypair, _sign_bytes
-from test_own_images import DEBIAN_FIXES, DEBIAN_IMAGES
+from test_own_images import ALPINE_FIXES, ALPINE_IMAGES, DEBIAN_FIXES, DEBIAN_IMAGES
 
 from lib import cli, images, own_images, suite
 
@@ -253,6 +253,39 @@ def _at_least(ref: str, installed: str, fixed: str) -> bool:
     return done.returncode == 0
 
 
+def _apk_installed(ref: str, platform: str) -> list[dict[str, str]]:
+    """The apk database of one platform of `ref`, one entry per package record, read
+    from the image's file system without running it, so the foreign platform needs no
+    emulation."""
+    name = f"{PROJECT}-apk-{platform.rsplit('/', 1)[1]}"
+    _run("docker", "rm", "-f", name, check=False)
+    try:
+        _run("docker", "create", "--platform", platform, "--name", name, ref)
+        copied = subprocess.run(["docker", "cp", f"{name}:/lib/apk/db/installed", "-"],
+                                capture_output=True, timeout=hang_guard.seconds(), check=True)
+    finally:
+        _run("docker", "rm", "-f", name, check=False)
+    with tarfile.open(fileobj=io.BytesIO(copied.stdout)) as archive:
+        member = archive.extractfile("installed")
+        assert member is not None
+        text = member.read().decode("utf-8")
+    records = []
+    for stanza in text.split("\n\n"):
+        fields = dict(line.split(":", 1) for line in stanza.splitlines()
+                      if len(line) > 1 and line[1] == ":" and line[0] in "PVA")
+        if "P" in fields:
+            records.append(fields)
+    return records
+
+
+def _apk_at_least(ref: str, installed: str, fixed: str) -> bool:
+    """apk's own version order (`apk version -t`), from the image on the host's platform."""
+    done = _run("docker", "run", "--rm", "--name", f"{PROJECT}-apk-compare",
+                "--network", "none", "--entrypoint", "apk", ref,
+                "version", "-t", installed, fixed, check=False)
+    return done.returncode == 0 and done.stdout.strip() in (">", "=")
+
+
 @pytest.fixture
 def builder(docker_buildx):
     if not _multi_platform():
@@ -305,6 +338,28 @@ def test_own_images_round_trip_through_a_registry(
                     )
                 # The copy of the upgrade left no package half installed.
                 assert all(e.get("Status") == "install ok installed" for e in status.values())
+        finally:
+            _run("docker", "image", "rm", served, check=False)
+
+    # The Alpine-based images carry the fixed krb5 on both platforms.
+    for name in sorted(ALPINE_IMAGES):
+        served = f"{prefix}{name}@{built[name]['digest']}"
+        try:
+            for arch, apk_arch in (("amd64", "x86_64"), ("arm64", "aarch64")):
+                records = _apk_installed(served, f"linux/{arch}")
+                packages = [r["P"] for r in records]
+                # The copy of the upgrade left every package listed exactly once.
+                assert len(packages) == len(set(packages)), (
+                    f"{name} ({arch}): packages listed twice in the apk database"
+                )
+                # Every package is of the platform's architecture (or of none).
+                assert {r.get("A") for r in records} <= {apk_arch, "noarch"}
+                installed = {r["P"]: r["V"] for r in records}
+                for package, fixed in ALPINE_FIXES.items():
+                    assert next(r["A"] for r in records if r["P"] == package) == apk_arch
+                    assert _apk_at_least(served, installed[package], fixed), (
+                        f"{name} ({arch}): {package} {installed[package]} is older than {fixed}"
+                    )
         finally:
             _run("docker", "image", "rm", served, check=False)
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -159,6 +160,53 @@ def test_every_debian_own_image_takes_the_fixed_zstd_and_zlib():
         assert "COPY --from=debian-fixes /out/target/ /" in final
         assert not any(i.startswith("RUN ") for i in final)
     assert debian == DEBIAN_IMAGES
+
+
+# Alpine security fixes the pinned python:3.12.16-alpine3.24 base does not carry yet:
+# krb5-libs 1.22.3-r0 (CVE-2026-107364, CVE-2026-112315 to CVE-2026-112323,
+# CVE-2026-118380, CVE-2026-119079, CVE-2026-40355, CVE-2026-40356, CVE-2026-71199,
+# CVE-2026-71200). An Alpine-based own image either builds on a base digest listed in
+# ALPINE_FIXED_BASES (one that carries these versions) or takes them in exactly these
+# versions in an alpine-fixes stage. The live test (test_own_images_registry.py) reads
+# them back from the built image on both platforms.
+ALPINE_FIXES = {"krb5-libs": "1.22.3-r0"}
+ALPINE_FIXED_BASES: frozenset[str] = frozenset()
+ALPINE_IMAGES = {"ghcr.io/fidonis/papaia-audit"}
+_APK_PIN = re.compile(r'"([a-z0-9][a-z0-9_.+-]*)=([^"\s]+)"')
+
+
+def test_every_alpine_own_image_takes_the_fixed_krb5():
+    alpine = set()
+    for image in own_images.load(REPO):
+        stages = _stages((REPO / image.dockerfile).read_text(encoding="utf-8"))
+        final = stages[-1]
+        if "-alpine" not in final[0].split("@", 1)[0]:
+            continue
+        alpine.add(image.name)
+        base_digest = final[0].split("@", 1)[1].split()[0] if "@" in final[0] else ""
+        if base_digest in ALPINE_FIXED_BASES:
+            continue
+        fixes = [s for s in stages if s[0].endswith(" AS alpine-fixes")]
+        assert len(fixes) == 1, f"{image.dockerfile}: no alpine-fixes stage"
+        # Built natively for the target, never under emulation.
+        assert fixes[0][0].startswith("FROM --platform=$BUILDPLATFORM ")
+        run = " ".join(i for i in fixes[0] if i.startswith("RUN "))
+        # apk installs into a copy of the target base, for the target architecture,
+        # with its signature checks on and without running any program of the target.
+        for flag in ("--root=/target", '--arch="$arch"', "--no-scripts"):
+            assert flag in run, f"{image.dockerfile}: apk runs without {flag}"
+        assert "--allow-untrusted" not in run
+        # Exactly the fixed packages in exactly the fixed versions, nothing else.
+        assert dict(_APK_PIN.findall(run)) == ALPINE_FIXES, (
+            f"{image.dockerfile}: alpine-fixes fetches {_APK_PIN.findall(run)}, "
+            f"expected {ALPINE_FIXES}"
+        )
+        assert len(_APK_PIN.findall(run)) == len(ALPINE_FIXES)
+        assert " upgrade" not in run
+        # The final stage only copies the result.
+        assert "COPY --from=alpine-fixes /out/target/ /" in final
+        assert not any(i.startswith("RUN ") for i in final)
+    assert alpine == ALPINE_IMAGES
 
 
 def test_the_inventory_documents_the_own_images():
