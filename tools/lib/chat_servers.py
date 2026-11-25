@@ -106,10 +106,16 @@ def _origin(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def fragment(chat: list[ChatServer], shipped: set[str]) -> dict:
+def fragment(
+    chat: list[ChatServer], shipped: set[str], relayed: list[ChatServer] | None = None
+) -> dict:
     """The generated layer of librechat.yaml: one entry per server whose module ships no
-    fragment, and its origin among the allowed domains. Empty when there is none."""
+    fragment, one per add-on outside the suite the operator allowed (`relayed`, pointing
+    to the chat relay, lib/chat_optin.py), and their origins among the allowed domains.
+    Empty when there is none."""
     entries = [server for server in chat if server.provider not in shipped]
+    direct = {server.audience for server in chat}
+    entries += [server for server in relayed or [] if server.audience not in direct]
     if not entries:
         return {}
     origins: list[str] = []

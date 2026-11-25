@@ -13,6 +13,10 @@ the confirmed ones. This module is the only writer of that file:
   waiting; a waiting write pairing is confirmed only by another host account than the one
   that requested it. The same person is refused, whatever the four-eyes setting says.
 - `papaia-ctl pairing revoke` removes a pairing.
+- The chat relay's pairings (`papaia-chat-relay` with an add-on's audience) are the
+  operator's opt-in of an add-on for the chat; they have exactly one path,
+  `papaia-ctl addon chat allow|revoke` (lib/chat_optin.py), and are refused here and in
+  the bill of materials.
 
 The acting person is the host account that runs papaia-ctl (`host:<login>`; under `sudo`,
 the login that called it): on the host, running papaia-ctl is the `papaia-admin` role of
@@ -37,7 +41,7 @@ from pathlib import Path
 
 import yaml
 
-from . import images, prerelease_anchor
+from . import chat_relay, images, prerelease_anchor
 from . import realm_sync as rs
 
 WRITER = "papaia-ctl/pairing"
@@ -93,6 +97,11 @@ def bom_pairings(doc: dict, register: rs.Register) -> list[rs.Pairing]:
         raise PairingError(
             str(exc).replace("pairings.yaml: pairing", "bill of materials: pairing")
         ) from None
+    if any(p.client == chat_relay.RELAY for p in parsed):
+        raise PairingError(
+            f"bill of materials: {chat_relay.RELAY} is paired only by the operator "
+            "('papaia-ctl addon chat allow')"
+        )
     return sorted(
         (rs.Pairing(p.client, p.audience, _sorted_effects(p.effects), False) for p in parsed),
         key=lambda p: (p.client, p.audience),
@@ -290,10 +299,15 @@ def _check_effects(effects: list[str] | None) -> tuple[str, ...] | None:
     return _sorted_effects(effects)
 
 
-def _names(client: object, audience: object) -> None:
+def _names(client: object, audience: object, command: str) -> None:
     for label, value in (("client", client), ("audience", audience)):
         if not isinstance(value, str) or not _REGISTER_NAME_RE.match(value):
             raise PairingError(f"{label}: not a name of the naming register")
+    if client == chat_relay.RELAY:
+        raise PairingError(
+            f"{client} is the chat relay: its pairings are the opt-in of an add-on for the "
+            f"chat ('papaia-ctl addon chat {command} <addon>')"
+        )
 
 
 def approve(
@@ -308,7 +322,7 @@ def approve(
     """Approve one pairing; returns "confirmed" or "waiting" (a write pairing that now
     needs a second person). `effects` is needed for a pairing the file does not hold yet
     and must match a recorded one."""
-    _names(client, audience)
+    _names(client, audience, "allow")
     wanted = _check_effects(effects)
     pid = _pid(client, audience)
     with _locked(config_dir):
@@ -361,7 +375,7 @@ def revoke(
     config_dir: Path, register: rs.Register, client: str, audience: str, *, person: str
 ) -> None:
     """Remove one pairing, whatever its state; the realm sync removes its scope."""
-    _names(client, audience)
+    _names(client, audience, "revoke")
     with _locked(config_dir):
         current = _load(config_dir, register)
         remaining = [p for p in current if (p.client, p.audience) != (client, audience)]

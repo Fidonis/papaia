@@ -44,10 +44,11 @@ The relay keeps no token beyond the call it serves: no cache, no file, no log li
 ## The list of allowed servers
 
 `$PAPAIA_CONFIG_DIR/chat-relay/servers.json`, mounted read-only into the relay alone and
-read again when it changes. The core writes it when the operator allows an add-on for the
-chat (the opt-in commands that write it, and the chat's entries for the relayed servers,
-are not part of this release yet); `papaia-ctl start` creates the empty folder. Format `papaia.chat-relay-servers/1`,
-every field required, unknown fields refused, at most 12 servers:
+read again when it changes. The core writes it (mode 0600, replaced atomically) from the
+operator's opt-ins (below) at every decision, at `addon stop` and at every render
+(`papaia-ctl start`, the add-on commands); without a served opt-in there is no file.
+`papaia-ctl start` creates the folder. Format `papaia.chat-relay-servers/1`, every field
+required, unknown fields refused, at most 12 servers:
 
 ```json
 {
@@ -80,6 +81,28 @@ Address, audience, scope and tools come from the add-on's catalog entry, never f
 request. A list that does not check makes the relay refuse every call (stderr names the
 reason).
 
+## The operator's opt-in
+
+```bash
+tools/papaia-ctl addon chat allow  <addon> [--approve=<audience>]
+tools/papaia-ctl addon chat revoke <addon>
+tools/papaia-ctl addon chat list   [--json]
+```
+
+| Step | Rule |
+|---|---|
+| Who may be allowed | An installed, active add-on with an app network (`networks.app_network`) whose catalog entries hold exactly one tool server for persons (`kind: mcp`, identity `person`, an address and a registered audience) with at least one operation `via: tools`, each with an object `input_schema`. Refused with a reason and an audit row: a module of the suite (`suite_module`, it needs no opt-in), a name that is not installed (`unknown_addon`), an add-on that puts `librechat` on one of its networks (`attaches_chat`), an audience that is itself a client with token exchange (`exchange_client`), anything else the relay cannot serve (`not_eligible`). A malformed name is refused before anything is read. |
+| What is shown | The add-on, its catalog entry, its audience, each tool with its effect and data class, the data class cap (the highest `data_class_max` of the tools) and whether a second host account must approve. The approval names the audience that was shown (`--approve=<audience>`, asked for on a terminal); another audience is refused (`approval_mismatch`). `-y` is refused. |
+| What is recorded | The pairing `papaia-chat-relay` → `<audience>` in `security/pairings.yaml` with the effects of the tools: `read` and `check` as `r`, `write` and `send` as `w`, `delete` as `d`. The add-on's trust level and catalog entry do not change. |
+| Second person | A pairing with `w` or `d`, and every opt-in while `approvals.four_eyes` is on (always in the profile `kritis`), waits until another host account runs `addon chat allow <addon>`; the account that asked is refused (`same_person`). `pairing approve` and `pairing revoke` refuse the relay, and so does the bill of materials: the opt-in has this one path. |
+| Served | A confirmed opt-in of a running add-on whose tools still have the recorded effects is on the relay's list and gets a chat entry: named after the audience, `url` `http://papaia-chat-relay:8080/servers/<audience>/mcp`, the catalog entry's title, its description ending with `Data class up to: <cap>.`, the person's token as for every chat entry. No audience mapper of the add-on's audience goes on `librechat`. An add-on that now declares other effects (an upgrade added a write tool) is not served until it is revoked and allowed again. |
+| Revoke | `addon chat revoke <addon>` removes the pairing in any state and writes the list at once: the relay refuses the add-on from that moment. `addon uninstall` removes the pairing too, `addon stop` and `addon remove` take the add-on off the list while the opt-in stays. The chat entry follows at the next render, the relay's scope at the next realm sync (`papaia-ctl start` runs both). |
+| Audit | One `papaia.audit/1` row of `papaia-ctl/chat-relay` per decision and per refusal: `chat_relay.allow` (a request that waits, or an opt-in that takes effect), `chat_relay.approve`, `chat_relay.revoke`; event `exchange_right_changed`, `sub` the host account, `object_ref` `addon`/`<addon>`, `catalog_id` the entry, `data_class` the cap, `result` and `error_code`. Each write or removal of the list is one row `chat_relay.list_write` (`object_ref` `file`/`chat-relay/servers.json`) with the correlation id of the decision that caused it. |
+
+`addon chat list` shows each opt-in with its add-on, audience, effects and state
+(`allowed`, `waiting for approval`, or `allowed, not served` with the reason, for example
+a stopped add-on).
+
 ## Identity provider
 
 The realm sync (`papaia-ctl realm sync`) keeps, while at least one opt-in is confirmed
@@ -110,7 +133,13 @@ not installed only waits. The relay's own audience can never be paired.
 ## Network
 
 `papaia-chat-relay-net` (`internal: true`) holds `librechat` and the relay alone. The relay
-reaches Keycloak and the add-ons on `papaia-net`. It publishes no port, runs as the user
+reaches Keycloak on `papaia-net`. It reaches a served add-on on that add-on's app network
+(`networks.app_network` of its manifest; an add-on without one cannot be allowed): for each
+served add-on the core writes `overrides/docker-compose.chat-relay-<addon>.override.yml`
+(mode 0644, one audit row `chat_relay.override_write` per write or removal), which puts the
+relay alone on that network; `librechat` never joins it. The override goes when the add-on
+is no longer served, and `papaia-ctl start` leaves it out while the add-on's network does not
+exist, so a stopped add-on never keeps the relay from the others. It publishes no port, runs as the user
 that owns the configuration directory on a read-only file system without capabilities, and
 no add-on may attach it (`papaia-ctl addon check` refuses such a manifest).
 

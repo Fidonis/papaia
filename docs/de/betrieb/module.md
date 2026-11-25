@@ -92,6 +92,43 @@ nie das Token des Chats, sondern ein Token, das nur für ihn gilt. Einzelheiten:
 - Ohne freigegebenen Server lehnt das Relais jeden Aufruf ab. Freigegeben ist ein Server,
   wenn er in `$PAPAIA_CONFIG_DIR/chat-relay/servers.json` steht und die Kopplung
   `papaia-chat-relay` → `<audience>` in `security/pairings.yaml` bestätigt ist.
+- Freigeben, zurücknehmen und anzeigen:
+
+  ```sh
+  papaia-ctl addon chat allow  <add-on>
+  papaia-ctl addon chat revoke <add-on>
+  papaia-ctl addon chat list
+  ```
+
+  `allow` zeigt das Add-on, seine Audience, seine Werkzeuge mit Wirkung und die höchste
+  Datenklasse und fragt dann. Ohne Terminal nennt `--approve=<audience>` die angezeigte
+  Audience; `-y` wird abgelehnt. Freigegeben werden kann nur ein installiertes Add-on
+  außerhalb der Suite mit genau einem Werkzeug-Server für Personen, mindestens einem
+  Werkzeug und einem eigenen App-Netz (`networks.app_network`), dem nur das Relais
+  beitritt (erzeugte Datei `overrides/docker-compose.chat-relay-<add-on>.override.yml`).
+  Abgelehnt werden Module der Suite (sie brauchen keine Freigabe), unbekannte
+  Namen, Add-ons, die `librechat` an eines ihrer Netze hängen, und Audiences, die selbst
+  Tokens tauschen.
+- Schreibt, sendet oder löscht ein Werkzeug, oder gilt das Vier-Augen-Prinzip
+  (`approvals.four_eyes`, im Profil `kritis` immer), wartet die Freigabe auf ein zweites
+  Host-Konto, das denselben Befehl ausführt. Dasselbe Konto wird abgelehnt.
+  Die Befehle zur Freigabe von Kopplungen (`pairing`) lehnen den Client
+  `papaia-chat-relay` ab; die Freigabe hat nur diesen einen Weg.
+- Eine bestätigte Freigabe eines laufenden Add-ons schreibt `servers.json` und erzeugt im
+  Chat einen Eintrag mit dem Namen der Audience, der auf das Relais zeigt
+  (`http://papaia-chat-relay:8080/servers/<audience>/mcp`), nie auf das Add-on. Der
+  Katalog-Eintrag behält `trust: addon`; die Audience des Add-ons kommt nicht in das Token
+  des Chats. Erst `papaia-ctl start` gibt dem Relais den Scope und lädt den Eintrag in
+  LibreChat.
+- `addon chat revoke`, `addon uninstall` und `addon stop` nehmen das Add-on sofort von der
+  Liste; ab dann lehnt das Relais es ab. Eintrag im Chat und Scope des Relais entfallen beim
+  nächsten `papaia-ctl start`. Deklariert das Add-on nach einem Upgrade andere Wirkungen
+  (etwa ein neues schreibendes Werkzeug), bleibt es draußen, bis es zurückgenommen und neu
+  freigegeben ist; `addon chat list` nennt den Grund.
+- Jede Entscheidung und jede Ablehnung ist eine Zeile `papaia.audit/1` im Audit-Ausgang des
+  Kerns (`chat_relay.allow`, `chat_relay.approve`, `chat_relay.revoke`) mit Host-Konto,
+  Add-on, Katalog-Eintrag und Datenklasse; jedes Schreiben der Liste ist eine Zeile
+  `chat_relay.list_write`.
 - `papaia-ctl realm sync` legt dann den Client `papaia-chat-relay` im Realm an, gibt ihm
   genau die bestätigten Scopes `aud-<audience>` und löscht ihn wieder, wenn keine Freigabe
   mehr besteht. Den Schlüssel des Clients erzeugt `papaia-ctl start` unter

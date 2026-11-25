@@ -36,6 +36,7 @@ from . import (
     backup_crypt,
     breakglass,
     catalog,
+    chat_optin,
     cli_addon,
     cli_node,
     cli_pki,
@@ -3481,6 +3482,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cli_node.add_parsers(sub)
     pairing_approval.add_parsers(sub)
+    chat_optin.add_parsers(sub)
     prerelease_anchor.add_parsers(sub)
     module_offer.add_parsers(sub)
     cli_pki.add_parsers(sub)

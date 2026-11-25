@@ -183,6 +183,10 @@
 #   papaia-ctl addon remove    <name> [--force] [--config-dir=PATH]
 #   papaia-ctl addon uninstall <name> [--purge-data] [--force] [--config-dir=PATH]
 #   papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
+#   papaia-ctl addon chat allow  <name> [--approve=AUDIENCE] [--config-dir=PATH] — let the chat
+#                              reach a tool server outside the suite through the chat relay
+#   papaia-ctl addon chat revoke <name> [--config-dir=PATH]
+#   papaia-ctl addon chat list   [--json] [--config-dir=PATH]
 #   papaia-ctl suite verify  --bom=FILE [--signature=FILE] [--json]
 #                            [--key=FILE | --fingerprint=sha256:HEX]
 #                            [--suite=VERSION] [--scope=delivery|test]
@@ -225,7 +229,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,218p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,222p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------
@@ -373,7 +377,8 @@ case "$cmd" in
             remove)    cmd_addon_remove "$@" ;;
             uninstall) cmd_addon_uninstall "$@" ;;
             run)       cmd_addon_run "$@" ;;
-            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, upgrade, rollback, list, check, components, stop, remove, uninstall, run."; exit 2 ;;
+            chat)      cmd_addon_chat "$@" ;;
+            *) error "Unknown 'addon' subcommand: '${sub:-<none>}'. Valid: install, start, upgrade, rollback, list, check, components, stop, remove, uninstall, run, chat."; exit 2 ;;
         esac
         ;;
     realm)

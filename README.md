@@ -1578,6 +1578,9 @@ tools/papaia-ctl addon run       <name> [<action>] [--json] [--config-dir=PATH]
 tools/papaia-ctl addon check     [--target-core=PATH] [--target-version=VER] \
   [--target-addon-api=N] [--target-min-addon-api=N] [--json] [--force] [--config-dir=PATH]
 tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
+tools/papaia-ctl addon chat allow  <name> [--approve=AUDIENCE] [--config-dir=PATH]
+tools/papaia-ctl addon chat revoke <name> [--config-dir=PATH]
+tools/papaia-ctl addon chat list   [--json] [--config-dir=PATH]
 ```
 
 | Command | Effect |
@@ -1594,6 +1597,37 @@ tools/papaia-ctl addon components [<name>] [--json] [--config-dir=PATH]
 | `uninstall` | Removes the add-on's containers and networks, its override files, config bundle and entry in `deployment.yaml`. Its proxy hosts and its clients in the realm go right after, through `npm-provision` and `keycloak-role-sync` (or at the next `start` when the stack is down); its service accounts and `aud-*` scopes go with them, since no installed module declares them any more. `--purge-data` (formerly `--clean-up`) also removes its volumes; without it the volumes stay and a later `install` uses them again. Refused, before anything is taken down, while another active add-on requires it; `--force` proceeds with a warning. An add-on that uses it optionally does not refuse it and is named. Leaves one audit row. |
 | `components` | Read-only. Lists the software each registered add-on bundles, from the `components` of its manifest: name, version, role (`primary` or `sidecar`) and the image variable that carries it. An add-on's own version counts changes to the bundle, this says what runs inside it. A tag the add-on's `.env` pins instead of the catalog's is shown as overridden, and a floating tag (`postgres:18`) is marked. `<name>` narrows the list to one add-on, `--json` prints `{"schema_version": 1, "addons": [...]}`. `install` prints the same list for the add-on it just registered. An add-on whose manifest declares no components is listed without any. |
 | `check` | Evaluates all active add-ons against the current core for compatibility and prints a status table (OK / INCOMPATIBLE / UNKNOWN). Exit 0 when all add-ons are compatible, exit 2 if any are INCOMPATIBLE. `--target-core=PATH` checks against a different core checkout for a dry-run before an upgrade. When the core ships the suite matrix `compat/suite.yaml`, every add-on it names must have a version of the core's suite or the suite before it (axis `matrix`, see [`docs/compatibility.md`](docs/compatibility.md)). `--json` prints machine-readable output. `--force` demotes INCOMPATIBLE to a warning (exit 0). An add-on built against a newer contract generation than the target serves is reported with every missing generation and its meaning, for example `missing generations 4, 5, 6, 7, 8, 9, 10, 11, 12; 12: add-on ingress integration.nginx (ADR 0023)`; see the generation table in [`ADDON_API`](ADDON_API). |
+
+#### Tool servers outside the suite in the chat
+
+The chat reaches the tool server of a module of the suite directly. An add-on outside the
+suite (`trust: addon` in the platform catalog) reaches it only through the core chat relay
+`papaia-chat-relay`, and only after the operator allowed it
+([ADR 0029](docs/adr/0029-reach-a-tool-server-outside-the-suite-through-a-core-chat-relay.md),
+[`docs/chat-relay.md`](docs/chat-relay.md)). It never receives the chat's token.
+
+- `addon chat allow <name>` shows the add-on, its audience, its tools with their effects and
+  the highest data class they return, and asks. Without a terminal, `--approve=<audience>`
+  names the audience that was shown; `-y` is refused. Allowed only for an installed add-on
+  outside the suite with an app network and one tool server for persons (`kind: mcp`,
+  identity `person`) with at least one tool; refused for a module of the suite, an unknown name, an add-on that attaches
+  `librechat` to one of its networks and an audience that exchanges tokens itself.
+- A tool that writes, sends or deletes, and every opt-in while `approvals.four_eyes` is on,
+  makes the opt-in wait for a second host account, who runs the same command; the same
+  account is refused.
+- A confirmed opt-in of a running add-on puts it on the relay's list
+  (`$PAPAIA_CONFIG_DIR/chat-relay/servers.json`) and gives the chat an entry named after its
+  audience that points to the relay, and the relay alone joins the add-on's app network
+  (a generated override). The add-on's audience is never mapped onto the chat's token, and
+  the catalog entry keeps `trust: addon`. `papaia-ctl start` grants the relay the
+  add-on's scope and lets LibreChat read the entry.
+- `addon chat revoke <name>`, `addon uninstall` and `addon stop` take the add-on off the
+  relay's list at once; the chat entry and the relay's scope go at the next `start`.
+  `addon chat list` shows each opt-in with its state and, for one that is not served, why.
+- Every decision and every refusal is one `papaia.audit/1` row (`chat_relay.allow`,
+  `chat_relay.approve`, `chat_relay.revoke`) with the host account, the add-on and the data
+  class; each write of the relay's list is one row `chat_relay.list_write`. `pairing approve`
+  and `pairing revoke` refuse the relay: the opt-in has this one path.
 
 #### Module selection
 

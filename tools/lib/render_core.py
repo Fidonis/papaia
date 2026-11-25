@@ -37,6 +37,7 @@ import yaml
 
 from . import (
     catalog,
+    chat_optin,
     chat_relay,
     chat_servers,
     common,
@@ -212,10 +213,15 @@ def _chat_servers(config_dir: Path, repo_root: Path) -> list[chat_servers.ChatSe
 
 def _chat_layer(config_dir: Path, repo_root: Path) -> dict:
     """The LibreChat entries of the catalog's tool servers whose module ships no fragment
-    of its own (V-10 step 13). Between the add-on layers and the overlay, so the operator
-    can still change or switch off an entry."""
+    of its own (V-10 step 13), and of the add-ons outside the suite the operator allowed,
+    which point to the chat relay (ADR 0029). Between the add-on layers and the overlay,
+    so the operator can still change or switch off an entry."""
     shipped = chat_servers.shipping_fragments(config_dir, repo_root, PROFILE_FRAGMENTS)
-    return chat_servers.fragment(_chat_servers(config_dir, repo_root), shipped)
+    try:
+        relayed = chat_optin.chat_entries(chat_optin.allowed(config_dir, repo_root))
+    except chat_optin.OptInError as exc:
+        raise RenderError(f"chat relay: {exc}") from exc
+    return chat_servers.fragment(_chat_servers(config_dir, repo_root), shipped, relayed)
 
 
 def _without_overridden(generated: list[dict], overlay) -> list[dict]:
@@ -300,7 +306,9 @@ def render(config_dir: Path, repo_root: Path) -> None:
     # mounted by its container; Compose must not create them (docs/chat-relay.md).
     try:
         chat_relay.render(config_dir)
-    except (chat_relay.ChatRelayError, OSError) as exc:
+        # The relay's list: the confirmed opt-ins of running add-ons (lib/chat_optin.py).
+        chat_optin.render_list(config_dir, repo_root)
+    except (chat_relay.ChatRelayError, chat_optin.OptInError, OSError) as exc:
         raise RenderError(f"papaia-chat-relay: {exc}") from exc
     # The folder of the platform halt, mounted read-only by the services that act;
     # Compose must not create it (docs/halt.md).

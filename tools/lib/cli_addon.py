@@ -20,6 +20,7 @@ from . import (
     addon_upgrade,
     addons,
     catalog,
+    chat_optin,
     chat_servers,
     common,
     compat,
@@ -1457,6 +1458,19 @@ def cmd_addon_uninstall(args: argparse.Namespace) -> int:
     # What lives in the identity provider and the proxy goes at their next sync
     # (lib/uninstall_journal.py): recorded before the bundle with its public URL goes.
     manifest, _ = deployment.load_addon_manifest(deployment.resolve_addon_path(entry, repo_root))
+    # Its opt-in for the chat goes with it, so it never applies to another add-on with
+    # the same audience later (lib/chat_optin.py); the relay's list follows below.
+    audiences = {
+        e["audience"]
+        for e in (manifest or {}).get("exposes") or []
+        if isinstance(e, dict) and isinstance(e.get("audience"), str)
+    }
+    try:
+        chat_optin.forget(config_dir, name, audiences)
+    except (chat_optin.OptInError, realm_sync.RealmSyncError, OSError) as exc:
+        print(f"ERROR: addon '{name}': its opt-in for the chat cannot be removed: {exc}. "
+              "Nothing was uninstalled.", file=sys.stderr)
+        return 2
     hostnames = npm_provision.uninstalled_hostnames(
         manifest or {},
         name,
@@ -1620,5 +1634,11 @@ def cmd_addon_state(args: argparse.Namespace) -> int:
         catalog.render(config_dir, repo_root)
     except catalog.CatalogError as exc:
         print(f"ERROR: platform catalog: {exc}", file=sys.stderr)
+        return 3
+    # A stopped add-on leaves the chat relay's list at once (lib/chat_optin.py).
+    try:
+        chat_optin.render_list(config_dir, repo_root)
+    except (chat_optin.OptInError, OSError) as exc:
+        print(f"ERROR: chat relay list: {exc}", file=sys.stderr)
         return 3
     return 0

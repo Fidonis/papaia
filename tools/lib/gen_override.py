@@ -298,6 +298,13 @@ def generate_overrides(config_dir: Path, repo_root: Path | None = None) -> list[
         return written
 
     base = repo_root if repo_root is not None else Path.cwd()
+    # The chat relay on the app network of each add-on allowed in the chat (ADR 0029).
+    from . import chat_optin  # it reaches this module through the render path
+
+    try:
+        written.extend(chat_optin.generate_overrides(config_dir, base))
+    except chat_optin.OptInError as exc:
+        raise ValueError(f"chat relay: {exc}") from None
     _check_isolated_claims(deployed, base, config_dir)
     for addon in deployment.active_addons(deployed):
         addon_path = deployment.resolve_addon_path(addon, base)

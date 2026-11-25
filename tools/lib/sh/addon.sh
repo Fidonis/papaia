@@ -916,3 +916,81 @@ _addon_uninstall_sync() {
         fi
     done
 }
+
+# `papaia-ctl addon chat allow|revoke|list` (ADR 0029, lib/chat_optin.py): the operator's
+# opt-in of an add-on outside the suite for the chat, through the core chat relay. `allow`
+# shows the add-on, its audience, its tools and the data class cap, then asks; without a
+# terminal the audience that was shown is named with --approve=<audience>. -y never
+# allows: the opt-in grants an exchange right. A write opt-in, and every opt-in while
+# four eyes are in effect, waits for a second host account running the same command.
+cmd_addon_chat() {
+    local config_dir="$DEFAULT_CONFIG_DIR" action="${1:-}" addon_name="" json=0 approve=""
+    shift || true
+    case "$action" in
+        allow|revoke|list) ;;
+        -h|--help) usage; exit 0 ;;
+        *) error "Unknown 'addon chat' subcommand: '${action:-<none>}'. Valid: allow, revoke, list."; exit 2 ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config-dir=*) config_dir="${1#*=}" ;;
+            --json) json=1 ;;
+            --approve=*) approve="${1#*=}" ;;
+            -y|--yes)
+                error "addon chat $action takes no -y: the opt-in is confirmed explicitly (--approve=<audience>)."
+                exit 2
+                ;;
+            -h|--help) usage; exit 0 ;;
+            -*) error "Unknown option for addon chat $action: $1"; exit 2 ;;
+            *)
+                if [ -n "$addon_name" ]; then
+                    error "addon chat $action takes one add-on name."; exit 2
+                fi
+                addon_name="$1"
+                ;;
+        esac
+        shift
+    done
+    if [ "$json" -eq 1 ] && [ "$action" != "list" ]; then
+        error "--json is an option of 'addon chat list' only."; exit 2
+    fi
+    if [ -n "$approve" ] && [ "$action" != "allow" ]; then
+        error "--approve is an option of 'addon chat allow' only."; exit 2
+    fi
+    if [ "$action" = "list" ] && [ -n "$addon_name" ]; then
+        error "addon chat list takes no add-on name."; exit 2
+    fi
+    if [ "$action" != "list" ] && [ -z "$addon_name" ]; then
+        error "Usage: papaia-ctl addon chat $action <name>"; exit 2
+    fi
+    # shellcheck disable=SC2034  # read by py_cli and _require_setup_done
+    CONFIG_DIR="$config_dir"
+    _require_setup_done
+    case "$action" in
+        list)
+            if [ "$json" -eq 1 ]; then
+                py_cli addon-chat-list --json
+            else
+                py_cli addon-chat-list
+            fi
+            ;;
+        revoke)
+            py_cli addon-chat-revoke --name="$addon_name"
+            ;;
+        allow)
+            py_cli addon-chat-show --name="$addon_name" || exit 2
+            if [ -z "$approve" ]; then
+                if ! is_tty; then
+                    error "Without a terminal, name the audience shown above: --approve=<audience>."
+                    exit 2
+                fi
+                approve="$(py_cli addon-chat-show --name="$addon_name" --audience-only)" || exit 2
+                if ! confirm "Allow $addon_name in the chat (audience $approve)?" "N"; then
+                    warn "Nothing was allowed."
+                    exit 1
+                fi
+            fi
+            py_cli addon-chat-allow --name="$addon_name" --approve="$approve"
+            ;;
+    esac
+}

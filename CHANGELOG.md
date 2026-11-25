@@ -49,7 +49,26 @@ based on merged pull requests; this file mirrors the published releases.
   with exactly the add-on's audience, after a per-add-on opt-in of the operator (off by
   default, a second host account for writes and under the four-eyes setting). The add-on
   never receives the shared chat token; opt-in, revoke and every relayed call are audited.
-  The opt-in commands are not implemented yet.
+
+### Opt-in of a tool server outside the suite for the chat
+
+- `papaia-ctl addon chat allow|revoke|list`: the operator allows an installed add-on outside
+  the suite (one tool server for persons, at least one tool) for the chat. A module of the
+  suite, an unknown name, an add-on that attaches `librechat` and an audience that exchanges
+  tokens are refused. `allow` shows audience, tools, effects and the data class cap and asks;
+  without a terminal `--approve=<audience>` names what was shown, `-y` is refused. A write
+  opt-in, and every opt-in under the four-eyes setting, waits for a second host account.
+  The opt-in is the pairing `papaia-chat-relay` → `<audience>` in `security/pairings.yaml`;
+  `pairing approve`, `pairing revoke` and the bill of materials refuse that client.
+- A confirmed opt-in of a running add-on whose declared effects still match is written to
+  the relay's list `chat-relay/servers.json` and gets a chat entry named after its audience
+  that points to `http://papaia-chat-relay:8080/servers/<audience>/mcp`, its description
+  ending with the data class cap. No audience mapper of the add-on goes on `librechat`; the
+  catalog entry keeps `trust: addon`. Revoke, uninstall and stop take it off the list at
+  once.
+- One `papaia.audit/1` row of `papaia-ctl/chat-relay` per decision and refusal
+  (`chat_relay.allow`, `chat_relay.approve`, `chat_relay.revoke`) and per write of the list
+  (`chat_relay.list_write`).
 
 ### Chat relay for tool servers outside the suite
 
@@ -69,7 +88,7 @@ based on merged pull requests; this file mirrors the published releases.
   on `librechat`; the client is deleted when the last opt-in goes. A pairing of the relay
   with a suite server, a core audience or an add-on that attaches the chat stops the sync.
 - `papaia-ctl start` makes the relay's key under `security/chat-relay/` and the folder of
-  its list `chat-relay/`. The list itself and the opt-in commands follow separately.
+  its list `chat-relay/`.
 - The core vendors papaia-kit 0.1.2, which registers the relay's audience, client and
   scope.
 
