@@ -182,6 +182,26 @@ Module, die ein Betreiber oder Dritte mit einer solchen Abhängigkeit hinzufüge
 Bei „erweitert um …“ läuft das Entfernen; ein Hinweis nennt das Modul, das danach ohne die
 Zusatzfunktion weiterläuft.
 
+### Ganze Installation entfernen
+
+```sh
+papaia-ctl uninstall --clean-up -y     # Kern-Container, alle Volumes und Netze des Kerns,
+                                       # dann das Konfigurationsverzeichnis
+```
+
+`--clean-up` entfernt die Volumes und Netze aller Profile des Kerns, auch eines Profils, das
+vorher abgeschaltet wurde (etwa die Datenbank und die Schlüssel des Verbindungsregisters nach
+dem Abschalten von `connections`). Der Befehl fährt den Kern mit allen Profilen und den
+Override-Dateien herunter und löscht danach jedes Volume und jedes Netz, das noch das Label
+`com.docker.compose.project=<projekt>` dieser Installation trägt. Er nennt, was er gelöscht
+hat. Volumes und Netze anderer Projekte bleiben unberührt; es wird nichts per `prune` gelöscht.
+Die Volumes der Add-ons gehören zu eigenen Projekten und bleiben (dafür
+`addon uninstall <modul> --purge-data`).
+
+Lässt sich ein Volume oder Netz nicht löschen (ein Container eines anderen Projekts hängt
+noch daran), endet der Befehl mit 1, nennt es mit dem Befehl, der es löscht, und lässt das
+Konfigurationsverzeichnis stehen. Danach `papaia-ctl uninstall --clean-up` wiederholen.
+
 ## Datenklasse der Modell-Routen
 
 Jeder Alias des Modell-Gateways (`papaia-chat`, `papaia-structured`, `papaia-embed` und

@@ -12,6 +12,18 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### `uninstall --clean-up` removes the volumes of switched-off profiles
+
+- `uninstall --clean-up` takes the core down with every profile the Compose files declare
+  (from `docker compose config --profiles`, so Compose 2.20.0 is enough) and the core
+  overrides, then removes every volume and network left with the label
+  `com.docker.compose.project=<project>` of the installation and lists them. Before, the
+  volumes of a profile switched off earlier stayed, among them the keys of the connection
+  registry. Nothing without the label is touched and nothing is pruned. A resource that cannot
+  be removed fails the command (exit 1) with its name and the command that removes it, and the
+  config directory is kept. `uninstall` without `--clean-up` and `stop --clean-up [--volumes]`
+  are unchanged.
+
 ### Keycloak alone after a restore with the core overrides
 
 - The step of a restore that starts Keycloak alone before the pending post-restore step

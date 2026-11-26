@@ -58,7 +58,7 @@ _require_profiles_resolve() {
     local profiles="$1" env_file="$2"; shift 2
     local -a files=("$@")
     local services status=0
-    services="$(COMPOSE_PROFILES="$profiles" docker compose ${files[@]+"${files[@]}"} \
+    services="$(COMPOSE_PROFILES="$profiles" docker compose ${files[@]+${files[@]+"${files[@]}"}} \
         --env-file "$env_file" config --services 2>&1)" || status=$?
 
     if [ "$status" -ne 0 ]; then
@@ -1230,8 +1230,8 @@ cmd_uninstall() {
 
     warn "This will stop and remove all core containers and permanently delete $CONFIG_DIR."
     if [ "$clean_up" -eq 1 ]; then
-        warn "  --clean-up: all named volumes will also be removed, and the models of a"
-        warn "  native LocalAI."
+        warn "  --clean-up: all volumes and networks of the core will also be removed, those"
+        warn "  of switched-off profiles included, and the models of a native LocalAI."
     fi
     if [ "$addons" -eq 1 ]; then
         warn "  --addons: active addon containers will also be stopped and removed."
@@ -1267,7 +1267,7 @@ cmd_uninstall() {
     if [ -f "$COMPOSE_FILE" ] && [ -f "$env_file" ]; then
         info "Stopping and removing core containers..."
         if [ "$clean_up" -eq 1 ]; then
-            docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down -v
+            _uninstall_clean_up_core "$env_file" || exit 1
         else
             docker compose -f "$COMPOSE_FILE" --env-file "$env_file" down
         fi
@@ -1280,6 +1280,113 @@ cmd_uninstall() {
         fi
     fi
     success "uninstall complete."
+}
+
+# Prints the value of KEY ($2) in the env file $1 as lib/common.py parse_env_file reads it:
+# the last `KEY=value` line wins, blanks around key and value and one pair of surrounding
+# quotes are dropped; nothing when the file or the key is missing.
+_env_file_value() {
+    local file="$1" key="$2" line k value=""
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "$line" in ""|"#"*) continue ;; *=*) ;; *) continue ;; esac
+        k="${line%%=*}"
+        k="${k%"${k##*[![:space:]]}"}"
+        [ "$k" = "$key" ] || continue
+        value="${line#*=}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [ "${#value}" -ge 2 ]; then
+            case "$value" in \"*\"|\'*\') value="${value:1:${#value}-2}" ;; esac
+        fi
+    done < "$file"
+    printf '%s' "$value"
+}
+
+# `uninstall --clean-up` for the core: everything of the installation's Compose project goes,
+# also what belongs to a profile switched off before. A plain `down -v` knows only the
+# services of the profiles enabled in the env file, so the volumes of a switched-off profile
+# (the connection registry's database and keys, for one) stayed.
+#
+# 1. `down -v --remove-orphans` with every profile the compose files declare (the list from
+#    `docker compose config --profiles`, which Compose 2.20.0 has; `COMPOSE_PROFILES=*` is
+#    not relied on) and the core overrides `start` uses.
+# 2. Every volume and network that still carries the label com.docker.compose.project=<the
+#    project of the env file> is removed one by one and named. Nothing without that label is
+#    touched, and nothing is pruned.
+# A resource that cannot be removed is named with the command that removes it; the others
+# are still removed, and the function returns 1 so the configuration stays for another run.
+# $1 = the core env file.
+_uninstall_clean_up_core() {
+    local env_file="$1" profiles project
+    _core_overrides quiet
+    # Never empty, but written like every array expansion here, for bash 3.2.
+    local -a files=(-f "$COMPOSE_FILE" ${CORE_OVERRIDES[@]+"${CORE_OVERRIDES[@]}"} --env-file "$env_file")
+
+    if ! profiles="$(docker compose ${files[@]+"${files[@]}"} config --profiles)"; then
+        error "Could not list the profiles of the core compose files; nothing was removed."
+        return 1
+    fi
+    profiles="$(printf '%s\n' "$profiles" | tr -d '\r' | sed '/^$/d' | paste -sd, -)"
+    # Called in an `||` list, where `set -e` does not apply: every step checks itself.
+    # Set even when empty: an empty list then overrides the env file's own selection too.
+    if ! COMPOSE_PROFILES="$profiles" docker compose ${files[@]+"${files[@]}"} down -v --remove-orphans; then
+        error "'docker compose down -v' failed for the core; nothing else was removed."
+        return 1
+    fi
+
+    # The project is COMPOSE_PROJECT_NAME of the env file Compose was given (the compose
+    # file sets no `name:`), "papaia" when unset, as the backup reads it. Not
+    # `docker compose config`: with every profile on, it needs the env files of profiles
+    # never set up, which do not exist (`down` does not read them).
+    project="$(_env_file_value "$env_file" COMPOSE_PROJECT_NAME)"
+    [ -n "$project" ] || project="papaia"
+    if ! [[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
+        error "Could not tell the Compose project of this installation (got '${project}');"
+        error "its volumes and networks were not removed. List them with:"
+        error "  docker volume ls --filter label=com.docker.compose.project=<project>"
+        return 1
+    fi
+
+    local label="com.docker.compose.project=$project" kind listing owner name failed=0
+    local -a removed=()
+    for kind in volume network; do
+        if ! listing="$(docker "$kind" ls --filter "label=$label" \
+                --format "{{.Label \"com.docker.compose.project\"}}"$'\t'"{{.Name}}")"; then
+            error "Could not list the ${kind}s of project $project."
+            error "  List them with: docker $kind ls --filter $label"
+            failed=1
+            continue
+        fi
+        while IFS=$'\t' read -r owner name; do
+            # The listing is filtered by the label already; checking it again keeps a
+            # resource of another project out even if the filter was not applied.
+            [ "$owner" = "$project" ] && [ -n "$name" ] || continue
+            if docker "$kind" rm "$name" >/dev/null; then
+                removed+=("$kind $name")
+            else
+                error "Could not remove $kind $name of project $project."
+                error "  Remove it with: docker $kind rm $name"
+                failed=1
+            fi
+        done < <(printf '%s\n' "$listing" | tr -d '\r')
+    done
+
+    if [ "${#removed[@]}" -gt 0 ]; then
+        info "Removed what was left of project $project:"
+        local item
+        for item in ${removed[@]+"${removed[@]}"}; do
+            info "  $item"
+        done
+    fi
+    if [ "$failed" -ne 0 ]; then
+        error "Not everything of project $project was removed (see above); $CONFIG_DIR was kept."
+        error "Run 'papaia-ctl uninstall --clean-up' again once the named resources are free."
+        return 1
+    fi
+    return 0
 }
 
 # Deletes the configuration directory. Containers write some of their bind-mounted data as

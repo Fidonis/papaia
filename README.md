@@ -942,8 +942,20 @@ tools/papaia-ctl uninstall [--clean-up] [--addons] [-y] [--config-dir=PATH]
 ```
 
 Stops and removes all core containers, then **permanently deletes the config directory**.
-Prompts for confirmation; `-y` / `--yes` skips the prompt. `--clean-up` also removes the
-Docker volumes. `--addons` stops and removes active add-on containers first.
+Prompts for confirmation; `-y` / `--yes` skips the prompt. `--addons` stops and removes
+active add-on containers first.
+
+`--clean-up` also removes the Docker volumes and networks of the core, those of **every
+profile, also one switched off before** (the database and keys of the connection registry
+after `connections` was switched off, for one). The core is taken down with every profile the
+Compose files declare (the list `docker compose config --profiles` prints) and with the core
+overrides, as `docker compose down -v --remove-orphans`. Then every volume and network that
+still carries the label `com.docker.compose.project=<project>` of this installation is removed
+and named. Resources of other Compose projects, among them the add-ons' own projects, are not
+touched, and nothing is pruned; add-on volumes go with `addon uninstall <name> --purge-data`.
+A volume or network that cannot be removed (a container of another project still uses it)
+makes `uninstall` exit 1 with its name and the `docker volume rm` or `docker network rm` that
+removes it; the config directory is then kept, so the same command can run again.
 
 Some data below the config directory is written by containers as root (the Nginx Proxy Manager
 database and certificates in `infra/nginx/nginx-data/`, for one). What the operator cannot
