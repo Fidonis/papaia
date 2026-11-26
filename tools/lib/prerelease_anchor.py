@@ -4,8 +4,9 @@ A release candidate is tested end to end before the release: the core starts, up
 confirms pairings against a bill of materials of candidate images. Those images are signed
 with a local test key, because the release key signs deliveries only. The option
 `--test-trust-anchor=FILE` lets exactly one `papaia-ctl` command (`start`, `upgrade`,
-`pairing confirm`, `pairing list`, `suite verify`) accept a bill of materials of scope
-`test` signed with the public key in FILE. Its limits:
+`pairing confirm`, `pairing list`, `suite verify`, and `setup` in its pairing step and
+module offer) accept a bill of materials of scope `test` signed with the public key in
+FILE. Its limits:
 
 - **Pre-release cores only.** The core `VERSION` must carry a SemVer pre-release part
   (`1.10.0-rc.1`). The version is read first; on a release version, or on any doubt about
@@ -41,11 +42,12 @@ MAX_VERSION_BYTES = 64
 MAX_KEY_BYTES = 4096
 MAX_PATH_CHARS = 4096
 # The papaia-ctl commands that take the option; each names itself in banner and audit.
-COMMANDS = ("start", "upgrade", "pairing-confirm", "pairing-list", "suite-verify")
-# The image checks such a command runs inside it (lib/sh/lifecycle.sh `_verify_images`):
-# the restore step of `start` and the module stages of `upgrade` among them.
+COMMANDS = ("start", "upgrade", "pairing-confirm", "pairing-list", "suite-verify", "setup")
+# The checks such a command runs inside it: the image checks (lib/sh/lifecycle.sh
+# `_verify_images`), the restore step of `start` and the module stages of `upgrade` among
+# them, and the module offer of `setup` (lib/module_offer.py).
 AUDIT_COMMANDS = (*COMMANDS, "restore", "addon-install", "addon-start", "addon-upgrade",
-                  "addon-rollback")
+                  "addon-rollback", "module-offer")
 
 # A SemVer 2.0.0 version with a pre-release part and no build metadata: numeric
 # identifiers without leading zeros, one optional trailing newline, nothing else.

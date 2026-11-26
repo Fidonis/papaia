@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from lib import prerelease_anchor as pre
 PRE = "1.10.0-rc.1"
 TRUST_SH = REPO / "tools" / "lib" / "sh" / "trust.sh"
 PAIRING_SH = REPO / "tools" / "lib" / "sh" / "pairing.sh"
+SETUP_SH = REPO / "tools" / "lib" / "sh" / "setup.sh"
 
 
 @pytest.fixture
@@ -439,7 +441,7 @@ def test_begin_on_a_release_core_refuses(tmp_path, test_key, capsys):
     assert "pre-release" in captured.err and captured.out == ""
 
 
-@pytest.mark.parametrize("command", ["stop", "addon-install", "setup", "restore"])
+@pytest.mark.parametrize("command", ["stop", "addon-install", "backup", "restore"])
 def test_begin_names_only_the_commands_that_take_the_anchor(tmp_path, test_key, command):
     root, config = _test_core(tmp_path, test_key), _config(tmp_path)
     key = _key_file(tmp_path, test_key[1])
@@ -562,13 +564,14 @@ def test_dispatch_with_the_option_opens_runs_and_closes(tmp_path):
     (("pairing", "confirm", "--approve-pairings=x"), "pairing-confirm"),
     (("pairing", "list"), "pairing-list"),
     (("suite", "verify", "--bom=x"), "suite-verify"),
+    (("setup", "-y"), "setup"),
 ])
 def test_dispatch_names_each_command_that_takes_the_option(tmp_path, args, label):
     done, calls = _dispatch(tmp_path, *args, "--test-trust-anchor=/k.pub")
     assert f"--command={label}" in calls[0]
 
 
-@pytest.mark.parametrize("args", [("stop",), ("setup",), ("addon", "install", "x"),
+@pytest.mark.parametrize("args", [("stop",), ("backup",), ("addon", "install", "x"),
                                   ("pairing", "approve"), ("restore",), ("rollback",)])
 def test_dispatch_refuses_the_option_for_any_other_command(tmp_path, args):
     done, calls = _dispatch(tmp_path, *args, "--test-trust-anchor=/k.pub")
@@ -700,6 +703,113 @@ cmd_pairing confirm --approve-pairings=sha256:{"0" * 64}
         assert "--correlation-id=0b5a4c84-6f0a-4f36-9a4e-0d0c5a7d1e11" in call
 
 
+_SETUP_STEPS = """
+set -euo pipefail
+CONFIG_DIR="@TMP@/config"
+error() { echo "ERROR: $*" >&2; }
+warn() { :; }
+info() { :; }
+is_tty() { return 1; }
+source "@LIFECYCLE@"
+source "@PAIRING@"
+source "@SETUP@"
+py_cli() {
+    echo "py_cli $*" >> "@TMP@/calls"
+    if [ "$1" = "pairing-list" ] && [ "${2:-}" = "--digest" ]; then
+        echo "sha256:@DIGEST@"
+    fi
+    return 0
+}
+@PREFIX@
+_setup_pairings 1 "@APPROVED@"
+_setup_module_offer
+"""
+
+
+def _setup_steps(tmp_path: Path, prefix: str, approved: str = "", env: dict | None = None):
+    if BASH is None:
+        pytest.skip("bash is not available")
+    calls = tmp_path / "calls"
+    calls.write_text("", encoding="utf-8")
+    script = (
+        _SETUP_STEPS.replace("@TMP@", tmp_path.as_posix())
+        .replace("@LIFECYCLE@", LIFECYCLE.as_posix())
+        .replace("@PAIRING@", PAIRING_SH.as_posix())
+        .replace("@SETUP@", SETUP_SH.as_posix())
+        .replace("@DIGEST@", "a" * 64)
+        .replace("@PREFIX@", prefix)
+        .replace("@APPROVED@", approved)
+    )
+    done = subprocess.run([BASH, "-c", script], capture_output=True, text=True, timeout=30,
+                          check=False, env={**os.environ, **(env or {})})
+    return done, calls.read_text("utf-8").splitlines()
+
+
+def test_setup_hands_the_anchor_to_each_check_of_the_bill(tmp_path):
+    done, calls = _setup_steps(
+        tmp_path,
+        'TEST_TRUST_ANCHOR="/keys/test.pub"\n'
+        'IMAGES_CORRELATION_ID="0b5a4c84-6f0a-4f36-9a4e-0d0c5a7d1e11"',
+        approved="sha256:" + "b" * 64,
+    )
+    assert done.returncode == 0, done.stderr
+    assert [call.split()[1] for call in calls] == [
+        "pairing-list", "pairing-list", "pairing-confirm", "module-offer"]
+    assert "--digest" in calls[0]
+    assert "--approve-pairings=sha256:" + "b" * 64 in calls[2]
+    for call in calls:
+        assert "--test-trust-anchor=/keys/test.pub" in call
+        assert "--correlation-id=0b5a4c84-6f0a-4f36-9a4e-0d0c5a7d1e11" in call
+
+
+def test_setup_without_the_anchor_calls_the_checks_as_before(tmp_path):
+    done, calls = _setup_steps(tmp_path, ":", env={"TEST_TRUST_ANCHOR": "/keys/test.pub",
+                                                   "PAPAIA_TEST_TRUST_ANCHOR": "/keys/x.pub"})
+    assert done.returncode == 0, done.stderr
+    assert calls == ["py_cli pairing-list --digest", "py_cli pairing-list",
+                     "py_cli module-offer"]
+
+
+def test_module_offer_accepts_a_test_bill_with_the_anchor(tmp_path, test_key, capsys):
+    root, config = _test_core(tmp_path, test_key), _config(tmp_path)
+    key = _key_file(tmp_path, test_key[1])
+    assert _pairing(root, config, "module-offer", f"--test-trust-anchor={key}",
+                    "--correlation-id=0b5a4c84-6f0a-4f36-9a4e-0d0c5a7d1e11") == 0
+    captured = capsys.readouterr()
+    assert "Modules offered by suite 1.10.0" in captured.out
+    rows = _anchor_rows(config)
+    assert [(row["operation"], row["result"]) for row in rows] == [("module-offer", "allowed")]
+    assert rows[0]["correlation_id"] == "0b5a4c84-6f0a-4f36-9a4e-0d0c5a7d1e11"
+
+
+def test_module_offer_refuses_a_test_bill_without_the_anchor(tmp_path, test_key, capsys):
+    root, config = _test_core(tmp_path, test_key, with_release_key=test_key), _config(tmp_path)
+    assert _pairing(root, config, "module-offer") == 2
+    assert "scope" in capsys.readouterr().err
+
+
+def test_module_offer_on_a_release_core_refuses_the_anchor(tmp_path, test_key, capsys):
+    root, config = _test_core(tmp_path, test_key, version="1.10.0"), _config(tmp_path)
+    key = _key_file(tmp_path, test_key[1])
+    assert _pairing(root, config, "module-offer", f"--test-trust-anchor={key}") == 2
+    assert "pre-release" in capsys.readouterr().err
+    assert _anchor_rows(config) == []
+
+
+def test_module_offer_refuses_a_delivery_bill_and_another_key_under_the_anchor(
+    tmp_path, test_key, capsys
+):
+    other = _new_keypair(tmp_path, "other")
+    root, config = _test_core(tmp_path, test_key, scope="delivery"), _config(tmp_path)
+    key = _key_file(tmp_path, test_key[1])
+    assert _pairing(root, config, "module-offer", f"--test-trust-anchor={key}") == 2
+    wrong = _key_file(tmp_path, other[1], "other.pub")
+    assert _pairing(root, config, "module-offer", f"--test-trust-anchor={wrong}") == 2
+    rows = _anchor_rows(config)
+    assert [(row["operation"], row["result"]) for row in rows] == [
+        ("module-offer", "denied"), ("module-offer", "denied")]
+
+
 def test_the_entrypoint_dispatches_through_the_anchor_gate():
     ctl = (REPO / "tools" / "papaia-ctl").read_text("utf-8")
     assert 'source "$SH_LIB/trust.sh"' in ctl
@@ -711,3 +821,17 @@ def test_the_documents_name_the_option():
     assert "--test-trust-anchor" in (REPO / "docs/de/betrieb/handbuch.md").read_text("utf-8")
     adr = next((REPO / "docs" / "adr").glob("*-accept-a-test-trust-anchor-*.md"))
     assert "pre-release" in adr.read_text("utf-8")
+
+
+def test_the_documents_name_setup_among_the_commands_of_the_option():
+    adr = next((REPO / "docs" / "adr").glob("*-accept-a-test-trust-anchor-*.md"))
+    text = adr.read_text("utf-8")
+    assert "## Amendment 1" in text
+    assert "`setup`" in text[text.index("## Amendment 1"):]
+    help_text = (REPO / "tools" / "papaia-ctl").read_text("utf-8")
+    header = help_text[:help_text.index("set -euo pipefail")]
+    words = " ".join(line.lstrip("#").strip() for line in header.splitlines())
+    assert "setup (its pairing step and module offer)" in words
+    setup_line = re.compile(r"papaia-ctl setup [^\n`]*--test-trust-anchor=")
+    assert setup_line.search((REPO / "docs/de/betrieb/handbuch.md").read_text("utf-8"))
+    assert setup_line.search((REPO / "README.md").read_text("utf-8"))

@@ -59,8 +59,13 @@ Ein Modul hebt `papaia-ctl addon upgrade <modul> --path=<verzeichnis>`.
 Nur für Testinstallationen einer Vorabversion, nie im Produktivbetrieb. Ein Kern, dessen
 `VERSION` eine Vorabversion ist (zum Beispiel `1.10.0-rc.1`), lässt sich gegen eine Stückliste
 mit Geltungsbereich `test` prüfen, die mit einem lokalen Testschlüssel signiert ist. Dafür nehmen
-`papaia-ctl start`, `upgrade`, `pairing list`, `pairing confirm` und `suite verify` die Option
-`--test-trust-anchor=<öffentlicher Schlüssel>` an:
+`papaia-ctl setup`, `start`, `upgrade`, `pairing list`, `pairing confirm` und `suite verify` die
+Option `--test-trust-anchor=<öffentlicher Schlüssel>` an:
+
+- Bei `setup` wirkt sie nur auf die beiden Schritte, die die Stückliste lesen: die Anzeige und
+  Bestätigung der Paarungen und das anschließende Modulangebot. Alle anderen Schritte bleiben
+  unverändert. Ohne die Option endet `setup` auf einer Vorabversion mit Test-Stückliste wie
+  bisher mit Rückgabewert 3.
 
 - Sie gilt nur für diesen einen Befehl. Keine Umgebungsvariable, kein Eintrag in der `.env` und
   kein gespeicherter Zustand schaltet sie ein.
@@ -74,8 +79,14 @@ mit Geltungsbereich `test` prüfen, die mit einem lokalen Testschlüssel signier
   Audit-Log `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl` (Befehl, Fingerabdruck, Prüfsumme der
   Stückliste, ausführende Person, Korrelationskennung).
 
-Beispiel: `papaia-ctl start --test-trust-anchor=/pfad/zum/testschluessel.pub`. Der nächste
-Befehl ohne Option prüft wieder streng gegen den Release-Schlüssel.
+Beispiele:
+
+```bash
+papaia-ctl setup -y --app-host=https://papaia.example.org --test-trust-anchor=/pfad/zum/testschluessel.pub
+papaia-ctl start --test-trust-anchor=/pfad/zum/testschluessel.pub
+```
+
+Der nächste Befehl ohne Option prüft wieder streng gegen den Release-Schlüssel.
 
 ## Begriffe
 

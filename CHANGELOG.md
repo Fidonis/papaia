@@ -25,6 +25,16 @@ based on merged pull requests; this file mirrors the published releases.
   pins (`image-verify --as-installed`). A distributed installation still checks every
   pin of the target; the second phase still checks before its first container.
 
+### Test trust anchor in the pairing step of setup
+
+- `setup` takes `--test-trust-anchor=FILE` on a pre-release core, with the rules of ADR 0030
+  (amendment 1). It reaches only the pairing step (`pairing list --digest`, `pairing list`,
+  `pairing confirm`) and the module offer after it, the two steps of setup that read the
+  bill of materials. A release core refuses the option before reading anything else; a
+  banner opens and closes the command and each check writes one `papaia.audit/1` row (event
+  `test_trust_anchor_used`). Without the option a candidate with a `test` bill of materials
+  still stops setup with exit code 3; the `delivery` path is unchanged.
+
 ### Module images published on the release day
 
 - `compat/release-day-images.yaml` lists the module images that are published only

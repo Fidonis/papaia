@@ -210,9 +210,10 @@
 #   papaia-ctl help
 #
 # Pre-release cores only (VERSION X.Y.Z-PRE), for one command: --test-trust-anchor=FILE on
-# start, upgrade, pairing list, pairing confirm and suite verify accepts a bill of
-# materials of scope test signed with the public key in FILE; banner and audit row, refused
-# on a release core (ADR 0030). Never read from the environment or a file.
+# start, upgrade, pairing list, pairing confirm, suite verify and setup (its pairing step and
+# module offer) accepts a bill of materials of scope test signed with the public key in
+# FILE; banner and audit row, refused on a release core (ADR 0030). Never read from the
+# environment or a file.
 #
 # Internal, set by papaia-ctl when 'upgrade' re-executes itself from the
 # release it just checked out:
@@ -229,7 +230,7 @@ COMPOSE_FILE="$REPO_ROOT/src/docker-compose.yml"
 usage() {
     # Prints the header block above verbatim -- keep this range in step with it
     # whenever a command or flag line is added.
-    sed -n '2,222p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,223p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --- command libraries --------------------------------------------------------

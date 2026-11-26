@@ -8,10 +8,17 @@
 # sha256 of the list and confirms them only on an explicit decision -- the question below,
 # or --approve-pairings=<sha256>. `-y` never confirms. Without a decision setup still
 # completes; nothing is assigned until the list is confirmed (lib/pairing_approval.py).
+# With `setup --test-trust-anchor=FILE` (lib/sh/trust.sh, ADR 0030) every call here checks
+# the bill of materials against that key; without it nothing differs.
 # $1: 1 when setup runs with -y, $2: the value of --approve-pairings (may be empty).
 _setup_pairings() {
     local non_interactive="$1" approved="$2" digest
-    if ! digest="$(py_cli pairing-list --digest)"; then
+    local -a anchored=()
+    if [ -n "${TEST_TRUST_ANCHOR:-}" ]; then
+        anchored+=(--test-trust-anchor="$TEST_TRUST_ANCHOR")
+        [ -n "${IMAGES_CORRELATION_ID:-}" ] && anchored+=(--correlation-id="$IMAGES_CORRELATION_ID")
+    fi
+    if ! digest="$(py_cli pairing-list --digest ${anchored[@]+"${anchored[@]}"})"; then
         error "The pairings of the bill of materials cannot be shown (see above)."
         return 3
     fi
@@ -21,14 +28,16 @@ _setup_pairings() {
         fi
         return 0
     fi
-    py_cli pairing-list || return 3
+    py_cli pairing-list ${anchored[@]+"${anchored[@]}"} || return 3
     if [ -n "$approved" ]; then
-        py_cli pairing-confirm --approve-pairings="$approved" || return 2
+        py_cli pairing-confirm --approve-pairings="$approved" ${anchored[@]+"${anchored[@]}"} \
+            || return 2
         return 0
     fi
     if [ "$non_interactive" -eq 0 ] && is_tty; then
         if confirm "Confirm the read pairings of this list ($digest)?" "N"; then
-            py_cli pairing-confirm --approve-pairings="$digest" || return 2
+            py_cli pairing-confirm --approve-pairings="$digest" ${anchored[@]+"${anchored[@]}"} \
+                || return 2
             return 0
         fi
         warn "Pairings not confirmed; nothing of the list is assigned."

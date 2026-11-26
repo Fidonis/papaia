@@ -3575,8 +3575,13 @@ same correlation id.
 **`--test-trust-anchor=FILE`: release candidates.** A pre-release core (`VERSION` with a
 pre-release part, for example `1.10.0-rc.1`) can be tested end to end against a bill of
 materials of candidate images signed with a local test key. `start`, `upgrade`, `pairing
-list`, `pairing confirm` and `suite verify` take `--test-trust-anchor=FILE`, a P-256 public
-key file as `cosign generate-key-pair` writes it. For that one command the bill of materials
+list`, `pairing confirm`, `suite verify` and `setup` take `--test-trust-anchor=FILE`, a P-256
+public key file as `cosign generate-key-pair` writes it. In `setup` the option reaches only
+the two steps that read the bill of materials: the pairing step (`pairing list --digest`,
+`pairing list` and, with `--approve-pairings=SHA256` or a confirmation on the terminal,
+`pairing confirm`) and the module offer after it; every other step of setup is unchanged.
+Without the option, a candidate whose bill of materials has the scope `test` still stops
+setup with exit code 3. For that one command the bill of materials
 of the core's suite must have the scope `test`, be signed with exactly that key and name it;
 the images must be signed with it. The rules
 ([ADR 0030](docs/adr/0030-accept-a-test-trust-anchor-for-pre-release-cores.md)):
@@ -3596,6 +3601,7 @@ the images must be signed with it. The rules
   `$PAPAIA_CONFIG_DIR/audit/papaia-ctl.jsonl`.
 
 ```bash
+tools/papaia-ctl setup -y --app-host=https://papaia.example.org --test-trust-anchor=/path/to/test-key.pub
 tools/papaia-ctl start --test-trust-anchor=/path/to/test-key.pub
 tools/papaia-ctl pairing list --test-trust-anchor=/path/to/test-key.pub
 tools/papaia-ctl pairing confirm --approve-pairings=SHA256 --test-trust-anchor=/path/to/test-key.pub

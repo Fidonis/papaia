@@ -20,6 +20,10 @@ would put in place (`_gate_refuses` in lib/cli_addon.py): its compose file must 
 gate, and with a signed bill of materials in the checkout that bill must list the gate as
 well (`install_refusal`). So neither a release without the gate nor an add-on version
 without it reaches Paperless by another route.
+
+On a pre-release core, `setup --test-trust-anchor=FILE` hands the anchor to the offer: the
+bill of materials of scope `test` is then read against that key, refused on a release core
+and audited (lib/prerelease_anchor.py, ADR 0030). Nothing else of the offer changes.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import images, suite
+from . import images, prerelease_anchor, suite
 
 # The modules of the choice, in the order `setup` names them (BE-03 No. 6).
 SELECTABLE = ("studio", "data", "flow", "assist", "paperless")
@@ -87,6 +91,19 @@ def load(repo_root: Path) -> dict | None:
         raise OfferError(str(exc)) from None
 
 
+def load_anchored(repo_root: Path, config_dir: Path, key_file: object,
+                  correlation: str | None) -> dict:
+    """The bill of materials of scope `test` verified against the test trust anchor in
+    `key_file` (pre-release cores only), with its audit row. A release core, a missing
+    file, another key or another scope raise OfferError."""
+    try:
+        anchor = prerelease_anchor.open_anchor(repo_root, key_file)
+        return prerelease_anchor.verified_bom(repo_root, config_dir, anchor, "module-offer",
+                                              correlation)
+    except prerelease_anchor.AnchorError as exc:
+        raise OfferError(str(exc)) from None
+
+
 def install_refusal(name: str, repo_root: Path) -> str | None:
     """Why `addon install <name>` is refused by the bill of materials, or None.
 
@@ -106,7 +123,11 @@ def install_refusal(name: str, repo_root: Path) -> str | None:
 
 def cmd_offer(args: argparse.Namespace) -> int:
     try:
-        doc = load(Path(args.repo_root))
+        if args.test_trust_anchor is None:
+            doc = load(Path(args.repo_root))
+        else:
+            doc = load_anchored(Path(args.repo_root), Path(args.config_dir),
+                                args.test_trust_anchor, args.correlation_id)
     except OfferError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -125,4 +146,6 @@ def cmd_offer(args: argparse.Namespace) -> int:
 def add_parsers(sub) -> None:
     p = sub.add_parser("module-offer")
     p.add_argument("--json", action="store_true")
+    p.add_argument(prerelease_anchor.FLAG, dest="test_trust_anchor", default=None)
+    p.add_argument("--correlation-id", default=None)
     p.set_defaults(func=cmd_offer)

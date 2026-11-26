@@ -925,7 +925,14 @@ _check_ca_bundle_flag() {
 # The modules this release offers: Paperless only with its gate in the signed bill of
 # materials (lib/module_offer.py). A bill of materials that does not verify stops setup.
 _setup_module_offer() {
-    if ! py_cli module-offer; then
+    # With `setup --test-trust-anchor=FILE` the offer reads the bill of materials of scope
+    # `test` against that key, as the pairing step does (lib/sh/trust.sh, ADR 0030).
+    local -a anchored=()
+    if [ -n "${TEST_TRUST_ANCHOR:-}" ]; then
+        anchored+=(--test-trust-anchor="$TEST_TRUST_ANCHOR")
+        [ -n "${IMAGES_CORRELATION_ID:-}" ] && anchored+=(--correlation-id="$IMAGES_CORRELATION_ID")
+    fi
+    if ! py_cli module-offer ${anchored[@]+"${anchored[@]}"}; then
         error "The modules of the bill of materials cannot be shown (see above)."
         return 3
     fi
