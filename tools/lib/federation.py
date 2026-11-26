@@ -402,6 +402,20 @@ def lifecycle_command(base: list[str], mail: str, sender: str) -> list[str]:
     return [*base, *extra]
 
 
+def no_proxy_ranges(env: dict[str, str]) -> list[str]:
+    """The assigned range of `papaia-lifecycle-net` (PAPAIA_SUBNET_POOL,
+    lib/subnet_pool.py), where papaia-lifecycle reaches Keycloak and the mail relay
+    directly; never its exit network. [] without a pool, or with one the render refuses
+    anyway."""
+    from . import subnet_pool
+
+    try:
+        subnet = subnet_pool.core_subnet(env, "papaia-lifecycle-net")
+    except subnet_pool.SubnetPoolError:
+        return []
+    return [subnet] if subnet else []
+
+
 def generate_override(config_dir: Path, repo_root: Path) -> Path | None:
     """With federation and the lifecycle profile: papaia-lifecycle on an internal network
     of its own with papaia-egress as its HTTPS proxy (Keycloak and the mail relay stay
@@ -425,7 +439,7 @@ def generate_override(config_dir: Path, repo_root: Path) -> Path | None:
     sender = relay.from_address if relay is not None and relay.configured else ""
     net = network(env)
     proxy = f"http://{egress.alias(EGRESS_SOURCE)}:{egress.PORT}"
-    no_proxy = f"keycloak,{MAIL_RELAY}"
+    no_proxy = ",".join(["keycloak", MAIL_RELAY, *no_proxy_ranges(env)])
     override = {
         "services": {
             LIFECYCLE_SERVICE: {

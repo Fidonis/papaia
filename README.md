@@ -539,6 +539,8 @@ tools/papaia-ctl setup [OPTIONS]
 | `--web-search` / `--no-web-search` | _(prompted, default on)_ | Toggle the `librechat-websearch` profile |
 | `--reranker-model=NAME` | _(prompted, optional)_ | LiteLLM model name used for reranking |
 | `--backup-dir=PATH` | `$PAPAIA_WORKSPACE_DIR/backup` | Default target of `papaia-ctl backup`; stored as `PAPAIA_BACKUP_DIR` |
+| `--subnet-pool=CIDR` | _(Docker's default pools)_ | Private IPv4 range every network of the installation takes its range from, stored as `PAPAIA_SUBNET_POOL` ([Address range of the networks](docs/network.md#address-range-of-the-networks)). Refused when it overlaps a Docker network of another stack |
+| `--subnet-block=N` / `--no-subnet-pool` | `24` | Prefix length of one block of the pool (24 to 28); `--no-subnet-pool` returns to Docker's default pools |
 | `--local-ai` / `--no-local-ai` | _(prompted, default on)_ | Toggle the `localai` profile |
 | `--localai-variant=NAME` | _(prompted, auto-detected)_ | LocalAI accelerator image: `cpu`, `nvidia-cuda-12`, `nvidia-cuda-13`, `intel`, `hipblas`, `vulkan`, or `auto` |
 | `--localai-runtime=container\|native` | _(prompted on an Apple Silicon Mac with Docker Desktop, default `native` there; `container` elsewhere)_ | Where LocalAI runs: in its container, or as a process on the Apple GPU ([Native LocalAI on Apple Silicon](#native-localai-on-apple-silicon)). `native` is refused with exit 2 on any other host (and while Docker Desktop is not running); `container` is accepted everywhere |

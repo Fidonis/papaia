@@ -91,6 +91,7 @@ from . import (
     setup_answers,
     stack_network,
     status,
+    subnet_pool,
     suite,
     support,
     topology,
@@ -277,13 +278,120 @@ def _requested_topology(
     return requested
 
 
+_POOL_DISTRIBUTED = (
+    "--subnet-pool is for an installation on one host; a distributed installation keeps"
+    " the address pools of each node's Docker daemon. Nothing was changed."
+)
+
+
+def _subnet_pool_request(
+    args: argparse.Namespace,
+    config_dir: Path,
+    repo_root: Path,
+    requested_topology: topology.Topology | None,
+) -> dict[str, str] | int | None:
+    """The PAPAIA_SUBNET_POOL / PAPAIA_SUBNET_BLOCK values a `setup` stores, None when it
+    changes neither, or SETUP_REFUSED. Checked before anything is written: the values,
+    the size of the pool for the networks the installation has now, and the networks of
+    the host that do not belong to the installation (when Docker answers; `start` checks
+    again)."""
+    pool_arg, block_arg = args.subnet_pool, args.subnet_block
+    if args.no_subnet_pool:
+        if pool_arg is not None or block_arg is not None:
+            print("ERROR: --no-subnet-pool cannot stand beside --subnet-pool or"
+                  " --subnet-block. Nothing was changed.", file=sys.stderr)
+            return SETUP_REFUSED
+        return {subnet_pool.POOL_KEY: "", subnet_pool.BLOCK_KEY: ""}
+    if pool_arg is None and block_arg is None:
+        return None
+    stored = common.parse_env_file(config_dir / ".env")
+    if requested_topology is not None or topology.is_distributed(config_dir):
+        print(f"ERROR: {_POOL_DISTRIBUTED}", file=sys.stderr)
+        return SETUP_REFUSED
+    try:
+        if block_arg is not None:
+            block = subnet_pool.parse_block(block_arg)
+        elif stored.get(subnet_pool.BLOCK_KEY, "").strip():
+            block = subnet_pool.parse_block(stored[subnet_pool.BLOCK_KEY])
+        else:
+            block = subnet_pool.DEFAULT_BLOCK
+        raw = pool_arg if pool_arg is not None else stored.get(subnet_pool.POOL_KEY, "").strip()
+        if not raw:
+            raise subnet_pool.SubnetPoolError("--subnet-block needs --subnet-pool=CIDR")
+        pool = subnet_pool.parse_pool(raw, block)
+        subnet_pool.plan(config_dir, repo_root, pool, block, stored)
+    except subnet_pool.SubnetPoolError as exc:
+        print(f"ERROR: {exc}. Nothing was changed.", file=sys.stderr)
+        return SETUP_REFUSED
+    networks = subnet_pool.host_networks()
+    if networks is None:
+        print(f"WARNING: Docker did not list its networks; {subnet_pool.POOL_KEY} {pool} is"
+              " checked against them at 'papaia-ctl start'.", file=sys.stderr)
+    else:
+        env = dict(stored)
+        if not env.get("COMPOSE_PROJECT_NAME"):
+            env["COMPOSE_PROJECT_NAME"] = "papaia" if args.env == "papaia" else (
+                f"papaia-{args.env}"
+            )
+        projects = subnet_pool.installation_projects(config_dir, repo_root, env)
+        _, foreign = subnet_pool.review(pool, networks, projects, [subnet_pool.uplink_name(env)])
+        if foreign:
+            for net in foreign:
+                print(f"ERROR: {subnet_pool.foreign_message(pool, net)}", file=sys.stderr)
+            print("Nothing was changed.", file=sys.stderr)
+            return SETUP_REFUSED
+    values = {subnet_pool.POOL_KEY: str(pool)}
+    if block_arg is not None:
+        values[subnet_pool.BLOCK_KEY] = str(block)
+    return values
+
+
+def _report_networks_to_move(config_dir: Path, repo_root: Path) -> None:
+    """After a change of the pool or the block size: the networks of the installation that
+    exist with their old ranges, and the steps that move them."""
+    env = common.parse_env_file(config_dir / ".env")
+    networks = subnet_pool.host_networks()
+    if not networks:
+        return
+    projects = subnet_pool.installation_projects(config_dir, repo_root, env)
+    uplink = subnet_pool.uplink_name(env)
+    ours = [n["name"] for n in networks if n["project"] in projects and n["name"] != uplink]
+    if not ours:
+        return
+    print(
+        f"WARNING: the address range changed; these networks of the installation keep their"
+        f" old ranges until they are created again: {', '.join(sorted(ours))}. Run"
+        " 'papaia-ctl stop --clean-up --addons' (containers and networks go, volumes stay),"
+        " then 'papaia-ctl start'.",
+        file=sys.stderr,
+    )
+
+
+def cmd_subnet_pool_check(args: argparse.Namespace) -> int:
+    """`start`, before the first container: the networks of the host against
+    PAPAIA_SUBNET_POOL (lib/subnet_pool.py). Exit 2 with the reasons, 0 otherwise."""
+    problems = subnet_pool.start_problems(Path(args.config_dir), Path(args.repo_root))
+    for problem in problems:
+        print(f"ERROR: {problem}", file=sys.stderr)
+    return 2 if problems else 0
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root)
     config_dir = Path(args.config_dir)
 
+    if (args.subnet_pool is not None or args.subnet_block is not None) and (
+        args.topology == topology.DISTRIBUTED
+    ):
+        print(f"ERROR: {_POOL_DISTRIBUTED}", file=sys.stderr)
+        return SETUP_REFUSED
     requested_topology = _requested_topology(args, config_dir)
     if isinstance(requested_topology, int):
         return requested_topology
+    pool_request = _subnet_pool_request(args, config_dir, repo_root, requested_topology)
+    if isinstance(pool_request, int):
+        return pool_request
+    stored_before = common.parse_env_file(config_dir / ".env")
 
     fresh_init = not (config_dir / ".env").is_file()
     # The native LocalAI lives below the workspace. Checked before the config directory is
@@ -404,6 +512,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tree = resolve.resolve_smtp(tree, setup_args)
         tree = resolve.resolve_reranker_model(tree, setup_args)
         tree = resolve.resolve_core_profiles(tree)
+        if pool_request is not None:
+            tree.setdefault("", {}).update(pool_request)
         if round_record is not None:
             tree.setdefault("", {}).update(setup_answers.root_env(round_record["answers"]))
     except resolve.SetupError as exc:
@@ -480,6 +590,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"ERROR: {runtime_problem}", file=sys.stderr)
         return 3
     _warn_protected_localai_home(config_dir)
+    if pool_request is not None and any(
+        (stored_before.get(key) or "") != value for key, value in pool_request.items()
+    ):
+        _report_networks_to_move(config_dir, repo_root)
     stored_root = common.parse_env_file(config_dir / ".env")
     if not _native_wanted(stored_root):
         # After a switch back to the container a job left from the native runtime would
@@ -3524,10 +3638,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--link-port", type=int, default=None)
     p_setup.add_argument("--topology-file", default=None)
     p_setup.add_argument("--answers-record", default=None)
+    p_setup.add_argument("--subnet-pool", default=None)
+    p_setup.add_argument("--subnet-block", default=None)
+    p_setup.add_argument("--no-subnet-pool", action="store_true")
     p_setup.set_defaults(func=cmd_setup)
 
     p_render = sub.add_parser("render")
     p_render.set_defaults(func=cmd_render)
+
+    p_pool_check = sub.add_parser("subnet-pool-check")
+    p_pool_check.set_defaults(func=cmd_subnet_pool_check)
 
     p_topology_mode = sub.add_parser("topology-mode")
     p_topology_mode.set_defaults(func=cmd_topology_mode)

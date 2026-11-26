@@ -12,6 +12,17 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Address range of the networks
+
+- `setup --subnet-pool=CIDR` (`PAPAIA_SUBNET_POOL`, with `--subnet-block=24..28` and
+  `--no-subnet-pool`) places every network of the core and of the active add-ons in an
+  operator-given private IPv4 range, in blocks of a fixed order that stay the same from
+  start to start (ADR 0032). `setup` and `start` refuse a pool that overlaps a Docker
+  network of another stack and name it; `doctor network` reports a network of the
+  installation outside the pool as `fail`. With a pool the mail relay accepts mail from
+  the pool only, and an internal egress target inside the pool is refused. Without the
+  option nothing changes.
+
 ### Image check covers the images the installation runs
 
 - `start` with `PAPAIA_IMAGE_MIRROR` on a single host no longer checks or starts the

@@ -95,6 +95,7 @@ files = [
   "test_me_connections_candidates_docker.py",
   "test_egress_docker.py",
   "test_knowledge_map_setup.py",
+  "test_subnet_pool_docker.py",
 ]
 
 # The catch-all shard: every other file.

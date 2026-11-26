@@ -41,6 +41,7 @@ LIVE_MODULES = {
     "test_replay",
     "test_smtp_relay_docker",
     "test_sql_uplink_docker",
+    "test_subnet_pool_docker",
 }
 _LIVE_VARIABLE = re.compile(r'"PAPAIA_[A-Z_]+_TEST_(?:PROJECT|SUBNET)"')
 # The settings a session takes its live names from; a simulated session starts without them.

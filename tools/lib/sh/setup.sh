@@ -14,6 +14,8 @@ SETUP_KNOWLEDGE_MAP_ARGS=()
 SETUP_CONNECTIONS_ARGS=()
 # The record of the question round (lib/setup_answers.py), same lifetime.
 SETUP_ANSWERS_ARGS=()
+# The address range of the Docker networks (lib/subnet_pool.py), same lifetime.
+SETUP_NETWORK_ARGS=()
 
 # Reads a py_cli subcommand's KEY=VALUE output into the current shell's
 # variables.
@@ -90,6 +92,7 @@ cmd_setup() {
     SETUP_KNOWLEDGE_MAP_ARGS=()
     SETUP_CONNECTIONS_ARGS=()
     SETUP_ANSWERS_ARGS=()
+    SETUP_NETWORK_ARGS=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -192,6 +195,8 @@ cmd_setup() {
             --smtp-from-name=*) smtp_from_name="${1#*=}" ;;
             --reranker-model=*) reranker_model="${1#*=}" ;;
             --backup-dir=*) backup_dir="${1#*=}" ;;
+            # Checked by the Python side before anything is written (lib/subnet_pool.py).
+            --subnet-pool=*|--subnet-block=*|--no-subnet-pool) SETUP_NETWORK_ARGS+=("$1") ;;
             --allow-direct-port-access) allow_direct_port_access=1 ;;
             --force) force=1 ;;
             -y|--non-interactive) non_interactive=1 ;;
@@ -1454,6 +1459,9 @@ _run_setup_py() {
     fi
     if [ "${#SETUP_ANSWERS_ARGS[@]}" -gt 0 ]; then
         extra+=(${SETUP_ANSWERS_ARGS[@]+"${SETUP_ANSWERS_ARGS[@]}"})
+    fi
+    if [ "${#SETUP_NETWORK_ARGS[@]}" -gt 0 ]; then
+        extra+=(${SETUP_NETWORK_ARGS[@]+"${SETUP_NETWORK_ARGS[@]}"})
     fi
     # The password travels in the environment of this one call, never in an argument
     # (the process list shows arguments). Python takes it out of the environment.

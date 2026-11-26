@@ -152,6 +152,56 @@ sudo iptables -F PAPAIA-SQL-<id> && sudo iptables -X PAPAIA-SQL-<id>
 
 The chain's name is in the rules file and in `doctor network --json` (`details.chain`).
 
+## Address range of the networks
+
+Without a setting, every network of the installation takes a range from Docker's default
+address pools. When those overlap the company network, or two installations on one host
+have to keep to ranges planned for them, give the installation a pool of its own
+([ADR 0032](adr/0032-place-every-network-in-one-operator-given-address-pool.md)):
+
+```sh
+tools/papaia-ctl setup --subnet-pool=10.240.0.0/16
+tools/papaia-ctl start
+```
+
+- **The pool** (`PAPAIA_SUBNET_POOL` in the root `.env`, sticky) is a private IPv4 range
+  inside 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16. It is cut into blocks of
+  `/PAPAIA_SUBNET_BLOCK` (24 to 28, default 24, `--subnet-block=N`) and must hold at least
+  16 of them: /8 to /20 for blocks of /24, up to /24 for blocks of /28.
+- **The core networks** take the first blocks in a fixed order: `papaia-net` the first,
+  then `papaia-egress-net`, the three audit networks, `papaia-lifecycle-net`, the three
+  replay networks, `papaia-chat-relay-net`, `papaia-docker-gate-net`,
+  `papaia-prefs-db-net` and the two networks of the connection registry. Their addresses
+  depend on the pool alone and do not change from start to start.
+- **Every other network** gets the next free block once and keeps it
+  (`$PAPAIA_CONFIG_DIR/subnet-pool.json`): the exits of LiteLLM, papaia-audit and
+  papaia-lifecycle while they are on, and every network an active add-on's compose file
+  creates without a range of its own (its app, egress, isolated and offered networks, its
+  `default` network). An add-on that declares a range itself keeps it; the SQL uplink
+  keeps `PAPAIA_SQL_UPLINK_SUBNET`, which must not overlap an assigned block.
+- **The overrides** are `$PAPAIA_CONFIG_DIR/overrides/docker-compose.subnet-pool.override.yml`
+  for the core and `overrides/addons/docker-compose.<add-on>-subnets.override.yml` per
+  add-on, written on every `setup`, `start` and add-on operation. Without the variable
+  they are removed and Docker's default pools apply as before.
+- **Checks.** `setup` refuses, before it writes anything, a range that is not private
+  IPv4, a prefix outside the limits, a pool too small for the networks of the installation
+  and a pool that overlaps a Docker network of another stack (it names that network).
+  `start` checks the host again before the first container and also refuses while a
+  network of the installation lies outside the pool. `doctor network` reports both as
+  `fail` with the fix. papaia-ctl never removes or changes a network that is not its own.
+- **Addresses that follow the pool.** The mail relay accepts mail from the pool only
+  (instead of every private range) unless `SMTP_RELAY_ALLOWED_CLIENTS` is set; `NO_PROXY`
+  of LiteLLM (hosted model) and papaia-lifecycle (federation) lists the assigned range of
+  `papaia-net` and `papaia-lifecycle-net`, never an exit network; an internal egress target
+  (`security/egress-internal-targets.yaml`) that overlaps the pool is refused.
+
+**Changing the pool.** Run `setup --subnet-pool=NEW` (it names the networks still in the
+old range), then `papaia-ctl stop --clean-up --addons` (containers and networks go, volumes
+stay) and `papaia-ctl start`. `setup --no-subnet-pool` returns to Docker's default pools
+with the same two steps. A distributed installation is refused the option; its nodes keep
+the pools of their own Docker daemons. As an alternative the operator can set
+`default-address-pools` in the Docker daemon, which restarts every container on the host.
+
 ## `topology firewall`
 
 ```sh

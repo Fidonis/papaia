@@ -83,6 +83,7 @@ from . import (
     smtp,
     sql_uplink,
     status,
+    subnet_pool,
 )
 from .status import Runner
 
@@ -2698,11 +2699,36 @@ def _check_host_rules(
     ]
 
 
+def _subnet_pool_findings(ctx: Context) -> tuple[list[str], list[str], dict[str, Any] | None]:
+    """(failures, warnings, details) about PAPAIA_SUBNET_POOL (lib/subnet_pool.py): every
+    network of the installation lies in the pool, and no foreign network overlaps it.
+    Details are None without a pool. SubnetPoolError for an unusable setting."""
+    found = subnet_pool.findings(ctx.config_dir, ctx.repo_root, ctx.run)
+    if found is None:
+        return [], [], None
+    pool = found["pool"]
+    details: dict[str, Any] = {
+        "subnet_pool": str(pool),
+        "outside": [n["name"] for n in found["outside"]],
+        "foreign": [n["name"] for n in found["foreign"]],
+    }
+    if found["unavailable"]:
+        return [], [f"the networks of the host could not be listed; {subnet_pool.POOL_KEY}"
+                    f" {pool} not checked"], details
+    fails = [subnet_pool.outside_message(pool, n) for n in found["outside"]]
+    fails += [subnet_pool.foreign_message(pool, n) for n in found["foreign"]]
+    return fails, [], details
+
+
 def check_network(ctx: Context) -> CheckResult:
-    """The one direct route out of the stack, to the SQL source (row K-14,
-    docs/network.md). Without a SQL source there is nothing to check. With one: the
-    network `<project>-sql-uplink` is not internal, has the rendered range and only
-    `mcp-mssql` of the SQL add-on on it, and the host's chain equals the rendered rules
+    """The networks of the installation and the one direct route out of the stack, to the
+    SQL source (row K-14, docs/network.md).
+
+    With PAPAIA_SUBNET_POOL every network of the installation lies in the pool and no
+    network of another stack overlaps it; a network outside is `fail` with the fix.
+    Without a SQL source there is no route to check. With one: the network
+    `<project>-sql-uplink` is not internal, has the rendered range and only `mcp-mssql`
+    of the SQL add-on on it, and the host's chain equals the rendered rules
     (`iptables -S`, which needs root) with the jump as the first rule of DOCKER-USER.
     A drifted, missing or misplaced rule is `fail`; rules that cannot be read here
     (not root, no iptables, inside a container) are `warn`, never `pass`."""
@@ -2710,11 +2736,27 @@ def check_network(ctx: Context) -> CheckResult:
     if not ctx.configured:
         return _not_set_up(name)
     try:
+        pool_fails, pool_warns, pool_details = _subnet_pool_findings(ctx)
+    except subnet_pool.SubnetPoolError as exc:
+        return CheckResult(name, FAIL, str(exc))
+    try:
         expected = sql_uplink.expected_rules(ctx.config_dir)
     except (sql_uplink.SqlUplinkError, egress.EgressError) as exc:
         return CheckResult(name, FAIL, str(exc))
     if not expected:
-        return CheckResult(name, SKIP, "no SQL source: nothing leaves the stack directly")
+        if pool_details is None:
+            return CheckResult(name, SKIP, "no SQL source: nothing leaves the stack directly")
+        if pool_fails:
+            return CheckResult(name, FAIL, "; ".join(pool_fails + pool_warns), pool_details)
+        if pool_warns:
+            return CheckResult(name, WARN, "; ".join(pool_warns), pool_details)
+        return CheckResult(
+            name,
+            PASS,
+            f"every network of the installation lies in {subnet_pool.POOL_KEY}"
+            f" {pool_details['subnet_pool']}; no SQL source: nothing leaves the stack directly",
+            pool_details,
+        )
     env = sql_uplink.root_env(ctx.config_dir)
     network = sql_uplink.network_name(env)
     subnet = str(sql_uplink.subnet(env))
@@ -2729,8 +2771,9 @@ def check_network(ctx: Context) -> CheckResult:
     }
     fails, warns = _check_uplink_network(ctx, network, subnet, details)
     rule_fails, rule_warns = _check_host_rules(ctx, expected, chain, rules_file)
-    fails += rule_fails
-    warns += rule_warns
+    fails += rule_fails + pool_fails
+    warns += rule_warns + pool_warns
+    details.update(pool_details or {})
     if fails:
         return CheckResult(name, FAIL, "; ".join(fails + warns), details)
     if warns:

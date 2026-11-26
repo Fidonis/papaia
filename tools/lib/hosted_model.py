@@ -457,6 +457,19 @@ def override_path(config_dir: Path) -> Path:
     return config_dir / "overrides" / f"docker-compose.{SERVICE}.hosted-model.override.yml"
 
 
+def no_proxy_ranges(env: dict[str, str]) -> list[str]:
+    """The assigned range of `papaia-net` (PAPAIA_SUBNET_POOL, lib/subnet_pool.py), which
+    LiteLLM reaches directly by address as it does by name; never its exit network. []
+    without a pool, or with one the render refuses anyway."""
+    from . import subnet_pool
+
+    try:
+        subnet = subnet_pool.core_subnet(env, "papaia-net")
+    except subnet_pool.SubnetPoolError:
+        return []
+    return [subnet] if subnet else []
+
+
 def _no_proxy(config_dir: Path, host: str, stack: frozenset[str]) -> str:
     """The names LiteLLM reaches without the proxy: itself, the model services inside the
     stack, and the host of its login -- the token and userinfo endpoints, and only where
@@ -503,7 +516,8 @@ def generate_override(config_dir: Path, repo_root: Path | None = None) -> Path |
     env = _root_env(config_dir)
     net = network(env)
     proxy = f"http://{egress.alias(SOURCE)}:{egress.PORT}"
-    no_proxy = _no_proxy(config_dir, found[0], names)
+    no_proxy = ",".join(n for n in (_no_proxy(config_dir, found[0], names),
+                                     *no_proxy_ranges(env)) if n)
     override = {
         "services": {
             SERVICE: {

@@ -446,6 +446,29 @@ def upstream_proxy(env: dict[str, str], config_dir: Path) -> dict | None:
     return {"host": host, "port": port, "user": user, "no_proxy": no_proxy}
 
 
+def _refuse_targets_in_pool(env: dict[str, str], opened: dict[str, list[str]]) -> None:
+    """An internal target never reaches into the installation's own networks: with
+    PAPAIA_SUBNET_POOL (lib/subnet_pool.py) a range that overlaps the pool is refused."""
+    from . import subnet_pool  # it reads the root .env only
+
+    try:
+        found = subnet_pool.settings(env)
+    except subnet_pool.SubnetPoolError as exc:
+        raise EgressError(str(exc)) from None
+    if found is None:
+        return
+    pool = found[0]
+    for addon, ranges in sorted(opened.items()):
+        for value in ranges:
+            net = ipaddress.ip_network(value)
+            if net.version == pool.version and net.overlaps(pool):
+                raise EgressError(
+                    f"{INTERNAL_TARGETS_FILE}: {value} of add-on '{addon}' overlaps"
+                    f" {subnet_pool.POOL_KEY} {pool}; the networks of the installation are"
+                    " never a target"
+                )
+
+
 def render(config_dir: Path, repo_root: Path | None = None) -> Path:
     """Write the proxy configuration. Raises EgressError, writing nothing, when the
     protected hosts, the internal targets, an add-on's declaration or the corporate
@@ -454,6 +477,7 @@ def render(config_dir: Path, repo_root: Path | None = None) -> Path:
 
     env = common.parse_env_file(config_dir / ".env")
     opened = load_internal_targets(config_dir)
+    _refuse_targets_in_pool(env, opened)
     sources = [
         {
             "name": d["name"],

@@ -33,6 +33,7 @@ from . import (
     module_tls,
     paperless_gate,
     sql_uplink,
+    subnet_pool,
 )
 
 # `${VAR}` / `${VAR:-default}` — the two interpolation forms an add-on's
@@ -460,6 +461,14 @@ def generate_addon_join_overrides(config_dir: Path, repo_root: Path) -> None:
     try:
         erasure_journal.generate_overrides(config_dir, repo_root)
     except erasure_journal.ErasureJournalError as exc:
+        from .render_core import RenderError  # render_core does not import this module
+
+        raise RenderError(str(exc)) from None
+    # Last: the address range of every network the overrides above and the compose files
+    # declare (PAPAIA_SUBNET_POOL, lib/subnet_pool.py).
+    try:
+        subnet_pool.generate_overrides(config_dir, repo_root)
+    except subnet_pool.SubnetPoolError as exc:
         from .render_core import RenderError  # render_core does not import this module
 
         raise RenderError(str(exc)) from None

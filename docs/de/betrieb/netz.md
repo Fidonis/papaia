@@ -44,6 +44,42 @@ und für die Liste der DNS-Namen vor der Installation (`papaia-ctl hostnames`).
 `papaia-ctl doctor network` prüft den direkten Weg K-14 und seine Host-Regeln,
 `papaia-ctl doctor egress` den einzigen Ausgang.
 
+### Adressbereiche der Docker-Netze
+
+Ohne Einstellung erhält jedes Netz der Installation einen Bereich aus den Standard-Pools von
+Docker. Überschneiden sich diese mit dem Unternehmensnetz oder sollen zwei Installationen auf
+einem Host in fest geplanten Bereichen bleiben, bekommt die Installation einen eigenen Pool:
+
+```sh
+tools/papaia-ctl setup --subnet-pool=10.240.0.0/16
+tools/papaia-ctl start
+```
+
+- Der Pool (`PAPAIA_SUBNET_POOL` in der Wurzel-`.env`, bleibt gespeichert) ist ein privater
+  IPv4-Bereich in 10.0.0.0/8, 172.16.0.0/12 oder 192.168.0.0/16 mit Präfix /8 bis /20. Er wird
+  in Blöcke zu /24 geteilt (`--subnet-block=24` bis `28`; mit /28 genügt ein Pool bis /24).
+- Die Netze des Kerns erhalten die ersten Blöcke in fester Reihenfolge, `papaia-net` den
+  ersten; ihre Adressen hängen nur vom Pool ab. Alle übrigen Netze (Ausgänge von LiteLLM,
+  `papaia-audit` und `papaia-lifecycle`, Netze der aktiven Module ohne eigenen Bereich)
+  erhalten einmal den nächsten freien Block und behalten ihn. Ein Modul, das selbst einen
+  Bereich festlegt, behält ihn; die SQL-Verbindung behält `PAPAIA_SQL_UPLINK_SUBNET`.
+- `setup` lehnt vor jedem Schreiben ab: keinen privaten IPv4-Bereich, ein Präfix außerhalb
+  der Grenzen, einen zu kleinen Pool und einen Pool, der ein Docker-Netz eines anderen
+  Stapels überschneidet (mit dessen Namen). `start` prüft vor dem ersten Container erneut
+  und lehnt auch ab, solange ein Netz der Installation außerhalb des Pools liegt.
+  `papaia-ctl doctor network` meldet beides als `fail` mit der Abhilfe. Fremde Netze werden
+  nie entfernt oder geändert.
+- Mit Pool nimmt das Mail-Relais Post nur aus dem Pool an (statt aus allen privaten
+  Bereichen), sofern `SMTP_RELAY_ALLOWED_CLIENTS` nicht gesetzt ist; interne Ziele des
+  Ausgangs, die den Pool überschneiden, werden abgelehnt.
+- **Pool ändern:** `setup --subnet-pool=NEU` nennt die Netze, die noch im alten Bereich
+  liegen; dann `papaia-ctl stop --clean-up --addons` (Container und Netze werden entfernt,
+  Volumes bleiben) und `papaia-ctl start`. `setup --no-subnet-pool` führt mit denselben
+  Schritten zu den Standard-Pools zurück.
+- Für eine verteilte Installation steht die Option nicht zur Verfügung. Alternative ohne
+  papaia-ctl: `default-address-pools` im Docker-Daemon; das startet alle Container des
+  Hosts neu.
+
 ### Noch nicht umgesetzt
 
 Bei diesen Zeilen gilt der Weg der Tabelle in dieser Version noch nicht:

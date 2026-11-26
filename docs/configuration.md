@@ -292,6 +292,16 @@ Root `.env`, read by `papaia-ctl` when a SQL source is configured ([network.md](
 |---|---|
 | `PAPAIA_SQL_UPLINK_SUBNET` | Fixed range of the network `<project>-sql-uplink`, the direct route of `mcp-mssql` to the SQL source. A private IPv4 range from /24 to /29 that overlaps no SQL source; empty means `10.255.254.0/29`. The host rules are written for this range |
 
+## Address range variables
+
+Root `.env`, set by `papaia-ctl setup --subnet-pool=CIDR [--subnet-block=N]`
+([network.md](network.md#address-range-of-the-networks)).
+
+| Variable | Purpose |
+|---|---|
+| `PAPAIA_SUBNET_POOL` | Private IPv4 range every network of the installation takes its range from, /8 to /20 for blocks of /24. Empty means Docker's default address pools. `--no-subnet-pool` empties it. |
+| `PAPAIA_SUBNET_BLOCK` | Prefix length of one block, 24 to 28; the pool holds at least 16 blocks. Empty means 24. |
+
 ## Federation variable
 
 Root `.env`, read by `papaia-ctl` while `$PAPAIA_CONFIG_DIR/security/idp.yaml` exists

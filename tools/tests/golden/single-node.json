@@ -16,7 +16,7 @@
     ],
     "status_json": "826554a1f10cb00e0caffc28be103be614a18e46b4cc39a6961bc3be6951a217",
     "tree": {
-      ".env": "ba837f85b9cfc915850ff286e1bcceb0c90cdf7ac3f40037f49d01e16579acd1",
+      ".env": "122bbd6aa8b1adf13399d550f7d2f23d2a5633c99d76d26c2c32ee37469e6bcc",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "17754182b5ad2965b37e6445214511d64fe00ba891b5f445ff0966e26daf2424",
@@ -100,7 +100,7 @@
     ],
     "status_json": "94d0985e0e4803d41fa259485a453dc639f6100094b781cef5ea1cd1ead0002a",
     "tree": {
-      ".env": "698a3fbe28970cd46c9343d64b23b039cb057175531360d7b42d131b4766da2e",
+      ".env": "49a2b172b91bd5ddbf1d2e911cb7f64c4386f93b3b08083997a6ea5cd9ee15b7",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "17754182b5ad2965b37e6445214511d64fe00ba891b5f445ff0966e26daf2424",
@@ -183,7 +183,7 @@
     ],
     "status_json": "d37a90507ad4ad966ca33658fea3c04bcef958dd15dd65e95e0eccc3857ec73d",
     "tree": {
-      ".env": "e146226b387505a31c08a204a27dd6ae9674244a13b4e13456e858e793bea388",
+      ".env": "3adc01dec9ad8f1652b6de1980cd7cde3774b00c5ceacad79c388596516a4975",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "4ea092dcf6bb0493af434ab28acff431ba10fcf8aee89cb0b68a69b3f45d9adc",
@@ -269,7 +269,7 @@
     ],
     "status_json": "834918aaccf9bb65543a2e381e2cbd2af078c6d279270f4502bd3e2cc5dc25c8",
     "tree": {
-      ".env": "fcc304725fd26b9fb98dc3af8a3c4fa0a2bcba8b1e74cc6e3f7a6684e421d4c3",
+      ".env": "a1e4d8605b40eb34843da1105184bfa6c3e0d973d8491b8d5610231f1cf0dbe0",
       "ai/jinaai/.env": "5e82ae043e0ed46cb6fa75332f82898a2add44edc309a935cfa7ff71d7afdfc3",
       "ai/knowledge-map/.env": "a8e6393b16531710ca543c899c7c751fc6fe69a3af1b2675b5bfe2c3d8520c00",
       "ai/librechat/.env": "f73aeb7ac7d4c388ad92e5b6d00c5442a79d14b43bd6b4f202314d03136b3650",
