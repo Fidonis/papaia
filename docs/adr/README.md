@@ -51,6 +51,7 @@ See [`0000-template.md`](./0000-template.md).
 | [0030](./0030-accept-a-test-trust-anchor-for-pre-release-cores.md) | Accept a test trust anchor for pre-release cores | Accepted | 2026-11-25 |
 | [0031](./0031-give-every-model-route-a-data-class-and-refuse-above-it-at-the-gateway.md) | Give every model route a data class and refuse requests above it at the gateway | Accepted | 2026-11-25 |
 | [0032](./0032-place-every-network-in-one-operator-given-address-pool.md) | Place every network of the installation in one operator-given address pool | Proposed | 2026-11-26 |
+| [0033](./0033-check-and-mirror-the-runner-of-the-admin-steps-and-fail-start-on-a-failed-role-sync.md) | Check and mirror the runner of the admin steps like an installed image and fail start on a failed role sync | Proposed | 2026-11-26 |
 
 ## Reserved numbers
 

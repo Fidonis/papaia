@@ -47,6 +47,31 @@ weiteren (Einzelheiten: README, Abschnitt „Fresh installation“):
 Vorher: Docker installieren, die DNS-Einträge anlegen, das Sicherungsziel einhängen und die
 Freigaben aus der [Kommunikationsmatrix](netz.md) in der Firewall eintragen.
 
+## Start
+
+`papaia-ctl start` prüft zuerst jedes Image, das die Installation ausführt, gegen die
+Stückliste (Digest und Signatur, siehe [Lizenz und Bezug](lizenz-und-bezug.md#3-bezug-der-images)),
+startet dann die Container und richtet danach Proxy, Anmeldedienst, Chat-Rolle und
+Modellschlüssel ein.
+
+- **Hilfscontainer des Anmeldedienstes.** Veröffentlicht der mitgelieferte Keycloak keinen Port
+  (der Regelfall hinter dem Rand), laufen der Rollenabgleich und die übrigen Verwaltungsschritte
+  von Keycloak in einem kurzlebigen Container mit dem Image von papaia-manager
+  (`src/manager/docker-compose.yml`). Dieses Image gilt als Image der Installation: `start`,
+  `upgrade`, `restore` und die `addon`-Befehle prüfen es vor dem ersten Container mit, auch wenn
+  das Profil `manager` aus ist, und es steht in der Stückliste der Installation. Mit
+  `PAPAIA_IMAGE_MIRROR` kommt es über den Spiegel, mit demselben Digest. Mit direktem Portzugang
+  und Profil `keycloak` oder mit einem fremden Anmeldedienst läuft kein Hilfscontainer.
+- **Abbruch bei fehlgeschlagenem Rollenabgleich.** Schlägt der Rollenabgleich fehl, fehlen dem
+  Realm Clients, Rollen und Rechte. `start` lässt die Container laufen, führt die übrigen
+  Schritte aus und endet dann mit Ausgang 3, der Ursache und dem Befehl zum Wiederholen
+  (`papaia-ctl keycloak-role-sync`); die Zeile `start complete.` fehlt. Ebenso endet `start`,
+  wenn die Chat-Rolle von papaia-replay (Wiederholen: `papaia-ctl start`) oder die
+  Modellschlüssel der Module (Wiederholen: `papaia-ctl start --addons`) nicht eingerichtet
+  werden konnten oder ein Add-on mit neuem Modellschlüssel nicht neu gestartet werden konnte
+  (die Meldung nennt das Add-on; Wiederholen: `papaia-ctl start --addons`). Ein fehlgeschlagener Proxy-Abgleich bleibt eine Warnung. `upgrade` und
+  `restore` starten über `start` und schlagen dann mit fehl.
+
 ## Upgrade und Rückweg
 
 `papaia-ctl upgrade` hebt den Kern auf eine neue Version; jedes Upgrade legt vorher einen

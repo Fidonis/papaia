@@ -220,7 +220,6 @@ def start(
         code = _run(cluster, name, ["compose-up", *services])
         if code != 0:
             return _stopped("start", name, services, code)
-    warnings = 0
     # In a container (papaia-manager and its runners) a hook on the controller reaches the
     # stack over its network; on the host this does nothing.
     root = envtree.load_config_dir_tree(cluster.config_dir, cluster.repo_root).get("", {})
@@ -228,19 +227,27 @@ def start(
     joined, reason = stack_network.join(network)
     if not joined:
         print(f"WARNING: cannot join {network}: {reason}", file=sys.stderr, flush=True)
+    # As on one host (docs/adr/0033): the role sync creates the realm's clients, roles and
+    # rights, so its failure fails `start`; the proxy hosts grant nothing and only warn.
+    failed = 0
     for hook, service in (("npm-provision", "nginx"), ("keycloak-role-sync", "keycloak")):
         owner = cluster.topology.node_of(service)
         if service not in cluster.active or owner not in names:
             continue
         _say(f"node {owner}: {hook}")
         if _run(cluster, owner, ["hook", hook]) != 0:
-            warnings += 1
+            fatal = hook == "keycloak-role-sync"
+            failed += fatal
             print(
-                f"WARNING: {hook} failed on node '{owner}'. Once the services are healthy,"
-                f" retry with 'papaia-ctl start --node={owner}'.",
+                f"{'ERROR' if fatal else 'WARNING'}: {hook} failed on node '{owner}'. Once"
+                f" the services are healthy, retry with 'papaia-ctl start --node={owner}'.",
                 file=sys.stderr,
                 flush=True,
             )
+    if failed:
+        print("ERROR: start did not complete: the containers run, but the role sync failed.",
+              file=sys.stderr, flush=True)
+        return 3
     return 0
 
 

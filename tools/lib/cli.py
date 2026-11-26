@@ -1496,19 +1496,26 @@ def _image_groups(
 ) -> list[tuple[str | None, list[str]]]:
     """Every image to check, by owner: (None, the core's: the pins of the tree with
     --from-checkout, the images the installation runs from the tree with --as-installed,
-    and the lines of --images-file) and (name, the add-on's) for each
-    --addon-images=NAME=FILE. Without duplicates inside a group. Raises ValueError or
-    images.ImageError on a bad source."""
+    the lines of --images-file, and on the host admin path the runner of the Keycloak
+    admin steps) and (name, the add-on's) for each --addon-images=NAME=FILE. Without
+    duplicates inside a group. Raises ValueError or images.ImageError on a bad source.
+
+    The runner is checked with every command: `start`, `upgrade` and `restore` run the
+    admin steps in it, the add-on commands their clients step (docs/adr/0033)."""
+    env = common.parse_env_file(config_dir / ".env")
     core: list[str] = []
     if args.from_checkout:
         # Every pin of the tree: all profiles and accelerator variants.
         core += [ref for _, ref in images.compose_image_refs(repo_root)]
     if args.as_installed:
         # What this installation runs from the tree: its profiles and variants.
-        env = common.parse_env_file(config_dir / ".env")
         core += gen_override.installation_images(repo_root, env)
     if args.images_file is not None:
         core += _read_image_lines(args.images_file)
+    try:
+        core += keycloak_admin_path.installed_images(repo_root, env)
+    except keycloak_admin_path.AdminPathError as exc:
+        raise images.ImageError(f"runner of the Keycloak admin steps: {exc}") from exc
     groups: list[tuple[str | None, list[str]]] = []
     if core:
         groups.append((None, list(dict.fromkeys(core))))
@@ -1704,6 +1711,25 @@ def _retry_hint(command: str) -> str:
         "addon-install": "addon install", "addon-start": "addon start",
         "addon-upgrade": "addon upgrade", "addon-rollback": "addon rollback",
     }.get(command, command)
+
+
+def cmd_installation_images(args: argparse.Namespace) -> int:
+    """The images the installation of --config-dir runs from this core tree, one per line,
+    as a bill of materials lists them (without the mirror): the services of the Compose
+    project its profiles enable, the accelerator images of its variants and, on the host
+    admin path, the runner of the Keycloak admin steps (docs/adr/0033). Exit 2 when the
+    tree cannot be read."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    env = common.parse_env_file(config_dir / ".env")
+    try:
+        found = gen_override.installation_images(repo_root, env)
+        found += keycloak_admin_path.installed_images(repo_root, env)
+    except (keycloak_admin_path.AdminPathError, OSError, yaml.YAMLError) as exc:
+        print(f"ERROR: installation images: {exc}", file=sys.stderr)
+        return 2
+    for ref in dict.fromkeys(found):
+        print(ref)
+    return 0
 
 
 def cmd_image_accept(args: argparse.Namespace) -> int:
@@ -3795,6 +3821,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_image_verify.add_argument("--addon-images", action="append", default=None)
     p_image_verify.add_argument("--test-trust-anchor", default=None)
     p_image_verify.set_defaults(func=cmd_image_verify)
+
+    p_installation_images = sub.add_parser("installation-images")
+    p_installation_images.set_defaults(func=cmd_installation_images)
 
     p_image_accept = sub.add_parser("image-accept")
     p_image_accept.add_argument("--addon", required=True)

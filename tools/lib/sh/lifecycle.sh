@@ -523,54 +523,87 @@ cmd_start() {
     # over its network, which `up` has just created; on the host this does nothing.
     py_cli join-stack-network || true
 
+    # The steps after `up` (docs/adr/0033). One that creates clients, roles or rights fails
+    # `start` when it fails: the stack stays up, every later step still runs, and the
+    # command ends non-zero with the cause and the retry command instead of the success
+    # line. The proxy hosts of npm-provision grant nothing; a failure there stays a warning.
+    local -a failed_steps=()
     if ! py_cli npm-provision; then
         warn "NPM proxy-host provisioning failed. Once the stack is healthy, run 'papaia-ctl npm-provision' to retry."
     fi
 
+    # The realm's clients, roles and rights; on the host without a published Keycloak
+    # port it runs in the one-shot container whose image the check above covered.
     if ! py_cli keycloak-role-sync; then
-        warn "Keycloak role sync failed. Once Keycloak is healthy, run 'papaia-ctl keycloak-role-sync' to retry."
+        failed_steps+=("Keycloak role sync failed: the realm may lack the clients, roles and rights of the core and the modules. Once Keycloak is healthy, run 'papaia-ctl keycloak-role-sync' to retry.")
     fi
 
+    # The database role papaia-replay reads the chat with.
     if ! py_cli replay-chat-sync; then
-        warn "The chat role of papaia-replay could not be set up. Once the chat database is healthy, run 'papaia-ctl start' again."
+        failed_steps+=("The chat role of papaia-replay could not be set up. Once the chat database is healthy, run 'papaia-ctl start' again.")
     fi
 
-    _model_keys_sync "$addons"
+    # The model keys of the modules, and the deletion of the revoked ones. Its outcome is
+    # in the two variables below, not in errexit: it runs on the left of `||`.
+    _model_keys_sync "$addons" || true
+    if [ "$MODEL_KEYS_UNCHECKED" -ne 0 ]; then
+        failed_steps+=("Not every module key of LiteLLM could be checked; a revoked key may still be valid. Once LiteLLM is healthy and the add-on manifests are fixed, run 'papaia-ctl start --addons' again.")
+    fi
+    if [ -n "$MODEL_KEYS_NOT_RESTARTED" ]; then
+        failed_steps+=("Add-on(s) with a new model key not started again, still running with the old key:${MODEL_KEYS_NOT_RESTARTED}. Fix the cause above, then run 'papaia-ctl start --addons' again.")
+    fi
 
+    if [ "${#failed_steps[@]}" -gt 0 ]; then
+        local step_error
+        for step_error in ${failed_steps[@]+"${failed_steps[@]}"}; do
+            error "$step_error"
+        done
+        error "start did not complete: the containers run, but the step(s) above failed."
+        return 3
+    fi
     success "start complete."
 }
 
+# The outcome of _model_keys_sync: 1 when not every key could be checked, and the add-ons
+# with a new key that were not started again (each name after a space).
+MODEL_KEYS_UNCHECKED=0
+MODEL_KEYS_NOT_RESTARTED=""
+
 # After `up`: every module that declares model needs holds its own LiteLLM key, and keys
 # revoked while LiteLLM was down are deleted (docs/model-gateway.md). An add-on whose key
-# changed is materialised and started again, so its containers see the key. A failure is
-# reported, not fatal: the add-ons run, without a usable model key; the add-ons whose key
-# did change are still started again.
+# changed is materialised and started again, so its containers see the key. The add-ons
+# whose key did change are started again even when another key could not be checked, and
+# one that fails does not stop the next. Every failure is checked explicitly and recorded
+# in the two variables above, since a caller may run this where errexit is off; then the
+# function returns 1 and `start` fails at its end (docs/adr/0033).
 # $1 = 1 when the add-ons are part of this start
 _model_keys_sync() {
-    local addons="$1" out="" changed="" rc=0 line addon_name addon_path
-    out="$(py_cli model-keys-sync)" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        warn "Not every module key of LiteLLM could be checked (see above). Once LiteLLM is"
-        warn "healthy and the add-on manifests are fixed, run 'papaia-ctl start --addons' again."
-    fi
+    local addons="$1" out="" changed="" line addon_name addon_path
+    MODEL_KEYS_UNCHECKED=0
+    MODEL_KEYS_NOT_RESTARTED=""
+    out="$(py_cli model-keys-sync)" || MODEL_KEYS_UNCHECKED=1
     while IFS= read -r line; do
         case "$line" in
             MODEL_KEY_CHANGED=*) changed+="${line#MODEL_KEY_CHANGED=}"$'\n' ;;
         esac
     done <<< "$out"
-    [ -n "$changed" ] || return 0
-    if [ "$addons" -ne 1 ]; then
+    if [ -n "$changed" ] && [ "$addons" -ne 1 ]; then
         warn "New model keys for: $(printf '%s' "$changed" | tr '\n' ' ')- run"
         warn "'papaia-ctl start --addons' so these add-ons see them."
-        return 0
+    elif [ -n "$changed" ]; then
+        while IFS= read -r addon_name; do
+            [ -n "$addon_name" ] || continue
+            info "  addon $addon_name: new model key, starting it again"
+            if py_cli addon-start --name="$addon_name" --no-keycloak \
+                    && addon_path="$(_addon_path "$addon_name")" \
+                    && _addon_compose_up "$addon_name" "$addon_path"; then
+                continue
+            fi
+            error "Add-on $addon_name was not started again with its new model key."
+            MODEL_KEYS_NOT_RESTARTED+=" $addon_name"
+        done <<< "$changed"
     fi
-    while IFS= read -r addon_name; do
-        [ -n "$addon_name" ] || continue
-        info "  addon $addon_name: new model key, starting it again"
-        py_cli addon-start --name="$addon_name" --no-keycloak || continue
-        addon_path="$(_addon_path "$addon_name")"
-        _addon_compose_up "$addon_name" "$addon_path"
-    done <<< "$changed"
+    [ "$MODEL_KEYS_UNCHECKED" -eq 0 ] && [ -z "$MODEL_KEYS_NOT_RESTARTED" ]
 }
 
 # What the native LocalAI step of `start` did (LOCALAI_NATIVE = off | skipped | installed |

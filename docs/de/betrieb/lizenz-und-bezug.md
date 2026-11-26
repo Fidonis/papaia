@@ -147,6 +147,10 @@ Installation startet, und kein anderes:
   Stückliste des Ziels. Die zweite Phase prüft vor dem ersten Container erneut.
 - Eine verteilte Installation prüft bei `start` und `upgrade` alle Images, die das Ziel festschreibt,
   weil ihre Dienste auf anderen Knoten starten.
+- Der Hilfscontainer der Verwaltungsschritte von Keycloak (Image von papaia-manager) zählt zu den
+  Images der Installation, sobald Keycloak keinen Port veröffentlicht: `start`, `upgrade`,
+  `restore` und die `addon`-Befehle prüfen ihn vor dem ersten Container, auch ohne Profil
+  `manager`, und die Stückliste der Installation führt ihn.
 
 1. Images des Kerns und der öffentlichen Repos (`ghcr.io/fidonis/`, `quay.io`, `docker.io`) sind ohne
    Zugangsdaten abrufbar. Docker Hub begrenzt anonyme Abrufe; bei Bedarf meldet sich der Betreiber mit
@@ -156,9 +160,9 @@ Installation startet, und kein anderes:
    (`docker login <Registry der Lieferung>`) und führt dann `papaia-ctl start` aus. Genau diese
    Zugangsdaten und dieser Weg reichen für den Abruf aller Images der Stückliste (EXK-PLT-71-A2).
 3. Mit einem eigenen Spiegel trägt der Betreiber `PAPAIA_IMAGE_MIRROR` in die `.env` ein; die Digests
-   bleiben gleich. Ein einzelner Host bezieht über den Spiegel nur die Images seines Compose-Projekts,
-   kein Link-Gateway; ein Knoten einer verteilten Installation bezieht sein Link-Gateway ebenfalls
-   über den Spiegel.
+   bleiben gleich. Ein einzelner Host bezieht über den Spiegel nur die Images seines Compose-Projekts
+   und den Hilfscontainer der Verwaltungsschritte, kein Link-Gateway; ein Knoten einer verteilten
+   Installation bezieht sein Link-Gateway ebenfalls über den Spiegel.
 
 **Abrufbarkeit.** Die Images jeder veröffentlichten Version bleiben unter ihrem Tag und Digest
 mindestens 3 Jahre nach der letzten Auslieferung dieser Version abrufbar. Ein Tag wird nie auf ein

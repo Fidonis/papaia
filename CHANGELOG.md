@@ -12,6 +12,23 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Runner of the Keycloak admin steps checked and mirrored; failed role sync fails start
+
+- On a host where the bundled Keycloak publishes no port, the image of the one-shot
+  container the admin steps run in (the `papaia-manager` pin) counts as an image of the
+  installation (ADR 0033): the image check of `start`, `upgrade`, `restore` and the add-on
+  commands checks it with digest and signature against the bill of materials before the
+  first container, also with the `manager` profile off, and `installation-images` lists
+  it for the bill of materials. It is pulled through `PAPAIA_IMAGE_MIRROR` with the same
+  digest. With a published Keycloak port or another identity provider nothing changes.
+- `start` (and `upgrade` and `restore`, which start through it) ends with exit code 3, the
+  cause and the retry command, and without `start complete.`, when `keycloak-role-sync`,
+  the chat role of papaia-replay or the module keys of the model gateway could not be set
+  up, or when an add-on with a new model key could not be started again (it is named);
+  the containers keep running and the other steps still run. A distributed `start`
+  fails the same way when the role sync fails on Keycloak's node. A failed
+  `npm-provision` stays a warning.
+
 ### Address range of the networks
 
 - `setup --subnet-pool=CIDR` (`PAPAIA_SUBNET_POOL`, with `--subnet-block=24..28` and

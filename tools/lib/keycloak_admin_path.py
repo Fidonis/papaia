@@ -18,6 +18,14 @@ stack's own services reach Keycloak: on the stack network, at `https://keycloak:
   read-write, each at the same path as on the host (the steps write files there).
 - With direct port access, which publishes Keycloak's port, the host uses that port as
   before.
+
+The runner image is an image the installation runs (docs/adr/0033): whenever the host
+admin path is used (the bundled Keycloak without a published port), `installed_images`
+names it, and the image check of `start`, `upgrade`, `restore` and the add-on commands
+checks it with digest and signature against the bill of materials before the first
+container, like every image of the Compose project. `runner_image` puts
+`PAPAIA_IMAGE_MIRROR` in front of it exactly as the mirror override does for the Compose
+services; the digest stays, so the container runs the checked image.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, deployment, direct_ports
+from . import common, deployment, direct_ports, images
 
 RUNNER_COMPOSE = Path("src") / "manager" / "docker-compose.yml"
 RUNNER_SERVICE = "papaia-manager"
@@ -93,18 +101,26 @@ def keycloak_published(root: dict[str, str]) -> bool:
     return direct_ports.direct_mode(root) is not None and "keycloak" in profiles
 
 
-def needs_oneshot(root: dict[str, str]) -> bool:
-    """Whether an admin step started here has to run in a one-shot container: on the
-    host, with the bundled Keycloak, which publishes no port."""
-    if common.in_container():
-        return False
+def host_admin_path(root: dict[str, str]) -> bool:
+    """Whether the installation described by the root `.env` runs its admin steps in the
+    one-shot container whenever papaia-ctl runs on the host: the bundled Keycloak, which
+    publishes no port."""
     if (root.get("AUTH_PROVIDER") or "internal_keycloak") != "internal_keycloak":
         return False
     return not keycloak_published(root)
 
 
-def runner_image(repo_root: Path) -> str:
-    """The pinned image of papaia-manager, which carries the runtime papaia-ctl needs."""
+def needs_oneshot(root: dict[str, str]) -> bool:
+    """Whether an admin step started here has to run in a one-shot container: on the
+    host, with the bundled Keycloak, which publishes no port."""
+    if common.in_container():
+        return False
+    return host_admin_path(root)
+
+
+def pinned_runner_image(repo_root: Path) -> str:
+    """The pinned image of papaia-manager, which carries the runtime papaia-ctl needs, as
+    the compose file names it (without a mirror)."""
     path = repo_root / RUNNER_COMPOSE
     try:
         doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -114,6 +130,31 @@ def runner_image(repo_root: Path) -> str:
     if not isinstance(image, str) or not _PINNED_IMAGE.match(image):
         raise AdminPathError(f"the image of {RUNNER_SERVICE} is not pinned by digest")
     return image
+
+
+def runner_image(repo_root: Path, root: dict[str, str] | None = None) -> str:
+    """The runner image as it is pulled: with `PAPAIA_IMAGE_MIRROR` of the root `.env`
+    in front, exactly as the mirror override names the Compose services; the digest
+    does not change."""
+    image = pinned_runner_image(repo_root)
+    try:
+        mirror = images.validate_mirror((root or {}).get(images.MIRROR_VAR, "").strip())
+    except images.ImageError as exc:
+        raise AdminPathError(str(exc)) from exc
+    return images.mirrored([image], mirror)[0]
+
+
+def installed_images(repo_root: Path, root: dict[str, str]) -> list[str]:
+    """The images the admin steps of the installation run besides its Compose project,
+    without a mirror (images.mirrored adds it): the runner image on the host admin path,
+    nothing with a published Keycloak port or another identity provider. A tree without
+    the runner's compose file names none; its admin steps then cannot start a runner
+    (AdminPathError) either. AdminPathError for a runner pin that cannot be used."""
+    if not host_admin_path(root):
+        return []
+    if not (Path(repo_root) / RUNNER_COMPOSE).is_file():
+        return []
+    return [pinned_runner_image(Path(repo_root))]
 
 
 def _host_id(root: dict[str, str], key: str, fallback: int) -> str:
@@ -186,7 +227,7 @@ def oneshot_argv(
         "--volume", f"{config}:{config}",
         "--workdir", str(repo / "tools"),
         "--entrypoint", "python3",
-        runner_image(repo_root),
+        runner_image(repo_root, root),
         "-c", PREFLIGHT,
         "--repo-root", str(repo),
         "--config-dir", str(config),

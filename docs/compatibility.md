@@ -195,6 +195,24 @@ image, the accelerator variants of LocalAI and voice included, with the tag
 and digest the compose files pin. An image pinned without a tag
 (`compat/image-exceptions.yaml`) is matched by its digest.
 
+The one-shot runner of the Keycloak admin steps is one of these images
+([ADR 0033](adr/0033-check-and-mirror-the-runner-of-the-admin-steps-and-fail-start-on-a-failed-role-sync.md)):
+on a host where the bundled Keycloak publishes no port, the role sync, realm
+sync, post-restore and the add-on clients step run in a container with the
+`papaia-manager` pin of `src/manager/docker-compose.yml`, whether the `manager`
+profile is on or not. The check of `start`, `upgrade`, `restore` and the add-on
+commands lists it, `PAPAIA_IMAGE_MIRROR` applies to it, and the bill of
+materials of such an installation must list it. The list a bill of materials
+of one installation is generated from comes from the core itself:
+
+```sh
+cd tools && python3 -m lib.cli --repo-root .. --config-dir <config> installation-images
+```
+
+It prints one image per line, without the mirror: the services of the Compose
+project the installation's `COMPOSE_PROFILES` enable, the accelerator images of
+its variants and, on that host admin path, the runner.
+
 An upgrade verifies the target's bill of materials against the release key of
 the installed checkout. A release that replaces the key ships
 `compat/release-key-rotation.yaml` (schema `papaia.release-key-rotation/1`):

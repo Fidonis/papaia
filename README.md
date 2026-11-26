@@ -2480,7 +2480,12 @@ only). The test suite fails on any other published port, and the list only ever 
   HSTS and custom locations you set in the NPM UI are kept. The steps that call it (`keycloak-role-sync`, `realm-sync`,
   `post-restore`, the service accounts, the clients of an add-on) run on the stack network:
   on the host `papaia-ctl` starts them in a one-shot container with the papaia-manager image
-  (read-only, no capabilities, no Docker socket), which is removed when the step ends.
+  (read-only, no capabilities, no Docker socket), which is removed when the step ends. That
+  image is checked against the bill of materials and pulled through `PAPAIA_IMAGE_MIRROR`
+  like every image of the installation (see "Image pinning and signatures"). A failed
+  `keycloak-role-sync` fails `start` (exit code 3, the cause and the retry command, no
+  `start complete.`), as does a failed chat role of papaia-replay or a failed model key
+  step; a failed `npm-provision` stays a warning.
 - **Direct port access** (`--reverse-proxy-provider=no_proxy`, or `--allow-direct-port-access`)
   is the only way to publish the core ports again. `setup` writes them into the generated
   `overrides/docker-compose.direct-ports.override.yml` (with a digest; `doctor` fails on a
@@ -3517,8 +3522,14 @@ same override files `up` gets, plus each active add-on with its own list. Images
 the installation does not enable, and the link gateway (`src/infra/link-gateway/`, which only a
 node of a distributed installation loads), are not about to run and are not checked; a later
 `start` that enables such a profile checks its images then. A distributed installation checks
-every image the tree pins, because its services start on other nodes. Each image must meet
-both conditions:
+every image the tree pins, because its services start on other nodes. On a host where the
+bundled Keycloak publishes no port, the Keycloak admin steps (role sync, realm sync,
+post-restore, the clients of an add-on) run in a one-shot container with the image of
+`papaia-manager` (`src/manager/docker-compose.yml`); that image is an image the installation
+runs, so `start`, `upgrade`, `restore` and the add-on commands check it too, even with the
+`manager` profile off, and it is pulled through `PAPAIA_IMAGE_MIRROR` with the same digest
+([ADR 0033](docs/adr/0033-check-and-mirror-the-runner-of-the-admin-steps-and-fail-start-on-a-failed-role-sync.md)).
+Each image must meet both conditions:
 
 1. It is listed, with the same digest, in the signed suite bill of materials of the
    checkout, `compat/suite-<VERSION>.yaml` with `compat/suite-<VERSION>.yaml.sig` (see
