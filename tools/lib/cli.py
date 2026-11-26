@@ -1375,15 +1375,22 @@ def _read_image_lines(path: str) -> list[str]:
             if line.strip()]
 
 
-def _image_groups(args: argparse.Namespace, repo_root: Path) -> list[tuple[str | None, list[str]]]:
+def _image_groups(
+    args: argparse.Namespace, repo_root: Path, config_dir: Path
+) -> list[tuple[str | None, list[str]]]:
     """Every image to check, by owner: (None, the core's: the pins of the tree with
-    --from-checkout and the lines of --images-file) and (name, the add-on's) for each
+    --from-checkout, the images the installation runs from the tree with --as-installed,
+    and the lines of --images-file) and (name, the add-on's) for each
     --addon-images=NAME=FILE. Without duplicates inside a group. Raises ValueError or
     images.ImageError on a bad source."""
     core: list[str] = []
     if args.from_checkout:
         # Every pin of the tree: all profiles and accelerator variants.
         core += [ref for _, ref in images.compose_image_refs(repo_root)]
+    if args.as_installed:
+        # What this installation runs from the tree: its profiles and variants.
+        env = common.parse_env_file(config_dir / ".env")
+        core += gen_override.installation_images(repo_root, env)
     if args.images_file is not None:
         core += _read_image_lines(args.images_file)
     groups: list[tuple[str | None, list[str]]] = []
@@ -1456,9 +1463,11 @@ def cmd_image_verify(args: argparse.Namespace) -> int:
     may start, 2 otherwise. `--insecure-images` skips the check for this one call,
     with a banner and one audit row; nothing of it is stored.
 
-    The core's images come from --from-checkout and --images-file, each add-on's from
-    its own --addon-images=NAME=FILE: an image accepted outside the bill of materials
-    passes only for the add-on it was accepted for (images.load_accepted).
+    The core's images come from --from-checkout (every pin of the tree: a distributed
+    installation), --as-installed (the images the installation of --config-dir runs from
+    the tree: stage 0 of an upgrade on one host) and --images-file (what Compose lists),
+    each add-on's from its own --addon-images=NAME=FILE: an image accepted outside the bill
+    of materials passes only for the add-on it was accepted for (images.load_accepted).
 
     `--anchor-fingerprint` is the release key of the installed core when this tree is
     the target of an upgrade (images.load_trusted_bom). At `addon install`, images from
@@ -1482,8 +1491,14 @@ def cmd_image_verify(args: argparse.Namespace) -> int:
             print("ERROR: --test-trust-anchor takes neither --insecure-images nor "
                   "--anchor-fingerprint", file=sys.stderr)
             return 2
-    if args.images_file is None and not args.from_checkout and not args.addon_images:
-        print("ERROR: pass --images-file, --from-checkout or --addon-images", file=sys.stderr)
+    if (args.images_file is None and not args.from_checkout and not args.as_installed
+            and not args.addon_images):
+        print("ERROR: pass --images-file, --from-checkout, --as-installed or --addon-images",
+              file=sys.stderr)
+        return 2
+    if args.from_checkout and args.as_installed:
+        print("ERROR: --from-checkout checks every pin of the tree, --as-installed what the "
+              "installation runs; pass one of them", file=sys.stderr)
         return 2
     if (args.command == "addon-install") != bool(args.addon and args.addon_path):
         print("ERROR: --addon and --addon-path go with --command=addon-install, and only "
@@ -1501,7 +1516,7 @@ def cmd_image_verify(args: argparse.Namespace) -> int:
         return 2
     try:
         correlation = images.correlation_id(args.correlation_id)
-        groups = _image_groups(args, repo_root)
+        groups = _image_groups(args, repo_root, config_dir)
     except images.ImageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -3646,6 +3661,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_image_verify = sub.add_parser("image-verify")
     p_image_verify.add_argument("--images-file", default=None)
     p_image_verify.add_argument("--from-checkout", action="store_true")
+    p_image_verify.add_argument("--as-installed", action="store_true")
     p_image_verify.add_argument("--command", choices=_IMAGE_COMMANDS, required=True)
     p_image_verify.add_argument("--insecure-images", action="store_true")
     p_image_verify.add_argument("--anchor-fingerprint", default=None)

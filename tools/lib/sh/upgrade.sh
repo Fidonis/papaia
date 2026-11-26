@@ -404,13 +404,17 @@ cmd_upgrade() {
         exit 2
     fi
 
-    # Stage 0: every image of the target and of the active add-ons against the target's
-    # bill of materials, that bill against the installed release key, before anything is
-    # backed up, stopped or moved. The second phase's start checks the ones it runs again
-    # after the render.
-    local verified=0
+    # Stage 0: the images the installation runs after the upgrade and those of the active
+    # add-ons against the target's bill of materials, that bill against the installed
+    # release key, before anything is backed up, stopped or moved. On one host that is the
+    # target's project with the installed profiles and accelerator variants (see
+    # _verify_images); a distributed installation checks every pin of the target,
+    # because its services start on other nodes. The second phase's start checks the ones
+    # it runs again after the render, before the first container.
+    local verified=0 tree=installed
+    [ "$distributed" -eq 1 ] && tree=1
     _addon_image_flags
-    ( _verify_images upgrade "$worktree" "" 1 "$insecure_images" \
+    ( _verify_images upgrade "$worktree" "" "$tree" "$insecure_images" \
         ${ADDON_IMAGE_FLAGS[@]+"${ADDON_IMAGE_FLAGS[@]}"} ) || verified=$?
     _addon_image_files_remove
     if [ "$verified" -ne 0 ]; then

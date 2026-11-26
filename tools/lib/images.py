@@ -21,6 +21,18 @@ the base64 ECDSA P-256/SHA-256 signature over that blob. It is read from the
 registry over the plain /v2 API and checked by openssl, the same way the bill
 of materials is; no cosign binary is needed on the host.
 
+Which images: those the installation runs, never more and never fewer. `start` on one
+host lists them with `docker compose config --images` (the active profiles, the files
+`src/docker-compose.yml` includes and the overrides `up` gets) and each active add-on
+with its own list. Stage 0 of `upgrade` on one host checks the images the installation
+runs after the upgrade: the target tree's project with the installed `COMPOSE_PROFILES`
+and accelerator variants (gen_override.installation_images; the target's env files do
+not exist yet, so Compose cannot list them), plus the add-ons. A distributed
+installation checks every pin of the tree (`compose_image_refs`), because its services
+start on other nodes. Images of a profile the installation does not enable are not
+about to run; `start` checks them when a later command enables that profile, and the
+second phase of an upgrade checks again before its first container.
+
 An upgrade checks the target's bill of materials against the release key of the
 installed core (its fingerprint, `anchor`), never against the key the target brings:
 a new key is accepted only through `compat/release-key-rotation.yaml`, a signature
@@ -32,8 +44,9 @@ write into the repositories of third-party images. Without that file a signature
 looked up next to its image.
 
 `PAPAIA_IMAGE_MIRROR` (a registry prefix such as `registry.example.com/papaia/`)
-is placed in front of every core image by a generated override
-(gen_override.generate_image_mirror_override); the mirror serves the images and
+is placed in front of every image of the core's Compose project by a generated override
+(gen_override.generate_image_mirror_override; the link gateway of a node gets it through
+the node's gateway override, lib/link.py); the mirror serves the images and
 the signature repository under the same prefix, and digests do not change.
 `PAPAIA_IMAGE_SIGNATURES` overrides the signature repository for a mirror that
 keeps signatures elsewhere.
@@ -73,7 +86,7 @@ from pathlib import Path
 
 import yaml
 
-from . import suite
+from . import compat, suite
 
 EXCEPTIONS_PATH = Path("compat") / "image-exceptions.yaml"
 EXCEPTIONS_SCHEMA = "papaia.image-exceptions/1"
@@ -276,12 +289,32 @@ def pin_problem(text: str, exceptions: set[tuple[str, str, str]] = frozenset()) 
 
 
 def compose_services(repo_root: Path) -> dict[str, str]:
-    """{service: image} of every service of the core's compose files."""
+    """{service: image} of every service of the core's compose files, including the
+    fragments no installation of one host loads (the link gateway): what a release
+    builds, pins and signs."""
     found: dict[str, str] = {}
     for path in sorted((Path(repo_root) / "src").rglob("docker-compose*.yml")):
         doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for service, body in (doc.get("services") or {}).items():
             if isinstance(body, dict) and isinstance(body.get("image"), str):
+                found[service] = body["image"]
+    return found
+
+
+def project_services(repo_root: Path, profiles: set[str] | None = None) -> dict[str, str]:
+    """{service: image} of the Compose project an installation runs: `src/docker-compose.yml`
+    and the files it includes, not every fragment under `src/`. With `profiles`, only
+    the services Compose enables for them: those without a profile and those with one
+    of them."""
+    root = Path(repo_root) / "src" / "docker-compose.yml"
+    found: dict[str, str] = {}
+    for path in compat.compose_files(root):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for service, body in (doc.get("services") or {}).items():
+            if not isinstance(body, dict) or not isinstance(body.get("image"), str):
+                continue
+            own = {str(p) for p in body.get("profiles") or ()}
+            if profiles is None or not own or own & profiles:
                 found[service] = body["image"]
     return found
 

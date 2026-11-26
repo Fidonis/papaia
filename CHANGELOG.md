@@ -12,6 +12,19 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Image check covers the images the installation runs
+
+- `start` with `PAPAIA_IMAGE_MIRROR` on a single host no longer checks or starts the
+  link gateway: the mirror override names only the services of the core's Compose
+  project (`src/docker-compose.yml` and the files it includes). On a node of a
+  distributed installation the gateway gets its mirrored image through the node's
+  gateway override.
+- Stage 0 of `upgrade` on a single host checks the images the installation runs after
+  the upgrade (installed `COMPOSE_PROFILES`, accelerator variants, mirror, active
+  add-ons) against the target's bill of materials, instead of every image the target
+  pins (`image-verify --as-installed`). A distributed installation still checks every
+  pin of the target; the second phase still checks before its first container.
+
 ### Module images published on the release day
 
 - `compat/release-day-images.yaml` lists the module images that are published only

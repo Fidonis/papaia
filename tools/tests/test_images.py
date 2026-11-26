@@ -402,7 +402,8 @@ def test_mirror_override_puts_every_core_image_behind_the_mirror(tmp_path):
 
     path = config / "overrides" / gen_override.IMAGE_MIRROR_OVERRIDE
     services = yaml.safe_load(path.read_text("utf-8"))["services"]
-    assert set(services) == set(images.compose_services(REPO))
+    # The services of the project the installation uses, never another fragment's.
+    assert set(services) == set(images.project_services(REPO))
     for body in services.values():
         assert body["image"].startswith(mirror)
         assert images.pin_problem(body["image"].removeprefix(mirror),
@@ -914,9 +915,9 @@ def test_upgrade_verifies_the_target_images_before_anything_changes(tmp_path):
     calls = done.stdout.splitlines()
     verify = next(i for i, c in enumerate(calls) if "image-verify" in c)
     assert calls[verify].startswith("py_cli_at ") and "--command=upgrade" in calls[verify]
-    # Every image the target pins, all profiles and variants: its env files do not
-    # exist yet, so compose cannot narrow the list.
-    assert "--from-checkout" in calls[verify]
+    # On a single host: the images the installation runs from the target tree, with its
+    # profiles and variants (test_images_installed.py).
+    assert "--as-installed" in calls[verify]
     assert "/target " in calls[verify] or calls[verify].split()[1].endswith("/target")
     assert verify < calls.index("backup")
     assert "--insecure-images" not in calls[-1]

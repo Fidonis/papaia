@@ -123,21 +123,28 @@ IMAGES_CORRELATION_ID="${IMAGES_CORRELATION_ID:-}"
 # line); never taken from the environment.
 TEST_TRUST_ANCHOR=""
 
-# Refuse to go on unless every image to start is listed with its digest in the signed
-# bill of materials of the core tree $2 and signed with its key (lib/images.py).
+# Refuse to go on unless every image the installation is about to run is listed with its
+# digest in the signed bill of materials of the core tree $2 and signed with its key
+# (lib/images.py). The images it does not run (other profiles, the link gateway on one
+# host) are not checked; a later command that runs them checks them then.
 # $1 = command (start, upgrade, addon-start, ...), $2 = core tree,
-# $3 = core image list file or empty, $4 = 1 to check every image the tree pins (all
-# profiles and variants: the target of an upgrade, whose env files do not exist yet, and
-# a distributed installation, whose services start on other nodes),
+# $3 = core image list file (what Compose lists for `up`) or empty,
+# $4 = what else of the tree $2: 0 nothing, 1 every image the tree pins (all profiles and
+# variants: a distributed installation, whose services start on other nodes), installed
+# the images this installation runs from the tree (its profiles and variants: the target
+# of an upgrade on one host, whose env files do not exist yet, so Compose cannot list them),
 # $5 = 1 for --insecure-images (this command only, never stored), rest = extra flags,
 # among them one --addon-images=NAME=FILE per add-on (see _addon_image_flags)
 _verify_images() {
-    local command="$1" root="$2" list="$3" whole_tree="$4" insecure="$5"
+    local command="$1" root="$2" list="$3" tree="$4" insecure="$5"
     shift 5
     local -a flags=(--command="$command" "$@")
     [ "$insecure" -eq 1 ] && flags+=(--insecure-images)
     [ -n "$list" ] && flags+=(--images-file="$list")
-    [ "$whole_tree" -eq 1 ] && flags+=(--from-checkout)
+    case "$tree" in
+        1) flags+=(--from-checkout) ;;
+        installed) flags+=(--as-installed) ;;
+    esac
     [ -n "$IMAGES_ANCHOR" ] && flags+=(--anchor-fingerprint="$IMAGES_ANCHOR")
     [ -n "${TEST_TRUST_ANCHOR:-}" ] && flags+=(--test-trust-anchor="${TEST_TRUST_ANCHOR:-}")
     [ -n "$IMAGES_CORRELATION_ID" ] && flags+=(--correlation-id="$IMAGES_CORRELATION_ID")

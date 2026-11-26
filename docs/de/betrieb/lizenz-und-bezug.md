@@ -135,7 +135,18 @@ Diese Lizenzen beschafft und verantwortet der Betreiber selbst; Fidonis liefert 
 
 **Weg.** Alle Images sind mit Tag und Digest festgeschrieben und mit dem Release-Schlüssel signiert;
 `papaia-ctl start` und `upgrade` prüfen Digest und Signatur vor dem Start
-([Image-Prüfung](../../../README.md#image-pinning-and-signatures)).
+([Image-Prüfung](../../../README.md#image-pinning-and-signatures)). Geprüft wird jedes Image, das die
+Installation startet, und kein anderes:
+
+- `start` auf einem Host prüft die Images der eingeschalteten Profile (`COMPOSE_PROFILES`) und der
+  aktiven Add-ons. Images anderer Profile und das Link-Gateway, das nur ein Knoten einer verteilten
+  Installation lädt, prüft erst der `start`, der sie einschaltet.
+- `upgrade` auf einem Host prüft vor Sicherung, Stopp und Umzug die Images, die die Installation nach
+  dem Upgrade startet: die eingeschalteten Profile, die Beschleuniger-Varianten
+  (`LOCALAI_IMAGE_VARIANT`, `VOICE_TTS_IMAGE_VARIANT`), den Spiegel und die aktiven Add-ons, gegen die
+  Stückliste des Ziels. Die zweite Phase prüft vor dem ersten Container erneut.
+- Eine verteilte Installation prüft bei `start` und `upgrade` alle Images, die das Ziel festschreibt,
+  weil ihre Dienste auf anderen Knoten starten.
 
 1. Images des Kerns und der öffentlichen Repos (`ghcr.io/fidonis/`, `quay.io`, `docker.io`) sind ohne
    Zugangsdaten abrufbar. Docker Hub begrenzt anonyme Abrufe; bei Bedarf meldet sich der Betreiber mit
@@ -145,7 +156,9 @@ Diese Lizenzen beschafft und verantwortet der Betreiber selbst; Fidonis liefert 
    (`docker login <Registry der Lieferung>`) und führt dann `papaia-ctl start` aus. Genau diese
    Zugangsdaten und dieser Weg reichen für den Abruf aller Images der Stückliste (EXK-PLT-71-A2).
 3. Mit einem eigenen Spiegel trägt der Betreiber `PAPAIA_IMAGE_MIRROR` in die `.env` ein; die Digests
-   bleiben gleich.
+   bleiben gleich. Ein einzelner Host bezieht über den Spiegel nur die Images seines Compose-Projekts,
+   kein Link-Gateway; ein Knoten einer verteilten Installation bezieht sein Link-Gateway ebenfalls
+   über den Spiegel.
 
 **Abrufbarkeit.** Die Images jeder veröffentlichten Version bleiben unter ihrem Tag und Digest
 mindestens 3 Jahre nach der letzten Auslieferung dieser Version abrufbar. Ein Tag wird nie auf ein

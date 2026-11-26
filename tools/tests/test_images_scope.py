@@ -428,7 +428,7 @@ def test_upgrade_checks_the_active_add_ons_in_stage_0(tmp_path):
     assert done.returncode == 0, done.stderr
     calls = done.stdout.splitlines()
     verify = next(i for i, c in enumerate(calls) if "image-verify" in c)
-    assert "--from-checkout" in calls[verify] and "--addon-images=wiki=" in calls[verify]
+    assert "--as-installed" in calls[verify] and "--addon-images=wiki=" in calls[verify]
     assert f"addon-listed {WIKI}:1.0.0@{D3}" in calls
     assert verify < calls.index("backup")
 

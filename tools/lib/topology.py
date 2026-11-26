@@ -1386,18 +1386,25 @@ def project(config_dir: Path, repo_root: Path, topo: Topology) -> list[NodeBundl
         return []
     require_file_modes(config_dir)
     # Local import: link builds on this module's model.
-    from . import link
+    from . import images, link
 
     tree = envtree.load_config_dir_tree(config_dir, repo_root)
     seed = envtree.load_seed_tree(repo_root)
     cluster = [p for p in tree.get("", {}).get("COMPOSE_PROFILES", "").split(",") if p]
     env = validation_env(config_dir, repo_root)
     link_plan = link.plan(topo, cluster, env)
+    # The gateway is no service of the core project, so the mirror override leaves it
+    # out; its own override carries the mirrored image.
+    try:
+        mirror = images.validate_mirror(tree.get("", {}).get(images.MIRROR_VAR, "").strip())
+        gateway = mirror + link.gateway_image(repo_root) if mirror else ""
+    except (images.ImageError, link.LinkError, OSError, yaml.YAMLError) as exc:
+        raise TopologyError(f"link gateway image: {exc}") from exc
 
     def writer_for(node: Node) -> Callable[[Path], None]:
         bundle_root = node_bundle_root(topo, node, config_dir)
         return lambda staging: link.write_node_files(
-            staging, config_dir, link_plan, node, bundle_root
+            staging, config_dir, link_plan, node, bundle_root, gateway
         )
 
     bundles = [

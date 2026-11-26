@@ -738,6 +738,14 @@ def _localai_gpu_images(repo_root: Path) -> dict[str, str]:
     return {k: v for k, v in pinned.items() if isinstance(v, str)}
 
 
+def localai_variant_image(repo_root: Path, variant: str) -> str | None:
+    """The accelerator image the LocalAI override pins for `variant`, or None when the
+    compose file's own (CPU) image runs: CPU, an unknown variant or one without a pin."""
+    if not gpu_detect.TAG_SUFFIX.get(variant):
+        return None
+    return _localai_gpu_images(repo_root).get(variant)
+
+
 def generate_localai_gpu_override(
     config_dir: Path,
     repo_root: Path,
@@ -753,9 +761,8 @@ def generate_localai_gpu_override(
     """
     out_path = config_dir / "overrides" / "docker-compose.localai-gpu.override.yml"
 
-    suffix = gpu_detect.TAG_SUFFIX.get(variant)
-    image = _localai_gpu_images(repo_root).get(variant) if suffix else None
-    if not suffix or image is None:
+    image = localai_variant_image(repo_root, variant)
+    if image is None:
         out_path.unlink(missing_ok=True)
         return
 
@@ -831,6 +838,16 @@ def _voice_gpu_images(repo_root: Path) -> dict[str, str]:
     return {k: v for k, v in images.items() if isinstance(v, str)}
 
 
+def voice_variant_image(repo_root: Path, variant: str) -> str | None:
+    """The accelerator image the voice override pins for `variant`, or None when the
+    compose file's own (CPU) image runs."""
+    # cpu (and anything unknown) short-circuits before the compose file is
+    # parsed, like the LocalAI counterpart above.
+    if not variant or variant not in _VOICE_VARIANT_FRAGMENT:
+        return None
+    return _voice_gpu_images(repo_root).get(variant)
+
+
 def generate_voice_gpu_override(
     config_dir: Path,
     repo_root: Path,
@@ -845,16 +862,11 @@ def generate_voice_gpu_override(
     a host back from GPU to CPU actually take effect."""
     out_path = config_dir / "overrides" / "docker-compose.voice-gpu.override.yml"
 
-    # cpu (and anything unknown) short-circuits before the compose file is
-    # parsed, like the LocalAI counterpart above.
-    fragment_variant = _VOICE_VARIANT_FRAGMENT.get(variant) if variant else None
-    if fragment_variant is None:
-        out_path.unlink(missing_ok=True)
-        return
-    image = _voice_gpu_images(repo_root).get(variant)
+    image = voice_variant_image(repo_root, variant)
     if image is None:
         out_path.unlink(missing_ok=True)
         return
+    fragment_variant = _VOICE_VARIANT_FRAGMENT[variant]
 
     # The accelerator images are published for linux/amd64, same as the CPU
     # build, so the platform pin of the base service stays correct.
@@ -887,7 +899,11 @@ def generate_image_mirror_override(config_dir: Path, repo_root: Path, mirror: st
         out_path.unlink(missing_ok=True)
         return
     images.validate_mirror(mirror)
-    chosen = images.compose_services(repo_root)
+    # The services of the project `up` reads, never another fragment under src/: a
+    # service the project does not define would be a new one here, without a profile and
+    # always enabled (the link gateway on one host). A node's gateway gets the mirror
+    # through its own override (link.gateway_override).
+    chosen = images.project_services(repo_root)
     for name in _IMAGE_VARIANT_OVERRIDES:
         path = config_dir / "overrides" / name
         if not path.is_file():
@@ -904,6 +920,29 @@ def generate_image_mirror_override(config_dir: Path, repo_root: Path, mirror: st
     common.atomic_write(
         out_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
     )
+
+
+def installation_images(repo_root: Path, env: dict[str, str]) -> list[str]:
+    """The images an installation with the root `.env` values `env` runs from the core
+    tree `repo_root`, as `docker compose config --images` lists them once that tree has
+    rendered its overrides: the services of the Compose project that `COMPOSE_PROFILES`
+    enables, with the accelerator image the LocalAI and voice overrides choose for the
+    installed variants. Without the mirror prefix (images.mirrored adds it).
+
+    For stage 0 of an upgrade, which has to check the target before its env files and
+    overrides exist."""
+    profiles = {p.strip() for p in env.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
+    chosen = images.project_services(repo_root, profiles)
+    # As cli._apply_image_overrides writes them: LocalAI always, voice only while its
+    # profile is active.
+    localai = localai_variant_image(repo_root, env.get("LOCALAI_IMAGE_VARIANT", "").strip())
+    if localai is not None and "localai" in chosen:
+        chosen["localai"] = localai
+    if "voice" in profiles:
+        voice = voice_variant_image(repo_root, env.get("VOICE_TTS_IMAGE_VARIANT", "").strip())
+        if voice is not None and "chatterbox" in chosen:
+            chosen["chatterbox"] = voice
+    return list(dict.fromkeys(chosen.values()))
 
 
 def generate_module_tls_override(config_dir: Path) -> Path | None:

@@ -3509,8 +3509,14 @@ bill of materials; they pass the check below only when listed and signed, like e
 image (see [`docs/compatibility.md`](docs/compatibility.md#own-images-of-the-core)).
 
 **Check before `start` and `upgrade`.** Before any container starts, `papaia-ctl` lists the
-images Compose is about to run (with the active profiles and the same override files `up`
-gets) and checks each one:
+images the installation is about to run and checks each one. `start` on a single host lists
+them with Compose: the active profiles, the files `src/docker-compose.yml` includes and the
+same override files `up` gets, plus each active add-on with its own list. Images of a profile
+the installation does not enable, and the link gateway (`src/infra/link-gateway/`, which only a
+node of a distributed installation loads), are not about to run and are not checked; a later
+`start` that enables such a profile checks its images then. A distributed installation checks
+every image the tree pins, because its services start on other nodes. Each image must meet
+both conditions:
 
 1. It is listed, with the same digest, in the signed suite bill of materials of the
    checkout, `compat/suite-<VERSION>.yaml` with `compat/suite-<VERSION>.yaml.sig` (see
@@ -3529,8 +3535,14 @@ of materials` or `no signature`, and no container is started. Without
 `compat/release-key.pub` or without the bill of materials the check refuses: images are
 never checked against a key taken from the file it vouches for.
 
-**Upgrade: the installed release vouches for the next one.** `upgrade` checks every image
-the target release pins before it backs up, stops or moves anything. The target's bill of
+**Upgrade: the installed release vouches for the next one.** `upgrade` checks the images the
+installation will run after the upgrade before it backs up, stops or moves anything. On a
+single host these are the services of the target's Compose project that the installed
+`COMPOSE_PROFILES` enable, with the accelerator images of the installed
+`LOCALAI_IMAGE_VARIANT` and `VOICE_TTS_IMAGE_VARIANT` and the image mirror; a distributed
+installation checks every image the target pins, in every profile and variant. An image of
+an installed profile that the target's bill of materials does not list, or that is not
+signed with its key, stops the upgrade with nothing changed. The target's bill of
 materials must be signed with the release key of the *installed* checkout. A release that
 changes the key ships `compat/release-key-rotation.yaml`, a signature by the previous key
 over the new `compat/release-key.pub` (`cosign sign-blob --key <previous key>
@@ -3593,7 +3605,11 @@ tools/papaia-ctl pairing confirm --approve-pairings=SHA256 --test-trust-anchor=/
 `registry.example.com/papaia/`, ending in `/`) pulls every core image through a mirror. The
 render writes `overrides/docker-compose.image-mirror.override.yml`, which puts the prefix in
 front of each pinned reference, for example
-`registry.example.com/papaia/quay.io/keycloak/keycloak:26.7.0@sha256:…`. The mirror must hold
+`registry.example.com/papaia/quay.io/keycloak/keycloak:26.7.0@sha256:…`. The override names
+only the services of the core's Compose project (`src/docker-compose.yml` and the files it
+includes), so a single host neither checks nor starts the link gateway; on a node of a
+distributed installation the gateway gets the mirrored image through the node's own
+`overrides/docker-compose.link-gateway.override.yml`. The mirror must hold
 each image under that path and the signature repository under the same prefix
 (`registry.example.com/papaia/ghcr.io/fidonis/papaia-signatures`); the digests stay the same,
 so the check above still applies. `PAPAIA_IMAGE_SIGNATURES` overrides the signature

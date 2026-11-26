@@ -397,13 +397,26 @@ def haproxy_config(plan_: LinkPlan, node: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def gateway_override(plan_: LinkPlan, node: Node, bundle_root: str) -> dict:
-    """The node-specific part of the gateway's Compose service."""
+def gateway_image(repo_root: Path) -> str:
+    """The gateway image pinned in the gateway's Compose fragment."""
+    doc = yaml.safe_load((Path(repo_root) / GATEWAY_FRAGMENT).read_text(encoding="utf-8"))
+    image = (((doc or {}).get("services") or {}).get(GATEWAY_SERVICE) or {}).get("image")
+    if not isinstance(image, str):
+        raise LinkError(f"{GATEWAY_FRAGMENT} pins no image for {GATEWAY_SERVICE}")
+    return image
+
+
+def gateway_override(plan_: LinkPlan, node: Node, bundle_root: str, image: str = "") -> dict:
+    """The node-specific part of the gateway's Compose service. `image` is the gateway
+    image behind the installation's image mirror, or empty without one: the core's mirror
+    override names only services of the core project, and the gateway is not one."""
     topo = plan_.topology
     link = plan_.for_node(node.name)
     service: dict = {
         "volumes": [f"{bundle_root.rstrip('/')}/{LINK_DIR}:{GATEWAY_CONFIG_PATH}:ro"],
     }
+    if image:
+        service["image"] = image
     if link.inbound:
         service["ports"] = [f"{link_bind_address(node)}:{topo.link_port}:{topo.link_port}"]
     network: dict = {}
@@ -608,9 +621,11 @@ def issue_leaf(
 
 
 def write_node_files(
-    staging: Path, config_dir: Path, plan_: LinkPlan, node: Node, bundle_root: str
+    staging: Path, config_dir: Path, plan_: LinkPlan, node: Node, bundle_root: str,
+    image: str = "",
 ) -> None:
-    """The node's link material and gateway configuration, into its bundle."""
+    """The node's link material and gateway configuration, into its bundle. `image` as in
+    gateway_override."""
     key, cert = issue_leaf(config_dir, node, serves=list(plan_.for_node(node.name).inbound))
     _ca_key, ca_cert = ensure_ca(config_dir)
     target = staging / LINK_DIR
@@ -629,7 +644,7 @@ def write_node_files(
     )
     common.atomic_write(
         staging / "overrides" / GATEWAY_OVERRIDE,
-        yaml.safe_dump(gateway_override(plan_, node, bundle_root), sort_keys=False),
+        yaml.safe_dump(gateway_override(plan_, node, bundle_root, image), sort_keys=False),
     )
 
 
