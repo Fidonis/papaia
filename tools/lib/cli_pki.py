@@ -7,7 +7,54 @@ import json
 import sys
 from pathlib import Path
 
-from . import pki
+from . import edge_pki, envtree, ingress, pki
+
+
+def _issue_edge(config_dir: Path, repo_root: Path, force: bool) -> int:
+    """The edge CA and the leaves of every proxy host papaia-ctl creates (ADR 0035), when
+    the installation serves its host names with `tls: internal` behind the bundled proxy."""
+    from . import npm_provision
+
+    tree = envtree.load_config_dir_tree(config_dir, repo_root)
+    root = tree.get("", {})
+    try:
+        if not edge_pki.enabled(config_dir, root):
+            return 0
+        hosts = npm_provision.edge_hosts(tree, config_dir, repo_root)
+        result = edge_pki.issue(
+            config_dir, [edge_pki.Host(h) for h in hosts], edge_pki.domains(root), force=force
+        )
+    except ingress.IngressError as exc:
+        # The interfaces cannot be read; no leaf is issued or removed until they can.
+        print(f"WARNING: edge certificates not checked: {exc}", file=sys.stderr)
+        return 0
+    except (edge_pki.EdgePkiError, OSError) as exc:
+        print(f"ERROR: edge CA: {exc}", file=sys.stderr)
+        return 3
+    if result.ca:
+        print(f"  edge CA {result.ca}: {edge_pki.ca_paths(config_dir)[0]}", flush=True)
+        print(
+            "  Distribute this root certificate to the browsers and hosts that reach the"
+            " installation's host names.",
+            flush=True,
+        )
+    for verb, labels in (
+        ("issued", result.issued),
+        ("renewed", result.renewed),
+        ("removed", result.removed),
+    ):
+        for label in labels:
+            print(f"  {verb} edge certificate {label}", flush=True)
+    for names in result.refused:
+        print(
+            f"WARNING: no edge certificate for {names}: outside the domains of the edge CA"
+            f" ({', '.join(edge_pki.domains(root))})",
+            file=sys.stderr,
+        )
+    if result.issued or result.renewed:
+        print("  The proxy serves them after 'papaia-ctl npm-provision' (part of start).",
+              flush=True)  # fmt: skip
+    return 0
 
 
 def cmd_pki_issue(args: argparse.Namespace) -> int:
@@ -36,11 +83,12 @@ def cmd_pki_issue(args: argparse.Namespace) -> int:
             " their next start.",
             flush=True,
         )
-    return 0
+    return _issue_edge(config_dir, repo_root, args.force)
 
 
 def cmd_pki_status(args: argparse.Namespace) -> int:
     report = pki.status(Path(args.config_dir))
+    report["certificates"] += edge_pki.status(Path(args.config_dir))
     if args.json:
         print(json.dumps(report, indent=2))
         return 0

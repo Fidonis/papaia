@@ -10,6 +10,7 @@ Uses only Python stdlib — no third-party dependencies.
 from __future__ import annotations
 
 import json
+import secrets
 import sys
 import time
 import urllib.error
@@ -22,6 +23,7 @@ from . import (
     common,
     deployment,
     edge_guard,
+    edge_pki,
     ingress,
     module_tls,
     paperless_gate,
@@ -107,9 +109,11 @@ def proxy_host_body(
     ssl_verify: bool = True,
     allow_websocket: bool = False,
     advanced_config: str | None = None,
+    certificate_id: int = 0,
 ) -> dict:
     """The NPM API body of one proxy host. Without `advanced_config` the host clears the
-    identity and gate headers itself, like every host through `server_proxy.conf`."""
+    identity and gate headers itself, like every host through `server_proxy.conf`.
+    `certificate_id` is the uploaded edge leaf of the host (ADR 0035), 0 for none."""
     if advanced_config is None:
         advanced_config = paperless_gate.strip_config() + (
             "" if ssl_verify else "proxy_ssl_verify off;\n"
@@ -123,7 +127,7 @@ def proxy_host_body(
         "allow_websocket_upgrade": allow_websocket,
         "block_exploits": True,
         "access_list_id": 0,
-        "certificate_id": 0,
+        "certificate_id": certificate_id,
         "ssl_forced": False,
         "http2_support": False,
         "hsts_enabled": False,
@@ -151,7 +155,14 @@ IDP_OWNED_FIELDS = (
 
 
 def core_host_body(
-    domain: str, service: str, port: int, scheme: str, ssl_verify: bool, websocket: bool
+    domain: str,
+    service: str,
+    port: int,
+    scheme: str,
+    ssl_verify: bool,
+    websocket: bool,
+    *,
+    certificate_id: int = 0,
 ) -> dict:
     """The NPM API body of a core interface; the identity provider's host refuses its
     admin paths."""
@@ -170,6 +181,7 @@ def core_host_body(
         ssl_verify=ssl_verify,
         allow_websocket=websocket,
         advanced_config=advanced,
+        certificate_id=certificate_id,
     )
 
 
@@ -178,7 +190,7 @@ def core_host_body(
 ENTRY_OWNED_FIELDS = ("forward_scheme", "forward_host", "forward_port", "advanced_config")
 
 
-def entry_host_body(entry: sign_in.Entry, root: dict[str, str]) -> dict:
+def entry_host_body(entry: sign_in.Entry, root: dict[str, str], certificate_id: int = 0) -> dict:
     """The NPM API body of the main address: every request is redirected to the entry
     page before anything is forwarded; the identity and gate headers are cleared. Its
     upstream is Mein Bereich's service with the scheme the security profile asks for
@@ -193,6 +205,7 @@ def entry_host_body(entry: sign_in.Entry, root: dict[str, str]) -> dict:
         sign_in.ME_PORT,
         scheme,
         advanced_config=advanced + sign_in.redirect_config(entry.target),
+        certificate_id=certificate_id,
     )
 
 
@@ -206,7 +219,13 @@ def _is_entry_host(host: dict) -> bool:
 
 
 def _entry_host(
-    base_url: str, token: str, root: dict[str, str], tree, edge, found: list[ingress.Route]
+    base_url: str,
+    token: str,
+    root: dict[str, str],
+    tree,
+    edge,
+    found: list[ingress.Route],
+    certs: _EdgeCertificates | None = None,
 ) -> str | None:
     """Create or correct the host of the main address; its host name, or None when the
     installation has no entry page. A host at the domain that does not forward to Mein
@@ -236,8 +255,9 @@ def _entry_host(
         return None
     route = main.route(root.get("DOCKER_NETWORK") or "papaia-net")
     _correct_host(
-        base_url, token, route, entry_host_body(main, root), hosts, owned=ENTRY_OWNED_FIELDS
-    )
+        base_url, token, route, entry_host_body(main, root), hosts, owned=ENTRY_OWNED_FIELDS,
+        certs=certs,
+    )  # fmt: skip
     return main.hostname
 
 
@@ -269,7 +289,7 @@ def core_route_body(root: dict[str, str], label: str) -> dict:
     return route_body(core_route(root, label, ingress.public_url_of({"": root}, node, key)))
 
 
-def route_body(route: ingress.Route) -> dict:
+def route_body(route: ingress.Route, certificate_id: int = 0) -> dict:
     """The NPM API body of an add-on interface (lib/ingress.py): its host names to its
     service, the identity and gate headers cleared, the upload limit of `max_body`."""
     advanced = paperless_gate.strip_config()
@@ -286,6 +306,7 @@ def route_body(route: ingress.Route) -> dict:
         route.scheme,
         allow_websocket=route.websocket,
         advanced_config=advanced,
+        certificate_id=certificate_id,
     )
 
 
@@ -296,21 +317,38 @@ def _correct_host(
     body: dict,
     hosts: list[dict] | None = None,
     owned: tuple[str, ...] | None = None,
+    certs: _EdgeCertificates | None = None,
 ) -> bool:
     """Create the proxy host of `route`, or correct one that differs from `body`. With
     `owned`, an existing host is compared and corrected in those fields only, and the
-    others keep what they have. True when something was written."""
+    others keep what they have. With `certs`, the host gets the uploaded edge leaf of its
+    names, unless it carries a certificate the operator set (ADR 0035). True when
+    something was written."""
     if hosts is None:
         hosts = _list_proxy_hosts(base_url, token)
     current = next(
         (h for h in hosts if set(route.hostnames) & set(h.get("domain_names") or [])), None
     )
+    certificate = certs.id_for(route.hostnames) if certs is not None else None
     if current is None:
+        if certificate is not None:
+            body = {**body, "certificate_id": certificate}
         _post_proxy_host(base_url, token, body)
         print(f"  created proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
         return True
     if owned is not None:
         body = {key: body[key] for key in owned}
+    if certificate is None:
+        # No leaf applies (none issued, a refused name, a failed upload): whatever
+        # certificate the host has stays, an operator's included.
+        if "certificate_id" in body:
+            body["certificate_id"] = current.get("certificate_id", body["certificate_id"])
+    elif certs is not None:
+        # The leaf replaces no certificate or an earlier upload; an operator's stays.
+        if certs.replaces(current, certificate):
+            body["certificate_id"] = certificate
+        elif "certificate_id" in body:
+            body["certificate_id"] = current.get("certificate_id")
     if any(current.get(key) != value for key, value in body.items()):
         _put_proxy_host(base_url, token, current.get("id"), body)
         print(f"  updated proxy host: {route.hostnames[0]} -> {route.target}", flush=True)
@@ -319,12 +357,19 @@ def _correct_host(
     return True
 
 
-def _ingress_hosts(base_url: str, token: str, found: list[ingress.Route]) -> int:
+def _ingress_hosts(
+    base_url: str,
+    token: str,
+    found: list[ingress.Route],
+    certs: _EdgeCertificates | None = None,
+) -> int:
     """Create or correct the proxy host of every add-on interface; the count of hosts
     created or corrected. A host that already matches is left as it is."""
     hosts = _list_proxy_hosts(base_url, token)
     return sum(
-        1 for route in found if _correct_host(base_url, token, route, route_body(route), hosts)
+        1
+        for route in found
+        if _correct_host(base_url, token, route, route_body(route), hosts, certs=certs)
     )
 
 
@@ -397,8 +442,11 @@ def _uninstalled_hosts(
     return True
 
 
-def _send(base_url: str, token: str, path: str, method: str, body: dict | None = None):
-    """One NPM API call; the parsed answer for a GET, None otherwise."""
+def _send(
+    base_url: str, token: str, path: str, method: str, body: dict | None = None,
+    answer: bool = False,
+):  # fmt: skip
+    """One NPM API call; the parsed answer for a GET (or with `answer`), None otherwise."""
     req = urllib.request.Request(
         f"{base_url}{path}",
         data=json.dumps(body).encode() if body is not None else None,
@@ -406,7 +454,10 @@ def _send(base_url: str, token: str, path: str, method: str, body: dict | None =
         method=method,
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read()) if method == "GET" else None
+        if method != "GET" and not answer:
+            return None
+        raw = resp.read()
+        return json.loads(raw) if raw.strip() else None
 
 
 def _list_proxy_hosts(base_url: str, token: str) -> list[dict]:
@@ -433,6 +484,7 @@ def _create_proxy_host(
     forward_scheme: str,
     ssl_verify: bool,
     allow_websocket: bool,
+    certificate_id: int = 0,
 ) -> None:
     """Create a single proxy host entry via the NPM REST API."""
     _post_proxy_host(
@@ -445,11 +497,14 @@ def _create_proxy_host(
             forward_scheme,
             ssl_verify=ssl_verify,
             allow_websocket=allow_websocket,
+            certificate_id=certificate_id,
         ),
     )
 
 
-def _paperless_route(base_url: str, token: str, config_dir: Path) -> bool:
+def _paperless_route(
+    base_url: str, token: str, config_dir: Path, certs: _EdgeCertificates | None = None
+) -> bool:
     """Create or correct the proxy host of the Paperless add-on: to the gate, with the
     proxy's gate secret from the included file. Only while the add-on is active and its
     public URL is a host name the proxy serves. False when the secret is missing or
@@ -482,9 +537,12 @@ def _paperless_route(base_url: str, token: str, config_dir: Path) -> bool:
         "forward_port": paperless_gate.GATE_PORT,
         "advanced_config": paperless_gate.route_advanced_config(),
     }
+    certificate = certs.id_for((domain,)) if certs is not None else None
     for host in _list_proxy_hosts(base_url, token):
         if domain not in (host.get("domain_names") or []):
             continue
+        if certificate is not None and certs is not None and certs.replaces(host, certificate):
+            wanted["certificate_id"] = certificate
         if all(host.get(key) == value for key, value in wanted.items()):
             return True
         _put_proxy_host(base_url, token, host.get("id"), wanted)
@@ -499,6 +557,7 @@ def _paperless_route(base_url: str, token: str, config_dir: Path) -> bool:
             paperless_gate.GATE_PORT,
             "http",
             advanced_config=paperless_gate.route_advanced_config(),
+            certificate_id=certificate or 0,
         ),
     )
     print(f"  created proxy host: {domain} -> the Paperless gate", flush=True)
@@ -519,6 +578,307 @@ def _api_base_url(nginx: dict[str, str]) -> str:
     if common.in_container():
         return NPM_API_IN_STACK
     return f"http://localhost:{nginx.get('NPM_API_LOCAL_PORT', '8181')}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# edge certificates (ADR 0035)
+# ─────────────────────────────────────────────────────────────────────────
+
+_CERTIFICATES_PATH = "/api/nginx/certificates"
+# The certificates papaia-ctl uploaded, by the first name of their leaf: the proxy's id
+# and the leaf's fingerprint. Ids listed under `retired` were replaced and are deleted once
+# no host uses them.
+UPLOADS_FILE = "npm-certificates.json"
+UPLOADS_FORMAT = "papaia.edge-uploads/1"
+NICE_NAME_PREFIX = "papaia edge "
+
+
+def edge_hosts(tree, config_dir: Path, repo_root: Path) -> list[tuple[str, ...]]:
+    """The names of every proxy host `npm-provision` creates and owns: the core's
+    interfaces, the add-ons' interfaces, the Paperless route and the main address, one
+    tuple per host. Empty without the bundled proxy. IngressError when the interfaces
+    cannot be read."""
+    root = tree.get("", {})
+    if root.get("REVERSE_PROXY_PROVIDER") != "internal_nginx":
+        return []
+    edge = ingress.edge_ports(root)
+    found = ingress.routes(tree, Path(config_dir), Path(repo_root))
+    hosts: list[tuple[str, ...]] = [tuple(h.lower() for h in r.hostnames) for r in found]
+    main, _ = sign_in.entry_and_note(tree, found)
+    if main is not None and _is_subdomain_url(main.public_url, edge):
+        hosts.append((main.hostname.lower(),))
+    active = deployment.active_addons(deployment.load(Path(config_dir)))
+    if any(entry.get("name") == paperless_gate.ADDON for entry in active):
+        env = common.parse_env_file(
+            Path(config_dir) / "addons" / paperless_gate.ADDON / ".env"
+        )
+        url = env.get(paperless_gate.PUBLIC_URL_KEY, "")
+        if _is_subdomain_url(url, edge):
+            hosts.append(((urlsplit(url).hostname or "").lower(),))
+    unique: list[tuple[str, ...]] = []
+    seen: set[str] = set()
+    for names in hosts:
+        if names and not seen & set(names):
+            unique.append(names)
+            seen |= set(names)
+    return unique
+
+
+def _list_certificates(base_url: str, token: str) -> list[dict]:
+    found = _send(base_url, token, _CERTIFICATES_PATH, "GET")
+    return [c for c in found if isinstance(c, dict)] if isinstance(found, list) else []
+
+
+def _create_certificate(base_url: str, token: str, nice_name: str) -> int:
+    """A custom certificate entry without files; its id."""
+    made = _send(
+        base_url, token, _CERTIFICATES_PATH, "POST",
+        {"provider": "other", "nice_name": nice_name}, answer=True,
+    )  # fmt: skip
+    cert_id = made.get("id") if isinstance(made, dict) else None
+    if isinstance(cert_id, bool) or not isinstance(cert_id, int):
+        raise ValueError("the proxy did not return the id of the new certificate")
+    return cert_id
+
+
+def _upload_certificate(base_url: str, token: str, cert_id: int, certificate: str,
+                        key: str) -> None:  # fmt: skip
+    """The certificate and its key into the custom certificate `cert_id` (multipart, as
+    the proxy's upload takes them)."""
+    if isinstance(cert_id, bool) or not isinstance(cert_id, int):
+        raise ValueError("certificate id must be an integer")
+    boundary = "papaia-" + secrets.token_hex(16)
+    parts = []
+    for name, filename, content in (
+        ("certificate", "tls.crt", certificate),
+        ("certificate_key", "tls.key", key),
+    ):
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\";"
+            f" filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            f"{content}\r\n"
+        )
+    data = ("".join(parts) + f"--{boundary}--\r\n").encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}{_CERTIFICATES_PATH}/{cert_id}/upload",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
+
+def _delete_certificate(base_url: str, token: str, cert_id: int) -> None:
+    if isinstance(cert_id, bool) or not isinstance(cert_id, int):
+        raise ValueError("certificate id must be an integer")
+    _send(base_url, token, f"{_CERTIFICATES_PATH}/{cert_id}", "DELETE")
+
+
+class _EdgeCertificates:
+    """The edge leaves of one installation as custom certificates of the proxy.
+
+    `upload` brings every leaf into the proxy that is not there with its current
+    fingerprint; `id_for` names the certificate of a host's names; `replaces` says whether
+    a host's certificate may be set (none, or one papaia-ctl uploaded: an operator's
+    stays); `clean_up` deletes the uploads of replaced or removed leaves once no host uses
+    them. Each upload and deletion is one `papaia.audit/1` row; a run that changes nothing
+    writes no row and no file."""
+
+    def __init__(self, config_dir: Path, base_url: str, token: str):
+        self.config_dir = config_dir
+        self.base_url = base_url
+        self.token = token
+        self.leaves = edge_pki.leaves(config_dir)
+        self.path = edge_pki.private_dir(config_dir) / UPLOADS_FILE
+        self.state = self._load()
+        self.domains = edge_pki.ca_domains(config_dir) or ()
+        self.ids: dict[tuple[str, ...], int] = {}
+
+    def _load(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"format": UPLOADS_FORMAT, "uploads": {}, "retired": []}
+        uploads = data.get("uploads") if isinstance(data, dict) else None
+        retired = data.get("retired") if isinstance(data, dict) else None
+        good = {
+            label: entry
+            for label, entry in (uploads.items() if isinstance(uploads, dict) else [])
+            if isinstance(entry, dict)
+            and isinstance(entry.get("id"), int)
+            and not isinstance(entry.get("id"), bool)
+            and isinstance(entry.get("sha256"), str)
+        }
+        ids = [i for i in (retired if isinstance(retired, list) else [])
+               if isinstance(i, int) and not isinstance(i, bool)]  # fmt: skip
+        return {"format": UPLOADS_FORMAT, "uploads": good, "retired": ids}
+
+    def _save(self) -> None:
+        common.atomic_write_private(self.path, json.dumps(self.state, indent=2) + "\n")
+
+    @property
+    def ours(self) -> set[int]:
+        return {e["id"] for e in self.state["uploads"].values()} | set(self.state["retired"])
+
+    def id_for(self, names) -> int | None:
+        return self.ids.get(tuple(n.lower() for n in names))
+
+    def replaces(self, host: dict, certificate: int) -> bool:
+        have = host.get("certificate_id") or 0
+        return have != certificate and (have == 0 or have in self.ours)
+
+    def _ours_by_name(self, cert: dict) -> bool:
+        """Whether a certificate of the proxy carries the name papaia-ctl gives an upload:
+        a custom one named after a leaf of this installation's edge domains."""
+        name = cert.get("nice_name")
+        if cert.get("provider") != "other" or not isinstance(name, str):
+            return False
+        if not name.startswith(NICE_NAME_PREFIX):
+            return False
+        try:
+            edge_pki.check_name(name[len(NICE_NAME_PREFIX):], self.domains)
+        except edge_pki.EdgePkiError:
+            return False
+        return True
+
+    def _adopt(self, listed: list[dict]) -> None:
+        """Uploads of papaia-ctl the state file does not know (it was lost or reset) are
+        taken as replaced: hosts get the current leaf, and they are deleted once unused."""
+        found = [
+            c["id"] for c in listed
+            if isinstance(c.get("id"), int) and not isinstance(c.get("id"), bool)
+            and c["id"] not in self.ours and self._ours_by_name(c)
+        ]  # fmt: skip
+        if found:
+            self.state["retired"].extend(sorted(found))
+            self._save()
+
+    def _upload_leaf(self, audit, change, leaf: edge_pki.Leaf) -> int:
+        """Creates the custom certificate entry of `leaf` and uploads its files: one row,
+        `error` with `file` (the leaf cannot be read; nothing is sent) or `transport` (the
+        proxy refused or did not answer), else `allowed`. An entry left without files is
+        deleted again, with a row of its own."""
+        from . import realm_sync as rs
+
+        try:
+            certificate = leaf.cert.read_text(encoding="utf-8")
+            key = leaf.key.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            audit.write(change, "error", "file", host=True)
+            raise
+        try:
+            cert_id = _create_certificate(
+                self.base_url, self.token, NICE_NAME_PREFIX + leaf.label
+            )
+        except (urllib.error.URLError, OSError, ValueError):
+            audit.write(change, "error", "transport", host=True)
+            raise
+        try:
+            _upload_certificate(self.base_url, self.token, cert_id, certificate, key)
+        except (urllib.error.URLError, OSError, ValueError):
+            audit.write(change, "error", "transport", host=True)
+            undo = rs.Change(
+                "certificate", leaf.label, "deleted from the proxy after a failed upload",
+                "delete_certificate", effect="delete",
+            )  # fmt: skip
+            try:
+                _delete_certificate(self.base_url, self.token, cert_id)
+            except (urllib.error.URLError, OSError, ValueError):
+                audit.write(undo, "error", "transport", host=True)
+            else:
+                audit.write(undo, "allowed", host=True)
+            raise
+        audit.write(change, "allowed", host=True)
+        return cert_id
+
+    def upload(self) -> None:
+        if not self.leaves and not self.state["uploads"] and not self.state["retired"]:
+            return
+        listed = _list_certificates(self.base_url, self.token)
+        present = {c.get("id") for c in listed}
+        self._adopt(listed)
+        from . import realm_sync as rs
+
+        audit: rs.AuditLog | None = None
+        try:
+            for leaf in self.leaves:
+                entry = self.state["uploads"].get(leaf.label)
+                fingerprint = leaf.fingerprint()
+                if entry and entry["sha256"] == fingerprint and entry["id"] in present:
+                    self.ids[leaf.names] = entry["id"]
+                    continue
+                if audit is None:
+                    audit = rs.AuditLog(
+                        rs.audit_path(self.config_dir), rs.new_correlation_id(), writer=WRITER
+                    )
+                change = rs.Change(
+                    "certificate", leaf.label, "uploaded to the proxy", "upload_certificate"
+                )
+                cert_id = self._upload_leaf(audit, change, leaf)
+                if entry:
+                    # Replaced; a host that still names it gets the new one below.
+                    self.state["retired"].append(entry["id"])
+                self.state["uploads"][leaf.label] = {"id": cert_id, "sha256": fingerprint}
+                self._save()
+                self.ids[leaf.names] = cert_id
+                print(f"  uploaded edge certificate: {leaf.label}", flush=True)
+        finally:
+            if audit is not None:
+                audit.close()
+
+    def clean_up(self) -> None:
+        current = {leaf.label for leaf in self.leaves}
+        gone = {
+            label: entry["id"]
+            for label, entry in self.state["uploads"].items()
+            if label not in current
+        }
+        if not gone and not self.state["retired"]:
+            return
+        in_use = {h.get("certificate_id") for h in _list_proxy_hosts(self.base_url, self.token)}
+        present = {c.get("id") for c in _list_certificates(self.base_url, self.token)}
+        from . import realm_sync as rs
+
+        doomed = [(label, cert_id) for label, cert_id in gone.items()]
+        doomed += [(None, cert_id) for cert_id in self.state["retired"]]
+        audit: rs.AuditLog | None = None
+        changed = False
+        try:
+            for label, cert_id in doomed:
+                if cert_id in in_use:
+                    continue  # a host still serves it; deleted at a later run
+                if cert_id in present:
+                    if audit is None:
+                        audit = rs.AuditLog(
+                            rs.audit_path(self.config_dir), rs.new_correlation_id(),
+                            writer=WRITER,
+                        )  # fmt: skip
+                    name = label or f"certificate {cert_id}"
+                    change = rs.Change(
+                        "certificate", name, "deleted from the proxy", "delete_certificate",
+                        effect="delete",
+                    )  # fmt: skip
+                    try:
+                        _delete_certificate(self.base_url, self.token, cert_id)
+                    except (urllib.error.URLError, OSError, ValueError):
+                        audit.write(change, "error", "transport", host=True)
+                        raise
+                    audit.write(change, "allowed", host=True)
+                    print(f"  deleted edge certificate: {name}", flush=True)
+                if label is None:
+                    self.state["retired"].remove(cert_id)
+                else:
+                    del self.state["uploads"][label]
+                changed = True
+        finally:
+            if changed:
+                self._save()
+            if audit is not None:
+                audit.close()
 
 
 def provision_npm_hosts(
@@ -561,6 +921,20 @@ def provision_npm_hosts(
 
     token = _get_token(base_url, email, password)
 
+    ok = True
+    # The edge leaves first (ADR 0035): every host below is created or corrected with its
+    # uploaded certificate. Without leaves (a certificate bundle of row 3, another proxy
+    # provider) nothing is uploaded and the hosts keep what they have.
+    certs: _EdgeCertificates | None = None
+    if config_dir is not None:
+        certs = _EdgeCertificates(Path(config_dir), base_url, token)
+        try:
+            certs.upload()
+        except (edge_pki.EdgePkiError, urllib.error.URLError, OSError, ValueError,
+                KeyError, TypeError) as exc:  # fmt: skip
+            print(f"Edge certificates not uploaded: {exc}", file=sys.stderr, flush=True)
+            certs, ok = None, False
+
     # Every interface first: the main address must not take a host name one of them
     # serves (lib/sign_in.py).
     edge = ingress.edge_ports(root)
@@ -572,8 +946,9 @@ def provision_npm_hosts(
         except ingress.IngressError as exc:
             routes_error = exc
     main = _entry_host(
-        base_url, token, root, tree, edge, found if found is not None else ingress.core_routes(tree)
-    )
+        base_url, token, root, tree, edge,
+        found if found is not None else ingress.core_routes(tree), certs,
+    )  # fmt: skip
     existing = _existing_domains(base_url, token)
 
     created = 0
@@ -595,27 +970,32 @@ def provision_npm_hosts(
             # Created or corrected, so the upstream follows the security profile.
             route = core_route(root, label, url)
             if _correct_host(base_url, token, route, route_body(route),
-                             owned=MODULE_OWNED_FIELDS):  # fmt: skip
+                             owned=MODULE_OWNED_FIELDS, certs=certs):  # fmt: skip
                 existing.add(domain)
                 created += 1
             else:
                 skipped_existing += 1
             continue
+        route = ingress.Route("core", label, (domain,), url, fwd_host, fwd_port, fwd_scheme, "")
         if fwd_host == IDP_SERVICE:
             # Created or corrected, so an earlier host without the admin block gets it.
             body = core_host_body(domain, fwd_host, fwd_port, fwd_scheme, ssl_verify, ws)
-            route = ingress.Route(
-                "core", label, (domain,), url, fwd_host, fwd_port, fwd_scheme, "",
-            )
-            if _correct_host(base_url, token, route, body, owned=IDP_OWNED_FIELDS):
+            if _correct_host(base_url, token, route, body, owned=IDP_OWNED_FIELDS, certs=certs):
                 existing.add(domain)
                 created += 1
             else:
                 skipped_existing += 1
             continue
         if domain in existing:
-            skipped_existing += 1
+            # Kept as it is; only a missing certificate is set (an operator's stays).
+            if certs is not None and _correct_host(
+                base_url, token, route, {}, owned=(), certs=certs
+            ):
+                created += 1
+            else:
+                skipped_existing += 1
             continue
+        certificate = certs.id_for((domain,)) if certs is not None else None
         _create_proxy_host(
             base_url,
             token,
@@ -625,6 +1005,7 @@ def provision_npm_hosts(
             fwd_scheme,
             ssl_verify,
             ws,
+            **({"certificate_id": certificate} if certificate is not None else {}),
         )
         existing.add(domain)
         print(f"  created proxy host: {domain} -> {fwd_scheme}://{fwd_host}:{fwd_port}", flush=True)
@@ -633,7 +1014,6 @@ def provision_npm_hosts(
     if main is not None:
         served.add(main)
 
-    ok = True
     if config_dir is not None and repo_root is not None:
         if found is None:
             print(f"Add-on proxy hosts skipped: {routes_error}", file=sys.stderr, flush=True)
@@ -641,7 +1021,7 @@ def provision_npm_hosts(
         else:
             # The Paperless route goes to its gate with the proxy's secret (below).
             addon = [r for r in found if r.module not in ("core", paperless_gate.ADDON)]
-            created += _ingress_hosts(base_url, token, addon)
+            created += _ingress_hosts(base_url, token, addon, certs)
             served |= {h for r in found for h in r.hostnames}
             ok = _uninstalled_hosts(base_url, token, Path(config_dir), served) and ok
     if config_dir is not None:
@@ -651,7 +1031,14 @@ def provision_npm_hosts(
             # Without the block the edge would forward while the gate is closed.
             print(f"ERROR: the start gate cannot be set up at the edge: {exc}", file=sys.stderr)
             return False
-        ok = _gate_steps(base_url, token, Path(config_dir), root, block) and ok
+        ok = _gate_steps(base_url, token, Path(config_dir), root, block, certs) and ok
+    if certs is not None:
+        try:
+            certs.clean_up()
+        except (edge_pki.EdgePkiError, urllib.error.URLError, OSError, ValueError,
+                KeyError, TypeError) as exc:  # fmt: skip
+            print(f"Edge certificates not cleaned up: {exc}", file=sys.stderr, flush=True)
+            ok = False
 
     if created:
         print(f"NPM provisioning complete: {created} host(s) created.", flush=True)
@@ -708,7 +1095,12 @@ def _startgate_block(tree, config_dir: Path, routes: list) -> str:
 
 
 def _gate_steps(
-    base_url: str, token: str, config_dir: Path, root: dict[str, str], gate_block: str = ""
+    base_url: str,
+    token: str,
+    config_dir: Path,
+    root: dict[str, str],
+    gate_block: str = "",
+    certs: _EdgeCertificates | None = None,
 ) -> bool:
     project = root.get("COMPOSE_PROJECT_NAME") or "papaia"
     changed = paperless_gate.install_strip_file(project, gate_block)
@@ -720,7 +1112,7 @@ def _gate_steps(
             file=sys.stderr,
             flush=True,
         )
-    ok = _paperless_route(base_url, token, config_dir)
+    ok = _paperless_route(base_url, token, config_dir, certs)
     guarded = _app_origin_guard(project, root)
     if guarded is None:
         ok = False

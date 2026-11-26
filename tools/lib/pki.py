@@ -49,8 +49,10 @@ CA_DAYS = 3650
 CA_RENEW_LEFT_DAYS = 365
 CORE_MODULE = "core"
 CORE_REQUEST_FILE = "pki.yaml"
+# The edge CA's own directory (lib/edge_pki.py, ADR 0035); the platform PKI leaves it alone.
+EDGE_DIR = "edge"
 # Names an add-on cannot use: they are directories of the layout or the core's.
-RESERVED_MODULES = frozenset({"ca", CORE_MODULE})
+RESERVED_MODULES = frozenset({"ca", EDGE_DIR, CORE_MODULE})
 MAX_SERVICES = 64
 MAX_DNS = 32
 # Profiles a core request's client certificate may additionally depend on.
@@ -617,7 +619,9 @@ def _issue(
                     f"runs as uid {request.uid}; run 'papaia-ctl certs renew' as root"
                 )
 
-        for module_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name != "ca"):
+        for module_dir in sorted(
+            p for p in root.iterdir() if p.is_dir() and p.name not in ("ca", EDGE_DIR)
+        ):
             for directory in sorted(p for p in module_dir.iterdir() if p.is_dir()):
                 if (module_dir.name, directory.name) in wanted:
                     continue

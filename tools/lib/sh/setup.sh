@@ -820,7 +820,7 @@ cmd_setup() {
         _ensure_keycloak_certs
         _macos_local_tls_steps "$non_interactive"
     fi
-    _ensure_platform_pki "$ca_bundle" || return 3
+    _ensure_platform_pki "$ca_bundle" "$non_interactive" || return 3
     local pairing_rc=0
     # The pairings are confirmed on the terminal even after a question round (row 14):
     # its answers do not stand for -y.
@@ -943,13 +943,16 @@ _setup_module_offer() {
     fi
 }
 
+# The platform PKI and, behind the bundled proxy with `tls: internal`, the edge CA and its
+# leaves (ADR 0035); on a Mac the offer to trust the edge CA follows.
 _ensure_platform_pki() {
-    local bundle="$1"
-    info "Issuing the certificates of the platform PKI..."
+    local bundle="$1" non_interactive="${2:-1}"
+    info "Issuing the certificates of the platform PKI and the edge..."
     py_cli pki-issue || return 1
     if [ -n "$bundle" ]; then
         py_cli pki-import-bundle --file="$bundle" || return 1
     fi
+    _macos_edge_tls_steps "$non_interactive"
 }
 
 # Whether this config dir holds an installation that completed a setup: PAPAIA_VERSION is

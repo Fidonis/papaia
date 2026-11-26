@@ -64,6 +64,7 @@ from . import (
     diagnosis,
     direct_ports,
     edge_guard,
+    edge_pki,
     egress,
     envtree,
     erasure_journal,
@@ -1806,7 +1807,8 @@ def _certificate_files(config_dir: Path) -> list[Path]:
         (config_dir / "infra" / "nginx" / "nginx-letsencrypt" / "live").glob("*/fullchain.pem")
     )
     # The platform PKI: its CA, every service certificate and the trust bundle (OPS-17).
-    return files + pki.doctor_files(config_dir)
+    # The edge CA is certs/edge-ca.crt above; its leaves are below pki/edge/leaves/ (ADR 0035).
+    return files + pki.doctor_files(config_dir) + edge_pki.doctor_files(config_dir)
 
 
 def check_certs(ctx: Context) -> CheckResult:

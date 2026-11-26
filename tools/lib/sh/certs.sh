@@ -192,6 +192,36 @@ _macos_local_tls_steps() {
     fi
 }
 
+# macOS only, once the edge CA exists (ADR 0035): browsers on this Mac check the host names
+# of the bundled proxy against the login keychain. Offers to trust the edge CA for TLS
+# server certificates only, or prints the command, as for the local CA above. The edge CA
+# is name-constrained to the installation's domains, so this trust covers no other name.
+_macos_edge_tls_steps() {
+    local non_interactive="$1"
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    local ca_crt="$CONFIG_DIR/certs/edge-ca.crt"
+    local keychain="$HOME/Library/Keychains/login.keychain-db"
+    [ -f "$ca_crt" ] || return 0
+    # The first leaf in glob order; no pipeline, so no reader stops one early. The leaves
+    # live with the CA key in pki/edge/, which no container mounts.
+    local leaf="" candidate
+    for candidate in "$CONFIG_DIR"/pki/edge/leaves/*/tls.crt; do
+        [ -f "$candidate" ] && { leaf="$candidate"; break; }
+    done
+    # Asked with a leaf under the TLS server policy, as a browser asks (see above).
+    if [ -n "$leaf" ] && security verify-cert -c "$leaf" -c "$ca_crt" -p ssl -L >/dev/null 2>&1; then
+        return 0
+    fi
+    if [ "$non_interactive" -eq 0 ] && is_tty \
+        && confirm "Trust the edge CA in your login keychain, so browsers on this Mac accept the installation's host names?" "Y" \
+        && security add-trusted-cert -r trustRoot -p ssl -k "$keychain" "$ca_crt"; then
+        success "Edge CA trusted for TLS in $keychain."
+    else
+        warn "Browsers on this Mac reject the installation's host names until the edge CA is trusted. Run:"
+        printf '  security add-trusted-cert -r trustRoot -p ssl -k %s %s\n' "$keychain" "$ca_crt" >&2
+    fi
+}
+
 # papaia-ctl certs renew|status — the platform PKI (docs/pki.md). `start` issues and renews
 # on its own; `renew` is for a daily timer, `--force` issues every leaf again, `--ca`
 # replaces the platform CA (the old one stays trusted until its last leaf has ended).

@@ -206,6 +206,19 @@ Linux host:
   The server certificate is issued for 825 days with `serverAuth`, as macOS requires.
   `setup` renews an older or expiring one with the same CA, so the trust stays; restart
   the stack afterwards (`papaia-ctl stop`, `papaia-ctl start`).
+- **Edge CA.** Behind the bundled proxy with `tls: internal`, the host names
+  (`https://auth.<env>.papaia.localhost:<edge port>`, ...) are served with certificates of
+  the installation's edge CA (see [Host names and add-on interfaces](#host-names-and-add-on-interfaces)).
+  `setup` offers to trust it in the login keychain the same way, for TLS server
+  certificates only, or prints the command:
+
+  ```bash
+  security add-trusted-cert -r trustRoot -p ssl \
+    -k ~/Library/Keychains/login.keychain-db "$PAPAIA_CONFIG_DIR/certs/edge-ca.crt"
+  ```
+
+  The edge CA can only sign for the installation's two local domains
+  (`<env>.papaia.localhost`, `<env>.papaia-apps.localhost`).
 - **Web search on Apple Silicon.** The Firecrawl MCP image exists for `linux/amd64` only and
   runs emulated; Docker Desktop provides the emulation (Rosetta or QEMU).
 - **LocalAI.** Docker on macOS has no GPU access, so LocalAI runs on the CPU. `setup`
@@ -287,7 +300,7 @@ The answer file (format `papaia.setup-answers/1`; unknown keys are refused):
 format: papaia.setup-answers/1
 domain: example.org
 apps_domain: example-apps.org     # only with studio; empty: apps under apps.example.org
-tls: internal                     # see row 3 below: a bundle is checked, not yet served
+tls: internal                     # see row 3 below: the edge CA, or a bundle (checked, not yet served)
 upstream_idp: ""                  # or /root/papaia-answers/idp.yaml, see docs/federation.md
 admin_mail: it@example.org
 modules: studio,data,flow,assist,paperless
@@ -326,9 +339,14 @@ setup printed. Rows 14 and 15 come after the configuration is written, as part o
 `setup`.
 
 Row 3 takes `internal` or the absolute path of a PEM bundle with the certificate chain and
-its key (mode `0600`). `setup` checks a bundle at once (names, key, mode) and records it, but
-the bundled proxy does not serve it yet: until it does, answer `internal`, or add the bundle
-as the custom certificate of the proxy hosts in Nginx Proxy Manager yourself.
+its key (mode `0600`). With `internal`, the installation's edge CA issues a certificate for
+every host name the bundled proxy serves, and `start` sets it on the proxy hosts; the one
+step left to you is to distribute its root certificate `$PAPAIA_CONFIG_DIR/certs/edge-ca.crt`
+to the browsers and hosts that reach the installation (see
+[Host names and add-on interfaces](#host-names-and-add-on-interfaces)). `setup` checks a
+bundle at once (names, key, mode) and records it, but the bundled proxy does not serve it
+yet: until it does, answer `internal`, or add the bundle as the custom certificate of the
+proxy hosts in Nginx Proxy Manager yourself.
 
 Without a second domain (row 2 empty) the apps live under `apps.<base domain>` of the
 platform's own site (`INGRESS_APP_SINGLE_SITE=true`), and Studio shows a lasting warning:
@@ -2572,8 +2590,32 @@ behind the bundled proxy derives Keycloak (`auth`), LibreChat (`chat`), LiteLLM 
 LocalAI (`localai`), papaia-manager (`manager`), Mein Bereich (`me`), Qdrant (`qdrant`), oauth2-proxy (`oauth2`)
 and the NPM admin UI (`npm`) this way. A port address an earlier release derived moves to
 the host name; an address the operator chose is kept. The edge port follows `INGRESS_HTTPS_EXT_PORT` (443 is left out of
-the URL). The proxy hosts `papaia-ctl` creates carry no certificate of their own, like the
-ones it created before; a certificate for these names is set up in Nginx Proxy Manager.
+the URL).
+
+**Certificates at the edge.** With the bundled proxy and `tls: internal` (row 3, or a setup
+with switches), every proxy host `papaia-ctl` creates is served with a certificate of the
+installation's edge CA; no step in Nginx Proxy Manager is needed
+([ADR 0035](docs/adr/0035-serve-the-edge-host-names-from-a-name-constrained-edge-ca.md),
+[`docs/pki.md`](docs/pki.md#the-edge-ca)):
+
+- The edge CA is `$PAPAIA_CONFIG_DIR/certs/edge-ca.crt`; its key `pki/edge/ca.key` and the
+  certificates with their keys (`pki/edge/leaves/`) stay on the host (mode `0600`, in a
+  directory no service mounts; `certs/` holds only the public root). It is neither the platform CA of internal TLS
+  nor the Keycloak CA. Distribute `edge-ca.crt` to the browsers and hosts that use the
+  installation: it is name-constrained to the base domain and the app domain (locally
+  `<env>.papaia.localhost` and `<env>.papaia-apps.localhost`) and cannot sign any other name.
+- `setup`, `start`, `addon start` and `certs renew` issue one certificate per proxy host
+  (`serverAuth` only, exactly its names, 90 days), renew it with 30 days or less left and
+  remove it when the name is no longer served; `npm-provision` (part of `start`) uploads it
+  to the proxy and sets it on the host. A host name outside the two domains gets no
+  certificate and a warning.
+- A certificate you set on a host in Nginx Proxy Manager stays, also where no edge
+  certificate applies; forcing https and HSTS are
+  left as you set them.
+- Check a name: `openssl s_client -connect 127.0.0.1:<edge port> -servername
+  auth.<env>.papaia.localhost -CAfile "$PAPAIA_CONFIG_DIR/certs/edge-ca.crt"
+  -verify_return_error`. `doctor certs` and `certs status` list the edge CA and its
+  certificates.
 
 An add-on declares its interfaces in `integration.nginx` (contract generation 12, see
 [`docs/architecture.md`](docs/architecture.md)): a host key, the service, its port and

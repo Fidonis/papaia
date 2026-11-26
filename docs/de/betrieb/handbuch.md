@@ -47,6 +47,47 @@ weiteren (Einzelheiten: README, Abschnitt „Fresh installation“):
 Vorher: Docker installieren, die DNS-Einträge anlegen, das Sicherungsziel einhängen und die
 Freigaben aus der [Kommunikationsmatrix](netz.md) in der Firewall eintragen.
 
+### Ersteinrichtung: Stammzertifikat verteilen
+
+Mit der Antwort `internal` auf Frage 3 (Zertifikat) und dem mitgelieferten Nginx Proxy
+Manager stellt die Installation die Zertifikate ihrer Hostnamen selbst aus; in der
+Oberfläche des Proxys ist nichts einzurichten. Zu verteilen ist nur das Stammzertifikat der
+Rand-CA, `$PAPAIA_CONFIG_DIR/certs/edge-ca.crt`, an die Browser und Hosts, die die
+Installation aufrufen (Unternehmensverteilung, Vertrauensspeicher des Betriebssystems).
+`setup` nennt den Pfad; auf macOS bietet es an, die CA im Schlüsselbund nur für
+TLS-Serverzertifikate zu vertrauen, oder gibt den Befehl aus.
+
+## TLS am Rand
+
+- **Eigene Rand-CA.** Die Rand-CA (`certs/edge-ca.crt`, Schlüssel `pki/edge/ca.key` mit
+  Modus 0600) ist weder die Plattform-CA für TLS zwischen den Diensten
+  noch die CA des Anmeldedienstes. Kritische Namensbeschränkungen lassen nur die Basis- und
+  die App-Domain der Installation zu (lokal `<env>.papaia.localhost` und
+  `<env>.papaia-apps.localhost`). Für jeden anderen Namen lehnt jeder Client, der ihr
+  vertraut, ein Zertifikat ab, auch wenn es von Hand mit ihrem Schlüssel signiert wurde.
+- **Schlüssel bleiben auf dem Host.** `certs/` ist in viele Dienste eingebunden und enthält
+  nur das öffentliche Stammzertifikat. Der Schlüssel der Rand-CA und die Zertifikate mit
+  ihren Schlüsseln liegen in `pki/edge/` (Verzeichnis 0700), das kein Dienst einbindet;
+  nur der Manager, der `papaia-ctl` mit dem Docker-Socket ausführt, sieht wie bei der
+  Plattform-CA das ganze Konfigurationsverzeichnis. Ein Zertifikatsschlüssel gelangt nur
+  über die Schnittstelle des Proxys in den Proxy.
+- **Zertifikate je Hostname.** Je Proxy-Host, den `papaia-ctl` anlegt (Kern, Module,
+  Paperless, Hauptadresse), ein Zertifikat nur für `serverAuth` mit genau dessen Namen,
+  90 Tage gültig. `setup`, `start`, `addon start` und `certs renew` stellen fehlende aus,
+  erneuern bei 30 Tagen Restlaufzeit oder geänderten Namen und entfernen nicht mehr
+  genutzte; `start` lädt sie in den Proxy und setzt sie an den Hosts. Jeder dieser Schritte
+  ist eine Zeile `papaia.audit/1`; ein Lauf ohne Änderung schreibt nichts.
+- **Eigene Zertifikate bleiben.** Ein Zertifikat, das der Betrieb in Nginx Proxy Manager an
+  einen Host gesetzt hat, bleibt; „SSL erzwingen“ und HSTS bleiben, wie sie sind.
+- **Prüfen.** `papaia-ctl doctor` (Prüfpunkt `certs`) und `papaia-ctl certs status` nennen
+  die Rand-CA und ihre Zertifikate mit Ablaufdatum. Ein Hostname lässt sich mit
+  `openssl s_client -connect 127.0.0.1:<Randport> -servername <Hostname> -CAfile
+  "$PAPAIA_CONFIG_DIR/certs/edge-ca.crt" -verify_return_error` prüfen.
+- **Eigenes Zertifikatspaket.** Mit einem PEM-Paket als Antwort auf Frage 3 entsteht keine
+  Rand-CA; das Paket wird wie bisher im Proxy hinterlegt.
+- **Sicherung.** `certs/` und `pki/` gehören zur Sicherung des Konfigurationsverzeichnisses; nach einer
+  Wiederherstellung auf dieselben Namen bleibt das Vertrauen erhalten.
+
 ## Start
 
 `papaia-ctl start` prüft zuerst jedes Image, das die Installation ausführt, gegen die

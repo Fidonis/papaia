@@ -24,6 +24,31 @@ based on merged pull requests; this file mirrors the published releases.
   config directory is kept. `uninstall` without `--clean-up` and `stop --clean-up [--volumes]`
   are unchanged.
 
+### Edge certificates from a name-constrained edge CA
+
+- With the bundled Nginx Proxy Manager and `tls: internal`, every host name papaia-ctl
+  creates is served over https with a certificate of the installation's edge CA
+  (`certs/edge-ca.crt`, ADR 0035). A fresh installation no longer answers https requests at
+  the edge with TLS alert 112, and no certificate is set up in the proxy's admin UI.
+- The edge CA is separate from the platform CA and the Keycloak CA. Only its public root
+  is in `certs/`; its key and the leaves with their keys stay on the host in `pki/edge/`
+  (mode `0600`, a directory no service mounts); critical name constraints limit it to the base
+  domain and the app domain (locally `<env>.papaia.localhost` and
+  `<env>.papaia-apps.localhost`), so it cannot sign any other name. Its leaves carry
+  `serverAuth` only and exactly the names of one proxy host, for 90 days. A host name or base
+  domain longer than the 64 characters of an X.509 common name is served all the same.
+- `setup`, `start`, `addon start` and `certs renew` issue, renew (30 days or less left, or
+  other names) and remove the leaves under one lock; `npm-provision` uploads them as custom
+  certificates and sets them on the hosts papaia-ctl creates. A certificate the operator set
+  stays, also on a host for which no leaf applies; forcing https and HSTS are unchanged. Each issue, renewal, removal, upload and
+  deletion is one `papaia.audit/1` row without key material; a run with nothing to do
+  writes nothing and makes no write to the proxy.
+- `doctor certs` and `certs status` include the edge CA and its leaves. On macOS `setup`
+  offers to trust the edge CA in the login keychain for TLS server certificates only.
+- With a PEM bundle as answer to row 3 nothing changes.
+- `edge` is a reserved module name of the platform PKI (`<config>/pki/edge/` belongs to the
+  edge CA).
+
 ### Keycloak alone after a restore with the core overrides
 
 - The step of a restore that starts Keycloak alone before the pending post-restore step

@@ -38,7 +38,8 @@ gets its certificates (`src/infra/lifecycle/pki.yaml`), but its compose file doe
 mount them and its calls do not present a client certificate; wiring the core links to
 the platform PKI is a later step.
 
-The certificates are issued in both profiles; the edge certificates of the reverse proxy,
+The certificates are issued in both profiles; the edge CA of the reverse proxy (below,
+[ADR 0035](adr/0035-serve-the-edge-host-names-from-a-name-constrained-edge-ca.md)),
 the Keycloak CA (`<config>/certs/local-ca.crt`) and the link CA of distributed
 installations stay as they are. So does the ingest CA of the audit store
 ([audit.md](audit.md)): mutual TLS at `papaia-audit:8443` accepts only client certificates
@@ -108,7 +109,9 @@ name requested twice are refused. `uid` may be left out: the files then belong t
 user that runs `papaia-ctl`.
 
 A core service asks in a `pki.yaml` next to its compose file, with the profile it
-belongs to; its files land under the module name `core`:
+belongs to; its files land under the module name `core`. An add-on cannot be named `ca`,
+`core` or `edge`: those directories of `<config>/pki/` belong to the platform CA, the core
+and the edge CA.
 
 ```yaml
 profile: lifecycle
@@ -241,6 +244,46 @@ answer is asked for once more; a second one stops setup without a change. With t
 unusable file stops setup before anything is written. The imported roots are kept in
 `<config>/certs/trust/company.pem`; a later `--ca-bundle` replaces them.
 
+## The edge CA
+
+With the bundled Nginx Proxy Manager and `tls: internal` (row 3 of the question round, or a
+setup with switches), the host names at the edge get certificates of a CA of their own,
+not of the platform CA ([ADR 0035](adr/0035-serve-the-edge-host-names-from-a-name-constrained-edge-ca.md)).
+Its root is the one certificate the operator distributes to browsers and hosts:
+
+- `<config>/certs/edge-ca.crt` (mode 0644), the root to distribute. ECDSA P-256, ten
+  years, `CA:TRUE, pathlen:0`. Its key is `<config>/pki/edge/ca.key` (0600, directory
+  0700), read by papaia-ctl only: `certs/` is mounted into services, `pki/edge/` into
+  none of them (only the manager, which runs papaia-ctl with the Docker socket, sees the
+  whole configuration directory, as it sees the platform CA's key).
+- Critical name constraints permit exactly the installation's base domain and app domain
+  (locally `<env>.papaia.localhost` and `<env>.papaia-apps.localhost`); addresses are
+  excluded. A certificate of this CA for any other name is refused by every client that
+  trusts it, even one signed with its key by hand. Other domains replace the CA.
+- One leaf per proxy host papaia-ctl creates (core and add-on interfaces, the Paperless
+  route, the main address) in `<config>/pki/edge/leaves/<name>/`: `serverAuth` only, exactly the
+  names of its host, 90 days. A host name outside the domains gets no leaf and a warning.
+  A name longer than the 64 characters of an X.509 common name is carried in the subject
+  alternative names only (which is all clients match); a base domain that long names the
+  CA by a hash of the domains.
+- `setup`, `start`, `addon start` and `certs renew` issue, renew (30 days or less left, or
+  other names) and remove leaves; `npm-provision` (part of `start`) uploads them as custom
+  certificates and sets them on the hosts. A certificate the operator set on a host stays;
+  forcing https and HSTS are left as they are. Each issue, renewal, removal, upload and
+  deletion is one `papaia.audit/1` row; a run with nothing to do writes nothing.
+
+Check a host name with the root (local example, edge port 57143):
+
+```bash
+openssl s_client -connect 127.0.0.1:57143 -servername auth.itest.papaia.localhost \
+  -CAfile "$PAPAIA_CONFIG_DIR/certs/edge-ca.crt" -verify_return_error </dev/null
+curl --cacert "$PAPAIA_CONFIG_DIR/certs/edge-ca.crt" \
+  https://auth.itest.papaia.localhost:57143/realms/papaia/.well-known/openid-configuration
+```
+
+With a PEM bundle as answer to row 3 there is no edge CA; the bundle is added in the proxy
+as before.
+
 ## Checking the certificates
 
 ```bash
@@ -249,8 +292,8 @@ papaia-ctl doctor                 # check `certs`
 ```
 
 `doctor`'s `certs` check covers the Keycloak certificates, the Let's Encrypt certificates
-of the Nginx Proxy Manager, the platform CA, every service certificate and the trust
-bundle: a warning under 30 days left, a failure under 7 days or when one has expired.
+of the Nginx Proxy Manager, the platform CA, every service certificate, the trust bundle,
+the edge CA and its leaves: a warning under 30 days left, a failure under 7 days or when one has expired.
 
 ## Commands and files
 
@@ -267,3 +310,7 @@ bundle: a warning under 30 days left, a failure under 7 days or when one has exp
 | `<config>/pki/.lock` | Held by the run that writes the PKI |
 | `<config>/certs/trust/ca-bundle.pem` | The one trust bundle: platform CA and company roots |
 | `<config>/certs/trust/company.pem` | The imported company roots |
+| `<config>/certs/edge-ca.crt` | The edge CA's certificate; distribute it |
+| `<config>/pki/edge/ca.key`, `ca.json` | The edge CA's key and domains; papaia-ctl only |
+| `<config>/pki/edge/leaves/<name>/` | The leaf of one proxy host (`tls.crt`, `tls.key`) |
+| `<config>/pki/edge/npm-certificates.json` | The ids of the uploads in the proxy |

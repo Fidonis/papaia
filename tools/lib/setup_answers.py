@@ -527,8 +527,9 @@ QUESTIONS: tuple[Question, ...] = (
              "example-apps.org", check_apps_domain, applies=_with_studio, default="",
              when="only with Studio; empty: apps under apps.<base domain>"),
     Question(3, "tls", "TLS certificate",
-             "internal: the platform CA issues it (distribute its root certificate). Or the"
-             " absolute path of a PEM file with certificate chain and key for both domains.",
+             "internal: the installation's edge CA issues one per host name (distribute"
+             " certs/edge-ca.crt). Or the absolute path of a PEM file with certificate chain"
+             " and key for both domains.",
              "internal", check_tls),
     Question(4, "upstream_idp", "Upstream identity provider",
              "Empty: none. Or the absolute path of idp.yaml (idp-group-map.yaml next to it).",
