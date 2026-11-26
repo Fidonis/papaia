@@ -191,14 +191,14 @@ _addon_image_files_remove() {
 }
 
 # Append the images compose starts for the core to the list file $1: the profiles
-# ($2, or the env file's COMPOSE_PROFILES when empty) with the override files that
-# follow, exactly as `up` gets them. $3 = env file, rest = -f args.
+# ($2, or the env file's COMPOSE_PROFILES when empty) of the core project the arguments
+# that follow describe (CORE_COMPOSE_ARGS), exactly as `up` gets them.
 _core_image_list() {
-    local out="$1" profiles="$2" env_file="$3"
-    shift 3
+    local out="$1" profiles="$2"
+    shift 2
     if ! (
         if [ -n "$profiles" ]; then export COMPOSE_PROFILES="$profiles"; fi
-        docker compose -f "$COMPOSE_FILE" "$@" --env-file "$env_file" config --images
+        docker compose "$@" config --images
     ) >> "$out"; then
         error "Could not list the images to check. Nothing was started."
         exit 2
@@ -233,6 +233,23 @@ _core_override_files() {
             warn "Addon not running — skipping override: $(basename "$f")"
         fi
     done
+}
+
+# The arguments of a core Compose call as `start` passes them, in CORE_COMPOSE_ARGS: the
+# compose file, the core overrides of _core_override_files and the env file, whose
+# COMPOSE_PROFILES are the installation's profiles. A call that starts or lists a subset of
+# the services of a running stack takes the same arguments: given fewer files, Compose sees
+# another definition of a core network (with PAPAIA_SUBNET_POOL, the address block of the
+# subnet-pool override is missing) and recreates it under the services still using it.
+# $1 = 1 when the add-ons start in the same command, so their networks count as present.
+CORE_COMPOSE_ARGS=()
+_core_compose_args() {
+    local with_addons="${1:-0}" override_file
+    CORE_COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+    while IFS= read -r override_file; do
+        [ -n "$override_file" ] && CORE_COMPOSE_ARGS+=(-f "$override_file")
+    done < <(_core_override_files "$with_addons")
+    CORE_COMPOSE_ARGS+=(--env-file "$REPO_ROOT/src/.env")
 }
 
 # ── post-restore before the first module ────────────────────────────────
@@ -298,24 +315,27 @@ _post_restore_before_modules() {
     local insecure="${1:-0}" since
     since="$(_post_restore_pending)" || return 0
     POST_RESTORE_STATUS="failed"
-    local env_file="$REPO_ROOT/src/.env"
     info "A restore left post-restore pending; running it before any module starts..."
+    # The core project as `start` describes it, so nothing that keeps running (a scoped
+    # restore) is recreated. No add-on has started yet: an override that declares an add-on
+    # network waits until that network exists, as in `start`.
+    _core_compose_args 0
+    local -a compose_args=(${CORE_COMPOSE_ARGS[@]+"${CORE_COMPOSE_ARGS[@]}"})
     # Without the keycloak profile (external_oidc) there is nothing to start: the step
     # reports that the delegations live at the external provider.
     # Captured first: under pipefail an early `grep -q` could fail the pipeline.
     local services=""
-    services="$(docker compose -f "$COMPOSE_FILE" --env-file "$env_file" \
+    services="$(docker compose ${compose_args[@]+"${compose_args[@]}"} \
         config --services 2>/dev/null)" || services=""
     if grep -qx keycloak <<< "$services"; then
         local list verified=0 up_rc=0
         list="$(mktemp)"
-        ( _core_image_list "$list" keycloak "$env_file" \
+        ( _core_image_list "$list" keycloak ${compose_args[@]+"${compose_args[@]}"} \
             && _verify_images restore "$REPO_ROOT" "$list" 0 "$insecure" ) || verified=$?
         rm -f "$list"
         if [ "$verified" -eq 0 ]; then
             info "Starting Keycloak alone..."
-            docker compose -f "$COMPOSE_FILE" --env-file "$env_file" \
-                up -d --no-recreate keycloak || up_rc=$?
+            docker compose ${compose_args[@]+"${compose_args[@]}"} up -d --no-recreate keycloak || up_rc=$?
         fi
         if [ "$verified" -ne 0 ] || [ "$up_rc" -ne 0 ]; then
             error "Keycloak could not be started on its own; no module was started."
@@ -463,11 +483,8 @@ cmd_start() {
     # Overrides that declare add-on networks as external are skipped while such a
     # network does not exist (see _core_override_files); built once, before the
     # check, so the images checked are the images `up` starts.
-    local -a compose_overrides=()
-    local override_file
-    while IFS= read -r override_file; do
-        [ -n "$override_file" ] && compose_overrides+=(-f "$override_file")
-    done < <(_core_override_files "$addons")
+    _core_compose_args "$addons"
+    local -a compose_args=(${CORE_COMPOSE_ARGS[@]+"${CORE_COMPOSE_ARGS[@]}"})
 
     # Before the first container of the core or an add-on: every image this command
     # starts, core and active add-ons (each with its own list), in one check (digest
@@ -475,8 +492,7 @@ cmd_start() {
     # second phase of an upgrade still reports it.
     local image_list
     image_list="$(mktemp)"
-    _core_image_list "$image_list" "$profiles" "$env_file" \
-        ${compose_overrides[@]+"${compose_overrides[@]}"}
+    _core_image_list "$image_list" "$profiles" ${compose_args[@]+"${compose_args[@]}"}
     ADDON_IMAGE_FLAGS=() ADDON_IMAGE_FILES=()
     [ "$addons" -eq 1 ] && _addon_image_flags
     local verified=0
@@ -510,9 +526,9 @@ cmd_start() {
 
     if [ -n "$profiles" ]; then
         info "Starting core with profiles: $profiles"
-        COMPOSE_PROFILES="$profiles" docker compose -f "$COMPOSE_FILE" ${compose_overrides[@]+"${compose_overrides[@]}"} --env-file "$env_file" up ${up_flags[@]+"${up_flags[@]}"}
+        COMPOSE_PROFILES="$profiles" docker compose ${compose_args[@]+"${compose_args[@]}"} up ${up_flags[@]+"${up_flags[@]}"}
     else
-        docker compose -f "$COMPOSE_FILE" ${compose_overrides[@]+"${compose_overrides[@]}"} --env-file "$env_file" up ${up_flags[@]+"${up_flags[@]}"}
+        docker compose ${compose_args[@]+"${compose_args[@]}"} up ${up_flags[@]+"${up_flags[@]}"}
     fi
 
     # After `up`, so LiteLLM is there when LocalAI answers. The init job need not have

@@ -12,6 +12,19 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Keycloak alone after a restore with the core overrides
+
+- The step of a restore that starts Keycloak alone before the pending post-restore step
+  now hands Compose the core project as `start` does: the compose file, the core overrides
+  (among them the subnet-pool override of `PAPAIA_SUBNET_POOL`) and the env file. Before,
+  it passed neither override, so with a subnet pool Compose saw another definition of a
+  core network and tried to recreate it under the services still using it; a scoped
+  restore (`--only=module:me`, `--only=module:connections`) into a running stack then
+  ended with exit code 3 and `Keycloak could not be started on its own`. Its service list
+  and the image list of the Keycloak profile use the same arguments. The order is
+  unchanged: images checked, Keycloak started alone, the post-restore step, then the
+  modules; a failure still starts no module.
+
 ### Test trust anchor in restore
 
 - `restore` and `restore-scoped` take `--test-trust-anchor=FILE` on a pre-release core, with
