@@ -4,9 +4,9 @@ A release candidate is tested end to end before the release: the core starts, up
 confirms pairings against a bill of materials of candidate images. Those images are signed
 with a local test key, because the release key signs deliveries only. The option
 `--test-trust-anchor=FILE` lets exactly one `papaia-ctl` command (`start`, `upgrade`,
-`pairing confirm`, `pairing list`, `suite verify`, and `setup` in its pairing step and
-module offer) accept a bill of materials of scope `test` signed with the public key in
-FILE. Its limits:
+`pairing confirm`, `pairing list`, `suite verify`, `setup` in its pairing step and module
+offer, and `restore` and `restore-scoped` in their image checks) accept a bill of materials
+of scope `test` signed with the public key in FILE. Its limits:
 
 - **Pre-release cores only.** The core `VERSION` must carry a SemVer pre-release part
   (`1.10.0-rc.1`). The version is read first; on a release version, or on any doubt about
@@ -42,11 +42,13 @@ MAX_VERSION_BYTES = 64
 MAX_KEY_BYTES = 4096
 MAX_PATH_CHARS = 4096
 # The papaia-ctl commands that take the option; each names itself in banner and audit.
-COMMANDS = ("start", "upgrade", "pairing-confirm", "pairing-list", "suite-verify", "setup")
+COMMANDS = ("start", "upgrade", "pairing-confirm", "pairing-list", "suite-verify", "setup",
+            "restore", "restore-scoped")
 # The checks such a command runs inside it: the image checks (lib/sh/lifecycle.sh
-# `_verify_images`), the restore step of `start` and the module stages of `upgrade` among
-# them, and the module offer of `setup` (lib/module_offer.py).
-AUDIT_COMMANDS = (*COMMANDS, "restore", "addon-install", "addon-start", "addon-upgrade",
+# `_verify_images`), the restore step of `start`, `restore` and `restore-scoped` (both
+# audited as `restore`) and the module stages of `upgrade` among them, and the module offer
+# of `setup` (lib/module_offer.py).
+AUDIT_COMMANDS = (*COMMANDS, "addon-install", "addon-start", "addon-upgrade",
                   "addon-rollback", "module-offer")
 
 # A SemVer 2.0.0 version with a pre-release part and no build metadata: numeric
@@ -230,6 +232,16 @@ def end_banner(command: str, fingerprint: str, exit_code: int, correlation: str)
     ))
 
 
+# The commands whose hyphen joins a command and its subcommand in COMMANDS; every other
+# name (`restore-scoped`) is shown as it is typed.
+_SUBCOMMANDS = ("pairing-confirm", "pairing-list", "suite-verify")
+
+
+def _shown(command: str) -> str:
+    """The command as the operator typed it, for the banner."""
+    return command.replace("-", " ") if command in _SUBCOMMANDS else command
+
+
 def cmd_test_anchor(args) -> int:
     """`test-anchor --phase=begin|end`: the gate papaia-ctl runs around a command given
     `--test-trust-anchor=FILE`. `begin` refuses on a release core before anything else,
@@ -240,7 +252,7 @@ def cmd_test_anchor(args) -> int:
     except images.ImageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    label = args.command.replace("-", " ")
+    label = _shown(args.command)
     if args.phase == "begin":
         if args.fingerprint is not None or args.exit_code is not None:
             print("ERROR: --fingerprint and --exit-code go with --phase=end", file=sys.stderr)

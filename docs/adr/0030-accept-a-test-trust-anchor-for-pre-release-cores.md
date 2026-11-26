@@ -127,3 +127,37 @@ checkouts, through the same pairing confirmation as a delivery.
   without the list ever being confirmed.
 - **Skip the pairing step on pre-release cores.** Rejected: the confirmation path of the
   candidate would go untested.
+
+## Amendment 2 (2026-11-26): `restore` and `restore-scoped` in their image checks
+
+The text above and amendment 1 stand unchanged; this amendment widens the commands by two.
+
+**Context.** A restore checks images before anything runs again: the images of the Keycloak
+profile, with the runner of the admin steps (ADR 0033), before the pending post-restore
+step; the images of each restored add-on before it starts; and, for a whole restore, the
+images of the `start` it ends with. Each check trusts only the pinned release key. A release
+candidate has no release key, so `restore` and `restore-scoped` on a candidate stop with
+exit code 3 before Keycloak starts ("no trust anchor"). A candidate could be set up, started
+and upgraded with the test anchor, but never restored.
+
+**Decision.** `restore` and `restore-scoped` take `--test-trust-anchor=FILE` under every rule
+of the decision above: pre-release `VERSION` read first and refused on a release version or
+any doubt, scope `test`, exactly the key of FILE, never implicit, banner at the start and the
+end of the command, one `papaia.audit/1` row `test_trust_anchor_used` per check of a bill of
+materials (operation `restore`, and `start` for the check of the closing `start`). The
+option reaches only the image checks named in the context; reading the restore point, the
+key of the backup, the archives and every other step of the restore are unchanged. Without
+the option a candidate with a `test` bill of materials still stops the restore with exit
+code 3 and the named cause; a release core and the `delivery` path stay strict.
+
+**Why.** Backup and restore of a release candidate can be accepted only when the candidate
+can be restored, through the same image checks that guard the restore of a delivery: a
+whole restore and the scoped restores of single modules (Me, the connection registry).
+
+**Alternatives considered.**
+
+- **Skip the image check in restore on pre-release cores.** Rejected: the restore path of a
+  candidate would run unchecked images, and a pre-release core would fail open instead of
+  closed.
+- **Restore with `--insecure-images`.** Rejected: it tests nothing of the checks and leaves
+  the restore path of a delivery untested.

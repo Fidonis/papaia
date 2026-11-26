@@ -12,6 +12,18 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Test trust anchor in restore
+
+- `restore` and `restore-scoped` take `--test-trust-anchor=FILE` on a pre-release core, with
+  the rules of ADR 0030 (amendment 2). It reaches only the image checks of the restore: the
+  images of the Keycloak profile with the runner of the admin steps before the pending
+  post-restore step, the images of each restored add-on before it starts and, for a whole
+  restore, the check of the `start` it ends with. A release core refuses the option before
+  reading anything else; a banner opens and closes the command and each check writes one
+  `papaia.audit/1` row (event `test_trust_anchor_used`, operation `restore`). Without the
+  option a candidate with a `test` bill of materials still stops the restore with exit code
+  3 before Keycloak starts; the `delivery` path is unchanged.
+
 ### Runner of the Keycloak admin steps checked and mirrored; failed role sync fails start
 
 - On a host where the bundled Keycloak publishes no port, the image of the one-shot

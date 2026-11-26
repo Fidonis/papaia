@@ -84,13 +84,21 @@ Ein Modul hebt `papaia-ctl addon upgrade <modul> --path=<verzeichnis>`.
 Nur für Testinstallationen einer Vorabversion, nie im Produktivbetrieb. Ein Kern, dessen
 `VERSION` eine Vorabversion ist (zum Beispiel `1.10.0-rc.1`), lässt sich gegen eine Stückliste
 mit Geltungsbereich `test` prüfen, die mit einem lokalen Testschlüssel signiert ist. Dafür nehmen
-`papaia-ctl setup`, `start`, `upgrade`, `pairing list`, `pairing confirm` und `suite verify` die
-Option `--test-trust-anchor=<öffentlicher Schlüssel>` an:
+`papaia-ctl setup`, `start`, `upgrade`, `restore`, `restore-scoped`, `pairing list`,
+`pairing confirm` und `suite verify` die Option `--test-trust-anchor=<öffentlicher Schlüssel>`
+an:
 
 - Bei `setup` wirkt sie nur auf die beiden Schritte, die die Stückliste lesen: die Anzeige und
   Bestätigung der Paarungen und das anschließende Modulangebot. Alle anderen Schritte bleiben
   unverändert. Ohne die Option endet `setup` auf einer Vorabversion mit Test-Stückliste wie
   bisher mit Rückgabewert 3.
+- Bei `restore` und `restore-scoped` wirkt sie nur auf die Imageprüfungen der
+  Wiederherstellung: die Images des Profils `keycloak` samt Hilfscontainer des Anmeldedienstes
+  vor dem ausstehenden Schritt `post-restore`, die Images jedes wiederhergestellten Add-ons vor
+  seinem Start und bei einer vollständigen Wiederherstellung die Prüfung des abschließenden
+  `start`. Ohne die Option endet die Wiederherstellung einer Vorabversion mit Test-Stückliste
+  wie bisher mit Rückgabewert 3, bevor Keycloak startet. So lassen sich Sicherung und
+  Wiederherstellung eines Kandidaten gegen dieselben Prüfungen testen wie eine Auslieferung.
 
 - Sie gilt nur für diesen einen Befehl. Keine Umgebungsvariable, kein Eintrag in der `.env` und
   kein gespeicherter Zustand schaltet sie ein.
@@ -109,6 +117,8 @@ Beispiele:
 ```bash
 papaia-ctl setup -y --app-host=https://papaia.example.org --test-trust-anchor=/pfad/zum/testschluessel.pub
 papaia-ctl start --test-trust-anchor=/pfad/zum/testschluessel.pub
+papaia-ctl restore -y --identity=/pfad/zum/sicherungsschluessel.age --test-trust-anchor=/pfad/zum/testschluessel.pub
+papaia-ctl restore-scoped --only=addon:flow -y --identity=/pfad/zum/sicherungsschluessel.age --test-trust-anchor=/pfad/zum/testschluessel.pub
 ```
 
 Der nächste Befehl ohne Option prüft wieder streng gegen den Release-Schlüssel.

@@ -3,8 +3,9 @@
 # docs/adr/0030-accept-a-test-trust-anchor-for-pre-release-cores.md).
 #
 # `--test-trust-anchor=FILE` lets one command (start, upgrade, pairing confirm, pairing list,
-# suite verify, and setup in its pairing step and module offer) accept a bill of materials
-# of scope `test` signed with the public key in FILE. Only the command line sets it:
+# suite verify, setup in its pairing step and module offer, and restore and restore-scoped
+# in their image checks) accept a bill of materials of scope `test` signed with the public
+# key in FILE. Only the command line sets it:
 # TEST_TRUST_ANCHOR is reset whenever this file is sourced and never taken from the
 # environment, a configuration file or stored state.
 
@@ -15,7 +16,7 @@ TEST_TRUST_ANCHOR=""
 # $1 command, $2 its first argument (the subcommand, where it has one).
 _test_anchor_command() {
     case "$1" in
-        start|upgrade|setup) echo "$1" ;;
+        start|upgrade|setup|restore|restore-scoped) echo "$1" ;;
         pairing)
             case "${2:-}" in
                 confirm|list) echo "pairing-$2" ;;
@@ -56,7 +57,8 @@ _dispatch_with_test_anchor() {
     label="$(_test_anchor_command "$cmd" "${rest[0]:-}")"
     if [ -z "$label" ]; then
         error "--test-trust-anchor is accepted by start, upgrade, pairing confirm, pairing list,"
-        error "suite verify and setup (its pairing step and module offer) only."
+        error "suite verify, setup (its pairing step and module offer), restore and"
+        error "restore-scoped (their image checks) only."
         exit 2
     fi
     if [ "$seen" -ne 1 ] || [ -z "$file" ]; then

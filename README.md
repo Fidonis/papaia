@@ -3588,8 +3588,14 @@ same correlation id.
 **`--test-trust-anchor=FILE`: release candidates.** A pre-release core (`VERSION` with a
 pre-release part, for example `1.10.0-rc.1`) can be tested end to end against a bill of
 materials of candidate images signed with a local test key. `start`, `upgrade`, `pairing
-list`, `pairing confirm`, `suite verify` and `setup` take `--test-trust-anchor=FILE`, a P-256
-public key file as `cosign generate-key-pair` writes it. In `setup` the option reaches only
+list`, `pairing confirm`, `suite verify`, `setup`, `restore` and `restore-scoped` take
+`--test-trust-anchor=FILE`, a P-256 public key file as `cosign generate-key-pair` writes it.
+In `restore` and `restore-scoped` the option reaches only the image checks of the restore:
+the images of the Keycloak profile (with the runner of the admin steps) before the pending
+post-restore step, the images of each restored add-on before it starts and, for a whole
+restore, the check of the `start` it ends with. Without the option, a candidate whose bill
+of materials has the scope `test` still stops the restore with exit code 3 before Keycloak
+starts. In `setup` the option reaches only
 the two steps that read the bill of materials: the pairing step (`pairing list --digest`,
 `pairing list` and, with `--approve-pairings=SHA256` or a confirmation on the terminal,
 `pairing confirm`) and the module offer after it; every other step of setup is unchanged.
@@ -3616,6 +3622,8 @@ the images must be signed with it. The rules
 ```bash
 tools/papaia-ctl setup -y --app-host=https://papaia.example.org --test-trust-anchor=/path/to/test-key.pub
 tools/papaia-ctl start --test-trust-anchor=/path/to/test-key.pub
+tools/papaia-ctl restore -y --identity=/path/to/backup.age --test-trust-anchor=/path/to/test-key.pub
+tools/papaia-ctl restore-scoped --only=addon:flow -y --identity=/path/to/backup.age --test-trust-anchor=/path/to/test-key.pub
 tools/papaia-ctl pairing list --test-trust-anchor=/path/to/test-key.pub
 tools/papaia-ctl pairing confirm --approve-pairings=SHA256 --test-trust-anchor=/path/to/test-key.pub
 ```

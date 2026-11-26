@@ -441,7 +441,8 @@ def test_begin_on_a_release_core_refuses(tmp_path, test_key, capsys):
     assert "pre-release" in captured.err and captured.out == ""
 
 
-@pytest.mark.parametrize("command", ["stop", "addon-install", "backup", "restore"])
+@pytest.mark.parametrize("command", ["stop", "addon-install", "backup", "post-restore",
+                                     "rollback"])
 def test_begin_names_only_the_commands_that_take_the_anchor(tmp_path, test_key, command):
     root, config = _test_core(tmp_path, test_key), _config(tmp_path)
     key = _key_file(tmp_path, test_key[1])
@@ -565,6 +566,8 @@ def test_dispatch_with_the_option_opens_runs_and_closes(tmp_path):
     (("pairing", "list"), "pairing-list"),
     (("suite", "verify", "--bom=x"), "suite-verify"),
     (("setup", "-y"), "setup"),
+    (("restore", "-y", "--identity=/k.age"), "restore"),
+    (("restore-scoped", "--only=addon:flow", "-y"), "restore-scoped"),
 ])
 def test_dispatch_names_each_command_that_takes_the_option(tmp_path, args, label):
     done, calls = _dispatch(tmp_path, *args, "--test-trust-anchor=/k.pub")
@@ -572,7 +575,8 @@ def test_dispatch_names_each_command_that_takes_the_option(tmp_path, args, label
 
 
 @pytest.mark.parametrize("args", [("stop",), ("backup",), ("addon", "install", "x"),
-                                  ("pairing", "approve"), ("restore",), ("rollback",)])
+                                  ("pairing", "approve"), ("post-restore",), ("rollback",),
+                                  ("recover-snapshot",)])
 def test_dispatch_refuses_the_option_for_any_other_command(tmp_path, args):
     done, calls = _dispatch(tmp_path, *args, "--test-trust-anchor=/k.pub")
     assert done.returncode == 2
@@ -835,3 +839,41 @@ def test_the_documents_name_setup_among_the_commands_of_the_option():
     setup_line = re.compile(r"papaia-ctl setup [^\n`]*--test-trust-anchor=")
     assert setup_line.search((REPO / "docs/de/betrieb/handbuch.md").read_text("utf-8"))
     assert setup_line.search((REPO / "README.md").read_text("utf-8"))
+
+
+@pytest.mark.parametrize("command", ["restore", "restore-scoped"])
+def test_begin_opens_the_banner_for_restore_and_restore_scoped(tmp_path, test_key, capsys,
+                                                               command):
+    root, config = _test_core(tmp_path, test_key), _config(tmp_path)
+    key = _key_file(tmp_path, test_key[1])
+    assert _anchor_cmd(root, config, "--phase=begin", f"--command={command}",
+                       f"--test-trust-anchor={key}") == 0
+    assert f"'{command}'" in capsys.readouterr().err
+
+
+def test_the_image_check_of_a_restore_accepts_a_test_bill_with_the_anchor(
+    tmp_path, test_key, monkeypatch
+):
+    root, config = _test_core(tmp_path, test_key), _config(tmp_path)
+    monkeypatch.setattr(images, "Registry", lambda: _signed_registry(test_key, tmp_path))
+    key = _key_file(tmp_path, test_key[1])
+    assert _verify(root, config, tmp_path, f"--test-trust-anchor={key}",
+                   command="restore") == 0
+    (row,) = _anchor_rows(config)
+    assert (row["operation"], row["result"]) == ("restore", "allowed")
+
+
+def test_the_documents_name_restore_among_the_commands_of_the_option():
+    adr = next((REPO / "docs" / "adr").glob("*-accept-a-test-trust-anchor-*.md"))
+    text = adr.read_text("utf-8")
+    assert "## Amendment 2" in text
+    amendment = text[text.index("## Amendment 2"):]
+    assert "`restore`" in amendment and "`restore-scoped`" in amendment
+    help_text = (REPO / "tools" / "papaia-ctl").read_text("utf-8")
+    header = help_text[:help_text.index("set -euo pipefail")]
+    words = " ".join(line.lstrip("#").strip() for line in header.splitlines())
+    assert "restore and restore-scoped (their image checks)" in words
+    for doc in ("docs/de/betrieb/handbuch.md", "README.md"):
+        text = (REPO / doc).read_text("utf-8")
+        assert re.search(r"papaia-ctl restore [^\n`]*--test-trust-anchor=", text), doc
+        assert re.search(r"papaia-ctl restore-scoped [^\n`]*--test-trust-anchor=", text), doc
