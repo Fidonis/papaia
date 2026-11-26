@@ -748,6 +748,39 @@ attempt is a row too (`result: denied`, `list_digest_mismatch` or `same_person`)
 decision takes effect with the next realm sync (`papaia-ctl start` runs it). Approval in
 the manager is not part of this release.
 
+The second host account runs `sudo tools/papaia-ctl pairing approve ...` (a sudoers rule
+that allows exactly this checkout's `tools/papaia-ctl`), because `pairings.yaml` belongs to
+the account that owns the configuration directory ([ADR 0034](adr/0034-let-a-second-account-approve-a-pairing-as-root.md)):
+
+- Without root nothing differs: `pairings.yaml` and `security/` must belong to the user
+  running `papaia-ctl` (or root) and must not be writable by group or others.
+- As root, the `pairing` commands (`list`, `confirm`, `approve`, `revoke`) open the
+  configuration directory without following a symbolic link; it must not be writable by
+  group or others, and its owner (uid and gid) is the owner of what root writes.
+  `security/` and `pairings.yaml` are trusted when they belong to root or to that owner and
+  group and others cannot write them; a third owner and a symbolic link are refused.
+- Root reads and writes only relative to the opened directories (`O_NOFOLLOW`): the new
+  `pairings.yaml` is written next to the old one, handed to the owner (`fchown`, mode
+  `0600`) and renamed over it; the lock file `security/.pairings.lock` and the audit outbox
+  (`audit/outbox/papaia-ctl.jsonl` and its counter), and with `--test-trust-anchor` the
+  host's audit journal, are opened the same way. A missing file or folder is created and
+  handed to the owner; an existing file must be a regular file of the owner with one link.
+  No file or folder below the configuration directory belongs to root afterwards, so the
+  owner's realm sync reads the file at the next `start`.
+- The realm sync, the federation file and the Paperless name list keep their rule (owned by
+  the running user or root): only the pairing commands trust the owner as root.
+- The decision rules do not change: a write pairing is confirmed only by another named host
+  account than the one that requested it (as root, `SUDO_USER`, believed only then); the
+  same person is refused and audited (`same_person`); the realm sync refuses a confirmed
+  write pairing without two different accounts. The audit row of the approval names the
+  second account.
+
+The limit of the control: the account that owns the configuration directory holds the
+identity provider's admin credentials (`infra/keycloak/.env`) and may edit `pairings.yaml`;
+it can grant an exchange right without a second person. The second approval is an
+organisational control with audit evidence (the `pairing.approve` row of the second
+account), not a barrier against that account.
+
 Task sources ("My tasks", `GET /api/v1/me/tasks[/summary]`, read with the person's
 token) are pairings like any other: Me (`papaia-me`) on `flow`, `papaia-data` and
 `papaia-studio`; Studio (`papaia-studio-gateway`) on `flow` and `papaia-data`; Flow's
@@ -1159,7 +1192,7 @@ No Core changes required.
 | `papaia-ctl realm keys apply <module>` | Register the public keys the module wrote to the files of its `client_keys` (see "Realm sync of declared clients", row "Client keys") without a full sync; every declaration is checked as for `realm sync`. Exit 2 when the module declares no `client_keys` or a declaration or key file is refused, 1 when a client does not exist yet |
 | `papaia-ctl pairing list [--json]` | Read-only. The pairings of the signed bill of materials with read or write, their state in `security/pairings.yaml` and the sha256 of the list (see "Pairing approval"). Exit 2 when the bill of materials does not verify |
 | `papaia-ctl pairing confirm --approve-pairings=SHA256` | The confirmation step of `setup`: confirms the read pairings of the list with this digest and records its write pairings as waiting for approval. Exit 2 for another list; nothing is changed then |
-| `papaia-ctl pairing approve --client=NAME --audience=NAME [--effects=rwdx]` | Confirm a pairing; a write pairing (`w` or `d`) is confirmed only by a second host account, the first one records it as waiting. Exit 2 when refused (same person, other effects, a name the register does not allow) |
+| `papaia-ctl pairing approve --client=NAME --audience=NAME [--effects=rwdx]` | Confirm a pairing; a write pairing (`w` or `d`) is confirmed only by a second host account, the first one records it as waiting. The second account runs it with `sudo` in the owner's configuration directory (see "Pairing approval"). Exit 2 when refused (same person, other effects, a name the register does not allow, a file or folder root must not trust) |
 | `papaia-ctl pairing revoke --client=NAME --audience=NAME` | Remove a pairing; the next realm sync removes its scope |
 | `papaia-ctl service-account list [--json]` | Read-only. The declared service accounts with module, owner, deputy, audiences, roles, effects, last key rotation (due after 90 days) and last use (see "Declared service accounts") |
 | `papaia-ctl service-account rotate <id> [--grace=SECONDS]` | Replace an account's key pair; the old key is refused at the latest 60 s after the rotation began (checked against Keycloak, exit 1 otherwise). `--grace` (0 to 60, default 30) keeps the old key registered that long. Exit 2 for an account that is not declared |

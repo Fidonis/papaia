@@ -1198,13 +1198,18 @@ def forget_row(addon: str, refs: list[str], correlation: str | None = None) -> d
                 {"addon": addon, "images": sorted(set(refs))}, correlation)
 
 
+def audit_line(row: dict) -> bytes:
+    """One row of the host's audit journal as it is appended."""
+    return (json.dumps(row, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 def append_audit(config_dir: Path, row: dict) -> Path:
     """Append one row to the host's audit journal (directory 0700, file 0600)."""
     path = Path(config_dir) / AUDIT_LOG
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.write(fd, (json.dumps(row, separators=(",", ":")) + "\n").encode("utf-8"))
+        os.write(fd, audit_line(row))
     finally:
         os.close(fd)
     return path

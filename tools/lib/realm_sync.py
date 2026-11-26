@@ -164,6 +164,7 @@ from . import (
     chat_relay,
     chat_servers,
     common,
+    config_owner,
     delegation_lifetime,
     deployment,
     kit_names,
@@ -632,14 +633,26 @@ def parse_pairings(doc: object, register: Register) -> list[Pairing]:
     return pairings
 
 
-def _trusted(st: os.stat_result, label: object, grants: str = "exchange rights") -> None:
+def _trusted(
+    st: os.stat_result,
+    label: object,
+    grants: str = "exchange rights",
+    owners: tuple[int, ...] | None = None,
+) -> None:
     """pairings.yaml grants exchange rights, the Paperless name list grants the identity
     header; only the user running papaia-ctl (or root) may be able to change them, never
-    group or others."""
-    if st.st_uid not in (os.geteuid(), 0):
+    group or others. `owners`: the pairing commands as root also trust the owner of the
+    configuration directory (lib/pairing_approval.py); every other caller keeps the rule."""
+    if owners is None:
+        if st.st_uid not in (os.geteuid(), 0):
+            raise RealmSyncError(
+                f"{label} is owned by uid {st.st_uid}, not by the user running papaia-ctl; "
+                f"it grants {grants}"
+            )
+    elif st.st_uid not in owners:
         raise RealmSyncError(
-            f"{label} is owned by uid {st.st_uid}, not by the user running papaia-ctl; "
-            f"it grants {grants}"
+            f"{label} is owned by uid {st.st_uid}, neither by root nor by the owner of the "
+            f"configuration directory; it grants {grants}"
         )
     if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         raise RealmSyncError(
@@ -647,12 +660,22 @@ def _trusted(st: os.stat_result, label: object, grants: str = "exchange rights")
         )
 
 
-def load_pairings(path: Path, register: Register) -> list[Pairing]:
+def load_pairings(
+    path: Path,
+    register: Register,
+    *,
+    folder: int | None = None,
+    owners: tuple[int, ...] | None = None,
+) -> list[Pairing]:
     """The pairings in `path`; no file pairs nothing. The file and its directory must
     belong to the user running papaia-ctl and not be writable by anyone else; a
-    symbolic link is refused."""
+    symbolic link is refused. `folder`: a descriptor of the directory of `path`, which is
+    then opened relative to it; `owners`: the owners trusted instead (see `_trusted`)."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        if folder is None:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        else:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=folder)
     except FileNotFoundError:
         return []
     except OSError as exc:
@@ -661,8 +684,9 @@ def load_pairings(path: Path, register: Register) -> list[Pairing]:
         st = os.fstat(fh.fileno())
         if not stat.S_ISREG(st.st_mode):
             raise RealmSyncError(f"{path} is not a regular file")
-        _trusted(st, path)
-        _trusted(os.stat(path.parent), path.parent)
+        _trusted(st, path, owners=owners)
+        _trusted(os.stat(path.parent) if folder is None else os.fstat(folder), path.parent,
+                 owners=owners)
         if st.st_size > _MAX_FILE_BYTES:
             raise RealmSyncError(f"{path} is larger than {_MAX_FILE_BYTES} bytes")
         raw = fh.read(_MAX_FILE_BYTES + 1)
@@ -1757,7 +1781,12 @@ class AuditLog:
     `source_seq` is gapless per source. Its counter lives in a file of its own, so it
     does not restart when the outbox has been delivered and emptied. The counter file is
     locked (flock) from construction to `close()`: a second papaia-ctl run waits, and
-    two runs never append at the same time or reuse a number."""
+    two runs never append at the same time or reuse a number.
+
+    `folder` and `owner`: a root run in a configuration directory of another account
+    (lib/pairing_approval.py) passes a descriptor of the outbox's folder and the owner of
+    the configuration directory; the outbox and its counter are then opened relative to
+    that descriptor and a new one is handed to that owner (lib/config_owner.py)."""
 
     def __init__(
         self,
@@ -1766,27 +1795,41 @@ class AuditLog:
         *,
         host_account: str | None = None,
         writer: str = "papaia-ctl/realm-sync",
+        folder: int | None = None,
+        owner: tuple[int, int] | None = None,
     ) -> None:
+        if (folder is None) != (owner is None):
+            raise ValueError("folder and owner go together")
         self.path = path
         self.correlation_id = correlation_id
         self.host_account = host_account or _host_account()
         self.writer = writer
         # realm-sync -> realm_sync.<operation>, service-account -> service_account.<...>
         self.operation_prefix = writer.rsplit("/", 1)[-1].replace("-", "_")
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._fd: int | None = os.open(
-            seq_path(path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600
-        )
+        self._folder = folder
+        self._owner = owner
+        self._fd: int | None = None
+        if folder is None:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._fd = self._open(seq_path(path), os.O_RDWR | os.O_CREAT)
         try:
             os.fchmod(self._fd, 0o600)
             self._lock()
             self._seq = max(self._stored_seq(), self._outbox_seq())
             # Pre-flight: an outbox that cannot be appended to stops the run before the
             # first change, so no change is made that could not be audited.
-            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600))
+            os.close(self._open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND))
         except BaseException:
             self.close()
             raise
+
+    def _open(self, path: Path, flags: int) -> int:
+        if self._folder is None:
+            return os.open(path, flags | os.O_NOFOLLOW, 0o600)
+        try:
+            return config_owner.open_file(self._folder, path.name, flags, self._owner, path)
+        except config_owner.OwnerError as exc:
+            raise RealmSyncError(str(exc)) from None
 
     def __enter__(self) -> AuditLog:
         return self
@@ -1825,7 +1868,7 @@ class AuditLog:
         """The last `source_seq` still in the outbox: covers a run that stopped between
         appending a row and storing the counter."""
         try:
-            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = self._open(self.path, os.O_RDONLY)
         except FileNotFoundError:
             return 0
         with os.fdopen(fd, "rb") as fh:
@@ -1898,7 +1941,7 @@ class AuditLog:
             "writer": self.writer,
             **fields,
         }
-        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        fd = self._open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
         with os.fdopen(fd, "a", encoding="utf-8") as fh:
             os.fchmod(fh.fileno(), 0o600)
             fh.write(json.dumps(row, sort_keys=True) + "\n")

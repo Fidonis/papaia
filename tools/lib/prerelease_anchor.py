@@ -174,10 +174,16 @@ def verified_bom(
     bom_path: Path | None = None,
     signature_path: Path | None = None,
     expected_suite: str | None = None,
+    append_audit=None,
 ) -> dict:
     """The bill of materials of this core (or `bom_path`), verified against the anchor:
     signed with exactly that key, scope `test`, the suite of the core version (or
-    `expected_suite`). Writes one audit row, `allowed` or `denied`."""
+    `expected_suite`). Writes one audit row, `allowed` or `denied`, to the host's audit
+    journal, or hands it to `append_audit` (a root run of the pairing commands writes it
+    through descriptors, lib/pairing_approval.py)."""
+    if append_audit is None:
+        def append_audit(row: dict) -> None:
+            images.append_audit(config_dir, row)
     try:
         correlation = images.correlation_id(correlation)
         path = Path(bom_path) if bom_path is not None else images.bom_path(
@@ -193,10 +199,9 @@ def verified_bom(
             expected_suite=expected,
         )
     except suite.SuiteError as exc:
-        images.append_audit(
-            config_dir, audit_row(command, anchor, None, correlation, result="denied"))
+        append_audit(audit_row(command, anchor, None, correlation, result="denied"))
         raise AnchorError(f"bill of materials {path.name}: {exc}") from None
-    images.append_audit(config_dir, audit_row(command, anchor, digest, correlation))
+    append_audit(audit_row(command, anchor, digest, correlation))
     print(
         f"WARNING: TEST TRUST ANCHOR {anchor.fingerprint}: bill of materials {path.name} "
         f"(scope '{SCOPE}', {digest}) accepted for '{command}'. Not for production. "

@@ -42,10 +42,28 @@ Bestätigung die Freigabe durch ein zweites Konto des Hosts:
 ```sh
 papaia-ctl pairing list
 papaia-ctl pairing confirm --approve-pairings=<sha256>
-# als zweites Konto des Hosts, nicht dasselbe wie oben:
-papaia-ctl pairing approve --client=papaia-me --audience=papaia-connections --effects=rd
+# als zweites Konto des Hosts, nicht dasselbe wie oben, mit sudo:
+sudo papaia-ctl pairing approve --client=papaia-me --audience=papaia-connections --effects=rd
+# wieder als Eigentümer des Konfigurationsverzeichnisses:
 papaia-ctl start
 ```
+
+Die zweite Freigabe läuft mit `sudo`, weil `security/pairings.yaml` dem Konto gehört, dem das
+Konfigurationsverzeichnis gehört. Das zweite Konto braucht dafür eine sudoers-Regel für genau
+`tools/papaia-ctl` dieses Checkouts. Als root vertrauen die Befehle `pairing` der Datei und dem
+Ordner `security/` auch dann, wenn sie dem Eigentümer des Konfigurationsverzeichnisses gehören;
+das Verzeichnis selbst darf kein symbolischer Link und für Gruppe und andere nicht beschreibbar
+sein. Eine Datei oder ein Ordner eines dritten Kontos, eine für Gruppe oder andere beschreibbare
+Datei und ein symbolischer Link werden abgelehnt. root liest und schreibt nur über die geöffneten
+Verzeichnisse und übergibt alles, was es anlegt (neue `pairings.yaml`, Sperrdatei, Audit-Ausgang),
+dem Eigentümer des Konfigurationsverzeichnisses; danach gehört dort nichts root, und `start` des
+Eigentümers liest die Datei. Die Audit-Zeile der Freigabe nennt das zweite Konto.
+
+Was die zweite Freigabe leistet und was nicht: Sie ist eine organisatorische Kontrolle mit
+Nachweis (die Zeile `pairing.approve` des zweiten Kontos), kein Schutz gegen das Konto, dem das
+Konfigurationsverzeichnis gehört. Dieses Konto hat die Admin-Zugangsdaten des Anmeldedienstes
+(`infra/keycloak/.env`) und darf `pairings.yaml` von Hand ändern; es kann ein Tauschrecht also
+auch ohne zweite Person vergeben.
 
 Vor der Freigabe zeigt Mein Bereich keine Daten des Registers. Die Kopplung hat genau die
 Wirkungen `r` und `d`; mehr oder weniger lehnt der Kern ab, die Freigabe durch ein zweites Konto

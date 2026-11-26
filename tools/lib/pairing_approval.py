@@ -23,6 +23,12 @@ the login that called it): on the host, running papaia-ctl is the `papaia-admin`
 the installation. Every change and every refused attempt is one `papaia.audit/1` row,
 event `exchange_right_changed`, in the core's audit outbox; a change takes effect with the
 next realm sync (`start` runs it).
+
+The second person runs `sudo tools/papaia-ctl pairing approve` in the configuration
+directory of the account that set the installation up. As root these commands therefore
+also trust `security/` and pairings.yaml of the owner of the configuration directory and
+write only through directory descriptors, handing what they create to that owner (`_Place`,
+lib/config_owner.py, ADR 0034).
 """
 
 from __future__ import annotations
@@ -41,7 +47,7 @@ from pathlib import Path
 
 import yaml
 
-from . import chat_relay, images, prerelease_anchor
+from . import chat_relay, config_owner, images, prerelease_anchor
 from . import realm_sync as rs
 
 WRITER = "papaia-ctl/pairing"
@@ -160,21 +166,116 @@ def _named(person: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+@dataclass
+class _Place:
+    """The configuration directory and its `security/` folder as descriptors.
+
+    Without root, as before: the folders are those of the user running papaia-ctl, found
+    through their paths, and pairings.yaml and `security/` must belong to that user (or
+    root). As root (`sudo papaia-ctl pairing approve` of a second host account), the
+    configuration directory is opened without following a symbolic link and must not be
+    writable by group or others; `security/` and pairings.yaml are also trusted when they
+    belong to its owner, and everything written is created relative to these descriptors
+    and handed to that owner (lib/config_owner.py), so the owner's realm sync still reads
+    it and nothing below the directory belongs to root."""
+
+    config_dir: Path
+    config: int | None = None
+    security: int | None = None
+    owner: tuple[int, int] | None = None
+    _fds: list[int] = field(default_factory=list)
+
+    @property
+    def owners(self) -> tuple[int, ...] | None:
+        """The owners pairings.yaml and `security/` may have; None: the realm sync's rule."""
+        return None if self.owner is None else (0, self.owner[0])
+
+    def folder(self, relative: Path) -> int:
+        """A folder of the audit records below the configuration directory as root, made
+        when missing. Its owner is checked; its mode is not (the owner's own runs make
+        `audit/` with the umask of the login), since every file in it is opened without a
+        link and checked on its own."""
+        if self.config is None or self.owner is None:
+            raise PairingError("only a run as root opens folders through descriptors")
+        folder, label = self.config, self.config_dir
+        for part in relative.parts:
+            label = label / part
+            folder = config_owner.open_folder(folder, part, self.owner, label, create=True)
+            self._fds.append(folder)
+            config_owner.check_folder(folder, self.owners, label, private=False)
+        return folder
+
+    def close(self) -> None:
+        while self._fds:
+            os.close(self._fds.pop())
+
+
+def _security_label(config_dir: Path) -> Path:
+    return rs.pairings_path(config_dir).parent
+
+
+@contextlib.contextmanager
+def _place(config_dir: Path, *, create: bool):
+    """The descriptors of `config_dir` and `security/`; `create` makes `security/` when it
+    is missing (otherwise `security` stays None)."""
+    config_dir = Path(config_dir)
+    label = _security_label(config_dir)
+    place = _Place(config_dir)
+    try:
+        if os.geteuid() == 0:
+            place.config, place.owner = config_owner.open_config_dir(config_dir)
+            place._fds.append(place.config)
+            place.security = config_owner.open_folder(
+                place.config, label.name, place.owner, label, create=create)
+            if place.security is not None:
+                place._fds.append(place.security)
+                config_owner.check_folder(place.security, place.owners, label)
+        else:
+            if create:
+                label.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try:
+                place.security = os.open(label, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            except FileNotFoundError:
+                place.security = None
+            except OSError as exc:
+                raise PairingError(f"{label} cannot be opened: {exc.strerror}") from None
+            if place.security is not None:
+                place._fds.append(place.security)
+        yield place
+    except config_owner.OwnerError as exc:
+        raise PairingError(str(exc)) from None
+    finally:
+        place.close()
+
+
 @contextlib.contextmanager
 def _locked(config_dir: Path):
-    folder = rs.pairings_path(config_dir).parent
-    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(folder / LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
+    """The lock of pairings.yaml held; yields the place of the configuration directory."""
+    with _place(config_dir, create=True) as place:
+        label = _security_label(config_dir) / LOCK_FILE
+        if place.owner is None:
+            fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600, dir_fd=place.security)
+        else:
+            fd = config_owner.open_file(place.security, LOCK_FILE, os.O_RDWR | os.O_CREAT,
+                                        place.owner, label)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield place
+        finally:
+            os.close(fd)
 
 
-def _load(config_dir: Path, register: rs.Register) -> list[rs.Pairing]:
+def _load(config_dir: Path, register: rs.Register, place: _Place | None = None
+          ) -> list[rs.Pairing]:
+    if place is None:
+        with _place(config_dir, create=False) as opened:
+            return _load(config_dir, register, opened)
+    if place.security is None:
+        return []
     try:
-        return rs.load_pairings(rs.pairings_path(config_dir), register)
+        return rs.load_pairings(rs.pairings_path(config_dir), register,
+                                folder=place.security, owners=place.owners)
     except rs.RealmSyncError as exc:
         raise PairingError(str(exc)) from None
 
@@ -193,32 +294,68 @@ def _row(pairing: rs.Pairing) -> dict:
     return row
 
 
-def _store(config_dir: Path, register: rs.Register, pairings: list[rs.Pairing]) -> None:
+def _store(config_dir: Path, register: rs.Register, pairings: list[rs.Pairing],
+           place: _Place | None = None) -> None:
     """Check the new list as the realm sync will read it, then replace the file
-    atomically (0600, written next to it)."""
+    atomically (0600, written next to it; as root handed to the owner of the configuration
+    directory before it replaces the old one)."""
     doc = {"format": rs.PAIRINGS_FORMAT, "pairings": [_row(p) for p in pairings]}
     try:
         rs.parse_pairings(doc, register)
     except rs.RealmSyncError as exc:
         raise PairingError(str(exc)) from None
+    if place is None:
+        with _place(config_dir, create=True) as opened:
+            return _store(config_dir, register, pairings, opened)
     path = rs.pairings_path(config_dir)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    tmp = f".{path.name}.{os.getpid()}.tmp"
+    folder = place.security
+    if place.owner is None:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=folder)
+    else:
+        try:
+            fd = config_owner.open_file(folder, tmp, os.O_WRONLY | os.O_CREAT, place.owner,
+                                        path.with_name(tmp), exclusive=True)
+        except config_owner.OwnerError as exc:
+            raise PairingError(str(exc)) from None
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             yaml.safe_dump(doc, fh, sort_keys=False)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        os.rename(tmp, path.name, src_dir_fd=folder, dst_dir_fd=folder)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
-            tmp.unlink()
+            os.unlink(tmp, dir_fd=folder)
         raise
+    return None
 
 
-def _audit(config_dir: Path, person: str) -> rs.AuditLog:
-    return rs.AuditLog(rs.audit_path(config_dir), rs.new_correlation_id(),
-                       host_account=person, writer=WRITER)
+@contextlib.contextmanager
+def _audit(config_dir: Path, person: str, place: _Place | None = None):
+    """The audit log of one decision. As root its outbox and counter are written through
+    descriptors and handed to the owner of the configuration directory."""
+    if place is None:
+        with _place(config_dir, create=False) as opened, _audit(config_dir, person,
+                                                                opened) as audit:
+            yield audit
+        return
+    path = rs.audit_path(Path(config_dir))
+    folder = owner = None
+    if place.owner is not None:
+        try:
+            folder = place.folder(path.parent.relative_to(config_dir))
+        except config_owner.OwnerError as exc:
+            raise PairingError(str(exc)) from None
+        owner = place.owner
+    try:
+        log = rs.AuditLog(path, rs.new_correlation_id(), host_account=person, writer=WRITER,
+                          folder=folder, owner=owner)
+    except rs.RealmSyncError as exc:
+        raise PairingError(str(exc)) from None
+    with log:
+        yield log
 
 
 def _change(pairing_id: str, operation: str, kind: str = "pairing") -> rs.Change:
@@ -257,8 +394,8 @@ def confirm_installation(
             "nothing was confirmed"
         )
     person = _named(person)
-    with _locked(config_dir):
-        current = _load(config_dir, register)
+    with _locked(config_dir) as place:
+        current = _load(config_dir, register, place)
         known = {(p.client, p.audience) for p in current}
         added: list[rs.Pairing] = []
         for entry in entries:
@@ -275,8 +412,8 @@ def confirm_installation(
             added.append(pairing)
         if not added:
             return result
-        with _audit(config_dir, person) as audit:
-            _store(config_dir, register, [*current, *added])
+        with _audit(config_dir, person, place) as audit:
+            _store(config_dir, register, [*current, *added], place)
             for pairing in added:
                 audit.write(
                     _change(_pid(pairing.client, pairing.audience),
@@ -325,8 +462,8 @@ def approve(
     _names(client, audience, "allow")
     wanted = _check_effects(effects)
     pid = _pid(client, audience)
-    with _locked(config_dir):
-        current = _load(config_dir, register)
+    with _locked(config_dir) as place:
+        current = _load(config_dir, register, place)
         index = next((i for i, p in enumerate(current)
                       if (p.client, p.audience) == (client, audience)), None)
         if index is None:
@@ -350,7 +487,7 @@ def approve(
                                  requested_by=_named(person))
             operation, outcome = "request", "waiting"
         elif person == existing.requested_by or not rs._PAIRING_PERSON_RE.match(person):
-            with _audit(config_dir, person) as audit:
+            with _audit(config_dir, person, place) as audit:
                 audit.write(_change(pid, "approve"), "denied", "same_person", host=True)
             raise PairingError(
                 f"{describe(existing)} writes or deletes and was requested by "
@@ -365,8 +502,8 @@ def approve(
             pairings.append(updated)
         else:
             pairings[index] = updated
-        with _audit(config_dir, person) as audit:
-            _store(config_dir, register, pairings)
+        with _audit(config_dir, person, place) as audit:
+            _store(config_dir, register, pairings, place)
             audit.write(_change(pid, operation), "allowed", host=True)
     return outcome
 
@@ -376,13 +513,13 @@ def revoke(
 ) -> None:
     """Remove one pairing, whatever its state; the realm sync removes its scope."""
     _names(client, audience, "revoke")
-    with _locked(config_dir):
-        current = _load(config_dir, register)
+    with _locked(config_dir) as place:
+        current = _load(config_dir, register, place)
         remaining = [p for p in current if (p.client, p.audience) != (client, audience)]
         if len(remaining) == len(current):
             raise PairingError(f"{client} -> {audience} is not recorded")
-        with _audit(config_dir, person) as audit:
-            _store(config_dir, register, remaining)
+        with _audit(config_dir, person, place) as audit:
+            _store(config_dir, register, remaining, place)
             audit.write(_change(_pid(client, audience), "revoke"), "allowed", host=True)
 
 
@@ -413,12 +550,34 @@ def _anchored_bom(args: argparse.Namespace, command: str) -> dict | None:
     delivery bill of materials as before."""
     if args.test_trust_anchor is None:
         return _trusted_bom(Path(args.repo_root))
+    config_dir = Path(args.config_dir)
     try:
         anchor = prerelease_anchor.open_anchor(Path(args.repo_root), args.test_trust_anchor)
-        return prerelease_anchor.verified_bom(
-            Path(args.repo_root), Path(args.config_dir), anchor, command, args.correlation_id)
+        if os.geteuid() != 0:
+            return prerelease_anchor.verified_bom(
+                Path(args.repo_root), config_dir, anchor, command, args.correlation_id)
+        with _place(config_dir, create=False) as place:
+            return prerelease_anchor.verified_bom(
+                Path(args.repo_root), config_dir, anchor, command, args.correlation_id,
+                append_audit=lambda row: _append_journal(place, row))
     except prerelease_anchor.AnchorError as exc:
         raise PairingError(str(exc)) from None
+
+
+def _append_journal(place: _Place, row: dict) -> None:
+    """One row of the host's audit journal (images.AUDIT_LOG) written as root: through
+    descriptors, a new file or folder handed to the owner of the configuration directory."""
+    path = place.config_dir / images.AUDIT_LOG
+    try:
+        folder = place.folder(images.AUDIT_LOG.parent)
+        fd = config_owner.open_file(folder, path.name, os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                                    place.owner, path)
+    except config_owner.OwnerError as exc:
+        raise PairingError(str(exc)) from None
+    try:
+        os.write(fd, images.audit_line(row))
+    finally:
+        os.close(fd)
 
 
 def _state(pairing: rs.Pairing, recorded: dict[tuple[str, str], rs.Pairing]) -> str:

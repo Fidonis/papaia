@@ -1511,6 +1511,34 @@ of them takes `-y`. Each decision and each refusal is a `papaia.audit/1` row wit
 account and the time; a decision takes effect with the next realm sync (`start` runs it).
 Details: "Pairing approval" in [`docs/architecture.md`](docs/architecture.md).
 
+**The second person.** `security/pairings.yaml` belongs to the account that owns the
+configuration directory (it ran `setup`), so the second host account approves through
+`sudo`:
+
+```bash
+# as the second host account:
+sudo tools/papaia-ctl pairing approve --client=NAME --audience=NAME [--config-dir=PATH]
+```
+
+Give that account a sudoers rule for exactly this checkout's `tools/papaia-ctl`, for
+example `approver ALL=(root) /srv/papaia/tools/papaia-ctl` (the absolute path of your
+checkout). As root, the `pairing` commands also trust `pairings.yaml` and `security/` when
+they belong to the owner of the configuration directory; that directory must be a real
+directory (not a symbolic link) that group and others cannot write. A file or folder of a
+third account, one that group or others can write, and a symbolic link are refused. Root
+reads and writes only through the opened directories, never through a link, and hands every
+file and folder it writes (the new `pairings.yaml`, the lock file, the audit outbox) to the
+owner of the configuration directory with mode `0600` (folders `0700`), so nothing below it
+belongs to root and the owner's next `start` reads the file. The audit row of the approval
+names the second account (`host:<login that called sudo>`).
+
+What the second approval guarantees, and what it does not: it is an organisational control
+with audit evidence, the `pairing.approve` row of the second account. It is not a barrier
+against the account that owns the configuration directory: that account holds the identity
+provider's admin credentials (`$PAPAIA_CONFIG_DIR/infra/keycloak/.env`) and can edit
+`pairings.yaml` by hand, so it can grant an exchange right without a second person. Keep that account to the people
+who run the installation.
+
 ### `librechat clear-history`
 
 ```bash

@@ -25,6 +25,26 @@ based on merged pull requests; this file mirrors the published releases.
   unchanged: images checked, Keycloak started alone, the post-restore step, then the
   modules; a failure still starts no module.
 
+### Pairing approval by a second account through sudo
+
+- `sudo tools/papaia-ctl pairing approve` by a second host account works in the
+  configuration directory of the account that set the installation up. As root, the
+  `pairing` commands also trust `security/pairings.yaml` and `security/` when they belong to
+  the owner of the configuration directory; that directory must not be a symbolic link or
+  writable by group or others. A third owner, a group- or other-writable file or folder and
+  a symbolic link are refused. Before, every such approval stopped with "owned by uid ...,
+  not by the user running papaia-ctl" (exit 2).
+- As root, the pairing commands write only through directory descriptors without following
+  a link and hand everything they create (the new `pairings.yaml`, the lock file, the audit
+  outbox) to the owner of the configuration directory with mode `0600`; nothing below it
+  belongs to root afterwards, and the owner's next `start` assigns the pairing. Without root
+  nothing changes; the realm sync, the federation file and the Paperless name list keep
+  their rule. The audit row of the approval names the second account.
+- README, `docs/architecture.md` and the operator handbook state what the second approval
+  guarantees and what it does not: it is an organisational control with audit evidence, not
+  a barrier against the account that owns the configuration directory and holds the
+  identity provider's admin credentials. ADR 0034.
+
 ### Test trust anchor in restore
 
 - `restore` and `restore-scoped` take `--test-trust-anchor=FILE` on a pre-release core, with
