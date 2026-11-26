@@ -334,7 +334,9 @@ def _subnet_pool_request(
                 f"papaia-{args.env}"
             )
         projects = subnet_pool.installation_projects(config_dir, repo_root, env)
-        _, foreign = subnet_pool.review(pool, networks, projects, [subnet_pool.uplink_name(env)])
+        _, foreign = subnet_pool.review(
+            pool, networks, projects, subnet_pool.exempt(config_dir, repo_root, env)
+        )
         if foreign:
             for net in foreign:
                 print(f"ERROR: {subnet_pool.foreign_message(pool, net)}", file=sys.stderr)
@@ -354,8 +356,8 @@ def _report_networks_to_move(config_dir: Path, repo_root: Path) -> None:
     if not networks:
         return
     projects = subnet_pool.installation_projects(config_dir, repo_root, env)
-    uplink = subnet_pool.uplink_name(env)
-    ours = [n["name"] for n in networks if n["project"] in projects and n["name"] != uplink]
+    kept = subnet_pool.exempt(config_dir, repo_root, env)
+    ours = [n["name"] for n in networks if n["project"] in projects and n["name"] not in kept]
     if not ours:
         return
     print(

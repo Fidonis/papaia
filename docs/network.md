@@ -177,8 +177,14 @@ tools/papaia-ctl start
   (`$PAPAIA_CONFIG_DIR/subnet-pool.json`): the exits of LiteLLM, papaia-audit and
   papaia-lifecycle while they are on, and every network an active add-on's compose file
   creates without a range of its own (its app, egress, isolated and offered networks, its
-  `default` network). An add-on that declares a range itself keeps it; the SQL uplink
-  keeps `PAPAIA_SQL_UPLINK_SUBNET`, which must not overlap an assigned block.
+  `default` network). The block of a core exit is freed again when it is switched off,
+  the blocks of an add-on when it leaves `deployment.yaml`.
+- **A network with a range of its own** keeps it: an add-on network that declares `ipam`
+  in its compose file (the variables of the root `.env` and of the add-on's `.env`
+  resolved), and the SQL uplink with `PAPAIA_SQL_UPLINK_SUBNET`. Such a network is not
+  placed and never counts as outside the pool. Its range must not overlap an assigned
+  block: `setup` and every render refuse it and name the network (Docker would refuse to
+  create one of the two); choose a pool that leaves it out, or move the add-on's range.
 - **The overrides** are `$PAPAIA_CONFIG_DIR/overrides/docker-compose.subnet-pool.override.yml`
   for the core and `overrides/addons/docker-compose.<add-on>-subnets.override.yml` per
   add-on, written on every `setup`, `start` and add-on operation. Without the variable
@@ -187,10 +193,16 @@ tools/papaia-ctl start
   IPv4, a prefix outside the limits, a pool too small for the networks of the installation
   and a pool that overlaps a Docker network of another stack (it names that network).
   `start` checks the host again before the first container and also refuses while a
-  network of the installation lies outside the pool. `doctor network` reports both as
+  network of the installation without a range of its own lies outside the pool.
+  `doctor network` reports both as
   `fail` with the fix. papaia-ctl never removes or changes a network that is not its own.
 - **Addresses that follow the pool.** The mail relay accepts mail from the pool only
-  (instead of every private range) unless `SMTP_RELAY_ALLOWED_CLIENTS` is set; `NO_PROXY`
+  (instead of every private range) unless `SMTP_RELAY_ALLOWED_CLIENTS` is set in
+  `infra/smtp-relay/.env` or the root `.env`; an operator's list is kept as it is. An
+  add-on network with a range of its own lies outside the pool by design: when it attaches
+  `smtp-relay`, add its range to `SMTP_RELAY_ALLOWED_CLIENTS` together with the pool
+  (for example `127.0.0.0/8,10.240.0.0/16,10.231.21.0/24`), or its services cannot send
+  mail; `NO_PROXY`
   of LiteLLM (hosted model) and papaia-lifecycle (federation) lists the assigned range of
   `papaia-net` and `papaia-lifecycle-net`, never an exit network; an internal egress target
   (`security/egress-internal-targets.yaml`) that overlaps the pool is refused.

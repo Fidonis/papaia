@@ -19,9 +19,12 @@ based on merged pull requests; this file mirrors the published releases.
   operator-given private IPv4 range, in blocks of a fixed order that stay the same from
   start to start (ADR 0032). `setup` and `start` refuse a pool that overlaps a Docker
   network of another stack and name it; `doctor network` reports a network of the
-  installation outside the pool as `fail`. With a pool the mail relay accepts mail from
-  the pool only, and an internal egress target inside the pool is refused. Without the
-  option nothing changes.
+  installation outside the pool as `fail`. An add-on network that declares its own range
+  keeps it and is not reported; the render refuses such a range when it overlaps a block
+  of the pool. With a pool the mail relay accepts mail from the pool only, unless
+  `SMTP_RELAY_ALLOWED_CLIENTS` is set (in `infra/smtp-relay/.env` or the root `.env`), and
+  an internal egress target inside the pool is refused. Without the option nothing
+  changes.
 
 ### Image check covers the images the installation runs
 

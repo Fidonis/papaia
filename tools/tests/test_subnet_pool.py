@@ -412,6 +412,99 @@ def test_the_sql_uplink_must_not_overlap_a_block_of_the_pool(tmp_path):
         gen_override.generate_addon_join_overrides(inst.config, inst.repo)
 
 
+# An add-on network that declares its own range (FLOW-055 for Flow) keeps it: it is not
+# placed, not reported as outside the pool, and refused when it overlaps an assigned block.
+OWN_FLOW_NETWORKS = {
+    "flow-net": {
+        "name": "${PAPAIA_PROJECT:-papaia}-flow-net",
+        "ipam": {"config": [{"subnet": "${FLOW_NET_SUBNET:-10.231.21.0/24}"}]},
+    },
+    "flow-db": {"internal": True, "ipam": {"config": [{"subnet": "10.231.22.0/24"}]}},
+    "flow-app": {},
+}
+
+
+def test_an_addon_network_with_its_own_range_outside_the_pool_passes_start(
+    tmp_path, capsys, _host
+):
+    inst = Installation(tmp_path, [APP_HOST])
+    inst.setup(APP_HOST, f"--subnet-pool={POOL}")
+    _addon(inst, "flow", OWN_FLOW_NETWORKS)
+    run_cli(inst.repo, inst.config, "render")
+    app = str(_subnets(yaml.safe_load(
+        subnet_pool.addon_override_path(inst.config, "flow").read_text(encoding="utf-8")
+    ))["flow-app"])
+    _host.networks = {
+        "papaia-net": ("papaia", ["10.212.0.0/24"]),
+        "papaia-flow-net": ("flow", ["10.231.21.0/24"]),
+        "flow_flow-db": ("flow", ["10.231.22.0/24"]),
+        "flow_flow-app": ("flow", [app]),
+    }
+
+    assert subnet_pool.start_problems(inst.config, inst.repo) == []
+    assert cli.main(["--repo-root", str(inst.repo), "--config-dir", str(inst.config),
+                     "subnet-pool-check"]) == 0
+
+    # A network of the add-on without a range of its own is still checked.
+    _host.networks["flow_flow-app"] = ("flow", ["172.18.0.0/16"])
+    problems = subnet_pool.start_problems(inst.config, inst.repo)
+    assert len(problems) == 1 and "flow_flow-app" in problems[0]
+
+
+def test_an_addon_range_of_its_own_overlapping_an_assigned_block_is_refused(tmp_path, capsys):
+    inst = Installation(tmp_path, [APP_HOST])
+    inst.setup(APP_HOST, f"--subnet-pool={POOL}")
+    path = _addon(inst, "flow", OWN_FLOW_NETWORKS)
+    # The block of papaia-audit-ingest-net, through the add-on's own variable.
+    (path / ".env").write_text("FLOW_NET_SUBNET=10.212.3.0/24\n", encoding="utf-8")
+    capsys.readouterr()
+
+    with pytest.raises(subnet_pool.SubnetPoolError, match="papaia-flow-net.*10.212.3.0/24"):
+        subnet_pool.generate_overrides(inst.config, inst.repo)
+    assert cli.main(["--repo-root", str(inst.repo), "--config-dir", str(inst.config),
+                     "render"]) == 3
+    assert "papaia-flow-net" in capsys.readouterr().err
+
+    before = (inst.config / ".env").read_text(encoding="utf-8")
+    code = cli.main(["--repo-root", str(inst.repo), "--config-dir", str(inst.config),
+                     "setup", f"--subnet-pool={POOL}", "--subnet-block=25"])
+    assert code == cli.SETUP_REFUSED
+    assert "papaia-flow-net" in capsys.readouterr().err
+    assert (inst.config / ".env").read_text(encoding="utf-8") == before
+
+    # Outside the pool the same network is fine.
+    (path / ".env").write_text("FLOW_NET_SUBNET=10.231.21.0/24\n", encoding="utf-8")
+    run_cli(inst.repo, inst.config, "render")
+
+
+def test_an_inactive_addon_with_an_overlapping_range_of_its_own_is_not_refused(tmp_path):
+    inst = Installation(tmp_path, [APP_HOST])
+    inst.setup(APP_HOST, f"--subnet-pool={POOL}")
+    path = _addon(inst, "flow", OWN_FLOW_NETWORKS)
+    (path / ".env").write_text("FLOW_NET_SUBNET=10.212.3.0/24\n", encoding="utf-8")
+    manifest = yaml.safe_load((inst.config / "deployment.yaml").read_text(encoding="utf-8"))
+    manifest["addons"][-1]["active"] = False
+    (inst.config / "deployment.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+
+    subnet_pool.generate_overrides(inst.config, inst.repo)
+
+
+def test_the_block_of_a_core_network_that_is_gone_is_freed(tmp_path):
+    inst = Installation(tmp_path, [APP_HOST])
+    inst.setup(APP_HOST, f"--subnet-pool={POOL}")
+    state_path = inst.config / subnet_pool.STATE_FILE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    # A core exit network that was on (its override existed) and is off now.
+    state["networks"]["core:papaia-switched-off-net"] = "10.212.200.0/24"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    run_cli(inst.repo, inst.config, "render")
+
+    kept = json.loads(state_path.read_text(encoding="utf-8"))["networks"]
+    assert "core:papaia-switched-off-net" not in kept
+    assert "10.212.200.0/24" not in kept.values()
+
+
 def test_a_distributed_installation_refuses_the_pool(tmp_path, capsys):
     inst = Installation(tmp_path, [APP_HOST])
     code = cli.main(["--repo-root", str(inst.repo), "--config-dir", str(inst.config),
@@ -441,6 +534,18 @@ def test_an_operator_list_of_mail_clients_stays(tmp_path):
     inst = Installation(tmp_path, [APP_HOST])
     inst.setup(APP_HOST, f"--subnet-pool={OTHER_POOL}")
     set_env({"config": inst.config}, SMTP_RELAY_ALLOWED_CLIENTS="127.0.0.0/8,172.20.0.0/24")
+    run_cli(inst.repo, inst.config, "render")
+
+    assert "services" not in _core_override(inst.config)
+
+
+def test_an_operator_list_of_mail_clients_in_the_relay_env_stays(tmp_path):
+    inst = Installation(tmp_path, [APP_HOST])
+    inst.setup(APP_HOST, f"--subnet-pool={OTHER_POOL}")
+    relay_env = inst.config / "infra" / "smtp-relay" / ".env"
+    relay_env.parent.mkdir(parents=True, exist_ok=True)
+    with relay_env.open("a", encoding="utf-8") as handle:
+        handle.write("\nSMTP_RELAY_ALLOWED_CLIENTS=127.0.0.0/8,172.20.0.0/24\n")
     run_cli(inst.repo, inst.config, "render")
 
     assert "services" not in _core_override(inst.config)
@@ -543,6 +648,29 @@ def test_doctor_network_fails_for_a_network_outside_the_pool_and_names_the_fix(s
     assert check.status == FAIL
     assert "papaia-net" in check.summary and "172.18.0.0/16" in check.summary
     assert "stop --clean-up" in check.summary
+
+
+def test_doctor_network_passes_for_an_addon_network_with_its_own_range(stack):
+    set_env(stack, **{subnet_pool.POOL_KEY: POOL, "COMPOSE_PROJECT_NAME": "papaia"})
+    (stack["addon"] / "docker-compose.yml").write_text(yaml.safe_dump({
+        "services": {"paperless": {"image": "x", "networks": ["own", "placed"]}},
+        "networks": {
+            "own": {"ipam": {"config": [{"subnet": "10.231.24.0/24"}]}},
+            "placed": {},
+        },
+    }), encoding="utf-8")
+    runner = DoctorHost({
+        "papaia-net": ("papaia", ["10.212.0.0/24"]),
+        "paperless_own": ("paperless", ["10.231.24.0/24"]),
+    })
+
+    check = _doctor_network(stack, runner)
+
+    assert check.status == PASS, check.summary
+
+    runner.networks["paperless_placed"] = ("paperless", ["172.18.0.0/16"])
+    check = _doctor_network(stack, runner)
+    assert check.status == FAIL and "paperless_placed" in check.summary
 
 
 def test_doctor_network_without_pool_and_sql_source_still_skips(stack):

@@ -188,7 +188,7 @@ configured".
 | `SMTP_RELAY_FROM_NAME`, `SMTP_RELAY_FROM_HEADER` | Derived by setup from the name of the installation (`name` in `overlay/platform/branding.yaml`) and the sender address — do not edit. The name is Keycloak's `fromDisplayName`; the header is the `From` the relay writes into every mail |
 | `SMTP_RELAY_SENDER_DOMAINS`, `SMTP_RELAY_TLS_LEVEL`, `SMTP_RELAY_TLS_WRAPPER` | Derived by setup from the sender address and the security mode — do not edit |
 | `SMTP_RELAY_PASSWORD_REV` | Raised by setup whenever the password changes, so that Compose recreates the relay (it reads the password file once, at start) |
-| `SMTP_RELAY_ALLOWED_CLIENTS` | Optional, commented out. The networks allowed to send, comma separated; the default is the private IPv4 ranges Docker hands out |
+| `SMTP_RELAY_ALLOWED_CLIENTS` | Optional, commented out. The networks allowed to send, comma separated; the default is the private IPv4 ranges Docker hands out, with `PAPAIA_SUBNET_POOL` the pool. Set here or in the root `.env`, the list is kept as it is ([network.md](network.md)) |
 
 The upstream password is not a variable. `setup` keeps it in
 `$PAPAIA_CONFIG_DIR/infra/smtp-relay/upstream-password` (mode 0600, empty when the mail server

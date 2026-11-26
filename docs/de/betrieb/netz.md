@@ -61,17 +61,30 @@ tools/papaia-ctl start
 - Die Netze des Kerns erhalten die ersten Blöcke in fester Reihenfolge, `papaia-net` den
   ersten; ihre Adressen hängen nur vom Pool ab. Alle übrigen Netze (Ausgänge von LiteLLM,
   `papaia-audit` und `papaia-lifecycle`, Netze der aktiven Module ohne eigenen Bereich)
-  erhalten einmal den nächsten freien Block und behalten ihn. Ein Modul, das selbst einen
-  Bereich festlegt, behält ihn; die SQL-Verbindung behält `PAPAIA_SQL_UPLINK_SUBNET`.
+  erhalten einmal den nächsten freien Block und behalten ihn. Der Block eines Ausgangs wird
+  frei, wenn er abgeschaltet wird, die Blöcke eines Moduls, wenn es aus `deployment.yaml`
+  entfernt wird.
+- Ein Netz mit eigenem Bereich behält ihn: ein Netz, für das ein Modul selbst `ipam`
+  festlegt (Variablen aus der Wurzel-`.env` und der `.env` des Moduls aufgelöst), und die
+  SQL-Verbindung mit `PAPAIA_SQL_UPLINK_SUBNET`. Ein solches Netz gilt nie als außerhalb
+  des Pools. Überschneidet sein Bereich einen vergebenen Block, lehnen `setup` und jedes
+  Rendern mit dem Namen des Netzes ab; dann einen Pool wählen, der den Bereich auslässt,
+  oder den Bereich des Moduls verschieben.
 - `setup` lehnt vor jedem Schreiben ab: keinen privaten IPv4-Bereich, ein Präfix außerhalb
   der Grenzen, einen zu kleinen Pool und einen Pool, der ein Docker-Netz eines anderen
   Stapels überschneidet (mit dessen Namen). `start` prüft vor dem ersten Container erneut
-  und lehnt auch ab, solange ein Netz der Installation außerhalb des Pools liegt.
+  und lehnt auch ab, solange ein Netz der Installation ohne eigenen Bereich außerhalb des
+  Pools liegt.
   `papaia-ctl doctor network` meldet beides als `fail` mit der Abhilfe. Fremde Netze werden
   nie entfernt oder geändert.
 - Mit Pool nimmt das Mail-Relais Post nur aus dem Pool an (statt aus allen privaten
-  Bereichen), sofern `SMTP_RELAY_ALLOWED_CLIENTS` nicht gesetzt ist; interne Ziele des
-  Ausgangs, die den Pool überschneiden, werden abgelehnt.
+  Bereichen), sofern `SMTP_RELAY_ALLOWED_CLIENTS` weder in `infra/smtp-relay/.env` noch in
+  der Wurzel-`.env` gesetzt ist; eine Liste des Betreibers bleibt unverändert. Ein
+  Modulnetz mit eigenem Bereich liegt bewusst außerhalb des Pools: Hängt es am
+  `smtp-relay`, seinen Bereich zusammen mit dem Pool in `SMTP_RELAY_ALLOWED_CLIENTS`
+  eintragen (etwa `127.0.0.0/8,10.240.0.0/16,10.231.21.0/24`), sonst können seine Dienste
+  keine Mail senden. Interne Ziele des Ausgangs, die den Pool überschneiden, werden
+  abgelehnt.
 - **Pool ändern:** `setup --subnet-pool=NEU` nennt die Netze, die noch im alten Bereich
   liegen; dann `papaia-ctl stop --clean-up --addons` (Container und Netze werden entfernt,
   Volumes bleiben) und `papaia-ctl start`. `setup --no-subnet-pool` führt mit denselben

@@ -44,9 +44,12 @@ Only the SQL uplink had a fixed range of its own (`PAPAIA_SQL_UPLINK_SUBNET`).
    overrides declare (the exits of LiteLLM, papaia-audit and papaia-lifecycle) and the
    networks an active add-on's compose file creates without a range of its own (app,
    egress and isolated networks, ADR 0026; offered networks, ADR 0027). An add-on's
-   blocks are freed when it leaves `deployment.yaml`. A network that declares its own
-   range keeps it; the SQL uplink keeps its variable, which must not overlap an assigned
-   block.
+   blocks are freed when it leaves `deployment.yaml`, the block of a core exit network
+   when the exit is switched off. A network that declares its own range (`ipam` in the
+   add-on's compose file or the core's, such as the SQL uplink with its variable) keeps
+   it: it is not placed, is never reported as outside the pool, and the render refuses
+   such a range of the core or of an active add-on when it overlaps an assigned block
+   (Docker would refuse to create one of the two).
 4. **Overrides, not edits.** The blocks reach Compose through generated overrides: one
    for the core project beside the image mirror override, one per add-on in
    `overrides/addons/`. Without the variable none is written and an installation behaves
@@ -55,10 +58,13 @@ Only the SQL uplink had a fixed range of its own (`PAPAIA_SQL_UPLINK_SUBNET`).
    too small for the networks the installation has, or overlaps a Docker network of the
    host that does not belong to the installation, and names that network. `start`
    repeats the overlap check and refuses a network of the installation that lies outside
-   the pool. `doctor network` reports both as `fail` with the fix. A foreign network is
+   the pool and has no range of its own. `doctor network` reports both as `fail` with the
+   fix. A foreign network is
    never removed or changed.
 6. **Derived addresses follow.** With a pool the mail relay accepts mail from the pool
-   instead of every private range (unless `SMTP_RELAY_ALLOWED_CLIENTS` is set), `NO_PROXY`
+   instead of every private range, unless `SMTP_RELAY_ALLOWED_CLIENTS` is set in
+   `infra/smtp-relay/.env` or the root `.env` (then the operator's list stays as it is;
+   an add-on network with its own range that attaches the relay is added there), `NO_PROXY`
    of LiteLLM and papaia-lifecycle names the assigned range of the network they share
    with their direct peers (never their exit network), and an internal egress target
    that overlaps the pool is refused.

@@ -16,9 +16,11 @@ network of the installation in that range instead:
     0027). These assignments are kept in $PAPAIA_CONFIG_DIR/subnet-pool.json; an
     add-on's blocks are freed when it leaves deployment.yaml.
   * The blocks reach Compose through generated overrides: one beside the image mirror
-    override for the core project, one per add-on in overrides/addons/. An add-on network
-    that declares its own range keeps it; the SQL uplink keeps PAPAIA_SQL_UPLINK_SUBNET,
-    which must not overlap an assigned block.
+    override for the core project, one per add-on in overrides/addons/. A network that
+    declares its own range (`ipam` in an add-on's or the core's files; the SQL uplink with
+    PAPAIA_SQL_UPLINK_SUBNET) keeps it and never counts as outside the pool; the render
+    refuses such a range of the core or of an active add-on that overlaps an assigned
+    block. The block of a core exit is freed when the exit is switched off.
   * `setup` and `start` refuse a pool that overlaps a Docker network of the host that does
     not belong to this installation and name it; a network of the installation outside
     the pool (after the pool changed) has to be removed: `stop --clean-up --addons`, then
@@ -36,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from . import common, compat, deployment, status
+from . import backup, common, compat, deployment, status
 
 POOL_KEY = "PAPAIA_SUBNET_POOL"
 BLOCK_KEY = "PAPAIA_SUBNET_BLOCK"
@@ -186,6 +188,36 @@ def _created(doc: dict) -> list[str]:
     return found
 
 
+def _own(doc: dict, env: dict[str, str], project_name: str) -> list[dict]:
+    """[{key, name, subnets}] of the networks a compose document creates with a range of
+    its own (`ipam`, not `external`): the Docker name as Compose gives it and the IPv4
+    ranges, `${VAR}` resolved against `env` the way Compose does."""
+    found = []
+    for key, body in (doc.get("networks") or {}).items():
+        if not isinstance(body, dict) or body.get("external") or not body.get("ipam"):
+            continue
+        ipam = body["ipam"] if isinstance(body["ipam"], dict) else {}
+        subnets = []
+        for entry in ipam.get("config") or []:
+            raw = entry.get("subnet") if isinstance(entry, dict) else None
+            if not isinstance(raw, str):
+                continue
+            try:
+                net = ipaddress.ip_network(backup.expand(raw, env).strip(), strict=False)
+            except ValueError:
+                continue  # Compose refuses it when it creates the network
+            if isinstance(net, ipaddress.IPv4Network):
+                subnets.append(net)
+        name = body.get("name")
+        found.append({
+            "key": str(key),
+            "name": backup.expand(name, env) if isinstance(name, str) and name
+            else f"{project_name}_{key}",
+            "subnets": subnets,
+        })
+    return found
+
+
 def _uses_default(doc: dict) -> bool:
     """Whether a service of the document is on the project's `default` network."""
     for body in (doc.get("services") or {}).values():
@@ -240,6 +272,52 @@ def addon_keys(config_dir: Path, repo_root: Path, addon: dict, deployed: dict) -
         if file != own:
             keys += _created(_load_yaml(file))
     return _unique(keys)
+
+
+def addon_env(config_dir: Path, addon_path: Path) -> dict[str, str]:
+    """What Compose interpolates an add-on's files with: the root .env, then the add-on's
+    own .env (lib/sh/addon.sh passes both, the add-on's second)."""
+    env = common.parse_env_file(config_dir / ".env")
+    env.update(common.parse_env_file(addon_path / ".env"))
+    return env
+
+
+def own_networks(
+    config_dir: Path, repo_root: Path, *, active_only: bool, deployed: dict | None = None
+) -> list[dict]:
+    """[{owner, key, name, subnets}] of the networks with a range of their own: those of
+    the core's fragments and overrides (owner "core") and those of the add-ons'
+    compose files and overrides (owner "addon:<name>"; with `active_only` the active
+    add-ons only). They keep their range and are not placed in the pool."""
+    deployed = deployment.load(config_dir) if deployed is None else deployed
+    env = common.parse_env_file(config_dir / ".env")
+    found: list[dict] = []
+    files: list[Path] = []
+    root = repo_root / "src" / "docker-compose.yml"
+    if root.is_file():
+        files += compat.compose_files(root)
+    folder = config_dir / "overrides"
+    if folder.is_dir():
+        files += [p for p in sorted(folder.glob("docker-compose.*.override.yml"))
+                  if p.name != OVERRIDE]
+    for path in files:
+        found += [{"owner": "core", **n} for n in _own(_load_yaml(path), env, project(env))]
+    for addon in _addons(deployed):
+        if active_only and not addon.get("active"):
+            continue
+        name = addon["name"]
+        path = deployment.resolve_addon_path(addon, repo_root)
+        values = addon_env(config_dir, path)
+        own = addon_override_path(config_dir, name)
+        docs = [path / "docker-compose.yml"] + [
+            f for f in deployment.addon_override_files(config_dir, name, deployed) if f != own
+        ]
+        for file in docs:
+            found += [
+                {"owner": f"addon:{name}", **n}
+                for n in _own(_load_yaml(file), values, path.name)
+            ]
+    return found
 
 
 def _addons(deployed: dict) -> list[dict]:
@@ -303,11 +381,14 @@ def plan(
         for key in addon_keys(config_dir, repo_root, addon, deployed):
             wanted.append((f"addon:{name}:{key}", f"addon:{name}", key))
 
+    current_core = {w[0] for w in wanted if w[1] == "core"}
     kept: dict[str, str] = {}
     for ident, value in sorted(_load_state(config_dir, pool, block).items()):
         owner = ident.split(":")[1] if ident.startswith("addon:") else None
         if owner is not None and owner not in installed:
             continue  # the add-on is gone; its blocks are free again
+        if ident.startswith("core:") and ident not in current_core:
+            continue  # the core network is switched off; its block is free again
         try:
             net = ipaddress.ip_network(value)
         except ValueError:
@@ -333,6 +414,7 @@ def plan(
         placed.setdefault(owner, {})[key] = kept[ident]
 
     _check_uplink(env, used)
+    _check_own(own_networks(config_dir, repo_root, active_only=True, deployed=deployed), used)
     return placed, kept
 
 
@@ -349,6 +431,31 @@ def _check_uplink(env: dict[str, str], used: set[ipaddress.IPv4Network]) -> None
                 f"{sql_uplink.SUBNET_KEY} {uplink} overlaps the block {net} of {POOL_KEY};"
                 f" choose a range for the SQL uplink outside the pool's blocks"
             )
+
+
+def _check_own(networks: list[dict], used: set[ipaddress.IPv4Network]) -> None:
+    """A network with a range of its own must not overlap a block of the pool: Docker
+    would refuse to create one of the two ("Pool overlaps")."""
+    for net in networks:
+        for own in net["subnets"]:
+            for block in sorted(used):
+                if own.overlaps(block):
+                    who = "the core" if net["owner"] == "core" else net["owner"].split(":", 1)[1]
+                    raise SubnetPoolError(
+                        f"the network {net['name']} of {who} declares the range {own}, which"
+                        f" overlaps the block {block} of {POOL_KEY}; choose a pool that"
+                        " leaves it out, or give that network a range outside the pool"
+                    )
+
+
+def relay_clients_set(config_dir: Path) -> bool:
+    """Whether the operator set SMTP_RELAY_ALLOWED_CLIENTS: in infra/smtp-relay/.env (its
+    documented place) or in the root .env, the two files Compose interpolates the relay
+    with."""
+    for path in (config_dir / "infra" / "smtp-relay" / ".env", config_dir / ".env"):
+        if (common.parse_env_file(path).get(RELAY_CLIENTS_KEY) or "").strip():
+            return True
+    return False
 
 
 def _override(subnets: dict[str, str]) -> dict:
@@ -390,7 +497,7 @@ def generate_overrides(config_dir: Path, repo_root: Path) -> list[Path]:
     )
     written = []
     core = _override(placed["core"])
-    if not (env.get(RELAY_CLIENTS_KEY) or "").strip():
+    if not relay_clients_set(config_dir):
         # The relay takes mail from its own networks only, and all of them are in the pool
         # (its default would be every private range).
         core["services"] = {
@@ -508,6 +615,15 @@ def uplink_name(env: dict[str, str]) -> str:
     return sql_uplink.network_name(env)
 
 
+def exempt(config_dir: Path, repo_root: Path, env: dict[str, str]) -> set[str]:
+    """The networks of the installation that keep a range of their own and are therefore
+    never "outside the pool": the SQL uplink and every network the core or an installed
+    add-on declares with `ipam` (plan() refuses such a range when it overlaps a block)."""
+    names = {uplink_name(env)}
+    names.update(n["name"] for n in own_networks(config_dir, repo_root, active_only=False))
+    return names
+
+
 def findings(
     config_dir: Path, repo_root: Path, runner: Runner | None = None
 ) -> dict | None:
@@ -522,7 +638,10 @@ def findings(
     if networks is None:
         return {"pool": pool, "outside": [], "foreign": [], "unavailable": True}
     outside, foreign = review(
-        pool, networks, installation_projects(config_dir, repo_root, env), [uplink_name(env)]
+        pool,
+        networks,
+        installation_projects(config_dir, repo_root, env),
+        exempt(config_dir, repo_root, env),
     )
     return {"pool": pool, "outside": outside, "foreign": foreign, "unavailable": False}
 
