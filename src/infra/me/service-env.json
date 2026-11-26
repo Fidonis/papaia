@@ -1,14 +1,17 @@
 {
   "format": "papaia.me-service-env/1",
-  "image": "ghcr.io/fidonis/papaia-me:0.1.0@sha256:7d8e5165cbda151723d31d322e8cd6524bc9449f4372345a57cd3302f88d2c99",
+  "image": "ghcr.io/fidonis/papaia-me:0.1.0@sha256:7b8a68ba36dfd9a87778ef01e2c76cf1a61c8ad2dc174df067c141a7fdf0fefb",
   "source": {
     "repository": "papaia-me",
-    "commit": "4d9b1a13750678eda10a47452ae7f4ae06f60cea"
+    "commit": "47ebc9eb292f826a36da6b46d9c75baf8553dff2"
   },
   "services": {
     "me-web": {
       "reads": [
+        "LOG_LEVEL",
         "ME_ACCOUNT_URL",
+        "ME_AUDIT_CLIENT_DIR",
+        "ME_AUDIT_URL",
         "ME_CATALOG_FILE",
         "ME_DEFAULT_LANG",
         "ME_EXPORT_MAX_BYTES",
@@ -21,6 +24,7 @@
         "ME_OIDC_CLIENT_SECRET",
         "ME_OIDC_INTERNAL_ISSUER",
         "ME_OIDC_SCOPE",
+        "ME_PREFS_URL",
         "ME_PUBLIC_URL",
         "ME_REGISTRY_FILE",
         "ME_SECURITY_PROFILE",
@@ -29,6 +33,10 @@
         "PAPAIA_SECURITY_PROFILE"
       ],
       "one_of": [
+        [
+          "ME_DEFAULT_TIME_ZONE",
+          "PREFS_DEFAULT_TIME_ZONE"
+        ],
         [
           "ME_MODULE_CA_FILE",
           "SSL_CERT_FILE"
@@ -82,6 +90,7 @@
         "PREFS_DB_USER",
         "PREFS_DEFAULT_CHANNEL",
         "PREFS_DEFAULT_TIME_ZONE",
+        "PREFS_DISABLED_CHANNELS",
         "PREFS_LANG",
         "PREFS_SQLITE_FILE"
       ],
@@ -89,7 +98,11 @@
       "runtime": [
         "SSL_CERT_FILE"
       ],
-      "with_profiles": {}
+      "with_profiles": {},
+      "channels": [
+        "chat_window",
+        "mail"
+      ]
     }
   }
 }

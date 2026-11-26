@@ -17,11 +17,12 @@ import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
 
-from lib import common, compat, envtree, ingress, me_profile, resolve, topology
+from lib import audit, common, compat, envtree, ingress, me_profile, resolve, topology
 from lib.compat import CoreTarget
 
 REPO = Path(__file__).resolve().parents[2]
@@ -96,7 +97,68 @@ def test_the_env_example_documents_exactly_the_own_interpolated_variables():
     own = me_profile.interpolated(ME_DIR / "docker-compose.yml") - set(
         common.parse_env_file(REPO / "src" / ".env.example")
     )
-    assert set(common.parse_env_file(ME_DIR / ".env.example")) == own
+    assert set(common.parse_env_file(ME_DIR / ".env.example")) == own | set(
+        me_profile.FILE_SECRETS
+    )
+
+
+def test_the_database_password_reaches_both_containers_as_a_file_secret():
+    # A read-only service takes no secret from an environment variable (Compose writes
+    # such a secret into the container and refuses a read-only one); the file is written
+    # from PREFS_DB_PASSWORD of infra/me/.env before every start.
+    doc = _compose()
+    assert doc["secrets"]["prefs-db-password"] == {
+        "file": "${PAPAIA_CONFIG_DIR}/infra/me/secrets/prefs-db-password"
+    }
+    assert doc["services"]["prefs"]["read_only"] is True
+    for name in ("prefs", "prefs-db"):
+        assert doc["services"][name]["secrets"] == ["prefs-db-password"]
+    assert "PREFS_DB_PASSWORD" in me_profile.FILE_SECRETS
+
+
+def _installation(tmp_path: Path, profiles: str, password: str) -> Path:
+    config = tmp_path / "config"
+    (config / "infra" / "me").mkdir(parents=True)
+    (config / ".env").write_text(f"COMPOSE_PROFILES={profiles}\n", encoding="utf-8")
+    (config / "infra" / "me" / ".env").write_text(
+        f"PREFS_DB_PASSWORD={password}\n", encoding="utf-8"
+    )
+    return config
+
+
+def test_the_password_file_is_written_from_the_profile_env_while_me_is_on(tmp_path):
+    from lib import render_core
+
+    config = _installation(tmp_path, "keycloak,audit,me", "s3cret-value-of-prefs")
+    render_core.ensure_me_secrets(config)
+    path = config / "infra" / "me" / "secrets" / "prefs-db-password"
+    assert path.read_text(encoding="utf-8") == "s3cret-value-of-prefs"
+    # prefs (10001) and the database (postgres) read it through the bind mount; the
+    # folder keeps every other account of the host out.
+    assert path.stat().st_mode & 0o777 == 0o644
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    # A changed value replaces the file.
+    (config / "infra" / "me" / ".env").write_text("PREFS_DB_PASSWORD=other\n", "utf-8")
+    render_core.ensure_me_secrets(config)
+    assert path.read_text(encoding="utf-8") == "other"
+
+
+def test_no_password_file_while_me_is_off(tmp_path):
+    from lib import render_core
+
+    config = _installation(tmp_path, "keycloak,audit", "s3cret-value-of-prefs")
+    render_core.ensure_me_secrets(config)
+    assert not (config / "infra" / "me" / "secrets").exists()
+
+
+@pytest.mark.parametrize("value", ["", "GENERATE_PREFS_DB_PASSWORD"])
+def test_a_password_setup_has_not_generated_stops_the_render(tmp_path, value):
+    from lib import render_core
+
+    config = _installation(tmp_path, "me", value)
+    with pytest.raises(render_core.RenderError, match="PREFS_DB_PASSWORD"):
+        render_core.ensure_me_secrets(config)
+    assert not (config / "infra" / "me" / "secrets" / "prefs-db-password").exists()
 
 
 def test_secrets_are_generated_and_never_shipped():
@@ -132,6 +194,115 @@ def test_the_core_wiring_names_the_profile():
     assert "me" in topology.CONTROLLER_ONLY
     rows = [row for row in ingress.CORE_PROXY_HOSTS if row[0] == "me"]
     assert rows == [("me", "", "ME_PUBLIC_URL", "me", "me-web", 8000, "http", True, False)]
+
+
+# ── the settings the core owns (candidate of papaia-me releases/0.1.0) ──────────
+
+
+def test_the_list_names_a_full_source_commit_and_the_pinned_image():
+    listed = _env_list()
+    assert listed["source"]["repository"] == "papaia-me"
+    assert len(listed["source"]["commit"]) == 40
+    assert int(listed["source"]["commit"], 16) >= 0
+    services = _compose()["services"]
+    assert services["me-web"]["image"] == services["prefs"]["image"] == listed["image"]
+
+
+def test_me_web_reads_its_audit_tickets_from_papaia_audit_over_mutual_tls():
+    me_web = _compose()["services"]["me-web"]
+    env = me_web["environment"]
+    url = urlsplit(env["ME_AUDIT_URL"])
+    assert (url.scheme, url.hostname, url.port, url.path) == ("https", "papaia-audit", 8443, "")
+    # The source certificate of papaia-me from the ingest CA (`papaia-ctl audit cert
+    # papaia-me`), the one prefs delivers with: papaia-audit knows its sources by it.
+    assert "papaia-me" in audit.SOURCES
+    assert env["ME_AUDIT_CLIENT_DIR"] == "/run/papaia/audit"
+    assert (
+        "${PAPAIA_CONFIG_DIR}/infra/audit/clients/papaia-me:/run/papaia/audit:ro"
+        in me_web["volumes"]
+    )
+    prefs = _compose()["services"]["prefs"]
+    assert (
+        "${PAPAIA_CONFIG_DIR}/infra/audit/clients/papaia-me:/run/papaia/audit:ro"
+        in prefs["volumes"]
+    )
+    assert "papaia-audit-ingest-net" in me_web["networks"]
+
+
+def test_prefs_checks_me_webs_rows_with_the_certificate_me_web_signs_with():
+    # One audit source, one outbox: me-web signs its rows with the key in its folder and
+    # hands them to prefs, which checks the signature with the certificate it delivers
+    # with. Both must be the same certificate of papaia-me, and they must share a network.
+    services = _compose()["services"]
+    me_web, prefs = services["me-web"], services["prefs"]
+    folder = me_web["environment"]["ME_AUDIT_CLIENT_DIR"]
+    assert prefs["environment"]["PREFS_AUDIT_CERT_FILE"] == f"{folder}/client.crt"
+    assert prefs["environment"]["PREFS_AUDIT_KEY_FILE"] == f"{folder}/client.key"
+    mounts = {v.split(":")[1]: v.split(":")[0] for v in me_web["volumes"]}
+    prefs_mounts = {v.split(":")[1]: v.split(":")[0] for v in prefs["volumes"]}
+    assert mounts[folder] == prefs_mounts[folder]
+    host = urlsplit(me_web["environment"]["ME_PREFS_URL"]).hostname
+    assert host == "prefs"
+    assert set(me_web["networks"]) & set(prefs["networks"]) >= {"papaia-net"}
+
+
+def test_me_web_and_prefs_take_the_default_time_zone_from_one_setting():
+    services = _compose()["services"]
+    me_web = services["me-web"]["environment"]["ME_DEFAULT_TIME_ZONE"]
+    prefs = services["prefs"]["environment"]["PREFS_DEFAULT_TIME_ZONE"]
+    assert me_web == prefs == "${PREFS_DEFAULT_TIME_ZONE:-Europe/Berlin}"
+    assert "PREFS_DEFAULT_TIME_ZONE" not in services["me-web"]["environment"]
+    assert common.parse_env_file(ME_DIR / ".env.example")["PREFS_DEFAULT_TIME_ZONE"] == (
+        "Europe/Berlin"
+    )
+
+
+def test_me_web_calls_prefs_by_its_compose_name_and_port():
+    services = _compose()["services"]
+    url = urlsplit(services["me-web"]["environment"]["ME_PREFS_URL"])
+    assert (url.scheme, url.hostname, url.port, url.path) == ("http", "prefs", 8080, "")
+    shared = set(services["me-web"]["networks"]) & set(services["prefs"]["networks"])
+    assert "papaia-net" in shared
+    assert "127.0.0.1:8080/healthz" in " ".join(services["prefs"]["healthcheck"]["test"])
+
+
+def test_the_log_level_of_me_web_is_one_setting_with_default_info():
+    env = _compose()["services"]["me-web"]["environment"]
+    assert env["LOG_LEVEL"] == "${ME_LOG_LEVEL:-INFO}"
+    assert common.parse_env_file(ME_DIR / ".env.example")["ME_LOG_LEVEL"] == "INFO"
+
+
+def test_disabled_channels_are_set_and_name_only_channels_of_the_store():
+    env = _compose()["services"]["prefs"]["environment"]
+    assert env["PREFS_DISABLED_CHANNELS"] == "${PREFS_DISABLED_CHANNELS:-}"
+    channels = _env_list()["services"]["prefs"]["channels"]
+    assert sorted(channels) == ["chat_window", "mail"]
+    example = common.parse_env_file(ME_DIR / ".env.example")
+    assert example["PREFS_DISABLED_CHANNELS"] == ""
+    assert example["PREFS_DEFAULT_CHANNEL"] in channels
+
+
+def test_a_disabled_channel_the_store_does_not_know_fails(tmp_path):
+    root = _copy(tmp_path)
+    path = root / me_profile.ENV_EXAMPLE_REL
+    text = path.read_text(encoding="utf-8").replace(
+        "PREFS_DISABLED_CHANNELS=", "PREFS_DISABLED_CHANNELS=mail,sms"
+    )
+    path.write_text(text, encoding="utf-8")
+    problems = me_profile.check(root)
+    assert any("PREFS_DISABLED_CHANNELS" in p and "sms" in p for p in problems)
+
+
+def test_a_channel_named_twice_fails(tmp_path):
+    root = _copy(tmp_path)
+    _rewrite_compose(
+        root,
+        lambda d: d["services"]["prefs"]["environment"].update(
+            PREFS_DISABLED_CHANNELS="${PREFS_DISABLED_CHANNELS:-mail,mail}"
+        ),
+    )
+    problems = me_profile.check(root)
+    assert any("PREFS_DISABLED_CHANNELS" in p and "mail" in p for p in problems)
 
 
 # ── the address: a host name only ────────────────────────────────────────────
@@ -320,12 +491,19 @@ class PrefsSettings:
 '''
 
 
+_PREFS_MODEL = '''
+CHANNELS = ("chat_window", "mail")
+DEFAULT_CHANNELS = CHANNELS
+'''
+
+
 def _source(tmp_path: Path) -> Path:
     source = tmp_path / "papaia-me"
     (source / "src/app").mkdir(parents=True)
     (source / "src/prefs").mkdir(parents=True)
     (source / "src/app/config.py").write_text(textwrap.dedent(_ME_CONFIG), "utf-8")
     (source / "src/prefs/config.py").write_text(textwrap.dedent(_PREFS_CONFIG), "utf-8")
+    (source / "src/prefs/model.py").write_text(textwrap.dedent(_PREFS_MODEL), "utf-8")
     return source
 
 
@@ -343,6 +521,16 @@ def test_the_generator_reads_the_names_from_the_configuration_modules(tmp_path):
     assert prefs["reads"] == ["OIDC_ISSUER", "PREFS_DB_DIALECT", "PREFS_DB_PASSWORD_FILE"]
     assert prefs["one_of"] == []
     assert me_web["runtime"] == prefs["runtime"] == list(me_profile.RUNTIME_READS)
+    # The channels the store knows, for the operator's PREFS_DISABLED_CHANNELS.
+    assert prefs["channels"] == ["chat_window", "mail"]
+    assert "channels" not in me_web
+
+
+def test_the_generator_refuses_a_store_without_a_literal_channel_list(tmp_path):
+    source = _source(tmp_path)
+    (source / "src/prefs/model.py").write_text("CHANNELS = tuple(load())\n", "utf-8")
+    with pytest.raises(me_profile.MeProfileError, match="CHANNELS"):
+        me_profile.generate(source, image="x:1@sha256:" + "a" * 64, commit="0" * 40)
 
 
 def test_the_generator_refuses_a_name_outside_the_variable_grammar(tmp_path):

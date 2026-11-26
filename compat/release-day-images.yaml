@@ -7,21 +7,22 @@
 # such image is listed here with that digest and the commit it was built from. Candidate
 # mode reports a listed image as a release-day notice; release mode fails while this
 # list has an entry. On the release day: publish, re-pin (tools/check-image-pins repin;
-# papaia-me also with python -m lib.me_profile generate), and remove the entry.
+# papaia-me and papaia-connections also with python -m lib.me_profile generate and
+# python -m lib.connections_env generate), and remove the entry.
 schema: papaia.release-day-images/1
 images:
   - image: ghcr.io/fidonis/papaia-me
     tag: 0.1.0
-    digest: sha256:7d8e5165cbda151723d31d322e8cd6524bc9449f4372345a57cd3302f88d2c99
+    digest: sha256:7b8a68ba36dfd9a87778ef01e2c76cf1a61c8ad2dc174df067c141a7fdf0fefb
     module: papaia-me
-    source: 4d9b1a13750678eda10a47452ae7f4ae06f60cea
-    built: 2026-11-20
+    source: 47ebc9eb292f826a36da6b46d9c75baf8553dff2
+    built: 2026-11-26
   - image: ghcr.io/fidonis/papaia-connections
     tag: 0.1.0
-    digest: sha256:ad0b8201f34c081baca32e7c841f3859b9ac9b98c0a70154bd55b3091bd75aa5
+    digest: sha256:0ede1075f2c818f043b240bf3e61cc9735a291a98db3f07f7dacf29b4a1ec963
     module: papaia-connections
-    source: 82e61778d116e313ebcecc1bfc6a6362f7640238
-    built: 2026-11-23
+    source: 120b4e7c9cd7b279ea1468840140b5b6efe1c414
+    built: 2026-11-25
   # The manager's runtime base is not pinned by digest: its published digest will
   # differ from this candidate, so it is re-pinned on the release day.
   - image: ghcr.io/fidonis/papaia-manager

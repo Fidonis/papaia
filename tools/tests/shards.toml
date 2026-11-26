@@ -92,6 +92,7 @@ files = [
   "test_edge_guard_docker.py",
   "test_isolated_network_docker.py",
   "test_audit_docker.py",
+  "test_me_connections_candidates_docker.py",
   "test_egress_docker.py",
   "test_knowledge_map_setup.py",
 ]

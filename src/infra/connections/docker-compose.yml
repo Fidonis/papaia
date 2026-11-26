@@ -50,9 +50,13 @@ services:
 
   connections:
     logging: *papaia-logging
-    # Candidate digest: reproducible build of papaia-connections 82e6177 (make image
-    # VERSION=v0.1.0). Re-pinned to the published digest when the module is released.
-    image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:ad0b8201f34c081baca32e7c841f3859b9ac9b98c0a70154bd55b3091bd75aa5
+    # Candidate digest: reproducible build (linux/amd64, linux/arm64) of
+    # papaia-connections 120b4e7 (releases/0.1.0), the source commit recorded in
+    # service-env.json next to every variable the image reads
+    # (`python -m lib.connections_env check`). Re-pinned to the published digest when
+    # the module is released. Settings the core leaves at the image's default, and why:
+    # DEFAULTS in tools/lib/connections_env.py.
+    image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:0ede1075f2c818f043b240bf3e61cc9735a291a98db3f07f7dacf29b4a1ec963
     restart: unless-stopped
     user: "10001:10001"
     depends_on:
@@ -142,7 +146,7 @@ services:
 
   connections-migrate:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:ad0b8201f34c081baca32e7c841f3859b9ac9b98c0a70154bd55b3091bd75aa5
+    image: ghcr.io/fidonis/papaia-connections:0.1.0@sha256:0ede1075f2c818f043b240bf3e61cc9735a291a98db3f07f7dacf29b4a1ec963
     command: ["migrate"]
     restart: "no"
     user: "10001:10001"

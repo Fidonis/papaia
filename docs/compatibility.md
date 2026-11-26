@@ -269,7 +269,8 @@ release (and a hotfix) is not cut until all of the following hold:
    [`compat/release-day-images.yaml`](../compat/release-day-images.yaml) is
    published from its module's release tag, re-pinned with
    `tools/check-image-pins repin` (papaia-me also with
-   `python -m lib.me_profile generate`), and removed from the list; then
+   `python -m lib.me_profile generate`, papaia-connections with
+   `python -m lib.connections_env generate`), and removed from the list; then
    `tools/check-image-pins check --mode=release` passes with the list empty.
    Release mode fails while the list has an entry.
 
@@ -374,13 +375,21 @@ candidate. Then:
 ```sh
 # 1. Move every pin of the image in compose and service-env.json at once.
 tools/check-image-pins repin --ref=ghcr.io/fidonis/papaia-me:0.1.0@sha256:<digest>
-# 2. papaia-me only: its variable list names the source commit; regenerate it from
-#    a checkout of papaia-me at the released tag.
+# 2. papaia-me and papaia-connections: their variable lists name the source commit;
+#    regenerate them from a checkout of the module at the released tag.
 cd tools && python -m lib.me_profile generate --source <papaia-me at the tag> \
     --image ghcr.io/fidonis/papaia-me:0.1.0@sha256:<digest>
+python -m lib.connections_env generate --source <papaia-connections at the tag> \
+    --image ghcr.io/fidonis/papaia-connections:0.1.0@sha256:<digest>
+python -m lib.me_profile check && python -m lib.connections_env check
 # 3. Remove the image from compat/release-day-images.yaml and check again.
 tools/check-image-pins check --mode=release
 ```
+
+`python -m lib.connections_env check` fails when the registry reads a variable that the
+compose file neither sets nor keeps at the image's default with a recorded reason
+(`DEFAULTS` in `tools/lib/connections_env.py`), and when the development setting
+`CONNECTIONS_DEV_OWNER_LOGIN` is set or documented anywhere.
 
 `repin` refuses an unpinned or floating reference, a loopback registry and an image
 pinned nowhere, and leaves the own images of the core to `tools/build-images pin`.

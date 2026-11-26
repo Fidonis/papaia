@@ -36,6 +36,31 @@ based on merged pull requests; this file mirrors the published releases.
 - `postgres:16.16` (`litellm-db`) and `postgres:17.12-alpine3.24` (`papaia-audit-db`)
   are re-pinned to the digests their tags name today (linux/amd64 and linux/arm64).
 
+### Mein Bereich and the connection registry on their release candidates
+
+- `me-web` and `prefs` run the image built from papaia-me `releases/0.1.0` (47ebc9e),
+  `connections` and `connections-migrate` the one built from papaia-connections
+  `releases/0.1.0` (120b4e7); both pinned by the index digest (linux/amd64, linux/arm64)
+  and regenerated lists of the variables each image reads, with the source commit.
+- `me-web` gets every setting the core owns: `ME_AUDIT_URL` and `ME_AUDIT_CLIENT_DIR`
+  (the source certificate of `papaia-me`: `me-web` signs its `papaia.audit/1` rows with
+  its key and hands them to `prefs`, which delivers them to `papaia-audit` from the one
+  outbox of the source; page "Aktivität" reads from `papaia-audit` over mutual TLS with
+  it; `me-web` joins `papaia-audit-ingest-net`), `ME_PREFS_URL`,
+  `ME_DEFAULT_TIME_ZONE` (the same setting as `PREFS_DEFAULT_TIME_ZONE`) and `LOG_LEVEL`
+  (new `ME_LOG_LEVEL`, default `INFO`). `prefs` gets `PREFS_DISABLED_CHANNELS` (new,
+  default empty); `me_profile check` refuses a channel name the store does not know.
+- Profile `me` starts again on current Compose releases: the password of `prefs-db` is a
+  file secret (`infra/me/secrets/prefs-db-password`, written by `papaia-ctl` from
+  `infra/me/.env` before every start) instead of an `environment:` secret, which Compose
+  refuses for the read-only service `prefs`.
+- New `python -m lib.connections_env generate|check`: `src/infra/connections/service-env.json`
+  lists every variable the registry image reads; each is set or kept at the image's
+  default with a recorded reason, and `CONNECTIONS_DEV_OWNER_LOGIN` is set nowhere.
+- `src/infra/connections/exposes.yaml` takes the storage statement of 120b4e7 (journal
+  kept 180 days, categories "Personen" and "Vollmachten"); the data protection package
+  (`docs/de/datenschutz/vvt/kern.md`) is regenerated from it.
+
 ### Core test suite in parallel shards
 
 - The CI job "Ruff and pytest" ran the whole core suite in one job and hit its 20-minute

@@ -398,6 +398,7 @@ def test_the_generator_keeps_the_handed_over_paths_apart_from_the_base_reads(tmp
          "        opt('ME_CONNECTIONS_CERT_FILE')\n"),
         (me_profile.SOURCES["prefs"],
          "class P:\n    def from_env(e):\n        req('PREFS_LANG')\n"),
+        (me_profile.CHANNELS_SOURCE, "CHANNELS = ('chat_window', 'mail')\n"),
     ):  # fmt: skip
         (source / rel).parent.mkdir(parents=True, exist_ok=True)
         (source / rel).write_text(body, encoding="utf-8")

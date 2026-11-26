@@ -16,11 +16,15 @@ when
   every listed name, one name of each alias group, the names the HTTP client of the image
   honours (`RUNTIME_READS`), and nothing else; no `env_file:`;
 - the profile's `.env.example` documents exactly the variables the compose file
-  interpolates that the root `src/.env.example` does not hold;
+  interpolates that the root `src/.env.example` does not hold, and the generated values
+  papaia-ctl hands over as file secrets (`FILE_SECRETS`);
 - the names a service gets only while another profile is on as well (`with_profiles`,
   set by a generated override, `HANDED_OVER`) are listed as such and are not in the
   compose file: the paths of me-web's client certificate for the connection registry
-  (lib/me_connections.py).
+  (lib/me_connections.py);
+- every channel name in the operator's `PREFS_DISABLED_CHANNELS` and `PREFS_DEFAULT_CHANNEL`
+  (the compose default and `.env.example`) is a channel of the store: `channels` of `prefs`
+  in the list, read from `CHANNELS` of the source's `src/prefs/model.py`; none twice.
 
 Every problem is one line that names the service or file and the variable.
 """
@@ -53,9 +57,16 @@ ROOT_ENV_EXAMPLE_REL = Path("src/.env.example")
 
 # Configuration module of each service in the papaia-me source.
 SOURCES = {"me-web": Path("src/app/config.py"), "prefs": Path("src/prefs/config.py")}
+# The notification channels of the store (`CHANNELS`, a tuple of string literals).
+CHANNELS_SOURCE = Path("src/prefs/model.py")
+# The variables of `prefs` that name channels, and whether they hold a comma list.
+CHANNEL_SETTINGS = {"PREFS_DISABLED_CHANNELS": True, "PREFS_DEFAULT_CHANNEL": False}
 # Read by the HTTP client of both services (httpx honours it for the trust store), not by
 # the configuration module: the local CA of the realm's internal address.
 RUNTIME_READS = ("SSL_CERT_FILE",)
+# Generated values of `.env.example` the compose file does not interpolate: papaia-ctl
+# writes each to a file secret before every start (render_core.ensure_me_secrets).
+FILE_SECRETS = {"PREFS_DB_PASSWORD": Path("infra/me/secrets/prefs-db-password")}
 # Names a service gets only while another profile is on as well, from an override the core
 # generates, never from the compose file: service -> profile -> names.
 HANDED_OVER: dict[str, dict[str, tuple[str, ...]]] = {
@@ -126,6 +137,29 @@ def _reads(path: Path) -> tuple[list[str], list[list[str]]]:
     return sorted(names - grouped), sorted(groups)
 
 
+def _channels(path: Path) -> list[str]:
+    """The literal tuple `CHANNELS = (...)` of the store's model module."""
+    if not path.is_file() or path.stat().st_size > _MAX_SOURCE_BYTES:
+        raise MeProfileError(f"{path}: not a readable model module")
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and [getattr(t, "id", None) for t in node.targets] == ["CHANNELS"]
+        ):
+            value = node.value
+            if isinstance(value, (ast.Tuple, ast.List)) and all(
+                isinstance(e, ast.Constant) and isinstance(e.value, str) for e in value.elts
+            ):
+                names = [e.value for e in value.elts]
+                if names and len(set(names)) == len(names) and all(
+                    re.fullmatch(r"[a-z][a-z_]{0,31}", n) for n in names
+                ):
+                    return names
+            break
+    raise MeProfileError(f"{path}: no literal CHANNELS tuple of channel names")
+
+
 def generate(source: Path, *, image: str, commit: str) -> dict:
     """The variable list of both services from a papaia-me checkout at `commit`."""
     if not PINNED_IMAGE_RE.fullmatch(image):
@@ -143,6 +177,7 @@ def generate(source: Path, *, image: str, commit: str) -> dict:
             "runtime": list(RUNTIME_READS),
             "with_profiles": {profile: list(names) for profile, names in handed.items()},
         }
+    services["prefs"]["channels"] = _channels(source / CHANNELS_SOURCE)
     return {
         "format": FORMAT,
         "image": image,
@@ -253,14 +288,52 @@ def check(repo_root: Path) -> list[str]:
             problems += _service_problems(name, services[name] or {}, listed["services"][name])
 
     root = set(common.parse_env_file(repo_root / ROOT_ENV_EXAMPLE_REL))
-    example = set(common.parse_env_file(repo_root / ENV_EXAMPLE_REL))
-    own = interpolated(compose_path) - root
+    example_values = common.parse_env_file(repo_root / ENV_EXAMPLE_REL)
+    example = set(example_values)
+    prefs_env = (services.get("prefs") or {}).get("environment") or {}
+    problems += _channel_problems(listed["services"]["prefs"], prefs_env, example_values)
+    own = (interpolated(compose_path) - root) | set(FILE_SECRETS)
     problems += [
         f"{ENV_EXAMPLE_REL}: {v} is interpolated but not documented" for v in sorted(own - example)
     ]
     problems += [
         f"{ENV_EXAMPLE_REL}: {v} is not interpolated by the profile" for v in sorted(example - own)
     ]
+    return problems
+
+
+def _compose_default(value: object) -> str | None:
+    """The default of `${NAME:-default}` / `${NAME-default}`, or the literal value."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}]*)\}", value)
+    if match:
+        return match.group(1)
+    return None if "${" in value else value
+
+
+def _channel_problems(listed: dict, environment: dict, example: dict[str, str]) -> list[str]:
+    channels = listed.get("channels")
+    if not isinstance(channels, list) or not channels:
+        return [f"{ENV_LIST_REL}: prefs has no channels; generate the list again"]
+    problems = []
+    for name, is_list in CHANNEL_SETTINGS.items():
+        for where, raw in (
+            ("prefs", _compose_default(environment.get(name))),
+            (str(ENV_EXAMPLE_REL), example.get(name)),
+        ):
+            if raw is None or (is_list and not raw.strip()):
+                continue
+            values = [v.strip() for v in raw.split(",")] if is_list else [raw.strip()]
+            unknown = [v for v in values if v not in channels]
+            if unknown:
+                problems.append(
+                    f"{where}: {name} names {', '.join(unknown)}, not a channel of the store "
+                    f"({', '.join(channels)})"
+                )
+            twice = sorted({v for v in values if values.count(v) > 1})
+            if twice:
+                problems.append(f"{where}: {name} names {', '.join(twice)} more than once")
     return problems
 
 

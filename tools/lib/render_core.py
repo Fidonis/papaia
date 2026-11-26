@@ -50,6 +50,7 @@ from . import (
     keycloak_role_sync,
     knowledge_map,
     localai_native,
+    me_profile,
     model_gateway,
     model_routes,
     realm_hardening,
@@ -329,6 +330,7 @@ def render(config_dir: Path, repo_root: Path) -> None:
         raise RenderError(str(exc)) from exc
     ensure_people_key(config_dir)
     ensure_audit_report_key(config_dir)
+    ensure_me_secrets(config_dir)
 
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
@@ -412,6 +414,27 @@ def ensure_audit_report_key(config_dir: Path) -> None:
             keys.generate(AUDIT_REPORT_ACCOUNT)
     except service_account_keys.KeyFileError as exc:
         raise RenderError(str(exc)) from exc
+
+
+def ensure_me_secrets(config_dir: Path) -> None:
+    """With the `me` profile, the file secrets of the profile exist before `up`, written
+    from their generated values in infra/me/.env (src/infra/me/docker-compose.yml). The
+    folder is the owner's alone; the file is readable inside the containers that mount
+    it (prefs as 10001, prefs-db as postgres), like the 0444 file of a Docker secret."""
+    if "me" not in _active_profiles(config_dir):
+        return
+    values = common.parse_env_file(config_dir / "infra" / "me" / ".env")
+    for name, rel in me_profile.FILE_SECRETS.items():
+        value = values.get(name, "")
+        if not value or value.startswith("GENERATE_"):
+            raise RenderError(
+                f"infra/me/.env: {name} is not generated yet; run 'papaia-ctl setup'"
+            )
+        path = config_dir / rel
+        common.ensure_dir(path.parent)
+        os.chmod(path.parent, 0o700)
+        common.atomic_write_private(path, value)
+        os.chmod(path, 0o644)
 
 
 ERASURE_KEY_FILE = Path("security") / "erasure-hmac"

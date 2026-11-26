@@ -1,6 +1,6 @@
 # Catalog declaration of the core profile `connections` (contract generation 9, schema
 # exposes.v1, ADR 0021). Taken from papaia-connections deploy/catalog/exposes.yaml at
-# 82e6177, the commit of the pinned image, with two changes: `scheme: https`, since the
+# 120b4e7, the commit of the pinned image, with two changes: `scheme: https`, since the
 # profile serves the registry over TLS, and an `id_field` on the resource of the two
 # operations that create an object (`propose_target`: host, `add_account`: label): the
 # platform catalog (platform-services.v1) needs one with every resource. `papaia-ctl catalog render` reads this file while the profile is on, and the
@@ -343,7 +343,15 @@ exposes:
               Konten einer Person oder Gruppe auf freigegebenen Zielen mit Benutzername und verschlüsselten
               Zugangsdaten.
             en: "Accounts of a person or a group on approved targets, with user name and encrypted credentials."
-          legal_basis: {de: "Art. 6 Abs. 1 lit. f DSGVO", en: "Art. 6(1)(f) GDPR"}
+          legal_basis:
+            de: >-
+              Art. 6 Abs. 1 lit. f DSGVO als Vorlage. Verantwortlicher ist der Betreiber: er dokumentiert die
+              Interessenabwägung, prüft bei Beschäftigtendaten Art. 6 Abs. 1 lit. b DSGVO bzw. § 26 BDSG und
+              führt die Verarbeitung im Verzeichnis nach Art. 30 DSGVO.
+            en: >-
+              Art. 6(1)(f) GDPR as a template. The operator is the controller: documents the balancing of
+              interests, checks Art. 6(1)(b) GDPR or § 26 BDSG for employee data and keeps the processing in
+              the record of Art. 30 GDPR.
           retention: {until: deleted_by_person}
           data_class: confidential
           erasure: me_api
@@ -356,20 +364,98 @@ exposes:
             en: >-
               Unchangeable record of who set up a target, added an account or used one, and when. Without
               credentials.
-          legal_basis: {de: "Art. 6 Abs. 1 lit. f DSGVO", en: "Art. 6(1)(f) GDPR"}
+          legal_basis:
+            de: >-
+              Art. 6 Abs. 1 lit. f DSGVO als Vorlage. Verantwortlicher ist der Betreiber: er dokumentiert die
+              Interessenabwägung, prüft bei Beschäftigtendaten Art. 6 Abs. 1 lit. b DSGVO bzw. § 26 BDSG und
+              führt die Verarbeitung im Verzeichnis nach Art. 30 DSGVO.
+            en: >-
+              Art. 6(1)(f) GDPR as a template. The operator is the controller: documents the balancing of
+              interests, checks Art. 6(1)(b) GDPR or § 26 BDSG for employee data and keeps the processing in
+              the record of Art. 30 GDPR.
           retention:
-            until: legal_obligation
+            days: 180
             note:
-              de: "Einträge sind verkettet und werden nicht einzeln entfernt."
-              en: "Entries are chained and are not removed one by one."
+              de: >-
+                Grund: die Nutzung gespeicherter Zugangsdaten, auch einen spät bemerkten Missbrauch, über einen
+                halbjährlichen Prüfzyklus nachvollziehen. Eine längere Frist nur durch den Betreiber mit dokumentierter
+                Begründung. Danach wird die Kette abschnittsweise mit einem Prüfpunkt gekürzt.
+              en: >-
+                Reason: tracing the use of stored credentials, including misuse noticed late, across one half-yearly
+                audit cycle. A longer term only by the operator with a documented reason. After the term the chain
+                is truncated by section behind a checkpoint.
           data_class: personal
           erasure: on_request
           on_request:
             action: journal-review
             way:
-              de: "Anfrage an den Betreiber der Installation, der die Aufbewahrungspflicht prüft."
-              en: "Request to the operator of the installation, who checks the duty to keep the record."
+              de: >-
+                Anfrage an den Betreiber. Einträge sind verkettet und werden nicht einzeln entfernt, sondern nach
+                Ablauf der Frist abschnittsweise hinter einem Prüfpunkt.
+              en: >-
+                Request to the operator. Entries are chained and are not removed one by one, but by section behind
+                a checkpoint after the term.
             responsible: {de: "Betreiber der Installation", en: "Operator of the installation"}
+        - id: persons
+          title: {de: "Personen", en: "Persons"}
+          purpose:
+            de: >-
+              Subjekt und Gruppen einer Person aus ihrem letzten geprüften Token und dessen Zeitpunkt, für die
+              Rechteprüfung und die Zuordnung von Gruppenkonten.
+            en: >-
+              Subject and groups of a person from her last verified token and its time, for the rights check and
+              the matching of group accounts.
+          legal_basis:
+            de: >-
+              Art. 6 Abs. 1 lit. f DSGVO als Vorlage. Verantwortlicher ist der Betreiber: er dokumentiert die
+              Interessenabwägung, prüft bei Beschäftigtendaten Art. 6 Abs. 1 lit. b DSGVO bzw. § 26 BDSG und
+              führt die Verarbeitung im Verzeichnis nach Art. 30 DSGVO.
+            en: >-
+              Art. 6(1)(f) GDPR as a template. The operator is the controller: documents the balancing of
+              interests, checks Art. 6(1)(b) GDPR or § 26 BDSG for employee data and keeps the processing in
+              the record of Art. 30 GDPR.
+          retention:
+            until: account_deleted
+            note:
+              de: "Bis der Betreiber die Person entfernt (Verfahren für ausgeschiedene Personen)."
+              en: "Until the operator removes the person (procedure for persons who left)."
+          data_class: personal
+          erasure: on_request
+          on_request:
+            action: person-removal
+            way:
+              de: "Der Betreiber entfernt die Person mit ihren Konten und Vollmachten; das Journal hält es fest."
+              en: "The operator removes the person with her accounts and mandates; the journal records it."
+            responsible: {de: "Betreiber der Installation", en: "Operator of the installation"}
+        - id: mandates
+          title: {de: "Vollmachten", en: "Mandates"}
+          purpose:
+            de: >-
+              Konto, Dienst, Ablauf und Ende einer Vollmacht: Nachweis der Zustimmung der Person zur Nutzung
+              eines Kontos durch einen Dienst.
+            en: >-
+              Account, service, expiry and end of a mandate: proof of the person's consent to the use of an
+              account by a service.
+          legal_basis:
+            de: >-
+              Art. 6 Abs. 1 lit. f DSGVO als Vorlage. Verantwortlicher ist der Betreiber: er dokumentiert die
+              Interessenabwägung, prüft bei Beschäftigtendaten Art. 6 Abs. 1 lit. b DSGVO bzw. § 26 BDSG und
+              führt die Verarbeitung im Verzeichnis nach Art. 30 DSGVO.
+            en: >-
+              Art. 6(1)(f) GDPR as a template. The operator is the controller: documents the balancing of
+              interests, checks Art. 6(1)(b) GDPR or § 26 BDSG for employee data and keeps the processing in
+              the record of Art. 30 GDPR.
+          retention:
+            until: account_deleted
+            note:
+              de: >-
+                Bis das Konto gelöscht oder der Dienst aus dem Konto entfernt wird; eine beendete Vollmacht
+                bleibt mit ihrem Ende (ended_at) als Nachweis der Entscheidung der Person erfasst.
+              en: >-
+                Until the account is deleted or the service is removed from the account; an ended mandate
+                stays recorded with its end (ended_at) as proof of the person's decision.
+          data_class: personal
+          erasure: me_api
       secrets:
         - {kind: database, location: connections-db}
         - {kind: file, location: connections-keys}

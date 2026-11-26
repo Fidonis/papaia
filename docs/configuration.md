@@ -211,7 +211,7 @@ compose file and the variables the image reads in step. The browser address is
 |---|---|
 | `ME_OIDC_CLIENT_SECRET` | Generated. Secret of the confidential client `papaia-me`, which signs the person in and exchanges the person's token per module |
 | `ME_SESSION_SECRET` | Generated. Signing key of the session cookie, at least 32 bytes |
-| `PREFS_DB_PASSWORD` | Generated. Password of `prefs-db`; it reaches `prefs` and `prefs-db` as a secret file under `/run/secrets`, never as a variable of either service |
+| `PREFS_DB_PASSWORD` | Generated. Password of `prefs-db`; it reaches `prefs` and `prefs-db` as a secret file under `/run/secrets`, never as a variable of either service. `papaia-ctl` writes it to `infra/me/secrets/prefs-db-password` (folder mode 0700) before every start: `prefs` runs read-only, and Compose takes no `environment:` secret for a read-only service |
 | `ME_OIDC_LOGOUT_URL`, `ME_OIDC_INTERNAL_ISSUER` | Sign-in details beyond the shared `OIDC_*` variables. Empty: derived from the issuer (end-session endpoint, back channel on the issuer itself) |
 | `ME_OIDC_SCOPE` | Scopes of the sign-in (default `openid profile`) |
 | `ME_ACCOUNT_URL` | Account console of the sign-in service. Empty: `<issuer>/account` |
@@ -221,9 +221,23 @@ compose file and the variables the image reads in step. The browser address is
 | `ME_MODULE_PORT` | Port of a module's API when its declaration names none (default 8080) |
 | `ME_DEFAULT_LANG` | Language of the area for a person without a saved language: `de` or `en` (default `de`) |
 | `ME_INSTALLATION_NAME` | Name of the installation in page titles while the catalog carries no branding, at most 60 characters. Empty: the name the image ships |
-| `PREFS_DEFAULT_TIME_ZONE` | Time zone of a person who never saved one (default `Europe/Berlin`) |
+| `ME_LOG_LEVEL` | Log level of `me-web`: `DEBUG`, `INFO`, `WARNING` or `ERROR` (default `INFO`); its own name, apart from the manager's log level |
+| `PREFS_DEFAULT_TIME_ZONE` | Time zone of a person who never saved one (default `Europe/Berlin`). `me-web` gets the same value, the time zone its "Auf Standard zurücksetzen" writes |
 | `PREFS_DEFAULT_CHANNEL` | Notification channel of a person who never saved one: `mail` or `chat_window` (default `mail`) |
+| `PREFS_DISABLED_CHANNELS` | Notification channels switched off for the installation, comma-separated: `chat_window`, `mail`. Empty (default): both on. Switch `mail` off while the installation has no mail relay; a person then cannot choose it. `python -m lib.me_profile check` refuses a name the store does not know |
 | `PREFS_LANG` | Language of the store's messages: `de` or `en` (default `de`) |
+
+Set in the compose file, not in `.env`: `me-web` reaches `prefs` at `http://prefs:8080`
+and reads the audit reads of its page "Aktivität" from `papaia-audit` at
+`https://papaia-audit:8443` (on `papaia-audit-ingest-net`) over mutual TLS with the source
+certificate of `papaia-me`: the folder `infra/audit/clients/papaia-me` that
+`papaia-ctl audit cert papaia-me` writes and `prefs` delivers its audit rows with.
+Mein Bereich is one audit source with one outbox in `prefs-db`: `me-web` signs its own
+`papaia.audit/1` rows with the key of that certificate and hands them to `prefs` before it
+answers; `prefs` checks the signature with the same certificate and delivers them with its
+own rows. `me-web` does not start when the key in the folder does not load or does not
+match the certificate, and answers a request with an error when `prefs` does not take its
+rows.
 
 The volume `prefs-pgdata` belongs to the module `me` in a backup
 (`papaia-ctl restore --only=module:me`).
