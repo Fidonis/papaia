@@ -12,6 +12,17 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Mein Bereich runs the image with the fixed pam packages of its base
+
+- `me-web` and `prefs` run the image built from papaia-me `releases/0.1.0` (2ac8fa8) in
+  place of the candidate 3e5f490 named below. The image of 3e5f490 carried the pam packages
+  of its Debian base at 1.5.2-6+deb12u2 (CVE-2025-6020, high, fix available); the new one
+  carries 1.5.2-6+deb12u3. The other changes since 3e5f490 are documentation, tests and checks of
+  papaia-me; the variables `me-web` and `prefs` read are unchanged.
+- Pinned by the index digest of the reproducible build of that commit (linux/amd64,
+  linux/arm64) in both compose pins and `src/infra/me/service-env.json`, with the source
+  commit and the entry in `compat/release-day-images.yaml`. No other pin moves.
+
 ### The test message by mail of Mein Bereich goes through the platform's mail relay
 
 - `me-web` and `prefs` run the image built from papaia-me `releases/0.1.0` (3e5f490), the

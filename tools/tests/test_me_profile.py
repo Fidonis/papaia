@@ -22,7 +22,18 @@ from urllib.parse import urlsplit
 import pytest
 import yaml
 
-from lib import audit, common, compat, envtree, ingress, me_profile, resolve, smtp, topology
+from lib import (
+    audit,
+    common,
+    compat,
+    envtree,
+    ingress,
+    me_profile,
+    release_day,
+    resolve,
+    smtp,
+    topology,
+)
 from lib.compat import CoreTarget
 
 REPO = Path(__file__).resolve().parents[2]
@@ -206,6 +217,30 @@ def test_the_list_names_a_full_source_commit_and_the_pinned_image():
     assert int(listed["source"]["commit"], 16) >= 0
     services = _compose()["services"]
     assert services["me-web"]["image"] == services["prefs"]["image"] == listed["image"]
+
+
+# The Me candidate the core pins: papaia-me `releases/0.1.0` with the fixed pam packages of
+# its Debian base (CVE-2025-6020) and the traceability of its MUSS criteria. The digest is
+# the reproducible build of that commit for linux/amd64 and linux/arm64.
+ME_CANDIDATE_COMMIT = "2ac8fa868843172b052aa88c9524c76aac1b23cf"
+ME_CANDIDATE_DIGEST = "sha256:fffdd8bbf7b23b9530eea645522e39378e5f8a259833b722460702d27fc381bf"
+ME_CANDIDATE_IMAGE = f"ghcr.io/fidonis/papaia-me:0.1.0@{ME_CANDIDATE_DIGEST}"
+
+
+def test_me_web_and_prefs_run_the_candidate_with_the_fixed_base_packages():
+    listed = _env_list()
+    assert listed["image"] == ME_CANDIDATE_IMAGE
+    assert listed["source"] == {"repository": "papaia-me", "commit": ME_CANDIDATE_COMMIT}
+    services = _compose()["services"]
+    assert services["me-web"]["image"] == services["prefs"]["image"] == ME_CANDIDATE_IMAGE
+
+
+def test_the_release_day_entry_of_me_names_the_pinned_candidate_and_its_commit():
+    entries = [entry for entry in release_day.load(REPO) if entry.module == "papaia-me"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert f"{entry.image}:{entry.tag}@{entry.digest}" == ME_CANDIDATE_IMAGE
+    assert entry.source == ME_CANDIDATE_COMMIT == _env_list()["source"]["commit"]
 
 
 def test_me_web_reads_its_audit_tickets_from_papaia_audit_over_mutual_tls():

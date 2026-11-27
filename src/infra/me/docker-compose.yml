@@ -46,7 +46,7 @@ services:
 
   me-web:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:9046995b0f0ceed7b5daab95284724a603afd0574b877f66679a8320b992c0a3
+    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:fffdd8bbf7b23b9530eea645522e39378e5f8a259833b722460702d27fc381bf
     restart: unless-stopped
     environment:
       OIDC_ISSUER: ${OIDC_ISSUER}
@@ -135,7 +135,7 @@ services:
 
   prefs:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:9046995b0f0ceed7b5daab95284724a603afd0574b877f66679a8320b992c0a3
+    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:fffdd8bbf7b23b9530eea645522e39378e5f8a259833b722460702d27fc381bf
     entrypoint: ["python", "-m", "prefs"]
     restart: unless-stopped
     depends_on:

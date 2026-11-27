@@ -1,9 +1,9 @@
 {
   "format": "papaia.me-service-env/1",
-  "image": "ghcr.io/fidonis/papaia-me:0.1.0@sha256:9046995b0f0ceed7b5daab95284724a603afd0574b877f66679a8320b992c0a3",
+  "image": "ghcr.io/fidonis/papaia-me:0.1.0@sha256:fffdd8bbf7b23b9530eea645522e39378e5f8a259833b722460702d27fc381bf",
   "source": {
     "repository": "papaia-me",
-    "commit": "3e5f49044e379901ff7d041e96fbcf4792e061d1"
+    "commit": "2ac8fa868843172b052aa88c9524c76aac1b23cf"
   },
   "services": {
     "me-web": {
