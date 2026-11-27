@@ -196,6 +196,10 @@ based on merged pull requests; this file mirrors the published releases.
   own image carries the fixed package. The profile `lifecycle` needs one image less.
 - `postgres:16.16` (`litellm-db`) and `postgres:17.12-alpine3.24` (`papaia-audit-db`)
   are re-pinned to the digests their tags name today (linux/amd64 and linux/arm64).
+- `postgres:16.16` (`litellm-db`) is re-pinned again: upstream re-published the tag
+  with a rebuilt linux/riscv64 image; the linux/amd64 and linux/arm64 images are unchanged.
+  `check-image-pins repin` moves only the pins of the tag it is given when an image is
+  pinned with several tags (PostgreSQL 16.16, 17.12 and 18.3), and refuses another tag.
 
 ### Mein Bereich and the connection registry on their release candidates
 

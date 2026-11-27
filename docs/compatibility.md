@@ -388,7 +388,9 @@ tag (the release notes and the output of its release workflow) names
 `<name>:<version>@sha256:<digest>`. Each such image is an item of the release
 day: the manager pin `ghcr.io/fidonis/papaia-manager` is one, since the manager's
 runtime base is not pinned by digest and its published digest differs from the
-candidate. Then:
+candidate. An image pinned with more than one tag (PostgreSQL of several services)
+moves only at the pins of the tag that `--ref` names, and a tag none of them carries is
+refused with the pinned tags named. Then:
 
 ```sh
 # 1. Move every pin of the image in compose and service-env.json at once.

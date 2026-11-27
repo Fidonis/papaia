@@ -14,6 +14,7 @@ import email.message
 import hashlib
 import http.server
 import json
+import shutil
 import subprocess
 import threading
 import urllib.error
@@ -565,6 +566,87 @@ def test_repin_refuses(tmp_path, ref, match):
         image_pins.repin(root, ref)
 
     assert (root / "src/app/docker-compose.yml").read_text(encoding="utf-8") == before
+
+
+D_NEW = "sha256:" + hashlib.sha256(b"new index").hexdigest()
+
+
+def _two_tag_checkout(tmp_path: Path) -> Path:
+    """One image pinned with two tags: 16.1 in compose and service-env, 18.3 in compose."""
+    return _checkout(tmp_path, f"db:16.1@{D_KNOWN}", db=f"db:18.3@{D_OTHER}")
+
+
+def _files(root: Path) -> dict[str, bytes]:
+    return {path.relative_to(root).as_posix(): path.read_bytes()
+            for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+def test_repin_moves_only_the_pins_of_the_tag_when_an_image_has_several(tmp_path):
+    root = _two_tag_checkout(tmp_path)
+    compose = root / "src/app/docker-compose.yml"
+    other = compose.read_bytes().splitlines(keepends=True)[5]
+
+    changed = image_pins.repin(root, f"db:16.1@{D_NEW}")
+
+    assert changed == ["src/app/docker-compose.yml:4: services.app.image",
+                       "src/app/service-env.json:3: image"]
+    assert [p.ref for p in image_pins.collect(root)] == [
+        f"db:16.1@{D_NEW}", f"db:18.3@{D_OTHER}", f"db:16.1@{D_NEW}"]
+    assert compose.read_bytes().splitlines(keepends=True)[5] == other
+    assert image_pins.repin(root, f"db:16.1@{D_NEW}") == []
+
+
+def test_repin_refuses_a_new_tag_when_an_image_has_several(tmp_path):
+    root = _two_tag_checkout(tmp_path)
+    before = _files(root)
+
+    with pytest.raises(image_pins.PinError, match=r"16\.1, 18\.3") as caught:
+        image_pins.repin(root, f"db:17.0@{D_NEW}")
+
+    assert "docker.io/library/db" in str(caught.value)
+    assert _files(root) == before
+
+
+def test_the_command_refuses_a_new_tag_of_an_image_with_several_and_exits_2(
+        tmp_path, capsys):
+    root = _two_tag_checkout(tmp_path)
+    before = _files(root)
+
+    code = image_pins.main(["--repo-root", str(root), "repin", f"--ref=db:17.0@{D_NEW}"])
+
+    assert code == 2
+    assert "16.1, 18.3" in capsys.readouterr().err
+    assert _files(root) == before
+
+
+def _shipped_copy(tmp_path: Path) -> Path:
+    root = tmp_path / "core"
+    root.mkdir()
+    shutil.copy2(REPO / "VERSION", root / "VERSION")
+    shutil.copytree(REPO / "compat", root / "compat")
+    shutil.copytree(REPO / "src", root / "src", symlinks=True)
+    return root
+
+
+def test_repin_of_postgres_16_16_in_the_shipped_tree_moves_only_litellm_db(tmp_path):
+    root = _shipped_copy(tmp_path)
+    before = _files(root)
+    postgres = [p for p in image_pins.collect(root)
+                if images.parse_ref(p.ref).repository == "library/postgres"]
+    assert len({images.parse_ref(p.ref).tag for p in postgres}) > 1
+
+    changed = image_pins.repin(root, f"postgres:16.16@{D_NEW}")
+
+    assert changed == ["src/ai/litellm/docker-compose.yml:88: services.litellm-db.image"]
+    after = _files(root)
+    assert [name for name in after if after[name] != before[name]] == [
+        "src/ai/litellm/docker-compose.yml"]
+    old = before["src/ai/litellm/docker-compose.yml"].splitlines(keepends=True)
+    new = after["src/ai/litellm/docker-compose.yml"].splitlines(keepends=True)
+    assert [i + 1 for i, (a, b) in enumerate(zip(old, new, strict=True)) if a != b] == [88]
+    assert [(p.location, images.parse_ref(p.ref).tag) for p in image_pins.collect(root)
+            if images.parse_ref(p.ref).repository == "library/postgres"] == [
+        (p.location, images.parse_ref(p.ref).tag) for p in postgres]
 
 
 def test_repin_leaves_the_own_images_to_build_images(tmp_path):
