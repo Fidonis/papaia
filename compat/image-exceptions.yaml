@@ -7,7 +7,7 @@
 schema: papaia.image-exceptions/1
 exceptions:
   - image: ghcr.io/firecrawl/firecrawl-mcp-server
-    digest: sha256:d9015c8ced7fc4c7186e8c07d8cae206803252c381992534f05e4e15242f2164
+    digest: sha256:92feb480268c790c122359a8d875d763ac274f6e40ede5462e106fc964ca14e0
     rule: tag
     reason: >-
       upstream publishes this build under moving tags only (latest, sha-<commit>

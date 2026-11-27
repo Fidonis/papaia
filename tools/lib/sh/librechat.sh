@@ -72,3 +72,42 @@ cmd_librechat_clear_history() {
     fi
     py_cli librechat-clear-history ${args[@]+"${args[@]}"}
 }
+
+# After `addon remove` or `addon uninstall` of an add-on that contributed LibreChat
+# agents or prompts: run LibreChat's init scripts once, so their tombstones delete what
+# the add-on no longer provides while LibreChat keeps running. Otherwise that happens
+# only when LibreChat is next recreated.
+#
+# The scripts run in a one-off container of the librechat service (`compose run
+# --no-deps`), not in the running one: the render has just replaced the add-on content
+# directories, and only a new container mounts the new ones -- the running container
+# still sees the old directory, which would read as "no add-on content at all" and
+# delete the agents and prompts of every other add-on. The compose files and env file
+# are those of `start`. Never fails the add-on command: anything that goes wrong ends in
+# a hint to restart LibreChat. $1 add-on name
+_librechat_sync_addon_content() {
+    local addon_name="$1" mode
+    local restart_hint="Its agents and prompts disappear from the chat when LibreChat is next restarted: run 'papaia-ctl start'."
+    mode="$(_topology_mode 2>/dev/null)" || mode="unknown"
+    if [ "$mode" != "single" ]; then
+        info "Addon $addon_name contributed LibreChat agents or prompts. $restart_hint"
+        return 0
+    fi
+    _core_compose_args 0
+    local -a compose=(docker compose ${CORE_COMPOSE_ARGS[@]+"${CORE_COMPOSE_ARGS[@]}"})
+    local running
+    running="$(${compose[@]+"${compose[@]}"} ps -q --status running librechat 2>/dev/null)" || running=""
+    if [ -z "${running//[$'\r\n']/}" ]; then
+        info "LibreChat is not running; its next start removes the agents and prompts of addon $addon_name."
+        return 0
+    fi
+    info "Removing the agents and prompts of addon $addon_name from LibreChat..."
+    local rc=0
+    ${compose[@]+"${compose[@]}"} run --rm --no-deps -T --entrypoint /bin/sh librechat -c \
+        'cd /app && node /app/patches/agents-init.js && node /app/patches/prompts-init.js' \
+        || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        warn "Could not update the LibreChat agents and prompts (exit status $rc). $restart_hint"
+    fi
+    return 0
+}

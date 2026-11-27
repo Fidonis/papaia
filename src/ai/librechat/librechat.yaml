@@ -30,6 +30,24 @@ endpoints:
         default: ["mammouth-chat", "qwen2.5-1.5b-instruct"]
         fetch: true
       titleConvo: true
+      # LibreChat's default title prompt asks for "title case conventions" and
+      # says nothing about the language, so models answer in English even for a
+      # conversation in another language. Title generation runs with the
+      # `completion` method by default, and LibreChat formats this prompt with
+      # `{convo}`: the user's first message (and, with `titleTiming: final`,
+      # the reply). It applies to chats with a model of this endpoint and to
+      # agents whose provider is this endpoint; `endpoints.all` is deliberately
+      # not used, because it would replace every endpoint's title settings,
+      # titleModel included. Another endpoint added in the overlay needs its
+      # own titlePrompt.
+      titlePrompt: |-
+        Write a concise title of at most five words for the conversation below.
+        Write the title in the language the user writes in. Never translate it
+        into English or any other language.
+        Return only the title, without quotation marks and without a trailing period.
+
+        Conversation:
+        {convo}
       summarize: false
       forcePrompt: false
       modelDisplayLabel: "Private-LLM"

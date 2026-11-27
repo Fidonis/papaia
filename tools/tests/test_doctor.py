@@ -3019,3 +3019,66 @@ def test_person_export_fails_for_a_folder_others_can_open(stack):
     check = result(run_doctor(stack), "person_export")
     assert check.status == FAIL
     assert "0700" in check.summary
+
+
+# A job left loaded after LocalAI was switched off or back to its container where launchd
+# was out of reach (papaia-manager's container).
+LEFTOVER = "of the native LocalAI is still loaded although"
+
+
+def leftover_result(stack, job: CommandResult, *, in_container=False, launchd=True):
+    docker = launchd_docker(job)
+    report = run_doctor(
+        stack,
+        docker=docker,
+        in_container=lambda: in_container,
+        launchd_host=lambda: launchd,
+    )
+    return result(report, "localai_native"), [c for c in docker.calls if c[0] == "launchctl"]
+
+
+@pytest.mark.parametrize("job", [JOB_RUNNING, JOB_CRASHED])
+def test_a_job_still_loaded_for_the_container_runtime_is_a_warning(stack, job):
+    enable_localai(stack)
+    set_env(stack, LOCALAI_RUNTIME="container", LOCALAI_EXT_PORT="8200")
+    found, _ = leftover_result(stack, job)
+    assert found.status == WARN
+    assert f"de.fidonis.papaia.papaia.localai {LEFTOVER} LocalAI runs in its container" in (
+        found.summary
+    )
+    assert "port 8200" in found.summary and "'papaia-ctl stop'" in found.summary
+    assert found.details["launchd"]["loaded"] is True
+
+
+def test_a_job_still_loaded_while_localai_is_off_is_a_warning(stack, tmp_path):
+    # Switched off with the runtime still stored as native.
+    native_localai(stack, tmp_path)
+    set_env(stack, COMPOSE_PROFILES=PROFILES)
+    found, _ = leftover_result(stack, JOB_RUNNING)
+    assert found.status == WARN
+    assert f"{LEFTOVER} LocalAI is not enabled" in found.summary
+
+
+def test_no_loaded_job_while_localai_is_off_or_in_its_container_stays_skipped(stack, tmp_path):
+    found, printed = leftover_result(stack, JOB_NOT_LOADED)
+    assert (found.status, found.summary) == (SKIP, "LocalAI runs in its container")
+    assert printed, "on the Mac the job is looked up"
+    native_localai(stack, tmp_path)
+    set_env(stack, COMPOSE_PROFILES=PROFILES)
+    found, _ = leftover_result(stack, JOB_NOT_LOADED)
+    assert (found.status, found.summary) == (SKIP, "LocalAI is not enabled")
+
+
+@pytest.mark.parametrize("where", [{"in_container": True}, {"launchd": False}])
+def test_off_the_mac_a_leftover_job_is_not_looked_up(stack, where):
+    enable_localai(stack)
+    found, printed = leftover_result(stack, JOB_RUNNING, **where)
+    assert (found.status, found.summary) == (SKIP, "LocalAI runs in its container")
+    assert printed == []
+
+
+def test_the_doctor_json_with_a_leftover_job_matches_the_schema(stack):
+    enable_localai(stack)
+    report = run_doctor(stack, docker=launchd_docker(JOB_RUNNING), launchd_host=lambda: True)
+    assert result(report, "localai_native").status == WARN
+    assert not list(VALIDATOR.iter_errors(json.loads(doctor.to_json(report))))

@@ -318,6 +318,9 @@ MANIFEST_KEYS = [
     "env_prompts.<key>.default_from_addon",
     "exports",
     "actions",
+    # Additive, not yet assigned a generation: the action `addon uninstall --clean-up`
+    # runs first.
+    "actions.<name>.on_uninstall",
     "env_replace_secrets",
     "integration.keycloak.clients",
     "integration.keycloak.client_mappers",
@@ -451,4 +454,4 @@ def test_manifest_keys_are_declared():
     # No mechanical source for "keys the code reads" exists; this list is
     # the reviewed declaration. Touching manifest handling means touching
     # this file -- which is exactly the reminder it is here to produce.
-    assert len(MANIFEST_KEYS) == 27, _SURFACE_CHANGED
+    assert len(MANIFEST_KEYS) == 28, _SURFACE_CHANGED

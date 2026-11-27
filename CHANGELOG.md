@@ -12,6 +12,37 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### Changes of the 1.10.0 milestone merged into this release
+
+- fix(render): quote the hash labels of the generated overrides (#438)
+- ci(deps): bump astral-sh/setup-uv from 10.3.3 to 10.4.0 (#437); every workflow uses the
+  same pinned release
+- chore(deps): bump the compose-patch group: LibreChat v0.8.9, its RAG API v0.9.1 and
+  Firecrawl 2.11.807 (#428)
+- fix(localai): pull the metal backend under launchd and purge the v4.12 state (#419)
+- fix(librechat): generate conversation titles in the user's language (#418)
+- fix(addon): run the add-on's clean-up action and drop its chat content on uninstall
+  (#416). The action marked `on_uninstall: true` runs on `addon uninstall --purge-data`
+  (formerly `--clean-up`). The key is not tied to an add-on contract generation yet;
+  `ADDON_API` stays at 18.
+- fix(localai): name the reason and warn from a container when a native job is retired
+  (#414)
+- fix(setup): leave no template configuration behind when a first setup is refused (#413).
+  A root `.env` that no setup wrote takes the keys it lacks from the template, so the
+  addresses it derives are those of a first setup.
+- docs(localai): point the intel mmap hint at the overlay (#432)
+- fix(litellm): start without a local ca under external oidc (#434)
+- feat(litellm): recreate litellm when its rendered configuration changes (#412)
+- fix(localai): remove model configs that left the overlay (#411)
+- chore(deps): Apache Tika 4.2.0-1 (#408), qdrant-ingest 1.1.0 (#430), Qdrant v1.20.2 (#407),
+  firecrawl-mcp-server `92feb48` (#406), LiteLLM 1.110.2 (#405). These and the three images
+  of #428 are pinned as `<name>:<tag>@sha256:<digest>` like every other core image; the
+  firecrawl-mcp-server tag exception moves to the new digest.
+- The optional `pki` profile (#423) and the second renderer of the platform services
+  catalogue (#436) are not part of this release line: the platform PKI (ADR 0019) and the
+  platform catalog stay the ones described in `docs/pki.md` and `docs/architecture.md`. Their
+  decision records are kept as ADR 0036 and ADR 0037 (numbers 0017 and 0019 are taken).
+
 ### Mein Bereich runs the image with the fixed pam packages of its base
 
 - `me-web` and `prefs` run the image built from papaia-me `releases/0.1.0` (2ac8fa8) in

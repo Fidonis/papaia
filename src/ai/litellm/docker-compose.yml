@@ -13,7 +13,7 @@ x-papaia-logging: &papaia-logging
 services:
   litellm:
     logging: *papaia-logging
-    image: ghcr.io/berriai/litellm:v1.108.3@sha256:f14d0a035d84d1a8bc98538faf5999e456641fd4cfa191822fd4be1934c1f4f6
+    image: ghcr.io/berriai/litellm:1.110.2@sha256:ef798594ca3db8d81bad2e1439f536f49b71fe095ee9f20416f5e149b4e22035
     restart: unless-stopped
     env_file:
       - ./.env
@@ -68,8 +68,10 @@ services:
         bind:
           create_host_path: false
     entrypoint: ["/bin/sh", "-c"]
+    # SSL_CERT_FILE replaces Python's trust store, so the bundle starts from the
+    # public roots. The local CA is generated only for the bundled Keycloak.
     command:
-      - "python -c 'import certifi,shutil; shutil.copy(certifi.where(), \"/tmp/ca-bundle.crt\")' && cat /certs/local-ca.crt >> /tmp/ca-bundle.crt && exec litellm --config=/app/config.yaml"
+      - "python -c 'import certifi,shutil; shutil.copy(certifi.where(), \"/tmp/ca-bundle.crt\")' && if [ -e /certs/local-ca.crt ]; then cat /certs/local-ca.crt >> /tmp/ca-bundle.crt; fi && exec litellm --config=/app/config.yaml"
     depends_on:
       litellm-db:
         condition: service_healthy

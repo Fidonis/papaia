@@ -2738,3 +2738,184 @@ path = "tools/tests/test_resolve.py"
 term = "agents"
 fingerprint = "ce571642433d5a63bac2a5ffd13bf26662099a47a31b45b0584bb9afd15578c6"
 reason = "product vocabulary present before the word check (chat feature names, provider API name, product term); frozen, texts unchanged"
+
+[[entry]]
+path = "README.md"
+term = "agents"
+fingerprint = "a629e6385b659ed6acfb029545491958ac056246943c47782356ed7c40d8d656"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "README.md"
+term = "agents"
+fingerprint = "e2ed38f2f09e33df4e392f6d31ff9817118ca610b8d553bcadc35642f9592194"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "README.md"
+term = "agent"
+fingerprint = "e2ed38f2f09e33df4e392f6d31ff9817118ca610b8d553bcadc35642f9592194"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "README.md"
+term = "agents"
+fingerprint = "8cece47d4d85738ec2eed45033ce9ba60dcd0661865ee20c176212ea2cd6a368"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "README.md"
+term = "agent"
+fingerprint = "3f4b23e04d042a0ada8085996d997ca257a6ce56ea449ee5a777cba264b43f55"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "c76ba7134e680ed5f970490aab62547dc227e3ab7a502dfff1784ac19aa05090"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "6aaa5532ecd22f950b251c8b58c8fadab34e9937ab4d61d413ec529d1f967b9b"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "fc826caf062ebe6676aa76745848426b70460f74eb856c224942a09da138a797"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "docs/architecture.md"
+term = "agents"
+fingerprint = "10bca0bd54e7f2b0a33899a6444b19b1bd1ec14f4e6b9fd197d18316cafbb924"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "src/ai/librechat/librechat.yaml"
+term = "agents"
+fingerprint = "d9ff53294bc78a2483eeae4b038619479cc236c5460a2439823cb654a080c0ea"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/addon.sh"
+term = "agents"
+fingerprint = "bc34ae3ef4ee3b7b302eba0cebb04e3ec0b7165d46807a3f44a3b32c01e107d8"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/addon.sh"
+term = "agents"
+fingerprint = "d584c0139c2e4812ca64ae6250bf0ee00a8a393b7b90fb312b7ca1bf19670a23"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/addon.sh"
+term = "agents"
+fingerprint = "d4a2b01f86fce56f8ba2365612d4b36039c3533ea5af16c75b9b0f7b6e06dde4"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "534261e4e15f8647a251249082327c2479d6aa942f37894e6bf12b5c113cef07"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "23eef1f821bbee446b82712f86b43651934e8062c9313bcaa56eb464bb40cc4c"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "231334f939b08cec0dd81fe9c391a1eaf4b0cc9b196524e92112539ac5cb6511"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "0f36fc1dd39bab230c0ebab6ae60ba15eec1a0c6632c1125dbe532324d047423"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "e93d3dfeeefee5d06d36a01583182e553117c4f40258ba2a78c6a564585bfa38"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "ae91c85a70e6ff6fd8b28bb1bc0604fe60ef817d69120aacf3a8232d600465ec"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "d01066c2de57eac91fd325a57b372d1b20ef490b9e8efe8dd8e32e7ecf36cb33"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/lib/sh/librechat.sh"
+term = "agents"
+fingerprint = "749ed30de827686d6683d11d3207cc95fd1d97ac4fe9c227485088f5b8b052ec"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agent"
+fingerprint = "8010d6a51faad3f22b62c31a828b688fcc858ad8b5058c992810f7c5abe16473"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agents"
+fingerprint = "c2f029997a2705ee7d33ca8679474cc36b4e8ba26826644b1f7b51bf06b11f9b"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agents"
+fingerprint = "06c64087617a9787d1cc016fd8712c391be01b35040f7d636a24e5b572a5b04d"
+count = 2
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agents"
+fingerprint = "52392fa707e017412c4c1615a6a4da2a631b9d8ece68224fbb08591aa0a24a1c"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agents"
+fingerprint = "e174031022e5a27f348b86e19f702172aad51d01a9ac99c9d5998b96ca7af1fb"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agents"
+fingerprint = "0943c9e4f65c43330452b47c212389d1c2755dcb708a613a48d12092701bf8bc"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agents"
+fingerprint = "e85d0f910b716815e3c22c8a53ca1bbb6faf569bce5446c66a0662ab35daa545"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_addon_uninstall_cleanup.py"
+term = "agents"
+fingerprint = "61111c9cce35ae82b1d19fdafa958dd7873c1b68163769c5ef2bdbd4f44ceca1"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"
+
+[[entry]]
+path = "tools/tests/test_render_core.py"
+term = "agents"
+fingerprint = "92f3b0148013a6a4171244a777e5bb13d4a8441b5f24450ae4099a7a7de53d2c"
+reason = "LibreChat product vocabulary (a feature name of the chat UI) and the provisioning file names built on it, from the merged 1.10.0 milestone"

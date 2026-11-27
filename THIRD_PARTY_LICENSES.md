@@ -41,26 +41,26 @@ their images there; the table below covers the Core only.
 | `ghcr.io/fidonis/papaia-docker-gate` | 1.9.0 | MIT | `infra/docker-gate` | own image of the core (`compat/own-images.yaml`): the Docker socket broker of the manager (profile `manager`) on `python:3.12.16-slim-trixie`; CPython is PSF-2.0, the Debian packages keep their copyright files in the image; notice files under `/usr/share/licenses/papaia-docker-gate/` |
 | `python` | 3.12.16-slim-trixie (digest-pinned) | PSF-2.0 | `infra/egress`, `infra/lifecycle`, `infra/replay`, `infra/people`, `infra/chat-relay`, `infra/docker-gate` | base of the own images above; `papaia-lifecycle-init` runs from the own image `ghcr.io/fidonis/papaia-lifecycle` |
 | `python` | 3.12.16-alpine3.24 (digest-pinned) | PSF-2.0 | `infra/audit` | base of the own image `ghcr.io/fidonis/papaia-audit` |
-| `ghcr.io/librechat-ai/librechat` | v0.8.8 | MIT | `ai/librechat` | |
+| `ghcr.io/librechat-ai/librechat` | v0.8.9 | MIT | `ai/librechat` | |
 | `mongo` | 8.3.17 | SSPL | `ai/librechat` | used as network service |
 | `getmeili/meilisearch` | v1.35.1 | MIT | `ai/librechat` | MIT core; BUSL-1.1 covers Enterprise Edition components |
 | `pgvector/pgvector` | 0.8.7-pg15-trixie | PostgreSQL License | `ai/librechat` | |
-| `ghcr.io/librechat-ai/librechat-rag-api-dev-lite` | v0.9.0 | MIT | `ai/librechat` | |
-| `ghcr.io/berriai/litellm` | v1.108.3 | MIT | `ai/litellm` | |
+| `ghcr.io/librechat-ai/librechat-rag-api-dev-lite` | v0.9.1 | MIT | `ai/librechat` | |
+| `ghcr.io/berriai/litellm` | 1.110.2 | MIT | `ai/litellm` | |
 | `postgres` | 16 | PostgreSQL License | `ai/litellm` | LiteLLM database |
 | `prom/prometheus` | v3.16.0 | Apache-2.0 | `ai/litellm` | |
 | `localai/localai` | v4.12.1 | MIT | `ai/localai` | CPU image; the NVIDIA CUDA, Intel, hipBLAS and Vulkan variants are the same license |
 | `curlimages/curl` | 8.16.0 (voice) / latest (localai) | MIT | `ai/localai`, `ai/voice` | model-init helpers |
 | `ghcr.io/fidonis/jina-reranker-api` | 0.1.3 | Apache-2.0 | `ai/jinaai` | Fidonis-maintained wrapper; Jina AI reranker base is Apache-2.0 |
-| `qdrant/qdrant` | v1.19.0 | Apache-2.0 | `ai/rag` | vector database |
+| `qdrant/qdrant` | v1.20.2 | Apache-2.0 | `ai/rag` | vector database |
 | `ghcr.io/fidonis/qdrant-mcp-rbac` | 0.4.2 | MIT | `ai/rag` | Fidonis-maintained OIDC + RBAC MCP server in front of Qdrant |
-| `ghcr.io/fidonis/qdrant-ingest` | 1.0.1 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service |
+| `ghcr.io/fidonis/qdrant-ingest` | 1.1.0 | MIT | `ai/rag` | Fidonis-maintained scheduled ingestion service |
 | `ghcr.io/fidonis/papaia-knowledge-map` | 0.2.0 | MIT | `ai/knowledge-map` | Fidonis-maintained role-trimmed MCP directory of knowledge sources |
-| `docker.io/apache/tika` | 3.2.3.0 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
+| `docker.io/apache/tika` | 4.2.0-1 | Apache-2.0 | `ai/rag` | text extraction for qdrant-ingest |
 | `ghcr.io/speaches-ai/speaches` | 0.8.3-cpu (digest-pinned) | MIT | `ai/voice` | speech-to-text (profile `voice`); the image bundles piper-tts, phonemizer and espeak-ng (GPL-3.0) plus Ubuntu's ffmpeg build (GPL), used as network service; the shipped default model `deepdml/faster-whisper-large-v3-turbo-ct2` is MIT |
 | `ghcr.io/devnen/chatterbox-tts-server` | sha-915ae28-cpu (digest-pinned; accelerator tags `-cu128`/`-rocm` of the same commit selectable via `--voice-variant`) | MIT | `ai/voice` | text-to-speech (profile `voice`); Chatterbox model code and the multilingual weights (Resemble AI) are MIT, the embedded Perth watermarker is MIT |
 | `ghcr.io/firecrawl/firecrawl-mcp-server` | (digest-pinned) | AGPL-3.0 | `ai/mcp-firecrawl` | used as network service |
-| `ghcr.io/firecrawl/firecrawl` | 2.11.705 | AGPL-3.0 | `services/firecrawl` | used as network service |
+| `ghcr.io/firecrawl/firecrawl` | 2.11.807 | AGPL-3.0 | `services/firecrawl` | used as network service |
 | `ghcr.io/firecrawl/playwright-service` | (digest-pinned) | Apache-2.0 | `services/firecrawl` | |
 | `ghcr.io/firecrawl/nuq-postgres` | (digest-pinned) | PostgreSQL License | `services/firecrawl` | |
 | `redis` | 8.8.0-alpine | RSALv2 / SSPLv1 / AGPLv3 | `services/firecrawl` | used as network service; Redis 8 is tri-licensed (AGPLv3 is OSI-approved) |

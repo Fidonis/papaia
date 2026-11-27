@@ -74,12 +74,15 @@ class SetupArgs:
     # relay's sender name. The caller reads it; the default is the product name.
     installation_name: str = smtp.DEFAULT_FROM_NAME
     smtp_password: str | None = field(default=None, repr=False)  # never printed or stored in env
+    # Set by resolve_smtp, written by store_smtp_password once the setup is validated.
+    smtp_password_to_store: str | None = field(default=None, repr=False)
     reranker_model: str | None = None  # None = sticky / no change
     allow_direct_port_access: bool = False
     non_interactive: bool = False
     force: bool = False
-    # Whether $PAPAIA_CONFIG_DIR/.env existed before this invocation. A
-    # *fresh* config dir's tree is seeded straight from .env.example, whose
+    # Whether this is a first setup, as envtree.load_setup_tree decides: the
+    # config dir holds no configuration to keep. The tree of such a *fresh*
+    # config dir comes straight from .env.example, whose
     # PAPAIA_HOST already holds a real-looking illustrative default
     # (http://host.docker.internal) rather than a GENERATE_*-style
     # placeholder -- so it must NOT be treated as a genuine sticky value
@@ -1325,7 +1328,8 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
     The password is not an env value. It goes to a file the relay mounts, and every
     change of it raises SMTP_RELAY_PASSWORD_REV so that Compose recreates the relay
     (the file is read once, at start, and a changed file does not alter the config
-    hash). Everything is validated before the first write."""
+    hash). Nothing is written here: a later check may still refuse the setup, so the
+    password waits in `args` for store_smtp_password."""
     if args.enable_smtp is None and not _smtp_fields_given(args):
         return _follow_installation_name(tree, args)
     root = tree.setdefault("", {})
@@ -1343,13 +1347,20 @@ def resolve_smtp(tree: EnvTree, args: SetupArgs) -> EnvTree:
         raise SetupError(str(exc)) from exc
 
     module.update(values)
-    if smtp.write_password(args.config_dir, password):
+    args.smtp_password_to_store = password
+    if smtp.read_password(args.config_dir) != password:
         module[smtp.KEY_PASSWORD_REV] = _next_revision(module.get(smtp.KEY_PASSWORD_REV, ""))
     if args.enable_smtp is True:
         root["COMPOSE_PROFILES"] = ",".join([*others, smtp.PROFILE])
     elif args.enable_smtp is False:
         root["COMPOSE_PROFILES"] = ",".join(others)
     return tree
+
+
+def store_smtp_password(args: SetupArgs) -> None:
+    """Write the password resolve_smtp settled on. Only for a setup that passed its checks."""
+    if args.smtp_password_to_store is not None:
+        smtp.write_password(args.config_dir, args.smtp_password_to_store)
 
 
 def resolve_reranker_model(tree: EnvTree, args: SetupArgs) -> EnvTree:

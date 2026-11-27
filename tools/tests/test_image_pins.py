@@ -637,13 +637,13 @@ def test_repin_of_postgres_16_16_in_the_shipped_tree_moves_only_litellm_db(tmp_p
 
     changed = image_pins.repin(root, f"postgres:16.16@{D_NEW}")
 
-    assert changed == ["src/ai/litellm/docker-compose.yml:88: services.litellm-db.image"]
+    assert changed == ["src/ai/litellm/docker-compose.yml:90: services.litellm-db.image"]
     after = _files(root)
     assert [name for name in after if after[name] != before[name]] == [
         "src/ai/litellm/docker-compose.yml"]
     old = before["src/ai/litellm/docker-compose.yml"].splitlines(keepends=True)
     new = after["src/ai/litellm/docker-compose.yml"].splitlines(keepends=True)
-    assert [i + 1 for i, (a, b) in enumerate(zip(old, new, strict=True)) if a != b] == [88]
+    assert [i + 1 for i, (a, b) in enumerate(zip(old, new, strict=True)) if a != b] == [90]
     assert [(p.location, images.parse_ref(p.ref).tag) for p in image_pins.collect(root)
             if images.parse_ref(p.ref).repository == "library/postgres"] == [
         (p.location, images.parse_ref(p.ref).tag) for p in postgres]

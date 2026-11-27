@@ -144,7 +144,7 @@ the backups of a test stack encrypted all the same and delete them after the run
 The render rule is the control this repository enforces. The following is not closed by it:
 
 - **The exit depends on LiteLLM honouring the proxy variables.** LiteLLM stays on
-  `papaia-net` as well, which has a route to the outside. Whether LiteLLM v1.108.3 sends its
+  `papaia-net` as well, which has a route to the outside. Whether LiteLLM 1.110.2 sends its
   provider calls through `HTTPS_PROXY`/`HTTP_PROXY` is not verified yet; every name in
   `NO_PROXY` and every client that ignores the variables goes out directly. The one-host limit
   at `papaia-egress` holds only as far as the variables are honoured. The hard control is a host
@@ -171,7 +171,7 @@ The render rule is the control this repository enforces. The following is not cl
   else until the next render overwrites it.
 - **Start-up calls.** LiteLLM reads its model cost map from the image
   (`LITELLM_LOCAL_MODEL_COST_MAP=True` in its compose file); without it, it fetches the map from
-  the internet at every start. Whether v1.108.3 makes other calls at start-up (telemetry,
+  the internet at every start. Whether 1.110.2 makes other calls at start-up (telemetry,
   version checks) is not verified; a capture during the smoke test has to show it.
 - The banner "Testbetrieb mit externem Modell" in the frames of the modules reads the same
   switch; it is not part of this repository.

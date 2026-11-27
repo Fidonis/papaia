@@ -212,7 +212,7 @@ routes it, so a refused request reaches no model and leaves no content in the ga
   message content, no header value off the scale, no key and no key hash. A row that cannot
   be written leaves the request refused and logs `audit_unavailable` with the code only.
 
-Behaviour of the pinned LiteLLM (`v1.108.3`), checked with the image and covered by
+Behaviour of the pinned LiteLLM (`1.110.2`), checked with the image and covered by
 `tools/tests/test_model_gateway_docker.py`:
 
 - The hook receives the request headers as `data["proxy_server_request"]["headers"]`, a

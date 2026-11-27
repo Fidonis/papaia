@@ -53,7 +53,7 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant:
     logging: *papaia-logging
-    image: qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    image: qdrant/qdrant:v1.20.2@sha256:d277592721d2e3b73f9b797b53cf05e6a5bb2134f6d13fdbda4ca51782afbcac
     restart: unless-stopped
     environment:
       QDRANT__SERVICE__API_KEY: ${QDRANT_JWT_SECRET}
@@ -175,7 +175,7 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/qdrant-ingest:1.0.1@sha256:d715048a85f615741fbdea20b398a5865d9c346f551a4b585d22444e234ff98e
+    image: ghcr.io/fidonis/qdrant-ingest:1.1.0@sha256:597dcc5e7efd212c891ad4f7467d9f6411acf597869184c6b58db38cb73f8f7c
     restart: unless-stopped
     # Jobs stop cooperatively between documents; give them room to finish.
     stop_grace_period: 60s
@@ -232,10 +232,12 @@ services:
   #  A JVM plus roughly 200 parsers, kept out of the ingester image so that
   #  image stays small and a parser OOM has its own blast radius. OCR for
   #  scanned PDFs needs the -full image variant, which also wants a larger heap.
+  #  Tika 4 takes its OCR settings from its own configuration, not from the
+  #  ingester's QI_TIKA_OCR_* variables, and needs qdrant-ingest 1.1.0 or later.
   # ═══════════════════════════════════════════════════════════════════════════
   qdrant-ingest-tika:
     logging: *papaia-logging
-    image: docker.io/apache/tika:3.2.3.0@sha256:c0154cb95587cde64be74f35ada1a2bd7892219f3f0ac3c9dc6cab34046b3573
+    image: docker.io/apache/tika:4.2.0-1@sha256:b99f19c4fd76237dafe7d22f719b9bddfa9a449da687c597a41e2f6d9a595418
     restart: unless-stopped
     environment:
       JAVA_OPTS: "-Xmx${QI_TIKA_HEAP:-2g}"

@@ -30,6 +30,7 @@ import secrets
 import shutil
 import stat
 import sys
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -98,6 +99,14 @@ LIBRECHAT_CONFIG = chat_servers.LIBRECHAT_FRAGMENT
 LOCALAI_PROFILE = "localai"
 LOCALAI_MODELS_FILE = "ai/localai/models.txt"
 LOCALAI_MODELS_DIR = "ai/localai/models"
+# The model YAMLs the last render wrote, next to their directory, which the init job mounts.
+# Only these are the render's to delete: until 1.8 the rendered directory was the only place
+# for a model YAML of one's own, so any other file there can be the only copy.
+LOCALAI_MODELS_RECORD = "ai/localai/.rendered-models"
+# LocalAI reads the model YAMLs when it starts and a reload forgets none. Each removal writes
+# a new label, so `start` recreates it. An addition writes none: LocalAI would be down while
+# the init job downloads the model.
+LOCALAI_MODELS_OVERRIDE = "overrides/docker-compose.localai-models.override.yml"
 # LiteLLM resolves `os.environ/...` itself, so the key is never written into the file.
 LOCALAI_API_KEY_REF = "os.environ/LOCALAI_API_KEY"
 
@@ -143,6 +152,13 @@ def _localai_model_files(directory: Path) -> list[Path]:
     )
 
 
+def _localai_model_names(repo_root: Path, config_dir: Path) -> set[str]:
+    """The names of the model YAMLs a render writes: shipped ones and overlay-only ones."""
+    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
+    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
+    return {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
+
+
 def _localai_model_configs(
     repo_root: Path, config_dir: Path, active_addons: list[dict]
 ) -> list[dict]:
@@ -150,11 +166,8 @@ def _localai_model_configs(
     exist only in the overlay. Only the top-level `*.yaml`, which is all the init job copies
     (`cp /models-config/configs/*.yaml`), so a `.yml` is never registered without reaching
     LocalAI."""
-    shipped = repo_root / "src" / LOCALAI_MODELS_DIR
-    overlay = config_dir / "overlay" / LOCALAI_MODELS_DIR
-    names = {p.name for d in (shipped, overlay) for p in _localai_model_files(d)}
     configs = []
-    for name in sorted(names):
+    for name in sorted(_localai_model_names(repo_root, config_dir)):
         rel_path = f"{LOCALAI_MODELS_DIR}/{name}"
         text = _effective_text(rel_path, repo_root, config_dir, active_addons)
         if text is None:
@@ -283,6 +296,7 @@ def render(config_dir: Path, repo_root: Path) -> None:
     except model_gateway.ModelGatewayError as exc:
         raise RenderError(f"model gateway: {exc}") from exc
 
+    render_litellm_config_label(config_dir)
     render_librechat_addon_content(config_dir, repo_root)
     bake_realm_secrets(repo_root, config_dir)
 
@@ -333,10 +347,10 @@ def render(config_dir: Path, repo_root: Path) -> None:
     ensure_me_secrets(config_dir)
     ensure_me_mail(config_dir, repo_root)
 
+    profiles = _active_profiles(config_dir)
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
     # installation's output stays byte-identical.
-    profiles = _active_profiles(config_dir)
     if "knowledge-map" in profiles:
         try:
             warnings = knowledge_map.render(
@@ -576,6 +590,49 @@ def _check_erasure_key(key: Path) -> None:
         raise RenderError(f"{key} (erasure-hmac) must hold the key as 64 to 2048 hex digits")
 
 
+class _QuotedStrings(yaml.SafeDumper):
+    """Writes every string double-quoted and leaves booleans and numbers alone. safe_dump
+    leaves some number-like hashes plain, and Compose reads those as floats (`0e17...`
+    becomes "0"), which would let two different labels compare equal."""
+
+
+_QuotedStrings.add_representer(
+    str, lambda dumper, value: dumper.represent_scalar("tag:yaml.org,2002:str", value, style='"')
+)
+
+
+def _dump_override(override: dict) -> str:
+    """A generated Compose override whose labels carry a hash or a random value."""
+    return yaml.dump(override, Dumper=_QuotedStrings, sort_keys=False, default_flow_style=False)
+
+
+# LiteLLM reads its configuration, a bind mount, only when it starts, and a changed file
+# leaves the service's Compose hash as it was. The override labels the service with a hash
+# of the rendered file, so `start` recreates LiteLLM when the configuration changes (a
+# LocalAI model line activated, an edit of the LiteLLM overlay) and leaves it running
+# otherwise.
+LITELLM_CONFIG_OVERRIDE = "overrides/docker-compose.litellm-config.override.yml"
+
+
+def render_litellm_config_label(config_dir: Path) -> None:
+    """Write the override that labels `litellm` with a hash of its rendered configuration,
+    or remove it while there is no rendered configuration."""
+    override_path = config_dir / LITELLM_CONFIG_OVERRIDE
+    try:
+        content = (config_dir / LITELLM_CONFIG).read_bytes()
+    except FileNotFoundError:
+        override_path.unlink(missing_ok=True)
+        return
+    override = {
+        "services": {
+            "litellm": {
+                "labels": {"org.papaia.config-hash": hashlib.sha256(content).hexdigest()[:16]}
+            }
+        }
+    }
+    common.atomic_write(override_path, _dump_override(override))
+
+
 # Agents and prompts an add-on contributes to LibreChat (addon_api 4): files under
 # <addon>/integration/ai/librechat/{agents,prompts}/, rendered as <addon>__<file> into
 # $PAPAIA_CONFIG_DIR/ai/librechat/addon-{agents,prompts}/ and mounted by a generated
@@ -683,9 +740,7 @@ def render_librechat_addon_content(config_dir: Path, repo_root: Path) -> list[st
             }
         }
     }
-    common.atomic_write(
-        override_path, yaml.safe_dump(override, sort_keys=False, default_flow_style=False)
-    )
+    common.atomic_write(override_path, _dump_override(override))
     return warnings
 
 
@@ -942,6 +997,10 @@ def _render_dir(
     base_dir = repo_root / "src" / rel_path
     if not base_dir.is_dir():
         return
+    if rel_path == LOCALAI_MODELS_DIR:
+        # Before writing: where file names ignore case, a YAML renamed only in case is
+        # written into the file of the old name, which would then be deleted as stale.
+        _remove_stale_model_files(repo_root, config_dir)
     src_root = repo_root / "src"
     for file_path in sorted(base_dir.rglob("*")):
         if file_path.is_file():
@@ -961,6 +1020,34 @@ def _render_dir(
         if not (src_root / sub_rel).is_file():
             text = _overlay_only_text(sub_rel, config_dir)
             common.atomic_write(config_dir / sub_rel, text)
+    names = sorted(_localai_model_names(repo_root, config_dir))
+    common.atomic_write(config_dir / LOCALAI_MODELS_RECORD, "".join(f"{n}\n" for n in names))
+
+
+def _remove_stale_model_files(repo_root: Path, config_dir: Path) -> None:
+    """Delete the model YAMLs an earlier render wrote that neither the repository nor the
+    overlay has any longer, and label LocalAI anew. The init job copies every YAML of the
+    rendered directory, so a leftover would keep the model in LocalAI."""
+    try:
+        record = (config_dir / LOCALAI_MODELS_RECORD).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    recorded = set(record.splitlines())
+    names = _localai_model_names(repo_root, config_dir)
+    stale = [
+        path
+        for path in _localai_model_files(config_dir / LOCALAI_MODELS_DIR)
+        if path.name in recorded and path.name not in names
+    ]
+    if not stale:
+        return
+    override = {
+        "services": {"localai": {"labels": {"org.papaia.models-removed": uuid.uuid4().hex[:16]}}}
+    }
+    common.atomic_write(config_dir / LOCALAI_MODELS_OVERRIDE, _dump_override(override))
+    for path in stale:
+        path.unlink()
+        logger.info("removed %s/%s: no longer in the overlay", LOCALAI_MODELS_DIR, path.name)
 
 
 # Browser-facing URLs in the root .env. A stored URL counts even while its service is off:

@@ -54,6 +54,8 @@ See [`0000-template.md`](./0000-template.md).
 | [0033](./0033-check-and-mirror-the-runner-of-the-admin-steps-and-fail-start-on-a-failed-role-sync.md) | Check and mirror the runner of the admin steps like an installed image and fail start on a failed role sync | Proposed | 2026-11-26 |
 | [0034](./0034-let-a-second-account-approve-a-pairing-as-root.md) | Let a second host account approve a pairing as root in the configuration directory of another account | Proposed | 2026-11-26 |
 | [0035](./0035-serve-the-edge-host-names-from-a-name-constrained-edge-ca.md) | Serve the edge host names with certificates of a name-constrained edge CA | Proposed | 2026-11-26 |
+| [0036](./0036-platform-services-catalogue.md) | Render a platform services catalogue from `exposes` declarations | Proposed | 2026-11-22 |
+| [0037](./0037-internal-tls-from-a-core-pki.md) | Issue internal TLS certificates from one core CA in an optional pki profile | Proposed | 2026-11-20 |
 
 ## Reserved numbers
 
