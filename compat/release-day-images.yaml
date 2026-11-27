@@ -13,10 +13,10 @@ schema: papaia.release-day-images/1
 images:
   - image: ghcr.io/fidonis/papaia-me
     tag: 0.1.0
-    digest: sha256:7b8a68ba36dfd9a87778ef01e2c76cf1a61c8ad2dc174df067c141a7fdf0fefb
+    digest: sha256:9046995b0f0ceed7b5daab95284724a603afd0574b877f66679a8320b992c0a3
     module: papaia-me
-    source: 47ebc9eb292f826a36da6b46d9c75baf8553dff2
-    built: 2026-11-26
+    source: 3e5f49044e379901ff7d041e96fbcf4792e061d1
+    built: 2026-11-27
   - image: ghcr.io/fidonis/papaia-connections
     tag: 0.1.0
     digest: sha256:0ede1075f2c818f043b240bf3e61cc9735a291a98db3f07f7dacf29b4a1ec963

@@ -226,6 +226,15 @@ compose file and the variables the image reads in step. The browser address is
 | `PREFS_DEFAULT_CHANNEL` | Notification channel of a person who never saved one: `mail` or `chat_window` (default `mail`) |
 | `PREFS_DISABLED_CHANNELS` | Notification channels switched off for the installation, comma-separated: `chat_window`, `mail`. Empty (default): both on. Switch `mail` off while the installation has no mail relay; a person then cannot choose it. `python -m lib.me_profile check` refuses a name the store does not know |
 | `PREFS_LANG` | Language of the store's messages: `de` or `en` (default `de`) |
+| `PREFS_SMTP_HOST`, `PREFS_MAIL_FROM`, `PREFS_INSTALLATION_NAME`, `PREFS_NOTIFICATIONS_URL` | Derived by setup and by every `start` — do not edit. The test message by mail of the page "Benachrichtigungen": with the profiles `me` and `smtp` on, the relay `smtp-relay` (port 587, fixed in the compose file), the relay's sender address (mail relay variables, above), the name of the installation (the one the relay writes into `From`) and the https link `<ME_PUBLIC_URL>/notifications` for the footer. Without `smtp` all four are empty and the mail test answers that the mail exit is not set up. A sender address outside the relay's sender domains, an `ME_PUBLIC_URL` without https or a name `prefs` cannot send under stops setup and `start` with the variable named |
+
+`prefs` hands a test mail to `smtp-relay:587` on `papaia-net` as plain SMTP without a
+login; it holds no credential of a mail server, and the relay's sender domain check and its
+`From` rewrite apply to the test mail as to every other mail. In a distributed installation
+whose relay runs on another node than the controller (the preset `dmz-split` puts it at the
+edge), the controller's link gateway carries the name `smtp-relay` and passes port 587 over
+the mutual-TLS link to the relay's node, as it already does for Keycloak's password reset
+mail; `topology firewall` lists `smtp-relay:587` on the controller's link to that node.
 
 Set in the compose file, not in `.env`: `me-web` reaches `prefs` at `http://prefs:8080`
 and reads the audit reads of its page "Aktivität" from `papaia-audit` at

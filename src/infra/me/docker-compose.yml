@@ -46,7 +46,7 @@ services:
 
   me-web:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:7b8a68ba36dfd9a87778ef01e2c76cf1a61c8ad2dc174df067c141a7fdf0fefb
+    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:9046995b0f0ceed7b5daab95284724a603afd0574b877f66679a8320b992c0a3
     restart: unless-stopped
     environment:
       OIDC_ISSUER: ${OIDC_ISSUER}
@@ -135,7 +135,7 @@ services:
 
   prefs:
     logging: *papaia-logging
-    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:7b8a68ba36dfd9a87778ef01e2c76cf1a61c8ad2dc174df067c141a7fdf0fefb
+    image: ghcr.io/fidonis/papaia-me:0.1.0@sha256:9046995b0f0ceed7b5daab95284724a603afd0574b877f66679a8320b992c0a3
     entrypoint: ["python", "-m", "prefs"]
     restart: unless-stopped
     depends_on:
@@ -163,6 +163,18 @@ services:
       # chat_window, mail); empty: both on.
       PREFS_DISABLED_CHANNELS: ${PREFS_DISABLED_CHANNELS:-}
       PREFS_LANG: ${PREFS_LANG:-de}
+      # The test message by mail (page "Benachrichtigungen"): handed to the platform's
+      # relay smtp-relay:587 on papaia-net, plain SMTP without a login; prefs holds no
+      # credential of a mail server. Setup and `start` derive the four values into
+      # infra/me/.env (tools/lib/me_profile.py, mail_env): the relay's name while the
+      # profile smtp is on, else empty (the mail test then answers "unavailable"); the
+      # relay's sender address, inside its sender domains; the name of the installation
+      # the relay writes into From; the https link to Me's page "Benachrichtigungen".
+      PREFS_SMTP_HOST: ${PREFS_SMTP_HOST:-}
+      PREFS_SMTP_PORT: "587"
+      PREFS_MAIL_FROM: ${PREFS_MAIL_FROM:-}
+      PREFS_INSTALLATION_NAME: ${PREFS_INSTALLATION_NAME:-}
+      PREFS_NOTIFICATIONS_URL: ${PREFS_NOTIFICATIONS_URL:-}
       # Client certificate of the audit source papaia-me (`papaia-ctl audit` issues it).
       PREFS_AUDIT_URL: https://papaia-audit:8443/v1/ingest
       PREFS_AUDIT_CERT_FILE: /run/papaia/audit/client.crt

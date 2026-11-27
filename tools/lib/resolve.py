@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import common, ingress, smtp
+from . import common, ingress, me_profile, smtp
 from .envtree import EnvTree
 
 _HOSTLIKE_NO_FQDN = {"localhost", "127.0.0.1", "host.docker.internal"}
@@ -1105,6 +1105,25 @@ def resolve_core_profiles(tree: EnvTree) -> EnvTree:
     for name in ALWAYS_ON_PROFILES:
         if name not in profiles:
             tree = _toggle_profile(tree, name, True)
+    return tree
+
+
+def resolve_me_mail(tree: EnvTree, args: SetupArgs) -> EnvTree:
+    """The settings of prefs for the test message by mail (me_profile.mail_env) in
+    infra/me/.env, after the profiles, the relay and ME_PUBLIC_URL are resolved: never
+    asked for, never sticky. A value prefs would refuse stops setup before anything is
+    written, with the variable named."""
+    root = tree.setdefault("", {})
+    try:
+        values = me_profile.mail_env(
+            profiles=common.cluster_profiles(root),
+            public_url=root.get("ME_PUBLIC_URL", ""),
+            relay=tree.get(smtp.MODULE_DIR, {}),
+            installation_name=args.installation_name,
+        )
+    except me_profile.MeProfileError as exc:
+        raise SetupError(f"Mein Bereich: {exc}") from None
+    tree.setdefault("infra/me", {}).update(values)
     return tree
 
 

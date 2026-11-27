@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 import pytest
 import yaml
 
-from lib import audit, common, compat, envtree, ingress, me_profile, resolve, topology
+from lib import audit, common, compat, envtree, ingress, me_profile, resolve, smtp, topology
 from lib.compat import CoreTarget
 
 REPO = Path(__file__).resolve().parents[2]
@@ -608,3 +608,296 @@ def test_the_rendered_profile_sets_the_listed_variables_and_no_host_port(tmp_pat
         assert all(value is not None for value in environment.values()), name
     for name, service in services.items():
         assert not service.get("ports"), name
+
+
+# ── the mail exit of prefs: the test message by mail (ME-07-A8, KE-25) ──────
+
+MAIL = ("PREFS_SMTP_HOST", "PREFS_SMTP_PORT", "PREFS_MAIL_FROM", "PREFS_INSTALLATION_NAME",
+        "PREFS_NOTIFICATIONS_URL")  # fmt: skip
+RELAY = {smtp.KEY_FROM: "noreply@example.org", smtp.KEY_SENDER_DOMAINS: "example.org"}
+
+
+def _mail(**overrides):
+    kwargs = {
+        "profiles": {"keycloak", "audit", "me", "smtp"},
+        "public_url": "https://me.example.org",
+        "relay": dict(RELAY),
+        "installation_name": "Muster GmbH",
+        **overrides,
+    }
+    return me_profile.mail_env(**kwargs)
+
+
+def test_prefs_reads_the_five_mail_settings_and_the_compose_file_sets_them():
+    listed = _env_list()["services"]["prefs"]
+    assert set(MAIL) <= set(listed["reads"])
+    env = _compose()["services"]["prefs"]["environment"]
+    # The relay's fixed name and port (lib/smtp.py); the rest derived into infra/me/.env.
+    assert env["PREFS_SMTP_HOST"] == "${PREFS_SMTP_HOST:-}"
+    assert env["PREFS_SMTP_PORT"] == str(smtp.RELAY_PORT)
+    for name in ("PREFS_MAIL_FROM", "PREFS_INSTALLATION_NAME", "PREFS_NOTIFICATIONS_URL"):
+        assert env[name] == f"${{{name}:-}}", name
+    # Derived, never set by hand: documented empty in the profile's .env.example.
+    example = common.parse_env_file(ME_DIR / ".env.example")
+    for name in me_profile.MAIL_DERIVED:
+        assert example[name] == "", name
+
+
+def test_prefs_reaches_only_the_internal_relay_and_holds_no_upstream_credential():
+    prefs = _compose()["services"]["prefs"]
+    assert "papaia-net" in prefs["networks"]
+    relay = yaml.safe_load(
+        (REPO / "src/infra/smtp-relay/docker-compose.yml").read_text(encoding="utf-8")
+    )["services"][smtp.SERVICE]
+    assert "papaia-net" in relay["networks"]
+    assert not any(name.startswith("SMTP_RELAY_") for name in prefs["environment"])
+    assert not any("smtp-relay" in str(volume) for volume in prefs["volumes"])
+    assert not any("PASSWORD" in name for name in me_profile.MAIL_DERIVED)
+
+
+def test_with_smtp_prefs_gets_the_relay_its_sender_the_name_and_the_https_link():
+    assert _mail() == {
+        "PREFS_SMTP_HOST": smtp.RELAY_HOST,
+        "PREFS_MAIL_FROM": "noreply@example.org",
+        "PREFS_INSTALLATION_NAME": "Muster GmbH",
+        "PREFS_NOTIFICATIONS_URL": "https://me.example.org/notifications",
+    }
+    # A trailing slash of the address does not double.
+    url = _mail(public_url="https://me.example.org:57143/")["PREFS_NOTIFICATIONS_URL"]
+    assert url == "https://me.example.org:57143/notifications"
+
+
+@pytest.mark.parametrize("profiles", [{"keycloak", "me"}, {"keycloak", "smtp"}, set()])
+def test_without_smtp_or_me_the_host_is_empty(profiles):
+    # The mail test of Me then answers "unavailable"; prefs starts as before.
+    values = _mail(profiles=profiles, public_url="http://me.example.org", relay={})
+    assert values == dict.fromkeys(me_profile.MAIL_DERIVED, "")
+
+
+@pytest.mark.parametrize(
+    "relay",
+    [
+        {smtp.KEY_FROM: "noreply@other.example", smtp.KEY_SENDER_DOMAINS: "example.org"},
+        {smtp.KEY_FROM: "noreply@sub.example.org", smtp.KEY_SENDER_DOMAINS: "example.org"},
+        {smtp.KEY_FROM: "", smtp.KEY_SENDER_DOMAINS: "example.org"},
+        {smtp.KEY_FROM: "Muster <noreply@example.org>", smtp.KEY_SENDER_DOMAINS: "example.org"},
+        {smtp.KEY_FROM: "noreply@example.org", smtp.KEY_SENDER_DOMAINS: ""},
+    ],
+)
+def test_a_sender_outside_the_relays_sender_domains_is_refused(relay):
+    with pytest.raises(me_profile.MeProfileError, match="PREFS_MAIL_FROM"):
+        _mail(relay=relay)
+
+
+def test_the_sender_domain_compares_without_case():
+    relay = {smtp.KEY_FROM: "NoReply@Example.ORG", smtp.KEY_SENDER_DOMAINS: "example.org"}
+    assert _mail(relay=relay)["PREFS_MAIL_FROM"] == "NoReply@Example.ORG"
+
+
+@pytest.mark.parametrize(
+    "public_url",
+    ["", "http://me.example.org", "https://", "https://me.example.org/a b", "ftp://me.x"],
+)
+def test_a_link_that_is_not_https_is_refused(public_url):
+    with pytest.raises(me_profile.MeProfileError, match="PREFS_NOTIFICATIONS_URL"):
+        _mail(public_url=public_url)
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 61, "Zeile\nzwei"])
+def test_an_installation_name_prefs_cannot_send_under_is_refused(name):
+    with pytest.raises(me_profile.MeProfileError, match="PREFS_INSTALLATION_NAME"):
+        _mail(installation_name=name)
+
+
+def test_the_installation_name_is_handed_on_without_surrounding_spaces():
+    # The branding schema allows them; the relay strips the name it writes into From.
+    assert _mail(installation_name="  Muster GmbH ")["PREFS_INSTALLATION_NAME"] == "Muster GmbH"
+
+
+def _start_config(tmp_path: Path, *, profiles: str, me_url: str, relay: dict) -> Path:
+    config = tmp_path / "config"
+    (config / "infra" / "me").mkdir(parents=True)
+    (config / "infra" / "smtp-relay").mkdir(parents=True)
+    (config / ".env").write_text(
+        f"COMPOSE_PROFILES={profiles}\nME_PUBLIC_URL={me_url}\n", encoding="utf-8"
+    )
+    shutil.copyfile(ME_DIR / ".env.example", config / "infra" / "me" / ".env")
+    (config / "infra" / "smtp-relay" / ".env").write_text(
+        "".join(f"{k}={v}\n" for k, v in relay.items()), encoding="utf-8"
+    )
+    return config
+
+
+def _mail_rows(config: Path) -> list[dict]:
+    from lib import realm_sync as rs
+
+    path = rs.audit_path(config)
+    if not path.is_file():
+        return []
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    return [r for r in rows if r.get("writer") == "papaia-ctl/me-mail"]
+
+
+def test_start_derives_the_mail_settings_into_the_profile_env_and_the_checkout(tmp_path):
+    from lib import render_core
+
+    config = _start_config(
+        tmp_path, profiles="keycloak,audit,me,smtp", me_url="https://me.example.org",
+        relay=RELAY,
+    )  # fmt: skip
+    checkout = tmp_path / "checkout"
+    (checkout / "src" / "infra" / "me").mkdir(parents=True)
+    shutil.copyfile(config / "infra" / "me" / ".env", checkout / "src/infra/me/.env")
+    render_core.ensure_me_mail(config, checkout, installation_name="Muster GmbH")
+    for path in (config / "infra/me/.env", checkout / "src/infra/me/.env"):
+        values = common.parse_env_file(path)
+        assert values["PREFS_SMTP_HOST"] == "smtp-relay"
+        assert values["PREFS_MAIL_FROM"] == "noreply@example.org"
+        assert values["PREFS_INSTALLATION_NAME"] == "Muster GmbH"
+        assert values["PREFS_NOTIFICATIONS_URL"] == "https://me.example.org/notifications"
+        # The generated secrets of the file stay as they were.
+        assert values["PREFS_DB_PASSWORD"] == "GENERATE_PREFS_DB_PASSWORD"
+    rows = _mail_rows(config)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["result"] == "allowed" and row["correlation_id"]
+    # Field names, never values.
+    text = json.dumps(row)
+    assert "PREFS_MAIL_FROM" in text
+    assert "noreply@example.org" not in text and "Muster GmbH" not in text
+    # A second start changes nothing and writes no row.
+    before = (config / "infra/me/.env").read_bytes()
+    render_core.ensure_me_mail(config, checkout, installation_name="Muster GmbH")
+    assert (config / "infra/me/.env").read_bytes() == before
+    assert len(_mail_rows(config)) == 1
+
+
+def test_a_name_with_surrounding_spaces_is_written_once(tmp_path):
+    from lib import render_core
+
+    config = _start_config(
+        tmp_path, profiles="keycloak,me,smtp", me_url="https://me.example.org", relay=RELAY
+    )
+    render_core.ensure_me_mail(config, tmp_path / "none", installation_name=" Muster GmbH  ")
+    values = common.parse_env_file(config / "infra/me/.env")
+    assert values["PREFS_INSTALLATION_NAME"] == "Muster GmbH"
+    before = (config / "infra/me/.env").read_bytes()
+    # The second start finds the stored value equal: no write, no audit row.
+    assert render_core.ensure_me_mail(
+        config, tmp_path / "none", installation_name=" Muster GmbH  "
+    ) == []
+    assert (config / "infra/me/.env").read_bytes() == before
+    assert len(_mail_rows(config)) == 1
+
+
+def test_start_empties_the_host_once_smtp_is_switched_off(tmp_path):
+    from lib import render_core
+
+    config = _start_config(
+        tmp_path, profiles="keycloak,me,smtp", me_url="https://me.example.org", relay=RELAY
+    )
+    render_core.ensure_me_mail(config, tmp_path / "none", installation_name="Muster GmbH")
+    (config / ".env").write_text(
+        "COMPOSE_PROFILES=keycloak,me\nME_PUBLIC_URL=https://me.example.org\n", "utf-8"
+    )
+    render_core.ensure_me_mail(config, tmp_path / "none", installation_name="Muster GmbH")
+    values = common.parse_env_file(config / "infra/me/.env")
+    assert {name: values[name] for name in me_profile.MAIL_DERIVED} == dict.fromkeys(
+        me_profile.MAIL_DERIVED, ""
+    )
+    assert len(_mail_rows(config)) == 2
+
+
+@pytest.mark.parametrize(
+    ("me_url", "relay", "variable"),
+    [
+        ("http://me.example.org", RELAY, "PREFS_NOTIFICATIONS_URL"),
+        (
+            "https://me.example.org",
+            {smtp.KEY_FROM: "noreply@other.example", smtp.KEY_SENDER_DOMAINS: "example.org"},
+            "PREFS_MAIL_FROM",
+        ),
+    ],
+)
+def test_start_refuses_a_setting_prefs_cannot_send_with(tmp_path, me_url, relay, variable):
+    from lib import render_core
+
+    config = _start_config(tmp_path, profiles="keycloak,me,smtp", me_url=me_url, relay=relay)
+    before = (config / "infra/me/.env").read_bytes()
+    with pytest.raises(render_core.RenderError, match=variable):
+        render_core.ensure_me_mail(config, tmp_path / "none", installation_name="Muster GmbH")
+    assert (config / "infra/me/.env").read_bytes() == before
+    assert _mail_rows(config) == []
+
+
+def test_the_render_of_start_derives_the_mail_settings():
+    import inspect
+
+    from lib import render_core
+
+    # `start` and `addon start` render before `up`; the name is the catalog's, the one
+    # the relay writes into From.
+    source = inspect.getsource(render_core.render)
+    assert "ensure_me_mail(" in source
+    assert "installation_name(" in inspect.getsource(render_core.ensure_me_mail)
+
+
+def test_setup_derives_the_mail_settings(repo_root):
+    tree = envtree.load_seed_tree(repo_root)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,audit,me,smtp"
+    tree[""]["ME_PUBLIC_URL"] = "https://me.example.org"
+    tree.setdefault("infra/smtp-relay", {}).update(RELAY)
+    args = resolve.SetupArgs(
+        config_dir=repo_root, env_name="itest", installation_name="Muster GmbH",
+        non_interactive=True,
+    )  # fmt: skip
+    me = resolve.resolve_me_mail(tree, args)["infra/me"]
+    assert me["PREFS_SMTP_HOST"] == "smtp-relay"
+    assert me["PREFS_NOTIFICATIONS_URL"] == "https://me.example.org/notifications"
+    tree[""]["ME_PUBLIC_URL"] = "http://me.example.org"
+    with pytest.raises(resolve.SetupError, match="PREFS_NOTIFICATIONS_URL"):
+        resolve.resolve_me_mail(tree, args)
+    tree[""]["COMPOSE_PROFILES"] = "keycloak,audit,me"
+    assert resolve.resolve_me_mail(tree, args)["infra/me"]["PREFS_SMTP_HOST"] == ""
+
+
+def test_the_rendered_prefs_carries_the_derived_mail_settings(tmp_path):
+    cli = _compose_cli()
+    if cli is None:
+        if REQUIRE_COMPOSE:
+            pytest.fail("PAPAIA_REQUIRE_GOLDEN_COMPOSE is set but Docker Compose is missing")
+        pytest.skip("Docker Compose not installed")
+    env = {
+        **common.parse_env_file(REPO / "src" / ".env.example"),
+        **common.parse_env_file(ME_DIR / ".env.example"),
+        **_mail(),
+        "PAPAIA_CONFIG_DIR": str(tmp_path / "config"),
+        "DOCKER_NETWORK": "papaia-me-render-net",
+    }
+    env_file = tmp_path / "render.env"
+    env_file.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
+    rendered = subprocess.run(
+        [
+            *cli,
+            "--project-name", "papaia-me-render",
+            "--project-directory", str(ME_DIR),
+            "--env-file", str(env_file),
+            "-f", str(ME_DIR / "docker-compose.yml"),
+            "-f", str(Path(__file__).parent / "fixtures" / "me" / "networks.yml"),
+            "--profile", "me",
+            "config", "--format", "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": os.environ.get("PATH", "")},
+    )  # fmt: skip
+    assert rendered.returncode == 0, rendered.stderr
+    environment = json.loads(rendered.stdout)["services"]["prefs"]["environment"]
+    assert {name: environment[name] for name in MAIL} == {
+        "PREFS_SMTP_HOST": "smtp-relay",
+        "PREFS_SMTP_PORT": "587",
+        "PREFS_MAIL_FROM": "noreply@example.org",
+        "PREFS_INSTALLATION_NAME": "Muster GmbH",
+        "PREFS_NOTIFICATIONS_URL": "https://me.example.org/notifications",
+    }

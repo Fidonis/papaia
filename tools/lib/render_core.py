@@ -331,6 +331,7 @@ def render(config_dir: Path, repo_root: Path) -> None:
     ensure_people_key(config_dir)
     ensure_audit_report_key(config_dir)
     ensure_me_secrets(config_dir)
+    ensure_me_mail(config_dir, repo_root)
 
     # The knowledge map is a generated artifact like the baked realm, not a
     # merge target; it is rendered only while its profile is active so a lean
@@ -435,6 +436,67 @@ def ensure_me_secrets(config_dir: Path) -> None:
         os.chmod(path.parent, 0o700)
         common.atomic_write_private(path, value)
         os.chmod(path, 0o644)
+
+
+ME_MAIL_WRITER = "papaia-ctl/me-mail"
+ME_ENV_REF = "infra/me/.env"
+
+
+def ensure_me_mail(
+    config_dir: Path, repo_root: Path, *, installation_name: str | None = None
+) -> list[str]:
+    """The settings of prefs for the test message by mail (me_profile.mail_env), written
+    into infra/me/.env of the configuration and, where it exists, of the checkout, before
+    `up`: the relay's name while the profiles `me` and `smtp` are on, its sender address,
+    the name of the installation (the catalog's, the one the relay writes into From) and
+    the https link to the page "Benachrichtigungen". A value prefs would refuse stops the
+    render with the variable named; nothing is written then. A change is one
+    `papaia.audit/1` row naming the variables, never their values. Returns the names that
+    changed."""
+    from . import realm_sync as rs  # the realm sync imports the render path
+
+    root = common.parse_env_file(config_dir / ".env")
+    relay = common.parse_env_file(config_dir / smtp.MODULE_DIR / ".env")
+    path = config_dir / ME_ENV_REF
+    try:
+        if installation_name is None:
+            installation_name = catalog.installation_name(config_dir)
+        wanted = me_profile.mail_env(
+            profiles=common.cluster_profiles(root),
+            public_url=root.get("ME_PUBLIC_URL", ""),
+            relay=relay,
+            installation_name=installation_name,
+        )
+    except (catalog.CatalogError, me_profile.MeProfileError) as exc:
+        raise RenderError(f"{ME_ENV_REF}: {exc}") from exc
+    if not path.is_file():
+        return []
+    current = common.parse_env_file(path)
+    changed = [name for name in me_profile.MAIL_DERIVED if current.get(name, "") != wanted[name]]
+    if changed:
+        change = rs.Change("env_file", ME_ENV_REF, "mail settings of prefs written", "env.write")
+        with rs.AuditLog(
+            rs.audit_path(config_dir), rs.new_correlation_id(), writer=ME_MAIL_WRITER
+        ) as audit:
+            try:
+                # Only these lines change; every other line of the file stays as it is.
+                common.write_env_file(path, wanted)
+            except OSError:
+                audit.write(change, "error", "io", host=True)
+                raise
+            audit.write(
+                change, "allowed", host=True, detail={"objects": changed, "count": len(changed)}
+            )
+    # The checkout's copy (materialised before the render of `start`) follows at once, so
+    # this start already runs with the values. It is a mirror of the audited configuration
+    # file, written from it, so it gets no row of its own; the same holds for setup, which
+    # writes these values with every other derived value of the tree (resolve_me_mail).
+    checkout = repo_root / "src" / ME_ENV_REF
+    if checkout.is_file():
+        copy = common.parse_env_file(checkout)
+        if any(copy.get(name, "") != value for name, value in wanted.items()):
+            common.write_env_file(checkout, wanted)
+    return changed
 
 
 ERASURE_KEY_FILE = Path("security") / "erasure-hmac"

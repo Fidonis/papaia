@@ -26,6 +26,9 @@ when
   (the compose default and `.env.example`) is a channel of the store: `channels` of `prefs`
   in the list, read from `CHANNELS` of the source's `src/prefs/model.py`; none twice.
 
+`mail_env` derives the settings of `prefs` for the test message by mail (ME-07-A8, KE-25):
+setup and every start write them into `infra/me/.env`; the operator sets none of them.
+
 Every problem is one line that names the service or file and the variable.
 """
 
@@ -39,10 +42,11 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
-from . import common, me_connections
+from . import common, me_connections, smtp
 
 PROFILE = "me"
 SERVICES = ("me-web", "prefs")
@@ -73,6 +77,24 @@ HANDED_OVER: dict[str, dict[str, tuple[str, ...]]] = {
     "me-web": {me_connections.CONNECTIONS_PROFILE: tuple(sorted(me_connections.ME_ENV))},
     "prefs": {},
 }
+
+# The test message by mail (ME-07-A8, MF-12, KE-25): prefs hands it to the platform's relay
+# (smtp.RELAY_HOST, plain SMTP inside papaia-net, no login). The port is the relay's fixed
+# one and set in the compose file; these four are derived by setup and `start` into
+# infra/me/.env (`mail_env`), all empty while the relay or the profile is off.
+MAIL_DERIVED = (
+    "PREFS_SMTP_HOST",
+    "PREFS_MAIL_FROM",
+    "PREFS_INSTALLATION_NAME",
+    "PREFS_NOTIFICATIONS_URL",
+)
+# Me's page "Benachrichtigungen", below ME_PUBLIC_URL.
+NOTIFICATIONS_PATH = "/notifications"
+# The sender name prefs accepts (papaia-me PrefsSettings, the kit's mail template).
+MAX_INSTALLATION_NAME = 60
+# The values are written unquoted into infra/me/.env, which Compose reads back: these
+# characters would change meaning on the way (`$` interpolation, ` #` comment, quoting).
+_ENV_UNSAFE = set("#$\"'\\`")
 
 PINNED_IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 _NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
@@ -335,6 +357,91 @@ def _channel_problems(listed: dict, environment: dict, example: dict[str, str]) 
             if twice:
                 problems.append(f"{where}: {name} names {', '.join(twice)} more than once")
     return problems
+
+
+# ── the mail settings of prefs ───────────────────────────────────────────────
+
+
+def _sender(relay: dict[str, str]) -> str:
+    address = relay.get(smtp.KEY_FROM, "").strip()
+    domains = {
+        d.strip().lower() for d in re.split(r"[\s,]+", relay.get(smtp.KEY_SENDER_DOMAINS, ""))
+    } - {""}
+    try:
+        address = smtp.validate_address(address)
+    except smtp.SmtpConfigError:
+        raise MeProfileError(
+            f"PREFS_MAIL_FROM: the relay's sender address ({smtp.KEY_FROM} in "
+            f"{smtp.MODULE_DIR}/.env) is not a plain mail address; run 'papaia-ctl setup "
+            "--smtp-from=<address>'"
+        ) from None
+    if address.rsplit("@", 1)[1].lower() not in domains:
+        raise MeProfileError(
+            f"PREFS_MAIL_FROM: {address} is not in the relay's sender domains "
+            f"({smtp.KEY_SENDER_DOMAINS}: {', '.join(sorted(domains)) or 'none'}); the relay "
+            "would refuse the mail. Run 'papaia-ctl setup --smtp-from=<address>' again"
+        )
+    return address
+
+
+def _installation(name: str) -> str:
+    if not (
+        name.strip()
+        and len(name) <= MAX_INSTALLATION_NAME
+        and name.isprintable()
+        and not _ENV_UNSAFE.intersection(name)
+    ):
+        raise MeProfileError(
+            f"PREFS_INSTALLATION_NAME: the name of the installation must be one line of 1 to "
+            f"{MAX_INSTALLATION_NAME} characters without # $ quotes or backslash; change "
+            "`name` in overlay/platform/branding.yaml"
+        )
+    # Stored trimmed: the env file reads values back trimmed (a start that compared the raw
+    # name would rewrite the file every time), and the relay trims the name it sends under.
+    return name.strip()
+
+
+def _notifications_url(public_url: str) -> str:
+    base = public_url.strip().rstrip("/")
+    url = base + NOTIFICATIONS_PATH
+    parts = urlsplit(url)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.query
+        or parts.fragment
+        or not url.isprintable()
+        or any(ch.isspace() for ch in url)
+        or _ENV_UNSAFE.intersection(url)
+    ):
+        raise MeProfileError(
+            f"PREFS_NOTIFICATIONS_URL: the link to the page \"Benachrichtigungen\" needs an "
+            f"https address of Mein Bereich, but ME_PUBLIC_URL is {public_url.strip()!r}; "
+            "serve Mein Bereich over https (edge or external proxy) or switch the profile "
+            "smtp off"
+        )
+    return url
+
+
+def mail_env(
+    *, profiles: set[str], public_url: str, relay: dict[str, str], installation_name: str
+) -> dict[str, str]:
+    """The settings of prefs for the test message by mail (MAIL_DERIVED).
+
+    With the profiles `me` and `smtp` on: the relay's name, its sender address (which must
+    lie in the relay's sender domains), the name of the installation (the one the relay
+    writes into From) and the https link to Me's page "Benachrichtigungen". Otherwise all
+    empty: without a host, prefs answers the mail test with "unavailable". A value prefs
+    would refuse raises MeProfileError naming the variable, so the start stops before
+    `up` instead of prefs restarting in a loop."""
+    if not {PROFILE, smtp.PROFILE} <= profiles:
+        return dict.fromkeys(MAIL_DERIVED, "")
+    return {
+        "PREFS_SMTP_HOST": smtp.RELAY_HOST,
+        "PREFS_MAIL_FROM": _sender(relay),
+        "PREFS_INSTALLATION_NAME": _installation(installation_name),
+        "PREFS_NOTIFICATIONS_URL": _notifications_url(public_url),
+    }
 
 
 # ── command line ─────────────────────────────────────────────────────────────

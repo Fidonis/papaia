@@ -139,6 +139,9 @@ This lists every connection between the nodes. For `dmz-split`:
 | internal | edge | 7443/tcp | link: keycloak, litellm, the public auth host |
 | edge | internal | 7443/tcp | link: librechat, and whatever is published (localai, papaia-manager, qdrant) |
 
+With the profile `me` on as well, the internal node's link to the edge also carries
+`smtp-relay:587`: the test message by mail of Mein Bereich, which runs on the controller.
+
 Plus 80 and 443 (`INGRESS_HTTP_EXT_PORT`/`INGRESS_HTTPS_EXT_PORT`) from the users to the
 proxy's node. That node's bundle binds the edge ports through `INGRESS_HOST_IP` to the
 node's `ingress_ip` when set, otherwise to the node's address (every address when the node

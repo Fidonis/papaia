@@ -518,6 +518,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
             tree.setdefault("", {}).update(pool_request)
         if round_record is not None:
             tree.setdefault("", {}).update(setup_answers.root_env(round_record["answers"]))
+        # Last: it follows the profiles, the relay and the address resolved above.
+        tree = resolve.resolve_me_mail(tree, setup_args)
     except resolve.SetupError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3

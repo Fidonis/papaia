@@ -125,6 +125,26 @@ def test_a_target_only_admits_the_nodes_whose_services_call_it():
     assert plan.for_node("internal").inbound["librechat"][2] == ["edge"]
 
 
+def test_prefs_on_the_controller_reaches_the_relay_at_the_edge():
+    # dmz-split puts the relay at the edge; Mein Bereich runs on the controller. The test
+    # message by mail of prefs reaches `smtp-relay:587` through the link, by the same name.
+    plan = link.plan(split(), [*ALL_PROFILES, "me"], ENV)
+    internal = plan.for_node("internal")
+    assert "smtp-relay" in internal.aliases
+    route = next(r for r in internal.routes if r.host == "smtp-relay")
+    assert (route.port, route.target_node, route.target_port) == (587, "edge", 587)
+    assert "test message by mail" in route.purposes
+    assert not route.required
+    assert plan.for_node("edge").inbound["smtp-relay"] == ("smtp-relay", 587, ["internal"])
+    # Without `me` the controller has no route to the relay (Keycloak runs at the edge).
+    assert "smtp-relay" not in link.plan(split(), ALL_PROFILES, ENV).for_node("internal").aliases
+    # The firewall matrix names the new route.
+    rules = link.firewall_rules(plan)
+    carried = next(r for r in rules if (r.source, r.destination) == ("internal", "edge")
+                   and r.port != 22)  # fmt: skip
+    assert "smtp-relay:587" in carried.purpose
+
+
 def test_two_remote_services_on_one_port_are_refused():
     original = link.EDGES
     try:

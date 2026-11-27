@@ -36,6 +36,36 @@ es fehlt oder unbrauchbar ist, und ersetzt nie ein brauchbares (erneuern: `papai
 übergibt es die Dateien des Ordners an den Benutzer der Dienste (uid 10001), der Ordner selbst
 bleibt bei root (0711); sonst warnt `start`, dass die Dienste ihn nicht lesen können.
 
+### Testnachricht über E-Mail
+
+Auf der Seite „Benachrichtigungen“ in Mein Bereich kann jede Person je Kanal eine
+Testnachricht senden. Die Mail geht über den Mail-Ausgang der Plattform: `prefs` übergibt sie
+dem Mail-Relais `smtp-relay` (Port 587, im Stack-Netz, ohne Anmeldung); `prefs` hält keine
+Zugangsdaten eines Mailservers. Von Hand ist dafür nichts einzustellen: `setup` und jedes
+`start` tragen die Werte in `infra/me/.env` ein (`PREFS_SMTP_HOST`, `PREFS_MAIL_FROM`,
+`PREFS_INSTALLATION_NAME`, `PREFS_NOTIFICATIONS_URL`), nämlich die Absenderadresse des
+Relais, den Namen der Installation (denselben, unter dem jede Mail hinausgeht) und den
+https-Verweis auf die Seite „Benachrichtigungen“.
+
+- Ist das Profil `smtp` aus (kein `papaia-ctl setup --smtp`), bleibt `PREFS_SMTP_HOST` leer.
+  Die Testnachricht über E-Mail meldet dann, dass der Mail-Ausgang nicht eingerichtet ist;
+  alles andere in Mein Bereich läuft normal.
+- `setup` und `start` brechen vor dem Start ab und nennen die Variable, wenn die
+  Absenderadresse nicht in der Absenderdomäne des Relais liegt (`PREFS_MAIL_FROM`), wenn
+  Mein Bereich keine https-Adresse hat (`PREFS_NOTIFICATIONS_URL`, aus `ME_PUBLIC_URL`) oder
+  wenn der Name der Installation länger als 60 Zeichen ist (`PREFS_INSTALLATION_NAME`).
+  Abhilfe: `papaia-ctl setup --smtp-from=<adresse>`, Mein Bereich über den Rand oder einen
+  externen Proxy mit https bereitstellen, `name` in `overlay/platform/branding.yaml` kürzen
+  oder das Profil `smtp` ausschalten.
+- Das Relais nimmt die Mail an und stellt sie zu; ist der Mailserver gerade nicht
+  erreichbar, wartet sie in der Warteschlange des Relais (`papaia-ctl doctor` meldet das).
+- Verteilte Installation: Läuft das Relais auf einem anderen Knoten als der Controller (das
+  Preset `dmz-split` stellt es an den Rand), erreicht `prefs` es über den Link. Das Link-Gateway
+  des Controllers trägt den Namen `smtp-relay` und reicht Port 587 über mTLS an den Knoten des
+  Relais weiter, wie schon für die Mails von Keycloak. `papaia-ctl topology firewall` nennt
+  dann `smtp-relay:587` auf der Verbindung des Controllers zu diesem Knoten (Port 7443);
+  von Hand ist nichts einzustellen.
+
 Sind beide Profile an (`me` und `connections`), zeigt Mein Bereich einer Person ihre Konten,
 Vollmachten und Nutzungen im Verbindungsregister, und sie kann dort eine Vollmacht beenden.
 Dafür erhält `me-web` ein Client-Zertifikat der Plattform-PKI, tritt dem Netz des Registers

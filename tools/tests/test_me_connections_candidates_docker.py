@@ -1,9 +1,12 @@
 """The pinned images of Mein Bereich and the connection registry, started from the core's
 own compose files with papaia-audit: both profiles start, a write in Mein Bereich gives one
 `papaia.audit/1` row at papaia-audit with its correlation id, and me-web reaches papaia-audit
-over mutual TLS with the source certificate of papaia-me.
+over mutual TLS with the source certificate of papaia-me. With the profile `smtp` on as
+well, prefs gets the mail settings `start` derives (render_core.ensure_me_mail) and hands
+the test message of the page "Benachrichtigungen" to the real relay `smtp-relay:587`, which
+queues it (its upstream is not configured, so nothing leaves the host).
 
-One Compose project with the profiles `audit`, `me` and `connections` (the compose files of
+One Compose project with the profiles `audit`, `me`, `connections` and `smtp` (the compose files of
 src/infra), the own image of papaia-audit built from the checkout as in
 test_audit_docker.py, and a small signing-key service `idp` (https, certificate of a
 throwaway CA that the services trust through SSL_CERT_FILE) in place of the realm. The
@@ -26,6 +29,7 @@ import json
 import os
 import secrets
 import shutil
+import socket
 import subprocess
 import time
 import uuid
@@ -37,7 +41,16 @@ import live_names
 import pytest
 import yaml
 
-from lib import audit, images, me_profile, own_images, render_core, service_account_keys
+from lib import (
+    audit,
+    common,
+    images,
+    me_profile,
+    own_images,
+    render_core,
+    service_account_keys,
+    smtp,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE_FILES = (
@@ -46,6 +59,7 @@ COMPOSE_FILES = (
     REPO / "src" / "infra" / "connections" / "docker-compose.yml",
     REPO / "src" / "infra" / "audit" / "docker-compose.yml",
     REPO / "src" / "infra" / "me" / "docker-compose.yml",
+    REPO / "src" / "infra" / "smtp-relay" / "docker-compose.yml",
 )
 ME_LIST = REPO / "src" / "infra" / "me" / "service-env.json"
 CONNECTIONS_LIST = REPO / "src" / "infra" / "connections" / "service-env.json"
@@ -54,6 +68,20 @@ SUBNET = live_names.subnet("PAPAIA_ME_CANDIDATES_TEST_SUBNET")
 AUDIT_IMAGE = f"{PROJECT}-audit:test"
 ISSUER = "https://idp:8443/realms/papaia"
 KID = "me-candidates-test"
+# The relay's sender and the name of the installation, as setup stores them. The relay
+# refuses a recipient whose domain takes no mail (the reserved example domains have a null
+# MX), so the test uses a domain that does, and the relay looks up its MX: the mail test
+# needs public DNS (the shard live-network of tools/tests/shards.toml) and is skipped with
+# that reason where the domain does not resolve. The relay of this test must never get an
+# upstream (SMTP_RELAY_UPSTREAM_HOST): the mail only waits in its queue and nothing leaves
+# the host, which test_the_mail_test_of_mein_bereich_reaches_the_relay asserts before it
+# sends.
+MAIL_DOMAIN = "fidonis.de"
+SENDER = f"noreply@{MAIL_DOMAIN}"
+# The relay's fail-closed upstream while none is configured (src/infra/smtp-relay).
+NO_UPSTREAM = "[smtp-not-configured.invalid]:587"
+INSTALLATION = "papAIa Kandidaten"
+PROFILES = ("audit", "me", "connections", "smtp")
 NETWORKS = (
     "papaia-net",
     "papaia-audit-net",
@@ -146,9 +174,9 @@ class Stack:
 
     def compose(self, *args: str, check: bool = True, timeout: int = 900):
         files = [arg for path in (*COMPOSE_FILES, self.override) for arg in ("-f", str(path))]
-        return _run("docker", "compose", "-p", PROJECT, *files, "--profile", "audit",
-                    "--profile", "me", "--profile", "connections", *args, env=self.env,
-                    check=check, timeout=timeout)
+        profiles = [arg for name in PROFILES for arg in ("--profile", name)]
+        return _run("docker", "compose", "-p", PROJECT, *files, *profiles, *args,
+                    env=self.env, check=check, timeout=timeout)
 
     def psql(self, sql: str) -> str:
         secret = self.config / "infra" / "audit" / "secrets" / "db-read-password"
@@ -228,16 +256,28 @@ def stack(tmp_path_factory) -> Iterator[Stack]:
     audit.prepare(st.config)
     st.backup.mkdir()
     (st.config / ".env").write_text(
-        f"PAPAIA_BACKUP_DIR={st.backup}\nCOMPOSE_PROFILES=audit,me,connections\n",
+        f"PAPAIA_BACKUP_DIR={st.backup}\nCOMPOSE_PROFILES=audit,me,connections,smtp\n"
+        "ME_PUBLIC_URL=https://me.candidates.invalid\n",
         encoding="utf-8",
     )
+    # The relay as `setup --smtp` stores it, without an upstream: mail stays in its queue.
+    relay_dir = st.config / smtp.MODULE_DIR
+    relay_dir.mkdir(parents=True)
+    relay_env = {smtp.KEY_FROM: SENDER, **smtp.derived_keys("starttls", SENDER, INSTALLATION)}
+    (relay_dir / ".env").write_text(
+        "".join(f"{k}={v}\n" for k, v in relay_env.items()), encoding="utf-8"
+    )
+    (relay_dir / smtp.PASSWORD_FILE).write_text("", encoding="utf-8")
     prefs_password = secrets.token_urlsafe(24)
     (st.config / "infra" / "me").mkdir(parents=True)
     (st.config / "infra" / "me" / ".env").write_text(
         f"PREFS_DB_PASSWORD={prefs_password}\n", encoding="utf-8"
     )
-    # As `papaia-ctl` does before every start: the file secret of prefs and prefs-db.
+    # As `papaia-ctl` does before every start: the file secret of prefs and prefs-db, and
+    # the mail settings of prefs from the relay, the address and the installation's name.
     render_core.ensure_me_secrets(st.config)
+    render_core.ensure_me_mail(st.config, root, installation_name=INSTALLATION)
+    me_env = common.parse_env_file(st.config / "infra" / "me" / ".env")
     audit.ensure_heads_folder(st.config)
     for source in ("papaia-me", "papaia-connections"):
         audit.issue_source_certificate(st.config, source)
@@ -311,6 +351,8 @@ def stack(tmp_path_factory) -> Iterator[Stack]:
         "ME_SESSION_SECRET": secrets.token_urlsafe(48),
         "CONNECTIONS_OWNER_DB_PASSWORD": secrets.token_urlsafe(24),
         "CONNECTIONS_SERVICE_DB_PASSWORD": secrets.token_urlsafe(24),
+        **{name: me_env[name] for name in me_profile.MAIL_DERIVED},
+        **{k: v for k, v in relay_env.items() if k != smtp.KEY_FROM},
     }
     try:
         up = st.compose("up", "-d", "--wait", "--wait-timeout", "240", check=False)
@@ -344,7 +386,7 @@ def test_both_profiles_run_and_the_migration_ended(stack: Stack):
     for line in stack.compose("ps", "-a", "--format", "json").stdout.splitlines():
         row = json.loads(line)
         states[row["Service"]] = (row["State"], row.get("Health", ""), row.get("ExitCode"))
-    for name in ("me-web", "prefs", "connections"):
+    for name in ("me-web", "prefs", "connections", "smtp-relay"):
         assert states[name][:2] == ("running", "healthy"), (name, states[name])
     assert states["prefs-db"][0] == states["connections-db"][0] == "running"
     assert states["connections-migrate"][0] == "exited"
@@ -476,3 +518,66 @@ def test_me_web_reaches_papaia_audit_over_mutual_tls_with_its_source_certificate
     # The handshake with papaia-me's certificate succeeds; without a person's token the
     # read route answers 401, never a TLS error.
     assert done.stdout.strip().splitlines()[-1] == "401"
+
+
+def test_prefs_gets_the_mail_settings_start_derives(stack: Stack):
+    listed = json.loads(ME_LIST.read_text(encoding="utf-8"))["services"]["prefs"]
+    inspected = stack.compose("exec", "-T", "prefs", "env").stdout.splitlines()
+    env = dict(line.split("=", 1) for line in inspected if "=" in line)
+    assert me_profile.expected_names(listed, set(env)) <= set(env)
+    assert {name: env[name] for name in (*me_profile.MAIL_DERIVED, "PREFS_SMTP_PORT")} == {
+        "PREFS_SMTP_HOST": "smtp-relay",
+        "PREFS_SMTP_PORT": "587",
+        "PREFS_MAIL_FROM": SENDER,
+        "PREFS_INSTALLATION_NAME": INSTALLATION,
+        "PREFS_NOTIFICATIONS_URL": "https://me.candidates.invalid/notifications",
+    }
+    # No credential of a mail server reaches prefs.
+    assert not [name for name in env if name.startswith("SMTP_RELAY_")]
+
+
+def test_the_mail_test_of_mein_bereich_reaches_the_relay(stack: Stack):
+    try:
+        socket.getaddrinfo(MAIL_DOMAIN, None)
+    except OSError:
+        pytest.skip(f"no public DNS: the relay cannot look up the MX of {MAIL_DOMAIN}")
+    # Nothing may leave the host: the relay has no upstream to deliver to.
+    relay = stack.compose("exec", "-T", "smtp-relay", "printenv", "RELAYHOST").stdout.strip()
+    assert relay == NO_UPSTREAM, relay
+    now = int(time.time())
+    recipient = f"anna-{uuid.uuid4().hex[:8]}@{MAIL_DOMAIN}"
+    token = stack.sign({
+        "iss": ISSUER, "aud": "papaia-prefs", "azp": "papaia-me", "typ": "Bearer",
+        "sub": str(uuid.uuid4()), "sid": str(uuid.uuid4()), "iat": now, "exp": now + 300,
+        "email": recipient, "email_verified": True,
+    })
+    call = r"""
+import json, sys, urllib.error, urllib.request
+request = urllib.request.Request(
+    "http://127.0.0.1:8080/api/v1/channels/mail/test", data=b"", method="POST",
+    headers={"Authorization": "Bearer " + sys.argv[1]})
+try:
+    with urllib.request.urlopen(request, timeout=30) as r:
+        print(json.dumps({"status": r.status, "body": json.loads(r.read())}))
+except urllib.error.HTTPError as error:
+    print(json.dumps({"status": error.code, "body": error.read().decode()[:500]}))
+"""
+    done = stack.compose("exec", "-T", "prefs", "python", "-I", "-c", call, token, check=False)
+    assert done.returncode == 0, done.stderr[-2000:]
+    answer = json.loads(done.stdout.strip().splitlines()[-1])
+    if answer != {"status": 202, "body": {"channel": "mail", "status": "sent"}}:
+        logs = stack.compose("logs", "--no-color", "--tail", "40", "prefs", "smtp-relay",
+                             check=False).stdout
+        pytest.fail(f"{answer}\n{logs[-6000:]}")
+    # The relay took it: one queued mail from the relay's sender to the person's address.
+    queued: list[dict] = []
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        listing = stack.compose("exec", "-T", "smtp-relay", "postqueue", "-j", check=False)
+        queued = [json.loads(line) for line in listing.stdout.splitlines() if line.strip()]
+        if any(r["address"] == recipient for q in queued for r in q.get("recipients", [])):
+            break
+        time.sleep(2)
+    mine = [q for q in queued if any(r["address"] == recipient for r in q["recipients"])]
+    assert len(mine) == 1, queued
+    assert mine[0]["sender"] == SENDER

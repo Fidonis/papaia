@@ -85,7 +85,8 @@ files = [
   "test_replay.py",
 ]
 
-# 212 s
+# 212 s. Needs public DNS: the mail test of test_me_connections_candidates_docker.py has the
+# relay look up the MX of the recipient's domain (skipped with that reason without DNS).
 [shards.live-network]
 files = [
   "test_offered_network_docker.py",

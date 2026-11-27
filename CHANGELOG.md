@@ -12,6 +12,27 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### The test message by mail of Mein Bereich goes through the platform's mail relay
+
+- `me-web` and `prefs` run the image built from papaia-me `releases/0.1.0` (3e5f490), the
+  release candidate with the test message per channel on the page "Benachrichtigungen";
+  pinned by its index digest (linux/amd64, linux/arm64), with the regenerated list of the
+  variables it reads and its entry in `compat/release-day-images.yaml`.
+- `prefs` gets `PREFS_SMTP_HOST`, `PREFS_SMTP_PORT` (587), `PREFS_MAIL_FROM`,
+  `PREFS_INSTALLATION_NAME` and `PREFS_NOTIFICATIONS_URL`. Setup and every `start` derive
+  them into `infra/me/.env`: with the profiles `me` and `smtp` on, the relay `smtp-relay`,
+  the relay's sender address, the name of the installation (the one the relay writes into
+  `From`) and the https link to the page "Benachrichtigungen" (`<ME_PUBLIC_URL>/notifications`).
+  Without `smtp` they are empty and the mail test answers that the mail exit is not set up.
+  A change at `start` is one `papaia.audit/1` row naming the variables, never their values.
+- Behaviour change of `setup` and `start`: with the profiles `me` and `smtp` on, a sender
+  address outside `SMTP_RELAY_SENDER_DOMAINS`, an `ME_PUBLIC_URL` without https or an
+  installation name of more than 60 characters stops them before anything starts, with the
+  variable named. `prefs` holds no credential of a mail server; the relay is unchanged.
+- Distributed installations: where the relay runs on another node than the controller
+  (preset `dmz-split`), the link carries `smtp-relay:587` from the controller to the relay's
+  node for `prefs`, as it does for Keycloak; `topology firewall` lists it.
+
 ### `start` issues the audit source certificates of Mein Bereich and the connection registry
 
 - `start` (one host and distributed) issues the client certificate of the audit sources

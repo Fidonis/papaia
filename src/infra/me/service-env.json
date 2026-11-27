@@ -1,9 +1,9 @@
 {
   "format": "papaia.me-service-env/1",
-  "image": "ghcr.io/fidonis/papaia-me:0.1.0@sha256:7b8a68ba36dfd9a87778ef01e2c76cf1a61c8ad2dc174df067c141a7fdf0fefb",
+  "image": "ghcr.io/fidonis/papaia-me:0.1.0@sha256:9046995b0f0ceed7b5daab95284724a603afd0574b877f66679a8320b992c0a3",
   "source": {
     "repository": "papaia-me",
-    "commit": "47ebc9eb292f826a36da6b46d9c75baf8553dff2"
+    "commit": "3e5f49044e379901ff7d041e96fbcf4792e061d1"
   },
   "services": {
     "me-web": {
@@ -91,7 +91,12 @@
         "PREFS_DEFAULT_CHANNEL",
         "PREFS_DEFAULT_TIME_ZONE",
         "PREFS_DISABLED_CHANNELS",
+        "PREFS_INSTALLATION_NAME",
         "PREFS_LANG",
+        "PREFS_MAIL_FROM",
+        "PREFS_NOTIFICATIONS_URL",
+        "PREFS_SMTP_HOST",
+        "PREFS_SMTP_PORT",
         "PREFS_SQLITE_FILE"
       ],
       "one_of": [],

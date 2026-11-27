@@ -119,6 +119,7 @@ EDGES: tuple[Edge, ...] = (
     Edge("knowledge-map", "litellm", "litellm", 4000, "routing embeddings"),
     Edge("knowledge-map", "keycloak", "keycloak", 8443, "JWKS fetch", required=False),
     Edge("keycloak", "smtp", "smtp-relay", 587, "password reset mail", required=False),
+    Edge("me", "smtp", "smtp-relay", 587, "test message by mail", required=False),
     Edge("manager", "keycloak", "keycloak", 8443, "Users & Roles"),
     Edge("manager", "litellm", "litellm", 4000, "Models & Usage", required=False),
 )
