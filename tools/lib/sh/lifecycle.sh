@@ -446,6 +446,9 @@ cmd_start() {
     # The audit store (profile `audit`, always on) needs its certificates and passwords
     # before `up`; existing ones are kept.
     py_cli audit-prepare
+    # Without --profiles, `up` below takes an exported COMPOSE_PROFILES over the env file,
+    # as Compose does; the certificates follow the same profiles.
+    _audit_source_certs "${profiles:-${COMPOSE_PROFILES:-}}"
 
     # The native LocalAI of an Apple Silicon Mac (LOCALAI_RUNTIME=native): its binary and
     # start script, before `up` so a failed download is reported before the stack moves.
@@ -997,6 +1000,20 @@ cmd_service_account() {
     fi
 }
 
+# The client certificates of the audit sources of the enabled core profiles ($1, else the
+# installation's): issued when missing or unusable, a usable one is kept, and as root the
+# folder is handed to the user of the source's services (docs/audit.md).
+# A service that stopped without its certificate is restarted by Docker and reads the
+# folder anew. A failure stops `start` before anything starts.
+_audit_source_certs() {
+    local -a flags=()
+    [ -n "$1" ] && flags+=(--profiles="$1")
+    if ! py_cli audit-source-certs ${flags[@]+"${flags[@]}"}; then
+        error "The client certificates of the audit sources could not be issued; nothing was started."
+        exit 2
+    fi
+}
+
 # --node belongs to a distributed installation; on one host it is a mistake worth naming.
 _require_no_node() {
     if [ -n "$1" ]; then
@@ -1021,6 +1038,11 @@ _start_distributed() {
     info "Rendering the configuration and the node bundles..."
     py_cli render
     py_cli audit-prepare
+    # Mein Bereich and the connection registry run on the controller only (topology.py),
+    # so the folders filled here are the ones their services mount. Unlike `up` on one host,
+    # cluster-start below takes --profiles or the installation's `.env` and never an exported
+    # COMPOSE_PROFILES (cluster.load), so the certificates follow the same two and no more.
+    _audit_source_certs "$profiles"
     # Every pin of the tree (the nodes start their own services) and the active add-ons,
     # each add-on with its own list.
     local verified=0

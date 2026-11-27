@@ -230,8 +230,9 @@ compose file and the variables the image reads in step. The browser address is
 Set in the compose file, not in `.env`: `me-web` reaches `prefs` at `http://prefs:8080`
 and reads the audit reads of its page "Aktivität" from `papaia-audit` at
 `https://papaia-audit:8443` (on `papaia-audit-ingest-net`) over mutual TLS with the source
-certificate of `papaia-me`: the folder `infra/audit/clients/papaia-me` that
-`papaia-ctl audit cert papaia-me` writes and `prefs` delivers its audit rows with.
+certificate of `papaia-me`: the folder `infra/audit/clients/papaia-me` that `start` fills
+while the profile `me` is on and the certificate there is missing or unusable (`papaia-ctl
+audit cert papaia-me` rotates it, docs/audit.md) and `prefs` delivers its audit rows with.
 Mein Bereich is one audit source with one outbox in `prefs-db`: `me-web` signs its own
 `papaia.audit/1` rows with the key of that certificate and hands them to `prefs` before it
 answers; `prefs` checks the signature with the same certificate and delivers them with its

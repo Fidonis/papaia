@@ -555,10 +555,56 @@ papaia-ctl audit cert <source>
 issues a client certificate (P-256, 825 days, `clientAuth`) for one source and lists its
 fingerprint in `sources.json`; the previous certificate of that source stops working at the
 next request. Sources: `papaia-studio`, `papaia-data`, `papaia-flow`, `papaia-assist`,
-`papaia-me`, `papaia-manager`, `papaia-lifecycle`, `papaia-egress`, `papaia-audit`,
-`mcp-paperless`, `mcp-qdrant`, `mcp-mssql`, `papaia-ctl`. The files land in
+`papaia-me`, `papaia-connections`, `papaia-manager`, `papaia-lifecycle`, `papaia-egress`,
+`papaia-audit`, `mcp-paperless`, `mcp-qdrant`, `mcp-mssql`, `papaia-ctl`. The files land in
 `$PAPAIA_CONFIG_DIR/infra/audit/clients/<source>/` (`client.crt`, `client.key` with mode
 0600, `ca.crt` to check the server).
+
+`start` (on one host and in a distributed installation) issues the certificate of each
+source of an enabled core profile itself, after the audit store's own material and before
+the first container: `papaia-me` for the profile `me`, `papaia-connections` for
+`connections`. It issues one only when the folder holds no usable certificate: a file
+missing, `ca.crt` not the current ingest CA, the certificate not signed by it, expired, not
+for `clientAuth` with the source as common name, its key not matching it, its fingerprint
+not listed for the source in `sources.json`, or one of the three names not a single regular
+file (a symbolic link, a hard link or a special file is never read and is replaced,
+reason `not_regular`). A usable certificate is never replaced, so
+`audit cert` stays the way to rotate one; sources of profiles that are off and add-on
+sources are never issued by `start`. Each issue prints one line and writes one
+`papaia.audit/1` row (writer `papaia-ctl/audit-cert`, operation
+`audit_cert.issue_<reason>`, object the source and the new fingerprint, never key material)
+to the outbox of `papaia-ctl`; a start with nothing to issue prints and writes nothing. When
+one cannot be issued, `start` stops with exit 2 before anything starts and names the source
+and the cause. A service that stopped for want of its certificate is restarted by Docker
+(`restart: unless-stopped`) and reads the mounted folder anew; `papaia-audit` reads the
+changed `sources.json` without a restart. Both profiles run on the controller of a
+distributed installation only, so the folder `start` fills there is the folder the services
+mount.
+
+Which profiles count: those of `start --profiles`; without it, on one host, an exported
+`COMPOSE_PROFILES`, which Compose also takes over the env file; otherwise the installation's
+profiles in `$PAPAIA_CONFIG_DIR/.env`. A distributed start never takes an exported
+`COMPOSE_PROFILES`, neither for the nodes nor here. A profile given with `--profiles` (or exported) that
+no compose file of the core declares stops `start` with exit 2. One in `.env` (misspelt, or
+dropped by a later release; Compose ignores it) does not: `start` names it and the file
+with "remove it or run setup again" and goes on with the others.
+
+Ownership: the services of both sources run as uid 10001 with every capability dropped,
+and the key is 0600. When `papaia-ctl` runs as root, it hands the three files to uid 10001
+and keeps the folder itself (root, mode 0711): uid 10001 opens the files by name but can
+never add, replace or remove an entry, so no link it could plant is ever there for a later
+run as root to follow. `audit cert` does the same for these two sources. Run as root, a
+client folder that root does not own (or that others may write to) is first taken back
+(root, 0700, without following a link) before anything in it is read; a client folder that
+is itself a link stops `start` with exit 2. A usable certificate whose files are not handed
+over yet is handed over without being replaced (one row, operation
+`audit_cert.hand_over`). Run as another account, `start` leaves a folder already handed
+over (root's, its key uid 10001's) alone and, on Linux,
+warns on every start while the folder belongs to that account and the services cannot read
+it: run `start` as root (`sudo tools/papaia-ctl start`). A folder of a third account, such
+as the empty one Docker creates as root for a missing bind mount, stops `start` with exit 2
+and names it: remove it, or run `start` as root. Docker Desktop's file sharing on macOS does
+not enforce the owner, so there nothing is said.
 
 ## Files
 
@@ -576,7 +622,7 @@ Under `$PAPAIA_CONFIG_DIR/infra/audit/`:
 | `secrets/pseudonym-key` | key of the pseudonyms of the read API and the SIEM export; never replaced | 0600 |
 | `service/siem-ca.crt` | optional CA of the SIEM target | 0644 |
 | `heads-target` | the backup target `audit-heads/` was set up on | 0600 |
-| `clients/<source>/` | certificate and key of one source | dir 0700, key 0600 |
+| `clients/<source>/` | certificate and key of one source | dir 0700 (0711 and root's once handed over), key 0600 |
 
 The database schema, function, triggers and roles are created by `papaia-audit-schema`
 from `schema.sql` in the image (`src/infra/audit/papaia_audit/schema.sql`), in one

@@ -3236,6 +3236,55 @@ def cmd_audit_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit_source_certs(args: argparse.Namespace) -> int:
+    """Issue the missing or unusable client certificates of the audit sources of the
+    enabled core profiles (`--profiles`, else the installation's). Silent with nothing to
+    do; exit 2 with the source and the cause when one cannot be issued.
+
+    A profile given with `--profiles` that no core compose file declares is refused. One
+    of the installation's `.env` (misspelt, or dropped by a later release; Compose ignores
+    it) is named with the way out and left out, so it does not stop `start`."""
+    config_dir, repo_root = Path(args.config_dir), Path(args.repo_root)
+    try:
+        known = audit.declared_profiles(audit.core_compose_files(repo_root))
+    except (audit.AuditError, OSError) as exc:
+        print(f"ERROR: audit source certificates: {exc}", file=sys.stderr)
+        return 2
+    if args.profiles is not None:
+        profiles = [p.strip() for p in args.profiles.split(",") if p.strip()]
+        unknown = [p for p in profiles if p not in known]
+        if unknown:
+            print(f"ERROR: audit source certificates: '{unknown[0]}' in --profiles is not a "
+                  "profile of the core.", file=sys.stderr)  # fmt: skip
+            return 2
+    else:
+        env_file = config_dir / ".env"
+        profiles = []
+        for profile in sorted(common.cluster_profiles(common.parse_env_file(env_file))):
+            if profile in known:
+                profiles.append(profile)
+            else:
+                print(f"WARNING: '{profile}' in the profiles of {env_file} is not a profile of "
+                      "the core and is left out here; remove it or run setup again.",
+                      file=sys.stderr)  # fmt: skip
+    try:
+        result = audit.ensure_source_certificates(config_dir, profiles, known_profiles=known)
+    except (audit.AuditError, OSError) as exc:
+        print(f"ERROR: audit source certificates: {exc}", file=sys.stderr)
+        return 2
+    for entry in result.issued:
+        if entry.reason == "wrong_owner":
+            uid = audit.SOURCE_READERS[entry.source]
+            print(f"  handed the audit certificate of {entry.source} to uid {uid} "
+                  f"({entry.reason})", flush=True)  # fmt: skip
+        else:
+            print(f"  issued the audit certificate of {entry.source} ({entry.reason})",
+                  flush=True)  # fmt: skip
+    for warning in result.warnings:
+        print(f"WARNING: {warning}", file=sys.stderr, flush=True)
+    return 0
+
+
 def cmd_audit_cert(args: argparse.Namespace) -> int:
     """Issue a client certificate for one audit source. Exit 2 for an unknown source."""
     if args.source not in audit.SOURCES:
@@ -4313,6 +4362,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_audit_prepare = sub.add_parser("audit-prepare")
     p_audit_prepare.set_defaults(func=cmd_audit_prepare)
+
+    p_audit_source_certs = sub.add_parser("audit-source-certs")
+    p_audit_source_certs.add_argument("--profiles", default=None)
+    p_audit_source_certs.set_defaults(func=cmd_audit_source_certs)
 
     p_audit_cert = sub.add_parser("audit-cert")
     p_audit_cert.add_argument("--source", required=True)

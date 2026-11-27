@@ -12,6 +12,31 @@ based on merged pull requests; this file mirrors the published releases.
 
 <!-- Updated automatically by release-drafter as PRs are merged to `main`. -->
 
+### `start` issues the audit source certificates of Mein Bereich and the connection registry
+
+- `start` (one host and distributed) issues the client certificate of the audit sources
+  `papaia-me` (profile `me`) and `papaia-connections` (profile `connections`) after the audit
+  store's own material and before the first container, when the folder
+  `infra/audit/clients/<source>` holds no usable one (a file missing, another CA, not signed,
+  expired, wrong name or purpose, key not matching, fingerprint not listed). Before, only
+  `papaia-ctl audit cert` wrote them, a step no guide named, and `me-web`, `prefs` and
+  `connections` of a new installation restarted in a loop. A usable certificate is never
+  replaced (`audit cert` stays the rotation); profiles that are off and add-on sources get
+  nothing. Each issue is one `papaia.audit/1` row without key material; a failure stops
+  `start` with exit 2 before anything starts. `docs/audit.md` now lists `papaia-connections`
+  among the sources.
+- Run as root, `start` and `audit cert` hand the files of these two client folders to
+  uid 10001, the user of `me-web`, `prefs` and `connections` (key 0600); the folder stays
+  root's with mode 0711, so that user cannot change its entries. A usable certificate that
+  is not handed over yet is handed over without being replaced. Run as root, nothing in a
+  client folder is followed: a symbolic link, hard link or special file at one of the three
+  names is replaced by a new file, `ca.crt` included, and a client folder that is a link
+  stops `start`. Run
+  as another account on Linux, `start` warns that the services cannot read the folder.
+- Behaviour change of `start`: a profile given with `--profiles` or an exported
+  `COMPOSE_PROFILES` that no compose file of the core declares stops `start` with exit 2 at
+  this step; one in the installation's `.env` is named with the way out and left out.
+
 ### `uninstall --clean-up` removes the volumes of switched-off profiles
 
 - `uninstall --clean-up` takes the core down with every profile the Compose files declare

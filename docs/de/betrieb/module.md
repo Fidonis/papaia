@@ -29,6 +29,13 @@ Funktion zusätzlich; „unabhängig“ heißt, keines der beiden sieht das ande
 
 ## Mein Bereich und das Verbindungsregister
 
+Mein Bereich und das Verbindungsregister liefern ihre Audit-Zeilen mit einem Client-Zertifikat
+der Audit-Ablage; `start` stellt es für jedes eingeschaltete der beiden Profile selbst aus, wenn
+es fehlt oder unbrauchbar ist, und ersetzt nie ein brauchbares (erneuern: `papaia-ctl audit cert
+<quelle>`). Unter Linux `start` als root ausführen (`sudo tools/papaia-ctl start`): Nur dann
+übergibt es die Dateien des Ordners an den Benutzer der Dienste (uid 10001), der Ordner selbst
+bleibt bei root (0711); sonst warnt `start`, dass die Dienste ihn nicht lesen können.
+
 Sind beide Profile an (`me` und `connections`), zeigt Mein Bereich einer Person ihre Konten,
 Vollmachten und Nutzungen im Verbindungsregister, und sie kann dort eine Vollmacht beenden.
 Dafür erhält `me-web` ein Client-Zertifikat der Plattform-PKI, tritt dem Netz des Registers

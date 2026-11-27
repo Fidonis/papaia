@@ -23,6 +23,10 @@ its `tid` and `oid` travel in the syslog header only.
 `prepare` creates what is missing and never replaces what exists, so it runs before
 every start. `issue_source_certificate` gives a source (one of SOURCES) a new client
 certificate and lists only that one for the source: the previous one stops working.
+`ensure_source_certificates`, also before every start, issues one for each source of an
+enabled core profile (PROFILE_SOURCES) whose folder holds no usable certificate, and never
+replaces a usable one. Run as root, both hand the files of the client folder of such a
+source to the user its services run as (SOURCE_READERS); the folder stays root's.
 `write_token_keys` stores the realm's signing keys that `papaia-ctl audit token-keys`
 fetched; the read API accepts no token without them.
 
@@ -35,14 +39,17 @@ import base64
 import hashlib
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
 import ssl
+import stat
 import subprocess
 import tempfile
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -114,15 +121,20 @@ def audit_dir(config_dir: Path) -> Path:
     return config_dir / "infra" / "audit"
 
 
-def _openssl(*args: str) -> None:
+def _openssl(*args: str, check: bool = True) -> str | None:
+    """The output of `openssl <args>`. A failure raises, or with `check=False` gives None
+    (a test of a certificate that answers "no")."""
     if shutil.which("openssl") is None:
         raise AuditError("openssl not found; it is needed for the audit certificates.")
     result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         ["openssl", *args], capture_output=True, text=True, check=False
     )
     if result.returncode != 0:
+        if not check:
+            return None
         lines = [line for line in result.stderr.splitlines() if line.strip()]
         raise AuditError(f"openssl {args[0]} failed: {lines[-1] if lines else 'no message'}")
+    return result.stdout
 
 
 def _private_dir(path: Path) -> Path:
@@ -467,14 +479,431 @@ def issue_source_certificate(config_dir: Path, source: str) -> Path:
         raise AuditError(f"'{source}' is not an audit source. Known: {', '.join(SOURCES)}.")
     prepare(config_dir)
     base = audit_dir(config_dir)
-    out_dir = _private_dir(base / "clients" / source)
+    out_dir = _client_dir(base / "clients" / source, source)
     certificate, _ = _issue(base / "pki", out_dir, source, "clientAuth")
-    shutil.copyfile(base / "pki" / "ca.crt", out_dir / "ca.crt")
-    os.chmod(out_dir / "ca.crt", 0o644)
+    _replace_file(out_dir / "ca.crt", (base / "pki" / "ca.crt").read_bytes(), 0o644)
+    _hand_over(out_dir, source)
     sources = load_sources(config_dir)
     sources[source] = [fingerprint(certificate)]
     _write_sources(config_dir, sources)
     return out_dir
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# the source certificates `start` issues
+# ─────────────────────────────────────────────────────────────────────────
+
+# Core profiles whose services deliver audit rows as a source from a mounted client folder
+# (`infra/audit/clients/<source>`). `start` issues the certificates of the sources of every
+# enabled profile here when they are missing or unusable (ensure_source_certificates); a
+# test over the core's compose files keeps this table complete. Never an add-on source.
+PROFILE_SOURCES: dict[str, tuple[str, ...]] = {
+    "me": ("papaia-me",),
+    "connections": ("papaia-connections",),
+}
+# The numeric user the services of each of these sources run as (the image's `USER`, or the
+# compose file's `user:`), with every capability dropped: the only account besides root
+# that can read the 0600 key. Run as root, papaia-ctl hands the three files to it and
+# keeps the folder itself (root, 0711): that user opens the files by name but can never
+# add, replace or remove an entry that a later run as root would then act on. A test
+# holds the table to the compose files.
+SOURCE_READERS: dict[str, int] = {
+    "papaia-me": 10001,
+    "papaia-connections": 10001,
+}
+_CLIENT_FILES = ("client.key", "client.crt", "ca.crt")
+CERT_WRITER = "papaia-ctl/audit-cert"
+_PROFILE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+_CLIENT_MOUNT_RE = re.compile(r"(?:^|/)infra/audit/clients/([^/:]+)/?$")
+_CLIENT_AUTH = "TLS Web Client Authentication"
+
+
+@dataclass(frozen=True)
+class ClientMount:
+    """A service of a core compose file that mounts the client folder of `source`."""
+
+    file: str
+    service: str
+    profiles: frozenset[str]
+    source: str
+
+
+@dataclass(frozen=True)
+class Issued:
+    """One certificate `start` issued (or, with the reason `wrong_owner`, handed to the user
+    of its services without replacing it): the source, why, and the fingerprint."""
+
+    source: str
+    reason: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class SourceCertificates:
+    """What ensure_source_certificates did, and what the operator must still do."""
+
+    issued: list[Issued]
+    warnings: list[str]
+
+
+_HANDED_MODE = 0o711
+
+
+def _uid_of(path: Path) -> int:
+    """The owner of `path` itself; a symbolic link is never followed."""
+    return os.lstat(path).st_uid
+
+
+def _is_root() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def _single_file(path: Path) -> bool:
+    """`path` itself is a regular file with no other name: not a symbolic link, not a
+    device or pipe, and not a hard link to a file elsewhere."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+
+
+def _folder_exists(folder: Path, source: str) -> bool:
+    """Whether the client folder of `source` exists. Anything at its place that is not a
+    folder (a symbolic link included) is refused, never followed."""
+    try:
+        info = os.lstat(folder)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(info.st_mode):
+        raise AuditError(
+            f"audit source {source}: {folder} is not a folder (a link or a file); remove it."
+        )
+    return True
+
+
+def _claim(folder: Path) -> None:
+    """Run as root: a client folder that root does not own, or that others may write to,
+    goes to root with mode 0700 before anything in it is read or written, so no other
+    account can change its entries meanwhile. The parent `clients/` is root's or the
+    operator's, so the folder cannot be swapped for a link after the check."""
+    info = os.lstat(folder)
+    if _uid_of(folder) != 0 or info.st_mode & 0o022:
+        os.chown(folder, 0, -1, follow_symlinks=False)
+        os.chmod(folder, 0o700)
+
+
+def _client_dir(folder: Path, source: str) -> Path:
+    """The client folder of `source`, created when missing and private (0700) while it is
+    written; run as root it is root's first (_claim)."""
+    if not _folder_exists(folder, source):
+        folder.mkdir(mode=0o700, parents=True)
+    if _is_root():
+        _claim(folder)
+    os.chmod(folder, 0o700)
+    return folder
+
+
+def _replace_file(path: Path, content: bytes, mode: int) -> None:
+    """Write `path` as a new file (a temp file of a random name in the same folder, then
+    os.replace): whatever was at that name, a link included, is replaced, never written
+    through."""
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            os.fchmod(handle.fileno(), mode)
+        os.replace(name, path)
+    except BaseException:
+        Path(name).unlink(missing_ok=True)
+        raise
+
+
+def _hand_over(folder: Path, source: str) -> None:
+    """Run as root: the three files to the user the source's services run as, the folder
+    root's with mode 0711. The file modes stay (key 0600); the group is left alone; a
+    link is never followed, and a name that is not a single regular file is refused.
+    Nothing for a source no core service reads from a client folder, and nothing when not
+    run as root."""
+    uid = SOURCE_READERS.get(source)
+    if uid is None or not _is_root():
+        return
+    _claim(folder)
+    for name in _CLIENT_FILES:
+        if not _single_file(folder / name):
+            raise AuditError(f"audit source {source}: {folder / name} is not a regular file.")
+        os.chown(folder / name, uid, -1, follow_symlinks=False)
+    os.chmod(folder, _HANDED_MODE)
+
+
+def _held_by(folder: Path, uid: int) -> bool:
+    """Handed over: the folder root's with mode 0711, the files `uid`'s."""
+    if _uid_of(folder) != 0 or stat.S_IMODE(os.lstat(folder).st_mode) != _HANDED_MODE:
+        return False
+    return all(_uid_of(folder / name) == uid for name in _CLIENT_FILES)
+
+
+def _handed_over(folder: Path, uid: int) -> bool:
+    """Seen by another account: the folder root's and its key `uid`'s (the folder can be
+    passed through, not listed)."""
+    try:
+        return _uid_of(folder) == 0 and _uid_of(folder / "client.key") == uid
+    except OSError:
+        return False
+
+
+def core_compose_files(repo_root: Path) -> list[Path]:
+    """Every compose file of the core: `src/**/docker-compose*.yml`."""
+    src = repo_root / "src"
+    return sorted(
+        path
+        for pattern in ("docker-compose*.yml", "docker-compose*.yaml")
+        for path in src.rglob(pattern)
+        if path.is_file()
+    )
+
+
+def _compose_services(path: Path) -> dict[str, dict]:
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise AuditError(f"cannot read the compose file {path}: {exc}") from None
+    services = document.get("services") if isinstance(document, dict) else None
+    if not isinstance(services, dict):
+        return {}
+    return {str(name): body for name, body in services.items() if isinstance(body, dict)}
+
+
+def _profiles_of(body: dict) -> frozenset[str]:
+    raw = body.get("profiles")
+    return frozenset(str(p) for p in raw) if isinstance(raw, list) else frozenset()
+
+
+def declared_profiles(files: Sequence[Path]) -> set[str]:
+    """The profiles the services of these compose files name."""
+    found: set[str] = set()
+    for path in files:
+        for body in _compose_services(path).values():
+            found |= _profiles_of(body)
+    return found
+
+
+def client_mounts(files: Sequence[Path]) -> list[ClientMount]:
+    """Every service of these compose files that mounts `infra/audit/clients/<source>`,
+    in the short (`source:target[:mode]`) or the long (`source:`) form."""
+    found = []
+    for path in files:
+        for service, body in _compose_services(path).items():
+            volumes = body.get("volumes")
+            for volume in volumes if isinstance(volumes, list) else []:
+                if isinstance(volume, str):
+                    host = volume.split(":", 1)[0]
+                elif isinstance(volume, dict):
+                    host = str(volume.get("source") or "")
+                else:
+                    continue
+                match = _CLIENT_MOUNT_RE.search(host)
+                if match:
+                    found.append(ClientMount(str(path), service, _profiles_of(body),
+                                             match.group(1)))  # fmt: skip
+    return found
+
+
+def unmapped_client_mounts(files: Sequence[Path]) -> list[str]:
+    """Mounted client folders `start` would leave empty: a service without a profile, or
+    one whose profiles PROFILE_SOURCES does not map to the source it mounts."""
+    findings = []
+    for mount in client_mounts(files):
+        if not mount.profiles or not any(
+            mount.source in PROFILE_SOURCES.get(profile, ()) for profile in mount.profiles
+        ):
+            profiles = ", ".join(sorted(mount.profiles)) or "no profile"
+            findings.append(
+                f"{mount.file}: service '{mount.service}' ({profiles}) mounts the client "
+                f"folder of '{mount.source}', which PROFILE_SOURCES does not issue for it"
+            )
+    return findings
+
+
+def _der(path: Path) -> bytes | None:
+    try:
+        return ssl.PEM_cert_to_DER_cert(path.read_text(encoding="ascii"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _certificate_problem(base: Path, source: str, listed: Sequence[str]) -> str | None:
+    """Why the client folder of `source` is unusable, or None when it is usable."""
+    folder = base / "clients" / source
+    crt, key, ca = folder / "client.crt", folder / "client.key", folder / "ca.crt"
+    for path in (crt, key, ca):
+        if not os.path.lexists(path):
+            return "missing"
+        if not _single_file(path):
+            # A link, a hard link or a special file is never read; a new file replaces it.
+            return "not_regular"
+    current = base / "pki" / "ca.crt"
+    if _der(ca) is None or _der(ca) != _der(current):
+        return "foreign_ca"
+    if _der(crt) is None:
+        return "not_signed"
+    if _openssl("x509", "-in", str(crt), "-noout", "-checkend", "0", check=False) is None:
+        return "expired"
+    text = _openssl("x509", "-in", str(crt), "-noout", "-subject", "-nameopt", "RFC2253",
+                    "-text", check=False) or ""  # fmt: skip
+    subject = text.splitlines()[0] if text else ""
+    if subject.removeprefix("subject=").strip() != f"CN={source}" or _CLIENT_AUTH not in text:
+        return "wrong_identity"
+    verified = _openssl("verify", "-CAfile", str(current), "-purpose", "sslclient", str(crt),
+                        check=False)  # fmt: skip
+    if verified is None or not verified.rstrip().endswith(": OK"):
+        return "not_signed"
+    public = _openssl("x509", "-in", str(crt), "-noout", "-pubkey", check=False)
+    private = _openssl("pkey", "-in", str(key), "-pubout", check=False)
+    if public is None or private is None or public.strip() != private.strip():
+        return "key_mismatch"
+    if fingerprint(crt) not in listed:
+        return "not_listed"
+    return None
+
+
+def _wanted_sources(profiles: Sequence[str], known_profiles: Collection[str]) -> list[str]:
+    """The sources of the enabled profiles, in the order of PROFILE_SOURCES. A malformed or
+    unknown profile and a table entry for an unknown source are refused."""
+    known = set(known_profiles)
+    enabled = set()
+    for profile in profiles:
+        if not isinstance(profile, str) or not _PROFILE_RE.fullmatch(profile):
+            raise AuditError(f"'{profile}' is not a profile name.")
+        if profile not in known:
+            raise AuditError(f"'{profile}' is not a profile of the core.")
+        enabled.add(profile)
+    wanted: list[str] = []
+    for profile, sources in PROFILE_SOURCES.items():
+        if profile not in enabled:
+            continue
+        for source in sources:
+            if source not in SOURCES:
+                raise AuditError(f"'{source}' (profile '{profile}') is not an audit source.")
+            if source not in wanted:
+                wanted.append(source)
+    return wanted
+
+
+def ensure_source_certificates(
+    config_dir: Path, profiles: Sequence[str], *, known_profiles: Collection[str]
+) -> SourceCertificates:
+    """Issue the client certificate of each source of an enabled core profile
+    (PROFILE_SOURCES) whose folder holds no usable one: a file missing, `ca.crt` not the
+    current ingest CA, the certificate not signed by it, expired, not for `clientAuth` with
+    the source as common name, its key not matching, or its fingerprint not listed for the
+    source. A usable certificate is never replaced; rotation stays `audit cert`.
+
+    The services read the files as their own user (SOURCE_READERS). Run as root, the
+    folder is root's before anything in it is read; a link, a hard link or a special file
+    in it is never followed but unusable (`not_regular`) and replaced by a new file; the
+    files of a new certificate are handed to that user, and a usable certificate the
+    services cannot own is handed over without being replaced (`wrong_owner`). Run as
+    another account, a folder already handed over is left alone (it cannot be looked
+    into), a folder of a third account is refused before anything is written, and on Linux
+    a folder the services cannot read gives a warning on every run. A client folder that
+    is not a folder (a link) is refused in either case.
+
+    Each issue or hand-over writes one `papaia.audit/1` row (source, reason, fingerprint)
+    to the outbox of papaia-ctl; the outbox is opened at the first one, so a run with
+    nothing to do writes nothing. Runs after `prepare`: without the ingest CA it refuses."""
+    wanted = _wanted_sources(profiles, known_profiles)
+    if not wanted:
+        return SourceCertificates([], [])
+    base = audit_dir(config_dir)
+    if not (base / "pki" / "ca.crt").is_file() or not (base / "pki" / "ca.key").is_file():
+        raise AuditError("the ingest CA is missing; 'papaia-ctl start' creates it first.")
+    listed = load_sources(config_dir)
+    root = _is_root()
+    euid = os.geteuid() if hasattr(os, "geteuid") else None
+    due: list[tuple[str, str]] = []
+    for source in wanted:
+        folder = base / "clients" / source
+        reader = SOURCE_READERS[source]
+        exists = _folder_exists(folder, source)
+        if root and exists:
+            _claim(folder)
+        elif not root and euid is not None and exists:
+            owner = _uid_of(folder)
+            if owner != euid and _handed_over(folder, reader):
+                # Handed over by a start as root; this account cannot look into it.
+                continue
+            if owner != euid:
+                raise AuditError(
+                    f"audit source {source}: the folder {folder} belongs to uid {owner}, "
+                    f"not to uid {euid} that runs papaia-ctl. Remove it if it is empty "
+                    "(Docker creates a missing folder as root), or run 'papaia-ctl start' "
+                    "as root."
+                )
+        reason = _certificate_problem(base, source, listed.get(source, []))
+        if reason is None and root and not _held_by(folder, reader):
+            reason = "wrong_owner"
+        if reason:
+            due.append((source, reason))
+    if not due:
+        return SourceCertificates([], _reader_warnings(base, wanted))
+
+    from . import realm_sync
+
+    issued: list[Issued] = []
+    try:
+        log = realm_sync.AuditLog(
+            realm_sync.audit_path(config_dir), realm_sync.new_correlation_id(), writer=CERT_WRITER
+        )
+    except (realm_sync.RealmSyncError, OSError) as exc:
+        raise AuditError(f"the audit outbox cannot be written: {exc}") from None
+    with log:
+        for source, reason in due:
+            if reason == "wrong_owner":
+                folder = base / "clients" / source
+                print_ = fingerprint(folder / "client.crt")
+                change = realm_sync.Change("audit_source_certificate", f"{source}/{print_}",
+                                           "handed_over", "hand_over")  # fmt: skip
+                try:
+                    _hand_over(folder, source)
+                except OSError as exc:
+                    log.write(change, "error", "file", host=True)
+                    raise AuditError(f"audit source {source} ({reason}): {exc}") from None
+                log.write(change, "allowed", host=True)
+                issued.append(Issued(source, reason, print_))
+                continue
+            try:
+                out_dir = issue_source_certificate(config_dir, source)
+            except (AuditError, OSError) as exc:
+                code = "openssl" if isinstance(exc, AuditError) else "file"
+                change = realm_sync.Change("audit_source_certificate", source, "issued",
+                                           f"issue_{reason}")  # fmt: skip
+                log.write(change, "error", code, host=True)
+                raise AuditError(f"audit source {source} ({reason}): {exc}") from None
+            new_print = fingerprint(out_dir / "client.crt")
+            change = realm_sync.Change("audit_source_certificate", f"{source}/{new_print}",
+                                       "issued", f"issue_{reason}")  # fmt: skip
+            log.write(change, "allowed", host=True)
+            issued.append(Issued(source, reason, new_print))
+    return SourceCertificates(issued, _reader_warnings(base, wanted))
+
+
+def _reader_warnings(base: Path, sources: Sequence[str]) -> list[str]:
+    """On Linux, run as neither root nor the services' user: a client folder the services
+    cannot read. Docker Desktop's file sharing does not enforce the owner, so elsewhere
+    nothing is said."""
+    if _is_root() or not hasattr(os, "geteuid") or platform.system() != "Linux":
+        return []
+    warnings = []
+    for source in sources:
+        folder, reader = base / "clients" / source, SOURCE_READERS[source]
+        if folder.is_dir() and _uid_of(folder) == os.geteuid() != reader:
+            warnings.append(
+                f"audit source {source}: the folder {folder} belongs to uid {os.geteuid()}, "
+                f"its services run as uid {reader} and cannot read it; run 'papaia-ctl "
+                "start' as root to hand it over"
+            )
+    return warnings
 
 
 # ─────────────────────────────────────────────────────────────────────────
